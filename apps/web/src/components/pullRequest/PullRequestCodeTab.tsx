@@ -1,4 +1,9 @@
-import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import type {
+  CodeViewItem,
+  CodeViewLineScrollTarget,
+  DiffLineAnnotation,
+  SelectedLineRange,
+} from "@pierre/diffs";
 import type { CodeViewDiffItem, CodeViewHandle } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
@@ -11,6 +16,7 @@ import type {
   PullRequestThreadCommentsResult,
 } from "@t3tools/contracts";
 import {
+  BookOpenIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ChevronsDownUpIcon,
@@ -75,6 +81,7 @@ import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PendingReviewCommentCard, ReviewThreadCard } from "./PullRequestReviewAnnotation";
+import { PullRequestGuide } from "./PullRequestGuide";
 import { PullRequestReviewBar } from "./PullRequestReviewBar";
 import {
   isFileDiffCollapsed,
@@ -197,6 +204,7 @@ function PullRequestCodeTab({
   actionPending = false,
   fixFindingLabel = "Fix in a thread",
   onFixFinding,
+  onExplainFile,
   onAddToAgentSelection,
   onRefresh,
   refreshToken = 0,
@@ -212,6 +220,7 @@ function PullRequestCodeTab({
   actionPending?: boolean;
   fixFindingLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
+  onExplainFile?: (path: string) => void;
   /** Absent where there is no active agent composer to receive a local comment. */
   onAddToAgentSelection?: (input: PullRequestAgentSelectionInput) => void;
   onRefresh: () => void;
@@ -234,6 +243,15 @@ function PullRequestCodeTab({
     false,
     Schema.Boolean,
   );
+  const [guided, setGuided] = useState(false);
+  const [guideSelection, setGuideSelection] = useState<{ scope: string; path: string } | null>(
+    null,
+  );
+  const [guideLine, setGuideLine] = useState<{
+    scope: string;
+    target: CodeViewLineScrollTarget;
+  } | null>(null);
+  const revealedGuideLine = useRef<typeof guideLine>(null);
   const [selectedLines, setSelectedLines] = useState<{
     id: string;
     range: SelectedLineRange;
@@ -543,6 +561,33 @@ function PullRequestCodeTab({
       toggledFiles,
     ],
   );
+  const guideIndex = Math.max(
+    0,
+    items.findIndex(
+      (item) =>
+        guideSelection?.scope === scopeKey &&
+        resolveFileDiffPath(item.fileDiff) === guideSelection.path,
+    ),
+  );
+  const guideItem = items[guideIndex];
+  const visibleItems = useMemo(
+    () => (guided && guideItem ? [guideItem] : items),
+    [guided, guideItem, items],
+  );
+  useEffect(() => {
+    if (guideLine === null || revealedGuideLine.current === guideLine) return;
+    if (guideLine.scope !== scopeKey || !guided) {
+      revealedGuideLine.current = guideLine;
+      return;
+    }
+    if (
+      !viewer?.getInstance() ||
+      !visibleItems.some((item) => item.id === guideLine.target.id && !item.collapsed)
+    )
+      return;
+    viewer.scrollTo(guideLine.target);
+    revealedGuideLine.current = guideLine;
+  }, [guideLine, guided, scopeKey, viewer, visibleItems]);
   const lineStat = useMemo(() => getDiffLineStat(files), [files]);
   const omittedFileStats = useMemo(
     () =>
@@ -610,11 +655,23 @@ function PullRequestCodeTab({
     (path: string) => {
       const item = items.find((candidate) => resolveFileDiffPath(candidate.fileDiff) === path);
       if (item === undefined) return;
+      if (guided) setGuideSelection({ scope: scopeKey, path });
+      setSelectedLines(null);
       if (item.collapsed === true) toggleFile(item.id);
       requestTreeReveal(item.id);
     },
-    [items, requestTreeReveal, toggleFile],
+    [guided, items, requestTreeReveal, scopeKey, toggleFile],
   );
+
+  const selectGuideFile = (index: number) => {
+    const item = items[index];
+    if (item) revealFile(resolveFileDiffPath(item.fileDiff));
+    else if (nextCursor !== null) loadNextSlice();
+  };
+  const guideFileId = guideItem?.id;
+  useEffect(() => {
+    if (guided && guideFileId) requestTreeReveal(guideFileId);
+  }, [guided, guideFileId, requestTreeReveal]);
 
   const treeRef = useRef<DiffFileTreeHandle>(null);
   const toggleAllFiles = () => {
@@ -1157,6 +1214,26 @@ function PullRequestCodeTab({
             </TooltipPopup>
           </Tooltip>
         ) : null}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                aria-label="Guided review"
+                pressed={guided}
+                onPressedChange={(pressed) => {
+                  setGuided(Boolean(pressed));
+                  if (pressed && guideItem?.collapsed) toggleFile(guideItem.id);
+                }}
+                variant="ghost"
+                size="sm"
+                className="data-pressed:border-primary/40 data-pressed:bg-primary/15 data-pressed:text-primary"
+              >
+                <BookOpenIcon className="size-3.5" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup>Guided review</TooltipPopup>
+        </Tooltip>
         <ToggleGroup
           aria-label="Diff layout"
           className="shrink-0"
@@ -1306,7 +1383,7 @@ function PullRequestCodeTab({
     );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="@container/review-code flex h-full min-h-0 flex-col">
       {toolbar}
       {/* Above the code, closed, and counted: these belong to the change rather than to any
             line of it, and in the stream they read as cards dropped into the patch. */}
@@ -1369,94 +1446,128 @@ function PullRequestCodeTab({
           </CollapsiblePanel>
         </Collapsible>
       ) : null}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* Relative wrapper so the review overlay floats over the diff rather than pushing it
-            up; the viewer inside still owns its own scrolling. */}
-        <div
-          className="relative min-h-0 min-w-0 flex-1"
-          // The chevron answers this too, but the whole header row is the target a reader
-          // actually aims for. The header lives in the viewer's shadow tree, so the capture
-          // listener walks `composedPath` — the only way to see through the shadow boundary.
-          onClickCapture={(event) => {
-            const composedPath = event.nativeEvent.composedPath?.() ?? [];
-            for (const node of composedPath) {
-              if (!(node instanceof HTMLElement)) continue;
-              // A control inside the header — the collapse chevron — handles itself, and
-              // this capture listener fires before its own click does. Leave it alone or
-              // the two toggles cancel out.
-              if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
-                return;
-              }
-              if (node.hasAttribute("data-diffs-header")) {
-                const filePath = node.querySelector("[data-title]")?.textContent?.trim();
-                if (filePath === undefined || filePath === "") return;
-                const item = items.find(
-                  (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
-                );
-                if (item !== undefined) toggleFile(item.id);
-                return;
-              }
-            }
-          }}
-        >
-          {/* The viewer virtualizes against the element it is told is scrolling and places its
-              rows absolutely, so it has to own that element — the thread diff panel hands it the
-              same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
-          <EditableDiffCodeView<ReviewAnnotationGroup>
-            // Keep scrollbar space stable so file metadata and line numbers do not shift as a
-            // diff crosses the overflow boundary. The viewer is itself focusable for keyboard
-            // interaction, but its native host outline clips and competes with the focus
-            // indicators on its actual controls.
-            className="h-full overflow-auto [scrollbar-gutter:stable]"
-            viewerRef={setViewer}
-            items={items}
-            selectedLines={selectedLines}
-            onSelectedLinesChange={setSelectedLines}
-            options={diffViewOptions}
-            // The viewer owns the scroll container, so the sentinel that asks for the next slice
-            // has to live inside it — at the end of the files, where reaching it means the reader
-            // is running out of diff.
-            renderCodeViewFooter={renderCodeViewFooter}
-            renderHeaderPrefix={renderHeaderPrefix}
-            editing={resolveEditTarget}
-            renderHeaderMetadata={renderHeaderMetadata}
-            renderAnnotation={renderAnnotation}
-            unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
-          />
-          {reviewOverlay}
-        </div>
-        {fileTreeOpen ? (
-          <DiffFileTree
-            ref={treeRef}
-            widthStorageKey="t3code.pullRequestFileTreeWidth"
-            ariaLabel={`Pull request #${detail.number} files`}
-            defaultWidth={320}
-            entries={fileTreeEntries}
-            onSelectFile={revealFile}
-            // The tree lists only what has arrived; a footer says so while the diff is still
-            // paging, and lets the reader pull the rest in without scrolling for it.
-            footer={
-              nextCursor === null ? null : (
-                <div className="shrink-0 border-t border-border/60 p-2">
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    className="w-full"
-                    disabled={diffQuery.isPending}
-                    onClick={diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice}
-                  >
-                    {diffQuery.error !== null
-                      ? "Retry"
-                      : diffQuery.isPending
-                        ? "Loading more files..."
-                        : "Load more files"}
-                  </Button>
-                </div>
-              )
-            }
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden @min-[48rem]/review-code:flex-row">
+        {guided && guideItem ? (
+          <PullRequestGuide
+            file={guideItem.fileDiff}
+            detail={detail}
+            environmentId={environmentId}
+            index={guideIndex}
+            count={items.length}
+            hasMore={nextCursor !== null}
+            loading={diffQuery.isPending}
+            actionPending={actionPending}
+            onPrevious={() => selectGuideFile(guideIndex - 1)}
+            onNext={() => selectGuideFile(guideIndex + 1)}
+            {...(onExplainFile
+              ? { onExplain: () => onExplainFile(resolveFileDiffPath(guideItem.fileDiff)) }
+              : {})}
+            onSelectHunk={(index) => {
+              const hunk = guideItem.fileDiff.hunks[index];
+              if (!hunk) return;
+              if (guideItem.collapsed) toggleFile(guideItem.id);
+              setGuideLine({
+                scope: scopeKey,
+                target: {
+                  type: "line",
+                  id: guideItem.id,
+                  lineNumber: hunk.additionCount === 0 ? hunk.deletionStart : hunk.additionStart,
+                  side: hunk.additionCount === 0 ? "deletions" : "additions",
+                  align: "start",
+                },
+              });
+            }}
           />
         ) : null}
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          {/* Relative wrapper so the review overlay floats over the diff rather than pushing it
+            up; the viewer inside still owns its own scrolling. */}
+          <div
+            className="relative min-h-0 min-w-0 flex-1"
+            // The chevron answers this too, but the whole header row is the target a reader
+            // actually aims for. The header lives in the viewer's shadow tree, so the capture
+            // listener walks `composedPath` — the only way to see through the shadow boundary.
+            onClickCapture={(event) => {
+              const composedPath = event.nativeEvent.composedPath?.() ?? [];
+              for (const node of composedPath) {
+                if (!(node instanceof HTMLElement)) continue;
+                // A control inside the header — the collapse chevron — handles itself, and
+                // this capture listener fires before its own click does. Leave it alone or
+                // the two toggles cancel out.
+                if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
+                  return;
+                }
+                if (node.hasAttribute("data-diffs-header")) {
+                  const filePath = node.querySelector("[data-title]")?.textContent?.trim();
+                  if (filePath === undefined || filePath === "") return;
+                  const item = items.find(
+                    (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
+                  );
+                  if (item !== undefined) toggleFile(item.id);
+                  return;
+                }
+              }
+            }}
+          >
+            {/* The viewer virtualizes against the element it is told is scrolling and places its
+              rows absolutely, so it has to own that element — the thread diff panel hands it the
+              same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
+            <EditableDiffCodeView<ReviewAnnotationGroup>
+              // Keep scrollbar space stable so file metadata and line numbers do not shift as a
+              // diff crosses the overflow boundary. The viewer is itself focusable for keyboard
+              // interaction, but its native host outline clips and competes with the focus
+              // indicators on its actual controls.
+              className="h-full overflow-auto [scrollbar-gutter:stable]"
+              viewerRef={setViewer}
+              items={visibleItems}
+              selectedLines={selectedLines}
+              onSelectedLinesChange={setSelectedLines}
+              options={diffViewOptions}
+              // The viewer owns the scroll container, so the sentinel that asks for the next slice
+              // has to live inside it — at the end of the files, where reaching it means the reader
+              // is running out of diff.
+              renderCodeViewFooter={renderCodeViewFooter}
+              renderHeaderPrefix={renderHeaderPrefix}
+              editing={resolveEditTarget}
+              renderHeaderMetadata={renderHeaderMetadata}
+              renderAnnotation={renderAnnotation}
+              unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
+            />
+            {reviewOverlay}
+          </div>
+          {fileTreeOpen ? (
+            <DiffFileTree
+              ref={treeRef}
+              widthStorageKey="t3code.pullRequestFileTreeWidth"
+              ariaLabel={`Pull request #${detail.number} files`}
+              defaultWidth={320}
+              entries={fileTreeEntries}
+              onSelectFile={revealFile}
+              // The tree lists only what has arrived; a footer says so while the diff is still
+              // paging, and lets the reader pull the rest in without scrolling for it.
+              footer={
+                nextCursor === null ? null : (
+                  <div className="shrink-0 border-t border-border/60 p-2">
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      className="w-full"
+                      disabled={diffQuery.isPending}
+                      onClick={diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice}
+                    >
+                      {diffQuery.error !== null
+                        ? "Retry"
+                        : diffQuery.isPending
+                          ? "Loading more files..."
+                          : "Load more files"}
+                    </Button>
+                  </div>
+                )
+              }
+            />
+          ) : null}
+        </div>
       </div>
       {unstructured}
     </div>
