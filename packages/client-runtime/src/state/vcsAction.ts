@@ -28,6 +28,7 @@ import {
 } from "./runtime.ts";
 import { vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import { invalidateCachedVcsRefs } from "./vcsRefInvalidation.ts";
+import { invalidateReviewDiffPreviews } from "./review.ts";
 
 export const VcsActionOperation = Schema.Literals([
   "refresh_status",
@@ -77,6 +78,7 @@ export interface RunVcsStackedActionInput {
   readonly action: GitStackedAction;
   readonly commitMessage?: string;
   readonly featureBranch?: boolean;
+  readonly stagedOnly?: boolean;
   readonly expectedBranch?: string;
   readonly pullRequestUrl?: string;
   readonly projectId?: ProjectId;
@@ -469,6 +471,7 @@ export function createVcsActionManager<R, E>(
           action: input.action,
           ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
           ...(input.featureBranch ? { featureBranch: true } : {}),
+          ...(input.stagedOnly ? { stagedOnly: true } : {}),
           ...(input.expectedBranch !== undefined ? { expectedBranch: input.expectedBranch } : {}),
           ...(input.pullRequestUrl !== undefined ? { pullRequestUrl: input.pullRequestUrl } : {}),
           ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
@@ -502,6 +505,7 @@ export function createVcsActionManager<R, E>(
               }),
           },
         ).pipe(
+          Effect.ensuring(Effect.sync(() => invalidateReviewDiffPreviews(registry, target))),
           Effect.ensuring(invalidateCachedVcsRefs(registry, target)),
           Effect.tapError((error) =>
             Effect.sync(() => {

@@ -540,6 +540,8 @@ function sanitizeProgressText(value: string): string | null {
 }
 
 interface CommitAndBranchSuggestion {
+  stagedTree?: string;
+  headCommit?: string | null;
   subject: string;
   body: string;
   branch?: string | undefined;
@@ -1785,9 +1787,14 @@ export const make = Effect.gen(function* () {
       /** When true, also produce a semantic feature branch name. */
       includeBranch?: boolean;
       filePaths?: readonly string[];
+      stagedOnly?: boolean;
       settings: SourceControlTextGenerationSettings;
     }) {
-      const context = yield* gitCore.prepareCommitContext(input.cwd, input.filePaths);
+      const context = yield* gitCore.prepareCommitContext(
+        input.cwd,
+        input.filePaths,
+        input.stagedOnly,
+      );
       if (!context) {
         return null;
       }
@@ -1801,6 +1808,9 @@ export const make = Effect.gen(function* () {
             ? { branch: sanitizeFeatureBranchName(customCommit.subject) }
             : {}),
           commitMessage: formatCommitMessage(customCommit.subject, customCommit.body),
+          ...(context.stagedTree
+            ? { stagedTree: context.stagedTree, headCommit: context.headCommit ?? null }
+            : {}),
         };
       }
 
@@ -1823,6 +1833,9 @@ export const make = Effect.gen(function* () {
         body: generated.body,
         ...(generated.branch !== undefined ? { branch: generated.branch } : {}),
         commitMessage: formatCommitMessage(generated.subject, generated.body),
+        ...(context.stagedTree
+          ? { stagedTree: context.stagedTree, headCommit: context.headCommit ?? null }
+          : {}),
       };
     },
   );
@@ -1837,6 +1850,7 @@ export const make = Effect.gen(function* () {
     filePaths?: readonly string[],
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
+    stagedOnly?: boolean,
   ) {
     const emit = (event: GitActionProgressPayload) =>
       progressReporter && actionId
@@ -1863,6 +1877,7 @@ export const make = Effect.gen(function* () {
         branch,
         ...(commitMessage ? { commitMessage } : {}),
         ...(filePaths ? { filePaths } : {}),
+        ...(stagedOnly ? { stagedOnly } : {}),
         settings,
       });
     }
@@ -1921,6 +1936,13 @@ export const make = Effect.gen(function* () {
           }
         : null;
     const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
+      ...(suggestion.stagedTree
+        ? {
+            stagedTree: suggestion.stagedTree,
+            expectedHead: suggestion.headCommit ?? null,
+            expectedBranch: branch,
+          }
+        : {}),
       timeoutMs: COMMIT_TIMEOUT_MS,
       ...(commitProgress ? { progress: commitProgress } : {}),
     });
@@ -2536,6 +2558,7 @@ export const make = Effect.gen(function* () {
     branch: string | null,
     commitMessage?: string,
     filePaths?: readonly string[],
+    stagedOnly?: boolean,
   ) {
     const suggestion = yield* resolveCommitAndBranchSuggestion({
       cwd,
@@ -2543,6 +2566,7 @@ export const make = Effect.gen(function* () {
       ...(commitMessage ? { commitMessage } : {}),
       ...(filePaths ? { filePaths } : {}),
       includeBranch: true,
+      ...(stagedOnly ? { stagedOnly } : {}),
       settings,
     });
     if (!suggestion) {
@@ -2608,6 +2632,13 @@ export const make = Effect.gen(function* () {
             });
           }
           yield* configurePullRequestHeadUpstreamBase(input.cwd, head, initialStatus.branch);
+        }
+        if (input.stagedOnly && input.filePaths?.length) {
+          return yield* new GitManagerError({
+            operation: "runStackedAction",
+            cwd: input.cwd,
+            detail: "Choose staged changes or whole files for this commit, not both.",
+          });
         }
         const wantsCommit = isCommitAction(input.action);
         const wantsPush =
@@ -2705,6 +2736,7 @@ export const make = Effect.gen(function* () {
             initialStatus.branch,
             input.commitMessage,
             input.filePaths,
+            input.stagedOnly,
           );
           branchStep = result.branchStep;
           commitMessageForStep = result.resolvedCommitMessage;
@@ -2735,6 +2767,7 @@ export const make = Effect.gen(function* () {
                   input.filePaths,
                   options?.progressReporter,
                   progress.actionId,
+                  input.stagedOnly,
                 ),
               ),
             )
