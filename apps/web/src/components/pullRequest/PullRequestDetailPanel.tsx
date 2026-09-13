@@ -2747,6 +2747,12 @@ export function PullRequestDetailPanel({
                     <PullRequestCodeTab
                       actionPending={actionPending}
                       onAddToAgentSelection={addSelectionToAgent}
+                      onExplainFile={(path) =>
+                        void startAsk(`explain:${path}`, {
+                          ...buildExplainPullRequestHandoff(detail),
+                          prompt: `Explain the changes to ${JSON.stringify(path)} in this pull request. Cover what changed, why it matters, and what to check during review. Do not change any code.`,
+                        })
+                      }
                       environmentId={environmentId}
                       reference={reference}
                       detail={detail}
