@@ -12,6 +12,7 @@ import type {
 } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
+import { PinnedGitHubCredential } from "../sourceControl/GitHubCli.ts";
 import {
   PullRequestProviderError,
   type PullRequestProviderFailure,
@@ -45,6 +46,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   updateMethods: ["merge", "rebase"],
   search: true,
   reactions: true,
+  viewedFiles: "host",
   review: {
     inlineComment: true,
     reply: true,
@@ -114,7 +116,11 @@ export function gitHubProviderFailure(
 ): PullRequestProviderFailure {
   if (error._tag === "GitHubCliUnavailableError") return { reason: "missing-tool" };
   if (error._tag === "GitHubCliAuthenticationError") return { reason: "unauthenticated" };
-  if (error._tag === "GitHubCliRateLimitError") return { reason: "rate-limited" };
+  if (error._tag === "GitHubCliRateLimitError")
+    return {
+      reason: "rate-limited",
+      ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
+    };
   if (error._tag === "SourceControlRateLimitPausedError") {
     return { reason: "rate-limited", retryAt: error.retryAt };
   }
@@ -134,8 +140,11 @@ function withAvatar(
   actor: PullRequestActor | null,
   avatarsByLogin: ReadonlyMap<string, string>,
   host: string,
+  botLogins?: ReadonlySet<string>,
 ): PullRequestActor | null {
-  if (actor === null || actor.avatarUrl !== null) return actor;
+  if (actor === null) return actor;
+  if (botLogins?.has(actor.login)) actor = { ...actor, isBot: true };
+  if (actor.avatarUrl !== null) return actor;
   const avatarUrl = avatarsByLogin.get(actor.login) ?? loginAvatarUrl(actor.login, host);
   return avatarUrl === null ? actor : { ...actor, avatarUrl };
 }
@@ -204,7 +213,20 @@ export const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly repository: string;
     readonly host: string;
-  }) => Cache.get(repositoryAccessCache, JSON.stringify([input.cwd, input.repository, input.host]));
+  }) =>
+    PinnedGitHubCredential.pipe(
+      Effect.flatMap((credential) =>
+        Cache.get(
+          repositoryAccessCache,
+          JSON.stringify([
+            input.cwd,
+            input.repository,
+            input.host,
+            credential?.credentialFingerprint ?? null,
+          ]),
+        ),
+      ),
+    );
 
   const fail = (operation: string) => (error: GitHubPullRequestCli.GitHubPullRequestCliError) =>
     new PullRequestProviderError({
@@ -249,9 +271,17 @@ export const make = Effect.gen(function* () {
   const provider: PullRequestProviderApi = {
     kind: "github",
     capabilities: CAPABILITIES,
+    getRoutingIdentity: (input) =>
+      cli.getRoutingIdentity(input).pipe(Effect.mapError(fail("routeIdentity"))),
+    withVerifiedCredential: (input, use) =>
+      cli
+        .withVerifiedCredential(input, (identity) => use(identity).pipe(Effect.result))
+        .pipe(Effect.mapError(fail("routeIdentity")), Effect.flatMap(Effect.fromResult)),
 
     getViewer: (input) =>
-      cli.getViewerLogin({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
+      cli
+        .getViewerLogin({ cwd: input.cwd, host: input.host ?? "github.com" })
+        .pipe(Effect.mapError(fail("getViewer"))),
 
     listChangeRequests: (input) =>
       cli
@@ -423,6 +453,7 @@ export const make = Effect.gen(function* () {
           citedIssues(input, detail.pullRequest, linkedIssues.links).pipe(
             Effect.map((cited): ProviderChangeRequestDetail => ({
               ...detail.pullRequest,
+              author: withAvatar(detail.pullRequest.author, new Map<string, string>(), input.host),
               checks: withWorkflowApprovals(
                 detail.pullRequest.checks,
                 detail.workflowApprovals.runs,
@@ -475,6 +506,7 @@ export const make = Effect.gen(function* () {
               truncated: true,
               reviewers: [],
               avatarsByLogin: new Map<string, string>(),
+              botLogins: new Set<string>(),
               commitStats: new Map<
                 string,
                 { readonly additions: number; readonly deletions: number }
@@ -488,7 +520,12 @@ export const make = Effect.gen(function* () {
       ).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
         Effect.map(([pullRequest, reviewThreads]): ProviderChangeRequestActivity => ({
-          author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
+          author: withAvatar(
+            pullRequest.author,
+            reviewThreads.avatarsByLogin,
+            input.host,
+            reviewThreads.botLogins,
+          ),
           reviewers: reviewThreads.reviewers,
           reactions: reviewThreads.reactions,
           commits: (reviewThreads.commits.length > 0
@@ -498,7 +535,13 @@ export const make = Effect.gen(function* () {
             ...commit,
             ...reviewThreads.commitStats.get(commit.oid),
             authors: commit.authors?.map(
-              (author) => withAvatar(author, reviewThreads.avatarsByLogin, input.host) ?? author,
+              (author) =>
+                withAvatar(
+                  author,
+                  reviewThreads.avatarsByLogin,
+                  input.host,
+                  reviewThreads.botLogins,
+                ) ?? author,
             ),
           })),
           comments: [...pullRequest.comments, ...reviewThreads.comments]
@@ -514,7 +557,12 @@ export const make = Effect.gen(function* () {
                 rendersEmpty(comment.body)
                   ? (reviewThreads.dismissalsByReviewId.get(comment.id) ?? comment.body)
                   : comment.body,
-              author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
+              author: withAvatar(
+                comment.author,
+                reviewThreads.avatarsByLogin,
+                input.host,
+                reviewThreads.botLogins,
+              ),
               // A comment out of `gh pr view --json` carries none of its own: that read
               // reports no reaction at all, so they arrive from the GraphQL page by node id.
               reactions: comment.reactions ?? reviewThreads.reactionsById.get(comment.id) ?? [],
@@ -528,7 +576,12 @@ export const make = Effect.gen(function* () {
             ...thread,
             comments: thread.comments.map((comment) => ({
               ...comment,
-              author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
+              author: withAvatar(
+                comment.author,
+                reviewThreads.avatarsByLogin,
+                input.host,
+                reviewThreads.botLogins,
+              ),
             })),
           })),
         })),
@@ -545,20 +598,22 @@ export const make = Effect.gen(function* () {
           // comparison only resolves through the head ref the detail carries. A failure here
           // withholds that one action rather than the whole answer, the way the detail path
           // leaves the banner unknown.
-          cli.getPullRequestDetail(input).pipe(
-            Effect.flatMap((pullRequest) =>
-              pullRequest.state !== "open" || pullRequest.headRepositoryOwner === null
-                ? Effect.succeed(false)
-                : cli
-                    .getPullRequestBaseComparison({
-                      ...input,
-                      headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
-                      allowReserve: true,
-                    })
-                    .pipe(Effect.map((comparison) => comparison.viewerCanUpdate === true)),
-            ),
-            Effect.orElseSucceed(() => false),
-          ),
+          input.includeUpdateBranch === false
+            ? Effect.succeed(false)
+            : cli.getPullRequestDetail(input).pipe(
+                Effect.flatMap((pullRequest) =>
+                  pullRequest.state !== "open" || pullRequest.headRepositoryOwner === null
+                    ? Effect.succeed(false)
+                    : cli
+                        .getPullRequestBaseComparison({
+                          ...input,
+                          headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
+                          allowReserve: true,
+                        })
+                        .pipe(Effect.map((comparison) => comparison.viewerCanUpdate === true)),
+                ),
+                Effect.orElseSucceed(() => false),
+              ),
         ],
         { concurrency: 2 },
       ).pipe(
@@ -572,6 +627,12 @@ export const make = Effect.gen(function* () {
 
     getDiffFileContents: (input) =>
       cli.getPullRequestDiffFileContents(input).pipe(Effect.mapError(fail("getDiffFileContents"))),
+
+    getFilesViewed: (input) =>
+      cli.getPullRequestFilesViewed(input).pipe(Effect.mapError(fail("getFilesViewed"))),
+
+    setFilesViewed: (input) =>
+      cli.setPullRequestFilesViewed(input).pipe(Effect.mapError(fail("setFilesViewed"))),
 
     listReviewerCandidates: (input) =>
       cli.listReviewerCandidates(input).pipe(Effect.mapError(fail("listReviewerCandidates"))),

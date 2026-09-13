@@ -27,15 +27,6 @@ function reactionsSignature(reactions: ReadonlyArray<PullRequestReaction>): stri
     .join(" ");
 }
 
-/**
- * The reaction pills under a remark, and the picker that adds one. The same bar serves the
- * description, a conversation comment and a review thread's comments: what differs between them
- * is only which subject the host is told about.
- *
- * The add button is revealed by hovering the remark it belongs to, the way GitHub's is, so the
- * parent must carry `group`. It stays put once there is something to press it beside, while the
- * picker is open, and whenever it is focused — a control only a mouse can find is no control.
- */
 export function SourceControlReactionBar({
   reactions,
   canReact,
@@ -74,7 +65,7 @@ export function SourceControlReactionBar({
   if (shown.length === 0 && !canReact) return null;
 
   return (
-    <div className={cn("flex flex-wrap items-center gap-1", className)}>
+    <div className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-1", className)}>
       {shown.map((reaction) => (
         <Tooltip key={reaction.content}>
           <TooltipTrigger
@@ -112,9 +103,6 @@ export function SourceControlReactionBar({
                 className={cn(
                   PILL_CLASS,
                   "border-border/70 px-1.5 text-muted-foreground hover:border-primary/60 hover:text-foreground",
-                  shown.length === 0 &&
-                    !pickerOpen &&
-                    "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100",
                 )}
               />
             }

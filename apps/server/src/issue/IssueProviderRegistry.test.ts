@@ -187,6 +187,7 @@ it.effect("refines one unknown remote before de-duplicating its worktrees", () =
       } as unknown as OrchestrationProjectShell["repositoryIdentity"],
     };
     const sourceControl = SourceControlProviderRegistry.SourceControlProviderRegistry.of({
+      resolveLink: () => Effect.die("unused"),
       get: () => Effect.die("unused"),
       resolve: () => Effect.die("unused"),
       discover: Effect.die("unused"),

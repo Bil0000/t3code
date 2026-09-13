@@ -1,3 +1,4 @@
+import { isTerminalFocused } from "~/lib/terminalFocus";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { sourceControlHostOf, ThreadId } from "@t3tools/contracts";
 import type {
@@ -1430,6 +1431,14 @@ function IssuesRouteView() {
           >
             {activeSurface.kind === "pull-request" ? (
               <PullRequestDetailPanel
+                shortcutsEnabled
+                getShortcutContext={() => ({
+                  terminalFocus: isTerminalFocused(),
+                  terminalOpen: false,
+                  previewFocus: false,
+                  previewOpen: false,
+                  modelPickerOpen: false,
+                })}
                 key={activeSurface.id}
                 environmentId={issueEnvironmentId}
                 panelRef={rightPanelRef}

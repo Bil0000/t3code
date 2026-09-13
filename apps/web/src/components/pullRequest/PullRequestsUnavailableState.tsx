@@ -1,4 +1,6 @@
-import { ExternalLinkIcon, GitPullRequestIcon } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
+
+import { PullRequestGlyph } from "./pullRequestIcons";
 
 import { UnavailableState } from "../sourceControl/UnavailableState";
 import { Button } from "../ui/button";
@@ -18,7 +20,7 @@ export function PullRequestsUnavailableState({
 }) {
   return (
     <UnavailableState
-      icon={<GitPullRequestIcon />}
+      icon={<PullRequestGlyph.pullRequest />}
       title={title}
       error={error}
       onRetry={onRetry}

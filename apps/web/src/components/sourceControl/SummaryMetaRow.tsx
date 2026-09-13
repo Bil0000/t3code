@@ -35,12 +35,14 @@ export function SummarySection({
   title,
   count,
   defaultOpen = true,
+  keepMounted = false,
   actions,
   children,
 }: {
   title: string;
   count?: number;
   defaultOpen?: boolean;
+  keepMounted?: boolean;
   /** Controls riding on the heading row itself. A sibling of the trigger, not a child of it —
       a button cannot hold a button — and only while open, since they act on what is shown. */
   actions?: ReactNode;
@@ -70,7 +72,12 @@ export function SummarySection({
     setOpen(nextOpen);
   };
   return (
-    <Collapsible open={open} onOpenChange={setOpenWithScrollAnchor} data-summary-section>
+    <Collapsible
+      open={open}
+      onOpenChange={setOpenWithScrollAnchor}
+      render={<section aria-label={title} />}
+      data-summary-section
+    >
       <div
         ref={headingRef}
         // The heading stays reachable while its body scrolls, like a diff file header.
@@ -93,7 +100,7 @@ export function SummarySection({
         </CollapsibleTrigger>
         {open ? actions : null}
       </div>
-      <CollapsiblePanel>
+      <CollapsiblePanel keepMounted={keepMounted}>
         <div className="px-4 pb-4">{children}</div>
       </CollapsiblePanel>
     </Collapsible>
