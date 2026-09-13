@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { useEffect, useRef } from "react";
@@ -14,6 +14,7 @@ import {
   unlockNotificationAudio,
 } from "../threadNotifications";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
+import { toastManager } from "./ui/toast";
 
 export function ThreadNotificationCoordinator() {
   const { environments } = useEnvironments();
@@ -29,8 +30,6 @@ export function ThreadNotificationCoordinator() {
     };
   }, [mode]);
 
-  if (mode === "off") return null;
-
   return environments.map((environment) => (
     <EnvironmentNotifications
       key={environment.environmentId}
@@ -43,6 +42,9 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
   const shell = useAtomValue(environmentShell.stateValueAtom(environmentId));
   const mode = useClientSettings((settings) => settings.notificationMode);
   const navigate = useNavigate();
+  const { environmentId: activeEnvironmentId, threadId: activeThreadId } = useParams({
+    strict: false,
+  });
   const previous = useRef(new Map<ThreadId, { input: string | null; completion: number | null }>());
 
   useEffect(() => {
@@ -66,7 +68,7 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
           ? completedAt
           : (prior?.completion ?? null);
       next.set(thread.id, { input, completion });
-      if (!prior || mode === "off" || thread.archivedAt !== null) continue;
+      if (!prior || thread.archivedAt !== null) continue;
       const kind =
         input && input !== prior.input
           ? "input"
@@ -78,6 +80,29 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
         void playNotificationSound(kind, () =>
           hasNotificationSound(getClientSettings().notificationMode),
         );
+      }
+      if (
+        kind === "completion" &&
+        document.visibilityState === "visible" &&
+        document.hasFocus() &&
+        (activeEnvironmentId !== environmentId || activeThreadId !== thread.id)
+      ) {
+        const toastId = toastManager.add({
+          type: "success",
+          title: "Thread completed",
+          description: thread.title,
+          actionProps: {
+            children: "Open thread",
+            onClick: () => {
+              toastManager.close(toastId);
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: { environmentId, threadId: thread.id },
+              });
+            },
+          },
+        });
+        continue;
       }
       if (
         !hasDesktopNotifications(mode) ||
@@ -107,7 +132,7 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
       }
     }
     previous.current = next;
-  }, [environmentId, mode, navigate, shell]);
+  }, [activeEnvironmentId, activeThreadId, environmentId, mode, navigate, shell]);
 
   return null;
 }
