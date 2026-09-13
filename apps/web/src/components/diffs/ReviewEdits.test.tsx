@@ -1,5 +1,6 @@
 import { parseDiffFromFile } from "@pierre/diffs";
-import { EnvironmentId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
 import { act, useEffect, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -15,10 +16,12 @@ const {
   editorOptions,
   prepareWorkspace,
   publish,
+  formatError,
 } = vi.hoisted(() => ({
   editorOptions: vi.fn(),
   prepareWorkspace: vi.fn(),
   publish: vi.fn(),
+  formatError: vi.fn(),
   read: vi.fn(),
   refreshStatus: vi.fn(),
   write: vi.fn(),
@@ -39,7 +42,7 @@ vi.mock("~/state/git", () => ({
 vi.mock("@pierre/diffs/editor", () => ({ Editor: editorOptions }));
 vi.mock("~/state/projects", () => ({ projectEnvironment: { writeFile: {} } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => write }));
-vi.mock("~/state/query", () => ({ formatEnvironmentQueryError: () => "Request failed" }));
+vi.mock("~/state/query", () => ({ formatEnvironmentQueryError: formatError }));
 vi.mock("../files/projectFilesQueryState", () => ({ getProjectFileQueryAtom: () => "file" }));
 vi.mock("./StyledDiffCodeView", () => ({ StyledDiffCodeView: () => null }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: toast } }));
@@ -62,7 +65,15 @@ vi.mock("../ui/alert-dialog", () => ({
 
 import { EditableDiffCodeView } from "./EditableDiffCodeView";
 import { StyledDiffCodeView } from "./StyledDiffCodeView";
-import { readReviewDraft, reviewEditKey, ReviewEditsProvider, useReviewEdits } from "./ReviewEdits";
+import {
+  readReviewDraft,
+  reviewEditKey,
+  ReviewEditsProvider,
+  useReviewEdits,
+  useReviewPanelLeaveGuard,
+} from "./ReviewEdits";
+import { selectActiveRightPanel, useRightPanelStore } from "~/rightPanelStore";
+import { useDiffPanelStore } from "~/diffPanelStore";
 
 const target = {
   environmentId: EnvironmentId.make("test"),
@@ -76,10 +87,12 @@ const savedDraft = {
   savedContents: "saved",
 };
 const key = reviewEditKey(target);
+const panelRef = scopeThreadRef(target.environmentId, ThreadId.make("review"));
 let renderer: ReactTestRenderer;
 let edits: NonNullable<ReturnType<typeof useReviewEdits>>;
 function Probe() {
   const value = useReviewEdits()!;
+  useReviewPanelLeaveGuard(panelRef);
   useEffect(() => {
     edits = value;
   }, [value]);
@@ -87,6 +100,7 @@ function Probe() {
 }
 
 beforeEach(() => {
+  useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const storage = new Map<string, string>();
   vi.stubGlobal(
@@ -103,6 +117,7 @@ beforeEach(() => {
     value: { worktreePath: "/review", branch: "t3-review/feature", isOnPullRequestHead: true },
   });
   publish.mockReset().mockResolvedValue({ _tag: "Success" });
+  formatError.mockReset().mockReturnValue("Request failed");
   blocker.status = "idle";
   blocker.proceed.mockReset().mockImplementation(() => {
     blocker.status = "idle";
@@ -213,7 +228,13 @@ it.each(["ctrlKey", "metaKey"])("saves only on %s+S", async (modifier) => {
   expect((await save(modifier)).defaultPrevented).toBe(true);
   expect(write).toHaveBeenCalledExactlyOnceWith({
     environmentId: "test",
-    input: { cwd: "/repo", relativePath: "file.ts", contents: "changed", expectedBranch: "review" },
+    input: {
+      cwd: "/repo",
+      relativePath: "file.ts",
+      contents: "changed",
+      expectedBranch: "review",
+      expectedContents: "saved",
+    },
   });
   expect(edits.drafts.get(key)?.savedContents).toBe("changed");
   expect(blockOptions.mock.lastCall?.[0].enableBeforeUnload).toBe(false);
@@ -227,6 +248,157 @@ it("keeps failed saves dirty and permits a retry", async () => {
   expect(toast).toHaveBeenCalledOnce();
   await save();
   expect(edits.drafts.get(key)?.savedContents).toBe("changed");
+});
+it("keeps edits and explains when an older server rejects PR saving", async () => {
+  await mount();
+  const draft = { ...savedDraft, pullRequestUrl: "https://github.com/example/repo/pull/1" };
+  const draftKey = reviewEditKey(draft);
+  await act(async () => {
+    edits.begin(draft);
+    edits.change(draftKey, "PR edit");
+    edits.focus(draftKey);
+  });
+  prepareWorkspace.mockResolvedValueOnce({ _tag: "Failure" });
+  const detail = 'Expected "local" | "worktree"\n  at ["mode"]';
+  formatError.mockReturnValueOnce(detail);
+  await save();
+  expect(edits.drafts.get(draftKey)).toMatchObject({
+    contents: "PR edit",
+    savedContents: "saved",
+  });
+  expect(write).not.toHaveBeenCalled();
+  expect(toast.mock.lastCall?.[0].description).toContain("Update and restart");
+  expect(toast.mock.lastCall?.[0].description).toContain(detail);
+  await save();
+  expect(edits.drafts.get(draftKey)?.savedContents).toBe("PR edit");
+});
+it("keeps the panel open until unsaved edits are saved or discarded", async () => {
+  await mount();
+  await change();
+  let open = true;
+  const close = () => {
+    open = false;
+  };
+  await act(async () => edits.requestLeave(close));
+  expect(open).toBe(true);
+  await click("Keep editing");
+  expect(open).toBe(true);
+  expect(edits.drafts.get(key)?.contents).toBe("changed");
+  await act(async () => edits.requestLeave(close));
+  write.mockResolvedValueOnce({ _tag: "Failure" });
+  await click("Save");
+  expect(open).toBe(true);
+  expect(edits.drafts.get(key)?.contents).toBe("changed");
+  await click("Save");
+  expect(open).toBe(false);
+  expect(edits.drafts.size).toBe(0);
+});
+it("keeps the editor for inactive closes and automatic opens, and confirms a user switch", async () => {
+  await mount();
+  const store = useRightPanelStore.getState();
+  store.open(panelRef, "files");
+  store.open(panelRef, "diff");
+  await change();
+  await act(async () => {
+    store.closeSurface(panelRef, "files");
+    store.closeOtherSurfaces(panelRef, "diff");
+    const currentTurn = TurnId.make("current");
+    useDiffPanelStore.getState().selectTurn(panelRef, currentTurn);
+    if (
+      store.openProactive(
+        panelRef,
+        { id: "diff", kind: "diff" },
+        store.getUserActionRevision(panelRef),
+      )
+    ) {
+      useDiffPanelStore.getState().selectTurn(panelRef, TurnId.make("new"));
+    }
+    expect(
+      useDiffPanelStore.getState().byThreadKey[`${target.environmentId}:review`],
+    ).toMatchObject({ turnId: currentTurn });
+    expect(
+      store.openProactive(
+        panelRef,
+        {
+          kind: "pull-request",
+          id: "pull-request:other",
+          projectId: "project",
+          repository: "owner/repo",
+          number: 1,
+        },
+        store.getUserActionRevision(panelRef),
+      ),
+    ).toBe(false);
+  });
+  expect(renderer.root.findAllByType("button")).toHaveLength(0);
+  expect(edits.drafts.get(key)?.contents).toBe("changed");
+  await act(async () => store.openFile(panelRef, "file.ts"));
+  expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, panelRef)).toBe("diff");
+  await click("Keep editing");
+  expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, panelRef)).toBe("diff");
+  await act(async () => store.openFile(panelRef, "file.ts"));
+  await click("Discard");
+  expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, panelRef)).toBe("file");
+});
+it("discards only after confirmation and closes a clean panel without asking", async () => {
+  await mount();
+  await change();
+  const close = vi.fn();
+  await act(async () => edits.requestLeave(close));
+  expect(close).not.toHaveBeenCalled();
+  await blockNavigation();
+  await click("Discard");
+  expect(close).toHaveBeenCalledOnce();
+  expect(blocker.reset).toHaveBeenCalledOnce();
+  expect(blocker.proceed).not.toHaveBeenCalled();
+  expect(edits.drafts.size).toBe(0);
+  await act(async () => edits.requestLeave(close));
+  expect(close).toHaveBeenCalledTimes(2);
+});
+it("cancels a pending close while saving and clears old save errors on the next prompt", async () => {
+  await mount();
+  await change();
+  write.mockResolvedValueOnce({ _tag: "Failure" });
+  await save();
+  const close = vi.fn();
+  await act(async () => edits.requestLeave(close));
+  expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);
+  let finish!: (value: unknown) => void;
+  write.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+  await click("Save");
+  expect(close).not.toHaveBeenCalled();
+  expect(
+    renderer.root.findAllByType("button").filter((button) => button.props.disabled),
+  ).toHaveLength(2);
+  await click("Keep editing");
+  await act(async () => finish({ _tag: "Success" }));
+  expect(close).not.toHaveBeenCalled();
+  expect(edits.drafts.get(key)?.savedContents).toBe("changed");
+});
+it("does not warn for list filters that keep the same PR open", async () => {
+  await mount();
+  await change();
+  const current = {
+    routeId: "/_chat/pull-requests",
+    search: { repository: "owner/repo", number: 1, selectedHost: "github.com" },
+  };
+  const shouldBlock = blockOptions.mock.lastCall?.[0].shouldBlockFn;
+  expect(
+    shouldBlock({
+      current,
+      next: { ...current, search: { ...current.search, q: "test", host: "gitlab.com" } },
+    }),
+  ).toBe(false);
+  expect(
+    shouldBlock({ current, next: { ...current, search: { ...current.search, number: 2 } } }),
+  ).toBe(true);
+  expect(
+    shouldBlock({
+      current,
+      next: { ...current, search: { ...current.search, selectedHost: "gitlab.com" } },
+    }),
+  ).toBe(true);
+  expect(shouldBlock({ current, next: { routeId: "/settings" } })).toBe(true);
 });
 it("retains newer edits made while saving and blocks duplicate writes", async () => {
   await mount();
@@ -291,6 +463,35 @@ it("does not capture the save shortcut after focus leaves the review editor", as
   await act(async () => edits.focus(null));
   expect((await save()).defaultPrevented).toBe(false);
   expect(write).not.toHaveBeenCalled();
+});
+it("consumes the editor save before the composer's window shortcut", async () => {
+  const stash = vi.fn();
+  function ComposerShortcut() {
+    useEffect(() => {
+      window.addEventListener("keydown", stash, true);
+      return () => window.removeEventListener("keydown", stash, true);
+    }, []);
+    return null;
+  }
+  await act(async () => {
+    renderer = create(
+      <ReviewEditsProvider>
+        <Probe />
+        <ComposerShortcut />
+      </ReviewEditsProvider>,
+    );
+  });
+  await act(async () => {
+    edits.begin(savedDraft);
+    edits.change(key, "changed");
+    edits.focus(key);
+  });
+  await save();
+  expect(write).toHaveBeenCalledOnce();
+  expect(stash).not.toHaveBeenCalled();
+  await act(async () => edits.focus(null));
+  await save();
+  expect(stash).toHaveBeenCalledOnce();
 });
 it("keeps edits on cancelled navigation and discards without writing", async () => {
   await mount();

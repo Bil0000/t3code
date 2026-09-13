@@ -1,6 +1,6 @@
 import { useBlocker } from "@tanstack/react-router";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, type ScopedThreadRef } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { randomUUID } from "~/lib/utils";
 import {
@@ -8,6 +8,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -21,6 +22,7 @@ import { vcsActionManager, vcsEnvironment } from "~/state/vcs";
 import { gitEnvironment } from "~/state/git";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { getProjectFileQueryAtom } from "../files/projectFilesQueryState";
+import { registerRightPanelLeaveGuard } from "~/rightPanelStore";
 import {
   AlertDialog,
   AlertDialogDescription,
@@ -145,12 +147,22 @@ const ReviewEditsContext = createContext<{
   begin: (draft: ReviewDraft) => ReviewDraft;
   change: (key: string, contents: string) => void;
   focus: (key: string | null) => void;
+  requestLeave: (action: () => void) => void;
+  blockLeave: (action?: () => void) => boolean;
   saving: boolean;
   publishing: ReadonlyMap<string, string>;
   publish: (environmentId: EnvironmentId, cwd: string, url: string) => Promise<boolean>;
 } | null>(null);
 
 export const useReviewEdits = () => useContext(ReviewEditsContext);
+
+export function useReviewPanelLeaveGuard(ref: ScopedThreadRef | null) {
+  const blockLeave = useReviewEdits()?.blockLeave;
+  useEffect(
+    () => (ref && blockLeave ? registerRightPanelLeaveGuard(ref, blockLeave) : undefined),
+    [ref, blockLeave],
+  );
+}
 
 export function ReviewEditsProvider({ children }: { children: ReactNode }) {
   const [drafts, setDrafts] = useState<ReadonlyMap<string, ReviewDraft>>(readSavedReviews);
@@ -161,10 +173,28 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const writeFile = useAtomCommand(projectEnvironment.writeFile, { reportFailure: false });
   const dirty = [...drafts.values()].some((draft) => draft.contents !== draft.savedContents);
   const blocker = useBlocker({
-    shouldBlockFn: () => dirty || saving || publishing.size > 0,
+    shouldBlockFn: ({ current, next }) => {
+      if (current.routeId === "/_chat/pull-requests" && next.routeId === current.routeId) {
+        if (
+          current.search.repository === next.search.repository &&
+          current.search.number === next.search.number &&
+          (current.search.selectedProjectId ?? current.search.projectId) ===
+            (next.search.selectedProjectId ?? next.search.projectId) &&
+          (current.search.selectedEnvironmentId ?? current.search.environmentId) ===
+            (next.search.selectedEnvironmentId ?? next.search.environmentId) &&
+          (current.search.selectedHost ?? current.search.host) ===
+            (next.search.selectedHost ?? next.search.host)
+        )
+          return false;
+      }
+      const shouldBlock = dirty || saving || publishing.size > 0;
+      if (shouldBlock) setError(null);
+      return shouldBlock;
+    },
     enableBeforeUnload: dirty || saving || publishing.size > 0,
     withResolver: true,
   });
@@ -175,6 +205,26 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
   const focus = useCallback((key: string | null) => {
     focusedKey.current = key;
   }, []);
+  const blockLeave = useCallback((action?: () => void) => {
+    if (
+      savingRef.current ||
+      publishingRef.current.size > 0 ||
+      [...draftsRef.current.values()].some((draft) => draft.contents !== draft.savedContents)
+    ) {
+      if (action) {
+        setError(null);
+        setPendingLeave((pending) => pending ?? action);
+      }
+      return true;
+    }
+    return false;
+  }, []);
+  const requestLeave = useCallback(
+    (action: () => void) => {
+      if (!blockLeave(action)) action();
+    },
+    [blockLeave],
+  );
   const begin = useCallback(
     (draft: ReviewDraft) => {
       const key = reviewEditKey(draft);
@@ -229,8 +279,16 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
                 environmentId: draft.environmentId,
                 input: { cwd: draft.cwd, reference: draft.pullRequestUrl, mode: "review" },
               });
-              if (prepared._tag === "Failure")
-                throw new Error(formatEnvironmentQueryError(prepared.cause));
+              if (prepared._tag === "Failure") {
+                const message = formatEnvironmentQueryError(prepared.cause);
+                throw new Error(
+                  message.includes('at ["mode"]') &&
+                    message.includes('"worktree"') &&
+                    !message.includes('"review"')
+                    ? `Update and restart this environment's T3 Code server to save PR edits. Your edits are still here.\n\n${message}`
+                    : message,
+                );
+              }
               if (!prepared.value.worktreePath || !prepared.value.isOnPullRequestHead)
                 throw new Error(
                   "The PR changed. Refresh the review before saving. Your edits are still here.",
@@ -245,7 +303,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
               relativePath: draft.filePath,
               contents: draft.contents,
               expectedBranch: workspace?.branch ?? draft.expectedBranch,
-              ...(draft.pullRequestUrl ? { expectedContents: draft.savedContents } : {}),
+              expectedContents: draft.savedContents,
             },
           });
           if (result._tag === "Failure") throw new Error(formatEnvironmentQueryError(result.cause));
@@ -361,7 +419,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
     );
     focusedKey.current = null;
   }, [update]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         (!event.metaKey && !event.ctrlKey) ||
@@ -371,25 +429,45 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
       )
         return;
       event.preventDefault();
-      event.stopPropagation();
+      event.stopImmediatePropagation();
       void save([focusedKey.current]);
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [save]);
   useEffect(() => {
-    if (blocker.status !== "blocked" || dirty || saving || publishing.size > 0) return;
+    if ((!pendingLeave && blocker.status !== "blocked") || dirty || saving || publishing.size > 0)
+      return;
     discardUnsaved();
-    blocker.proceed();
-  }, [blocker, dirty, saving, publishing.size, discardUnsaved]);
+    if (pendingLeave) {
+      setPendingLeave(null);
+      if (blocker.status === "blocked") blocker.reset();
+      pendingLeave();
+    } else if (blocker.status === "blocked") blocker.proceed();
+  }, [blocker, dirty, saving, publishing.size, discardUnsaved, pendingLeave]);
 
   return (
-    <ReviewEditsContext value={{ drafts, begin, change, focus, saving, publishing, publish }}>
+    <ReviewEditsContext
+      value={{
+        drafts,
+        begin,
+        change,
+        focus,
+        requestLeave,
+        blockLeave,
+        saving,
+        publishing,
+        publish,
+      }}
+    >
       {children}
       <AlertDialog
-        open={blocker.status === "blocked"}
+        open={pendingLeave !== null || blocker.status === "blocked"}
         onOpenChange={(open) => {
-          if (!open && blocker.status === "blocked") blocker.reset();
+          if (!open) {
+            setPendingLeave(null);
+            if (blocker.status === "blocked") blocker.reset();
+          }
         }}
       >
         <AlertDialogPopup>
@@ -412,6 +490,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
             <Button
               variant="outline"
               onClick={() => {
+                setPendingLeave(null);
                 if (blocker.status === "blocked") blocker.reset();
               }}
             >
@@ -420,10 +499,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
             <Button
               variant="ghost"
               disabled={saving || publishing.size > 0}
-              onClick={() => {
-                discardUnsaved();
-                if (blocker.status === "blocked") blocker.proceed();
-              }}
+              onClick={discardUnsaved}
             >
               Discard
             </Button>
