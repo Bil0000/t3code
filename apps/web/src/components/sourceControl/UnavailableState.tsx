@@ -28,7 +28,7 @@ export function UnavailableState({
   refreshing?: boolean;
 }) {
   return (
-    <Empty className="px-4 py-16 md:px-4">
+    <Empty className="min-h-0 justify-center-safe overflow-y-auto px-4 py-16 md:px-4 [&>*]:shrink-0">
       <EmptyMedia variant="icon">{icon}</EmptyMedia>
       <EmptyHeader>
         <EmptyTitle>{title}</EmptyTitle>
