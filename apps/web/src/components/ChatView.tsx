@@ -1,4 +1,5 @@
 import { useReviewEdits, useReviewPanelLeaveGuard } from "./diffs/ReviewEdits";
+import { isDiffSearchShortcut } from "./diffs/DiffSearch.logic";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
@@ -6317,7 +6318,7 @@ export default function ChatView(props: ChatViewProps) {
         event.stopPropagation();
         return;
       }
-      if (!activeThreadId || isCommandPaletteOpen()) {
+      if (!activeThreadId || isCommandPaletteOpen() || isDiffSearchShortcut(event)) {
         return;
       }
       const terminalFocusOwner = getTerminalFocusOwner();
