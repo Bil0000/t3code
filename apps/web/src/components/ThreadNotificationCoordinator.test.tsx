@@ -14,6 +14,9 @@ const state = vi.hoisted(() => ({
   completedAt: null as string | null,
   archivedAt: null as string | null,
   input: false,
+  approval: false,
+  sessionError: false,
+  turnError: false,
   add: vi.fn(
     (_toast: { title: string; description: string; actionProps: { onClick: () => void } }) =>
       "toast-1",
@@ -34,9 +37,11 @@ vi.mock("@effect/atom-react", () => ({
           title: "Fix the login form",
           archivedAt: state.archivedAt,
           hasPendingUserInput: state.input,
+          hasPendingApprovals: state.approval,
+          session: state.sessionError ? { status: "error" } : null,
           latestTurn: {
             turnId: "turn-1",
-            state: state.completedAt ? "completed" : "running",
+            state: state.turnError ? "error" : state.completedAt ? "completed" : "running",
             completedAt: state.completedAt,
           },
         },
@@ -98,6 +103,9 @@ beforeEach(() => {
     completedAt: null,
     archivedAt: null,
     input: false,
+    approval: false,
+    sessionError: false,
+    turnError: false,
   });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("document", {
@@ -135,7 +143,7 @@ describe("thread notifications", () => {
     expect(state.notification).not.toHaveBeenCalled();
   });
 
-  it.each(["active", "blurred", "hidden", "archived", "input", "disabled"])(
+  it.each(["active", "blurred", "hidden", "archived", "disabled"])(
     "does not show a completion toast for %s threads",
     async (condition) => {
       await render();
@@ -143,12 +151,42 @@ describe("thread notifications", () => {
       if (condition === "blurred") state.focused = false;
       if (condition === "hidden") state.visible = "hidden";
       if (condition === "archived") state.archivedAt = "2026-09-13T09:00:00.000Z";
-      if (condition === "input") state.input = true;
       if (condition === "disabled") state.inApp = false;
       await complete();
       expect(state.add).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    ["input", "Input needed"],
+    ["approval", "Approval needed"],
+    ["sessionError", "Thread failed"],
+    ["turnError", "Thread failed"],
+  ] as const)("uses the same %s event for in-app and desktop alerts", async (event, title) => {
+    state.mode = "notifications-and-sound";
+    await render();
+    state[event] = true;
+    await render();
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(1);
+    expect(state.add).toHaveBeenLastCalledWith(expect.objectContaining({ title }));
+    expect(state.sound).toHaveBeenCalledWith("input", expect.any(Function));
+    expect(state.notification).not.toHaveBeenCalled();
+
+    state[event] = false;
+    await render();
+    state.focused = false;
+    state[event] = true;
+    await render();
+    await render();
+    expect(state.add).toHaveBeenCalledTimes(1);
+    expect(state.notification).toHaveBeenCalledTimes(1);
+    expect(state.notification).toHaveBeenCalledWith(title, {
+      body: "Fix the login form",
+      tag: "env-1:thread-1",
+      silent: true,
+    });
+  });
 
   it("keeps desktop alerts when in-app notifications are disabled", async () => {
     state.inApp = false;
