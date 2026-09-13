@@ -17,7 +17,7 @@ import {
 } from "./KeybindingsSettings.logic";
 
 describe("KeybindingsSettings.logic", () => {
-  it("lists all composer controls and provider navigation with editable defaults", () => {
+  it("lists composer, provider, and pull request commands with editable defaults", () => {
     const rows = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "");
     for (const command of [
       "composer.host",
@@ -28,6 +28,8 @@ describe("KeybindingsSettings.logic", () => {
       "composer.previousWorktree",
       "modelPicker.previousProvider",
       "modelPicker.nextProvider",
+      "pullRequest.copyUrl",
+      "pullRequest.copyNumber",
     ]) {
       expect(rows.find((row) => row.command === command)).toMatchObject({
         source: "Default",

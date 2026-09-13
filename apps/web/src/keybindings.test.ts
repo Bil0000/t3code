@@ -1062,7 +1062,7 @@ describe("plus key parsing", () => {
   });
 });
 
-describe("composer control shortcuts", () => {
+describe("composer and pull request shortcuts", () => {
   const shortcuts = [
     ["h", "composer.host"],
     ["e", "composer.effort"],
@@ -1070,6 +1070,8 @@ describe("composer control shortcuts", () => {
     ["x", "composer.workspace"],
     ["g", "composer.branch"],
     ["l", "composer.previousWorktree"],
+    ["k", "pullRequest.copyUrl"],
+    ["y", "pullRequest.copyNumber"],
   ] as const;
 
   for (const platform of ["MacIntel", "Win32", "Linux"]) {
