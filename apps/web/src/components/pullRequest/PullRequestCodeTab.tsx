@@ -194,6 +194,7 @@ function PullRequestCodeTab({
   selectedCommitOid,
   onSelectedCommitChange,
   pendingFinding,
+  actionPending = false,
   fixFindingLabel = "Fix in a thread",
   onFixFinding,
   onAddToAgentSelection,
@@ -208,6 +209,7 @@ function PullRequestCodeTab({
   onSelectedCommitChange: (oid: string | null) => void;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
+  actionPending?: boolean;
   fixFindingLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
   /** Absent where there is no active agent composer to receive a local comment. */
@@ -805,7 +807,7 @@ function PullRequestCodeTab({
 
   const runThreadCommand = useCallback(
     async (label: string, run: () => Promise<{ readonly _tag: string }>): Promise<boolean> => {
-      if (threadPending) return false;
+      if (threadPending || actionPending) return false;
       setThreadPending(true);
       const result = await run();
       setThreadPending(false);
@@ -816,7 +818,7 @@ function PullRequestCodeTab({
       onRefresh();
       return true;
     },
-    [onRefresh, threadPending],
+    [actionPending, onRefresh, threadPending],
   );
 
   // A conversation is the same card wired to the same commands whether it sits on its line or
@@ -835,7 +837,7 @@ function PullRequestCodeTab({
         canReact={detail.capabilities.reactions === true}
         environmentId={environmentId}
         reference={reference}
-        pending={threadPending}
+        pending={threadPending || actionPending}
         fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
         fixLabel={fixFindingLabel}
         {...(onFixFinding ? { onFix: () => onFixFinding({ kind: "thread", thread }) } : {})}
@@ -899,6 +901,7 @@ function PullRequestCodeTab({
       runThreadCommand,
       setThreadResolution,
       threadPending,
+      actionPending,
       updateComment,
     ],
   );

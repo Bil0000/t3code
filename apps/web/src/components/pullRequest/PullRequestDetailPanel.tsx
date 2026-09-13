@@ -117,10 +117,12 @@ import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
 import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
 import { PullRequestMarkdownContext } from "./PullRequestMarkdown";
+import { PullRequestCommentActionsContext } from "./PullRequestCommentActions";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import {
   buildAddSelectionToAgentHandoff,
+  buildPullRequestCommentContext,
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
@@ -827,6 +829,10 @@ export function PullRequestDetailPanel({
   // Which action is in flight, not merely that one is: every control here is disabled while any
   // of them runs, but only the button that was pressed may say what it is doing.
   const [pendingAction, setPendingAction] = useState<PullRequestAction | null>(null);
+  const [resolvingThread, setResolvingThread] = useState(false);
+  const setThreadResolution = useAtomCommand(pullRequestEnvironment.setThreadResolution, {
+    reportFailure: false,
+  });
   const reviewEdits = useReviewEdits();
   const publishLabel =
     detail && reviewEdits?.publishing.get(reviewPublishKey(environmentId, detail.url));
@@ -840,7 +846,7 @@ export function PullRequestDetailPanel({
   const savingReview =
     !!reviewEdits?.saving && reviewFiles.some((draft) => draft.contents !== draft.savedContents);
   const hasUnsavedEdits = reviewFiles.some((draft) => draft.contents !== draft.savedContents);
-  const actionPending = pendingAction !== null || savingReview || !!publishLabel;
+  const actionPending = pendingAction !== null || resolvingThread || savingReview || !!publishLabel;
   const [pushedReviewUrl, setPushedReviewUrl] = useState<string | null>(null);
   const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
   // Scoped to the pull request it was typed against, since this one panel shows a different one
@@ -1105,7 +1111,7 @@ export function PullRequestDetailPanel({
 
   /** A question about the change, which needs a thread and nothing else. */
   const startAsk = async (kind: string, task: ThreadTask) => {
-    if (!detail || handoff !== null) return;
+    if (!detail || handoff !== null || actionPending) return;
     if (attachTarget !== null) {
       writeTaskToComposer(attachTarget, task);
       toastManager.add({
@@ -1153,7 +1159,7 @@ export function PullRequestDetailPanel({
     // already work — and it moves the branch under everything else that is open there.
     mode: "worktree" | "local" = "worktree",
   ) => {
-    if (!detail || handoff !== null) return;
+    if (!detail || handoff !== null || actionPending) return;
     if (attachTarget !== null && task !== null) {
       writeTaskToComposer(attachTarget, task);
       toastManager.add({
@@ -2646,68 +2652,112 @@ export function PullRequestDetailPanel({
             {...(unavailableGitHubUrl ? { gitHubUrl: unavailableGitHubUrl } : {})}
           />
         ) : detail ? (
-          <PullRequestMarkdownContext value={markdownContext}>
-            {mountedTabs.has("summary") ? (
-              <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
-                <PullRequestSummaryTab
-                  environmentId={environmentId}
-                  threadRef={threadRef}
-                  reference={reference}
-                  detail={detail}
-                  activityPending={activityPending}
-                  activityError={activityError}
-                  pendingFinding={handoff}
-                  fixFindingLabel={handoffLabels.fixFinding}
-                  fixCheckLabel={handoffLabels.fixCheck}
-                  onFixFinding={startFixFinding}
-                  actionPending={actionPending}
-                  onCommentAction={performCommentAction}
-                  onRefresh={refreshDetail}
-                />
-              </div>
-            ) : null}
-            {mountedTabs.has("timeline") ? (
-              <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
-                {activityPending ? (
-                  <PullRequestTimelineGhost />
-                ) : activityError ? (
-                  <PullRequestActivityUnavailableState
-                    error={activityError}
-                    onRetry={activityQuery.refresh}
-                  />
-                ) : (
-                  <PullRequestTimelineTab
-                    detail={detail}
+          <PullRequestCommentActionsContext
+            value={{
+              disabled: actionPending || handoff !== null,
+              threads: new Map(
+                detail.reviewThreads.flatMap((thread) =>
+                  thread.comments.map((comment) => [comment.id, thread] as const),
+                ),
+              ),
+              ...(detail.capabilities.review.resolve && detail.viewerPermissions.resolve
+                ? {
+                    resolve: async (thread) => {
+                      if (actionPending) return;
+                      setResolvingThread(true);
+                      const result = await setThreadResolution({
+                        environmentId,
+                        input: { ...reference, threadId: thread.id, resolved: !thread.isResolved },
+                      });
+                      setResolvingThread(false);
+                      if (result._tag === "Failure") {
+                        toastManager.add({
+                          type: "error",
+                          title: "The conversation could not be updated",
+                          description: readableFailure(
+                            squashAtomCommandFailure(result),
+                            "Try again.",
+                          ),
+                        });
+                        return;
+                      }
+                      refreshDetail();
+                    },
+                  }
+                : {}),
+              add: (comment) =>
+                void startAsk(`comment:${comment.id}`, {
+                  prompt: "",
+                  reviewComments: [buildPullRequestCommentContext(detail, comment)],
+                }),
+            }}
+          >
+            <PullRequestMarkdownContext value={markdownContext}>
+              {mountedTabs.has("summary") ? (
+                <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
+                  <PullRequestSummaryTab
                     environmentId={environmentId}
                     threadRef={threadRef}
                     reference={reference}
-                    order={timelineOrder}
-                    onOpenCommit={openCommit}
-                    onRefresh={refreshDetail}
-                  />
-                )}
-              </div>
-            ) : null}
-            {mountedTabs.has("code") ? (
-              <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
-                <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
-                  <PullRequestCodeTab
-                    onAddToAgentSelection={addSelectionToAgent}
-                    environmentId={environmentId}
-                    reference={reference}
                     detail={detail}
-                    selectedCommitOid={selectedCodeCommitOid}
-                    onSelectedCommitChange={selectCodeCommit}
+                    activityPending={activityPending}
+                    activityError={activityError}
                     pendingFinding={handoff}
                     fixFindingLabel={handoffLabels.fixFinding}
+                    fixCheckLabel={handoffLabels.fixCheck}
                     onFixFinding={startFixFinding}
+                    actionPending={actionPending}
+                    onCommentAction={performCommentAction}
                     onRefresh={refreshDetail}
-                    refreshToken={codeRefreshToken}
                   />
-                </Suspense>
-              </div>
-            ) : null}
-          </PullRequestMarkdownContext>
+                </div>
+              ) : null}
+              {mountedTabs.has("timeline") ? (
+                <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
+                  {activityPending ? (
+                    <PullRequestTimelineGhost />
+                  ) : activityError ? (
+                    <PullRequestActivityUnavailableState
+                      error={activityError}
+                      onRetry={activityQuery.refresh}
+                    />
+                  ) : (
+                    <PullRequestTimelineTab
+                      detail={detail}
+                      environmentId={environmentId}
+                      threadRef={threadRef}
+                      reference={reference}
+                      order={timelineOrder}
+                      onOpenCommit={openCommit}
+                      onRefresh={refreshDetail}
+                    />
+                  )}
+                </div>
+              ) : null}
+              {mountedTabs.has("code") ? (
+                <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
+                  <Suspense
+                    fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}
+                  >
+                    <PullRequestCodeTab
+                      actionPending={actionPending}
+                      onAddToAgentSelection={addSelectionToAgent}
+                      environmentId={environmentId}
+                      reference={reference}
+                      detail={detail}
+                      selectedCommitOid={selectedCodeCommitOid}
+                      onSelectedCommitChange={selectCodeCommit}
+                      pendingFinding={handoff}
+                      fixFindingLabel={handoffLabels.fixFinding}
+                      onFixFinding={startFixFinding}
+                      onRefresh={refreshDetail}
+                      refreshToken={codeRefreshToken}
+                    />
+                  </Suspense>
+                </div>
+              ) : null}
+            </PullRequestMarkdownContext>
+          </PullRequestCommentActionsContext>
         ) : null}
       </div>
 
