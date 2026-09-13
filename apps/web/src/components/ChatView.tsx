@@ -4655,18 +4655,22 @@ export default function ChatView(props: ChatViewProps) {
   const activateRightPanelSurface = useCallback(
     (surface: RightPanelSurface) => {
       if (!activeThreadRef) return;
-      useRightPanelStore.getState().activateSurface(activeThreadRef, surface.id);
-      if (surface.kind === "preview" && surface.resourceId) {
-        setActivePreviewTab(activeThreadRef, surface.resourceId);
-      }
-      if (surface.kind === "terminal") {
-        setTerminalFocusRequestId((value) => value + 1);
-      }
-      if (surface.kind === "diff" && !diffOpen) {
-        onDiffPanelOpen?.();
-      }
+      const activate = () => {
+        useRightPanelStore.getState().activateSurface(activeThreadRef, surface.id);
+        if (surface.kind === "preview" && surface.resourceId) {
+          setActivePreviewTab(activeThreadRef, surface.resourceId);
+        }
+        if (surface.kind === "terminal") {
+          setTerminalFocusRequestId((value) => value + 1);
+        }
+        if (surface.kind === "diff" && !diffOpen) {
+          onDiffPanelOpen?.();
+        }
+      };
+      if (activeRightPanelSurface?.id === surface.id) activate();
+      else leaveReviewPanel(activate);
     },
-    [activeThreadRef, diffOpen, onDiffPanelOpen],
+    [activeRightPanelSurface?.id, activeThreadRef, diffOpen, leaveReviewPanel, onDiffPanelOpen],
   );
   const toggleRightPanel = useCallback(() => {
     if (!activeThreadRef) return;
