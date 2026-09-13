@@ -148,7 +148,7 @@ describe("diff tree file activation", () => {
       await act(async () => {
         handlers.onPointerDown(pointer);
         handlers.onPointerMove({ ...pointer, clientX: 60 });
-        handlers.onPointerUp(pointer);
+        handlers.onPointerUp({ ...pointer, clientX: 60 });
       });
       await act(async () => renderer!.unmount());
       renderer = undefined;
