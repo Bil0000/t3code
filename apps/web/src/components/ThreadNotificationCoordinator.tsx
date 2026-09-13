@@ -125,6 +125,7 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
         continue;
       }
       if (
+        document.hasFocus() ||
         !hasDesktopNotifications(mode) ||
         typeof Notification === "undefined" ||
         Notification.permission !== "granted"

@@ -188,8 +188,9 @@ describe("thread notifications", () => {
     });
   });
 
-  it("keeps desktop alerts when in-app notifications are disabled", async () => {
+  it("keeps background desktop alerts when in-app notifications are disabled", async () => {
     state.inApp = false;
+    state.focused = false;
     state.mode = "notifications";
     await render();
     await complete();
@@ -198,6 +199,41 @@ describe("thread notifications", () => {
     state.inApp = true;
     await render();
     expect(state.add).not.toHaveBeenCalled();
+  });
+
+  it.each(["completedAt", "input", "approval", "sessionError", "turnError"] as const)(
+    "suppresses focused %s desktop alerts without replaying them after blur",
+    async (event) => {
+      state.inApp = false;
+      state.mode = "notifications-and-sound";
+      await render();
+      if (event === "completedAt") state.completedAt = "2026-09-13T10:00:00.000Z";
+      else state[event] = true;
+      await render();
+      expect(state.notification).not.toHaveBeenCalled();
+      expect(state.sound).toHaveBeenCalledTimes(1);
+
+      state.focused = false;
+      await render();
+      expect(state.notification).not.toHaveBeenCalled();
+
+      if (event === "completedAt") state.completedAt = null;
+      else state[event] = false;
+      await render();
+      if (event === "completedAt") state.completedAt = "2026-09-13T10:01:00.000Z";
+      else state[event] = true;
+      await render();
+      expect(state.notification).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("suppresses focused desktop alerts for the active thread with in-app alerts enabled", async () => {
+    state.mode = "notifications";
+    state.active.threadId = "thread-1";
+    await render();
+    await complete();
+    expect(state.add).not.toHaveBeenCalled();
+    expect(state.notification).not.toHaveBeenCalled();
   });
 
   it("does not replay a completion when opting in from all alerts off", async () => {
