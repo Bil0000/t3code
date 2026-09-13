@@ -56,6 +56,7 @@ import {
   canEditPullRequestChangeRequest,
   canEditPullRequestComment,
 } from "./pullRequestEditing.logic";
+import { PullRequestCommentActions } from "./PullRequestCommentActions";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
@@ -209,7 +210,10 @@ function CollapsedComment({
               {body === null && !editing.canEdit(comment) ? null : (
                 <CommentBody className="mt-2" comment={comment} editing={editing} />
               )}
-              {reactionBar}
+              <div className="mt-2 flex items-center justify-between">
+                {reactionBar}
+                <PullRequestCommentActions showResolution comment={comment} />
+              </div>
             </div>
           ) : null}
         </CollapsiblePanel>
@@ -938,6 +942,7 @@ export function PullRequestSummaryTab({
                           ) : null}
                           {body === null ? reactionBar : null}
                         </span>
+                        <PullRequestCommentActions showResolution comment={comment} />
                         {/* Review remarks only. A plain conversation comment is talk, not a finding,
                       and offering to fix one would promise more than it says. */}
                         {onFixFinding && finding ? (
