@@ -868,7 +868,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           operation: input.operation,
         },
       }),
-      
       gitProcesses.withPermits(1),
       Effect.withSpan(input.operation, {
         kind: "client",
