@@ -2740,7 +2740,10 @@ const makeWsRpcLayer = (
         [WS_METHODS.reviewApplyPatch]: (input) =>
           observeRpcEffect(
             WS_METHODS.reviewApplyPatch,
-            review.applyPatch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            gitWorkflow.withRepositoryLock(
+              input.cwd,
+              review.applyPatch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            ),
             { "rpc.aggregate": "review" },
           ),
         [WS_METHODS.terminalOpen]: (input) =>
