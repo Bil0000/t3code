@@ -317,6 +317,7 @@ export function PullRequestSummaryTab({
   activityPending,
   activityError,
   pendingFinding,
+  actionPending,
   fixFindingLabel = "Fix in a thread",
   fixCheckLabel = "Fix",
   onFixFinding,
@@ -330,6 +331,7 @@ export function PullRequestSummaryTab({
   activityError: string | null;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
+  actionPending: boolean;
   fixFindingLabel?: string;
   fixCheckLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
@@ -700,7 +702,9 @@ export function PullRequestSummaryTab({
                         size="xs"
                         variant="ghost"
                         className="shrink-0"
-                        disabled={pendingFinding !== null && pendingFinding !== undefined}
+                        disabled={
+                          actionPending || (pendingFinding !== null && pendingFinding !== undefined)
+                        }
                         onClick={() => onFixFinding(finding)}
                       >
                         <HammerIcon className="size-3" />
@@ -832,7 +836,10 @@ export function PullRequestSummaryTab({
                             size="xs"
                             variant="ghost"
                             className="-mt-1 shrink-0"
-                            disabled={pendingFinding !== null && pendingFinding !== undefined}
+                            disabled={
+                              actionPending ||
+                              (pendingFinding !== null && pendingFinding !== undefined)
+                            }
                             onClick={() => onFixFinding(finding)}
                           >
                             <HammerIcon className="size-3" />
