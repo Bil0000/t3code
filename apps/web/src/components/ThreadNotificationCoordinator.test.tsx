@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 const state = vi.hoisted(() => ({
   mode: "off" as ClientSettings["notificationMode"],
+  inApp: true,
   active: { environmentId: "env-1", threadId: "other-thread" },
   focused: true,
   visible: "visible",
@@ -48,8 +49,11 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => state.active,
 }));
 vi.mock("../hooks/useSettings", () => ({
-  useClientSettings: (select: (settings: Pick<ClientSettings, "notificationMode">) => unknown) =>
-    select({ notificationMode: state.mode }),
+  useClientSettings: (
+    select: (
+      settings: Pick<ClientSettings, "notificationMode" | "inAppNotificationsEnabled">,
+    ) => unknown,
+  ) => select({ notificationMode: state.mode, inAppNotificationsEnabled: state.inApp }),
   getClientSettings: () => ({ notificationMode: state.mode }),
 }));
 vi.mock("../state/environments", () => ({
@@ -86,6 +90,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   Object.assign(state, {
     mode: "off",
+    inApp: true,
     active: { environmentId: "env-1", threadId: "other-thread" },
     focused: true,
     visible: "visible",
@@ -112,7 +117,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-describe("thread completion toasts", () => {
+describe("thread notifications", () => {
   it("alerts once with system alerts off and opens the completed thread", async () => {
     await render();
     await complete();
@@ -130,7 +135,7 @@ describe("thread completion toasts", () => {
     expect(state.notification).not.toHaveBeenCalled();
   });
 
-  it.each(["active", "blurred", "hidden", "archived", "input"])(
+  it.each(["active", "blurred", "hidden", "archived", "input", "disabled"])(
     "does not show a completion toast for %s threads",
     async (condition) => {
       await render();
@@ -139,10 +144,32 @@ describe("thread completion toasts", () => {
       if (condition === "hidden") state.visible = "hidden";
       if (condition === "archived") state.archivedAt = "2026-09-13T09:00:00.000Z";
       if (condition === "input") state.input = true;
+      if (condition === "disabled") state.inApp = false;
       await complete();
       expect(state.add).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps desktop alerts when in-app notifications are disabled", async () => {
+    state.inApp = false;
+    state.mode = "notifications";
+    await render();
+    await complete();
+    expect(state.add).not.toHaveBeenCalled();
+    expect(state.notification).toHaveBeenCalledTimes(1);
+    state.inApp = true;
+    await render();
+    expect(state.add).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a completion when opting in from all alerts off", async () => {
+    state.inApp = false;
+    await render();
+    await complete();
+    state.inApp = true;
+    await render();
+    expect(state.add).not.toHaveBeenCalled();
+  });
 
   it("compares the environment as well as the thread", async () => {
     state.active = { environmentId: "env-2", threadId: "thread-1" };

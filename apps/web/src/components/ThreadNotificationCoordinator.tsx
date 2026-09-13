@@ -19,6 +19,9 @@ import { toastManager } from "./ui/toast";
 export function ThreadNotificationCoordinator() {
   const { environments } = useEnvironments();
   const mode = useClientSettings((settings) => settings.notificationMode);
+  const inAppNotificationsEnabled = useClientSettings(
+    (settings) => settings.inAppNotificationsEnabled,
+  );
 
   useEffect(() => {
     if (!hasNotificationSound(mode)) return;
@@ -29,6 +32,8 @@ export function ThreadNotificationCoordinator() {
       document.removeEventListener("keydown", unlockNotificationAudio);
     };
   }, [mode]);
+
+  if (mode === "off" && !inAppNotificationsEnabled) return null;
 
   return environments.map((environment) => (
     <EnvironmentNotifications
@@ -41,6 +46,9 @@ export function ThreadNotificationCoordinator() {
 function EnvironmentNotifications({ environmentId }: { environmentId: EnvironmentId }) {
   const shell = useAtomValue(environmentShell.stateValueAtom(environmentId));
   const mode = useClientSettings((settings) => settings.notificationMode);
+  const inAppNotificationsEnabled = useClientSettings(
+    (settings) => settings.inAppNotificationsEnabled,
+  );
   const navigate = useNavigate();
   const { environmentId: activeEnvironmentId, threadId: activeThreadId } = useParams({
     strict: false,
@@ -82,6 +90,7 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
         );
       }
       if (
+        inAppNotificationsEnabled &&
         kind === "completion" &&
         document.visibilityState === "visible" &&
         document.hasFocus() &&
@@ -132,7 +141,15 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
       }
     }
     previous.current = next;
-  }, [activeEnvironmentId, activeThreadId, environmentId, mode, navigate, shell]);
+  }, [
+    activeEnvironmentId,
+    activeThreadId,
+    environmentId,
+    inAppNotificationsEnabled,
+    mode,
+    navigate,
+    shell,
+  ]);
 
   return null;
 }
