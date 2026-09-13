@@ -1064,22 +1064,21 @@ describe("plus key parsing", () => {
 
 describe("composer control shortcuts", () => {
   const shortcuts = [
-    ["h", "composer.host", true],
-    ["e", "composer.effort", false],
-    ["a", "composer.mode", false],
-    ["s", "composer.workspace", false],
-    ["g", "composer.branch", false],
-    ["p", "composer.previousWorktree", false],
+    ["h", "composer.host"],
+    ["e", "composer.effort"],
+    ["a", "composer.mode"],
+    ["x", "composer.workspace"],
+    ["g", "composer.branch"],
+    ["l", "composer.previousWorktree"],
   ] as const;
 
   for (const platform of ["MacIntel", "Win32", "Linux"]) {
     it.each(shortcuts)(
       `resolves %s on ${platform} and leaves terminal input alone`,
-      (key, command, shiftKey) => {
+      (key, command) => {
         const input = event({
           key,
-          shiftKey,
-          altKey: !shiftKey,
+          shiftKey: true,
           metaKey: platform === "MacIntel",
           ctrlKey: platform !== "MacIntel",
         });
@@ -1100,7 +1099,32 @@ describe("composer control shortcuts", () => {
     );
   }
 
-  it("leaves AltGr text entry alone on Windows and Linux", () => {
+  for (const platform of ["MacIntel", "Win32", "Linux"]) {
+    it.each([
+      ["s", "thread.settle"],
+      ["p", "thread.pin"],
+    ])(`preserves the existing %s shortcut on ${platform}`, (key, command) => {
+      assert.strictEqual(
+        resolveShortcutCommand(
+          event({
+            key,
+            shiftKey: true,
+            metaKey: platform === "MacIntel",
+            ctrlKey: platform !== "MacIntel",
+          }),
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          { platform },
+        ),
+        command,
+      );
+    });
+  }
+
+  const altEffortBindings = compileResolvedKeybindingsConfig([
+    { key: "mod+alt+e", command: "composer.effort", when: "!terminalFocus" },
+  ]);
+
+  it("leaves AltGr text entry alone with a custom Alt binding", () => {
     for (const platform of ["Win32", "Linux"]) {
       const input = event({
         key: "€",
@@ -1109,13 +1133,11 @@ describe("composer control shortcuts", () => {
         altKey: true,
         getModifierState: (key) => key === "AltGraph",
       });
-      assert.isNull(resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, { platform }));
+      assert.isNull(resolveShortcutCommand(input, altEffortBindings, { platform }));
       assert.strictEqual(
-        resolveShortcutCommand(
-          { ...input, getModifierState: () => false },
-          DEFAULT_RESOLVED_KEYBINDINGS,
-          { platform },
-        ),
+        resolveShortcutCommand({ ...input, getModifierState: () => false }, altEffortBindings, {
+          platform,
+        }),
         "composer.effort",
       );
     }
@@ -1126,7 +1148,7 @@ describe("composer control shortcuts", () => {
     assert.strictEqual(
       resolveShortcutCommand(
         event({ key: "e", ctrlKey: true, altKey: true, getModifierState }),
-        DEFAULT_RESOLVED_KEYBINDINGS,
+        altEffortBindings,
         { platform: "Win32" },
       ),
       "composer.effort",
@@ -1134,7 +1156,7 @@ describe("composer control shortcuts", () => {
     assert.strictEqual(
       resolveShortcutCommand(
         event({ key: "´", code: "KeyE", metaKey: true, altKey: true, getModifierState }),
-        DEFAULT_RESOLVED_KEYBINDINGS,
+        altEffortBindings,
         { platform: "MacIntel" },
       ),
       "composer.effort",
@@ -1155,21 +1177,30 @@ describe("composer control shortcuts", () => {
     );
   });
 
-  it.each([
-    ["ArrowUp", "modelPicker.previousProvider"],
-    ["ArrowDown", "modelPicker.nextProvider"],
-  ] as const)("limits %s to the model picker", (key, command) => {
-    const input = event({ key, altKey: true });
-    assert.strictEqual(
-      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
-        context: { modelPickerOpen: true },
-      }),
-      command,
-    );
-    assert.isNull(
-      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
-        context: { modelPickerOpen: false },
-      }),
-    );
-  });
+  for (const platform of ["MacIntel", "Win32", "Linux"]) {
+    it.each([
+      ["ArrowUp", "modelPicker.previousProvider"],
+      ["ArrowDown", "modelPicker.nextProvider"],
+    ] as const)(`limits %s to the model picker on ${platform}`, (key, command) => {
+      const input = event({
+        key,
+        shiftKey: true,
+        metaKey: platform === "MacIntel",
+        ctrlKey: platform !== "MacIntel",
+      });
+      assert.strictEqual(
+        resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: { modelPickerOpen: true },
+        }),
+        command,
+      );
+      assert.isNull(
+        resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: { modelPickerOpen: false },
+        }),
+      );
+    });
+  }
 });

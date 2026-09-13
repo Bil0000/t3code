@@ -6,14 +6,14 @@ also lists the command IDs and defaults available in your version.
 ## Composer controls
 
 Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
-Use `mod+alt+e` for effort, `mod+alt+a` for access mode, `mod+alt+s` for the
-workspace, and `mod+alt+g` for the Git branch. The workspace menu includes the
+Use `mod+shift+e` for effort, `mod+shift+a` for access mode, `mod+shift+x` for the
+workspace, and `mod+shift+g` for the Git branch. The workspace menu includes the
 current checkout, a new worktree, and the previous worktree when available.
-Use `mod+alt+p` to reuse the previous worktree directly.
+Use `mod+shift+l` to reuse the previous worktree directly.
 
 In the model picker, press Left in an empty search field or Shift+Tab to reach
 the provider list. Use Up/Down to move and Enter to choose. Right returns to
-model search. `alt+up` and `alt+down` switch providers directly and clear the
+model search. `mod+shift+up` and `mod+shift+down` switch providers directly and clear the
 search. These provider shortcuts can also be changed in Settings.
 
 These shortcuts run inside the focused web or desktop client. `mod` uses Command
