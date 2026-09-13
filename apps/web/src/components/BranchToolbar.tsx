@@ -8,7 +8,17 @@ import {
   HistoryIcon,
   ScaleIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type Ref,
+  memo,
+  useImperativeHandle,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
@@ -46,7 +56,12 @@ import { measureRestingComposerControls } from "./chat/restingComposerControlsMe
 import { resolveRestingComposerControlsNaturalWidth } from "./composerFooterLayout";
 import { cn } from "~/lib/utils";
 
+export interface BranchToolbarHandle {
+  usePreviousWorktree: () => void;
+}
+
 interface BranchToolbarProps {
+  ref?: Ref<BranchToolbarHandle>;
   environmentId: EnvironmentId;
   threadId: ThreadId;
   showGitControls: boolean;
@@ -169,6 +184,10 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         render={<Button variant="ghost" size="xs" />}
         className="min-w-0 max-w-[48%] flex-initial justify-start font-normal text-muted-foreground/70 text-xs! hover:text-foreground/80"
         data-composer-context-control
+        data-composer-shortcut={[
+          showEnvironmentPicker && !envLocked ? "composer.host" : "",
+          !envModeLocked ? "composer.workspace" : "",
+        ].join(" ")}
       >
         {triggerContent}
         <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
@@ -438,6 +457,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
 }
 
 export const BranchToolbar = memo(function BranchToolbar({
+  ref,
   environmentId,
   threadId,
   showGitControls,
@@ -517,6 +537,24 @@ export const BranchToolbar = memo(function BranchToolbar({
       projectRef: activeProjectRef,
     });
   }, [activeProjectRef, draftId, previousWorktreeSeed, setDraftThreadContext, threadRef]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      usePreviousWorktree: () => {
+        if (!showGitControls || !canUsePreviousWorktree || !previousWorktreeSeed) return;
+        onUsePreviousWorktree();
+        onComposerFocusRequest?.();
+      },
+    }),
+    [
+      canUsePreviousWorktree,
+      onComposerFocusRequest,
+      onUsePreviousWorktree,
+      previousWorktreeSeed,
+      showGitControls,
+    ],
+  );
 
   const showEnvironmentPicker = Boolean(
     availableEnvironments && availableEnvironments.length > 1 && onEnvironmentChange,

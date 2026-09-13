@@ -1,4 +1,8 @@
 import { assert, describe, it } from "vite-plus/test";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+} from "@t3tools/shared/keybindings";
 
 import {
   type KeybindingCommand,
@@ -1053,6 +1057,77 @@ describe("plus key parsing", () => {
     assert.isTrue(
       isTerminalToggleShortcut(event({ key: "+", ctrlKey: true }), plusBindings, {
         platform: "Linux",
+      }),
+    );
+  });
+});
+
+describe("composer control shortcuts", () => {
+  const shortcuts = [
+    ["h", "composer.host", true],
+    ["e", "composer.effort", false],
+    ["a", "composer.mode", false],
+    ["t", "composer.workspace", false],
+    ["g", "composer.branch", false],
+    ["p", "composer.previousWorktree", false],
+  ] as const;
+
+  for (const platform of ["MacIntel", "Linux"]) {
+    it.each(shortcuts)(
+      `resolves %s on ${platform} and leaves terminal input alone`,
+      (key, command, shiftKey) => {
+        const input = event({
+          key,
+          shiftKey,
+          altKey: !shiftKey,
+          metaKey: platform === "MacIntel",
+          ctrlKey: platform !== "MacIntel",
+        });
+        assert.strictEqual(
+          resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+            platform,
+            context: { terminalFocus: false },
+          }),
+          command,
+        );
+        assert.isNull(
+          resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+            platform,
+            context: { terminalFocus: true },
+          }),
+        );
+      },
+    );
+  }
+
+  it.each(shortcuts)("uses a custom binding for %s", (_key, command) => {
+    const bindings = compileResolvedKeybindingsConfig([
+      { key: "mod+shift+y", command, when: "!terminalFocus" },
+    ]);
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "Y", code: "KeyY", ctrlKey: true, shiftKey: true }),
+        bindings,
+        { platform: "Linux" },
+      ),
+      command,
+    );
+  });
+
+  it.each([
+    ["ArrowUp", "modelPicker.previousProvider"],
+    ["ArrowDown", "modelPicker.nextProvider"],
+  ] as const)("limits %s to the model picker", (key, command) => {
+    const input = event({ key, altKey: true });
+    assert.strictEqual(
+      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+        context: { modelPickerOpen: true },
+      }),
+      command,
+    );
+    assert.isNull(
+      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+        context: { modelPickerOpen: false },
       }),
     );
   });
