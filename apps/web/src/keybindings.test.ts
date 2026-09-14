@@ -1064,53 +1064,37 @@ describe("plus key parsing", () => {
 });
 
 describe("composer and pull request shortcuts", () => {
-  it("fills missing server commands without replacing saved bindings", () => {
+  it("fills missing number shortcuts without replacing the saved URL binding", () => {
     const olderServerBindings = DEFAULT_RESOLVED_KEYBINDINGS.filter(
-      (binding) => !binding.command.startsWith("pullRequest.copy"),
+      (binding) =>
+        binding.command !== "pullRequest.copyNumber" && binding.command !== "thread.copyReference",
     );
-    const input = event({ key: "k", metaKey: true, shiftKey: true });
-    assert.strictEqual(
-      resolveShortcutCommand(input, olderServerBindings, { platform: "MacIntel" }),
-      null,
-    );
-    const bindings = mergeWithDefaultKeybindings(olderServerBindings);
-    assert.strictEqual(
-      resolveShortcutCommand(input, bindings, { platform: "MacIntel" }),
-      "pullRequest.copyUrl",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(event({ key: "y", metaKey: true, shiftKey: true }), bindings, {
-        platform: "MacIntel",
-      }),
-      "pullRequest.copyNumber",
-    );
-    const remapped = mergeWithDefaultKeybindings(
-      compileResolvedKeybindingsConfig([
-        { key: "mod+shift+8", command: "pullRequest.copyUrl", when: "terminalOpen" },
-        { key: "mod+shift+y", command: "composer.effort" },
+    const bindings = mergeWithDefaultKeybindings([
+      ...olderServerBindings,
+      ...compileResolvedKeybindingsConfig([
+        { key: "mod+shift+8", command: "thread.copyReference", when: "!terminalFocus" },
       ]),
-    );
-    assert.strictEqual(resolveShortcutCommand(input, remapped, { platform: "MacIntel" }), null);
-    assert.strictEqual(
-      resolveShortcutCommand(event({ key: "8", ctrlKey: true, shiftKey: true }), remapped, {
-        platform: "Linux",
-        context: { terminalOpen: true },
-      }),
-      "pullRequest.copyUrl",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(event({ key: "y", ctrlKey: true, shiftKey: true }), remapped, {
-        platform: "Linux",
-      }),
-      "composer.effort",
-    );
+    ]);
+    for (const [key, command] of [
+      ["k", "pullRequest.copyNumber"],
+      ["8", "thread.copyReference"],
+      ["c", null],
+      ["y", null],
+    ] as const) {
+      assert.strictEqual(
+        resolveShortcutCommand(event({ key, metaKey: true, shiftKey: true }), bindings, {
+          platform: "MacIntel",
+        }),
+        command,
+      );
+    }
   });
 
   it.each(["terminalOpen", "previewFocus", "previewOpen", "modelPickerOpen"])(
     "honors custom PR shortcut conditions for %s",
     (condition) => {
       const bindings = compileResolvedKeybindingsConfig([
-        { key: "mod+shift+k", command: "pullRequest.copyUrl", when: condition },
+        { key: "mod+shift+k", command: "thread.copyReference", when: condition },
         { key: "mod+shift+k", command: "pullRequest.copyNumber", when: `!${condition}` },
       ]);
       const input = event({ key: "k", ctrlKey: true, shiftKey: true });
@@ -1120,7 +1104,7 @@ describe("composer and pull request shortcuts", () => {
             platform: "Linux",
             context: { [condition]: enabled },
           }),
-          enabled ? "pullRequest.copyUrl" : "pullRequest.copyNumber",
+          enabled ? "thread.copyReference" : "pullRequest.copyNumber",
         );
       }
     },
@@ -1133,8 +1117,8 @@ describe("composer and pull request shortcuts", () => {
     ["x", "composer.workspace"],
     ["g", "composer.branch"],
     ["l", "composer.previousWorktree"],
-    ["k", "pullRequest.copyUrl"],
-    ["y", "pullRequest.copyNumber"],
+    ["c", "thread.copyReference"],
+    ["k", "pullRequest.copyNumber"],
   ] as const;
 
   for (const platform of ["MacIntel", "Win32", "Linux"]) {

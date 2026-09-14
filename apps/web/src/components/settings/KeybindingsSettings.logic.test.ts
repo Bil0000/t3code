@@ -28,7 +28,7 @@ describe("KeybindingsSettings.logic", () => {
       "composer.previousWorktree",
       "modelPicker.previousProvider",
       "modelPicker.nextProvider",
-      "pullRequest.copyUrl",
+      "thread.copyReference",
       "pullRequest.copyNumber",
     ]) {
       expect(rows.find((row) => row.command === command)).toMatchObject({
@@ -36,6 +36,12 @@ describe("KeybindingsSettings.logic", () => {
         conflicts: [],
       });
     }
+  });
+  it("finds the existing URL shortcut in Settings", () => {
+    const rows = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "PR URL");
+    expect(rows).toEqual([
+      expect.objectContaining({ command: "thread.copyReference", key: "mod+shift+c" }),
+    ]);
   });
   it("builds searchable rows with readable key and when values", () => {
     const rows = buildKeybindingRows(

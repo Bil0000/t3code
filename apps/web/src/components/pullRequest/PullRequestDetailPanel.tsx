@@ -738,17 +738,10 @@ export function PullRequestDetailPanel({
     const command = resolveShortcutCommand(event, keybindings, {
       context: getShortcutContext(),
     });
-    const value =
-      command === "pullRequest.copyUrl"
-        ? (detail?.url ?? matchingListEntry?.url)
-        : command === "pullRequest.copyNumber"
-          ? `#${reference.number}`
-          : null;
-    if (!value) return;
+    if (command !== "pullRequest.copyNumber") return;
     event.preventDefault();
     event.stopPropagation();
-    if (!event.repeat)
-      copyReference(value, command === "pullRequest.copyNumber" ? "PR number" : "PR link");
+    if (!event.repeat) copyReference(`#${reference.number}`, "PR number");
   });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => copyFromShortcut(event);
@@ -2132,7 +2125,7 @@ export function PullRequestDetailPanel({
                     <LinkIcon className="size-3.5" />
                     Copy link
                     <MenuShortcut>
-                      {shortcutLabelForCommand(keybindings, "pullRequest.copyUrl")}
+                      {shortcutLabelForCommand(keybindings, "thread.copyReference")}
                     </MenuShortcut>
                   </MenuItem>
                   <MenuItem onClick={() => copyReference(`#${reference.number}`, "PR number")}>
