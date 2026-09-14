@@ -555,14 +555,7 @@ export function SnapShotSettings() {
                         </Button>
                       ) : null}
                       {shortcutChanged ? (
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="xs"
-                            disabled={!canSaveShortcut || setupBusy}
-                            onClick={() => void saveShortcut()}
-                          >
-                            {setupBusy ? "Saving…" : "Save"}
-                          </Button>
+                        <div className="flex items-center gap-1">
                           <Button
                             size="xs"
                             variant="ghost"
@@ -576,6 +569,13 @@ export function SnapShotSettings() {
                             }}
                           >
                             Cancel
+                          </Button>
+                          <Button
+                            size="xs"
+                            disabled={!canSaveShortcut || setupBusy}
+                            onClick={() => void saveShortcut()}
+                          >
+                            {setupBusy ? "Saving…" : "Save"}
                           </Button>
                         </div>
                       ) : state?.mode === "portal" &&
