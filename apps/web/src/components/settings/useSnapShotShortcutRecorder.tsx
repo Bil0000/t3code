@@ -167,7 +167,7 @@ export function useSnapShotShortcutRecorder({
           "Press shortcut…"
         ) : !displayShortcut ? (
           shortcut === undefined ? (
-            "Record shortcut"
+            "Press shortcut…"
           ) : (
             "Change shortcut"
           )

@@ -555,7 +555,7 @@ export function SnapShotSettings() {
                         </Button>
                       ) : null}
                       {shortcutChanged ? (
-                        <>
+                        <div className="flex items-center gap-2">
                           <Button
                             size="xs"
                             disabled={!canSaveShortcut || setupBusy}
@@ -577,7 +577,7 @@ export function SnapShotSettings() {
                           >
                             Cancel
                           </Button>
-                        </>
+                        </div>
                       ) : state?.mode === "portal" &&
                         state.shortcutCanRetry !== false &&
                         !isModifierPairShortcut(savedShortcut) ? (
