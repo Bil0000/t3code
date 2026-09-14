@@ -208,6 +208,7 @@ it.each(["niri", "hyprland"] as const)(
     button(render(desktop), "Review changes").onClick();
     await finish(bridge.previewSnapShotConfig.mock.results.at(-1)!.value);
     button(render(desktop), "Add shortcut").onClick();
+    expect(bridge.setSnapShotShortcutSuppressed).toHaveBeenLastCalledWith(true);
     await recordKeys(desktop);
     button(render(desktop), "Review changes").onClick();
     await finish(bridge.previewSnapShotConfig.mock.results.at(-1)!.value);

@@ -211,7 +211,10 @@ export function CaptureShortcutConfig({
                 size="xs"
                 variant="ghost"
                 disabled={busy || recorder.recording}
-                onClick={() => setShortcutIndex(shortcuts.length)}
+                onClick={() => {
+                  setShortcutIndex(shortcuts.length);
+                  void recorder.startRecording();
+                }}
               >
                 <PlusIcon className="size-3" aria-hidden />
                 Add shortcut

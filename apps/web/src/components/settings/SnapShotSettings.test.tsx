@@ -424,7 +424,7 @@ it("cancels an empty shortcut with Escape without saving", async () => {
   button(render(), "Add shortcut").onClick();
   const recorder = () =>
     visitElements(render(), (element) => "data-keybinding-capture" in element.props)!.props;
-  (recorder().onClick as () => void)();
+  expect(bridge.setSnapShotShortcutSuppressed).toHaveBeenLastCalledWith(true);
   await finish(bridge.setSnapShotShortcutSuppressed.mock.results.at(-1)!.value);
   (recorder().onKeyDown as (event: object) => void)({
     key: "Escape",
@@ -449,7 +449,7 @@ it.each(["direct", "gnome-extension", "kde", "picker"] as const)(
       button(render(), "Add shortcut").onClick();
       const recorder = () =>
         visitElements(render(), (element) => "data-keybinding-capture" in element.props)!.props;
-      (recorder().onClick as () => void)();
+      expect(bridge.setSnapShotShortcutSuppressed).toHaveBeenLastCalledWith(true);
       await finish(bridge.setSnapShotShortcutSuppressed.mock.results.at(-1)!.value);
       (recorder().onKeyDown as (event: object) => void)({
         key,

@@ -55,6 +55,7 @@ export function useSnapShotShortcutRecorder({
   const displayShortcut = shortcutLabel ? parseDesktopSnapShotShortcut(shortcutLabel) : shortcut;
   const [recording, setRecording] = useState(false);
   const [requests] = useState(createRecordingRequestTracker);
+  const inputRef = useRef<HTMLButtonElement>(null);
   const heldModifierCodes = useRef(new Set<string>());
   const tooManyModifiers = useRef(false);
   const stopRecording = useCallback(() => {
@@ -86,6 +87,9 @@ export function useSnapShotShortcutRecorder({
     },
     [bridge, requests],
   );
+  useEffect(() => {
+    if (recording) inputRef.current?.focus();
+  }, [recording]);
   const recordShortcut = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!recording || event.key === "Tab" || event.repeat) return;
     event.preventDefault();
@@ -117,9 +121,11 @@ export function useSnapShotShortcutRecorder({
 
   return {
     recording,
+    startRecording,
     stopRecording,
     input: (
       <Button
+        ref={inputRef}
         type="button"
         size="xs"
         variant={recording ? "secondary" : "outline"}

@@ -268,6 +268,7 @@ export function SnapShotSettings() {
 
   const {
     recording,
+    startRecording,
     stopRecording,
     input: shortcutInput,
   } = useSnapShotShortcutRecorder({
@@ -548,6 +549,7 @@ export function SnapShotSettings() {
                           onClick={() => {
                             stopRecording();
                             setShortcutIndex(savedShortcuts.length);
+                            void startRecording();
                           }}
                         >
                           <PlusIcon className="size-3" aria-hidden />
