@@ -1578,6 +1578,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
               yield* fs.remove(worktreePath, { recursive: true });
             }
           }
+          const baseDriver = yield* GitVcsDriver.GitVcsDriver;
           const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
           const commandFinished = yield* Deferred.make<void>();
           const spawner = ChildProcessSpawner.make((command) =>
@@ -1587,8 +1588,14 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
                 command.args.includes("worktree") &&
                 command.args.includes("add");
               if (isWorktreeAdd && state === "concurrent") {
-                yield* git(cwd, ["worktree", "add", "-b", "feature/existing", worktreePath]);
-                yield* writeTextFile(worktreePath, "uncommitted.txt", "keep these edits");
+                yield* git(cwd, ["worktree", "add", "-b", "feature/existing", worktreePath]).pipe(
+                  Effect.provideService(GitVcsDriver.GitVcsDriver, baseDriver),
+                  Effect.orDie,
+                );
+                yield* fs.writeFileString(
+                  path.join(worktreePath, "uncommitted.txt"),
+                  "keep these edits",
+                );
               }
               const handle = yield* delegate.spawn(command);
               return isWorktreeAdd
