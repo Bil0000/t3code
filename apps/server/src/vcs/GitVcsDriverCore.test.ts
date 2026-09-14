@@ -139,7 +139,7 @@ const initRepoWithCommit = (
     return { initialBranch };
   });
 
-it.effect("bounds Git bursts without counting queue time against command timeouts", () =>
+it.effect("bounds Git bursts across drivers without timing out queued commands", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();
     const starts = yield* Queue.unbounded<number>();
@@ -158,18 +158,22 @@ it.effect("bounds Git bursts without counting queue time against command timeout
         () => Effect.sync(() => active--),
       ),
     );
-    const driver = yield* makeGitVcsDriverCore().pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    const drivers = yield* Effect.all(
+      Array.from({ length: 16 }, () =>
+        makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
     );
-    const burst = yield* Effect.all(
-      Array.from({ length: 16 }, (_, index) =>
+    const burst = yield* Effect.forEach(
+      drivers,
+      (driver, index) =>
         driver.execute({
           operation: "test.gitBurst",
           cwd: "/repo",
           args: ["rev-parse", "HEAD"],
           timeoutMs: index < 4 ? null : 1_000,
         }),
-      ),
       { concurrency: "unbounded" },
     ).pipe(Effect.forkChild);
 
