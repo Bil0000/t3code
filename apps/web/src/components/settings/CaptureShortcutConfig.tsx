@@ -8,6 +8,7 @@ import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import { FileDiff } from "@pierre/diffs/react";
 import { parseDiffFromFile } from "@pierre/diffs";
 import { useMemo, useState } from "react";
+import { sameSnapShotShortcut } from "../../lib/snapShotShortcut";
 import { getDesktopSnapShotBridge } from "../../lib/desktopSnapShot";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
 import { useTheme } from "../../hooks/useTheme";
@@ -40,36 +41,47 @@ export function CaptureShortcutConfig({
   const [result, setResult] = useState<DesktopCaptureConfigApplied | null>(null);
   const [error, setError] = useState<{ message: string; detail?: string } | null>(null);
   const [working, setWorking] = useState<"reading" | "writing" | null>(null);
-  const [keys, setKeys] = useState<string | null>(null);
+  const [keys, setKeys] = useState<readonly string[] | null>(null);
+  const [shortcutIndex, setShortcutIndex] = useState(0);
+  const shortcuts = keys ?? preview?.shortcuts ?? [preview?.shortcut ?? "Ctrl+Shift+2"];
   const [customFile, setCustomFile] = useState(false);
   const busy = disabled || working !== null;
   const supported = Boolean(bridge?.previewSnapShotConfig && bridge.applySnapShotConfig);
   const changed = preview !== null && preview.before !== preview.after;
   const niri = state.linuxBackend === "niri";
   const desktop = niri ? "Niri" : "Hyprland";
-  const shortcutKeys = (keys ?? preview?.shortcut)?.trim();
+  const shortcutKeys = shortcuts[shortcutIndex];
   const recorder = useSnapShotShortcutRecorder({
     shortcut: shortcutKeys
       ? (parseKeybindingShortcut(shortcutKeys.replace(/super/gi, "meta")) ?? DEFAULT_SHORTCUT)
-      : DEFAULT_SHORTCUT,
+      : undefined,
     disabled: busy,
     allowModifierPairs: false,
     onStart: () => setError(null),
     onError: (message) => setError({ message }),
     onRecord: (shortcut) => {
       if (isModifierPairShortcut(shortcut)) return;
-      setKeys(
-        shortcutToKeybindingInput({
-          ...shortcut,
-          ctrlKey: shortcut.ctrlKey || shortcut.modKey,
-          modKey: false,
-        }),
-      );
+      if (
+        shortcuts.some((keys, index) => {
+          const saved = parseKeybindingShortcut(keys.replace(/super/gi, "meta"));
+          return index !== shortcutIndex && saved && sameSnapShotShortcut(saved, shortcut, "Linux");
+        })
+      ) {
+        setError({ message: "This shortcut is already in the list." });
+        return;
+      }
+      const next = [...shortcuts];
+      next[shortcutIndex] = shortcutToKeybindingInput({
+        ...shortcut,
+        ctrlKey: shortcut.ctrlKey || shortcut.modKey,
+        modKey: false,
+      });
+      setKeys(next);
       setPreview(null);
       setError(null);
     },
   });
-  const actionBusy = busy || recorder.recording;
+  const actionBusy = busy || recorder.recording || shortcutIndex >= shortcuts.length;
   const diff = useMemo(
     () =>
       preview && changed
@@ -96,13 +108,13 @@ export function CaptureShortcutConfig({
     setResult(null);
     setCustomFile(chooseFile);
     try {
-      setPreview(
-        await bridge.previewSnapShotConfig({
-          operation,
-          chooseFile,
-          ...(keys?.trim() ? { shortcut: keys.trim() } : {}),
-        }),
-      );
+      const next = await bridge.previewSnapShotConfig({
+        operation,
+        chooseFile,
+        ...(keys ? { shortcuts: keys } : {}),
+      });
+      setPreview(next);
+      if (next) setKeys(next.shortcuts ?? [next.shortcut]);
     } catch (cause) {
       setError({
         message: "Couldn't prepare the changes. Check Advanced for help.",
@@ -123,7 +135,7 @@ export function CaptureShortcutConfig({
         toastManager.add({
           type: "success",
           title: "Shortcut saved",
-          description: `Use ${preview.shortcut} from another app.`,
+          description: `Use ${(preview.shortcuts ?? [preview.shortcut]).join(" or ")} from another app.`,
         });
         await onComplete();
       }
@@ -142,8 +154,65 @@ export function CaptureShortcutConfig({
     <div className="space-y-4 text-sm">
       {!result ? (
         <div className="flex items-center justify-between gap-3">
-          <span>Shortcut</span>
-          {recorder.input}
+          <span>Shortcuts</span>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {shortcuts.map((key, index) => (
+              <div key={key} className="flex items-center gap-1">
+                {index === shortcutIndex ? (
+                  recorder.input
+                ) : (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={busy || recorder.recording}
+                    onClick={() => setShortcutIndex(index)}
+                  >
+                    {key}
+                  </Button>
+                )}
+                {shortcuts.length > 1 ? (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={busy || recorder.recording}
+                    aria-label={`Remove snapshot shortcut ${index + 1}`}
+                    onClick={() => {
+                      setKeys(shortcuts.filter((_, selected) => selected !== index));
+                      setShortcutIndex(0);
+                      setPreview(null);
+                    }}
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+            {shortcutIndex >= shortcuts.length ? (
+              <>
+                {recorder.input}
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    recorder.stopRecording();
+                    setShortcutIndex(0);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : shortcuts.length < 3 ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={busy || recorder.recording}
+                onClick={() => setShortcutIndex(shortcuts.length)}
+              >
+                Add shortcut
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : null}
       {recorder.recording ? (
@@ -157,7 +226,7 @@ export function CaptureShortcutConfig({
             ? "Saved, but the shortcut needs attention. Check Advanced for help."
             : preview?.operation === "remove"
               ? "Shortcut removed."
-              : `Use ${preview?.shortcut} from another app to capture a window.`}
+              : `Use ${(preview?.shortcuts ?? [preview?.shortcut]).join(" or ")} from another app to capture a window.`}
         </p>
       ) : preview ? (
         <>

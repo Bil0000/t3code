@@ -9,7 +9,7 @@ import {
   SNAP_SHOT_ACCESSIBILITY_MAX_SERIALIZED_CHARS,
   isModifierPairShortcut,
   snapShotModifierPairLabel,
-  snapShotShortcutModifierPair,
+  snapShotShortcutModifierKeys,
   type SnapShotAccessibilityNode,
   type SnapShotKeyChord,
   type SnapShotModifier,
@@ -42,7 +42,7 @@ export function snapShotShortcutRegistrationFailureMessage(
 ): string {
   return isModifierPairShortcut(shortcut)
     ? `${snapShotModifierPairLabel(
-        snapShotShortcutModifierPair(shortcut),
+        shortcut,
         platform === "darwin",
       )} is not available on this system.`
     : "This shortcut is already used by the system or another app.";
@@ -530,7 +530,8 @@ export function sameSnapShotShortcut(left: SnapShotShortcut, right: SnapShotShor
     return (
       isModifierPairShortcut(left) &&
       isModifierPairShortcut(right) &&
-      snapShotShortcutModifierPair(left) === snapShotShortcutModifierPair(right)
+      [...snapShotShortcutModifierKeys(left)].sort().join() ===
+        [...snapShotShortcutModifierKeys(right)].sort().join()
     );
   }
   return toElectronAccelerator(left) === toElectronAccelerator(right);

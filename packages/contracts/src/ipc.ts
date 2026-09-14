@@ -243,6 +243,12 @@ export const DesktopCaptureConfigRequest = Schema.Struct({
   operation: Schema.Literals(["install", "remove"]),
   chooseFile: Schema.Boolean,
   shortcut: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
+  shortcuts: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMaxLength(80))).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(3),
+    ),
+  ),
 });
 export type DesktopCaptureConfigRequest = typeof DesktopCaptureConfigRequest.Type;
 
@@ -253,6 +259,7 @@ export const DesktopCaptureConfigPreview = Schema.Struct({
   before: Schema.String,
   after: Schema.String,
   shortcut: Schema.String,
+  shortcuts: Schema.optional(Schema.Array(Schema.String)),
   operation: Schema.Literals(["install", "remove"]),
 });
 export type DesktopCaptureConfigPreview = typeof DesktopCaptureConfigPreview.Type;
@@ -276,6 +283,7 @@ export const DesktopSnapShotState = Schema.Struct({
   shortcutPending: Schema.optional(Schema.Boolean),
   shortcutCanRetry: Schema.optional(Schema.Boolean),
   shortcutLabel: Schema.optional(Schema.String),
+  shortcutLabels: Schema.optional(Schema.Array(Schema.String)),
   shortcutMessage: Schema.NullOr(Schema.String),
   shortcutBinding: Schema.optional(Schema.String),
   shortcutConfigPath: Schema.optional(Schema.String),

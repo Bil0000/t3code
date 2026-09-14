@@ -164,7 +164,7 @@ it.each(["niri", "hyprland"] as const)(
     expect(bridge.previewSnapShotConfig).toHaveBeenCalledExactlyOnceWith({
       operation: "install",
       chooseFile: false,
-      shortcut: "ctrl+alt+y",
+      shortcuts: ["ctrl+alt+y"],
     });
     expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
     button(render(desktop), "Save shortcut").onClick();
@@ -198,7 +198,7 @@ it("requires a new diff after changing keys during review", async () => {
   expect(bridge.previewSnapShotConfig).toHaveBeenLastCalledWith({
     operation: "install",
     chooseFile: false,
-    shortcut: "meta+f8",
+    shortcuts: ["meta+f8"],
   });
   button(render(), "Save shortcut").onClick();
   await finish(bridge.applySnapShotConfig.mock.results[0]!.value);
@@ -318,3 +318,37 @@ it("does not finish or claim success when the desktop could not reload", async (
   expect(complete).not.toHaveBeenCalled();
   expect(toastManager.add).not.toHaveBeenCalled();
 });
+
+it.each(["niri", "hyprland"] as const)(
+  "reviews all three %s shortcuts and removes one without losing the others",
+  async (desktop) => {
+    const shortcuts = ["Ctrl+Shift+2", "ctrl+alt+y", "ctrl+alt+z"];
+    for (const key of ["y", "z"]) {
+      button(render(desktop), "Add shortcut").onClick();
+      await recordKeys(desktop, { key, code: `Key${key.toUpperCase()}` });
+    }
+    expect(
+      visitElements(render(desktop), (element) => element.props.children === "Add shortcut"),
+    ).toBeNull();
+    bridge.previewSnapShotConfig.mockResolvedValue({ ...preview, shortcuts });
+    button(render(desktop), "Review changes").onClick();
+    await finish(bridge.previewSnapShotConfig.mock.results.at(-1)!.value);
+    expect(bridge.previewSnapShotConfig).toHaveBeenLastCalledWith({
+      operation: "install",
+      chooseFile: false,
+      shortcuts,
+    });
+    const remove = visitElements(
+      render(desktop),
+      (element) => element.props["aria-label"] === "Remove snapshot shortcut 2",
+    )!;
+    (remove.props.onClick as () => void)();
+    button(render(desktop), "Review changes").onClick();
+    await finish(bridge.previewSnapShotConfig.mock.results.at(-1)!.value);
+    expect(bridge.previewSnapShotConfig).toHaveBeenLastCalledWith({
+      operation: "install",
+      chooseFile: false,
+      shortcuts: [shortcuts[0], shortcuts[2]],
+    });
+  },
+);

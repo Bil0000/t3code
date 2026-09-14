@@ -5,7 +5,7 @@ import {
   DesktopPendingSnapShot,
   isModifierPairShortcut,
   snapShotModifierPairLabel,
-  snapShotShortcutModifierPair,
+  snapShotShortcutModifierKeys,
   type DesktopSnapShot as DesktopSnapShotValue,
   type DesktopSnapShotShortcutAvailability,
   type DesktopSnapShotState,
@@ -14,9 +14,9 @@ import {
   type DesktopCaptureConfigPreview,
   type DesktopCaptureConfigApplied,
   type ClientSettings,
-  type SnapShotModifier,
   type SnapShotModifierPairShortcut,
   type SnapShotShortcut,
+  type SnapShotKeyChord,
   type DesktopSnapShotEvent,
   type DesktopSnapShotId,
 } from "@t3tools/contracts";
@@ -676,13 +676,13 @@ function observedPairMessage(
   shortcut: SnapShotModifierPairShortcut,
   platform: NodeJS.Platform,
 ): string {
-  const modifier = snapShotShortcutModifierPair(shortcut);
-  const label = snapShotModifierPairLabel(modifier, platform === "darwin");
+  const keys = snapShotShortcutModifierKeys(shortcut);
+  const label = snapShotModifierPairLabel(shortcut, platform === "darwin");
   const base = `${label} is observed and cannot be reserved exclusively.`;
-  if (modifier === "meta" && platform !== "darwin") {
+  if (keys.some((key) => key.startsWith("Meta")) && platform !== "darwin") {
     return `${base} This key can also open the system's own menu.`;
   }
-  if (modifier === "alt" && platform === "win32") {
+  if (keys.some((key) => key.startsWith("Alt")) && platform === "win32") {
     return `${base} This key can also activate app menu bars.`;
   }
   return base;
@@ -767,7 +767,7 @@ export const make = Effect.gen(function* () {
   const regionSnapShotPool = makeRegionSnapShotPool(
     path.join(__dirname, "snapShot", "RegionSnapShotWorker.cjs"),
   );
-  let registeredAccelerator: string | undefined;
+  let registeredAccelerators: string[] = [];
   // False until the first applySettings; the first pass must always register.
   let initialized = false;
   let portalShortcut: PortalCaptureShortcut | undefined;
@@ -799,22 +799,30 @@ export const make = Effect.gen(function* () {
   };
 
   const startPairShortcutProcess = (
-    modifier: SnapShotModifier,
+    shortcuts: readonly SnapShotModifierPairShortcut[],
     onTrigger: () => void,
     onFailure: (error: Error) => void,
   ) =>
     environment.platform === "darwin"
-      ? startMacModifierPairShortcutProcess(modifier, onTrigger, onFailure)
-      : startGlobalShiftShortcutProcess(shiftShortcutWorkerPath, modifier, onTrigger, onFailure);
+      ? startMacModifierPairShortcutProcess(
+          shortcuts.map(snapShotShortcutModifierKeys),
+          onTrigger,
+          onFailure,
+        )
+      : startGlobalShiftShortcutProcess(
+          shiftShortcutWorkerPath,
+          shortcuts.map(snapShotShortcutModifierKeys),
+          onTrigger,
+          onFailure,
+        );
 
   const releaseShortcut = () => {
     shortcutGeneration++;
     portalShortcut?.close();
     portalShortcut = undefined;
-    if (registeredAccelerator) {
-      Electron.globalShortcut.unregister(registeredAccelerator);
-      registeredAccelerator = undefined;
-    }
+    for (const accelerator of registeredAccelerators)
+      Electron.globalShortcut.unregister(accelerator);
+    registeredAccelerators = [];
     stopShiftShortcut?.();
     stopShiftShortcut = undefined;
   };
@@ -1032,7 +1040,7 @@ export const make = Effect.gen(function* () {
       }
       const available = yield* Effect.tryPromise(() =>
         startPairShortcutProcess(
-          snapShotShortcutModifierPair(shortcut),
+          [shortcut],
           () => undefined,
           () => undefined,
         ),
@@ -1065,10 +1073,9 @@ export const make = Effect.gen(function* () {
       );
     }
     const accelerator = toElectronAccelerator(shortcut);
-    const available =
-      registeredAccelerator === accelerator
-        ? { available: true, message: null }
-        : probeGlobalShortcut(accelerator);
+    const available = registeredAccelerators.includes(accelerator)
+      ? { available: true, message: null }
+      : probeGlobalShortcut(accelerator);
     return available;
   });
 
@@ -1082,6 +1089,14 @@ export const make = Effect.gen(function* () {
 
     const mode = captureMode(environment.platform);
     const shortcut = settings.snapShotShortcut;
+    const shortcuts = [shortcut, ...settings.snapShotAdditionalShortcuts];
+    const previousShortcuts = [
+      previousSettings.snapShotShortcut,
+      ...previousSettings.snapShotAdditionalShortcuts,
+    ];
+    const shortcutsChanged =
+      shortcuts.length !== previousShortcuts.length ||
+      shortcuts.some((item, index) => !sameSnapShotShortcut(item, previousShortcuts[index]!));
     if (
       settings.snapShotEnabled &&
       settings.snapShotIncludeAccessibility &&
@@ -1109,16 +1124,12 @@ export const make = Effect.gen(function* () {
     const shortcutInputsChanged =
       settings.snapShotEnabled !== previousSettings.snapShotEnabled ||
       settings.snapShotIncludeAccessibility !== previousSettings.snapShotIncludeAccessibility ||
-      !sameSnapShotShortcut(shortcut, previousSettings.snapShotShortcut);
+      shortcutsChanged;
     const portalShortcutUnchanged =
       portalShortcut !== undefined &&
       settings.snapShotEnabled &&
       previousSettings.snapShotEnabled &&
-      (isHyprlandCaptureSession() ||
-        (!isModifierPairShortcut(shortcut) &&
-          !isModifierPairShortcut(previousSettings.snapShotShortcut) &&
-          toElectronAccelerator(shortcut) ===
-            toElectronAccelerator(previousSettings.snapShotShortcut)));
+      (isHyprlandCaptureSession() || !shortcutsChanged);
     if (!forceShortcut && (portalShortcutUnchanged || (initialized && !shortcutInputsChanged))) {
       yield* Ref.update(stateRef, (state) => ({ ...state, shortcut }));
       return;
@@ -1195,7 +1206,7 @@ export const make = Effect.gen(function* () {
       return;
     }
     const hyprland = mode === "portal" && isHyprlandCaptureSession();
-    if (mode === "portal" && isModifierPairShortcut(shortcut) && !hyprland) {
+    if (mode === "portal" && shortcuts.some(isModifierPairShortcut) && !hyprland) {
       yield* Ref.set(stateRef, {
         mode,
         shortcut,
@@ -1235,6 +1246,9 @@ export const make = Effect.gen(function* () {
           },
           undefined,
           hyprland,
+          settings.snapShotAdditionalShortcuts.filter(
+            (item): item is SnapShotKeyChord => !isModifierPairShortcut(item),
+          ),
         );
       }).pipe(
         Effect.tap((registration) =>
@@ -1255,14 +1269,13 @@ export const make = Effect.gen(function* () {
       return;
     }
 
-    let registered = false;
-    if (isModifierPairShortcut(shortcut)) {
+    let registered = true;
+    const pairs = shortcuts.filter(isModifierPairShortcut);
+    if (pairs.length > 0) {
       registered = yield* Effect.tryPromise(() =>
-        startPairShortcutProcess(snapShotShortcutModifierPair(shortcut), onCurrentShortcut, () => {
+        startPairShortcutProcess(pairs, onCurrentShortcut, () => {
           void runPromise(
-            setShortcutFailure(
-              snapShotShortcutRegistrationFailureMessage(shortcut, environment.platform),
-            ),
+            setShortcutFailure("The capture shortcut listener stopped. Restart T3 Code."),
           ).catch(() => undefined);
         }),
       ).pipe(
@@ -1274,10 +1287,16 @@ export const make = Effect.gen(function* () {
         Effect.as(true),
         Effect.orElseSucceed(() => false),
       );
-    } else {
-      const accelerator = toElectronAccelerator(shortcut);
-      registered = Electron.globalShortcut.register(accelerator, onCurrentShortcut);
-      if (registered) registeredAccelerator = accelerator;
+    }
+    for (const item of shortcuts) {
+      if (isModifierPairShortcut(item)) continue;
+      const accelerator = toElectronAccelerator(item);
+      if (registeredAccelerators.includes(accelerator)) continue;
+      const success = yield* Effect.try(() =>
+        Electron.globalShortcut.register(accelerator, onCurrentShortcut),
+      ).pipe(Effect.orElseSucceed(() => false));
+      if (success) registeredAccelerators.push(accelerator);
+      else registered = false;
     }
 
     yield* Ref.set(stateRef, {
@@ -1286,10 +1305,10 @@ export const make = Effect.gen(function* () {
       shortcutRegistered: registered,
       message: null,
       shortcutMessage: registered
-        ? isModifierPairShortcut(shortcut)
-          ? observedPairMessage(shortcut, environment.platform)
+        ? pairs.length > 0
+          ? pairs.map((pair) => observedPairMessage(pair, environment.platform)).join(" ")
           : null
-        : snapShotShortcutRegistrationFailureMessage(shortcut, environment.platform),
+        : "One or more capture shortcuts could not be registered. Choose another shortcut.",
     });
   });
 

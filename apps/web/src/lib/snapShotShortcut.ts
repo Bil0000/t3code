@@ -1,7 +1,8 @@
 import {
   isModifierPairShortcut,
   snapShotModifierPairLabel,
-  snapShotShortcutModifierPair,
+  snapShotModifierKeyParts,
+  snapShotShortcutModifierKeys,
   type KeybindingShortcut,
   type SnapShotModifier,
   type SnapShotShortcut,
@@ -53,7 +54,7 @@ export function formatSnapShotShortcutLabel(
   platform = navigator.platform,
 ): string {
   return isModifierPairShortcut(shortcut)
-    ? snapShotModifierPairLabel(snapShotShortcutModifierPair(shortcut), isMacPlatform(platform))
+    ? snapShotModifierPairLabel(shortcut, isMacPlatform(platform))
     : formatShortcutLabel(shortcut, platform);
 }
 
@@ -73,8 +74,10 @@ export function snapShotShortcutKeyLabels(
   platform = navigator.platform,
 ): readonly string[] {
   if (isModifierPairShortcut(shortcut)) {
-    const label = modifierKeyLabel(snapShotShortcutModifierPair(shortcut), platform);
-    return [label, label];
+    return snapShotShortcutModifierKeys(shortcut).map((key) => {
+      const { modifier, side } = snapShotModifierKeyParts(key);
+      return `${side} ${modifierKeyLabel(modifier, platform)}`;
+    });
   }
 
   const useMetaForMod = isMacPlatform(platform);
@@ -101,7 +104,8 @@ export function sameSnapShotShortcut(
     return (
       isModifierPairShortcut(left) &&
       isModifierPairShortcut(right) &&
-      snapShotShortcutModifierPair(left) === snapShotShortcutModifierPair(right)
+      [...snapShotShortcutModifierKeys(left)].sort().join() ===
+        [...snapShotShortcutModifierKeys(right)].sort().join()
     );
   }
   return shortcutConflictKey(left, platform) === shortcutConflictKey(right, platform);

@@ -35,11 +35,15 @@ too large are discarded.
 
 ## Changing the shortcut
 
-Select the shortcut in Settings, press the new keys, then **Save**. On macOS and Windows you can use
-a modifier pair such as Command+Command or Ctrl+Ctrl, or a key chord. T3 Code refuses shortcuts
+Select a shortcut in Settings, press and release the new keys, then **Save**. Use **Add shortcut**
+to keep up to three shortcuts, for example one for each keyboard. Remove a shortcut to free its keys.
+On macOS and Windows, modifier pairs keep the exact left and right keys. You can use Left Command +
+Right Command, Left Command + Right Control, or another pair of modifier keys. Ordinary key chords
+such as Ctrl+Alt+K accept either side of each modifier. T3 Code refuses shortcuts
 that collide with its own keybindings or that the operating system already reserves.
 
-On Linux, choose a key chord; modifier pairs are not supported. On Niri and Hyprland the shortcut
+On Linux, choose up to three key chords. Linux shortcut services do not preserve the side of every
+modifier, so modifier pairs are not supported. On Niri and Hyprland the shortcut
 lives in your compositor config, so **Change shortcut** reopens setup to review the change.
 
 ## Include app text

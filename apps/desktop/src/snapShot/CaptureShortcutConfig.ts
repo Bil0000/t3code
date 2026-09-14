@@ -150,7 +150,7 @@ export class CaptureShortcutConfig {
       format,
       target.appId,
       request.operation,
-      request.shortcut,
+      request.shortcuts ?? request.shortcut,
     );
     const files = [root];
     const missing: string[] = [];
@@ -185,17 +185,17 @@ export class CaptureShortcutConfig {
           files.push(child);
           if (
             request.operation === "install" &&
-            niriConfigConflict(child.text, target.appId, edit.shortcut)
+            edit.shortcuts.some((key) => niriConfigConflict(child.text, target.appId, key))
           )
             throw new Error(
-              `${edit.shortcut} is already used in ${child.path}. Choose another shortcut.`,
+              `A capture shortcut is already used in ${child.path}. Choose another shortcut.`,
             );
           await visit(child, depth + 1);
         }
       };
       await visit(root, 0);
     } else if (request.operation === "install") {
-      await this.checkHyprlandKeys(target.appId, edit.shortcut);
+      for (const key of edit.shortcuts) await this.checkHyprlandKeys(target.appId, key);
     }
     const preview = {
       id: NodeCrypto.randomUUID(),
@@ -204,6 +204,7 @@ export class CaptureShortcutConfig {
       before: root.text,
       after: edit.after,
       shortcut: edit.shortcut,
+      shortcuts: edit.shortcuts,
       operation: request.operation,
     };
     this.pending = { preview, target, files, missing };
@@ -255,7 +256,8 @@ export class CaptureShortcutConfig {
       };
       await unchanged();
       if (desktop === "hyprland" && preview.operation === "install")
-        await this.checkHyprlandKeys(pending.target.appId, preview.shortcut);
+        for (const key of preview.shortcuts ?? [preview.shortcut])
+          await this.checkHyprlandKeys(pending.target.appId, key);
       if (preview.before === preview.after) return { backupPath: null, warning: null };
       await NodeFSP.writeFile(temporary, preview.after, {
         flag: "wx",

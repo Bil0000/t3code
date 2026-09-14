@@ -57,6 +57,7 @@ export interface PortalShortcutState {
   /** Whether retry-shortcut can reopen permissions or start a new session. */
   readonly shortcutCanRetry?: boolean;
   readonly shortcutLabel?: string;
+  readonly shortcutLabels?: readonly string[];
   readonly shortcutMessage: string | null;
 }
 
@@ -72,7 +73,8 @@ export class PortalCaptureShortcut {
   private owner = "";
   private namespace = "";
   private session = "";
-  private shortcutId = "";
+  private shortcutIds: string[] = [];
+  private activeShortcutIds: string[] = [];
   private version = 0;
   private pending: { path: string; resolve: (body: unknown) => void } | undefined;
   private responses = new Map<string, unknown>();
@@ -90,6 +92,7 @@ export class PortalCaptureShortcut {
     onStateChanged: () => void,
     bus: MessageBus = sessionBus(),
     managedByHyprland = false,
+    additionalShortcuts: readonly SnapShotKeyChord[] = [],
   ) {
     this.onCapture = onCapture;
     this.onStateChanged = onStateChanged;
@@ -107,7 +110,7 @@ export class PortalCaptureShortcut {
     void this.stopped.catch(() => undefined);
     bus.on("error", this.failed);
     bus.on("message", this.message);
-    this.ready = this.initialize(appId, shortcut).catch(this.failed);
+    this.ready = this.initialize(appId, [shortcut, ...additionalShortcuts]).catch(this.failed);
   }
 
   close = () => {
@@ -251,8 +254,7 @@ export class PortalCaptureShortcut {
     if (
       message.member === "Activated" &&
       message.signature === "osta{sv}" &&
-      message.body[1] === this.shortcutId &&
-      (this.state.shortcutRegistered || this.state.shortcutActionRegistered)
+      this.activeShortcutIds.includes(message.body[1])
     )
       this.onCapture();
     if (message.member === "ShortcutsChanged") {
@@ -319,7 +321,13 @@ export class PortalCaptureShortcut {
   }
 
   private bound(shortcuts: typeof Shortcuts.Type) {
-    const shortcut = shortcuts.find(([id]) => id === this.shortcutId);
+    const assigned = this.shortcutIds.map((expected) => shortcuts.find(([id]) => id === expected));
+    const shortcut = assigned[0];
+    this.activeShortcutIds = assigned
+      .filter(
+        (item) => item && (this.managedByHyprland || item[1].trigger_description?.value.trim()),
+      )
+      .map((item) => item![0]);
     if (this.managedByHyprland) {
       this.update({
         shortcutRegistered: false,
@@ -331,21 +339,25 @@ export class PortalCaptureShortcut {
       });
       return;
     }
-    const label = shortcut?.[1].trigger_description?.value.trim();
+    const labels = assigned.map((item) => item?.[1].trigger_description?.value.trim() ?? "");
+    const label = labels.filter(Boolean).join(" or ");
     this.update({
-      shortcutRegistered: Boolean(shortcut && label),
+      shortcutRegistered: labels.every(Boolean),
       shortcutPending: false,
-      ...(label ? { shortcutLabel: label } : {}),
-      shortcutMessage: label
+      ...(labels[0] ? { shortcutLabel: labels[0] } : {}),
+      shortcutLabels: labels,
+      shortcutMessage: labels.every(Boolean)
         ? `Desktop shortcut: ${label}`
-        : this.version >= 2
-          ? "No shortcut is assigned. Open shortcut permissions to choose one."
-          : "No shortcut is assigned. Choose one in your desktop's shortcut settings.",
+        : labels.some(Boolean)
+          ? "Some capture shortcuts are unassigned. Open your desktop's shortcut settings to allow them."
+          : this.version >= 2
+            ? "No shortcut is assigned. Open shortcut permissions to choose one."
+            : "No shortcut is assigned. Choose one in your desktop's shortcut settings.",
     });
   }
 
-  private async initialize(appId: string, shortcut: SnapShotKeyChord) {
-    const trigger = portalShortcutTrigger(shortcut);
+  private async initialize(appId: string, shortcuts: readonly SnapShotKeyChord[]) {
+    const triggers = [...new Set(shortcuts.map(portalShortcutTrigger))];
     if (!process.env.FLATPAK_ID && !process.env.SNAP) {
       await this.call({
         destination: PORTAL,
@@ -407,21 +419,26 @@ export class PortalCaptureShortcut {
     const sessionNamespace = this.namespace.replace("/request/", "/session/");
     if (!session.startsWith(sessionNamespace)) throw new Error("Invalid shortcut session handle.");
     this.session = session;
-    this.shortcutId = this.managedByHyprland
-      ? HYPRLAND_CAPTURE_ACTION
-      : `t3-snap-shot-${NodeCrypto.createHash("sha256").update(trigger).digest("hex").slice(0, 16)}`;
-    // Every session must bind, even when the desktop remembers this shortcut's approval.
+    this.shortcutIds = this.managedByHyprland
+      ? [HYPRLAND_CAPTURE_ACTION]
+      : triggers.map(
+          (trigger) =>
+            `t3-snap-shot-${NodeCrypto.createHash("sha256").update(trigger).digest("hex").slice(0, 16)}`,
+        );
     const bound = await this.request("BindShortcuts", "oa(sa{sv})s", [
       this.session,
-      [
-        [
-          this.shortcutId,
-          {
-            description: new Variant("s", "Capture a window"),
-            ...(!this.managedByHyprland ? { preferred_trigger: new Variant("s", trigger) } : {}),
-          },
-        ],
-      ],
+      this.shortcutIds.map((id, index) => [
+        id,
+        {
+          description: new Variant(
+            "s",
+            this.shortcutIds.length === 1 ? "Capture a window" : `Capture a window (${index + 1})`,
+          ),
+          ...(!this.managedByHyprland
+            ? { preferred_trigger: new Variant("s", triggers[index]!) }
+            : {}),
+        },
+      ]),
       "",
     ]);
     if (bound) this.bound(decodeShortcutsResult(bound).shortcuts.value);

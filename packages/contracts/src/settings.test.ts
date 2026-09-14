@@ -872,3 +872,23 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
 });
+
+it("keeps old snapshot settings and accepts only two extra shortcuts with valid key sides", () => {
+  const saved = { kind: "modifier-pair", modifier: "meta" };
+  const extra = { kind: "modifier-keys", keys: ["MetaLeft", "ControlRight"] };
+  const settings = decodeClientSettings({ snapShotShortcut: saved });
+  expect(settings.snapShotShortcut).toEqual(saved);
+  expect(settings.snapShotAdditionalShortcuts).toEqual([]);
+  expect(
+    decodeClientSettingsPatch({ snapShotAdditionalShortcuts: [extra, saved] })
+      .snapShotAdditionalShortcuts,
+  ).toEqual([extra, saved]);
+  expect(() =>
+    decodeClientSettingsPatch({ snapShotAdditionalShortcuts: [extra, saved, extra] }),
+  ).toThrow();
+  for (const keys of [["MetaLeft", "MetaLeft"], ["MetaLeft", "Control"], ["MetaLeft"]]) {
+    expect(() =>
+      decodeClientSettingsPatch({ snapShotShortcut: { kind: "modifier-keys", keys } }),
+    ).toThrow();
+  }
+});

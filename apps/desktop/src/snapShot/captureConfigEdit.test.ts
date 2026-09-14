@@ -133,3 +133,27 @@ describe("Hyprland capture config edits", () => {
     },
   );
 });
+
+it.each(["niri", "hyprland", "hyprland-lua"] as const)(
+  "adds, preserves, replaces, and removes three %s shortcuts",
+  (format) => {
+    const shortcuts = ["Ctrl+Shift+2", "Super+F8", "Ctrl+Alt+Y"];
+    const first = editCaptureConfig("", format, app, "install", shortcuts);
+    for (const key of shortcuts)
+      expect(first.after).toContain(captureConfigBinding(format, app, key));
+    expect(editCaptureConfig(first.after, format, app, "install").after).toBe(first.after);
+    const replaced = editCaptureConfig(first.after, format, app, "install", [
+      shortcuts[0]!,
+      "Ctrl+Alt+Z",
+    ]);
+    expect(replaced.after).not.toContain(captureConfigBinding(format, app, shortcuts[1]!));
+    expect(replaced.after).toContain(captureConfigBinding(format, app, "Ctrl+Alt+Z"));
+    expect(editCaptureConfig(replaced.after, format, app, "remove").after).not.toContain(app);
+    expect(() =>
+      editCaptureConfig("", format, app, "install", [...shortcuts, "Ctrl+Alt+Z"]),
+    ).toThrow(/three/);
+    expect(() =>
+      editCaptureConfig("", format, app, "install", ["Ctrl+Alt+Y", "ctrl+alt+y"]),
+    ).toThrow(/different/);
+  },
+);

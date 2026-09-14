@@ -162,5 +162,30 @@ it("preserves native modifier-pair recording and tracks released keys", async ()
   recorder.input.props.onKeyDown(event("Shift", "ShiftRight", { shiftKey: true }));
   expect(recorded).not.toHaveBeenCalled();
   recorder.input.props.onKeyDown(event("Shift", "ShiftLeft", { shiftKey: true }));
+  recorder.input.props.onKeyUp(event("Shift", "ShiftLeft"));
   expect(recorded).toHaveBeenCalledExactlyOnceWith({ kind: "both-shift-keys" });
+});
+
+it.each(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "AltLeft", "AltRight"])(
+  "records MetaLeft with %s on release",
+  async (code) => {
+    const recorder = await start(true);
+    recorder.input.props.onKeyDown(event("Meta", "MetaLeft", { metaKey: true }));
+    recorder.input.props.onKeyDown(event(code.replace(/Left|Right/, ""), code, { metaKey: true }));
+    expect(recorded).not.toHaveBeenCalled();
+    recorder.input.props.onKeyUp(event("Meta", "MetaLeft"));
+    expect(recorded).toHaveBeenCalledExactlyOnceWith({
+      kind: "modifier-keys",
+      keys: [code, "MetaLeft"].sort(),
+    });
+  },
+);
+it("lets a mixed modifier pair become an ordinary key chord", async () => {
+  const recorder = await start(true);
+  recorder.input.props.onKeyDown(event("Control", "ControlLeft", { ctrlKey: true }));
+  recorder.input.props.onKeyDown(event("Alt", "AltRight", { ctrlKey: true, altKey: true }));
+  recorder.input.props.onKeyDown(event("y", "KeyY", { ctrlKey: true, altKey: true }));
+  expect(recorded).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ key: "y", modKey: true, altKey: true }),
+  );
 });

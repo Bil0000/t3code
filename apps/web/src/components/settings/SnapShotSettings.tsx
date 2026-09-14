@@ -7,7 +7,7 @@ import {
   type DesktopSnapShotSetupAction,
   type SnapShotShortcut,
 } from "@t3tools/contracts";
-import { ChevronDownIcon, PlayIcon } from "lucide-react";
+import { ChevronDownIcon, PlayIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -19,7 +19,11 @@ import {
   saveSnapShotSetupResume,
   clearSnapShotSetupResume,
 } from "../../lib/snapShotSetupResume";
-import { sameSnapShotShortcut, snapShotKeybindingConflict } from "../../lib/snapShotShortcut";
+import {
+  formatSnapShotShortcutLabel,
+  sameSnapShotShortcut,
+  snapShotKeybindingConflict,
+} from "../../lib/snapShotShortcut";
 import { playSnapShotSound } from "../../lib/snapShotSound";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { commandLabel } from "./KeybindingsSettings.logic";
@@ -48,6 +52,7 @@ import { selectTriggerVariants } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { SnapShotSetupDialog } from "./SnapShotSetupDialog";
+import { SnapShotShortcutKeys } from "../desktop/SnapShotShortcutKeys";
 import { useSnapShotShortcutRecorder } from "./useSnapShotShortcutRecorder";
 import {
   captureSetupAccessReady,
@@ -87,6 +92,7 @@ export function SnapShotSettings() {
     initialStep: CaptureSetupStep;
     wasEnabled: boolean;
   } | null>(null);
+  const [shortcutIndex, setShortcutIndex] = useState(0);
   const [candidate, setCandidate] = useState<SnapShotShortcut>(settings.snapShotShortcut);
   const [shortcutCheck, setShortcutCheck] = useState<ShortcutCheck>({
     status: "idle",
@@ -97,15 +103,28 @@ export function SnapShotSettings() {
   const unavailableMessage = snapShotUnavailableMessage(Boolean(bridge));
   const captureAvailable = Boolean(bridge) && state !== null && state.mode !== "unavailable";
   const feedbackUnavailable = snapShotFeedbackUnavailableMessage(state);
-  const savedShortcut = settings.snapShotShortcut;
+  const savedShortcuts = [settings.snapShotShortcut, ...settings.snapShotAdditionalShortcuts];
+  const savedShortcut = savedShortcuts[shortcutIndex] ?? settings.snapShotShortcut;
+  const addingShortcut = shortcutIndex === savedShortcuts.length;
+  const duplicateShortcut = savedShortcuts.some(
+    (item, index) => index !== shortcutIndex && sameSnapShotShortcut(item, candidate),
+  );
   const managedShortcut = state?.linuxBackend === "niri" || state?.linuxBackend === "hyprland";
-  const shortcutChanged = !managedShortcut && !sameSnapShotShortcut(candidate, savedShortcut);
-  const displayShortcut = shortcutChanged ? candidate : (state?.shortcut ?? savedShortcut);
+  const shortcutChanged =
+    !managedShortcut && (addingShortcut || !sameSnapShotShortcut(candidate, savedShortcut));
+  const displayShortcut = shortcutChanged
+    ? candidate
+    : shortcutIndex === 0
+      ? (state?.shortcut ?? savedShortcut)
+      : savedShortcut;
   const candidateConflict = shortcutChanged
     ? snapShotKeybindingConflict(candidate, keybindings)
     : null;
   const canSaveShortcut =
-    shortcutChanged && candidateConflict === null && shortcutCheck.availability?.available === true;
+    shortcutChanged &&
+    !duplicateShortcut &&
+    candidateConflict === null &&
+    shortcutCheck.availability?.available === true;
   const soundSelection = settings.snapShotPlaySound ? settings.snapShotSound : "off";
   const soundLabel =
     soundSelection === "off" ? "Off" : soundSelection === "soft-pop" ? "Whoosh (Default)" : "Click";
@@ -252,8 +271,11 @@ export function SnapShotSettings() {
     stopRecording,
     input: shortcutInput,
   } = useSnapShotShortcutRecorder({
-    shortcut: displayShortcut,
-    shortcutLabel: !shortcutChanged ? state?.shortcutLabel : undefined,
+    shortcut: addingShortcut && shortcutCheck.status === "idle" ? undefined : displayShortcut,
+    shortcutLabel: !shortcutChanged
+      ? (state?.shortcutLabels?.[shortcutIndex] ??
+        (shortcutIndex === 0 ? state?.shortcutLabel : undefined))
+      : undefined,
     disabled: setupBusy,
     allowModifierPairs: state?.mode !== "portal",
     onRecord: (shortcut) => void checkShortcut(shortcut),
@@ -267,25 +289,30 @@ export function SnapShotSettings() {
 
   const shortcutStatus = recording
     ? "Press your shortcut. Esc cancels."
-    : candidateConflict
-      ? `T3 Code already uses this for "${commandLabel(candidateConflict)}".`
-      : shortcutCheck.status === "checking"
-        ? "Checking shortcut…"
-        : shortcutCheck.availability
-          ? shortcutCheck.availability.available
-            ? "Ready to save."
-            : shortcutCheck.availability.message
-          : state?.mode === "portal" &&
-              !state.shortcutLabel &&
-              isModifierPairShortcut(displayShortcut)
-            ? "Try a shortcut such as Ctrl+Shift+2."
-            : snapShotShortcutStatus(state);
+    : addingShortcut && shortcutCheck.status === "idle"
+      ? "Record another shortcut, then save."
+      : shortcutChanged && duplicateShortcut
+        ? "This shortcut is already in the list."
+        : candidateConflict
+          ? `T3 Code already uses this for "${commandLabel(candidateConflict)}".`
+          : shortcutCheck.status === "checking"
+            ? "Checking shortcut…"
+            : shortcutCheck.availability
+              ? shortcutCheck.availability.available
+                ? "Ready to save."
+                : shortcutCheck.availability.message
+              : state?.mode === "portal" &&
+                  !state.shortcutLabel &&
+                  isModifierPairShortcut(displayShortcut)
+                ? "Try a shortcut such as Ctrl+Shift+2."
+                : snapShotShortcutStatus(state);
 
   const openSetup = async (requested: CaptureSetupStep | "resume" = "resume") => {
     if (!state || setupBusy) return;
     stopRecording();
+    setShortcutIndex(0);
     shortcutCheckIdRef.current++;
-    setCandidate(savedShortcut);
+    setCandidate(settings.snapShotShortcut);
     setShortcutCheck({ status: "idle", availability: null });
     setSetupError(null);
     setSetupBusy(true);
@@ -363,7 +390,13 @@ export function SnapShotSettings() {
     if (!canSaveShortcut || setupBusy) return false;
     setSetupBusy(true);
     try {
-      const saved = await save({ snapShotShortcut: candidate });
+      const shortcuts = [...savedShortcuts];
+      shortcuts[shortcutIndex] = candidate;
+      const saved = await save(
+        shortcutIndex === 0
+          ? { snapShotShortcut: candidate }
+          : { snapShotAdditionalShortcuts: shortcuts.slice(1) },
+      );
       return Boolean(saved?.shortcutRegistered || saved?.shortcutPending);
     } finally {
       setSetupBusy(false);
@@ -449,8 +482,74 @@ export function SnapShotSettings() {
                       Change shortcut
                     </Button>
                   ) : (
-                    <>
-                      {shortcutInput}
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {savedShortcuts.map((item, index) => (
+                        <div
+                          key={formatSnapShotShortcutLabel(item)}
+                          className="flex items-center gap-1"
+                        >
+                          {index === shortcutIndex ? (
+                            shortcutInput
+                          ) : (
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              disabled={setupBusy}
+                              aria-label={`Edit snapshot shortcut ${index + 1}: ${formatSnapShotShortcutLabel(item)}`}
+                              onClick={() => {
+                                stopRecording();
+                                setShortcutIndex(index);
+                              }}
+                            >
+                              {state?.shortcutLabels?.[index] || (
+                                <SnapShotShortcutKeys shortcut={item} />
+                              )}
+                            </Button>
+                          )}
+                          {savedShortcuts.length > 1 ? (
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              disabled={setupBusy || recording}
+                              aria-label={`Remove snapshot shortcut ${index + 1}`}
+                              onClick={async () => {
+                                setSetupBusy(true);
+                                try {
+                                  const remaining = savedShortcuts.filter(
+                                    (_, selected) => selected !== index,
+                                  );
+                                  if (
+                                    await save({
+                                      snapShotShortcut: remaining[0]!,
+                                      snapShotAdditionalShortcuts: remaining.slice(1),
+                                    })
+                                  )
+                                    setShortcutIndex(0);
+                                } finally {
+                                  setSetupBusy(false);
+                                }
+                              }}
+                            >
+                              <XIcon />
+                            </Button>
+                          ) : null}
+                        </div>
+                      ))}
+                      {addingShortcut ? (
+                        shortcutInput
+                      ) : savedShortcuts.length < 3 ? (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          disabled={setupBusy || recording || shortcutChanged}
+                          onClick={() => {
+                            stopRecording();
+                            setShortcutIndex(savedShortcuts.length);
+                          }}
+                        >
+                          Add shortcut
+                        </Button>
+                      ) : null}
                       {shortcutChanged ? (
                         <>
                           <Button
@@ -467,6 +566,7 @@ export function SnapShotSettings() {
                             onClick={() => {
                               stopRecording();
                               shortcutCheckIdRef.current++;
+                              if (addingShortcut) setShortcutIndex(0);
                               setCandidate(savedShortcut);
                               setShortcutCheck({ status: "idle", availability: null });
                             }}
@@ -486,7 +586,7 @@ export function SnapShotSettings() {
                           Shortcut permissions
                         </Button>
                       ) : null}
-                    </>
+                    </div>
                   )
                 }
               />

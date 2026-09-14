@@ -1,3 +1,4 @@
+import * as NodeVM from "node:vm";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const { spawnedPollers } = vi.hoisted(() => ({
@@ -50,10 +51,14 @@ describe("macOS modifier pair poller", () => {
     spawnedPollers.length = 0;
     const onTrigger = vi.fn();
     const onFailure = vi.fn();
-    const started = startMacModifierPairShortcutProcess("meta", onTrigger, onFailure);
+    const started = startMacModifierPairShortcutProcess(
+      [["MetaLeft", "MetaRight"]],
+      onTrigger,
+      onFailure,
+    );
     const poller = spawnedPollers[0]!;
     expect(poller.command).toBe("/usr/bin/osascript");
-    expect(poller.args.slice(-2)).toEqual(["8", "16"]);
+    expect(poller.args.slice(-1)).toEqual(["[24]"]);
 
     poller.emitStderr("ready\ntrig");
     const stop = await started;
@@ -71,7 +76,11 @@ describe("macOS modifier pair poller", () => {
   it("reports an unexpected exit after startup", async () => {
     spawnedPollers.length = 0;
     const onFailure = vi.fn();
-    const started = startMacModifierPairShortcutProcess("shift", () => undefined, onFailure);
+    const started = startMacModifierPairShortcutProcess(
+      [["ShiftLeft", "ShiftRight"]],
+      () => undefined,
+      onFailure,
+    );
     const poller = spawnedPollers[0]!;
     poller.emitStderr("ready\n");
     await started;
@@ -83,11 +92,60 @@ describe("macOS modifier pair poller", () => {
   it("rejects when the poller dies before it is ready", async () => {
     spawnedPollers.length = 0;
     const started = startMacModifierPairShortcutProcess(
-      "control",
+      [["ControlLeft", "ControlRight"]],
       () => undefined,
       () => undefined,
     );
     spawnedPollers[0]!.emitExit(1);
     await expect(started).rejects.toThrow(/exited with code 1/);
   });
+});
+
+it("uses distinct masks for mixed keys and shares one poller across shortcuts", async () => {
+  spawnedPollers.length = 0;
+  const started = startMacModifierPairShortcutProcess(
+    [
+      ["MetaLeft", "MetaRight"],
+      ["MetaLeft", "ControlRight"],
+      ["MetaRight", "ControlLeft"],
+    ],
+    () => undefined,
+    () => undefined,
+  );
+  expect(spawnedPollers).toHaveLength(1);
+  expect(JSON.parse(spawnedPollers[0]!.args.at(-1)!)).toEqual([24, 8200, 17]);
+  spawnedPollers[0]!.emitStderr("ready\n");
+  (await started)();
+});
+
+it("matches the recorded macOS key sides and fires once while held", async () => {
+  spawnedPollers.length = 0;
+  const started = startMacModifierPairShortcutProcess(
+    [
+      ["MetaLeft", "MetaRight"],
+      ["MetaLeft", "ControlRight"],
+    ],
+    () => undefined,
+    () => undefined,
+  );
+  const poller = spawnedPollers[0]!;
+  const flags = [0x9, 0x2010, 0x2008, 0x2008, 0, 0x18, 0x18];
+  const log = vi.fn();
+  let index = 0;
+  const context = {
+    ObjC: { import: () => undefined },
+    $: {
+      getppid: () => (index < flags.length ? 2 : 1),
+      CGEventSourceFlagsState: () => flags[index],
+    },
+    console: { log },
+    delay: () => {
+      index++;
+    },
+    args: [poller.args.at(-1)!],
+  };
+  NodeVM.runInNewContext(`${poller.args[3]}; run(args);`, context);
+  expect(log.mock.calls).toEqual([["ready"], ["trigger"], ["trigger"]]);
+  poller.emitStderr("ready\n");
+  (await started)();
 });

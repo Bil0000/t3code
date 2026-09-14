@@ -1,6 +1,7 @@
 import {
   isModifierPairShortcut,
   type SnapShotModifier,
+  type SnapShotModifierKey,
   type SnapShotShortcut,
 } from "@t3tools/contracts";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
@@ -40,7 +41,7 @@ export function useSnapShotShortcutRecorder({
   onStart,
   onError,
 }: {
-  shortcut: SnapShotShortcut;
+  shortcut: SnapShotShortcut | undefined;
   shortcutLabel?: string | undefined;
   disabled?: boolean;
   allowModifierPairs?: boolean;
@@ -93,15 +94,9 @@ export function useSnapShotShortcutRecorder({
     if (modifier) {
       const held = heldModifierCodes.current;
       held.add(event.code);
-      const [left, right] = MODIFIER_CODES[modifier];
-      if (held.has(left) && held.has(right)) {
-        if (!allowModifierPairs) {
-          onError("Add a letter, number, or function key to your shortcut.");
-          return;
-        }
-        stopRecording();
-        onRecord(
-          modifier === "shift" ? { kind: "both-shift-keys" } : { kind: "modifier-pair", modifier },
+      if (held.size === 2 && !allowModifierPairs) {
+        onError(
+          "This desktop cannot preserve left/right modifier pairs. Add a letter, number, or function key.",
         );
       }
       return;
@@ -126,19 +121,41 @@ export function useSnapShotShortcutRecorder({
         aria-label={
           displayShortcut
             ? `Record snapshot shortcut, currently ${formatSnapShotShortcutLabel(displayShortcut)}`
-            : "Change snapshot shortcut"
+            : shortcut === undefined
+              ? "Record snapshot shortcut"
+              : "Change snapshot shortcut"
         }
         aria-pressed={recording}
         data-keybinding-capture=""
         onClick={() => void startRecording()}
         onKeyDown={recordShortcut}
-        onKeyUp={(event) => heldModifierCodes.current.delete(event.code)}
+        onKeyUp={(event) => {
+          const held = heldModifierCodes.current;
+          if (recording && allowModifierPairs && held.has(event.code) && held.size === 2) {
+            const keys = [...held].sort() as [SnapShotModifierKey, SnapShotModifierKey];
+            const modifier = MODIFIER_FROM_KEY[event.key];
+            const pair = modifier && MODIFIER_CODES[modifier];
+            const sameModifier = pair && held.has(pair[0]) && held.has(pair[1]);
+            stopRecording();
+            onRecord(
+              sameModifier
+                ? modifier === "shift"
+                  ? { kind: "both-shift-keys" }
+                  : { kind: "modifier-pair", modifier }
+                : { kind: "modifier-keys", keys },
+            );
+          } else held.delete(event.code);
+        }}
         onBlur={stopRecording}
       >
         {recording ? (
           "Press shortcut…"
         ) : !displayShortcut ? (
-          "Change shortcut"
+          shortcut === undefined ? (
+            "Record shortcut"
+          ) : (
+            "Change shortcut"
+          )
         ) : !allowModifierPairs && isModifierPairShortcut(displayShortcut) ? (
           "Choose shortcut"
         ) : (

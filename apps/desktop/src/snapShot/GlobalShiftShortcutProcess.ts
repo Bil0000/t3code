@@ -3,15 +3,15 @@
 
 import * as NodeChildProcess from "node:child_process";
 
-import type { SnapShotModifier } from "@t3tools/contracts";
+import type { SnapShotModifierKey } from "@t3tools/contracts";
 
 export function startGlobalShiftShortcutProcess(
   workerPath: string,
-  modifier: SnapShotModifier,
+  shortcuts: readonly (readonly [SnapShotModifierKey, SnapShotModifierKey])[],
   onTrigger: () => void,
   onFailure: (error: Error) => void,
 ): Promise<() => void> {
-  const worker = NodeChildProcess.fork(workerPath, [modifier], {
+  const worker = NodeChildProcess.fork(workerPath, [JSON.stringify(shortcuts)], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     execArgv: [],
     stdio: ["ignore", "ignore", "inherit", "ipc"],

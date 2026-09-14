@@ -3095,7 +3095,7 @@ it.effect("starts the Shift listener outside the Electron main process", () => {
 
       assert.isTrue(state.shortcutRegistered);
       assert.lengthOf(shortcutProcesses, 1);
-      assert.deepEqual(shortcutForkArgs[0], ["shift"]);
+      assert.deepEqual(shortcutForkArgs[0], ['[["ShiftLeft","ShiftRight"]]']);
       assert.strictEqual(shortcutForkOptions[0]?.env?.ELECTRON_RUN_AS_NODE, "1");
 
       shortcutProcesses[0]?.emit("exit", 1);
@@ -3121,7 +3121,7 @@ it.effect("passes the configured modifier pair to the listener process", () => {
       const state = yield* service.state;
 
       assert.isTrue(state.shortcutRegistered);
-      assert.deepEqual(shortcutForkArgs[0], ["meta"]);
+      assert.deepEqual(shortcutForkArgs[0], ['[["MetaLeft","MetaRight"]]']);
     }),
   ).pipe(Effect.provide(testLayer("win32")));
 });
@@ -3237,7 +3237,7 @@ it.effect("keeps shortcut registration errors off the capture status", () => {
       assert.isNull(state.message);
       assert.equal(
         state.shortcutMessage,
-        "This shortcut is already used by the system or another app.",
+        "One or more capture shortcuts could not be registered. Choose another shortcut.",
       );
     }),
   ).pipe(Effect.provide(testLayer("win32")));
@@ -3655,7 +3655,7 @@ it.effect("advises about the system menu for a meta pair on Windows", () =>
       const service = yield* DesktopSnapShot.make;
       const result = yield* service.checkShortcut({ kind: "modifier-pair", modifier: "meta" });
       assert.isTrue(result.available);
-      assert.match(result.message ?? "", /Super \+ Super is observed/);
+      assert.match(result.message ?? "", /Left Super \+ Right Super is observed/);
       assert.match(result.message ?? "", /system's own menu/);
     }),
   ).pipe(Effect.provide(testLayer("win32"))),
@@ -3668,10 +3668,10 @@ it.effect("probes macOS modifier pairs with the flags poller", () => {
       const service = yield* DesktopSnapShot.make;
       const result = yield* service.checkShortcut({ kind: "both-shift-keys" });
       assert.isTrue(result.available);
-      assert.match(result.message ?? "", /Shift \+ Shift is observed/);
+      assert.match(result.message ?? "", /Left Shift \+ Right Shift is observed/);
       assert.notMatch(result.message ?? "", /Input Monitoring/);
       assert.lengthOf(spawnedPollers, 1);
-      assert.deepEqual(spawnedPollers[0]?.args.slice(-2), ["2", "4"]);
+      assert.deepEqual(spawnedPollers[0]?.args.slice(-1), ["[6]"]);
       assert.strictEqual(spawnedPollers[0]?.kill.mock.calls.length, 1);
     }),
   ).pipe(Effect.provide(testLayer("darwin")));
@@ -3695,7 +3695,7 @@ it.effect("registers macOS modifier pairs through the flags poller", () => {
 
       assert.lengthOf(shortcutProcesses, 0);
       assert.lengthOf(spawnedPollers, 1);
-      assert.deepEqual(spawnedPollers[0]?.args.slice(-2), ["8", "16"]);
+      assert.deepEqual(spawnedPollers[0]?.args.slice(-1), ["[24]"]);
       assert.isTrue(state.shortcutRegistered);
     }),
   ).pipe(Effect.provide(testLayer("darwin")));
@@ -3788,4 +3788,48 @@ it.effect("rejects macOS test capture on other platforms", () =>
       assert.equal(error.reason, "unsupported-session");
     }),
   ).pipe(Effect.provide(testLayer("win32"))),
+);
+
+it.effect.each(["darwin", "win32"] as const)(
+  "keeps three %s shortcuts registered and releases removed bindings",
+  (platform) => {
+    spawnedPollers.length = 0;
+    shortcutProcesses.length = 0;
+    registerShortcutMock.mockReset().mockReturnValue(true);
+    unregisterShortcutMock.mockReset();
+    accessibilityTrustedMock.mockReturnValue(true);
+    mediaAccessStatusMock.mockReturnValue("granted");
+    const chord = {
+      key: "k",
+      metaKey: false,
+      ctrlKey: true,
+      altKey: true,
+      shiftKey: false,
+      modKey: false,
+    };
+    const settings = enabledSettings({
+      snapShotShortcut: { kind: "modifier-pair", modifier: "meta" },
+      snapShotAdditionalShortcuts: [
+        { kind: "modifier-keys", keys: ["MetaLeft", "ControlRight"] },
+        chord,
+      ],
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopSnapShot.make;
+        yield* service.configure(settings);
+        assert.isTrue((yield* service.state).shortcutRegistered);
+        assert.lengthOf(platform === "darwin" ? spawnedPollers : shortcutProcesses, 1);
+        assert.deepEqual(
+          registerShortcutMock.mock.calls.map(([key]) => key),
+          ["Control+Alt+K"],
+        );
+        yield* service.configure({ ...settings, snapShotAdditionalShortcuts: [] });
+        assert.deepEqual(unregisterShortcutMock.mock.calls, [["Control+Alt+K"]]);
+        assert.isTrue((yield* service.state).shortcutRegistered);
+        yield* service.configure({ ...settings, snapShotEnabled: false });
+        assert.isFalse((yield* service.state).shortcutRegistered);
+      }),
+    ).pipe(Effect.provide(testLayer(platform)));
+  },
 );

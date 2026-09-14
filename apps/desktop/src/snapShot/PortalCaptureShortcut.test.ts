@@ -29,6 +29,7 @@ class FakeBus extends NodeEvents.EventEmitter {
   session = "";
   requestPath = "";
   boundId = "";
+  boundShortcuts: Shortcut[] = [];
   foreignHandle = false;
 
   send(message: Message) {
@@ -60,15 +61,16 @@ class FakeBus extends NodeEvents.EventEmitter {
   }
   respondBind(status = this.bindStatus) {
     this.response(this.requestPath, status, {
-      shortcuts: new Variant("a(sa{sv})", [
-        [
-          this.boundId,
+      shortcuts: new Variant(
+        "a(sa{sv})",
+        this.boundShortcuts.map(([id]) => [
+          id,
           {
             description: new Variant("s", "Capture a window"),
             trigger_description: new Variant("s", this.actualLabel),
           },
-        ],
-      ]),
+        ]),
+      ),
     });
   }
   activate(id = this.boundId, session = this.session, sender = ":1.2") {
@@ -101,7 +103,8 @@ class FakeBus extends NodeEvents.EventEmitter {
         ),
       });
     } else if (message.member === "BindShortcuts") {
-      this.boundId = (message.body[1] as Shortcut[])[0]![0];
+      this.boundShortcuts = message.body[1] as Shortcut[];
+      this.boundId = this.boundShortcuts[0]![0];
       this.requestPath = path;
       this.emit("bind");
       if (this.autoBind) this.respondBind();
@@ -110,7 +113,12 @@ class FakeBus extends NodeEvents.EventEmitter {
   }
 }
 
-function start(bus = new FakeBus(), shortcut = chord, managedByHyprland = false) {
+function start(
+  bus = new FakeBus(),
+  shortcut = chord,
+  managedByHyprland = false,
+  additionalShortcuts: (typeof chord)[] = [],
+) {
   const capture = vi.fn();
   const changed = vi.fn();
   const client = new PortalCaptureShortcut(
@@ -120,6 +128,7 @@ function start(bus = new FakeBus(), shortcut = chord, managedByHyprland = false)
     changed,
     bus as unknown as MessageBus,
     managedByHyprland,
+    additionalShortcuts,
   );
   clients.push(client);
   return { bus, client, capture, changed };
@@ -415,4 +424,31 @@ it("rejects a foreign session without trying to close someone else's session", a
   await client.ready;
   expect(client.state.shortcutRegistered).toBe(false);
   expect(bus.sends.some((message) => message.path.includes("9_9"))).toBe(false);
+});
+
+it("binds all three portal shortcuts in one session and keeps approved alternatives active", async () => {
+  const { bus, client, capture } = start(new FakeBus(), chord, false, [
+    { ...chord, key: "3" },
+    { ...chord, key: "4" },
+  ]);
+  await client.ready;
+  expect(bus.boundShortcuts).toHaveLength(3);
+  expect(client.state.shortcutRegistered).toBe(true);
+  for (const [id] of bus.boundShortcuts) bus.activate(id);
+  expect(capture).toHaveBeenCalledTimes(3);
+  const [first, second] = bus.boundShortcuts;
+  bus.signal(portal, "ShortcutsChanged", root, [
+    bus.session,
+    [
+      [first![0], { trigger_description: new Variant("s", "Ctrl+Shift+2") }],
+      [second![0], { trigger_description: new Variant("s", "") }],
+    ],
+  ]);
+  expect(client.state.shortcutRegistered).toBe(false);
+  bus.activate(first![0]);
+  bus.activate(second![0]);
+  expect(capture).toHaveBeenCalledTimes(4);
+  client.close();
+  bus.activate(first![0]);
+  expect(capture).toHaveBeenCalledTimes(4);
 });

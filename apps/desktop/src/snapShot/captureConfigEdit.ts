@@ -142,7 +142,7 @@ export function editCaptureConfig(
   format: CaptureConfigFormat,
   appId: string,
   operation: "install" | "remove",
-  requestedKeys?: string,
+  requestedKeys?: string | readonly string[],
 ) {
   if (format === "hyprland-lua" && (/^\s*return\b/m.test(source) || /\[=*\[/.test(source)))
     throw new Error(
@@ -156,17 +156,40 @@ export function editCaptureConfig(
     : hyprlandBinds(source, format === "hyprland-lua").filter(
         (bind) => bind.action === `${appId}:capture-window`,
       );
-  const keys = captureConfigKeys(requestedKeys ?? existing[0]?.keys).label;
-  if (operation === "install" && existing.length === 1 && sameKeys(existing[0]!.keys, keys))
-    return { after: source, shortcut: keys };
+  const requested =
+    requestedKeys === undefined
+      ? existing.length > 0
+        ? existing.map((item) => item.keys)
+        : ["Ctrl+Shift+2"]
+      : typeof requestedKeys === "string"
+        ? [requestedKeys]
+        : requestedKeys;
+  const shortcuts = requested.map((key) => captureConfigKeys(key).label);
+  if (
+    operation === "install" &&
+    (shortcuts.length < 1 || shortcuts.length > 3 || new Set(shortcuts).size !== shortcuts.length)
+  )
+    throw new Error("Choose up to three different shortcuts.");
+  const keys = shortcuts[0]!;
+  if (
+    operation === "install" &&
+    existing.length === shortcuts.length &&
+    existing.every((item, index) => sameKeys(item.keys, shortcuts[index]!))
+  )
+    return { after: source, shortcut: keys, shortcuts };
   let after = removeNodes(source, existing);
-  if (operation === "remove") return { after, shortcut: keys };
-  const conflict = niri
-    ? niriConfigConflict(after, appId, keys)
-    : hyprlandBinds(after, false).some((bind) => sameKeys(bind.keys, keys));
-  if (conflict) throw new Error(`${keys} is already used in this config. Choose another shortcut.`);
+  if (operation === "remove") return { after, shortcut: keys, shortcuts };
+  for (const key of shortcuts) {
+    const conflict = niri
+      ? niriConfigConflict(after, appId, key)
+      : hyprlandBinds(after, format === "hyprland-lua").some((bind) => sameKeys(bind.keys, key));
+    if (conflict)
+      throw new Error(`${key} is already used in this config. Choose another shortcut.`);
+  }
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
-  const binding = captureConfigBinding(format, appId, keys);
+  const binding = shortcuts
+    .map((key) => captureConfigBinding(format, appId, key))
+    .join(newline + (niri ? "    " : ""));
   if (niri) {
     const block = niriBinds(after);
     if (block?.close !== undefined) {
@@ -191,5 +214,5 @@ export function editCaptureConfig(
     // The normal Omarchy binding file is a sequence of top-level hl.bind calls.
     after += `${after && !after.endsWith("\n") ? newline : ""}${newline}${binding}${newline}`;
   }
-  return { after, shortcut: keys };
+  return { after, shortcut: keys, shortcuts };
 }

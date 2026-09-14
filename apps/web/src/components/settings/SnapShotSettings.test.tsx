@@ -415,3 +415,54 @@ it("requires a successful macOS test capture before enabling and allows retry", 
   expect(bridge.setupSnapShot.mock.calls).toEqual([["test-mac-capture"], ["test-mac-capture"]]);
   expect(settingsStore.current.snapShotEnabled).toBe(true);
 });
+
+it.each(["direct", "gnome-extension", "kde", "picker"] as const)(
+  "adds up to three %s shortcuts and removes only the selected one",
+  async (backend) => {
+    state = {
+      ...state,
+      mode: backend === "direct" ? "direct" : "portal",
+      linuxBackend: backend === "direct" ? undefined : backend,
+      shortcutRegistered: true,
+    };
+    await mount();
+    for (const key of ["y", "z"]) {
+      button(render(), "Add shortcut").onClick();
+      const recorder = () =>
+        visitElements(render(), (element) => "data-keybinding-capture" in element.props)!.props;
+      (recorder().onClick as () => void)();
+      await finish(bridge.setSnapShotShortcutSuppressed.mock.results.at(-1)!.value);
+      (recorder().onKeyDown as (event: object) => void)({
+        key,
+        code: `Key${key.toUpperCase()}`,
+        ctrlKey: true,
+        altKey: true,
+        metaKey: false,
+        shiftKey: false,
+        repeat: false,
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      });
+      await finish(bridge.checkSnapShotShortcut.mock.results.at(-1)!.value);
+      button(render(), "Save").onClick();
+      await finish(settingsStore.update.mock.results.at(-1)!.value);
+      await finish(bridge.getSnapShotState.mock.results.at(-1)!.value);
+    }
+    expect(settingsStore.current.snapShotAdditionalShortcuts).toHaveLength(2);
+    expect(
+      visitElements(render(), (element) => element.props.children === "Add shortcut"),
+    ).toBeNull();
+    const remove = visitElements(
+      render(),
+      (element) => element.props["aria-label"] === "Remove snapshot shortcut 2",
+    )!;
+    await (remove.props.onClick as () => Promise<void>)();
+    expect(settingsStore.current.snapShotAdditionalShortcuts).toEqual([
+      expect.objectContaining({ key: "z" }),
+    ]);
+    expect(settingsStore.current.snapShotShortcut).toEqual(
+      DEFAULT_CLIENT_SETTINGS.snapShotShortcut,
+    );
+    expect(button(render(), "Add shortcut")).toBeDefined();
+  },
+);

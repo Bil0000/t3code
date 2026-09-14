@@ -169,7 +169,24 @@ export type SnapShotKeyChord = typeof SnapShotKeyChord.Type;
 export const SNAP_SHOT_MODIFIERS = ["shift", "meta", "control", "alt"] as const;
 export const SnapShotModifier = Schema.Literals(SNAP_SHOT_MODIFIERS);
 export type SnapShotModifier = typeof SnapShotModifier.Type;
+export const SnapShotModifierKey = Schema.Literals([
+  "ShiftLeft",
+  "ShiftRight",
+  "MetaLeft",
+  "MetaRight",
+  "ControlLeft",
+  "ControlRight",
+  "AltLeft",
+  "AltRight",
+]);
+export type SnapShotModifierKey = typeof SnapShotModifierKey.Type;
 export const SnapShotShortcut = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("modifier-keys"),
+    keys: Schema.Tuple([SnapShotModifierKey, SnapShotModifierKey]).check(
+      Schema.makeFilter(([first, second]) => first !== second || "Choose two different keys."),
+    ),
+  }),
   Schema.Struct({ kind: Schema.Literal("both-shift-keys") }),
   Schema.Struct({ kind: Schema.Literal("modifier-pair"), modifier: SnapShotModifier }),
   SnapShotKeyChord,
@@ -187,10 +204,25 @@ export function isModifierPairShortcut(
   return "kind" in shortcut;
 }
 
-export function snapShotShortcutModifierPair(
+export function snapShotShortcutModifierKeys(
   shortcut: SnapShotModifierPairShortcut,
-): SnapShotModifier {
-  return shortcut.kind === "both-shift-keys" ? "shift" : shortcut.modifier;
+): readonly [SnapShotModifierKey, SnapShotModifierKey] {
+  if (shortcut.kind === "modifier-keys") return shortcut.keys;
+  const modifier = shortcut.kind === "both-shift-keys" ? "shift" : shortcut.modifier;
+  const codes = {
+    shift: ["ShiftLeft", "ShiftRight"],
+    meta: ["MetaLeft", "MetaRight"],
+    control: ["ControlLeft", "ControlRight"],
+    alt: ["AltLeft", "AltRight"],
+  } as const;
+  return codes[modifier];
+}
+
+export function snapShotModifierKeyParts(key: SnapShotModifierKey) {
+  return {
+    modifier: key.replace(/Left|Right/, "").toLowerCase() as SnapShotModifier,
+    side: key.endsWith("Left") ? "Left" : "Right",
+  };
 }
 
 const APPLE_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
@@ -206,9 +238,16 @@ const OTHER_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
   alt: "Alt",
 };
 
-export function snapShotModifierPairLabel(modifier: SnapShotModifier, apple: boolean): string {
-  const label = (apple ? APPLE_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[modifier];
-  return `${label} + ${label}`;
+export function snapShotModifierPairLabel(
+  shortcut: SnapShotModifierPairShortcut,
+  apple: boolean,
+): string {
+  return snapShotShortcutModifierKeys(shortcut)
+    .map((key) => {
+      const { modifier, side } = snapShotModifierKeyParts(key);
+      return `${side} ${(apple ? APPLE_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[modifier]}`;
+    })
+    .join(" + ");
 }
 const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
   kind: "both-shift-keys",
@@ -463,6 +502,9 @@ export const ClientSettingsSchema = Schema.Struct({
   snapShotShortcut: SnapShotShortcut.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNAP_SHOT_SHORTCUT)),
   ),
+  snapShotAdditionalShortcuts: Schema.Array(SnapShotShortcut)
+    .check(Schema.isMaxLength(2))
+    .pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   snapShotPlaySound: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotSound: SnapShotSound.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNAP_SHOT_SOUND)),
@@ -1513,6 +1555,9 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
   snapShotIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
   snapShotShortcut: Schema.optionalKey(SnapShotShortcut),
+  snapShotAdditionalShortcuts: Schema.optionalKey(
+    Schema.Array(SnapShotShortcut).check(Schema.isMaxLength(2)),
+  ),
   snapShotPlaySound: Schema.optionalKey(Schema.Boolean),
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
