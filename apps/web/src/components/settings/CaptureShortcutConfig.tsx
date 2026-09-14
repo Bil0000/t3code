@@ -8,6 +8,7 @@ import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import { FileDiff } from "@pierre/diffs/react";
 import { parseDiffFromFile } from "@pierre/diffs";
 import { useMemo, useState } from "react";
+import { PlusIcon } from "lucide-react";
 import { sameSnapShotShortcut } from "../../lib/snapShotShortcut";
 import { getDesktopSnapShotBridge } from "../../lib/desktopSnapShot";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
@@ -212,6 +213,7 @@ export function CaptureShortcutConfig({
                 disabled={busy || recorder.recording}
                 onClick={() => setShortcutIndex(shortcuts.length)}
               >
+                <PlusIcon className="size-3" aria-hidden />
                 Add shortcut
               </Button>
             ) : null}

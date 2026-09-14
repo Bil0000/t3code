@@ -72,7 +72,9 @@ function wizard(tree: ReturnType<typeof render>) {
 function button(tree: ReturnType<typeof render>, label: string) {
   const node = visitElements(
     tree,
-    (element) => element.props.children === label && typeof element.props.onClick === "function",
+    (element) =>
+      [element.props.children].flat().includes(label) &&
+      typeof element.props.onClick === "function",
   );
   if (!node) throw new Error(`Missing button: ${label}`);
   return node.props as { onClick: () => void };
@@ -467,7 +469,9 @@ it.each(["direct", "gnome-extension", "kde", "picker"] as const)(
     }
     expect(settingsStore.current.snapShotAdditionalShortcuts).toHaveLength(2);
     expect(
-      visitElements(render(), (element) => element.props.children === "Add shortcut"),
+      visitElements(render(), (element) =>
+        [element.props.children].flat().includes("Add shortcut"),
+      ),
     ).toBeNull();
     const remove = visitElements(
       render(),

@@ -7,7 +7,7 @@ import {
   type DesktopSnapShotSetupAction,
   type SnapShotShortcut,
 } from "@t3tools/contracts";
-import { ChevronDownIcon, PlayIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, PlayIcon, PlusIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -550,6 +550,7 @@ export function SnapShotSettings() {
                             setShortcutIndex(savedShortcuts.length);
                           }}
                         >
+                          <PlusIcon className="size-3" aria-hidden />
                           Add shortcut
                         </Button>
                       ) : null}

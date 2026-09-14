@@ -65,7 +65,9 @@ function render(desktop: "niri" | "hyprland" = "niri") {
 function button(tree: ReturnType<typeof render>, label: string) {
   const node = visitElements(
     tree,
-    (element) => element.props.children === label && typeof element.props.onClick === "function",
+    (element) =>
+      [element.props.children].flat().includes(label) &&
+      typeof element.props.onClick === "function",
   );
   if (!node) throw new Error(`Missing button: ${label}`);
   return node.props as { onClick: () => void; disabled: boolean };
@@ -194,7 +196,9 @@ it.each(["niri", "hyprland"] as const)(
     shortcutInput(render(desktop)).onClick();
     expect(bridge.setSnapShotShortcutSuppressed).not.toHaveBeenCalled();
     expect(
-      visitElements(render(desktop), (element) => element.props.children === "Add shortcut"),
+      visitElements(render(desktop), (element) =>
+        [element.props.children].flat().includes("Add shortcut"),
+      ),
     ).toBeNull();
     bridge.previewSnapShotConfig.mockResolvedValue({
       ...preview,
@@ -372,7 +376,9 @@ it.each(["niri", "hyprland"] as const)(
       await recordKeys(desktop, { key, code: `Key${key.toUpperCase()}` });
     }
     expect(
-      visitElements(render(desktop), (element) => element.props.children === "Add shortcut"),
+      visitElements(render(desktop), (element) =>
+        [element.props.children].flat().includes("Add shortcut"),
+      ),
     ).toBeNull();
     bridge.previewSnapShotConfig.mockResolvedValue({ ...preview, shortcuts });
     button(render(desktop), "Review changes").onClick();
