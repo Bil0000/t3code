@@ -108,6 +108,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           displayMode === "panel" && THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
         )}
         aria-label="Run on"
+        data-composer-shortcut="composer.host"
         data-composer-context-control
       >
         {autoEnvironmentLabel ? (
