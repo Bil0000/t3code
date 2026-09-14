@@ -269,6 +269,65 @@ describe("remote thread lifecycle commands", () => {
   );
 
   for (const action of ["settle", "snooze"] as const) {
+    it.effect(`restores a confirmed ${action} when a queued undo fails`, () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const parked =
+          action === "settle"
+            ? { settledOverride: "settled" as const }
+            : { snoozedUntil: "2099-01-01T00:00:00.000Z" };
+        const awake = action === "settle" ? { settledOverride: "active" } : { snoozedUntil: null };
+        const result = h.commands[action].run(h.registry, {
+          environmentId: ENVIRONMENT_ID,
+          input: { threadId: THREAD_ID, snoozedUntil: "2099-01-01T00:00:00.000Z" },
+        });
+        const first = yield* Queue.take(h.requests);
+        const undo = h.commands[action === "settle" ? "unsettle" : "unsnooze"].run(h.registry, {
+          environmentId: ENVIRONMENT_ID,
+          input: { threadId: THREAD_ID, reason: "user" },
+        });
+        expect(h.registry.get(h.visibleAtom)?.threads[0]).toMatchObject(awake);
+        yield* Deferred.succeed(first.reply, { sequence: 2 });
+        expect((yield* Effect.promise(() => result))._tag).toBe("Success");
+        expect(h.registry.get(h.visibleAtom)?.threads[0]).toMatchObject(awake);
+        const confirmed = {
+          ...SNAPSHOT,
+          snapshotSequence: 2,
+          threads: [{ ...SNAPSHOT.threads[0]!, ...parked }],
+        };
+        h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), confirmed);
+        expect(h.registry.get(h.visibleAtom)?.threads[0]).toMatchObject(awake);
+        const second = yield* Queue.take(h.requests);
+        expect(second.command.type).toBe(
+          action === "settle" ? "thread.unsettle" : "thread.unsnooze",
+        );
+        yield* Deferred.fail(second.reply, new Error("Undo rejected"));
+        expect((yield* Effect.promise(() => undo))._tag).toBe("Failure");
+        expect(h.registry.get(h.visibleAtom)).toBe(confirmed);
+      }),
+    );
+
+    it.effect(`preserves a newer approval when the ${action} reply arrives after the shell`, () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const result = h.commands[action].run(h.registry, {
+          environmentId: ENVIRONMENT_ID,
+          input: { threadId: THREAD_ID, snoozedUntil: "2099-01-01T00:00:00.000Z" },
+        });
+        const request = yield* Queue.take(h.requests);
+        const newer = {
+          ...SNAPSHOT,
+          snapshotSequence: 3,
+          threads: [{ ...SNAPSHOT.threads[0]!, hasPendingApprovals: true }],
+        };
+        h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), newer);
+        expect(h.registry.get(h.visibleAtom)?.threads[0]).toBe(newer.threads[0]);
+        yield* Deferred.succeed(request.reply, { sequence: 2 });
+        expect((yield* Effect.promise(() => result))._tag).toBe("Success");
+        expect(h.registry.get(h.visibleAtom)).toBe(newer);
+      }),
+    );
+
     it.effect(`shows an accepted ${action} while the shell still has an old input request`, () =>
       Effect.gen(function* () {
         const h = yield* makeHarness();
