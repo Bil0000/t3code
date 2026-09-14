@@ -170,6 +170,27 @@ it("detects included config changes before applying", async () => {
   await NodeFSP.writeFile(included, "binds { Ctrl+Shift+2 { quit; } }");
   await expect(setup.apply(preview.id, "niri")).rejects.toThrow("changed since");
 });
+it.each(["install", "remove"] as const)(
+  "rejects root-only %s when a nested Niri include owns the capture binding",
+  async (operation) => {
+    await NodeFSP.appendFile(path, 'include "extra.kdl"\n');
+    await NodeFSP.writeFile(NodePath.join(directory, "extra.kdl"), 'include "keys.kdl"\n');
+    const included = NodePath.join(directory, "keys.kdl");
+    const before = `binds { ${captureConfigBinding("niri", appId, "Ctrl+Alt+Y")} }`;
+    await NodeFSP.writeFile(included, before);
+    const rootBefore = await NodeFSP.readFile(path, "utf8");
+    const request = { ...install, operation, shortcuts: ["Super+F8"] };
+    await expect(setup.preview(target(), request)).rejects.toThrow(included);
+    expect(await NodeFSP.readFile(path, "utf8")).toBe(rootBefore);
+    expect(await NodeFSP.readFile(included, "utf8")).toBe(before);
+    const preview = await setup.preview({ ...target(), path: included }, request);
+    await setup.apply(preview.id, "niri");
+    expect(await NodeFSP.readFile(included, "utf8")).toBe(preview.after);
+    expect(preview.after).not.toContain("Ctrl+Alt+Y");
+    if (operation === "install") expect(preview.after).toContain("Super+F8");
+    expect(await NodeFSP.readFile(path, "utf8")).toBe(rootBefore);
+  },
+);
 it("rejects a conflict from another Hyprland config or dynamic Lua bind", async () => {
   const hypr = {
     ...target(),

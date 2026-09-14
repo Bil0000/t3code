@@ -183,6 +183,10 @@ export class CaptureShortcutConfig {
           }
           if (files.some((item) => item.resolvedPath === child.resolvedPath)) continue;
           files.push(child);
+          if (editCaptureConfig(child.text, "niri", target.appId, "remove").after !== child.text)
+            throw new Error(
+              `A capture binding is in ${child.path}. Choose that file in Advanced or use manual setup.`,
+            );
           if (
             request.operation === "install" &&
             edit.shortcuts.some((key) => niriConfigConflict(child.text, target.appId, key))
