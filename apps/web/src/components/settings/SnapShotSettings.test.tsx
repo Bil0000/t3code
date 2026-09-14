@@ -416,6 +416,23 @@ it("requires a successful macOS test capture before enabling and allows retry", 
   expect(settingsStore.current.snapShotEnabled).toBe(true);
 });
 
+it("cancels an empty shortcut with Escape without saving", async () => {
+  state = { ...state, mode: "direct", linuxBackend: undefined, shortcutRegistered: true };
+  await mount();
+  button(render(), "Add shortcut").onClick();
+  const recorder = () =>
+    visitElements(render(), (element) => "data-keybinding-capture" in element.props)!.props;
+  (recorder().onClick as () => void)();
+  await finish(bridge.setSnapShotShortcutSuppressed.mock.results.at(-1)!.value);
+  (recorder().onKeyDown as (event: object) => void)({
+    key: "Escape",
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  });
+  expect(button(render(), "Add shortcut")).toBeDefined();
+  expect(settingsStore.update).not.toHaveBeenCalled();
+});
+
 it.each(["direct", "gnome-extension", "kde", "picker"] as const)(
   "adds up to three %s shortcuts and removes only the selected one",
   async (backend) => {

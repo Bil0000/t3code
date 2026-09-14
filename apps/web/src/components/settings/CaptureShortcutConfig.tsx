@@ -58,6 +58,9 @@ export function CaptureShortcutConfig({
     disabled: busy || keys === null,
     allowModifierPairs: false,
     onStart: () => setError(null),
+    onCancel: () => {
+      if (shortcutIndex === shortcuts.length) setShortcutIndex(0);
+    },
     onError: (message) => setError({ message }),
     onRecord: (shortcut) => {
       if (isModifierPairShortcut(shortcut)) return;

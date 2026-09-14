@@ -233,6 +233,19 @@ it("requires a new diff after changing keys during review", async () => {
   await finish(bridge.applySnapShotConfig.mock.results[0]!.value);
   expect(bridge.applySnapShotConfig).toHaveBeenCalledExactlyOnceWith(replacement.id);
 });
+
+it.each(["niri", "hyprland"] as const)(
+  "cancels an empty %s shortcut with Escape",
+  async (desktop) => {
+    button(render(desktop), "Review changes").onClick();
+    await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
+    button(render(desktop), "Add shortcut").onClick();
+    await recordKeys(desktop, { key: "Escape", code: "Escape" });
+    expect(shortcutInput(render(desktop))["aria-label"]).toContain("2");
+    expect(button(render(desktop), "Save shortcut").disabled).toBe(false);
+    expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
+  },
+);
 it.each(["Escape", "blur"])(
   "keeps the reviewed diff when recording is cancelled with %s",
   async (cancel) => {

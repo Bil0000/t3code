@@ -39,6 +39,7 @@ export function useSnapShotShortcutRecorder({
   allowModifierPairs = true,
   onRecord,
   onStart,
+  onCancel,
   onError,
 }: {
   shortcut: SnapShotShortcut | undefined;
@@ -47,6 +48,7 @@ export function useSnapShotShortcutRecorder({
   allowModifierPairs?: boolean;
   onRecord: (shortcut: SnapShotShortcut) => void;
   onStart?: () => void;
+  onCancel?: () => void;
   onError: (message: string) => void;
 }) {
   const bridge = getDesktopSnapShotBridge();
@@ -90,6 +92,7 @@ export function useSnapShotShortcutRecorder({
     event.stopPropagation();
     if (event.key === "Escape") {
       stopRecording();
+      onCancel?.();
       return;
     }
     const modifier = MODIFIER_FROM_KEY[event.key];

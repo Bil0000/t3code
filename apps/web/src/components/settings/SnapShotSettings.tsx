@@ -279,6 +279,9 @@ export function SnapShotSettings() {
     disabled: setupBusy,
     allowModifierPairs: state?.mode !== "portal",
     onRecord: (shortcut) => void checkShortcut(shortcut),
+    onCancel: () => {
+      if (addingShortcut) setShortcutIndex(0);
+    },
     onStart: () => {
       shortcutCheckIdRef.current++;
       setShortcutCheck({ status: "idle", availability: null });
