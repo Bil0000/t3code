@@ -172,27 +172,77 @@ it.effect("bounds Git bursts across drivers without timing out queued commands",
           operation: "test.gitBurst",
           cwd: "/repo",
           args: ["rev-parse", "HEAD"],
-          timeoutMs: index < 4 ? null : 1_000,
+          ...(index < 4 ? {} : { timeoutMs: index < 8 ? 30_000 : 1_000 }),
         }),
       { concurrency: "unbounded" },
     ).pipe(Effect.forkChild);
 
-    yield* Effect.all(Array.from({ length: 4 }, () => Queue.take(starts)));
     yield* TestClock.adjust("2 seconds");
-    assert.equal(yield* Queue.size(starts), 0);
-    assert.equal(peak, 4);
+    assert.equal(yield* Queue.size(starts), 8);
+    assert.equal(peak, 8);
     yield* Deferred.succeed(gate, undefined);
     const results = yield* Fiber.join(burst);
     assert.equal(results.length, 16);
     assert.isTrue(results.every((result) => result.stdout === "ok" && result.exitCode === 0));
-    assert.equal(peak, 4);
+    assert.equal(peak, 8);
     assert.equal(active, 0);
     const duration = yield* Metric.value(
       Metric.withAttributes(gitCommandDuration, [["operation", "test.gitBurst"]]),
     );
     assert.equal(duration.count, 16);
-    assert.equal(duration.sum, 8_000);
+    assert.equal(duration.sum, 16_000);
   }).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect.each([{ timeoutMs: null }, { timeoutMs: 30_001 }])(
+  "keeps all Git slots available with a pending command whose timeout is $timeoutMs",
+  ({ timeoutMs }) =>
+    Effect.gen(function* () {
+      const slowGate = yield* Deferred.make<void>();
+      const fastGate = yield* Deferred.make<void>();
+      const starts = yield* Queue.unbounded<void>();
+      let active = 0;
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.acquireRelease(
+          Effect.gen(function* () {
+            active++;
+            yield* Queue.offer(starts, undefined);
+            const gate =
+              ChildProcess.isStandardCommand(command) && command.args[0] === "push"
+                ? slowGate
+                : fastGate;
+            return ChildProcessSpawner.makeHandle({
+              ...makeSuccessfulHandle("ok"),
+              exitCode: Deferred.await(gate).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+            });
+          }),
+          () => Effect.sync(() => active--),
+        ),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const slow = yield* driver
+        .execute({ operation: "test.slowGit", cwd: "/repo", args: ["push"], timeoutMs })
+        .pipe(Effect.forkChild);
+      yield* Queue.take(starts);
+      const burst = yield* Effect.all(
+        Array.from({ length: 8 }, () =>
+          driver.execute({ operation: "test.fastGit", cwd: "/repo", args: ["status"] }),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+
+      yield* TestClock.adjust("0 seconds");
+      assert.equal(yield* Queue.size(starts), 8);
+      assert.equal(active, 9);
+      yield* Deferred.succeed(fastGate, undefined);
+      assert.equal((yield* Fiber.join(burst)).length, 8);
+      assert.equal(active, 1);
+      yield* Deferred.succeed(slowGate, undefined);
+      assert.equal((yield* Fiber.join(slow)).stdout, "ok");
+      assert.equal(active, 0);
+    }).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 for (const location of ["root", "nested", "worktree"] as const) {
