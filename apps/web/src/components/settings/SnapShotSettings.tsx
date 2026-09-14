@@ -498,7 +498,7 @@ export function SnapShotSettings() {
                             <Button
                               size="xs"
                               variant="outline"
-                              disabled={setupBusy}
+                              disabled={setupBusy || recording || shortcutChanged}
                               aria-label={`Edit snapshot shortcut ${index + 1}: ${formatSnapShotShortcutLabel(item)}`}
                               onClick={() => {
                                 stopRecording();
@@ -514,7 +514,7 @@ export function SnapShotSettings() {
                             <Button
                               size="icon-xs"
                               variant="ghost"
-                              disabled={setupBusy || recording}
+                              disabled={setupBusy || recording || shortcutChanged}
                               aria-label={`Remove snapshot shortcut ${index + 1}`}
                               onClick={async () => {
                                 setSetupBusy(true);

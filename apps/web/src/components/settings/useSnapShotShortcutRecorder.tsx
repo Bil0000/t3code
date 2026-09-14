@@ -167,7 +167,10 @@ export function useSnapShotShortcutRecorder({
             if (held.size === 0) tooManyModifiers.current = false;
           }
         }}
-        onBlur={stopRecording}
+        onBlur={() => {
+          stopRecording();
+          if (shortcut === undefined) onCancel?.();
+        }}
       >
         {recording ? (
           "Press shortcut…"

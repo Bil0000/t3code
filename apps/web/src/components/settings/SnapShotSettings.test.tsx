@@ -418,7 +418,7 @@ it("requires a successful macOS test capture before enabling and allows retry", 
   expect(settingsStore.current.snapShotEnabled).toBe(true);
 });
 
-it("cancels an empty shortcut with Escape without saving", async () => {
+it.each(["Escape", "blur"])("cancels an empty shortcut with %s without saving", async (cancel) => {
   state = { ...state, mode: "direct", linuxBackend: undefined, shortcutRegistered: true };
   await mount();
   button(render(), "Add shortcut").onClick();
@@ -426,11 +426,13 @@ it("cancels an empty shortcut with Escape without saving", async () => {
     visitElements(render(), (element) => "data-keybinding-capture" in element.props)!.props;
   expect(bridge.setSnapShotShortcutSuppressed).toHaveBeenLastCalledWith(true);
   await finish(bridge.setSnapShotShortcutSuppressed.mock.results.at(-1)!.value);
-  (recorder().onKeyDown as (event: object) => void)({
-    key: "Escape",
-    preventDefault: vi.fn(),
-    stopPropagation: vi.fn(),
-  });
+  if (cancel === "blur") (recorder().onBlur as () => void)();
+  else
+    (recorder().onKeyDown as (event: object) => void)({
+      key: "Escape",
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
   expect(button(render(), "Add shortcut")).toBeDefined();
   expect(settingsStore.update).not.toHaveBeenCalled();
 });
@@ -463,6 +465,15 @@ it.each(["direct", "gnome-extension", "kde", "picker"] as const)(
         stopPropagation: vi.fn(),
       });
       await finish(bridge.checkSnapShotShortcut.mock.results.at(-1)!.value);
+      const other = visitElements(render(), (element) =>
+        String(element.props["aria-label"]).startsWith("Edit snapshot shortcut"),
+      );
+      expect(other?.props.disabled).toBe(true);
+      const remove = visitElements(render(), (element) =>
+        String(element.props["aria-label"]).startsWith("Remove snapshot shortcut"),
+      );
+      if (key === "z") expect(remove?.props.disabled).toBe(true);
+      (recorder().onBlur as () => void)();
       button(render(), "Save").onClick();
       await finish(settingsStore.update.mock.results.at(-1)!.value);
       await finish(bridge.getSnapShotState.mock.results.at(-1)!.value);
