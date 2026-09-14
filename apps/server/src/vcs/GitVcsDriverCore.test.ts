@@ -1557,90 +1557,6 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("worktree operations", () => {
-    for (const state of [
-      "new",
-      "new-missing",
-      "existing",
-      "existing-missing",
-      "concurrent",
-    ] as const) {
-      it.effect(`cleans up only newly registered worktrees on interruption: ${state}`, () =>
-        Effect.gen(function* () {
-          const cwd = yield* makeTmpDir();
-          const { initialBranch } = yield* initRepoWithCommit(cwd);
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "interrupted");
-          const existing = state.startsWith("existing") || state === "concurrent";
-          if (state.startsWith("existing")) {
-            yield* git(cwd, ["worktree", "add", "-b", "feature/existing", worktreePath]);
-            if (state === "existing-missing") {
-              yield* fs.remove(worktreePath, { recursive: true });
-            }
-          }
-          const baseDriver = yield* GitVcsDriver.GitVcsDriver;
-          const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
-          const commandFinished = yield* Deferred.make<void>();
-          const spawner = ChildProcessSpawner.make((command) =>
-            Effect.gen(function* () {
-              const isWorktreeAdd =
-                ChildProcess.isStandardCommand(command) &&
-                command.args.includes("worktree") &&
-                command.args.includes("add");
-              if (isWorktreeAdd && state === "concurrent") {
-                yield* git(cwd, ["worktree", "add", "-b", "feature/existing", worktreePath]).pipe(
-                  Effect.provideService(GitVcsDriver.GitVcsDriver, baseDriver),
-                  Effect.orDie,
-                );
-                yield* fs.writeFileString(
-                  path.join(worktreePath, "uncommitted.txt"),
-                  "keep these edits",
-                );
-              }
-              const handle = yield* delegate.spawn(command);
-              return isWorktreeAdd
-                ? ChildProcessSpawner.makeHandle({
-                    ...handle,
-                    exitCode: handle.exitCode.pipe(
-                      Effect.andThen(Deferred.succeed(commandFinished, undefined)),
-                      Effect.andThen(Effect.never),
-                    ),
-                  })
-                : handle;
-            }),
-          );
-          const driver = yield* makeGitVcsDriverCore().pipe(
-            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-            Effect.provide(ServerConfigLayer),
-          );
-          const creating = yield* driver
-            .createWorktree({
-              cwd,
-              path: worktreePath,
-              refName: initialBranch,
-              newRefName: "feature/interrupted",
-            })
-            .pipe(Effect.forkChild({ startImmediately: true }));
-          yield* Deferred.await(commandFinished);
-          if (state === "new-missing") {
-            yield* fs.remove(worktreePath, { recursive: true });
-          }
-          yield* Fiber.interrupt(creating);
-
-          assert.equal(yield* fs.exists(worktreePath), existing && !state.endsWith("missing"));
-          if (state === "concurrent") {
-            assert.equal(
-              yield* fs.readFileString(path.join(worktreePath, "uncommitted.txt")),
-              "keep these edits",
-            );
-          }
-          const registered = yield* git(cwd, ["worktree", "list", "--porcelain", "-z"]);
-          assert.equal(registered.includes("feature/existing"), existing);
-          assert.notInclude(registered, "feature/interrupted");
-        }),
-      );
-    }
-
     it.effect("uses parallel checkout without skipping filters or hooks", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -1680,18 +1596,23 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           yield* git(cwd, ["config", "branch.feature/parallel.gh-merge-base"]),
           initialBranch,
         );
-        yield* git(cwd, ["config", "checkout.workers", "1"]);
-        const configuredPath = path.join(yield* makeTmpDir("git-worktrees-"), "configured");
-        yield* driver.createWorktree({
-          cwd,
-          path: configuredPath,
-          refName: initialBranch,
-          newRefName: "feature/configured",
-        });
-        assert.equal(
-          yield* fs.readFileString(path.join(configuredPath, "checkout-workers")),
-          "1\n",
-        );
+        for (const [configured, expected] of [
+          ["1", "1"],
+          ["", "0"],
+        ] as const) {
+          yield* git(cwd, ["config", "checkout.workers", configured]);
+          const configuredPath = path.join(yield* makeTmpDir("git-worktrees-"), "configured");
+          yield* driver.createWorktree({
+            cwd,
+            path: configuredPath,
+            refName: initialBranch,
+            newRefName: `feature/configured-${expected}`,
+          });
+          assert.equal(
+            yield* fs.readFileString(path.join(configuredPath, "checkout-workers")),
+            `${expected}\n`,
+          );
+        }
       }),
     );
     it("parses checkout progress lines from git's stderr", () => {
@@ -2094,6 +2015,61 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("remote operations", () => {
+    for (const failure of ["offline", "auth", "timeout"] as const) {
+      it.effect(`does not retry a scoped fetch after ${failure}`, () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const started = yield* Deferred.make<void>();
+          const attempts: Array<ReadonlyArray<string>> = [];
+          const spawner = ChildProcessSpawner.make((command) =>
+            Effect.gen(function* () {
+              if (!ChildProcess.isStandardCommand(command))
+                return yield* Effect.die("unexpected command");
+              if (command.args[0] !== "fetch") return yield* delegate.spawn(command);
+              attempts.push(command.args);
+              yield* Deferred.succeed(started, undefined);
+              return ChildProcessSpawner.makeHandle({
+                ...makeNonRepositoryHandle(),
+                exitCode:
+                  failure === "timeout"
+                    ? Effect.never
+                    : Effect.succeed(ChildProcessSpawner.ExitCode(128)),
+                stderr: Stream.encodeText(
+                  Stream.make(
+                    failure === "auth"
+                      ? "fatal: Authentication failed"
+                      : "fatal: Could not resolve host",
+                  ),
+                ),
+              });
+            }),
+          );
+          const driver = yield* makeGitVcsDriverCore().pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provide(ServerConfigLayer),
+          );
+          const fetching = yield* driver
+            .fetchRemote({ cwd, remoteName: "origin", refName: "main" })
+            .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(started);
+          if (failure === "timeout") {
+            yield* TestClock.adjust("31 seconds");
+            yield* TestClock.adjust("31 seconds");
+          }
+          const result = yield* Fiber.join(fetching);
+          assert.isTrue(Result.isFailure(result));
+          assert.equal(attempts.length, 1);
+          if (Result.isFailure(result)) {
+            assert.equal(
+              result.failure.detail,
+              failure === "timeout" ? "Git command timed out." : "git fetch origin failed",
+            );
+          }
+        }),
+      );
+    }
+
     it.effect("creates a worktree from the latest fetched remote commit", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -2124,10 +2100,6 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           refName: `origin/${initialBranch}`,
         });
         assert.isFalse(
-          yield* driver.remoteBranchExists({ cwd, remoteName: "origin", refName: "unrelated" }),
-        );
-        yield* driver.fetchRemote({ cwd, remoteName: "origin", refName: "local-only" });
-        assert.isTrue(
           yield* driver.remoteBranchExists({ cwd, remoteName: "origin", refName: "unrelated" }),
         );
 
@@ -2191,6 +2163,11 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const status = yield* driver.statusDetails(worktreePath);
         assert.equal(status.aheadCount, 0);
         assert.equal(status.aheadOfDefaultCount, 0);
+
+        yield* driver.fetchRemote({ cwd, remoteName: "origin", refName: "local-only" });
+        assert.isTrue(
+          yield* driver.remoteBranchExists({ cwd, remoteName: "origin", refName: "unrelated" }),
+        );
       }),
     );
 

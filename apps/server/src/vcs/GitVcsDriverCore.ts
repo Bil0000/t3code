@@ -3036,17 +3036,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
     const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
-    const lockReason = `t3code-create-${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`;
-    const args = [
-      "worktree",
-      "add",
-      "--lock",
-      "--reason",
-      lockReason,
-      ...(input.newRefName ? ["-b", input.newRefName] : []),
-      worktreePath,
-      input.refName,
-    ];
+    const args = input.newRefName
+      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
+      : ["worktree", "add", worktreePath, input.refName];
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
@@ -3072,45 +3064,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             }
           : {}),
       },
-    ).pipe(
-      Effect.tap(() => progress?.onWorktreeClaimed?.(worktreePath) ?? Effect.void),
-      Effect.onExit((exit) =>
-        Effect.gen(function* () {
-          if (!Exit.isSuccess(exit)) {
-            const registeredWorktrees = yield* runGitStdout(
-              "GitVcsDriver.createWorktree.registeredPaths",
-              input.cwd,
-              ["worktree", "list", "--porcelain", "-z"],
-            );
-            const matchingPaths = registeredWorktrees
-              .split("\0\0")
-              .filter((record) =>
-                record
-                  .split("\0")
-                  .some(
-                    (field) =>
-                      field.startsWith("worktree ") &&
-                      path.resolve(field.slice("worktree ".length)) === path.resolve(worktreePath),
-                  ),
-              );
-            if (
-              matchingPaths.length !== 1 ||
-              !matchingPaths[0]?.split("\0").includes(`locked ${lockReason}`)
-            ) {
-              return;
-            }
-          }
-          yield* runGit("GitVcsDriver.createWorktree.unlock", input.cwd, [
-            "worktree",
-            "unlock",
-            worktreePath,
-          ]);
-          if (Exit.hasInterrupts(exit)) {
-            yield* removeWorktree({ cwd: input.cwd, path: worktreePath, force: true });
-          }
-        }).pipe(Effect.ignoreCause({ log: true })),
-      ),
     );
+
+    if (progress?.onWorktreeClaimed) {
+      yield* progress.onWorktreeClaimed(worktreePath);
+    }
 
     // `git worktree add` leaves submodules empty, so a repo that keeps agent
     // skills, tooling or source in one gets a worktree that is quietly missing
@@ -3300,12 +3258,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const branch =
         parseRemoteRefWithRemoteNames(input.refName, [input.remoteName])?.branchName ??
         input.refName;
-      yield* executeGit(
+      const scopedArgs = [
+        ...args,
+        `+refs/heads/${branch}:refs/remotes/${input.remoteName}/${branch}`,
+      ];
+      const result = yield* executeGitWithStableDiagnostics(
         "GitVcsDriver.fetchRemote",
         input.cwd,
-        [...args, `+refs/heads/${branch}:refs/remotes/${input.remoteName}/${branch}`],
-        options,
-      ).pipe(Effect.catch(() => fetchAll));
+        scopedArgs,
+        { ...options, allowNonZeroExit: true },
+      );
+      if (result.exitCode === 0) return;
+      if (
+        result.stderr
+          .split(/\r?\n/)
+          .includes(`fatal: couldn't find remote ref refs/heads/${branch}`)
+      ) {
+        return yield* fetchAll.pipe(Effect.asVoid);
+      }
+      return yield* new GitCommandError({
+        ...gitCommandContext({
+          operation: "GitVcsDriver.fetchRemote",
+          cwd: input.cwd,
+          args: scopedArgs,
+        }),
+        detail: options.fallbackErrorDetail,
+        exitCode: result.exitCode,
+        stdoutLength: result.stdout.length,
+        stderrLength: result.stderr.length,
+      });
     },
   );
 
