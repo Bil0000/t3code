@@ -158,7 +158,7 @@ export function CaptureShortcutConfig({
       {!result ? (
         <div className="flex items-center justify-between gap-3">
           <span>Shortcuts</span>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-col items-end gap-2">
             {shortcuts.map((key, index) => (
               <div key={key} className="flex items-center gap-1">
                 {index === shortcutIndex ? (

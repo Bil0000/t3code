@@ -485,7 +485,7 @@ export function SnapShotSettings() {
                       Change shortcut
                     </Button>
                   ) : (
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex flex-col items-end gap-2">
                       {savedShortcuts.map((item, index) => (
                         <div
                           key={formatSnapShotShortcutLabel(item)}
