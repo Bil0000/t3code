@@ -1557,6 +1557,65 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("worktree operations", () => {
+    for (const state of ["new", "new-missing", "existing", "existing-missing"] as const) {
+      it.effect(`cleans up only newly registered worktrees on interruption: ${state}`, () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "interrupted");
+          const existing = state.startsWith("existing");
+          if (existing) {
+            yield* git(cwd, ["worktree", "add", "-b", "feature/existing", worktreePath]);
+            if (state === "existing-missing") {
+              yield* fs.remove(worktreePath, { recursive: true });
+            }
+          }
+          const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const commandFinished = yield* Deferred.make<void>();
+          const spawner = ChildProcessSpawner.make((command) =>
+            Effect.gen(function* () {
+              const handle = yield* delegate.spawn(command);
+              return ChildProcess.isStandardCommand(command) &&
+                command.args.includes("worktree") &&
+                command.args.includes("add")
+                ? ChildProcessSpawner.makeHandle({
+                    ...handle,
+                    exitCode: handle.exitCode.pipe(
+                      Effect.andThen(Deferred.succeed(commandFinished, undefined)),
+                      Effect.andThen(Effect.never),
+                    ),
+                  })
+                : handle;
+            }),
+          );
+          const driver = yield* makeGitVcsDriverCore().pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provide(ServerConfigLayer),
+          );
+          const creating = yield* driver
+            .createWorktree({
+              cwd,
+              path: worktreePath,
+              refName: initialBranch,
+              newRefName: "feature/interrupted",
+            })
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(commandFinished);
+          if (state === "new-missing") {
+            yield* fs.remove(worktreePath, { recursive: true });
+          }
+          yield* Fiber.interrupt(creating);
+
+          assert.equal(yield* fs.exists(worktreePath), state === "existing");
+          const registered = yield* git(cwd, ["worktree", "list", "--porcelain", "-z"]);
+          assert.equal(registered.includes("feature/existing"), existing);
+          assert.notInclude(registered, "feature/interrupted");
+        }),
+      );
+    }
+
     it.effect("uses parallel checkout without skipping filters or hooks", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

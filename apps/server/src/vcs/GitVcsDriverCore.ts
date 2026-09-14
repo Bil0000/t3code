@@ -3043,6 +3043,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
+    const registeredWorktrees = yield* runGitStdout(
+      "GitVcsDriver.createWorktree.registeredPaths",
+      input.cwd,
+      ["worktree", "list", "--porcelain", "-z"],
+    );
+    const worktreeAlreadyRegistered =
+      registeredWorktrees
+        .split("\0")
+        .some(
+          (field) =>
+            field.startsWith("worktree ") &&
+            path.resolve(field.slice("worktree ".length)) === path.resolve(worktreePath),
+        ) ||
+      (yield* fileSystem
+        .exists(path.join(worktreePath, ".git"))
+        .pipe(Effect.orElseSucceed(() => true)));
     yield* executeGit(
       "GitVcsDriver.createWorktree",
       input.cwd,
@@ -3064,11 +3080,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             }
           : {}),
       },
+    ).pipe(
+      Effect.tap(() => progress?.onWorktreeClaimed?.(worktreePath) ?? Effect.void),
+      Effect.onInterrupt(() =>
+        worktreeAlreadyRegistered
+          ? Effect.void
+          : removeWorktree({ cwd: input.cwd, path: worktreePath, force: true }).pipe(
+              Effect.ignoreCause({ log: true }),
+            ),
+      ),
     );
-
-    if (progress?.onWorktreeClaimed) {
-      yield* progress.onWorktreeClaimed(worktreePath);
-    }
 
     // `git worktree add` leaves submodules empty, so a repo that keeps agent
     // skills, tooling or source in one gets a worktree that is quietly missing
