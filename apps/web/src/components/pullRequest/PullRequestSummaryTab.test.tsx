@@ -86,7 +86,10 @@ function render(value = detail) {
 }
 
 function heading(title: string) {
-  return renderer.root
+  const section = renderer.root
+    .findAllByType("section")
+    .find((section) => section.props["aria-label"] === title)!;
+  return section
     .findAllByType("button")
     .find((button) => button.findAllByType("span").some((span) => span.children.includes(title)))!;
 }

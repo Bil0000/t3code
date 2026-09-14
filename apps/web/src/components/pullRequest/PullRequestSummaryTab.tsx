@@ -273,6 +273,7 @@ function Section({
     <Collapsible
       open={open}
       onOpenChange={setOpenWithScrollAnchor}
+      render={<section aria-label={title} />}
       data-pull-request-summary-section
     >
       {/* The heading rides the top of the scroll box the way a diff's file header does, so a
