@@ -3036,29 +3036,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
     const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
-    const args = input.newRefName
-      ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
-      : ["worktree", "add", worktreePath, input.refName];
+    const lockReason = `t3code-create-${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`;
+    const args = [
+      "worktree",
+      "add",
+      "--lock",
+      "--reason",
+      lockReason,
+      ...(input.newRefName ? ["-b", input.newRefName] : []),
+      worktreePath,
+      input.refName,
+    ];
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    const registeredWorktrees = yield* runGitStdout(
-      "GitVcsDriver.createWorktree.registeredPaths",
-      input.cwd,
-      ["worktree", "list", "--porcelain", "-z"],
-    );
-    const worktreeAlreadyRegistered =
-      registeredWorktrees
-        .split("\0")
-        .some(
-          (field) =>
-            field.startsWith("worktree ") &&
-            path.resolve(field.slice("worktree ".length)) === path.resolve(worktreePath),
-        ) ||
-      (yield* fileSystem
-        .exists(path.join(worktreePath, ".git"))
-        .pipe(Effect.orElseSucceed(() => true)));
     yield* executeGit(
       "GitVcsDriver.createWorktree",
       input.cwd,
@@ -3082,12 +3074,41 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       },
     ).pipe(
       Effect.tap(() => progress?.onWorktreeClaimed?.(worktreePath) ?? Effect.void),
-      Effect.onInterrupt(() =>
-        worktreeAlreadyRegistered
-          ? Effect.void
-          : removeWorktree({ cwd: input.cwd, path: worktreePath, force: true }).pipe(
-              Effect.ignoreCause({ log: true }),
-            ),
+      Effect.onExit((exit) =>
+        Effect.gen(function* () {
+          if (!Exit.isSuccess(exit)) {
+            const registeredWorktrees = yield* runGitStdout(
+              "GitVcsDriver.createWorktree.registeredPaths",
+              input.cwd,
+              ["worktree", "list", "--porcelain", "-z"],
+            );
+            const matchingPaths = registeredWorktrees
+              .split("\0\0")
+              .filter((record) =>
+                record
+                  .split("\0")
+                  .some(
+                    (field) =>
+                      field.startsWith("worktree ") &&
+                      path.resolve(field.slice("worktree ".length)) === path.resolve(worktreePath),
+                  ),
+              );
+            if (
+              matchingPaths.length !== 1 ||
+              !matchingPaths[0]?.split("\0").includes(`locked ${lockReason}`)
+            ) {
+              return;
+            }
+          }
+          yield* runGit("GitVcsDriver.createWorktree.unlock", input.cwd, [
+            "worktree",
+            "unlock",
+            worktreePath,
+          ]);
+          if (Exit.hasInterrupts(exit)) {
+            yield* removeWorktree({ cwd: input.cwd, path: worktreePath, force: true });
+          }
+        }).pipe(Effect.ignoreCause({ log: true })),
       ),
     );
 

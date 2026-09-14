@@ -1557,7 +1557,13 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("worktree operations", () => {
-    for (const state of ["new", "new-missing", "existing", "existing-missing"] as const) {
+    for (const state of [
+      "new",
+      "new-missing",
+      "existing",
+      "existing-missing",
+      "concurrent",
+    ] as const) {
       it.effect(`cleans up only newly registered worktrees on interruption: ${state}`, () =>
         Effect.gen(function* () {
           const cwd = yield* makeTmpDir();
@@ -1565,8 +1571,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
           const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "interrupted");
-          const existing = state.startsWith("existing");
-          if (existing) {
+          const existing = state.startsWith("existing") || state === "concurrent";
+          if (state.startsWith("existing")) {
             yield* git(cwd, ["worktree", "add", "-b", "feature/existing", worktreePath]);
             if (state === "existing-missing") {
               yield* fs.remove(worktreePath, { recursive: true });
@@ -1576,10 +1582,16 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           const commandFinished = yield* Deferred.make<void>();
           const spawner = ChildProcessSpawner.make((command) =>
             Effect.gen(function* () {
-              const handle = yield* delegate.spawn(command);
-              return ChildProcess.isStandardCommand(command) &&
+              const isWorktreeAdd =
+                ChildProcess.isStandardCommand(command) &&
                 command.args.includes("worktree") &&
-                command.args.includes("add")
+                command.args.includes("add");
+              if (isWorktreeAdd && state === "concurrent") {
+                yield* git(cwd, ["worktree", "add", "-b", "feature/existing", worktreePath]);
+                yield* writeTextFile(worktreePath, "uncommitted.txt", "keep these edits");
+              }
+              const handle = yield* delegate.spawn(command);
+              return isWorktreeAdd
                 ? ChildProcessSpawner.makeHandle({
                     ...handle,
                     exitCode: handle.exitCode.pipe(
@@ -1608,7 +1620,13 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           }
           yield* Fiber.interrupt(creating);
 
-          assert.equal(yield* fs.exists(worktreePath), state === "existing");
+          assert.equal(yield* fs.exists(worktreePath), existing && !state.endsWith("missing"));
+          if (state === "concurrent") {
+            assert.equal(
+              yield* fs.readFileString(path.join(worktreePath, "uncommitted.txt")),
+              "keep these edits",
+            );
+          }
           const registered = yield* git(cwd, ["worktree", "list", "--porcelain", "-z"]);
           assert.equal(registered.includes("feature/existing"), existing);
           assert.notInclude(registered, "feature/interrupted");
@@ -1644,6 +1662,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           baseRefName: initialBranch,
         });
 
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), "locked");
         assert.equal(yield* fs.readFileString(path.join(worktreePath, "checkout-workers")), "0\n");
         assert.equal(yield* fs.readFileString(path.join(worktreePath, "asset.txt")), "filtered\n");
         assert.equal(
