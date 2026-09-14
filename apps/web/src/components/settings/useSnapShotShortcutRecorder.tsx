@@ -54,9 +54,11 @@ export function useSnapShotShortcutRecorder({
   const [recording, setRecording] = useState(false);
   const [requests] = useState(createRecordingRequestTracker);
   const heldModifierCodes = useRef(new Set<string>());
+  const tooManyModifiers = useRef(false);
   const stopRecording = useCallback(() => {
     requests.clear();
     heldModifierCodes.current.clear();
+    tooManyModifiers.current = false;
     setRecording(false);
     void bridge?.setSnapShotShortcutSuppressed(false).catch(() => undefined);
   }, [bridge, requests]);
@@ -94,6 +96,7 @@ export function useSnapShotShortcutRecorder({
     if (modifier) {
       const held = heldModifierCodes.current;
       held.add(event.code);
+      if (held.size > 2) tooManyModifiers.current = true;
       if (held.size === 2 && !allowModifierPairs) {
         onError(
           "This desktop cannot preserve left/right modifier pairs. Add a letter, number, or function key.",
@@ -131,7 +134,13 @@ export function useSnapShotShortcutRecorder({
         onKeyDown={recordShortcut}
         onKeyUp={(event) => {
           const held = heldModifierCodes.current;
-          if (recording && allowModifierPairs && held.has(event.code) && held.size === 2) {
+          if (
+            recording &&
+            allowModifierPairs &&
+            !tooManyModifiers.current &&
+            held.has(event.code) &&
+            held.size === 2
+          ) {
             const keys = [...held].sort() as [SnapShotModifierKey, SnapShotModifierKey];
             const modifier = MODIFIER_FROM_KEY[event.key];
             const pair = modifier && MODIFIER_CODES[modifier];
@@ -144,7 +153,10 @@ export function useSnapShotShortcutRecorder({
                   : { kind: "modifier-pair", modifier }
                 : { kind: "modifier-keys", keys },
             );
-          } else held.delete(event.code);
+          } else {
+            held.delete(event.code);
+            if (held.size === 0) tooManyModifiers.current = false;
+          }
         }}
         onBlur={stopRecording}
       >

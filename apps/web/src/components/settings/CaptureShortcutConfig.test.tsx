@@ -148,10 +148,12 @@ it.each(["niri", "hyprland"] as const)(
     expect(
       visitElements(advanced, (element) => "data-keybinding-capture" in element.props),
     ).toBeNull();
+    button(render(desktop), "Review changes").onClick();
+    await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
     await recordKeys(desktop);
     expect(bridge.setSnapShotShortcutSuppressed).toHaveBeenNthCalledWith(1, true);
     expect(bridge.setSnapShotShortcutSuppressed).toHaveBeenLastCalledWith(false);
-    expect(bridge.previewSnapShotConfig).not.toHaveBeenCalled();
+    expect(bridge.previewSnapShotConfig).toHaveBeenCalledOnce();
     const custom = {
       ...preview,
       id: "custom-keys",
@@ -160,8 +162,8 @@ it.each(["niri", "hyprland"] as const)(
     };
     bridge.previewSnapShotConfig.mockResolvedValue(custom);
     button(render(desktop), "Review changes").onClick();
-    await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
-    expect(bridge.previewSnapShotConfig).toHaveBeenCalledExactlyOnceWith({
+    await finish(bridge.previewSnapShotConfig.mock.results[1]!.value);
+    expect(bridge.previewSnapShotConfig).toHaveBeenLastCalledWith({
       operation: "install",
       chooseFile: false,
       shortcuts: ["ctrl+alt+y"],
@@ -185,6 +187,33 @@ it("uses the existing config keys when no replacement was chosen", async () => {
   });
   expect(shortcutInput(render())["aria-label"]).toContain("F8");
 });
+
+it.each(["niri", "hyprland"] as const)(
+  "reads existing %s shortcuts before editing or adding",
+  async (desktop) => {
+    shortcutInput(render(desktop)).onClick();
+    expect(bridge.setSnapShotShortcutSuppressed).not.toHaveBeenCalled();
+    expect(
+      visitElements(render(desktop), (element) => element.props.children === "Add shortcut"),
+    ).toBeNull();
+    bridge.previewSnapShotConfig.mockResolvedValue({
+      ...preview,
+      shortcut: "Super+F8",
+      shortcuts: ["Super+F8"],
+    });
+    button(render(desktop), "Review changes").onClick();
+    await finish(bridge.previewSnapShotConfig.mock.results.at(-1)!.value);
+    button(render(desktop), "Add shortcut").onClick();
+    await recordKeys(desktop);
+    button(render(desktop), "Review changes").onClick();
+    await finish(bridge.previewSnapShotConfig.mock.results.at(-1)!.value);
+    expect(bridge.previewSnapShotConfig).toHaveBeenLastCalledWith({
+      operation: "install",
+      chooseFile: false,
+      shortcuts: ["Super+F8", "ctrl+alt+y"],
+    });
+  },
+);
 it("requires a new diff after changing keys during review", async () => {
   button(render(), "Review changes").onClick();
   await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
@@ -323,6 +352,8 @@ it.each(["niri", "hyprland"] as const)(
   "reviews all three %s shortcuts and removes one without losing the others",
   async (desktop) => {
     const shortcuts = ["Ctrl+Shift+2", "ctrl+alt+y", "ctrl+alt+z"];
+    button(render(desktop), "Review changes").onClick();
+    await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
     for (const key of ["y", "z"]) {
       button(render(desktop), "Add shortcut").onClick();
       await recordKeys(desktop, { key, code: `Key${key.toUpperCase()}` });

@@ -55,7 +55,7 @@ export function CaptureShortcutConfig({
     shortcut: shortcutKeys
       ? (parseKeybindingShortcut(shortcutKeys.replace(/super/gi, "meta")) ?? DEFAULT_SHORTCUT)
       : undefined,
-    disabled: busy,
+    disabled: busy || keys === null,
     allowModifierPairs: false,
     onStart: () => setError(null),
     onError: (message) => setError({ message }),
@@ -202,7 +202,7 @@ export function CaptureShortcutConfig({
                   Cancel
                 </Button>
               </>
-            ) : shortcuts.length < 3 ? (
+            ) : keys !== null && shortcuts.length < 3 ? (
               <Button
                 size="xs"
                 variant="ghost"

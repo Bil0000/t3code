@@ -180,12 +180,43 @@ it.each(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "AltLeft", "A
     });
   },
 );
-it("lets a mixed modifier pair become an ordinary key chord", async () => {
+it("lets three modifiers become an ordinary key chord", async () => {
   const recorder = await start(true);
   recorder.input.props.onKeyDown(event("Control", "ControlLeft", { ctrlKey: true }));
   recorder.input.props.onKeyDown(event("Alt", "AltRight", { ctrlKey: true, altKey: true }));
-  recorder.input.props.onKeyDown(event("y", "KeyY", { ctrlKey: true, altKey: true }));
-  expect(recorded).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ key: "y", modKey: true, altKey: true }),
+  recorder.input.props.onKeyDown(
+    event("Shift", "ShiftLeft", { ctrlKey: true, altKey: true, shiftKey: true }),
   );
+  recorder.input.props.onKeyDown(
+    event("y", "KeyY", { ctrlKey: true, altKey: true, shiftKey: true }),
+  );
+  expect(recorded).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ key: "y", modKey: true, altKey: true, shiftKey: true }),
+  );
+});
+
+it("does not record a leftover pair after three modifiers are released", async () => {
+  const recorder = await start(true);
+  for (const [key, code] of [
+    ["Meta", "MetaLeft"],
+    ["Control", "ControlRight"],
+    ["Shift", "ShiftLeft"],
+  ]) {
+    recorder.input.props.onKeyDown(event(key!, code!));
+  }
+  for (const [key, code] of [
+    ["Shift", "ShiftLeft"],
+    ["Control", "ControlRight"],
+    ["Meta", "MetaLeft"],
+  ]) {
+    recorder.input.props.onKeyUp(event(key!, code!));
+  }
+  expect(recorded).not.toHaveBeenCalled();
+  recorder.input.props.onKeyDown(event("Meta", "MetaLeft"));
+  recorder.input.props.onKeyDown(event("Control", "ControlRight"));
+  recorder.input.props.onKeyUp(event("Control", "ControlRight"));
+  expect(recorded).toHaveBeenCalledExactlyOnceWith({
+    kind: "modifier-keys",
+    keys: ["ControlRight", "MetaLeft"],
+  });
 });

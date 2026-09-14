@@ -166,8 +166,7 @@ export const SnapShotKeyChord = KeybindingShortcut.check(
   ),
 );
 export type SnapShotKeyChord = typeof SnapShotKeyChord.Type;
-export const SNAP_SHOT_MODIFIERS = ["shift", "meta", "control", "alt"] as const;
-export const SnapShotModifier = Schema.Literals(SNAP_SHOT_MODIFIERS);
+export const SnapShotModifier = Schema.Literals(["shift", "meta", "control", "alt"]);
 export type SnapShotModifier = typeof SnapShotModifier.Type;
 export const SnapShotModifierKey = Schema.Literals([
   "ShiftLeft",

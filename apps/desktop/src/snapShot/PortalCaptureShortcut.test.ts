@@ -163,8 +163,8 @@ it("accepts Hyprland's action-only binding without claiming the keys are reserve
   await expect(client.configure()).rejects.toThrow("Hyprland config");
   bus.signal(portal, "ShortcutsChanged", root, [bus.session, []]);
   bus.activate();
-  expect(capture).toHaveBeenCalledOnce();
-  expect(client.state.shortcutActionRegistered).toBe(false);
+  expect(capture).toHaveBeenCalledTimes(2);
+  expect(client.state.shortcutActionRegistered).toBe(true);
 });
 
 it("keeps the Hyprland action ID stable regardless of a saved key chord", async () => {
@@ -343,7 +343,10 @@ it("captures on older portals without offering an unsupported permission dialog"
   expect(client.state).toMatchObject({ shortcutRegistered: true, shortcutCanRetry: false });
   bus.activate();
   expect(capture).toHaveBeenCalledOnce();
-  bus.signal(portal, "ShortcutsChanged", root, [bus.session, []]);
+  bus.signal(portal, "ShortcutsChanged", root, [
+    bus.session,
+    [[bus.boundId, { trigger_description: new Variant("s", "") }]],
+  ]);
   expect(client.state).toMatchObject({
     shortcutRegistered: false,
     shortcutCanRetry: false,
@@ -436,7 +439,7 @@ it("binds all three portal shortcuts in one session and keeps approved alternati
   expect(client.state.shortcutRegistered).toBe(true);
   for (const [id] of bus.boundShortcuts) bus.activate(id);
   expect(capture).toHaveBeenCalledTimes(3);
-  const [first, second] = bus.boundShortcuts;
+  const [first, second, third] = bus.boundShortcuts;
   bus.signal(portal, "ShortcutsChanged", root, [
     bus.session,
     [
@@ -447,8 +450,9 @@ it("binds all three portal shortcuts in one session and keeps approved alternati
   expect(client.state.shortcutRegistered).toBe(false);
   bus.activate(first![0]);
   bus.activate(second![0]);
-  expect(capture).toHaveBeenCalledTimes(4);
+  bus.activate(third![0]);
+  expect(capture).toHaveBeenCalledTimes(5);
   client.close();
   bus.activate(first![0]);
-  expect(capture).toHaveBeenCalledTimes(4);
+  expect(capture).toHaveBeenCalledTimes(5);
 });

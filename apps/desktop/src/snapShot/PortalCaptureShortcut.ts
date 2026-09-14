@@ -75,6 +75,7 @@ export class PortalCaptureShortcut {
   private session = "";
   private shortcutIds: string[] = [];
   private activeShortcutIds: string[] = [];
+  private readonly bindings = new Map<string, (typeof Shortcuts.Type)[number]>();
   private version = 0;
   private pending: { path: string; resolve: (body: unknown) => void } | undefined;
   private responses = new Map<string, unknown>();
@@ -321,7 +322,10 @@ export class PortalCaptureShortcut {
   }
 
   private bound(shortcuts: typeof Shortcuts.Type) {
-    const assigned = this.shortcutIds.map((expected) => shortcuts.find(([id]) => id === expected));
+    for (const shortcut of shortcuts) {
+      if (this.shortcutIds.includes(shortcut[0])) this.bindings.set(shortcut[0], shortcut);
+    }
+    const assigned = this.shortcutIds.map((id) => this.bindings.get(id));
     const shortcut = assigned[0];
     this.activeShortcutIds = assigned
       .filter(

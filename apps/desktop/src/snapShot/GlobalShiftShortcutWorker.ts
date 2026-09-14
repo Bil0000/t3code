@@ -27,11 +27,11 @@ const shortcuts = Schema.decodeUnknownSync(
 
 async function poll() {
   const api = await loadWindowsForegroundApi();
-  let active = false;
+  let active: boolean[] = [];
   process.send?.("ready");
   const timer = setInterval(() => {
-    const pressed = shortcuts.some((keys) => keys.every((key) => api.isKeyDown(key)));
-    if (pressed && !active) {
+    const pressed = shortcuts.map((keys) => keys.every((key) => api.isKeyDown(key)));
+    if (pressed.some((down, index) => down && !active[index])) {
       try {
         process.send?.("trigger");
       } catch {}

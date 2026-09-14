@@ -84,15 +84,15 @@ shortcut does not fire, check T3 Code under **System Settings** > **Keyboard** >
 shortcut using Shift and a number does not work on your keyboard layout, use a letter chord instead.
 Remove the helper from **Manage capture** > **Access** > **Advanced**.
 
-**Hyprland and Omarchy.** Install the bundled helper during setup, then choose a shortcut and select
-**Review changes**. T3 Code shows the exact change it will make to your Hyprland config. **Save
+**Hyprland and Omarchy.** Install the bundled helper during setup, then select **Review changes**
+to read your current bindings. Choose your shortcuts and review the changes before saving. **Save
 shortcut** writes only that change, keeps a backup, and reloads Hyprland. Approve the screen-sharing
 prompt for the helper if one appears. On Omarchy, bind in your own config, not the shipped defaults.
 Some Hyprland versions return an "access denied" image instead of an error when capture is blocked;
 check the helper's screen-sharing permission.
 
-**Niri.** Choose a shortcut and select **Review changes**. T3 Code shows the exact binding it will
-add to your Niri config, validates the result, keeps a backup, and saves it when you approve. Niri
+**Niri.** Select **Review changes** to read your current bindings before choosing shortcuts. T3 Code
+shows the bindings it will save, validates the result, keeps a backup, and saves when you approve. Niri
 reloads the config on its own. The binding needs the `gdbus` command, normally part of your
 distribution's GLib tools. Remove the line from your config to release the key.
 

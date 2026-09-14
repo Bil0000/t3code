@@ -20,12 +20,12 @@ ObjC.import("CoreGraphics");
 ObjC.import("unistd");
 function run(argv) {
   const masks = JSON.parse(argv[0]);
-  let active = false;
+  let active = [];
   console.log("ready");
   while ($.getppid() !== 1) {
     const flags = $.CGEventSourceFlagsState(0);
-    const pressed = masks.some(function(mask) { return (flags & mask) === mask; });
-    if (pressed && !active) console.log("trigger");
+    const pressed = masks.map(function(mask) { return (flags & mask) === mask; });
+    if (pressed.some(function(down, index) { return down && !active[index]; })) console.log("trigger");
     active = pressed;
     delay(0.05);
   }

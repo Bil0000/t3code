@@ -129,7 +129,7 @@ it("matches the recorded macOS key sides and fires once while held", async () =>
     () => undefined,
   );
   const poller = spawnedPollers[0]!;
-  const flags = [0x9, 0x2010, 0x2008, 0x2008, 0, 0x18, 0x18];
+  const flags = [0x9, 0x2010, 0x2008, 0x2008, 0x2018, 0x2018, 0, 0x18, 0x18];
   const log = vi.fn();
   let index = 0;
   const context = {
@@ -145,7 +145,7 @@ it("matches the recorded macOS key sides and fires once while held", async () =>
     args: [poller.args.at(-1)!],
   };
   NodeVM.runInNewContext(`${poller.args[3]}; run(args);`, context);
-  expect(log.mock.calls).toEqual([["ready"], ["trigger"], ["trigger"]]);
+  expect(log.mock.calls).toEqual([["ready"], ["trigger"], ["trigger"], ["trigger"]]);
   poller.emitStderr("ready\n");
   (await started)();
 });
