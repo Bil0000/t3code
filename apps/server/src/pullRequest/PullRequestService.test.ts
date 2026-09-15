@@ -3152,6 +3152,48 @@ it.effect("keeps unrelated PRs warm after a mutation, explicit refresh, and proj
   }),
 );
 
+it.effect(
+  "keeps matching PR numbers on different hosts separate and refreshes the serving project",
+  () =>
+    Effect.gen(function* () {
+      const hosts: string[] = [];
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "public", workspaceRoot: "/a", repository: "acme/web" }),
+          project({
+            id: "p2",
+            title: "enterprise",
+            workspaceRoot: "/b",
+            repository: "acme/web",
+            host: "enterprise.test",
+          }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            getChangeRequest: (input) =>
+              Effect.sync(() => {
+                hosts.push(input.host);
+                return hostedChangeRequest("body");
+              }),
+          }),
+        ],
+      });
+      const own = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+      const other = { ...own, host: "enterprise.test" };
+      const readBoth = Effect.all([service.summary(own), service.summary(other)]);
+      yield* readBoth;
+      yield* service.invalidate({ reference: { ...own, host: "github.com" } });
+      yield* readBoth;
+      assert.deepStrictEqual(hosts, ["github.com", "enterprise.test", "github.com"]);
+      yield* service.invalidate({ reference: own });
+      yield* readBoth;
+      assert.deepStrictEqual(hosts.slice(3), ["github.com"]);
+      yield* service.refreshAfterTurn("p2" as ProjectId);
+      yield* readBoth;
+      assert.deepStrictEqual(hosts.slice(4), ["enterprise.test"]);
+    }),
+);
+
 it.effect("explicit and turn invalidations make the next listing ask the host again", () =>
   Effect.gen(function* () {
     let hostCalls = 0;

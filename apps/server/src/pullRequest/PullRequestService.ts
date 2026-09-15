@@ -797,6 +797,18 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const canonicalRef = Effect.fn("PullRequestService.canonicalRef")(function* <
+    I extends PullRequestRef,
+  >(input: I) {
+    const project = yield* requireProject(input);
+    return {
+      ...input,
+      projectId: project.project.id,
+      host: project.host,
+      repository: project.repository,
+    };
+  });
+
   /**
    * What the signed-in account may do with this change request, asked of the host itself. Every
    * write goes through it: the page hides what a viewer may not do, and a request that arrived
@@ -2425,7 +2437,12 @@ export const make = Effect.gen(function* () {
   const projectEpochs = new Map<ProjectId, number>();
   const REF_EPOCH_CAPACITY = 2_048;
   const refScope = (ref: PullRequestRef) =>
-    JSON.stringify([ref.projectId, ref.repository.toLowerCase(), ref.number]);
+    JSON.stringify([
+      ref.projectId,
+      ref.host?.toLowerCase() ?? "",
+      ref.repository.toLowerCase(),
+      ref.number,
+    ]);
   const refEpoch = (ref: PullRequestRef) =>
     Math.max(projectEpochs.get(ref.projectId) ?? 0, refEpochs.get(refScope(ref)) ?? 0);
   // Keys carry the reference back out of the cache loader, so the slot layout is shared with
@@ -2834,9 +2851,14 @@ export const make = Effect.gen(function* () {
   const invalidate: PullRequestService["Service"]["invalidate"] = (input) => {
     const reference = input.reference;
     if (reference !== undefined) {
-      return readCache
-        .invalidate(refScope(reference))
-        .pipe(Effect.andThen(Effect.sync(() => bumpRefEpoch(reference))));
+      return canonicalRef(reference).pipe(
+        Effect.flatMap((ref) =>
+          readCache
+            .invalidate(refScope(ref))
+            .pipe(Effect.andThen(Effect.sync(() => bumpRefEpoch(ref)))),
+        ),
+        Effect.ignore,
+      );
     }
     return Effect.sync(() => {
       listingsEpoch = ++epochCounter;
@@ -2861,24 +2883,28 @@ export const make = Effect.gen(function* () {
       method: (input: I) => Effect.Effect<void, PullRequestError>,
     ): ((input: I) => Effect.Effect<void, PullRequestError>) =>
     (input) =>
-      readCache.invalidate(refScope(input)).pipe(
-        Effect.andThen(method(input)),
-        Effect.ensuring(readCache.invalidate(refScope(input))),
-        Effect.tap(() =>
-          Effect.sync(() => {
-            bumpRefEpoch(input);
-            listingsEpoch = ++epochCounter;
-          }),
-        ),
-      );
+      Effect.gen(function* () {
+        const ref = yield* canonicalRef(input);
+        yield* readCache.invalidate(refScope(ref)).pipe(
+          Effect.andThen(method(input)),
+          Effect.ensuring(readCache.invalidate(refScope(ref))),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              bumpRefEpoch(ref);
+              listingsEpoch = ++epochCounter;
+            }),
+          ),
+        );
+      });
   const runActionAndInvalidate: PullRequestService["Service"]["runAction"] = Effect.fn(
     "PullRequestService.runActionAndInvalidate",
   )(function* (input) {
-    yield* readCache.invalidate(refScope(input));
+    const ref = yield* canonicalRef(input);
+    yield* readCache.invalidate(refScope(ref));
     const repository = yield* runAction(input).pipe(
-      Effect.ensuring(readCache.invalidate(refScope(input))),
+      Effect.ensuring(readCache.invalidate(refScope(ref))),
     );
-    bumpRefEpoch({ ...input, repository });
+    bumpRefEpoch({ ...ref, repository });
     listingsEpoch = ++epochCounter;
     if (input.action === "merge") {
       // A successful merge action can merely enqueue the PR or enable auto-merge.
@@ -2904,26 +2930,26 @@ export const make = Effect.gen(function* () {
       read: (input: I, ...args: Args) => Effect.Effect<A, E>,
     ) =>
     (input: I, ...args: Args) =>
-      routingCredential.pipe(
-        Effect.flatMap((credential) =>
-          read(
-            credential === null
-              ? input
-              : {
-                  ...input,
-                  [credentialNamespace]: credential.credentialFingerprint,
-                },
-            ...args,
-          ),
-        ),
-      );
+      Effect.gen(function* () {
+        const ref = yield* canonicalRef(input);
+        const credential = yield* routingCredential;
+        return yield* read(
+          credential === null
+            ? ref
+            : { ...ref, [credentialNamespace]: credential.credentialFingerprint },
+          ...args,
+        );
+      });
 
   return PullRequestService.of({
     routing,
     routingIdentity,
     withRoutingCredential,
     list,
-    listStats,
+    listStats: (input) =>
+      Effect.forEach(input.refs, (ref) => canonicalRef(ref).pipe(Effect.option)).pipe(
+        Effect.flatMap((refs) => listStats({ ...input, refs: refs.flatMap(Option.toArray) })),
+      ),
     summary: credentialCached(summary),
     stack: credentialCached(stack),
     subscribeMerges: PubSub.subscribe(mergedPullRequests).pipe(
@@ -2936,7 +2962,7 @@ export const make = Effect.gen(function* () {
     detail: credentialCached(detail),
     activity: credentialCached(activity),
     threadComments,
-    diff,
+    diff: credentialCached(diff),
     diffFileContents,
     runAction: runActionAndInvalidate,
     update: invalidatedByMutation(update),
