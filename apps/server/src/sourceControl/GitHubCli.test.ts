@@ -98,6 +98,17 @@ it.effect("shares quota checks, preserves the reserve, and resumes after reset",
 );
 
 describe("GitHubCli.layer", () => {
+  it.effect("shares the registry budget with CLI reads through nested layer providers", () =>
+    Effect.gen(function* () {
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      const gh = yield* GitHubCli.GitHubCli;
+      yield* budget.observe("github.com", quotaOutput(0).stdout);
+      const error = yield* gh.execute({ cwd: "/repo", args: ["pr", "list"] }).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "GitHubCliRateLimitError");
+      expect(mockRun).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(layer.pipe(Layer.provide(GitHubGraphQlBudget.layer)))),
+  );
+
   it.effect("keeps quota snapshots separate for verified credentials on the same host", () =>
     Effect.gen(function* () {
       let reads = 0;
@@ -113,15 +124,13 @@ describe("GitHubCli.layer", () => {
         }),
       );
       const read = (token: string) =>
-        gh
-          .execute({ cwd: "/repo", args: ["pr", "list", "--repo", "github.com/acme/web"] })
-          .pipe(
-            Effect.provideService(GitHubCli.PinnedGitHubCredential, {
-              host: "github.com",
-              token: Redacted.make(token),
-              credentialFingerprint: token,
-            }),
-          );
+        gh.execute({ cwd: "/repo", args: ["pr", "list", "--repo", "github.com/acme/web"] }).pipe(
+          Effect.provideService(GitHubCli.PinnedGitHubCredential, {
+            host: "github.com",
+            token: Redacted.make(token),
+            credentialFingerprint: token,
+          }),
+        );
       yield* read("empty").pipe(Effect.flip);
       yield* read("healthy");
       yield* read("empty").pipe(Effect.flip);
