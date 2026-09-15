@@ -1799,7 +1799,9 @@ export const make = Effect.gen(function* () {
                 // Once the authorized provider action starts, a failure may leave partial
                 // remote updates. Validation and permission failures above changed nothing.
                 Effect.ensuring(
-                  input.stackNumber === undefined ? Effect.void : refreshAfterTurn(input.projectId),
+                  input.stackNumber === undefined
+                    ? Effect.void
+                    : refreshAfterTurn(project.project.id),
                 ),
                 Effect.mapError(toPullRequestError("runAction")),
                 Effect.as(

@@ -4431,90 +4431,104 @@ it.effect('resolves an author filter of "me" to the viewer before narrowing a ho
   }),
 );
 
-it.effect("authorizes stack rebases independently of whether the selected layer is behind", () =>
-  Effect.gen(function* () {
-    let taken = 0;
-    let summaryReads = 0;
-    let mutationFails = false;
-    let stackRebase = true;
-    let stackActions = true;
-    const capabilities = {
-      diff: true,
-      comment: true,
-      actions: ["update-branch"] as const,
-      mergeMethods: ["merge"] as const,
-      updateMethods: ["rebase"] as const,
-      get stackActions() {
-        return stackActions;
-      },
-      search: true,
-      reactions: true,
-      review: FULL_REVIEW,
-      reviewers: FULL_REVIEWERS,
-    };
-    const service = yield* makeService({
-      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
-      providers: [
-        fakeProvider("github", {
-          capabilities,
-          getViewerPermissions: () =>
-            Effect.succeed({
-              actions: [],
-              stackRebase,
-              comment: true,
-              resolve: false,
-              verdicts: [],
-              requestReviewers: false,
+for (const crossHost of [false, true]) {
+  it.effect(
+    `authorizes stack rebases and refreshes sibling layers (cross-host: ${crossHost})`,
+    () =>
+      Effect.gen(function* () {
+        let taken = 0;
+        let summaryReads = 0;
+        let mutationFails = false;
+        let stackRebase = true;
+        let stackActions = true;
+        const capabilities = {
+          diff: true,
+          comment: true,
+          actions: ["update-branch"] as const,
+          mergeMethods: ["merge"] as const,
+          updateMethods: ["rebase"] as const,
+          get stackActions() {
+            return stackActions;
+          },
+          search: true,
+          reactions: true,
+          review: FULL_REVIEW,
+          reviewers: FULL_REVIEWERS,
+        };
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+            project({
+              id: "p2",
+              title: "enterprise",
+              workspaceRoot: "/b",
+              repository: "acme/web",
+              host: "enterprise.test",
             }),
-          getChangeRequestSummary: () =>
-            Effect.sync(() => {
-              summaryReads++;
-              return changeRequest(8, "2026-07-01T00:00:00Z");
+          ],
+          providers: [
+            fakeProvider("github", {
+              capabilities,
+              getViewerPermissions: () =>
+                Effect.succeed({
+                  actions: [],
+                  stackRebase,
+                  comment: true,
+                  resolve: false,
+                  verdicts: [],
+                  requestReviewers: false,
+                }),
+              getChangeRequestSummary: () =>
+                Effect.sync(() => {
+                  summaryReads++;
+                  return changeRequest(8, "2026-07-01T00:00:00Z");
+                }),
+              runAction: () =>
+                Effect.gen(function* () {
+                  taken++;
+                  if (mutationFails) return yield* requestFailed;
+                }),
             }),
-          runAction: () =>
-            Effect.gen(function* () {
-              taken++;
-              if (mutationFails) return yield* requestFailed;
-            }),
-        }),
-      ],
-    });
-    const input = {
-      projectId: "p1" as ProjectId,
-      repository: "acme/web",
-      number: 3,
-      action: "update-branch" as const,
-      updateMethod: "rebase" as const,
-      stackNumber: 50,
-      expectedStackHeads: [{ number: 3, headSha: "ccc" }],
-    };
-    yield* service.runAction(input);
-    assert.strictEqual(taken, 1);
-    const unrelated = { ...input, number: 8 };
-    yield* service.summary(unrelated);
-    assert.strictEqual(summaryReads, 1);
-    stackRebase = false;
-    assert.strictEqual(
-      (yield* Effect.flip(service.runAction(input)))._tag,
-      "PullRequestOperationError",
-    );
-    stackRebase = true;
-    stackActions = false;
-    assert.strictEqual(
-      (yield* Effect.flip(service.runAction(input)))._tag,
-      "PullRequestOperationError",
-    );
-    assert.strictEqual(taken, 1);
-    yield* service.summary(unrelated);
-    assert.strictEqual(summaryReads, 1);
-    stackActions = true;
-    mutationFails = true;
-    yield* Effect.flip(service.runAction(input));
-    assert.strictEqual(taken, 2);
-    yield* service.summary(unrelated);
-    assert.strictEqual(summaryReads, 2);
-  }),
-);
+          ],
+        });
+        const input = {
+          ...(crossHost ? { host: "enterprise.test" } : {}),
+          projectId: "p1" as ProjectId,
+          repository: "acme/web",
+          number: 3,
+          action: "update-branch" as const,
+          updateMethod: "rebase" as const,
+          stackNumber: 50,
+          expectedStackHeads: [{ number: 3, headSha: "ccc" }],
+        };
+        yield* service.runAction(input);
+        assert.strictEqual(taken, 1);
+        const unrelated = { ...input, number: 8 };
+        yield* service.summary(unrelated);
+        assert.strictEqual(summaryReads, 1);
+        stackRebase = false;
+        assert.strictEqual(
+          (yield* Effect.flip(service.runAction(input)))._tag,
+          "PullRequestOperationError",
+        );
+        stackRebase = true;
+        stackActions = false;
+        assert.strictEqual(
+          (yield* Effect.flip(service.runAction(input)))._tag,
+          "PullRequestOperationError",
+        );
+        assert.strictEqual(taken, 1);
+        yield* service.summary(unrelated);
+        assert.strictEqual(summaryReads, 1);
+        stackActions = true;
+        mutationFails = true;
+        yield* Effect.flip(service.runAction(input));
+        assert.strictEqual(taken, 2);
+        yield* service.summary(unrelated);
+        assert.strictEqual(summaryReads, 2);
+      }),
+  );
+}
 
 it.effect("refuses a way of updating a branch that the host or the viewer does not allow", () =>
   Effect.gen(function* () {
