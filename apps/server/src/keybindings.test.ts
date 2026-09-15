@@ -499,6 +499,11 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         restored.filter((rule) => rule.command === "thread.next").map((rule) => rule.shortcut.key),
         ["mouse5"],
       );
+      const removedCustom = yield* service.removeKeybindingRule({
+        key: "mouse5",
+        command: "thread.next",
+      });
+      assert.isTrue(removedCustom.find((rule) => rule.command === "thread.next")?.disabled);
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
@@ -563,6 +568,23 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           { key: "mouse4", command: "terminal.toggle", presses: 2 },
         ]);
       }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("does not replace an unconditional shortcut with an invalid condition", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const original = { key: "mod+j", command: "terminal.toggle" } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [original]);
+      const service = yield* Keybindings.Keybindings;
+      const resolved = yield* service.upsertKeybindingRule({ ...original, when: "+" });
+      assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), [
+        original,
+        { ...original, when: "+" },
+      ]);
+      assert.isTrue(
+        resolved.some((rule) => rule.command === "terminal.toggle" && rule.whenAst === undefined),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
   it.effect("refuses to overwrite malformed keybindings config", () =>

@@ -112,7 +112,7 @@ function keybindingShortcutContext(rule: KeybindingRule): string | null {
   const encoded = encodeShortcut(parsed);
   if (!encoded) return null;
   const when = rule.when ? parseKeybindingWhenExpression(rule.when) : null;
-  return `${encoded}\u0000${rule.presses ?? 1}\u0000${when ? encodeWhenAst(when) : ""}`;
+  return `${encoded}\u0000${rule.presses ?? 1}\u0000${when ? encodeWhenAst(when) : (rule.when ?? "")}`;
 }
 
 function hasSameShortcutContext(left: KeybindingRule, right: KeybindingRule): boolean {
