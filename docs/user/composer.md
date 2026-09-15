@@ -37,7 +37,7 @@ call, or when the turn ends. Use the arrow under the bubble to send it right
 away, or the X to move it back into the composer. Stop returns every queued
 message to the composer.
 
-In **Settings → General → Messages while busy**, choose **Queue** to keep this
+In **Settings → General → Follow-up behavior**, choose **Queue** to keep this
 behavior or **Steer** to send new messages immediately. This setting applies to
 the current client. Messages already queued keep their place.
 

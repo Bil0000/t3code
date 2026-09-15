@@ -300,7 +300,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "busy-message-behavior",
-    title: "Messages while busy",
+    title: "Follow-up behavior",
     to: "/settings/general",
     searchTerms: ["queue steer running turn send default behavior composer"],
   },

@@ -579,7 +579,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Collapse composer on scroll"]
         : []),
       ...(settings.busyMessageBehavior !== DEFAULT_UNIFIED_SETTINGS.busyMessageBehavior
-        ? ["Messages while busy"]
+        ? ["Follow-up behavior"]
         : []),
       ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
         ? ["Context window indicator"]
@@ -2596,11 +2596,11 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("busy-message-behavior")}
-          description="Queue messages until the next tool call finishes or the turn ends, or steer the agent immediately."
+          description="Queue follow-ups while the agent runs or steer the current turn."
           resetAction={
             settings.busyMessageBehavior !== DEFAULT_UNIFIED_SETTINGS.busyMessageBehavior ? (
               <SettingResetButton
-                label="messages while busy"
+                label="follow-up behavior"
                 onClick={() =>
                   updateSettings({
                     busyMessageBehavior: DEFAULT_UNIFIED_SETTINGS.busyMessageBehavior,
@@ -2618,7 +2618,7 @@ export function GeneralSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Messages while busy">
+              <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Follow-up behavior">
                 <SelectValue>
                   {settings.busyMessageBehavior === "queue" ? "Queue" : "Steer"}
                 </SelectValue>
