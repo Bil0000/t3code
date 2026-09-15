@@ -116,7 +116,6 @@ export const make = Effect.gen(function* () {
         return (yield* Cache.get(cache, request)).payload;
       }).pipe(
         Effect.catchTags({ PlatformError: () => read, KeyValueStoreError: () => read }),
-        Effect.uninterruptible,
         lock.withPermits(1),
       );
     }),
@@ -131,6 +130,7 @@ export const make = Effect.gen(function* () {
           enabled = false;
           return Effect.logWarning("PR cache disabled after clearing failed");
         }),
+        Effect.uninterruptible,
         lock.withPermits(CONCURRENT_READS),
       ),
   });

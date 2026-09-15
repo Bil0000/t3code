@@ -127,4 +127,56 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
       assert.strictEqual(yield* read, "2");
     }).pipe(Effect.provide(KeyValueStore.layerMemory)),
   );
+
+  it.effect("cancels abandoned reads without blocking invalidation", () =>
+    Effect.gen(function* () {
+      const cache = yield* PullRequestReadCache.make;
+      const started = yield* Deferred.make<void>();
+      const read = yield* cache
+        .get("summary", Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)), [
+          "pr",
+        ])
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(read);
+      yield* cache.invalidate("pr");
+      assert.strictEqual(yield* cache.get("summary", Effect.succeed("fresh"), ["pr"]), "fresh");
+    }).pipe(Effect.provide(KeyValueStore.layerMemory)),
+  );
+
+  it.effect(
+    "finishes the in-memory revision update when invalidation is canceled after writing",
+    () =>
+      Effect.gen(function* () {
+        const backing = yield* KeyValueStore.KeyValueStore;
+        const written = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const cache = yield* PullRequestReadCache.make.pipe(
+          Effect.provideService(KeyValueStore.KeyValueStore, {
+            ...backing,
+            set: (key, value) =>
+              backing
+                .set(key, value)
+                .pipe(
+                  Effect.andThen(
+                    key.startsWith("revision:")
+                      ? Deferred.succeed(written, undefined).pipe(
+                          Effect.andThen(Deferred.await(release)),
+                        )
+                      : Effect.void,
+                  ),
+                ),
+          }),
+        );
+        yield* cache.get("summary", Effect.succeed("old"), ["pr"]);
+        const invalidation = yield* cache.invalidate("pr").pipe(Effect.forkChild);
+        yield* Deferred.await(written);
+        const interrupt = yield* Fiber.interrupt(invalidation).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(interrupt);
+        assert.strictEqual(yield* cache.get("summary", Effect.succeed("fresh"), ["pr"]), "fresh");
+      }).pipe(Effect.provide(KeyValueStore.layerMemory)),
+  );
 });
