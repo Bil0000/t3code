@@ -16,6 +16,7 @@ import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
  */
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, ProjectId, PullRequestRef } from "@t3tools/contracts";
+import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { ArrowUpRightIcon, FileDiffIcon, GitBranchIcon, TriangleAlertIcon } from "lucide-react";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 
@@ -99,11 +100,7 @@ export function ThreadDetailsPrRow({
   const serverConfigs = useServerConfigs();
   const supportsPullRequests =
     serverConfigs.get(environmentId)?.environment.capabilities.pullRequests === true;
-  // The identity's own spelling, the way the detail panel is addressed everywhere else.
-  const identity = project?.repositoryIdentity;
-  const repository =
-    identity?.displayName ??
-    (identity?.owner && identity.name ? `${identity.owner}/${identity.name}` : null);
+  const repository = sourceControlRepositorySelector(project?.repositoryIdentity);
   const reference: PullRequestRef | null =
     supportsPullRequests && project !== null
       ? linkedReference
@@ -120,9 +117,9 @@ export function ThreadDetailsPrRow({
           input: { ...reference, allowStale: false },
         }),
   );
-  useLiveRefresh(detailQuery.refresh, {
-    enabled: reference !== null,
-    key: `workspace-pr:${environmentId}:${project?.id}:${repository}:${pr.number}`,
+  useLiveRefresh(detailQuery.isPending ? null : detailQuery.refresh, {
+    enabled: reference !== null && (detailQuery.data?.state ?? pr?.state) === "open",
+    key: `workspace-pr:${environmentId}:${project?.id}:${reference?.host}:${reference?.repository}:${number}`,
     intervalMs: 45_000,
   });
   const detail = detailQuery.data ?? null;
