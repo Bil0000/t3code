@@ -4,6 +4,7 @@ import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
 import { PullRequestOperationError, PullRequestUnavailableError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Data from "effect/Data";
 import * as Encoding from "effect/Encoding";
 import * as Option from "effect/Option";
 import * as Context from "effect/Context";
@@ -15,26 +16,28 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
-import * as Persistable from "effect/unstable/persistence/Persistable";
-import * as PersistedCache from "effect/unstable/persistence/PersistedCache";
-import * as Persistence from "effect/unstable/persistence/Persistence";
 import { ServerConfig } from "../config.ts";
 
 const CONCURRENT_READS = 512;
 type ReadError = PullRequestOperationError | PullRequestUnavailableError;
+const entryCodec = Schema.fromJsonString(
+  Schema.Struct({
+    payload: Schema.String,
+    expiresAt: Schema.Finite,
+    revision: Schema.String,
+  }),
+);
 
-class Read extends Persistable.Class<{
-  payload: { key: string; lookup: Effect.Effect<string, ReadError> };
-}>()("PullRequestRead", {
-  primaryKey: ({ key }) => key,
-  success: Schema.Struct({ payload: Schema.String, expiresAt: Schema.Finite }),
-  error: Schema.Union([PullRequestOperationError, PullRequestUnavailableError]),
-}) {
+class Read extends Data.Class<{
+  key: string;
+  revision: string;
+  lookup: Effect.Effect<string, ReadError>;
+}> {
   [Equal.symbol](that: unknown): boolean {
-    return that instanceof Read && that.key === this.key;
+    return that instanceof Read && that.key === this.key && that.revision === this.revision;
   }
   [Hash.symbol](): number {
-    return Hash.string(this.key);
+    return Hash.string(`${this.key}:${this.revision}`);
   }
 }
 
@@ -44,8 +47,9 @@ export class PullRequestReadCache extends Context.Service<
     readonly get: (
       key: string,
       lookup: Effect.Effect<string, ReadError>,
+      scopes?: ReadonlyArray<string>,
     ) => Effect.Effect<string, ReadError>;
-    readonly invalidate: Effect.Effect<void>;
+    readonly invalidate: (scope: string) => Effect.Effect<void>;
   }
 >()("t3/pullRequest/PullRequestReadCache") {}
 
@@ -55,51 +59,73 @@ export const make = Effect.gen(function* () {
   const clock = yield* Clock.Clock;
   let enabled = true;
   const lock = yield* Semaphore.make(CONCURRENT_READS);
-  const timeToLive: Persistable.TimeToLiveFn<Read> = (exit) =>
-    Exit.isSuccess(exit)
-      ? Duration.millis(Math.max(0, exit.value.expiresAt - clock.currentTimeMillisUnsafe()))
-      : Duration.zero;
-  const cache = yield* PersistedCache.make(
-    (request: Read) =>
-      request.lookup.pipe(
-        Effect.map((payload) => ({ payload, expiresAt: clock.currentTimeMillisUnsafe() + 60_000 })),
-      ),
+  const digest = (key: string) =>
+    crypto.digest("SHA-256", new TextEncoder().encode(key)).pipe(Effect.map(Encoding.encodeHex));
+  const revisions = yield* Cache.makeWith(
+    (key: string) => backing.get(`revision:${key}`).pipe(Effect.map((value) => value ?? "")),
+    { capacity: 2_048, timeToLive: () => Duration.infinity },
+  );
+  const cache = yield* Cache.makeWith(
+    Effect.fn("PullRequestReadCache.lookup")(function* (request: Read) {
+      const stored = yield* backing.get(request.key).pipe(
+        Effect.flatMap((raw) => Schema.decodeUnknownEffect(entryCodec)(raw)),
+        Effect.option,
+      );
+      if (
+        Option.isSome(stored) &&
+        stored.value.revision === request.revision &&
+        stored.value.expiresAt > clock.currentTimeMillisUnsafe()
+      )
+        return stored.value;
+      const payload = yield* request.lookup;
+      const result = {
+        payload,
+        expiresAt: clock.currentTimeMillisUnsafe() + 60_000,
+        revision: request.revision,
+      };
+      yield* Schema.encodeEffect(entryCodec)(result).pipe(
+        Effect.flatMap((encoded) => backing.set(request.key, encoded)),
+        Effect.ignore,
+      );
+      return result;
+    }),
     {
-      storeId: "pr-v2",
-      timeToLive,
-      inMemoryTTL: timeToLive,
-      inMemoryCapacity: CONCURRENT_READS,
+      capacity: CONCURRENT_READS,
+      timeToLive: (exit) =>
+        Exit.isSuccess(exit)
+          ? Duration.millis(Math.max(0, exit.value.expiresAt - clock.currentTimeMillisUnsafe()))
+          : Duration.zero,
     },
   );
   return PullRequestReadCache.of({
-    get: Effect.fn("PullRequestReadCache.get")(function* (key, lookup) {
+    get: Effect.fn("PullRequestReadCache.get")(function* (key, lookup, scopes = []) {
       if (!enabled) return yield* lookup;
-      const digest = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(key))
-        .pipe(Effect.option);
-      if (Option.isNone(digest)) return yield* lookup;
       const read = yield* Effect.cached(lookup);
-      return yield* cache
-        .get(new Read({ key: Encoding.encodeHex(digest.value), lookup: read }))
-        .pipe(
-          Effect.map((result) => result.payload),
-          Effect.catchTags({
-            PersistenceError: () => read,
-            SchemaError: () => read,
-          }),
-          Effect.uninterruptible,
-          lock.withPermits(1),
-        );
+      return yield* Effect.gen(function* () {
+        const revision = (yield* Effect.forEach(scopes, (scope) =>
+          digest(scope).pipe(Effect.flatMap((key) => Cache.get(revisions, key))),
+        )).join(":");
+        const request = new Read({ key: yield* digest(key), revision, lookup: read });
+        return (yield* Cache.get(cache, request)).payload;
+      }).pipe(
+        Effect.catchTags({ PlatformError: () => read, KeyValueStoreError: () => read }),
+        Effect.uninterruptible,
+        lock.withPermits(1),
+      );
     }),
-    // Let existing reads finish before clearing, so they cannot repopulate stale entries.
-    invalidate: Cache.invalidateAll(cache.inMemory).pipe(
-      Effect.andThen(backing.clear),
-      Effect.catch(() => {
-        enabled = false;
-        return Effect.logWarning("PR cache disabled after clearing failed");
-      }),
-      lock.withPermits(CONCURRENT_READS),
-    ),
+    invalidate: (scope) =>
+      Effect.gen(function* () {
+        const key = yield* digest(scope);
+        const revision = yield* crypto.randomUUIDv4;
+        yield* backing.set(`revision:${key}`, revision);
+        yield* Cache.set(revisions, key, revision);
+      }).pipe(
+        Effect.catch(() => {
+          enabled = false;
+          return Effect.logWarning("PR cache disabled after clearing failed");
+        }),
+        lock.withPermits(CONCURRENT_READS),
+      ),
   });
 });
 
@@ -108,7 +134,6 @@ export const layer = Layer.unwrap(
     const config = yield* ServerConfig;
     const path = yield* Path.Path;
     return Layer.effect(PullRequestReadCache, make).pipe(
-      Layer.provide(Persistence.layerKvs),
       Layer.provide(
         KeyValueStore.layerFileSystem(
           path.join(config.providerStatusCacheDir, "pull-requests"),

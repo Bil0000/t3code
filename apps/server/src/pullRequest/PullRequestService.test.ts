@@ -1,6 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
-import * as Persistence from "effect/unstable/persistence/Persistence";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -204,7 +203,6 @@ function makeService(input: {
         }),
         SourceControlRateLimit.layer,
         Layer.effect(PullRequestReadCache.PullRequestReadCache, PullRequestReadCache.make).pipe(
-          Layer.provide(Persistence.layerKvs),
           Layer.provide(KeyValueStore.layerMemory),
           Layer.provide(NodeServices.layer),
         ),
@@ -3117,6 +3115,43 @@ it.effect("a listing narrowed to some projects is its own cache entry", () =>
   }),
 );
 
+it.effect("keeps unrelated PRs warm after a mutation, explicit refresh, and project turn", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: (input) =>
+            Effect.sync(() => {
+              calls.push(`${input.repository}/${input.number}`);
+              return { ...hostedChangeRequest("body"), number: input.number };
+            }),
+        }),
+      ],
+    });
+    const refs = [
+      { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 },
+      { projectId: "p1" as ProjectId, repository: "acme/web", number: 2 },
+      { projectId: "p2" as ProjectId, repository: "acme/docs", number: 3 },
+    ];
+    const readAll = Effect.forEach(refs, (ref) => service.summary({ ...ref, allowStale: false }));
+    yield* readAll;
+    yield* service.invalidate({ reference: { ...refs[0]!, host: "github.com" } });
+    yield* readAll;
+    assert.deepStrictEqual(calls, ["acme/web/1", "acme/web/2", "acme/docs/3", "acme/web/1"]);
+    yield* service.comment({ ...refs[0]!, body: "hello" });
+    yield* readAll;
+    assert.deepStrictEqual(calls.slice(4), ["acme/web/1"]);
+    yield* service.refreshAfterTurn("p1" as ProjectId);
+    yield* readAll;
+    assert.deepStrictEqual(calls.slice(5), ["acme/web/1", "acme/web/2"]);
+  }),
+);
+
 it.effect("explicit and turn invalidations make the next listing ask the host again", () =>
   Effect.gen(function* () {
     let hostCalls = 0;
@@ -3148,7 +3183,7 @@ it.effect("explicit and turn invalidations make the next listing ask the host ag
     yield* service.invalidate({ reference });
     yield* service.list({ state: "open" });
     assert.strictEqual(hostCalls, 2);
-    yield* service.refreshAfterTurn;
+    yield* service.refreshAfterTurn("p1" as ProjectId);
     const refresh = Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes));
     yield* service.list({ state: "open" });
     assert.isAbove(refresh, 0);
@@ -3551,7 +3586,7 @@ it.effect(
       yield* service.listStats({ refs: [ref(1), ref(2), ref(3)] });
       assert.deepStrictEqual(asked, [[1, 2], [3], [2], [1, 2, 3]]);
 
-      yield* service.refreshAfterTurn;
+      yield* service.refreshAfterTurn("p1" as ProjectId);
       yield* service.listStats({ refs: [ref(1)] });
       assert.deepStrictEqual(asked, [[1, 2], [3], [2], [1, 2, 3], [1]]);
 
@@ -4773,7 +4808,7 @@ it.effect("forgets the cached detail after a rewrite or terminal turn", () =>
     yield* service.detail(reference);
     assert.strictEqual(coreCalls, 2);
 
-    yield* service.refreshAfterTurn;
+    yield* service.refreshAfterTurn("p1" as ProjectId);
     yield* service.detail(reference);
     assert.strictEqual(coreCalls, 3);
   }),
