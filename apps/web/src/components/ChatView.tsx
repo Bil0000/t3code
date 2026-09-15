@@ -7514,7 +7514,7 @@ export default function ChatView(props: ChatViewProps) {
       !directAnnotation &&
       phase === "running" &&
       activeThreadKey &&
-      settings.busyMessageBehavior === "queue"
+      settings.followUpBehavior === "queue"
     ) {
       if (composerRef.current?.validateProviderInput(promptForSend) === false) {
         return;

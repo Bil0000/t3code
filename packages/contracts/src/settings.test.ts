@@ -529,18 +529,16 @@ describe("ClientSettings context window meter", () => {
   });
 });
 
-describe("ClientSettings busy message behavior", () => {
+describe("ClientSettings follow-up behavior", () => {
   it("defaults to queue and accepts either behavior", () => {
-    expect(decodeClientSettings({}).busyMessageBehavior).toBe("queue");
-    for (const busyMessageBehavior of ["queue", "steer"]) {
-      expect(decodeClientSettings({ busyMessageBehavior }).busyMessageBehavior).toBe(
-        busyMessageBehavior,
-      );
-      expect(decodeClientSettingsPatch({ busyMessageBehavior }).busyMessageBehavior).toBe(
-        busyMessageBehavior,
+    expect(decodeClientSettings({}).followUpBehavior).toBe("queue");
+    for (const followUpBehavior of ["queue", "steer"]) {
+      expect(decodeClientSettings({ followUpBehavior }).followUpBehavior).toBe(followUpBehavior);
+      expect(decodeClientSettingsPatch({ followUpBehavior }).followUpBehavior).toBe(
+        followUpBehavior,
       );
     }
-    expect(() => decodeClientSettingsPatch({ busyMessageBehavior: "invalid" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ followUpBehavior: "invalid" })).toThrow();
   });
 });
 

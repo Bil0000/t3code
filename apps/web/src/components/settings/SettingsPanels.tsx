@@ -578,7 +578,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.composerCollapseOnScroll !== DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll
         ? ["Collapse composer on scroll"]
         : []),
-      ...(settings.busyMessageBehavior !== DEFAULT_UNIFIED_SETTINGS.busyMessageBehavior
+      ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
         ? ["Follow-up behavior"]
         : []),
       ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
@@ -639,7 +639,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadDelete,
       settings.confirmThreadUnpin,
       settings.composerCollapseOnScroll,
-      settings.busyMessageBehavior,
+      settings.followUpBehavior,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -752,7 +752,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
-      busyMessageBehavior: DEFAULT_UNIFIED_SETTINGS.busyMessageBehavior,
+      followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -2595,15 +2595,15 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
-          {...searchableSetting("busy-message-behavior")}
+          {...searchableSetting("follow-up-behavior")}
           description="Queue follow-ups while the agent runs or steer the current turn."
           resetAction={
-            settings.busyMessageBehavior !== DEFAULT_UNIFIED_SETTINGS.busyMessageBehavior ? (
+            settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior ? (
               <SettingResetButton
                 label="follow-up behavior"
                 onClick={() =>
                   updateSettings({
-                    busyMessageBehavior: DEFAULT_UNIFIED_SETTINGS.busyMessageBehavior,
+                    followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
                   })
                 }
               />
@@ -2611,16 +2611,16 @@ export function GeneralSettingsPanel() {
           }
           control={
             <Select
-              value={settings.busyMessageBehavior}
+              value={settings.followUpBehavior}
               onValueChange={(value) => {
                 if (value === "queue" || value === "steer") {
-                  updateSettings({ busyMessageBehavior: value });
+                  updateSettings({ followUpBehavior: value });
                 }
               }}
             >
               <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Follow-up behavior">
                 <SelectValue>
-                  {settings.busyMessageBehavior === "queue" ? "Queue" : "Steer"}
+                  {settings.followUpBehavior === "queue" ? "Queue" : "Steer"}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
