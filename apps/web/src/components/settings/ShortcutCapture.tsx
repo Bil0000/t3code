@@ -47,7 +47,10 @@ export function ShortcutCapture({
       if (!claimed.has(event.button)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (event.type === "auxclick" || event.type === "click") claimed.delete(event.button);
+      if (event.type === "auxclick" || event.type === "click") {
+        claimed.delete(event.button);
+        stopRecording();
+      }
     };
     const onBlur = () => stopRecording();
     window.addEventListener("mousedown", onMouseDown, true);
@@ -85,7 +88,10 @@ export function ShortcutCapture({
             }
             if (event.repeat || event.nativeEvent.isComposing) return;
             const key = keybindingFromKeyboardEvent(event.nativeEvent, navigator.platform, true);
-            if (key) onChange(key);
+            if (key) {
+              onChange(key);
+              onRecordingChange(false);
+            }
           }}
         />
       ) : (
