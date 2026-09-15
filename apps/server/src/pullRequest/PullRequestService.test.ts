@@ -3867,9 +3867,9 @@ it.effect("shares linked summaries and reuses them for display without asking th
   }),
 );
 
-it.effect("keeps routed summaries and details separate when the GitHub account changes", () =>
+it.effect("keeps routed reads separate when the GitHub account changes", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail"] as const) {
+    for (const operation of ["summary", "detail", "diff"] as const) {
       let failing = false;
       let calls = 0;
       const read = () =>
@@ -3884,16 +3884,27 @@ it.effect("keeps routed summaries and details separate when the GitHub account c
           project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
         ],
         providers: [
-          fakeProvider("github", { getChangeRequestSummary: read, getChangeRequest: read }),
+          fakeProvider("github", {
+            getChangeRequestSummary: read,
+            getChangeRequest: read,
+            getDiff: () =>
+              read().pipe(
+                Effect.as({ patch: "private patch", truncated: false, nextCursor: null }),
+              ),
+          }),
         ],
       });
+      const readOperation = (input: Parameters<typeof service.diff>[0]) =>
+        Effect.gen(function* () {
+          yield* service[operation](input);
+        });
       const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
-      yield* service[operation]({ ...reference, expectedAccountId: "101" });
+      yield* readOperation({ ...reference, expectedAccountId: "101" });
       failing = true;
 
       for (const allowStale of [false, true]) {
         const error = yield* Effect.flip(
-          service[operation]({ ...reference, expectedAccountId: "202", allowStale }),
+          readOperation({ ...reference, expectedAccountId: "202", allowStale }),
         );
         assert.strictEqual(error._tag, "PullRequestOperationError");
       }
@@ -3904,7 +3915,7 @@ it.effect("keeps routed summaries and details separate when the GitHub account c
 
 it.effect("isolates routed caches for two credentials belonging to the same account", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail"] as const) {
+    for (const operation of ["summary", "detail", "diff"] as const) {
       let credential = "broad";
       let calls = 0;
       const read = () =>
@@ -3930,9 +3941,17 @@ it.effect("isolates routed caches for two credentials belonging to the same acco
               ),
             getChangeRequest: read,
             getChangeRequestSummary: read,
+            getDiff: () =>
+              read().pipe(
+                Effect.as({ patch: "private patch", truncated: false, nextCursor: null }),
+              ),
           }),
         ],
       });
+      const readOperation = (input: Parameters<typeof service.diff>[0]) =>
+        Effect.gen(function* () {
+          yield* service[operation](input);
+        });
       const reference = {
         projectId: "p1" as ProjectId,
         repository: "acme/web",
@@ -3940,14 +3959,11 @@ it.effect("isolates routed caches for two credentials belonging to the same acco
         host: "github.com",
         expectedAccountId: "101",
       };
-      yield* service.withRoutingCredential(reference, service[operation](reference));
+      yield* service.withRoutingCredential(reference, readOperation(reference));
       credential = "restricted";
       for (const allowStale of [false, true]) {
         const error = yield* Effect.flip(
-          service.withRoutingCredential(
-            reference,
-            service[operation]({ ...reference, allowStale }),
-          ),
+          service.withRoutingCredential(reference, readOperation({ ...reference, allowStale })),
         );
         assert.strictEqual(error._tag, "PullRequestOperationError");
       }

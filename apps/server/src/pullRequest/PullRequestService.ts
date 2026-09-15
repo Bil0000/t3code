@@ -2754,20 +2754,9 @@ export const make = Effect.gen(function* () {
 
   const diffCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, host, repository, number, cursor, commit] = JSON.parse(key) as [
-        number,
-        string,
-        string | null,
-        string,
-        number,
-        string | null,
-        string | null,
-      ];
+      const [reference, cursor, commit] = JSON.parse(key) as [string, string | null, string | null];
       return diffUncached({
-        projectId,
-        ...(host === null ? {} : { host }),
-        repository,
-        number,
+        ...refOfCacheKey(reference),
         ...(cursor === null ? {} : { cursor }),
         ...(commit === null ? {} : { commit }),
       } as PullRequestDiffInput);
@@ -2776,18 +2765,14 @@ export const make = Effect.gen(function* () {
       capacity: DIFF_CACHE_CAPACITY,
       timeToLive: (exit, key) => {
         if (!Exit.isSuccess(exit)) return Duration.zero;
-        const commit = (JSON.parse(key) as ReadonlyArray<unknown>)[6];
+        const commit = (JSON.parse(key) as ReadonlyArray<unknown>)[2];
         return commit === null ? DIFF_CACHE_TTL : COMMIT_DIFF_CACHE_TTL;
       },
     },
   );
   const diff: PullRequestService["Service"]["diff"] = (input) => {
     const key = JSON.stringify([
-      refEpoch(input),
-      input.projectId,
-      input.host?.toLowerCase() ?? null,
-      input.repository.toLowerCase(),
-      input.number,
+      refCacheKey(input),
       input.cursor ?? null,
       input.commit ?? null,
       input.commit === undefined
