@@ -66,6 +66,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
+  beginBackgroundDraftSubmissionByRef,
   clearComposerDraftsEnvironment,
   composerDraftHasUserContent,
   finalizePromotedDraftThreadByRef,
@@ -1626,6 +1627,28 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
     expect(draftByKey(draftId)).toBeUndefined();
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("typed during setup");
+  });
+
+  it("cleans up a completed background draft without replacing the active draft", () => {
+    const store = useComposerDraftStore.getState();
+    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+    const nextDraftId = DraftId.make("next-draft");
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    beginBackgroundDraftSubmissionByRef(threadRef);
+    markPromotedDraftThreadByRef(threadRef);
+    store.setProjectDraftThreadId(projectRef, nextDraftId, {
+      threadId: ThreadId.make("next-thread"),
+    });
+    store.setPrompt(nextDraftId, "Keep my next task");
+
+    finalizePromotedDraftThreadByRef(threadRef);
+
+    expect(store.getDraftSession(draftId)).toBeNull();
+    expect(store.getDraftThreadByProjectRef(projectRef)?.draftId).toBe(nextDraftId);
+    expect(store.getComposerDraft(nextDraftId)?.prompt).toBe("Keep my next task");
+    expect(
+      useComposerDraftStore.getState().backgroundSubmissionThreadKeys[scopedThreadKey(threadRef)],
+    ).toBeUndefined();
   });
 
   it("finalizes a matching materialized draft even when promotion was not pre-marked", () => {

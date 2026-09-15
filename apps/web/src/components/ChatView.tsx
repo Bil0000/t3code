@@ -8015,8 +8015,12 @@ export default function ChatView(props: ChatViewProps) {
         }
         acknowledgeActiveThreadWoke();
         if (backgroundThreadRef) {
-          if (backgroundDraftOpened) {
+          if (backgroundDraftOpened || currentRouteThreadKeyRef.current !== routeThreadKey) {
             finalizePromotedDraftThreadByRef(backgroundThreadRef);
+          } else {
+            clearBackgroundDraftSubmissionByRef(backgroundThreadRef);
+          }
+          if (backgroundDraftOpened) {
             toastManager.add(
               stackedThreadToast({
                 type: "success",
@@ -8033,8 +8037,6 @@ export default function ChatView(props: ChatViewProps) {
                 },
               }),
             );
-          } else {
-            clearBackgroundDraftSubmissionByRef(backgroundThreadRef);
           }
         }
       }
