@@ -98,4 +98,33 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
       assert.strictEqual(yield* restarted.get("summary", Effect.succeed("recovered")), "recovered");
     }),
   );
+
+  it.effect("resumes caching after a failed scope read", () =>
+    Effect.gen(function* () {
+      const backing = yield* KeyValueStore.KeyValueStore;
+      let fail = true;
+      let reads = 0;
+      const cache = yield* PullRequestReadCache.make.pipe(
+        Effect.provideService(KeyValueStore.KeyValueStore, {
+          ...backing,
+          get: (key) =>
+            Effect.suspend(() => {
+              if (!fail) return backing.get(key);
+              fail = false;
+              return Effect.fail(
+                new KeyValueStore.KeyValueStoreError({ method: "get", message: "unavailable" }),
+              );
+            }),
+        }),
+      );
+      const read = cache.get(
+        "summary",
+        Effect.sync(() => String(++reads)),
+        ["pr"],
+      );
+      assert.strictEqual(yield* read, "1");
+      assert.strictEqual(yield* read, "2");
+      assert.strictEqual(yield* read, "2");
+    }).pipe(Effect.provide(KeyValueStore.layerMemory)),
+  );
 });

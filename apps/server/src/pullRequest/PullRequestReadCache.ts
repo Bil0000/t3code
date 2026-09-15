@@ -62,8 +62,15 @@ export const make = Effect.gen(function* () {
   const digest = (key: string) =>
     crypto.digest("SHA-256", new TextEncoder().encode(key)).pipe(Effect.map(Encoding.encodeHex));
   const revisions = yield* Cache.makeWith(
-    (key: string) => backing.get(`revision:${key}`).pipe(Effect.map((value) => value ?? "")),
-    { capacity: 2_048, timeToLive: () => Duration.infinity },
+    (scope: string) =>
+      digest(scope).pipe(
+        Effect.flatMap((key) => backing.get(`revision:${key}`)),
+        Effect.map((value) => value ?? ""),
+      ),
+    {
+      capacity: 2_048,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+    },
   );
   const cache = yield* Cache.makeWith(
     Effect.fn("PullRequestReadCache.lookup")(function* (request: Read) {
@@ -103,7 +110,7 @@ export const make = Effect.gen(function* () {
       const read = yield* Effect.cached(lookup);
       return yield* Effect.gen(function* () {
         const revision = (yield* Effect.forEach(scopes, (scope) =>
-          digest(scope).pipe(Effect.flatMap((key) => Cache.get(revisions, key))),
+          Cache.get(revisions, scope),
         )).join(":");
         const request = new Read({ key: yield* digest(key), revision, lookup: read });
         return (yield* Cache.get(cache, request)).payload;
@@ -118,7 +125,7 @@ export const make = Effect.gen(function* () {
         const key = yield* digest(scope);
         const revision = yield* crypto.randomUUIDv4;
         yield* backing.set(`revision:${key}`, revision);
-        yield* Cache.set(revisions, key, revision);
+        yield* Cache.set(revisions, scope, revision);
       }).pipe(
         Effect.catch(() => {
           enabled = false;
