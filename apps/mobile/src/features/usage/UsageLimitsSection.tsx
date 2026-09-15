@@ -310,8 +310,9 @@ export function useRefreshLimits(
           ),
         ),
       );
-      setFailedEnvironments((previous) =>
-        connected
+      setFailedEnvironments((previous) => [
+        ...previous.filter(({ environmentId }) => !connected.some(([id]) => id === environmentId)),
+        ...connected
           .filter(([environmentId], index) =>
             results[index] === undefined
               ? previous.some((failed) => failed.environmentId === environmentId)
@@ -321,7 +322,7 @@ export function useRefreshLimits(
             environmentId,
             label: presentation.entry.target.label,
           })),
-      );
+      ]);
     } finally {
       setNow(Date.now());
     }
@@ -348,11 +349,9 @@ export function useRefreshLimits(
     .map(([environmentId]) => environmentId)
     .sort()
     .join(",");
-  const autoRefreshLimits = useEffectEvent(() => {
-    void refresh(true);
-  });
+  const autoRefreshLimits = useEffectEvent(() => refresh(true));
   useEffect(() => {
-    if (active && connectedLimitsEnvironments) autoRefreshLimits();
+    if (active && connectedLimitsEnvironments) void autoRefreshLimits();
   }, [active, connectedLimitsEnvironments]);
 
   const failedLabels = failedEnvironments
