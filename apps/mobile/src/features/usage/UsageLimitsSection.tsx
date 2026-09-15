@@ -16,7 +16,8 @@ import {
   paceOf,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
+import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { Alert, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -279,32 +280,43 @@ export function ResetCredits(props: {
  * Environments whose probe failed are named, since their rows keep showing
  * the previous quota with nothing else to say so.
  */
-export function useRefreshLimits(selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null) {
+export function useRefreshLimits(
+  selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
+  active = false,
+) {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
   const [now, setNow] = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
   const [failedEnvironments, setFailedEnvironments] = useState<
     readonly { environmentId: EnvironmentId; label: string }[]
   >([]);
-  // Always toggles `refreshing`, even with nothing to probe: Android's
-  // RefreshControl keeps its spinner up until it sees true then false.
-  const refresh = async () => {
+  const refresh = async (automatic = false) => {
     const connected = [...presentations].filter(
       ([environmentId, presentation]) =>
         presentation.connection.phase === "connected" &&
         (selectedEnvironmentIds === null || selectedEnvironmentIds.has(environmentId)),
     );
-    setRefreshing(true);
     try {
       const results = await Promise.all(
-        connected.map(([environmentId]) => refreshProviders({ environmentId, input: {} })),
+        connected.map(([environmentId]) =>
+          refreshUsageLimits(
+            environmentId,
+            () => refreshProviders({ environmentId, input: {} }),
+            automatic,
+          ),
+        ),
       );
-      setFailedEnvironments(
+      setFailedEnvironments((previous) =>
         connected
-          .filter((_, index) => results[index]?._tag === "Failure")
+          .filter(([environmentId], index) =>
+            results[index] === undefined
+              ? previous.some((failed) => failed.environmentId === environmentId)
+              : results[index]?._tag === "Failure",
+          )
           .map(([environmentId, presentation]) => ({
             environmentId,
             label: presentation.entry.target.label,
@@ -312,14 +324,42 @@ export function useRefreshLimits(selectedEnvironmentIds: ReadonlySet<Environment
       );
     } finally {
       setNow(Date.now());
+    }
+  };
+  // Always toggles `refreshing`, even with nothing to probe: Android's
+  // RefreshControl keeps its spinner up until it sees true then false.
+  const refreshManually = async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      refreshingRef.current = false;
       setRefreshing(false);
     }
   };
+  const connectedLimitsEnvironments = [...presentations]
+    .filter(
+      ([environmentId, presentation]) =>
+        presentation.connection.phase === "connected" &&
+        (selectedEnvironmentIds === null || selectedEnvironmentIds.has(environmentId)),
+    )
+    .map(([environmentId]) => environmentId)
+    .sort()
+    .join(",");
+  const autoRefreshLimits = useEffectEvent(() => {
+    void refresh(true);
+  });
+  useEffect(() => {
+    if (active && connectedLimitsEnvironments) autoRefreshLimits();
+  }, [active, connectedLimitsEnvironments]);
+
   const failedLabels = failedEnvironments
     .filter(
       ({ environmentId }) =>
         selectedEnvironmentIds === null || selectedEnvironmentIds.has(environmentId),
     )
     .map(({ label }) => label);
-  return { now, refreshing, failedLabels, refresh };
+  return { now, refreshing, failedLabels, refresh: refreshManually };
 }

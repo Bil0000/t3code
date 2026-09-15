@@ -9,6 +9,25 @@ import type { createServerEnvironmentAtoms } from "./server.ts";
 
 const isEnvironmentRpcUnavailable = Schema.is(EnvironmentRpcUnavailableError);
 
+const limitsRefreshAfter = new Map<EnvironmentId, number>();
+
+export async function refreshUsageLimits<A>(
+  environmentId: EnvironmentId,
+  refresh: () => Promise<A>,
+  automatic = false,
+): Promise<A | undefined> {
+  const refreshAfter = limitsRefreshAfter.get(environmentId) ?? 0;
+  // @effect-diagnostics-next-line globalDate:off
+  if (refreshAfter === Infinity || (automatic && Date.now() < refreshAfter)) return;
+  limitsRefreshAfter.set(environmentId, Infinity);
+  try {
+    return await refresh();
+  } finally {
+    // @effect-diagnostics-next-line globalDate:off
+    limitsRefreshAfter.set(environmentId, Date.now() + 5 * 60_000);
+  }
+}
+
 /** Refresh pricing, then await each selected environment's rescan while it remains connected. */
 export async function refreshUsage({
   registry,
