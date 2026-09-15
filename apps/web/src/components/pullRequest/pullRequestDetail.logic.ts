@@ -288,7 +288,9 @@ export function classifyPullRequestChecks(
   if (checks.some((check) => check.status === "failure" || check.status === "cancelled")) {
     return "failing";
   }
-  if (checks.some((check) => check.status === "pending")) return "pending";
+  if (checks.some((check) => check.status === "pending" || check.status === "action-required")) {
+    return "pending";
+  }
   return "passing";
 }
 

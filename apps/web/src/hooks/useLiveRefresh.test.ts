@@ -13,7 +13,7 @@ import {
 } from "./useLiveRefresh";
 
 describe("live refresh cadence", () => {
-  it("polls every 45 seconds, pauses while hidden, refreshes on return, and cleans up", () => {
+  it("polls every 45 seconds, pauses while hidden or busy, respects disabling, and cleans up", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const document = Object.assign(new EventTarget(), { visibilityState: "visible" });
@@ -23,8 +23,8 @@ describe("live refresh cadence", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const refresh = vi.fn();
     let renderer: ReactTestRenderer | undefined;
-    function Probe() {
-      useLiveRefresh(refresh, { intervalMs: 45_000 });
+    function Probe({ pending = false, enabled = true }) {
+      useLiveRefresh(pending ? null : refresh, { intervalMs: 45_000, enabled });
       return null;
     }
     try {
@@ -45,9 +45,19 @@ describe("live refresh cadence", () => {
       document.dispatchEvent(new Event("visibilitychange"));
       window.dispatchEvent(new Event("focus"));
       expect(refresh).toHaveBeenCalledTimes(3);
-      act(() => renderer?.unmount());
+      act(() => renderer?.update(createElement(Probe, { pending: true })));
       act(() => vi.advanceTimersByTime(45_000));
       expect(refresh).toHaveBeenCalledTimes(3);
+      act(() => renderer?.update(createElement(Probe)));
+      act(() => vi.advanceTimersByTime(45_000));
+      expect(refresh).toHaveBeenCalledTimes(4);
+      act(() => renderer?.update(createElement(Probe, { enabled: false })));
+      act(() => vi.advanceTimersByTime(90_000));
+      window.dispatchEvent(new Event("focus"));
+      expect(refresh).toHaveBeenCalledTimes(4);
+      act(() => renderer?.unmount());
+      act(() => vi.advanceTimersByTime(45_000));
+      expect(refresh).toHaveBeenCalledTimes(4);
     } finally {
       act(() => renderer?.unmount());
       vi.useRealTimers();

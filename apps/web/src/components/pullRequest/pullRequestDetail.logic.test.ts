@@ -1479,6 +1479,9 @@ describe("the compact row's single action slot", () => {
         openDetail({ checks: [check("success"), check("pending")] }),
       ),
     ).toBeNull();
+    expect(
+      resolveThreadPanelPullRequestAction(openDetail({ checks: [check("action-required")] })),
+    ).toBeNull();
   });
 
   it("ranks conflicts above everything, then draft, then failing checks", () => {
