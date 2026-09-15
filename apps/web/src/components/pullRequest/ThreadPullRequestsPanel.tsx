@@ -1,4 +1,4 @@
-import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
+import type { ProjectId, ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
 import {
   resolveThreadPullRequestChains,
   visibleThreadPullRequests,
@@ -13,9 +13,13 @@ import {
 import { useCallback, useMemo } from "react";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { cn } from "~/lib/utils";
 import { useServerConfigs, useThreadShell } from "~/state/entities";
+import { pullRequestEnvironment } from "~/state/pullRequests";
+import { useEnvironmentQuery } from "~/state/query";
+import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -31,7 +35,7 @@ import {
   PullRequestDiffStat,
   PullRequestApprovalGlyph,
   PullRequestStateGlyph,
-  pullRequestChecksStatePresentation,
+  pullRequestChecksState,
 } from "./pullRequestPresentation";
 
 const SOURCE_LABELS: Record<ThreadPullRequestLink["source"], string> = {
@@ -42,32 +46,52 @@ const SOURCE_LABELS: Record<ThreadPullRequestLink["source"], string> = {
   "stack-dismissed": "Dismissed",
 };
 
-function ChecksGlyph({
-  state,
+function LinkedPullRequestChecks({
+  link,
+  projectId,
+  threadRef,
 }: {
-  state: NonNullable<ThreadPullRequestLink["snapshot"]>["checksState"] & string;
+  link: ThreadPullRequestLink;
+  projectId: ProjectId;
+  threadRef: ScopedThreadRef;
 }) {
-  const presentation = pullRequestChecksStatePresentation(state);
+  const reference = {
+    projectId,
+    host: link.host,
+    repository: link.repository,
+    number: link.number,
+    allowStale: false,
+  };
+  const query = useEnvironmentQuery(
+    pullRequestEnvironment.detail({ environmentId: threadRef.environmentId, input: reference }),
+  );
+  useLiveRefresh(query.refresh, {
+    key: `linked-pr-checks:${threadRef.environmentId}:${projectId}:${link.host}:${link.repository}:${link.number}`,
+    intervalMs: 45_000,
+  });
+  const checksState = query.data
+    ? pullRequestChecksState(query.data.checks)
+    : link.snapshot?.checksState;
+  if (!checksState) return null;
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-        <presentation.Icon
-          role="img"
-          aria-label={presentation.label}
-          className={cn("size-3.5", presentation.toneClassName)}
-        />
-      </TooltipTrigger>
-      <TooltipPopup>{presentation.label}</TooltipPopup>
-    </Tooltip>
+    <PullRequestChecksPopover
+      checksState={checksState}
+      {...(query.data ? { checks: query.data.checks } : {})}
+      environmentId={threadRef.environmentId}
+      reference={reference}
+      threadRef={threadRef}
+    />
   );
 }
 
 function LinkRow({
   line,
+  projectId,
   threadRef,
   onUnlink,
 }: {
   line: PullRequestListLine;
+  projectId: ProjectId;
   threadRef: ScopedThreadRef;
   onUnlink: (link: ThreadPullRequestLink) => void;
 }) {
@@ -112,9 +136,6 @@ function LinkRow({
           <span className="min-w-0 flex-1 truncate text-sm">
             {snapshot?.title ?? link.repository}
           </span>
-          {/* Match the full PR list: review verdict, checks, then diff counts.
-              Each is absent rather than neutral when the
-              host said nothing, so a row without them reads as unknown, not as fine. */}
           <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px]">
             {snapshot?.state === "open" &&
             (snapshot.reviewDecision === "approved" ||
@@ -128,7 +149,6 @@ function LinkRow({
             {snapshot?.state === "open" && snapshot.mergeability === "conflicting" ? (
               <span className="text-destructive">Conflicts</span>
             ) : null}
-            {snapshot?.checksState ? <ChecksGlyph state={snapshot.checksState} /> : null}
             <PullRequestDiffStat
               additions={snapshot?.additions ?? 0}
               deletions={snapshot?.deletions ?? 0}
@@ -174,6 +194,7 @@ function LinkRow({
           ) : null}
         </span>
       </a>
+      <LinkedPullRequestChecks link={link} projectId={projectId} threadRef={threadRef} />
       <Menu>
         <MenuTrigger
           render={
@@ -247,7 +268,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     return latest;
   }, [links]);
 
-  if (links.length === 0) {
+  if (!thread || links.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <LinkIcon aria-hidden className="size-6 text-muted-foreground/60" />
@@ -272,6 +293,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
             <LinkRow
               key={`${line.link.host}/${line.link.repository}#${line.link.number}`}
               line={line}
+              projectId={thread.projectId}
               threadRef={threadRef}
               onUnlink={handleUnlink}
             />
