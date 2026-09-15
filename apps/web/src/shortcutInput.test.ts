@@ -126,7 +126,10 @@ describe("shortcut presses", () => {
 });
 
 describe("shortcut input dispatch", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
 
   it("reaches actions before editors consume keys and leaves unhandled shortcuts alone", () => {
     class InputEvent extends Event {
@@ -173,6 +176,10 @@ describe("shortcut input dispatch", () => {
       { key: "mod+shift+]", command: "thread.next" },
       { key: "mod+w", command: "rightPanel.close" },
       { key: "mouse4", command: "thread.previous" },
+      { key: "mouse1", command: "thread.next" },
+      { key: "mouse1", presses: 2, command: "thread.previous" },
+      { key: "ctrl+x", command: "thread.next" },
+      { key: "ctrl+x", presses: 2, command: "thread.previous" },
     ]);
     const input = installShortcutInput(target as unknown as Window, () => ({
       keybindings,
@@ -234,6 +241,32 @@ describe("shortcut input dispatch", () => {
       target.dispatchEvent(end);
       expect(end.defaultPrevented).toBe(true);
     }
+    vi.useFakeTimers();
+    actions.length = 0;
+    for (const pointerType of ["touch", "pen"]) {
+      for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click"]) {
+        const event = Object.assign(new MouseInput(type, { cancelable: true }), {
+          button: 0,
+          pointerType,
+        });
+        target.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+      }
+      vi.runAllTimers();
+      expect(actions).toEqual([]);
+    }
+    for (const type of ["pointercancel", "blur"]) {
+      target.dispatchEvent(
+        Object.assign(new MouseInput("pointerdown", { cancelable: true }), { button: 0 }),
+      );
+      target.dispatchEvent(new Event(type));
+      vi.runAllTimers();
+      expect(actions).toEqual([]);
+    }
+    target.dispatchEvent(new InputEvent("keydown", { key: "x", ctrlKey: true }));
+    target.dispatchEvent(new InputEvent("keydown", { key: "x", ctrlKey: true, repeat: true }));
+    vi.runAllTimers();
+    expect(actions).toEqual(["thread.next"]);
     input.dispose();
   });
 });

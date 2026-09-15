@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import {
   MOUSE_SHORTCUTS_CHANNEL,
   MOUSE_SHORTCUT_INPUT_CHANNEL,
+  MOUSE_SHORTCUT_CANCEL_CHANNEL,
   mouseShortcutInputKey,
 } from "@t3tools/shared/mouseShortcuts";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -230,6 +231,10 @@ export function HostedBrowserWebview(props: {
       sync();
     };
     const onInput = (event: Event) => {
+      if ("channel" in event && event.channel === MOUSE_SHORTCUT_CANCEL_CHANNEL) {
+        window.dispatchEvent(new Event("pointercancel"));
+        return;
+      }
       if (
         !("channel" in event) ||
         event.channel !== MOUSE_SHORTCUT_INPUT_CHANNEL ||

@@ -68,17 +68,18 @@ export function installShortcutInput(
   const tracker = createShortcutPressTracker();
   const claimedButtons = new Set<number>();
   const claimedPointerButtons = new Set<number>();
+  let nonMousePointer = false;
   const stop = (event: Event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
   const onInput = (event: KeyboardEvent | MouseEvent) => {
     const keyboard = event instanceof KeyboardEvent;
-    if (
-      event.type === "pointerdown" &&
-      ((event as PointerEvent).pointerType !== "mouse" || (event as MouseEvent).button >= 3)
-    )
-      return;
+    if (event.type === "pointerdown") {
+      nonMousePointer = (event as PointerEvent).pointerType !== "mouse";
+      if (nonMousePointer || (event as MouseEvent).button >= 3) return;
+    }
+    if (event.type === "mousedown" && nonMousePointer) return;
     if (event.type === "mousedown" && claimedPointerButtons.has((event as MouseEvent).button)) {
       stop(event);
       return;
@@ -149,6 +150,7 @@ export function installShortcutInput(
     tracker.press(key, commands, (command) => target.dispatchEvent(shortcutCommandEvent(command)));
   };
   const onMouseEnd = (event: MouseEvent) => {
+    if (event.type === "click" || event.type === "auxclick") nonMousePointer = false;
     if (event.type === "mouseup") claimedPointerButtons.delete(event.button);
     if (!claimedButtons.has(event.button)) return;
     stop(event);
@@ -158,6 +160,7 @@ export function installShortcutInput(
     tracker.clear();
     claimedButtons.clear();
     claimedPointerButtons.clear();
+    nonMousePointer = false;
   };
   const onVisibility = () => {
     if (target.document.hidden) clear();
@@ -169,6 +172,7 @@ export function installShortcutInput(
     target.addEventListener(type, onMouseEnd, true);
   }
   target.addEventListener("blur", clear);
+  target.addEventListener("pointercancel", clear);
   target.document.addEventListener("visibilitychange", onVisibility);
   return {
     clear: tracker.clear,
@@ -181,6 +185,7 @@ export function installShortcutInput(
         target.removeEventListener(type, onMouseEnd, true);
       }
       target.removeEventListener("blur", clear);
+      target.removeEventListener("pointercancel", clear);
       target.document.removeEventListener("visibilitychange", onVisibility);
     },
   };

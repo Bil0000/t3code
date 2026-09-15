@@ -3,6 +3,7 @@ import { ipcRenderer } from "electron";
 import {
   MOUSE_SHORTCUTS_CHANNEL,
   MOUSE_SHORTCUT_INPUT_CHANNEL,
+  MOUSE_SHORTCUT_CANCEL_CHANNEL,
   mouseShortcutInputKey,
 } from "@t3tools/shared/mouseShortcuts";
 import { getElementContext } from "react-grab/primitives";
@@ -113,6 +114,7 @@ window.addEventListener("keydown", reportHumanKeyInput, true);
 let mouseShortcuts = new Set<string>();
 const claimedShortcutButtons = new Set<number>();
 const claimedPointerShortcutButtons = new Set<number>();
+let nonMouseShortcutPointer = false;
 ipcRenderer.on(MOUSE_SHORTCUTS_CHANNEL, (_event, shortcuts: unknown) => {
   if (
     Array.isArray(shortcuts) &&
@@ -126,11 +128,11 @@ for (const type of ["pointerdown", "mousedown"] as const) {
   window.addEventListener(
     type,
     (event) => {
-      if (
-        type === "pointerdown" &&
-        ((event as PointerEvent).pointerType !== "mouse" || event.button >= 3)
-      )
-        return;
+      if (type === "pointerdown") {
+        nonMouseShortcutPointer = (event as PointerEvent).pointerType !== "mouse";
+        if (nonMouseShortcutPointer || event.button >= 3) return;
+      }
+      if (type === "mousedown" && nonMouseShortcutPointer) return;
       if (type === "mousedown" && claimedPointerShortcutButtons.has(event.button)) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -166,6 +168,7 @@ for (const type of ["mouseup", "click", "auxclick", "contextmenu"] as const) {
   window.addEventListener(
     type,
     (event) => {
+      if (type === "click" || type === "auxclick") nonMouseShortcutPointer = false;
       if (type === "mouseup") claimedPointerShortcutButtons.delete(event.button);
       if (!claimedShortcutButtons.has(event.button)) return;
       event.preventDefault();
@@ -175,10 +178,14 @@ for (const type of ["mouseup", "click", "auxclick", "contextmenu"] as const) {
     true,
   );
 }
-window.addEventListener("blur", () => {
+const cancelMouseShortcut = () => {
   claimedShortcutButtons.clear();
   claimedPointerShortcutButtons.clear();
-});
+  nonMouseShortcutPointer = false;
+  ipcRenderer.sendToHost(MOUSE_SHORTCUT_CANCEL_CHANNEL);
+};
+window.addEventListener("blur", cancelMouseShortcut);
+window.addEventListener("pointercancel", cancelMouseShortcut);
 
 // Mouse thumb buttons: `button === 3` is Back, `button === 4` is Forward.
 const MOUSE_BUTTON_BACK = 3;
