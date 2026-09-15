@@ -1297,6 +1297,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  followUpBehavior: "queue" | "steer";
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -1331,6 +1332,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        followUpBehavior={props.followUpBehavior}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -3933,7 +3935,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           providerInputRejectedRef.current = false;
           onSend(
             sendEvent,
-            dispatchMode ?? resolveComposerDispatchMode({ phase, queueModifier: false }),
+            dispatchMode ??
+              resolveComposerDispatchMode({
+                phase,
+                queueModifier: false,
+                activeTurnDefault: settings.followUpBehavior,
+              }),
           );
           return !providerInputRejectedRef.current;
         },
@@ -3952,6 +3959,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isSendDisabled,
       noProviderAvailable,
       onSend,
+      settings.followUpBehavior,
       phase,
       promptRef,
       shouldBlurMobileComposerOnSubmit,
@@ -3965,14 +3973,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         resolveComposerDispatchMode({
           phase,
           queueModifier: event.metaKey || event.ctrlKey,
+          activeTurnDefault: settings.followUpBehavior,
         }),
       );
     },
-    [phase, submitComposer],
+    [phase, settings.followUpBehavior, submitComposer],
   );
   const submitCitationAndSend = useCallback(() => {
-    submitComposer(undefined, resolveComposerDispatchMode({ phase, queueModifier: false }));
-  }, [phase, submitComposer]);
+    submitComposer(
+      undefined,
+      resolveComposerDispatchMode({
+        phase,
+        queueModifier: false,
+        activeTurnDefault: settings.followUpBehavior,
+      }),
+    );
+  }, [phase, settings.followUpBehavior, submitComposer]);
   const compactThreadContext = useCallback(() => {
     if (
       compactDisabled ||
@@ -4147,6 +4163,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         resolveComposerDispatchMode({
           phase,
           queueModifier: event.metaKey || event.ctrlKey,
+          activeTurnDefault: settings.followUpBehavior,
         }),
       );
       return true;
@@ -7074,6 +7091,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
+                    followUpBehavior={settings.followUpBehavior}
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }
