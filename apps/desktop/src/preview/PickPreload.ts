@@ -1,5 +1,10 @@
 // @effect-diagnostics globalDate:off globalTimers:off - This isolated Electron preload does not run inside an Effect runtime.
 import { ipcRenderer } from "electron";
+import {
+  MOUSE_SHORTCUTS_CHANNEL,
+  MOUSE_SHORTCUT_INPUT_CHANNEL,
+  mouseShortcutInputKey,
+} from "@t3tools/shared/mouseShortcuts";
 import { getElementContext } from "react-grab/primitives";
 import type {
   DesktopPreviewAnnotationTheme,
@@ -104,6 +109,76 @@ const reportHumanKeyInput = (event: KeyboardEvent): void => {
 
 window.addEventListener("pointerdown", reportHumanPointerInput, true);
 window.addEventListener("keydown", reportHumanKeyInput, true);
+
+let mouseShortcuts = new Set<string>();
+const claimedShortcutButtons = new Set<number>();
+const claimedPointerShortcutButtons = new Set<number>();
+ipcRenderer.on(MOUSE_SHORTCUTS_CHANNEL, (_event, shortcuts: unknown) => {
+  if (
+    Array.isArray(shortcuts) &&
+    shortcuts.length <= 256 &&
+    shortcuts.every((key) => typeof key === "string")
+  ) {
+    mouseShortcuts = new Set(shortcuts);
+  }
+});
+for (const type of ["pointerdown", "mousedown"] as const) {
+  window.addEventListener(
+    type,
+    (event) => {
+      if (
+        type === "pointerdown" &&
+        ((event as PointerEvent).pointerType !== "mouse" || event.button >= 3)
+      )
+        return;
+      if (type === "mousedown" && claimedPointerShortcutButtons.has(event.button)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (!event.isTrusted || !mouseShortcuts.has(mouseShortcutInputKey(event))) return;
+      const active = document.activeElement;
+      if (
+        event.button < 3 &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        active instanceof HTMLElement &&
+        (active.isContentEditable || active.closest("input, textarea, select"))
+      )
+        return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      claimedShortcutButtons.add(event.button);
+      if (type === "pointerdown") claimedPointerShortcutButtons.add(event.button);
+      ipcRenderer.sendToHost(MOUSE_SHORTCUT_INPUT_CHANNEL, {
+        button: event.button,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+      });
+    },
+    true,
+  );
+}
+for (const type of ["mouseup", "click", "auxclick", "contextmenu"] as const) {
+  window.addEventListener(
+    type,
+    (event) => {
+      if (type === "mouseup") claimedPointerShortcutButtons.delete(event.button);
+      if (!claimedShortcutButtons.has(event.button)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (type === "click" || type === "auxclick") claimedShortcutButtons.delete(event.button);
+    },
+    true,
+  );
+}
+window.addEventListener("blur", () => {
+  claimedShortcutButtons.clear();
+  claimedPointerShortcutButtons.clear();
+});
 
 // Mouse thumb buttons: `button === 3` is Back, `button === 4` is Forward.
 const MOUSE_BUTTON_BACK = 3;

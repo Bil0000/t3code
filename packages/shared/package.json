@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./mouseShortcuts": {
+      "types": "./src/mouseShortcuts.ts",
+      "import": "./src/mouseShortcuts.ts"
+    },
     "./legacyCliLauncher": {
       "types": "./src/legacyCliLauncher.ts",
       "import": "./src/legacyCliLauncher.ts"

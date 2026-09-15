@@ -1,6 +1,23 @@
 "use client";
 
-import type { PreviewViewportSetting, ScopedThreadRef } from "@t3tools/contracts";
+import {
+  MouseShortcutInput,
+  type PreviewViewportSetting,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import * as Schema from "effect/Schema";
+import {
+  MOUSE_SHORTCUTS_CHANNEL,
+  MOUSE_SHORTCUT_INPUT_CHANNEL,
+  mouseShortcutInputKey,
+} from "@t3tools/shared/mouseShortcuts";
+import { primaryServerKeybindingsAtom } from "../state/server";
+import { matchesWhenClause } from "../keybindings";
+import { isTerminalFocused } from "../lib/terminalFocus";
+import { isPreviewFocused } from "../lib/previewFocus";
+import { isModelPickerOpen } from "../modelPickerVisibility";
+import { useTerminalUiStateStore, selectThreadTerminalUiState } from "../terminalUiStateStore";
 import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -28,12 +45,15 @@ import {
   type WebviewCrashRecoveryState,
 } from "./webviewCrashRecovery";
 
+const isMouseShortcutInput = Schema.is(MouseShortcutInput);
+
 interface ElectronWebview extends HTMLElement {
   src: string;
   partition: string;
   preload?: string;
   webpreferences?: string;
   getWebContentsId: () => number;
+  send: (channel: string, ...args: unknown[]) => void;
   executeJavaScript: (code: string, userGesture?: boolean) => Promise<unknown>;
 }
 
@@ -168,6 +188,86 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("render-process-gone", recoverGuest);
     };
   }, [clientSettingsHydrated, config, initialSrc, runtimeTabId, webviewGeneration]);
+
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const terminalOpen = useTerminalUiStateStore(
+    (state) =>
+      selectThreadTerminalUiState(state.terminalUiStateByThreadKey, threadRef).terminalOpen,
+  );
+  useEffect(() => {
+    const webview = webviewRef.current;
+    if (!clientSettingsHydrated || !webview || !config) return;
+    let ready = false;
+    const sync = () => {
+      if (!ready) return;
+      const context = {
+        terminalFocus: isTerminalFocused(),
+        terminalOpen,
+        previewFocus: isPreviewFocused(),
+        previewOpen: presentation.visible,
+        modelPickerOpen: isModelPickerOpen(),
+      };
+      const shortcuts = keybindings
+        .filter(
+          (binding) =>
+            !binding.disabled &&
+            /^mouse[1-9]\d*$/.test(binding.shortcut.key) &&
+            matchesWhenClause(binding.whenAst, context),
+        )
+        .map(({ shortcut }) =>
+          mouseShortcutInputKey({
+            button: Number(shortcut.key.slice(5)) - 1,
+            metaKey: shortcut.metaKey || (shortcut.modKey && isMacPlatform(navigator.platform)),
+            ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !isMacPlatform(navigator.platform)),
+            altKey: shortcut.altKey,
+            shiftKey: shortcut.shiftKey,
+          }),
+        );
+      webview.send(MOUSE_SHORTCUTS_CHANNEL, [...new Set(shortcuts)]);
+    };
+    const onReady = () => {
+      ready = true;
+      sync();
+    };
+    const onInput = (event: Event) => {
+      if (
+        !("channel" in event) ||
+        event.channel !== MOUSE_SHORTCUT_INPUT_CHANNEL ||
+        !("args" in event) ||
+        !Array.isArray(event.args)
+      )
+        return;
+      const input: unknown = event.args[0];
+      if (!isMouseShortcutInput(input)) return;
+      webview.dispatchEvent(
+        new MouseEvent("mousedown", { ...input, bubbles: true, cancelable: true }),
+      );
+      webview.dispatchEvent(
+        new MouseEvent("auxclick", { ...input, bubbles: true, cancelable: true }),
+      );
+    };
+    webview.addEventListener("dom-ready", onReady);
+    webview.addEventListener("ipc-message", onInput);
+    window.addEventListener("focus", sync, true);
+    window.addEventListener("blur", sync, true);
+    try {
+      webview.getWebContentsId();
+      onReady();
+    } catch {}
+    return () => {
+      webview.removeEventListener("dom-ready", onReady);
+      webview.removeEventListener("ipc-message", onInput);
+      window.removeEventListener("focus", sync, true);
+      window.removeEventListener("blur", sync, true);
+    };
+  }, [
+    clientSettingsHydrated,
+    config,
+    keybindings,
+    presentation.visible,
+    terminalOpen,
+    webviewGeneration,
+  ]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;

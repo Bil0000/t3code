@@ -3,6 +3,36 @@
 Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
 also lists the command IDs and defaults available in your version.
 
+## Mouse buttons and press counts
+
+Use **Add keybinding**, choose an action, then **Record shortcut**. Press a key or
+mouse button with any modifiers held. Choose **1 press**, **2 presses**, or
+**3 presses**, then save. Add another binding to keep keyboard and mouse shortcuts
+for the same action. Select a shortcut to edit it; use its action menu to remove it.
+
+For side-button navigation, add these bindings:
+
+| Input                                        | Presses | Action              |
+| -------------------------------------------- | ------- | ------------------- |
+| Mouse Back, usually the rear side button     | 1       | Thread: Previous    |
+| Mouse Forward, usually the front side button | 1       | Thread: Next        |
+| Mouse Forward                                | 2       | Open Usage → Limits |
+
+Thread navigation follows the sidebar order. The keyboard bindings stay active.
+Single-only shortcuts run at once. If the same input has a longer binding, T3
+waits up to 300 ms between presses and runs only the matching count. Holding a key
+does not add presses. Leaving the app clears pending presses.
+
+Mapped mouse buttons work across T3 content, including the desktop preview.
+Unassigned buttons keep their normal actions. Bare keyboard shortcuts do not run
+while typing in an input or terminal. Plain left, middle, and right buttons keep
+normal editing actions while an input is focused; use modifiers or side buttons there.
+
+The browser, OS, or mouse driver must send the button to T3. Browser toolbars,
+system-reserved shortcuts, and cross-origin frames in third-party pages are outside
+T3 control. Some browsers do not expose buttons beyond the standard five.
+The native mobile app does not use these desktop/web shortcuts.
+
 ## Composer controls
 
 Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.

@@ -11,6 +11,7 @@ import {
   CircleDashedIcon,
   SlidersHorizontalIcon,
 } from "lucide-react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMemo, useRef, useState } from "react";
 
 import {
@@ -101,7 +102,9 @@ export function UsagePage() {
       preferences.windowDays === 1 ? "hour" : "day",
     ),
   }));
-  const metric = preferences.metric;
+  const { tab } = useSearch({ from: "/usage" });
+  const navigate = useNavigate();
+  const metric = tab ?? preferences.metric;
   const showingLimits = metric === "limits";
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
@@ -160,6 +163,7 @@ export function UsagePage() {
     });
   };
   const selectMetric = (nextMetric: UsageMetric) => {
+    void navigate({ to: "/usage", search: {}, replace: true });
     if (nextMetric === "limits") setLimitsNow(Date.now());
     const nextPreferences = { metric: nextMetric, windowDays };
     setPreferences(nextPreferences);

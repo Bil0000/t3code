@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+} from "@t3tools/shared/keybindings";
 
 import {
   buildKeybindingRows,
@@ -335,5 +338,50 @@ describe("KeybindingsSettings.logic", () => {
         when: "",
       }),
     ).toEqual(["Chat: New Local"]);
+  });
+});
+
+describe("mouse and press-count conflicts", () => {
+  it("normalizes platform modifiers and only flags equal press counts across actions", () => {
+    const rows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        { key: "mod+mouse5", command: "thread.next" },
+        { key: "meta+mouse5", presses: 2, command: "usage.openLimits" },
+        { key: "meta+mouse5", command: "thread.previous" },
+      ]),
+      "",
+    );
+    expect(
+      keybindingConflictLabels(
+        rows,
+        { rowId: "new", key: "meta+mouse5", when: "", command: "thread.next" },
+        "MacIntel",
+      ),
+    ).toEqual(["Thread: Previous"]);
+    expect(
+      keybindingConflictLabels(
+        rows,
+        { rowId: "new", key: "ctrl+mouse5", when: "", presses: 2 },
+        "Win32",
+      ),
+    ).toEqual([]);
+  });
+  it("checks overlapping conditions, hides removed rules, and searches mouse labels", () => {
+    const rows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        { key: "mouse5", command: "thread.next", when: "terminalFocus && terminalOpen" },
+        { key: "mouse5", command: "usage.openLimits", when: "terminalOpen" },
+        { key: "mouse5", command: "thread.previous", when: "!terminalFocus" },
+        { key: "mouse4", command: "sidebar.toggle", disabled: true },
+      ]),
+      "mouse forward",
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows.find((row) => row.command === "thread.next")?.conflicts).toEqual([
+      "Open Usage → Limits",
+    ]);
+    expect(rows.find((row) => row.command === "thread.previous")?.conflicts).toEqual([
+      "Open Usage → Limits",
+    ]);
   });
 });

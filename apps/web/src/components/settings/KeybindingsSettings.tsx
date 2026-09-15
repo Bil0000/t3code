@@ -10,7 +10,6 @@ import {
   XIcon,
 } from "lucide-react";
 import {
-  type KeyboardEvent,
   type ReactNode,
   type RefObject,
   useCallback,
@@ -22,11 +21,12 @@ import {
 } from "react";
 import {
   type KeybindingCommand,
+  type KeybindingPressCount,
   type KeybindingWhenNode,
   type ServerRemoveKeybindingInput,
   type ServerUpsertKeybindingInput,
 } from "@t3tools/contracts";
-import { mergeWithDefaultKeybindings } from "@t3tools/shared/keybindings";
+import { parseKeybindingShortcut, mergeWithDefaultKeybindings } from "@t3tools/shared/keybindings";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -34,14 +34,13 @@ import {
 
 import { isElectron } from "../../env";
 import { useOpenInPreferredEditor } from "../../editorPreferences";
-import { formatShortcutLabel } from "../../keybindings";
 import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Kbd, KbdGroup } from "../ui/kbd";
+import { ShortcutCapture } from "./ShortcutCapture";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -55,7 +54,6 @@ import {
   DEFAULT_WHEN_VARIABLE,
   isKnownWhenVariable,
   keybindingConflictLabels,
-  keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
   type KeybindingCommandOption,
   type KeybindingRow,
@@ -69,36 +67,32 @@ import { searchableSetting } from "./settingsSearch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomCommand } from "../../state/use-atom-command";
 
-function KeybindingPill({ value }: { value: string }) {
-  // Keys dedupe repeated parts; a literal "+" in a shortcut splits into empty strings.
-  const seenParts = new Map<string, number>();
-  const parts = value.split("+").map((part) => {
-    const seen = seenParts.get(part) ?? 0;
-    seenParts.set(part, seen + 1);
-    return { part, key: seen === 0 ? part : `${part}-${seen}` };
-  });
+function PressCountSelect({
+  value,
+  onChange,
+}: {
+  value: KeybindingPressCount;
+  onChange: (presses: KeybindingPressCount) => void;
+}) {
   return (
-    <KbdGroup className="bg-transparent p-0 shadow-none">
-      {parts.map(({ part, key }) => (
-        <Kbd key={key} className="min-w-6 justify-center px-1.5">
-          {part === "mod"
-            ? navigator.platform.toLowerCase().includes("mac")
-              ? "⌘"
-              : "Ctrl"
-            : part === "shift"
-              ? "⇧"
-              : part === "alt"
-                ? navigator.platform.toLowerCase().includes("mac")
-                  ? "⌥"
-                  : "Alt"
-                : part === "ctrl"
-                  ? "⌃"
-                  : part.length === 1
-                    ? part.toUpperCase()
-                    : part}
-        </Kbd>
-      ))}
-    </KbdGroup>
+    <Select
+      value={String(value)}
+      onValueChange={(next) => next && onChange(Number(next) as KeybindingPressCount)}
+    >
+      <SelectTrigger
+        size="compact"
+        variant="ghost"
+        className="w-24 min-w-24"
+        aria-label="Press count"
+      >
+        <SelectValue>{value === 1 ? "1 press" : `${value} presses`}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="1">1 press</SelectItem>
+        <SelectItem value="2">2 presses</SelectItem>
+        <SelectItem value="3">3 presses</SelectItem>
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -729,6 +723,7 @@ function WhenExpressionBuilder({
 
 type KeybindingRowDraftState = {
   keyDraft: string;
+  presses: KeybindingPressCount;
   whenDraft: KeybindingWhenNode | undefined;
   isRecording: boolean;
   isWhenDraftValid: boolean;
@@ -737,6 +732,7 @@ type KeybindingRowDraftState = {
 function createKeybindingRowDraft(row: KeybindingRow): KeybindingRowDraftState {
   return {
     keyDraft: row.key,
+    presses: row.presses,
     whenDraft: row.binding.whenAst,
     isRecording: false,
     isWhenDraftValid: true,
@@ -754,6 +750,7 @@ function rowKeybindingTarget(row: KeybindingRow): ServerRemoveKeybindingInput {
   return {
     command: row.command,
     key: row.key,
+    presses: row.presses,
     ...(row.when.trim().length > 0 ? { when: row.when } : {}),
   };
 }
@@ -769,11 +766,14 @@ function useKeybindingRowEditor({
   onSave: (input: ServerUpsertKeybindingInput) => void;
 }) {
   const [draft, setDraft] = useReducer(keybindingRowDraftReducer, row, createKeybindingRowDraft);
-  const { keyDraft, whenDraft, isRecording, isWhenDraftValid } = draft;
+  const { keyDraft, presses, whenDraft, isRecording, isWhenDraftValid } = draft;
   const whenDraftExpression = whenAstToExpression(whenDraft);
-  const isDirty = keyDraft !== row.key || whenDraftExpression !== row.when;
+  const isDirty =
+    keyDraft !== row.key || presses !== row.presses || whenDraftExpression !== row.when;
   const conflictLabels = keybindingConflictLabels(allRows, {
     rowId: row.id,
+    command: row.command,
+    presses,
     key: keyDraft,
     when: whenDraftExpression,
   });
@@ -782,25 +782,15 @@ function useKeybindingRowEditor({
     onSave({
       command: row.command,
       key: keyDraft,
+      presses,
       when: whenDraftExpression.trim().length > 0 ? whenDraftExpression : undefined,
       replace: rowKeybindingTarget(row),
     });
   };
 
-  const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Tab") return;
-    event.preventDefault();
-    if (event.key === "Escape") {
-      setDraft({ keyDraft: row.key, isRecording: false });
-      return;
-    }
-    const next = keybindingFromKeyboardEvent(event.nativeEvent, navigator.platform);
-    if (!next) return;
-    setDraft({ keyDraft: next, isRecording: false });
-  };
-
   return {
     keyDraft,
+    presses,
     whenDraft,
     isRecording,
     isWhenDraftValid,
@@ -809,7 +799,6 @@ function useKeybindingRowEditor({
     conflictLabels,
     setDraft,
     save,
-    captureKeybinding,
   };
 }
 
@@ -830,55 +819,31 @@ function KeybindingKeyControl({
   row,
   editor,
   isSaving,
-  pillClassName,
 }: {
   row: KeybindingRow;
   editor: KeybindingRowEditor;
   isSaving: boolean;
-  pillClassName?: string | undefined;
 }) {
-  const { keyDraft, isRecording, isDirty, isWhenDraftValid, setDraft, save, captureKeybinding } =
-    editor;
-  const showPill = !isRecording && keyDraft === row.key && row.key.length > 0 && !isDirty;
-
+  const { keyDraft, presses, isRecording, isDirty, isWhenDraftValid, setDraft, save } = editor;
   return (
     <>
+      <ShortcutCapture
+        value={keyDraft}
+        recording={isRecording}
+        label={commandLabel(row.command)}
+        onChange={(keyDraft) => setDraft({ keyDraft })}
+        onRecordingChange={(isRecording) => setDraft({ isRecording })}
+      />
+      <PressCountSelect value={presses} onChange={(presses) => setDraft({ presses })} />
       {isDirty ? (
         <Button
           size="sm"
-          disabled={isSaving || keyDraft.trim().length === 0 || !isWhenDraftValid}
+          disabled={isSaving || !parseKeybindingShortcut(keyDraft) || !isWhenDraftValid}
           onClick={save}
         >
           {isSaving ? "Saving" : "Save"}
         </Button>
       ) : null}
-      {showPill ? (
-        <button
-          type="button"
-          onClick={() => setDraft({ isRecording: true })}
-          aria-label={`Edit shortcut for ${commandLabel(row.command)}: ${formatShortcutLabel(row.binding.shortcut)}`}
-          className={cn(
-            "inline-flex h-8 cursor-pointer items-center rounded-md border border-transparent px-1.5 sm:h-7 outline-none transition-colors hover:border-border/70 hover:bg-accent focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24",
-            pillClassName,
-          )}
-        >
-          <KeybindingPill value={row.key} />
-        </button>
-      ) : (
-        <Input
-          data-keybinding-capture=""
-          autoFocus={isRecording}
-          aria-label={`Keybinding for ${commandLabel(row.command)}`}
-          value={isRecording ? "" : keyDraft}
-          placeholder={isRecording ? "Press shortcut" : "Unassigned"}
-          size="sm"
-          className={cn("w-44 font-mono", isRecording && "border-primary/70 bg-primary/5")}
-          onFocus={() => setDraft({ isRecording: true })}
-          onBlur={() => setDraft({ isRecording: false })}
-          onChange={(event) => setDraft({ keyDraft: event.currentTarget.value })}
-          onKeyDown={captureKeybinding}
-        />
-      )}
     </>
   );
 }
@@ -938,8 +903,6 @@ function KeybindingRowMenu({
   onRemove: (row: KeybindingRow) => void;
 }) {
   const canReset = row.source === "Custom" && row.defaultKey !== null;
-  const canRemove = row.source !== "Default";
-  if (!canReset && !canRemove) return null;
 
   return (
     <Menu>
@@ -963,11 +926,9 @@ function KeybindingRowMenu({
             Reset to default
           </MenuItem>
         ) : null}
-        {canRemove ? (
-          <MenuItem variant="destructive" disabled={isSaving} onClick={() => onRemove(row)}>
-            Remove
-          </MenuItem>
-        ) : null}
+        <MenuItem variant="destructive" disabled={isSaving} onClick={() => onRemove(row)}>
+          Remove
+        </MenuItem>
       </MenuPopup>
     </Menu>
   );
@@ -1051,12 +1012,7 @@ function KeybindingSettingsRow(props: KeybindingRowProps) {
             onReset={onReset}
             onRemove={onRemove}
           />
-          <KeybindingKeyControl
-            row={row}
-            editor={editor}
-            isSaving={isSaving}
-            pillClassName="-mr-1.5"
-          />
+          <KeybindingKeyControl row={row} editor={editor} isSaving={isSaving} />
         </div>
       }
     />
@@ -1074,45 +1030,39 @@ function useNewKeybindingDraft({
   const [commandDraft, setCommandDraft] = useState<KeybindingCommand | "">("");
   const [draft, setDraft] = useReducer(keybindingRowDraftReducer, {
     keyDraft: "",
+    presses: 1,
     whenDraft: undefined,
     isRecording: false,
     isWhenDraftValid: true,
   });
-  const { keyDraft, whenDraft, isRecording, isWhenDraftValid } = draft;
+  const { keyDraft, presses, whenDraft, isRecording, isWhenDraftValid } = draft;
   const whenDraftExpression = whenAstToExpression(whenDraft);
   const conflictLabels = keybindingConflictLabels(allRows, {
     rowId: "new",
+    ...(commandDraft ? { command: commandDraft } : {}),
+    presses,
     key: keyDraft,
     when: whenDraftExpression,
   });
   const commandLabelText = commandDraft ? commandLabel(commandDraft) : "new keybinding";
-  const canSave = Boolean(commandDraft) && keyDraft.trim().length > 0 && isWhenDraftValid;
+  const canSave =
+    Boolean(commandDraft) && Boolean(parseKeybindingShortcut(keyDraft)) && isWhenDraftValid;
 
   const save = () => {
     if (!commandDraft) return;
     onSave({
       command: commandDraft,
       key: keyDraft,
+      presses,
       ...(whenDraftExpression.trim().length > 0 ? { when: whenDraftExpression } : {}),
     });
-  };
-
-  const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Tab") return;
-    event.preventDefault();
-    if (event.key === "Escape") {
-      setDraft({ keyDraft: "", isRecording: false });
-      return;
-    }
-    const next = keybindingFromKeyboardEvent(event.nativeEvent, navigator.platform);
-    if (!next) return;
-    setDraft({ keyDraft: next, isRecording: false });
   };
 
   return {
     commandDraft,
     setCommandDraft,
     keyDraft,
+    presses,
     whenDraft,
     whenDraftExpression,
     isRecording,
@@ -1121,7 +1071,6 @@ function useNewKeybindingDraft({
     canSave,
     setDraft,
     save,
-    captureKeybinding,
   };
 }
 
@@ -1151,7 +1100,9 @@ function NewKeybindingCommandSelect({
       onValueChange={(value) => draft.setCommandDraft(value as KeybindingCommand)}
     >
       <SelectTrigger size="sm" className={className}>
-        <SelectValue placeholder="Command" />
+        <SelectValue placeholder="Choose action">
+          {draft.commandDraft ? commandLabel(draft.commandDraft) : null}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent
         alignItemWithTrigger={false}
@@ -1168,29 +1119,18 @@ function NewKeybindingCommandSelect({
   );
 }
 
-function NewKeybindingKeyInput({
-  draft,
-  autoFocus = false,
-  className,
-}: {
-  draft: NewKeybindingDraft;
-  autoFocus?: boolean;
-  className?: string | undefined;
-}) {
+function NewKeybindingKeyInput({ draft }: { draft: NewKeybindingDraft }) {
   return (
-    <Input
-      data-keybinding-capture=""
-      autoFocus={autoFocus}
-      aria-label={`Keybinding for ${draft.commandLabelText}`}
-      value={draft.isRecording ? "" : draft.keyDraft}
-      placeholder={draft.isRecording ? "Press shortcut" : "Unassigned"}
-      size="sm"
-      className={cn("font-mono", draft.isRecording && "border-primary/70 bg-primary/5", className)}
-      onFocus={() => draft.setDraft({ isRecording: true })}
-      onBlur={() => draft.setDraft({ isRecording: false })}
-      onChange={(event) => draft.setDraft({ keyDraft: event.currentTarget.value })}
-      onKeyDown={draft.captureKeybinding}
-    />
+    <>
+      <ShortcutCapture
+        value={draft.keyDraft}
+        recording={draft.isRecording}
+        label={draft.commandLabelText}
+        onChange={(keyDraft) => draft.setDraft({ keyDraft })}
+        onRecordingChange={(isRecording) => draft.setDraft({ isRecording })}
+      />
+      <PressCountSelect value={draft.presses} onChange={(presses) => draft.setDraft({ presses })} />
+    </>
   );
 }
 
@@ -1265,7 +1205,7 @@ function NewKeybindingSettingsRow(props: NewKeybindingProps) {
             className="w-56"
           />
           <KeybindingConflictWarning labels={draft.conflictLabels} />
-          <NewKeybindingKeyInput draft={draft} className="w-44" />
+          <NewKeybindingKeyInput draft={draft} />
           <Button size="sm" disabled={isSaving || !draft.canSave} onClick={draft.save}>
             {isSaving ? "Saving" : "Save"}
           </Button>
@@ -1290,7 +1230,7 @@ function KeybindingsList(props: KeybindingsListProps) {
     props;
   const newProps: NewKeybindingProps = {
     commandOptions,
-    allRows: rows,
+    allRows: rowActions.allRows,
     variables: rowActions.variables,
     isSaving: savingCommand !== null,
     onSave: rowActions.onSave,
@@ -1357,6 +1297,7 @@ export function KeybindingsSettingsPanel() {
   const [savingCommand, setSavingCommand] = useState<KeybindingCommand | null>(null);
   const [isAddingBinding, setIsAddingBinding] = useState(false);
   const rows = useMemo(() => buildKeybindingRows(keybindings, query), [keybindings, query]);
+  const allRows = useMemo(() => buildKeybindingRows(keybindings, ""), [keybindings]);
   const commandOptions = useMemo(() => buildKeybindingCommandOptions(keybindings), [keybindings]);
   const whenVariables = useMemo(() => buildWhenVariableOptions(), []);
 
@@ -1409,6 +1350,7 @@ export function KeybindingsSettingsPanel() {
       const payload: ServerUpsertKeybindingInput = {
         command: input.command,
         key: input.key.trim(),
+        ...(input.presses ? { presses: input.presses } : {}),
         ...(input.when?.trim() ? { when: input.when.trim() } : {}),
         ...(input.replace ? { replace: input.replace } : {}),
       };
@@ -1472,11 +1414,7 @@ export function KeybindingsSettingsPanel() {
         command: row.command,
         key: row.defaultKey,
         when: row.defaultWhen.trim().length > 0 ? row.defaultWhen : undefined,
-        replace: {
-          command: row.command,
-          key: row.key,
-          ...(row.when.trim().length > 0 ? { when: row.when } : {}),
-        },
+        replace: rowKeybindingTarget(row),
       });
     },
     [saveKeybinding],
@@ -1493,7 +1431,7 @@ export function KeybindingsSettingsPanel() {
 
   const listProps: KeybindingsListProps = {
     rows,
-    allRows: rows,
+    allRows,
     commandOptions,
     variables: whenVariables,
     savingCommand,
@@ -1506,6 +1444,10 @@ export function KeybindingsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <p className="px-1 pb-4 text-sm text-muted-foreground">
+        Add keyboard and mouse shortcuts to the same action. Record an input, then choose its press
+        count. Shared inputs wait 300 ms between presses. Single-only shortcuts run at once.
+      </p>
       <SettingsSection
         {...searchableSetting("keybindings")}
         headerAction={

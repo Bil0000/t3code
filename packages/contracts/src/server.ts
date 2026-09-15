@@ -17,6 +17,7 @@ import {
 } from "./baseSchemas.ts";
 import {
   KeybindingCommand,
+  KeybindingPressCount,
   KeybindingValue,
   KeybindingWhen,
   ResolvedKeybindingsConfig,
@@ -612,12 +613,14 @@ const ServerUpsertKeybindingReplaceTarget = Schema.Struct({
   key: KeybindingValue,
   command: KeybindingCommand,
   when: Schema.optional(KeybindingWhen),
+  presses: Schema.optional(KeybindingPressCount),
 });
 
 export const ServerUpsertKeybindingInput = Schema.Struct({
   key: KeybindingValue,
   command: KeybindingCommand,
   when: Schema.optional(KeybindingWhen),
+  presses: Schema.optional(KeybindingPressCount),
   replace: Schema.optional(ServerUpsertKeybindingReplaceTarget),
 });
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;

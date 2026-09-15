@@ -54,6 +54,7 @@ const MODEL_PICKER_KEYBINDING_COMMANDS = [
 export type ModelPickerKeybindingCommand = (typeof MODEL_PICKER_KEYBINDING_COMMANDS)[number];
 
 export const STATIC_KEYBINDING_COMMANDS = [
+  "usage.openLimits",
   "sidebar.toggle",
   "terminal.toggle",
   "terminal.split",
@@ -113,10 +114,15 @@ export const KeybindingWhen = TrimmedString.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_KEYBINDING_WHEN_LENGTH),
 );
+export const KeybindingPressCount = Schema.Literals([1, 2, 3]);
+export type KeybindingPressCount = typeof KeybindingPressCount.Type;
+
 export const KeybindingRule = Schema.Struct({
   key: KeybindingValue,
   command: KeybindingCommand,
   when: Schema.optional(KeybindingWhen),
+  presses: Schema.optional(KeybindingPressCount),
+  disabled: Schema.optional(Schema.Boolean),
 });
 export type KeybindingRule = typeof KeybindingRule.Type;
 
@@ -132,6 +138,7 @@ export const KeybindingShortcut = Schema.Struct({
   shiftKey: Schema.Boolean,
   altKey: Schema.Boolean,
   modKey: Schema.Boolean,
+  presses: Schema.optional(KeybindingPressCount),
 });
 export type KeybindingShortcut = typeof KeybindingShortcut.Type;
 
@@ -168,6 +175,7 @@ export const ResolvedKeybindingRule = Schema.Struct({
   command: KeybindingCommand,
   shortcut: KeybindingShortcut,
   whenAst: Schema.optional(KeybindingWhenNode),
+  disabled: Schema.optional(Schema.Boolean),
 }).annotate({ parseOptions: { onExcessProperty: "ignore" } });
 export type ResolvedKeybindingRule = typeof ResolvedKeybindingRule.Type;
 
@@ -195,3 +203,12 @@ export class KeybindingsConfigError extends Schema.TaggedError<KeybindingsConfig
     return `Unable to parse keybindings config at ${this.configPath}: ${this.detail}`;
   }
 }
+
+export const MouseShortcutInput = Schema.Struct({
+  button: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 31 })),
+  metaKey: Schema.Boolean,
+  ctrlKey: Schema.Boolean,
+  altKey: Schema.Boolean,
+  shiftKey: Schema.Boolean,
+});
+export type MouseShortcutInput = typeof MouseShortcutInput.Type;

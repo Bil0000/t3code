@@ -12,6 +12,8 @@ import { isMacPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
   getModifierState?: (key: "AltGraph") => boolean;
+  presses?: number;
+  isComposing?: boolean;
   type?: string;
   code?: string;
   key: string;
@@ -163,7 +165,7 @@ function evaluateWhenNode(node: KeybindingWhenNode, context: ShortcutMatchContex
   }
 }
 
-function matchesWhenClause(
+export function matchesWhenClause(
   whenAst: KeybindingWhenNode | undefined,
   context: ShortcutMatchContext,
 ): boolean {
@@ -180,6 +182,7 @@ export function shortcutConflictKey(
   const ctrlKey = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
   return [
     shortcut.key,
+    shortcut.presses ?? 1,
     metaKey ? "meta" : "",
     ctrlKey ? "ctrl" : "",
     shortcut.shiftKey ? "shift" : "",
@@ -198,7 +201,7 @@ function findEffectiveShortcutForCommand(
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding) continue;
+    if (!binding || binding.disabled) continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
 
     const conflictKey = shortcutConflictKey(binding.shortcut, platform);
@@ -224,18 +227,54 @@ function matchesCommandShortcut(
   return resolveShortcutCommand(event, keybindings, options) === command;
 }
 
+const shortcutCommands = new WeakMap<ShortcutEventLike, KeybindingCommand>();
+
+export function shortcutCommandEvent(command: KeybindingCommand): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "Unidentified",
+    bubbles: true,
+    cancelable: true,
+  });
+  shortcutCommands.set(event, command);
+  return event;
+}
+
 export function resolveShortcutCommand(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): KeybindingCommand | null {
+  if (
+    typeof document !== "undefined" &&
+    document.activeElement?.closest("[data-keybinding-capture]")
+  )
+    return null;
+  if (event.isComposing) return null;
+  const dispatched = shortcutCommands.get(event);
+  if (dispatched) return dispatched;
+  if (
+    typeof document !== "undefined" &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !/^mouse\d+$/.test(event.key)
+  ) {
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      (active.isContentEditable || active.closest("input, textarea, select, [data-terminal-owner]"))
+    )
+      return null;
+  }
+
   const platform = resolvePlatform(options);
   const context = resolveContext(options);
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding) continue;
+    if (!binding || binding.disabled) continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
+    if ((binding.shortcut.presses ?? 1) !== (event.presses ?? 1)) continue;
     if (!matchesShortcut(event, binding.shortcut, platform)) continue;
     return binding.command;
   }
@@ -243,6 +282,15 @@ export function resolveShortcutCommand(
 }
 
 export function formatShortcutKeyLabel(key: string): string {
+  const mouseLabels: Readonly<Record<string, string>> = {
+    mouse1: "Mouse Left",
+    mouse2: "Mouse Middle",
+    mouse3: "Mouse Right",
+    mouse4: "Mouse Back",
+    mouse5: "Mouse Forward",
+  };
+  if (mouseLabels[key]) return mouseLabels[key];
+  if (/^mouse\d+$/.test(key)) return `Mouse ${key.slice(5)}`;
   if (key === " ") return "Space";
   if (key.length === 1) return key.toUpperCase();
   if (key === "escape") return "Esc";
@@ -257,7 +305,7 @@ export function formatShortcutLabel(
   shortcut: KeybindingShortcut,
   platform = navigator.platform,
 ): string {
-  const keyLabel = formatShortcutKeyLabel(shortcut.key);
+  const keyLabel = `${formatShortcutKeyLabel(shortcut.key)}${(shortcut.presses ?? 1) > 1 ? ` ×${shortcut.presses}` : ""}`;
   const useMetaForMod = isMacPlatform(platform);
   const showMeta = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
   const showCtrl = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);

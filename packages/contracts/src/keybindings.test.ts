@@ -19,6 +19,7 @@ const decode = <S extends Schema.Top>(
     never
   >;
 
+const isKeybindingRule = Schema.is(KeybindingRule);
 const decodeResolvedRule = Schema.decodeUnknownEffect(ResolvedKeybindingRule as never);
 const encodeResolvedKeybindings = Schema.encodeEffect(ResolvedKeybindingsConfig);
 
@@ -308,4 +309,21 @@ it.effect("drops unknown fields in resolved keybinding rules", () =>
       assert.strictEqual(view.command, "terminal.toggle");
     }),
   ),
+);
+
+it.effect("accepts old settings and validates press counts", () =>
+  Effect.gen(function* () {
+    const legacy = { key: "mod+j", command: "terminal.toggle" };
+    assert.deepEqual(yield* decode(KeybindingRule, legacy), legacy);
+    for (const presses of [1, 2, 3]) {
+      assert.strictEqual(
+        (yield* decode(KeybindingRule, { key: "mouse5", command: "usage.openLimits", presses }))
+          .presses,
+        presses,
+      );
+    }
+    for (const presses of [0, 4, 1.5, "2", null]) {
+      assert.isFalse(isKeybindingRule({ ...legacy, presses }));
+    }
+  }),
 );

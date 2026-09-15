@@ -436,6 +436,108 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect(
+    "keeps keyboard defaults when adding mouse bindings and edits press counts independently",
+    () =>
+      Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        yield* writeKeybindingsConfig(keybindingsConfigPath, []);
+        const service = yield* Keybindings.Keybindings;
+        yield* service.upsertKeybindingRule({ key: "mouse5", command: "thread.next" });
+        yield* service.upsertKeybindingRule({ key: "mouse5", command: "thread.next", presses: 2 });
+        const changed = yield* service.upsertKeybindingRule({
+          key: "ctrl+mouse5",
+          command: "thread.next",
+          presses: 3,
+          replace: { key: "mouse5", command: "thread.next", presses: 2 },
+        });
+        assert.deepEqual(
+          changed
+            .filter((rule) => rule.command === "thread.next")
+            .map((rule) => [rule.shortcut.key, rule.shortcut.presses ?? 1]),
+          [
+            ["]", 1],
+            ["mouse5", 1],
+            ["mouse5", 3],
+          ],
+        );
+        yield* service.removeKeybindingRule({ key: "mouse5", command: "thread.next" });
+        const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+        assert.deepEqual(persisted, [
+          { key: "mod+shift+]", command: "thread.next" },
+          { key: "ctrl+mouse5", command: "thread.next", presses: 3 },
+        ]);
+      }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("keeps the last binding removed through default merging and startup", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, []);
+      const service = yield* Keybindings.Keybindings;
+      const removed = yield* service.removeKeybindingRule({
+        key: "mod+shift+]",
+        command: "thread.next",
+      });
+      assert.isTrue(removed.find((rule) => rule.command === "thread.next")?.disabled);
+      yield* service.syncDefaultKeybindingsOnStartup;
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.deepEqual(
+        persisted.filter((rule) => rule.command === "thread.next"),
+        [{ key: "mod+shift+]", command: "thread.next", disabled: true }],
+      );
+      const restored = yield* service.upsertKeybindingRule({
+        key: "mouse5",
+        command: "thread.next",
+      });
+      assert.deepEqual(
+        restored.filter((rule) => rule.command === "thread.next").map((rule) => rule.shortcut.key),
+        ["mouse5"],
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("round trips mouse modifiers, press counts, and disabled bindings", () =>
+    Effect.gen(function* () {
+      const rule = {
+        key: "mod+shift+mouse5",
+        command: "usage.openLimits",
+        presses: 2,
+        disabled: true,
+      } as const;
+      const resolved = Keybindings.compileResolvedKeybindingRule(rule)!;
+      assert.deepEqual(yield* encodeResolvedKeybindingFromConfig(resolved), {
+        ...rule,
+        when: undefined,
+      });
+    }),
+  );
+
+  it.effect(
+    "edits legacy aliases and condition formatting without leaving the old shortcut active",
+    () =>
+      Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [
+          { key: "CMD+J", command: "terminal.toggle", when: "!terminalFocus&&terminalOpen" },
+        ]);
+        const service = yield* Keybindings.Keybindings;
+        yield* service.upsertKeybindingRule({
+          key: "mouse4",
+          command: "terminal.toggle",
+          presses: 2,
+          replace: {
+            key: "meta+j",
+            command: "terminal.toggle",
+            when: "!terminalFocus && terminalOpen",
+          },
+        });
+        assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), [
+          { key: "mouse4", command: "terminal.toggle", presses: 2 },
+        ]);
+      }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("refuses to overwrite malformed keybindings config", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

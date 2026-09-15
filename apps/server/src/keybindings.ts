@@ -49,6 +49,7 @@ import {
   compileResolvedKeybindingRule,
   compileResolvedKeybindingsConfig,
   parseKeybindingShortcut,
+  parseKeybindingWhenExpression,
 } from "@t3tools/shared/keybindings";
 
 export {
@@ -90,6 +91,8 @@ export const ResolvedKeybindingFromConfig = KeybindingRule.pipe(
             key,
             command: resolved.command,
             when,
+            ...(resolved.shortcut.presses ? { presses: resolved.shortcut.presses } : {}),
+            ...(resolved.disabled ? { disabled: true } : {}),
           };
         }),
     }),
@@ -99,8 +102,7 @@ export const ResolvedKeybindingFromConfig = KeybindingRule.pipe(
 function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): boolean {
   return (
     left.command === right.command &&
-    left.key === right.key &&
-    (left.when ?? undefined) === (right.when ?? undefined)
+    keybindingShortcutContext(left) === keybindingShortcutContext(right)
   );
 }
 
@@ -109,7 +111,8 @@ function keybindingShortcutContext(rule: KeybindingRule): string | null {
   if (!parsed) return null;
   const encoded = encodeShortcut(parsed);
   if (!encoded) return null;
-  return `${encoded}\u0000${rule.when ?? ""}`;
+  const when = rule.when ? parseKeybindingWhenExpression(rule.when) : null;
+  return `${encoded}\u0000${rule.presses ?? 1}\u0000${when ? encodeWhenAst(when) : ""}`;
 }
 
 function hasSameShortcutContext(left: KeybindingRule, right: KeybindingRule): boolean {
@@ -119,23 +122,22 @@ function hasSameShortcutContext(left: KeybindingRule, right: KeybindingRule): bo
   return leftContext === rightContext;
 }
 
-function keybindingRuleFromUpsertInput(input: ServerUpsertKeybindingInput): KeybindingRule {
-  return input.when === undefined
-    ? { key: input.key, command: input.command }
-    : { key: input.key, command: input.command, when: input.when };
+function keybindingRuleFromUpsertInput(input: ServerRemoveKeybindingInput): KeybindingRule {
+  return {
+    key: input.key,
+    command: input.command,
+    ...(input.when !== undefined ? { when: input.when } : {}),
+    ...(input.presses !== undefined ? { presses: input.presses } : {}),
+  };
 }
 
-function replaceTargetFromUpsertInput(input: ServerUpsertKeybindingInput): KeybindingRule | null {
-  if (!input.replace) return null;
-  return input.replace.when === undefined
-    ? { key: input.replace.key, command: input.replace.command }
-    : { key: input.replace.key, command: input.replace.command, when: input.replace.when };
-}
-
-function keybindingRuleFromRemoveInput(input: ServerRemoveKeybindingInput): KeybindingRule {
-  return input.when === undefined
-    ? { key: input.key, command: input.command }
-    : { key: input.key, command: input.command, when: input.when };
+function editableCommandRules(
+  config: ReadonlyArray<KeybindingRule>,
+  command: KeybindingRule["command"],
+) {
+  return config.some((rule) => rule.command === command)
+    ? config
+    : [...config, ...DEFAULT_KEYBINDINGS.filter((rule) => rule.command === command)];
 }
 
 function encodeShortcut(shortcut: KeybindingShortcut): string | null {
@@ -621,9 +623,10 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
           const rule = keybindingRuleFromUpsertInput(input);
-          const replaceTarget = replaceTargetFromUpsertInput(input);
+          const replaceTarget = input.replace ? keybindingRuleFromUpsertInput(input.replace) : null;
           const nextConfig = [
-            ...customConfig.filter((entry) => {
+            ...editableCommandRules(customConfig, input.command).filter((entry) => {
+              if (entry.disabled && entry.command === input.command) return false;
               if (replaceTarget) {
                 return (
                   !isSameKeybindingRule(entry, replaceTarget) && !isSameKeybindingRule(entry, rule)
@@ -662,8 +665,13 @@ const make = Effect.gen(function* () {
       upsertSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
-          const target = keybindingRuleFromRemoveInput(input);
-          const nextConfig = customConfig.filter((entry) => !isSameKeybindingRule(entry, target));
+          const target = keybindingRuleFromUpsertInput(input);
+          const nextConfig = editableCommandRules(customConfig, input.command).filter(
+            (entry) => !isSameKeybindingRule(entry, target),
+          );
+          if (!nextConfig.some((entry) => entry.command === input.command)) {
+            nextConfig.push({ ...target, disabled: true });
+          }
           yield* writeConfigAtomically(nextConfig);
           const nextResolved = mergeWithDefaultKeybindings(
             compileResolvedKeybindingsConfig(nextConfig),

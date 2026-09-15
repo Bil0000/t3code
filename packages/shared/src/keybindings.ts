@@ -77,6 +77,7 @@ function normalizeKeyToken(token: string): string {
 }
 
 export function parseKeybindingShortcut(value: string): KeybindingShortcut | null {
+  if (value.trim().length === 0) return null;
   const rawTokens = value
     .toLowerCase()
     .split("+")
@@ -277,20 +278,24 @@ export function parseKeybindingWhenExpression(expression: string): KeybindingWhe
 export function compileResolvedKeybindingRule(rule: KeybindingRule): ResolvedKeybindingRule | null {
   const shortcut = parseKeybindingShortcut(rule.key);
   if (!shortcut) return null;
+  const resolvedShortcut = { ...shortcut, ...(rule.presses ? { presses: rule.presses } : {}) };
+  const disabled = rule.disabled ? { disabled: true } : {};
 
   if (rule.when !== undefined) {
     const whenAst = parseKeybindingWhenExpression(rule.when);
     if (!whenAst) return null;
     return {
       command: rule.command,
-      shortcut,
+      shortcut: resolvedShortcut,
+      ...disabled,
       whenAst,
     };
   }
 
   return {
     command: rule.command,
-    shortcut,
+    shortcut: resolvedShortcut,
+    ...disabled,
   };
 }
 
