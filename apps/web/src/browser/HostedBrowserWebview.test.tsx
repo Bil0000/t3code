@@ -77,6 +77,9 @@ beforeEach(() => {
   });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", globalThis);
+  const windowEvents = new EventTarget();
+  vi.stubGlobal("addEventListener", windowEvents.addEventListener.bind(windowEvents));
+  vi.stubGlobal("removeEventListener", windowEvents.removeEventListener.bind(windowEvents));
   vi.stubGlobal("navigator", { platform: "Linux" });
   vi.stubGlobal(
     "requestAnimationFrame",

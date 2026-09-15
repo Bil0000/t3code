@@ -7,6 +7,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   presentations: new Map(),
   refreshProviders: vi.fn(async () => undefined),
+  metric: "limits" as "cost" | "tokens" | "limits",
+  search: {} as { tab?: "limits" },
+  navigate: vi.fn(async (_options: unknown) => {
+    state.search = {};
+  }),
+}));
+vi.mock("@tanstack/react-router", () => ({
+  useSearch: () => state.search,
+  useNavigate: () => state.navigate,
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.presentations }));
 vi.mock("../../state/presentation", () => ({
@@ -43,7 +52,7 @@ vi.mock("../../state/usage", () => ({
   }),
 }));
 vi.mock("./usagePagePreferences", () => ({
-  readUsagePagePreferences: () => ({ metric: "limits", windowDays: 30 }),
+  readUsagePagePreferences: () => ({ metric: state.metric, windowDays: 30 }),
   saveUsagePagePreferences: vi.fn(),
 }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
@@ -87,6 +96,9 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-11T12:00:00Z"));
   state.refreshProviders.mockClear();
+  state.metric = "limits";
+  state.search = {};
+  state.navigate.mockClear();
   state.presentations = new Map([
     [
       EnvironmentId.make("test"),
@@ -176,4 +188,31 @@ it("uses the current time when returning to limits from tokens", async () => {
     JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
   ).toContain("in 1h 0m");
   expect(state.refreshProviders).not.toHaveBeenCalled();
+});
+
+it("opens Limits over the saved metric and lets the user select another metric", async () => {
+  state.metric = "tokens";
+  state.search = { tab: "limits" };
+  await act(() => {
+    renderer = create(<UsagePage />);
+  });
+  expect(
+    JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
+  ).toContain("in 2h 0m");
+  await act(() => {
+    renderer.root
+      .findAll((node) => node.type === "div" && node.props["aria-label"] === "Usage metric")[0]!
+      .props.onValueChange(["tokens"]);
+  });
+  expect(state.navigate).toHaveBeenCalledWith({ to: "/usage", search: {}, replace: true });
+  expect(
+    JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
+  ).not.toContain("in 2h 0m");
+  await act(() => {
+    state.search = { tab: "limits" };
+    renderer.update(<UsagePage />);
+  });
+  expect(
+    JSON.stringify(renderer.toJSON(), (key, value) => (key === "props" ? undefined : value)),
+  ).toContain("in 2h 0m");
 });
