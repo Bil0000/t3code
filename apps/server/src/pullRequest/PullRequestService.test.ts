@@ -3194,6 +3194,28 @@ it.effect(
     }),
 );
 
+it.effect("does not revive old summaries when project epochs are evicted", () =>
+  Effect.gen(function* () {
+    let title = "old";
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () => Effect.succeed({ ...hostedChangeRequest("body"), title }),
+        }),
+      ],
+    });
+    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    assert.strictEqual((yield* service.summary(ref))?.title, "old");
+    title = "new";
+    yield* service.refreshAfterTurn(ref.projectId);
+    assert.strictEqual((yield* service.summary(ref))?.title, "new");
+    for (let index = 0; index < 2048; index++)
+      yield* service.refreshAfterTurn(`project-${index}` as ProjectId);
+    assert.strictEqual((yield* service.summary(ref))?.title, "new");
+  }),
+);
+
 it.effect("explicit and turn invalidations make the next listing ask the host again", () =>
   Effect.gen(function* () {
     let hostCalls = 0;

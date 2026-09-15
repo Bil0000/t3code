@@ -2437,6 +2437,7 @@ export const make = Effect.gen(function* () {
   let listingsEpoch = 0;
   const refEpochs = new Map<string, number>();
   const projectEpochs = new Map<ProjectId, number>();
+  let projectEpochFloor = 0;
   const REF_EPOCH_CAPACITY = 2_048;
   const refScope = (ref: PullRequestRef) =>
     JSON.stringify([
@@ -2446,7 +2447,10 @@ export const make = Effect.gen(function* () {
       ref.number,
     ]);
   const refEpoch = (ref: PullRequestRef) =>
-    Math.max(projectEpochs.get(ref.projectId) ?? 0, refEpochs.get(refScope(ref)) ?? 0);
+    Math.max(
+      projectEpochs.get(ref.projectId) ?? projectEpochFloor,
+      refEpochs.get(refScope(ref)) ?? 0,
+    );
   // Keys carry the reference back out of the cache loader, so the slot layout is shared with
   // `refOfCacheKey` rather than read positionally at every loader.
   const refCacheKey = (ref: CredentialRef) =>
@@ -2871,6 +2875,14 @@ export const make = Effect.gen(function* () {
   const refreshAfterTurn: PullRequestService["Service"]["refreshAfterTurn"] = (projectId) =>
     Effect.suspend(() => {
       listingsEpoch = ++epochCounter;
+      projectEpochs.delete(projectId);
+      if (projectEpochs.size >= REF_EPOCH_CAPACITY) {
+        const oldest = projectEpochs.keys().next().value;
+        if (oldest !== undefined) {
+          projectEpochFloor = projectEpochs.get(oldest)!;
+          projectEpochs.delete(oldest);
+        }
+      }
       projectEpochs.set(projectId, listingsEpoch);
       return readCache
         .invalidate(`project:${projectId}`)
