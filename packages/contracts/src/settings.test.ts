@@ -529,6 +529,21 @@ describe("ClientSettings context window meter", () => {
   });
 });
 
+describe("ClientSettings busy message behavior", () => {
+  it("defaults to queue and accepts either behavior", () => {
+    expect(decodeClientSettings({}).busyMessageBehavior).toBe("queue");
+    for (const busyMessageBehavior of ["queue", "steer"]) {
+      expect(decodeClientSettings({ busyMessageBehavior }).busyMessageBehavior).toBe(
+        busyMessageBehavior,
+      );
+      expect(decodeClientSettingsPatch({ busyMessageBehavior }).busyMessageBehavior).toBe(
+        busyMessageBehavior,
+      );
+    }
+    expect(() => decodeClientSettingsPatch({ busyMessageBehavior: "invalid" })).toThrow();
+  });
+});
+
 describe("ClientSettings composer collapse", () => {
   it("collapses on scroll by default and accepts opting out", () => {
     expect(decodeClientSettings({}).composerCollapseOnScroll).toBe(true);
