@@ -20,6 +20,34 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("ServerSettings response streaming", () => {
+  it("defaults to paragraph buffering", () => {
+    expect(decodeServerSettings({}).responseStreamingMode).toBe("paragraph");
+  });
+
+  it.each(["turn", "paragraph"])(
+    "round-trips %s as an environment setting and project override",
+    (responseStreamingMode) => {
+      const input = {
+        responseStreamingMode,
+        projectSettingsOverrides: { project: { responseStreamingMode } },
+      };
+      expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
+      expect(decodeServerSettingsPatch(input)).toEqual(input);
+    },
+  );
+
+  it.each(["token", "unsupported"])("rejects %s in settings snapshots and writes", (mode) => {
+    for (const input of [
+      { responseStreamingMode: mode },
+      { projectSettingsOverrides: { project: { responseStreamingMode: mode } } },
+    ]) {
+      expect(() => decodeServerSettings(input)).toThrow();
+      expect(() => decodeServerSettingsPatch(input)).toThrow();
+    }
+  });
+});
+
 describe("ServerSettings default permissions", () => {
   it("keeps full access for settings saved before a default was configured", () => {
     expect(decodeServerSettings({}).defaultRuntimeMode).toBe("full-access");
