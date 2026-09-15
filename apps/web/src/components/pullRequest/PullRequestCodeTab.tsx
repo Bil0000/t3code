@@ -38,7 +38,6 @@ import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
-  getDiffLineStat,
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
@@ -546,7 +545,6 @@ function PullRequestCodeTab({
       toggledFiles,
     ],
   );
-  const lineStat = useMemo(() => getDiffLineStat(files), [files]);
   const omittedFileStats = useMemo(
     () =>
       new Map(
@@ -1124,11 +1122,6 @@ function PullRequestCodeTab({
         </PullRequestMetaLine>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-1">
-        <PullRequestDiffStat
-          additions={lineStat.additions}
-          deletions={lineStat.deletions}
-          className="mr-1"
-        />
         {fileKeys.length > 0 ? (
           <Tooltip>
             <TooltipTrigger
