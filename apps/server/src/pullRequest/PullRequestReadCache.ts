@@ -4,9 +4,7 @@ import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
 import { PullRequestOperationError, PullRequestUnavailableError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
-import * as Data from "effect/Data";
 import * as Encoding from "effect/Encoding";
-import * as Option from "effect/Option";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -16,23 +14,24 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
+import * as Persistable from "effect/unstable/persistence/Persistable";
+import * as PersistedCache from "effect/unstable/persistence/PersistedCache";
+import * as Persistence from "effect/unstable/persistence/Persistence";
 import { ServerConfig } from "../config.ts";
 
 const CONCURRENT_READS = 512;
 type ReadError = PullRequestOperationError | PullRequestUnavailableError;
-const entryCodec = Schema.fromJsonString(
-  Schema.Struct({
+class Read extends Persistable.Class<{
+  payload: { key: string; revision: string; lookup: Effect.Effect<string, ReadError> };
+}>()("PullRequestRead", {
+  primaryKey: ({ key }) => key,
+  success: Schema.Struct({
     payload: Schema.String,
     expiresAt: Schema.Finite,
-    revision: Schema.String,
+    revision: Schema.optionalKey(Schema.String),
   }),
-);
-
-class Read extends Data.Class<{
-  key: string;
-  revision: string;
-  lookup: Effect.Effect<string, ReadError>;
-}> {
+  error: Schema.Union([PullRequestOperationError, PullRequestUnavailableError]),
+}) {
   [Equal.symbol](that: unknown): boolean {
     return that instanceof Read && that.key === this.key && that.revision === this.revision;
   }
@@ -72,37 +71,34 @@ export const make = Effect.gen(function* () {
       timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
     },
   );
-  const cache = yield* Cache.makeWith(
-    Effect.fn("PullRequestReadCache.lookup")(function* (request: Read) {
-      const stored = yield* backing.get(request.key).pipe(
-        Effect.flatMap((raw) => Schema.decodeUnknownEffect(entryCodec)(raw)),
-        Effect.option,
-      );
-      if (
-        Option.isSome(stored) &&
-        stored.value.revision === request.revision &&
-        stored.value.expiresAt > clock.currentTimeMillisUnsafe()
-      )
-        return stored.value;
-      const payload = yield* request.lookup;
-      const result = {
-        payload,
-        expiresAt: clock.currentTimeMillisUnsafe() + 60_000,
-        revision: request.revision,
-      };
-      yield* Schema.encodeEffect(entryCodec)(result).pipe(
-        Effect.flatMap((encoded) => backing.set(request.key, encoded)),
-        Effect.ignore,
-      );
-      return result;
-    }),
+  const timeToLive: Persistable.TimeToLiveFn<Read> = (exit) =>
+    Exit.isSuccess(exit)
+      ? Duration.millis(Math.max(0, exit.value.expiresAt - clock.currentTimeMillisUnsafe()))
+      : Duration.zero;
+  const cache = yield* PersistedCache.make(
+    (request: Read) =>
+      request.lookup.pipe(
+        Effect.map((payload) => ({
+          payload,
+          expiresAt: clock.currentTimeMillisUnsafe() + 60_000,
+          revision: request.revision,
+        })),
+      ),
     {
-      capacity: CONCURRENT_READS,
-      timeToLive: (exit) =>
-        Exit.isSuccess(exit)
-          ? Duration.millis(Math.max(0, exit.value.expiresAt - clock.currentTimeMillisUnsafe()))
-          : Duration.zero,
+      storeId: "pr-v2",
+      timeToLive,
+      inMemoryTTL: timeToLive,
+      inMemoryCapacity: CONCURRENT_READS,
     },
+  ).pipe(Effect.provide(Persistence.layerKvs));
+  const refreshes = yield* Cache.makeWith(
+    Effect.fn("PullRequestReadCache.refresh")(function* (request: Read) {
+      const stored = yield* cache.get(request);
+      if ((stored.revision ?? "") === request.revision) return stored;
+      yield* cache.invalidate(request);
+      return yield* cache.get(request);
+    }),
+    { capacity: CONCURRENT_READS, timeToLive: () => Duration.zero },
   );
   return PullRequestReadCache.of({
     get: Effect.fn("PullRequestReadCache.get")(function* (key, lookup, scopes = []) {
@@ -113,9 +109,17 @@ export const make = Effect.gen(function* () {
           Cache.get(revisions, scope),
         )).join(":");
         const request = new Read({ key: yield* digest(key), revision, lookup: read });
-        return (yield* Cache.get(cache, request)).payload;
+        const stored = yield* cache.get(request);
+        return (
+          (stored.revision ?? "") === revision ? stored : yield* Cache.get(refreshes, request)
+        ).payload;
       }).pipe(
-        Effect.catchTags({ PlatformError: () => read, KeyValueStoreError: () => read }),
+        Effect.catchTags({
+          PlatformError: () => read,
+          KeyValueStoreError: () => read,
+          PersistenceError: () => read,
+          SchemaError: () => read,
+        }),
         lock.withPermits(1),
       );
     }),

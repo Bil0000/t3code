@@ -84,7 +84,46 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
       assert.strictEqual(yield* again.get("second", lookup, ["project", "pr-2"]), "5");
       assert.strictEqual(yield* again.get("third", lookup, ["other-project", "pr-3"]), "3");
       assert.strictEqual(reads, 5);
+      const files = (yield* fs.readDirectory(directory)).length;
+      for (let index = 0; index < 3; index++) {
+        yield* again.invalidate("pr-1");
+        yield* again.get("first", lookup, ["project", "pr-1"]);
+      }
+      assert.strictEqual((yield* fs.readDirectory(directory)).length, files);
     }),
+  );
+
+  it.effect("shares a pending refresh without blocking an unrelated cached PR", () =>
+    Effect.gen(function* () {
+      const cache = yield* PullRequestReadCache.make;
+      yield* cache.get("first", Effect.succeed("old"), ["pr-1"]);
+      yield* cache.get("second", Effect.succeed("warm"), ["pr-2"]);
+      yield* cache.invalidate("pr-1");
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let reads = 0;
+      const refresh = cache.get(
+        "first",
+        Effect.gen(function* () {
+          reads++;
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+          return "fresh";
+        }),
+        ["pr-1"],
+      );
+      const pending = yield* Effect.all(
+        Array.from({ length: 10 }, () => refresh),
+        {
+          concurrency: 10,
+        },
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      assert.strictEqual(yield* cache.get("second", Effect.die("cache miss"), ["pr-2"]), "warm");
+      yield* Deferred.succeed(release, undefined);
+      assert.deepStrictEqual(yield* Fiber.join(pending), Array(10).fill("fresh"));
+      assert.strictEqual(reads, 1);
+    }).pipe(Effect.provide(KeyValueStore.layerMemory)),
   );
 
   it.effect("does not persist failed GitHub reads", () =>
