@@ -98,6 +98,37 @@ it.effect("shares quota checks, preserves the reserve, and resumes after reset",
 );
 
 describe("GitHubCli.layer", () => {
+  it.effect("keeps quota snapshots separate for verified credentials on the same host", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const gh = yield* GitHubCli.make.pipe(
+        Effect.provideService(VcsProcess.VcsProcess, {
+          run: (input) =>
+            Effect.sync(() => {
+              if (input.args[1] === "rate_limit")
+                return quotaOutput(input.env?.GH_TOKEN === "empty" ? 0 : 5000);
+              reads++;
+              return processOutput("[]");
+            }),
+        }),
+      );
+      const read = (token: string) =>
+        gh
+          .execute({ cwd: "/repo", args: ["pr", "list", "--repo", "github.com/acme/web"] })
+          .pipe(
+            Effect.provideService(GitHubCli.PinnedGitHubCredential, {
+              host: "github.com",
+              token: Redacted.make(token),
+              credentialFingerprint: token,
+            }),
+          );
+      yield* read("empty").pipe(Effect.flip);
+      yield* read("healthy");
+      yield* read("empty").pipe(Effect.flip);
+      assert.strictEqual(reads, 1);
+    }).pipe(Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer))),
+  );
+
   it.effect("pins concurrent cached commands to their own verified credentials", () =>
     Effect.gen(function* () {
       mockRun.mockImplementation((input) =>

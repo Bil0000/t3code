@@ -499,6 +499,10 @@ export const make = Effect.gen(function* () {
         );
       });
       return yield* guarded.pipe(
+        Effect.provideService(
+          SourceControlRateLimit.CredentialScope,
+          credential?.credentialFingerprint ?? (yield* SourceControlRateLimit.CredentialScope),
+        ),
         Effect.catchTag("SourceControlRateLimitPausedError", (cause) =>
           Effect.fail(
             new GitHubCliRateLimitError({

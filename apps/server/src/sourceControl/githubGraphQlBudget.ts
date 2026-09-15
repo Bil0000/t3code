@@ -85,8 +85,8 @@ export const make = Effect.gen(function* () {
     function* (host, document, options) {
       if (!isReadOperation(document)) return document;
       const now = yield* Clock.currentTimeMillis;
+      const key = `${hostKey(host)}\0${yield* SourceControlRateLimit.CredentialScope}`;
       const retryAt = yield* Ref.modify(snapshots, (current) => {
-        const key = hostKey(host);
         const snapshot = current.get(key);
         if (snapshot === undefined) return [null, current] as const;
         if (snapshot.resetAtMs <= now) {
@@ -121,8 +121,8 @@ export const make = Effect.gen(function* () {
   )(function* (host, raw) {
     const snapshot = snapshotFrom(raw);
     if (snapshot === null) return;
+    const key = `${hostKey(host)}\0${yield* SourceControlRateLimit.CredentialScope}`;
     yield* Ref.update(snapshots, (current) => {
-      const key = hostKey(host);
       const previous = current.get(key);
       // Concurrent reads can finish out of order. Quota only falls within one reset window, and
       // an answer from an older window must not replace the current one.
