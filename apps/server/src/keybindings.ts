@@ -672,9 +672,10 @@ const make = Effect.gen(function* () {
           if (!nextConfig.some((entry) => entry.command === input.command)) {
             nextConfig.push({ ...target, disabled: true });
           }
-          yield* writeConfigAtomically(nextConfig);
+          const cappedConfig = nextConfig.slice(-MAX_KEYBINDINGS_COUNT);
+          yield* writeConfigAtomically(cappedConfig);
           const nextResolved = mergeWithDefaultKeybindings(
-            compileResolvedKeybindingsConfig(nextConfig),
+            compileResolvedKeybindingsConfig(cappedConfig),
           );
           yield* Cache.set(resolvedConfigCache, resolvedConfigCacheKey, {
             keybindings: nextResolved,

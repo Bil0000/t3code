@@ -1,4 +1,9 @@
-import { KeybindingCommand, KeybindingRule, KeybindingsConfig } from "@t3tools/contracts";
+import {
+  KeybindingCommand,
+  KeybindingRule,
+  KeybindingsConfig,
+  MAX_KEYBINDINGS_COUNT,
+} from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
@@ -511,6 +516,28 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         when: undefined,
       });
     }),
+  );
+
+  it.effect("uses the existing entry cap when disabling a default from a full config", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      yield* writeKeybindingsConfig(
+        keybindingsConfigPath,
+        Array.from({ length: MAX_KEYBINDINGS_COUNT }, (_, index) => ({
+          key: `ctrl+f${index + 1}`,
+          command: "usage.openLimits" as const,
+        })),
+      );
+      const service = yield* Keybindings.Keybindings;
+      const resolved = yield* service.removeKeybindingRule({
+        key: "mod+shift+]",
+        command: "thread.next",
+      });
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.strictEqual(persisted.length, MAX_KEYBINDINGS_COUNT);
+      assert.strictEqual(persisted[0]?.key, "ctrl+f2");
+      assert.isTrue(resolved.find((rule) => rule.command === "thread.next")?.disabled);
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
   it.effect(
