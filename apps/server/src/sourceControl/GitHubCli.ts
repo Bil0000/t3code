@@ -504,16 +504,17 @@ export const make = Effect.gen(function* () {
           SourceControlRateLimit.CredentialScope,
           credential?.credentialFingerprint ?? (yield* SourceControlRateLimit.CredentialScope),
         ),
-        Effect.catchTag("SourceControlRateLimitPausedError", (cause) =>
-          Effect.fail(
-            new GitHubCliRateLimitError({
-              command: "gh",
-              cwd: input.cwd,
-              retryAt: cause.retryAt,
-              cause,
-            }),
-          ),
-        ),
+        Effect.catchTags({
+          SourceControlRateLimitPausedError: (cause) =>
+            Effect.fail(
+              new GitHubCliRateLimitError({
+                command: "gh",
+                cwd: input.cwd,
+                retryAt: cause.retryAt,
+                cause,
+              }),
+            ),
+        }),
       );
     },
   );
