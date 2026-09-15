@@ -21,6 +21,12 @@ import { ServerConfig } from "../config.ts";
 
 const CONCURRENT_READS = 512;
 type ReadError = PullRequestOperationError | PullRequestUnavailableError;
+const revisionCodec = Schema.fromJsonString(
+  Schema.Record(
+    Schema.String,
+    Schema.Struct({ revision: Schema.String, expiresAt: Schema.Finite }),
+  ),
+);
 class Read extends Persistable.Class<{
   payload: { key: string; revision: string; lookup: Effect.Effect<string, ReadError> };
 }>()("PullRequestRead", {
@@ -32,6 +38,13 @@ class Read extends Persistable.Class<{
   }),
   error: Schema.Union([PullRequestOperationError, PullRequestUnavailableError]),
 }) {
+  matchesRevision(revision: string | undefined): boolean {
+    const stored = revision?.split(":") ?? [];
+    return this.revision
+      .split(":")
+      .every((value, index) => value === "" || value === stored[index]);
+  }
+
   [Equal.symbol](that: unknown): boolean {
     return that instanceof Read && that.key === this.key && that.revision === this.revision;
   }
@@ -61,13 +74,12 @@ export const make = Effect.gen(function* () {
   const digest = (key: string) =>
     crypto.digest("SHA-256", new TextEncoder().encode(key)).pipe(Effect.map(Encoding.encodeHex));
   const revisions = yield* Cache.makeWith(
-    (scope: string) =>
-      digest(scope).pipe(
-        Effect.flatMap((key) => backing.get(`revision:${key}`)),
-        Effect.map((value) => value ?? ""),
-      ),
+    () =>
+      backing
+        .get("revisions")
+        .pipe(Effect.flatMap((raw) => Schema.decodeUnknownEffect(revisionCodec)(raw ?? "{}"))),
     {
-      capacity: 2_048,
+      capacity: 1,
       timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
     },
   );
@@ -94,7 +106,7 @@ export const make = Effect.gen(function* () {
   const refreshes = yield* Cache.makeWith(
     Effect.fn("PullRequestReadCache.refresh")(function* (request: Read) {
       const stored = yield* cache.get(request);
-      if ((stored.revision ?? "") === request.revision) return stored;
+      if (request.matchesRevision(stored.revision)) return stored;
       yield* cache.invalidate(request);
       return yield* cache.get(request);
     }),
@@ -105,13 +117,18 @@ export const make = Effect.gen(function* () {
       if (!enabled) return yield* lookup;
       const read = yield* Effect.cached(lookup);
       return yield* Effect.gen(function* () {
-        const revision = (yield* Effect.forEach(scopes, (scope) =>
-          Cache.get(revisions, scope),
-        )).join(":");
+        const current = yield* Cache.get(revisions, undefined);
+        const now = clock.currentTimeMillisUnsafe();
+        const revision = scopes
+          .map((scope) => {
+            const value = current[scope];
+            return value !== undefined && value.expiresAt > now ? value.revision : "";
+          })
+          .join(":");
         const request = new Read({ key: yield* digest(key), revision, lookup: read });
         const stored = yield* cache.get(request);
         return (
-          (stored.revision ?? "") === revision ? stored : yield* Cache.get(refreshes, request)
+          request.matchesRevision(stored.revision) ? stored : yield* Cache.get(refreshes, request)
         ).payload;
       }).pipe(
         Effect.catchTags({
@@ -125,10 +142,15 @@ export const make = Effect.gen(function* () {
     }),
     invalidate: (scope) =>
       Effect.gen(function* () {
-        const key = yield* digest(scope);
-        const revision = yield* crypto.randomUUIDv4;
-        yield* backing.set(`revision:${key}`, revision);
-        yield* Cache.set(revisions, scope, revision);
+        const now = clock.currentTimeMillisUnsafe();
+        const current = yield* Cache.get(revisions, undefined);
+        const next = Object.fromEntries(
+          Object.entries(current).filter(([, value]) => value.expiresAt > now),
+        );
+        next[scope] = { revision: yield* crypto.randomUUIDv4, expiresAt: now + 60_000 };
+        const encoded = yield* Schema.encodeEffect(revisionCodec)(next);
+        yield* backing.set("revisions", encoded);
+        yield* Cache.set(revisions, undefined, next);
       }).pipe(
         Effect.catch(() => {
           enabled = false;

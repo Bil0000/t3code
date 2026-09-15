@@ -126,6 +126,29 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
     }).pipe(Effect.provide(KeyValueStore.layerMemory)),
   );
 
+  it.effect("compacts expired scope records without discarding fresh PR data", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pr-cache-" });
+      const cache = yield* cacheLayer(directory);
+      yield* cache.get("summary", Effect.succeed("old"), ["pr"]);
+      yield* cache.invalidate("pr");
+      for (let index = 0; index < 100; index++) yield* cache.invalidate(`pr-${index}`);
+      assert.strictEqual((yield* fs.readDirectory(directory)).length, 2);
+      const before = (yield* fs.stat(`${directory}/revisions`)).size;
+      yield* TestClock.adjust("59 seconds");
+      assert.strictEqual(yield* cache.get("summary", Effect.succeed("fresh"), ["pr"]), "fresh");
+      yield* TestClock.adjust("1 second");
+      yield* cache.invalidate("other-pr");
+      assert.isTrue((yield* fs.stat(`${directory}/revisions`)).size < before);
+      const restarted = yield* cacheLayer(directory);
+      assert.strictEqual(
+        yield* restarted.get("summary", Effect.die("cache miss"), ["pr"]),
+        "fresh",
+      );
+    }),
+  );
+
   it.effect("does not persist failed GitHub reads", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -198,7 +221,7 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
                 .set(key, value)
                 .pipe(
                   Effect.andThen(
-                    key.startsWith("revision:")
+                    key === "revisions"
                       ? Deferred.succeed(written, undefined).pipe(
                           Effect.andThen(Deferred.await(release)),
                         )
