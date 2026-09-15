@@ -94,8 +94,11 @@ export const make = Effect.gen(function* () {
           next.delete(key);
           return [null, next] as const;
         }
-        const remaining = Math.max(0, snapshot.remaining - Math.max(1, snapshot.cost));
-        if (options?.allowReserve !== true && remaining < snapshot.limit * GRAPHQL_RESERVE_RATIO) {
+        const remaining = snapshot.remaining - Math.max(1, snapshot.cost);
+        if (
+          remaining < 0 ||
+          (options?.allowReserve !== true && remaining < snapshot.limit * GRAPHQL_RESERVE_RATIO)
+        ) {
           return [snapshot.resetAtMs, current] as const;
         }
         const next = new Map(current);

@@ -181,6 +181,19 @@ describe("GitHub GraphQL budget", () => {
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 
+  it.effect("stops interactive reads when the reserve is exhausted", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(1, 5000, RESET_AT, 1));
+      yield* budget.query("github.com", "query { viewer { login } }", { allowReserve: true });
+      const error = yield* budget
+        .query("github.com", "query { viewer { login } }", { allowReserve: true })
+        .pipe(Effect.flip);
+      expect(error.retryAt).toBe(Date.parse(RESET_AT));
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
   it.effect("ignores malformed or partial rate metadata", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(BEFORE_RESET);
