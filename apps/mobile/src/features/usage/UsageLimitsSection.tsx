@@ -301,28 +301,22 @@ export function useRefreshLimits(
         (selectedEnvironmentIds === null || selectedEnvironmentIds.has(environmentId)),
     );
     try {
-      const results = await Promise.all(
-        connected.map(([environmentId]) =>
-          refreshUsageLimits(
+      await Promise.all(
+        connected.map(async ([environmentId, presentation]) => {
+          const result = await refreshUsageLimits(
             environmentId,
             () => refreshProviders({ environmentId, input: {} }),
             automatic,
-          ),
-        ),
+          );
+          if (result === undefined) return;
+          setFailedEnvironments((previous) => [
+            ...previous.filter((failed) => failed.environmentId !== environmentId),
+            ...(result._tag === "Failure"
+              ? [{ environmentId, label: presentation.entry.target.label }]
+              : []),
+          ]);
+        }),
       );
-      setFailedEnvironments((previous) => [
-        ...previous.filter(({ environmentId }) => !connected.some(([id]) => id === environmentId)),
-        ...connected
-          .filter(([environmentId], index) =>
-            results[index] === undefined
-              ? previous.some((failed) => failed.environmentId === environmentId)
-              : results[index]?._tag === "Failure",
-          )
-          .map(([environmentId, presentation]) => ({
-            environmentId,
-            label: presentation.entry.target.label,
-          })),
-      ]);
     } finally {
       setNow(Date.now());
     }

@@ -243,3 +243,30 @@ it("waits for connection and refreshes new environments during a slow refresh", 
   expect(state.refreshProviders).toHaveBeenLastCalledWith({ environmentId: nextId, input: {} });
   await act(() => finishRefresh());
 });
+
+it("keeps manual refresh busy until the already-running automatic check settles", async () => {
+  let finishRefresh!: () => void;
+  const pending = new Promise<undefined>((resolve) => {
+    finishRefresh = () => resolve(undefined);
+  });
+  state.refreshProviders.mockImplementationOnce(() => pending);
+  await act(() => {
+    renderer = create(<UsagePage />);
+  });
+  const button = () =>
+    renderer.root.findAll(
+      (node) => node.type === "button" && node.props["aria-label"] === "Refresh limits",
+    )[0]!;
+  expect(state.refreshProviders).toHaveBeenCalledTimes(1);
+  await act(() => button().props.onClick());
+  try {
+    expect(button().props["aria-busy"]).toBe(true);
+    expect(state.refreshProviders).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => {
+      finishRefresh();
+      await pending;
+    });
+  }
+  expect(button().props["aria-busy"]).toBe(false);
+});
