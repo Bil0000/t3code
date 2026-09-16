@@ -2,7 +2,7 @@ import type { PreviewOpenInput, PreviewSessionSnapshot, ScopedThreadRef } from "
 import { AsyncResult } from "effect/unstable/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { resetPreviewStateForTests } from "~/previewStateStore";
+import { readThreadPreviewState, resetPreviewStateForTests } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
@@ -10,6 +10,7 @@ vi.mock("~/hooks/useSettings", async (importOriginal) => ({
   ensureClientSettingsHydrated: vi.fn(async () => undefined),
 }));
 
+import { threadDesigns } from "~/components/preview/threadDesigns";
 import { openFileInPreview } from "./openFileInPreview";
 
 const threadRef = {
@@ -76,10 +77,14 @@ describe("openFileInPreview", () => {
   ])("adds editor metadata only when reopening %s", async (_scenario, sourcePath, designPath) => {
     if (_scenario === "web design files") vi.stubGlobal("window", {});
     const openPreview = vi.fn(
-      async (_request: {
+      async (request: {
         readonly environmentId: ScopedThreadRef["environmentId"];
         readonly input: PreviewOpenInput;
-      }) => AsyncResult.success(snapshot),
+      }) =>
+        AsyncResult.success({
+          ...snapshot,
+          navStatus: { _tag: "Loading" as const, url: request.input.url!, title: "" },
+        }),
     );
 
     await openFileInPreview({
@@ -99,6 +104,18 @@ describe("openFileInPreview", () => {
     const openedUrl = new URL(openPreview.mock.calls[0]?.[0].input.url ?? "");
     expect(openedUrl.searchParams.has("t3-design")).toBe(designPath !== null);
     expect(openedUrl.searchParams.get("t3-design-path")).toBe(designPath);
+    if (designPath) {
+      const designs = threadDesigns(
+        readThreadPreviewState(threadRef).sessions,
+        "http://127.0.0.1:3773",
+      );
+      expect(designs.map((design) => design.path)).toEqual([designPath]);
+      useRightPanelStore.getState().reconcileBrowserSurfaces(
+        threadRef,
+        [],
+        designs.map((design) => design.tabId),
+      );
+    }
     expect(Object.values(useRightPanelStore.getState().byThreadKey)[0]?.activeSurfaceId).toBe(
       designPath ? "design" : "browser:tab-1",
     );
