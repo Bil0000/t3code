@@ -3,6 +3,7 @@
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 
 import { cn } from "~/lib/utils";
+import { ScrollArea } from "./scroll-area";
 
 const PopoverCreateHandle = PopoverPrimitive.createHandle;
 
@@ -25,6 +26,7 @@ function PopoverPopup({
   sideOffset = 4,
   alignOffset = 0,
   tooltipStyle = false,
+  scrollable = false,
   anchor,
   ...props
 }: PopoverPrimitive.Popup.Props & {
@@ -34,6 +36,7 @@ function PopoverPopup({
   sideOffset?: PopoverPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: PopoverPrimitive.Positioner.Props["alignOffset"];
   tooltipStyle?: boolean;
+  scrollable?: boolean;
   anchor?: PopoverPrimitive.Positioner.Props["anchor"];
 }) {
   return (
@@ -65,11 +68,18 @@ function PopoverPopup({
               tooltipStyle
                 ? "py-1 [--viewport-inline-padding:--spacing(2)]"
                 : "not-data-transitioning:overflow-y-auto",
+              scrollable && "p-0",
               viewportClassName,
             )}
             data-slot="popover-viewport"
           >
-            {children}
+            {scrollable ? (
+              <ScrollArea className="h-auto max-h-[min(20rem,var(--available-height))]">
+                <div className={cn("p-4", tooltipStyle && "px-2 py-1")}>{children}</div>
+              </ScrollArea>
+            ) : (
+              children
+            )}
           </PopoverPrimitive.Viewport>
         </PopoverPrimitive.Popup>
       </PopoverPrimitive.Positioner>

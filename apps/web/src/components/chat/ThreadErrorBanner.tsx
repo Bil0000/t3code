@@ -60,9 +60,9 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
             </PopoverTrigger>
             <PopoverPopup
               tooltipStyle
+              scrollable
               side="top"
-              className="max-w-96 text-left"
-              viewportClassName="max-h-[min(20rem,var(--available-height))] overflow-y-auto overscroll-contain whitespace-pre-wrap wrap-anywhere"
+              className="max-w-96 text-left whitespace-pre-wrap wrap-anywhere"
               aria-label="Error details"
             >
               {error}
