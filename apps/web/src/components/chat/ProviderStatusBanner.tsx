@@ -4,7 +4,7 @@ import { InfoIcon, XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { formatProviderDriverKindLabel } from "../../providerModels";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 export function getProviderStatusBannerKey(status: ServerProvider | null): string | null {
   if (!status || status.status === "ready" || status.status === "disabled") return null;
@@ -96,14 +96,23 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
         <InfoIcon className="size-4 shrink-0" aria-hidden />
         <div className="flex min-w-0 flex-col gap-1">
           <div className="font-medium">{title}</div>
-          <Tooltip>
-            <TooltipTrigger
-              render={<div className="line-clamp-3 text-muted-foreground">{message}</div>}
-            />
-            <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
+          <Popover>
+            <PopoverTrigger
+              openOnHover
+              className="line-clamp-3 text-muted-foreground cursor-pointer rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               {message}
-            </TooltipPopup>
-          </Tooltip>
+            </PopoverTrigger>
+            <PopoverPopup
+              tooltipStyle
+              side="top"
+              className="max-w-96 text-left"
+              viewportClassName="max-h-[min(20rem,var(--available-height))] overflow-y-auto overscroll-contain whitespace-pre-wrap wrap-anywhere"
+              aria-label="Provider status details"
+            >
+              {message}
+            </PopoverPopup>
+          </Popover>
           {onOpenProviderSetup && hasProviderSetup(status) ? (
             <Button
               className="self-start px-0 text-foreground"

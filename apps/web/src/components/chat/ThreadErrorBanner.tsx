@@ -2,7 +2,7 @@ import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { CircleAlertIcon, XIcon } from "lucide-react";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 export function getThreadErrorBannerKey(threadKey: string, error: string | null): string | null {
   return error === null ? null : `${threadKey}\u0000${error}`;
@@ -51,12 +51,23 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
       >
         <CircleAlertIcon />
         <AlertDescription>
-          <Tooltip>
-            <TooltipTrigger render={<div className="line-clamp-3" />}>{error}</TooltipTrigger>
-            <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
+          <Popover>
+            <PopoverTrigger
+              openOnHover
+              className="line-clamp-3 cursor-pointer rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               {error}
-            </TooltipPopup>
-          </Tooltip>
+            </PopoverTrigger>
+            <PopoverPopup
+              tooltipStyle
+              side="top"
+              className="max-w-96 text-left"
+              viewportClassName="max-h-[min(20rem,var(--available-height))] overflow-y-auto overscroll-contain whitespace-pre-wrap wrap-anywhere"
+              aria-label="Error details"
+            >
+              {error}
+            </PopoverPopup>
+          </Popover>
         </AlertDescription>
         {onDismiss && (
           <AlertAction>

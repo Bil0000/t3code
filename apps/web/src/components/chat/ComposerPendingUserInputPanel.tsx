@@ -9,6 +9,7 @@ import { CheckIcon } from "lucide-react";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
@@ -180,7 +181,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     >
       <CollapsibleTrigger
         render={<ComposerBanner.Row render={<button type="button" />} />}
-        title={
+        aria-label={
           isCollapsed ? "Show the question and its options" : "Hide the question and its options"
         }
         data-pending-user-input-toggle={isCollapsed ? "collapsed" : "expanded"}
@@ -202,28 +203,43 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               {questionIndex + 1}/{prompt.questions.length}
             </span>
           ) : null}
-          <ComposerBanner.ToggleIcon expanded={!isCollapsed} />
+          <Tooltip>
+            <TooltipTrigger render={<span />}>
+              <ComposerBanner.ToggleIcon expanded={!isCollapsed} />
+            </TooltipTrigger>
+            <TooltipPopup>
+              {isCollapsed
+                ? "Show the question and its options"
+                : "Hide the question and its options"}
+            </TooltipPopup>
+          </Tooltip>
           {prompt.dismissible ? (
             // Sits inside the trigger button, so stop the click from toggling
             // the disclosure. Dismiss closes the question without a reply.
-            <ComposerBanner.Dismiss
-              render={<span role="button" tabIndex={0} />}
-              aria-label="Dismiss question without answering"
-              title="Dismiss question without answering"
-              disabled={isResponding}
-              data-pending-user-input-dismiss
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onDismiss(prompt.requestId);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                event.stopPropagation();
-                onDismiss(prompt.requestId);
-              }}
-            />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <ComposerBanner.Dismiss
+                    render={<span role="button" tabIndex={0} />}
+                    aria-label="Dismiss question without answering"
+                    disabled={isResponding}
+                    data-pending-user-input-dismiss
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onDismiss(prompt.requestId);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onDismiss(prompt.requestId);
+                    }}
+                  />
+                }
+              />
+              <TooltipPopup>Dismiss question without answering</TooltipPopup>
+            </Tooltip>
           ) : null}
         </ComposerBanner.Actions>
       </CollapsibleTrigger>
