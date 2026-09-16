@@ -437,6 +437,7 @@ export function startDesignEditor(
       : [element];
   };
   let drag: DragState | null = null;
+  let activePointerId: number | null = null;
   let dragBatch: {
     index: number;
     history: HistoryEntry[];
@@ -1774,7 +1775,8 @@ export function startDesignEditor(
     handle.className = `handle ${direction}`;
     handle.setAttribute("aria-label", `Resize ${direction}`);
     handle.addEventListener("pointerdown", (event) => {
-      if (!selected || event.button !== 0) return;
+      if (!selected || event.button !== 0 || activePointerId !== null) return;
+      activePointerId = event.pointerId;
       handle.setPointerCapture(event.pointerId);
       const rect = boundsOf(selectionElements);
       transformElements = selectionElements
@@ -1980,6 +1982,7 @@ export function startDesignEditor(
   };
 
   const onPointerDown = (event: PointerEvent): void => {
+    if (activePointerId !== null) return;
     keyboardNavigation = false;
     if (editorOpen && !isUiElement(event.target)) window.focus();
     if (
@@ -1995,6 +1998,7 @@ export function startDesignEditor(
       !isUiElement(event.target) &&
       (event.button === 1 || (event.button === 0 && (tool === "hand" || spaceHeld)))
     ) {
+      activePointerId = event.pointerId;
       pan = { start: { x: event.clientX, y: event.clientY }, offset: { ...offset } };
       if (event.target instanceof Element) event.target.setPointerCapture(event.pointerId);
       updateCursor();
@@ -2009,6 +2013,7 @@ export function startDesignEditor(
       if (editingText.contains(event.target)) return;
       finishEditingText?.();
     }
+    activePointerId = event.pointerId;
     if (event.target instanceof Element) event.target.setPointerCapture(event.pointerId);
     if (tool !== "select" && tool !== "hand") {
       beginCreation(event, tool);
@@ -2061,6 +2066,7 @@ export function startDesignEditor(
   };
 
   const onPointerMove = (event: PointerEvent): void => {
+    if (activePointerId !== null && event.pointerId !== activePointerId) return;
     if (!editorOpen || annotationActive()) return;
     if (pan) {
       offset = {
@@ -2214,6 +2220,7 @@ export function startDesignEditor(
   };
 
   const cancelDrag = (): void => {
+    activePointerId = null;
     pan = null;
     updateCursor();
     if (marquee) selectElements(marquee.previous, false);
@@ -2238,6 +2245,8 @@ export function startDesignEditor(
   };
 
   const onPointerUp = (event: PointerEvent): void => {
+    if (event.pointerId !== activePointerId) return;
+    activePointerId = null;
     pan = null;
     updateCursor();
     endSnapping();
@@ -2792,7 +2801,13 @@ export function startDesignEditor(
   window.addEventListener("pointerdown", onPointerDown, true);
   window.addEventListener("pointermove", onPointerMove, true);
   window.addEventListener("pointerup", onPointerUp, true);
-  window.addEventListener("pointercancel", cancelDrag, true);
+  window.addEventListener(
+    "pointercancel",
+    (event) => {
+      if (event.pointerId === activePointerId) cancelDrag();
+    },
+    true,
+  );
   window.addEventListener("click", preventNavigation, true);
   window.addEventListener("dblclick", editText, true);
   window.addEventListener("keydown", onKeyDown, true);

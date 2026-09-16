@@ -706,6 +706,56 @@ try {
   console.log(
     "PASS keyboard: tools, duplicate, multi-select, groups, nudge, align, layers, lock, rich text, clipboard, undo/redo, save, zoom, and help",
   );
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("r");
+  const boxCount = await page.locator('[data-t3-design-object="box"]').count();
+  await page.evaluate(() => {
+    const send = (type, pointerId, clientX, clientY) =>
+      window.dispatchEvent(
+        new PointerEvent(type, { pointerId, pointerType: "touch", button: 0, clientX, clientY }),
+      );
+    send("pointerdown", 101, 450, 450);
+    send("pointermove", 101, 550, 550);
+    send("pointerdown", 102, 600, 450);
+    send("pointermove", 102, 650, 550);
+    send("pointerup", 102, 650, 550);
+    send("pointercancel", 102, 650, 550);
+  });
+  NodeAssert.equal(
+    await page.locator('[data-t3-design-object="box"]').count(),
+    boxCount + 1,
+    "another touch cannot start an orphan shape",
+  );
+  NodeAssert.equal(
+    await page
+      .getByRole("button", { name: "Rectangle (R)", exact: true })
+      .getAttribute("aria-pressed"),
+    "true",
+    "another touch cannot finish the active shape",
+  );
+  await page.evaluate(() =>
+    window.dispatchEvent(
+      new PointerEvent("pointerup", {
+        pointerId: 101,
+        pointerType: "touch",
+        button: 0,
+        clientX: 550,
+        clientY: 550,
+      }),
+    ),
+  );
+  NodeAssert.equal(
+    await page
+      .getByRole("button", { name: "Select (V)", exact: true })
+      .getAttribute("aria-pressed"),
+    "true",
+  );
+  await page.keyboard.press("Control+z");
+  NodeAssert.equal(
+    await page.locator('[data-t3-design-object="box"]').count(),
+    boxCount,
+    "one undo removes the completed shape",
+  );
   const editorBundle = `${temporary}/editor.js`;
   NodeChildProcess.execFileSync(
     `${repo}node_modules/.bin/esbuild`,
