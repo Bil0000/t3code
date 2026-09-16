@@ -756,6 +756,56 @@ try {
     boxCount,
     "one undo removes the completed shape",
   );
+  await page.locator(".zoom-menu > summary").click();
+  await page.getByRole("button", { name: "25%", exact: true }).click();
+  await page.keyboard.press("r");
+  await page.mouse.move(450, 450);
+  await page.mouse.down();
+  await page.mouse.move(453, 453);
+  await page.mouse.up();
+  NodeAssert.equal(
+    await page.locator('[data-t3-design-object="box"]').count(),
+    boxCount + 1,
+    "canvas-sized shapes survive at 25% zoom",
+  );
+  const tinyBox = page.locator('[data-t3-design-object="box"]').last();
+  await tinyBox.evaluate((e) => {
+    e.style.width = "0px";
+    e.style.height = "0px";
+    e.style.border = "none";
+  });
+  const handle = await page.getByRole("button", { name: "Resize se", exact: true }).boundingBox();
+  await page.mouse.move(handle.x + 4, handle.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 24, handle.y + 24);
+  await page.mouse.up();
+  NodeAssert.ok(
+    !(await tinyBox.evaluate((e) => e.outerHTML)).includes("NaN"),
+    "zero-sized elements cannot gain invalid coordinates",
+  );
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("a");
+  await page.mouse.move(450, 450);
+  await page.mouse.down();
+  await page.mouse.move(520, 520);
+  await page.mouse.up();
+  if ((await page.locator(".top-actions .edit").getAttribute("aria-pressed")) !== "true")
+    await page.locator(".top-actions .edit").click();
+  await page.locator(".inspector summary").getByText("Drawing", { exact: true }).click();
+  await page.getByLabel("Stroke", { exact: true }).fill("#e03131");
+  await page.getByLabel("Stroke", { exact: true }).press("Tab");
+  const arrowColors = await page
+    .locator('[data-t3-design-object="arrow"]')
+    .last()
+    .evaluate((e) => [
+      getComputedStyle(e.querySelector("line")).stroke,
+      getComputedStyle(e.querySelector("polygon")).fill,
+    ]);
+  NodeAssert.equal(
+    arrowColors[0],
+    arrowColors[1],
+    "arrowheads use the same stroke color as the shaft",
+  );
   const editorBundle = `${temporary}/editor.js`;
   NodeChildProcess.execFileSync(
     `${repo}node_modules/.bin/esbuild`,
@@ -910,6 +960,15 @@ try {
   );
   await heading.click();
   await frame.getByRole("button", { name: "Edit", exact: true }).click();
+  const originalColor = await heading.evaluate((e) => e.style.color);
+  await frame.getByRole("button", { name: "Text color #e03131", exact: true }).click();
+  NodeAssert.notEqual(await heading.evaluate((e) => e.style.color), originalColor);
+  await frame.getByRole("button", { name: "Undo", exact: true }).click();
+  NodeAssert.equal(
+    await heading.evaluate((e) => e.style.color),
+    originalColor,
+    "swatch changes can be undone",
+  );
   const weight = frame.getByLabel("Weight", { exact: true });
   await weight.focus();
   await weight.selectOption("700");

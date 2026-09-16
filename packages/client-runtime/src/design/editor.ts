@@ -1552,6 +1552,7 @@ export function startDesignEditor(
           input.focus();
           input.value = value;
           input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
           input.blur();
         },
         swatches,
@@ -1599,7 +1600,9 @@ export function startDesignEditor(
           if (input === width || input === height) {
             if (value <= 0) continue;
             const horizontal = input === width;
-            const scale = value / ((horizontal ? bounds.width : bounds.height) / zoom);
+            const length = (horizontal ? bounds.width : bounds.height) / zoom;
+            if (length === 0) continue;
+            const scale = value / length;
             update(element, String(((horizontal ? rect.width : rect.height) / zoom) * scale));
             const x =
               position.x + (horizontal ? ((rect.left - bounds.left) / zoom) * (scale - 1) : 0);
@@ -1776,9 +1779,10 @@ export function startDesignEditor(
     handle.setAttribute("aria-label", `Resize ${direction}`);
     handle.addEventListener("pointerdown", (event) => {
       if (!selected || event.button !== 0 || activePointerId !== null) return;
+      const rect = boundsOf(selectionElements);
+      if (rect.width === 0 || rect.height === 0) return;
       activePointerId = event.pointerId;
       handle.setPointerCapture(event.pointerId);
-      const rect = boundsOf(selectionElements);
       transformElements = selectionElements
         .filter((element) => !element.hasAttribute(LOCK_ATTRIBUTE))
         .map((element) => ({
@@ -1846,7 +1850,7 @@ export function startDesignEditor(
     const baseX = end.x - ux * 13;
     const baseY = end.y - uy * 13;
     const wing = 6;
-    svg.innerHTML = `<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="var(--t3-design-stroke,currentColor)" stroke-width="var(--t3-design-stroke-width,4)" stroke-dasharray="var(--t3-design-stroke-dasharray,none)" stroke-linecap="round"/><polygon points="${end.x},${end.y} ${baseX - uy * wing},${baseY + ux * wing} ${baseX + uy * wing},${baseY - ux * wing}" fill="currentColor"/>`;
+    svg.innerHTML = `<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="var(--t3-design-stroke,currentColor)" stroke-width="var(--t3-design-stroke-width,4)" stroke-dasharray="var(--t3-design-stroke-dasharray,none)" stroke-linecap="round"/><polygon points="${end.x},${end.y} ${baseX - uy * wing},${baseY + ux * wing} ${baseX + uy * wing},${baseY - ux * wing}" fill="var(--t3-design-stroke,currentColor)"/>`;
   };
 
   const beginCreation = (
@@ -2269,7 +2273,8 @@ export function startDesignEditor(
       }
     } else {
       const rect = completed.element.getBoundingClientRect();
-      if (rect.width < MIN_SHAPE_SIZE || rect.height < MIN_SHAPE_SIZE) completed.element.remove();
+      if (rect.width / zoom < MIN_SHAPE_SIZE || rect.height / zoom < MIN_SHAPE_SIZE)
+        completed.element.remove();
       else {
         const element = completed.element;
         const layer = element.parentNode!;
