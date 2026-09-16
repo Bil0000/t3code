@@ -7,13 +7,18 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   projection: null as unknown,
   navigate: vi.fn(),
+  shells: [] as unknown[],
+  projects: [] as unknown[],
+  configs: new Map<string, unknown>(),
+  showTooltips: false,
 }));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 vi.mock("../../state/entities", () => ({
   useThreadProjection: () => ({ projection: state.projection }),
-  useThreadShells: () => [],
-  useServerConfigs: () => new Map(),
+  useThreadShells: () => state.shells,
+  useProjects: () => state.projects,
+  useServerConfigs: () => state.configs,
 }));
 vi.mock("../../lib/archivedThreadsState", () => ({
   useArchivedThreadSnapshots: () => ({ snapshots: [] }),
@@ -23,7 +28,7 @@ vi.mock("../ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => children,
   TooltipTrigger: ({ render, children }: { render: ReactElement; children: ReactNode }) =>
     cloneElement(render, {}, children),
-  TooltipPopup: () => null,
+  TooltipPopup: ({ children }: { children: ReactNode }) => (state.showTooltips ? children : null),
 }));
 
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
@@ -33,6 +38,10 @@ let renderer: ReactTestRenderer;
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   vi.unstubAllGlobals();
+  state.shells = [];
+  state.projects = [];
+  state.configs.clear();
+  state.showTooltips = false;
 });
 
 it("shows the matching child agent details and refreshes them when the agent settles", async () => {
@@ -147,4 +156,109 @@ it("shows the matching child agent details and refreshes them when the agent set
       .props.onClick(),
   );
   expect(text()).toContain("Old agent 7");
+});
+
+it("shows readable models and only differing workspace details in agent tooltips", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.showTooltips = true;
+  const parent = {
+    id: "parent",
+    projectId: "main",
+    worktreePath: null,
+    lineage: {},
+    activeProviderThreadId: null,
+  };
+  const child = {
+    id: "child",
+    projectId: "main",
+    worktreePath: null as string | null,
+    title: "Worker",
+    lineage: { parentThreadId: "parent", relationshipToParent: "subagent" },
+  };
+  state.projects = [
+    { id: "main", environmentId: "test", title: "Main", workspaceRoot: "/main" },
+    {
+      id: "other",
+      environmentId: "elsewhere",
+      title: "Wrong environment",
+      workspaceRoot: "/wrong",
+    },
+    { id: "other", environmentId: "test", title: "Other project", workspaceRoot: "/other" },
+  ];
+  state.shells = [{ environmentId: "test", source: child }];
+  state.configs.set("test", {
+    providers: [
+      {
+        instanceId: "codex",
+        driver: "codex",
+        models: [{ slug: "gpt-5.4", name: "GPT-5.4", shortName: "GPT-5.4" }],
+      },
+    ],
+  });
+  state.projection = {
+    thread: parent,
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [
+      {
+        id: "agent",
+        childThreadId: "child",
+        driver: "codex",
+        providerInstanceId: "codex",
+        title: "Worker",
+        prompt: "Check",
+        model: "gpt-5.4",
+        status: "pending",
+        startedAt: null,
+        completedAt: null,
+        updatedAt: DateTime.makeUnsafe("2026-09-16T12:00:00Z"),
+      },
+    ],
+  };
+  const panel = (
+    <ThreadRelationshipsPanel
+      environmentId={EnvironmentId.make("test")}
+      threadId={ThreadId.make("parent")}
+    />
+  );
+  await act(async () => {
+    renderer = create(panel);
+  });
+  const text = () =>
+    renderer.root
+      .findAll((node) => typeof node.type === "string")
+      .flatMap((node) => node.children.filter((child) => typeof child === "string"))
+      .join(" ");
+  expect(text()).toContain("GPT-5.4");
+  expect(text()).not.toContain("Tokens");
+  expect(text()).not.toContain("Open subagent");
+  expect(text()).not.toContain("Project");
+  expect(text()).not.toContain("Worktree");
+  expect(text()).not.toContain("Workspace");
+
+  child.worktreePath = "/main/worktrees/checker";
+  state.shells = [{ environmentId: "test", source: { ...child } }];
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).toContain("Worktree");
+  expect(text()).toContain("/main/worktrees/checker");
+  expect(text()).not.toContain("Project");
+
+  child.projectId = "other";
+  child.worktreePath = null;
+  state.shells = [{ environmentId: "test", source: { ...child } }];
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).toContain("Other project");
+  expect(text()).toContain("Workspace");
+  expect(text()).toContain("/other");
+  expect(text()).not.toContain("Wrong environment");
+  expect(text()).not.toContain("Worktree");
+
+  state.shells = [];
+  state.configs.clear();
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).toContain("gpt-5.4");
+  expect(text()).not.toContain("Project");
+  expect(text()).not.toContain("Workspace");
 });

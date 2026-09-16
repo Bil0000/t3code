@@ -1,10 +1,6 @@
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import {
-  formatSubagentModelLabel,
-  formatSubagentTokenCount,
-  projectedSubagentsToRuntime,
-} from "@t3tools/client-runtime/state/subagentRuntime";
+import { projectedSubagentsToRuntime } from "@t3tools/client-runtime/state/subagentRuntime";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
   deriveThreadRelationshipGraph,
@@ -37,13 +33,19 @@ import { useMemo, useState, type ReactNode } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { useServerConfigs, useThreadProjection, useThreadShells } from "../../state/entities";
+import {
+  useProjects,
+  useServerConfigs,
+  useThreadProjection,
+  useThreadShells,
+} from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
 import { AgentElapsed } from "../AgentsPanel";
 import { Badge } from "../ui/badge";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
+import { getTriggerDisplayModelLabel } from "./providerIconUtils";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -206,6 +208,7 @@ export function ThreadRelationshipsPanel(props: {
     [projection?.subagents],
   );
   const threadShells = useThreadShells();
+  const projects = useProjects().filter((project) => project.environmentId === props.environmentId);
   const archived = useArchivedThreadSnapshots([props.environmentId]);
   const archivedShells = archived.snapshots.find(
     (entry) => entry.environmentId === props.environmentId,
@@ -219,6 +222,9 @@ export function ThreadRelationshipsPanel(props: {
     ];
     return deriveThreadRelationshipGraph({ threads: shells, projection });
   }, [archivedShells, projection, props.environmentId, threadShells]);
+  const currentThread = projection?.thread ?? graph.nodes.get(props.threadId)?.thread;
+  const currentProject = projects.find((project) => project.id === currentThread?.projectId);
+  const currentWorkspace = currentThread?.worktreePath ?? currentProject?.workspaceRoot;
   const navigate = useNavigate();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
@@ -357,28 +363,44 @@ export function ThreadRelationshipsPanel(props: {
                 title: node?.thread?.title ?? agent?.title ?? threadId,
                 isSubagent,
               });
-              const modelLabel = agent ? formatSubagentModelLabel(agent.model, agent.effort) : null;
               const provider = providers?.find(
                 (entry) =>
                   entry.instanceId ===
                   (agent?.providerInstanceId ?? node?.thread?.providerInstanceId),
               );
               const providerDriver = agent?.driver ?? provider?.driver;
+              const model = provider?.models.find((model) => model.slug === agent?.model);
+              const modelLabel = model ? getTriggerDisplayModelLabel(model) : agent?.model;
+              const project = projects.find((project) => project.id === node?.thread?.projectId);
+              const differentProject =
+                currentThread && project && project.id !== currentThread.projectId ? project : null;
+              const workspace = node?.thread?.worktreePath ?? project?.workspaceRoot;
+              const differentWorkspace =
+                currentWorkspace && workspace !== currentWorkspace ? workspace : null;
               const relationshipHint = node?.missing
                 ? "This related thread is unavailable"
                 : `Open ${relationship.toLowerCase()} in this chat`;
               const relationshipTooltip = agent ? (
                 <div className="max-w-64 space-y-1 py-1">
                   <div className="font-medium">{threadTitle}</div>
-                  <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
                     <dt className="text-muted-foreground">Model</dt>
-                    <dd className="text-right">{modelLabel ?? "Unknown"}</dd>
-                    <dt className="text-muted-foreground">Tokens</dt>
-                    <dd className="text-right tabular-nums">
-                      {agent.usage ? formatSubagentTokenCount(agent.usage.totalTokens) : "—"}
-                    </dd>
+                    <dd className="break-words text-right">{modelLabel ?? "Unknown"}</dd>
+                    {differentProject ? (
+                      <>
+                        <dt className="text-muted-foreground">Project</dt>
+                        <dd className="break-words text-right">{differentProject.title}</dd>
+                      </>
+                    ) : null}
+                    {differentWorkspace ? (
+                      <>
+                        <dt className="text-muted-foreground">
+                          {node?.thread?.worktreePath ? "Worktree" : "Workspace"}
+                        </dt>
+                        <dd className="break-all text-right">{differentWorkspace}</dd>
+                      </>
+                    ) : null}
                   </dl>
-                  <div className="text-muted-foreground">{relationshipHint}</div>
                 </div>
               ) : (
                 relationshipHint
