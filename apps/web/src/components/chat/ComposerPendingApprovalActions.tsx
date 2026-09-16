@@ -4,8 +4,8 @@ import {
   type ProviderApprovalOption,
 } from "@t3tools/contracts";
 import { memo } from "react";
-import { ChevronRightIcon, TriangleAlertIcon } from "lucide-react";
-import { Button, buttonVariants } from "../ui/button";
+import { EllipsisIcon, TriangleAlertIcon } from "lucide-react";
+import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
@@ -73,7 +73,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
             disabled={isResponding}
             render={<Button size="icon-xs" variant="outline" aria-label="More approval options" />}
           >
-            <ChevronRightIcon />
+            <EllipsisIcon />
           </MenuTrigger>
           <MenuPopup
             {...composerFloatingLayerProps}
@@ -88,11 +88,8 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
                   disabled={isResponding}
                   aria-description={option.warning}
                   onClick={() => void onRespondToApproval(requestId, option.decision)}
-                  className={buttonVariants({
-                    variant: "outline",
-                    size: "compact",
-                    className: "mb-1 h-auto min-h-7 w-full last:mb-0 sm:text-xs",
-                  })}
+                  variant="ghost"
+                  className="mb-1 last:mb-0"
                 >
                   {option.warning ? <TriangleAlertIcon className="size-3 text-warning" /> : null}
                   <span className="min-w-0 whitespace-normal wrap-break-word">{option.label}</span>
