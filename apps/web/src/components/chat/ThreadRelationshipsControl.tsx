@@ -139,7 +139,7 @@ function ThreadLineageGroup(props: {
             {props.label} ({props.rows.length})
           </span>
           {failedCount > 0 ? (
-            <Badge size="sm" variant="error">
+            <Badge size="sm" variant="error" className="ml-auto">
               {failedCount} failed
             </Badge>
           ) : null}
