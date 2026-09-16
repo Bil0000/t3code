@@ -115,13 +115,14 @@ it("shows the matching child agent details and refreshes them when the agent set
     ],
   };
   await act(async () => renderer.update(cloneElement(panel)));
-  expect(text()).toContain("Previous agents");
+  expect(text()).toContain("Previous agents (1)");
   expect(text()).not.toContain("Checker");
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
   );
   expect(text()).toContain("Checker");
   expect(text()).toContain("2m 15s");
+  expect(text()).not.toContain("(1)");
   expect(text()).toContain("completed");
   expect(text()).not.toContain("running");
   expect(text()).not.toContain("Worker");
@@ -129,6 +130,7 @@ it("shows the matching child agent details and refreshes them when the agent set
     renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
   );
   expect(text()).not.toContain("Checker");
+  expect(text()).toContain("Previous agents (1)");
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
   );
