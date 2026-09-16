@@ -930,6 +930,7 @@ import {
   PaperclipIcon,
   PencilRulerIcon,
   PlayIcon,
+  ShieldIcon,
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
@@ -6003,20 +6004,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <ComposerBanner.Root
                 data-chat-composer-top-drawer="true"
                 variant={activePendingApproval ? "warning" : "info"}
+                className={
+                  activePendingApproval
+                    ? "px-3 [--composer-banner-padding-block:--spacing(3)]"
+                    : undefined
+                }
               >
                 {activePendingApproval ? (
                   <ComposerBanner.Row
-                    layout="wrap-actions"
+                    className="items-start gap-x-2 gap-y-3"
                     data-chat-composer-collapsed-controls="true"
                   >
-                    <ComposerBanner.Icon />
-                    <ComposerBanner.Content>
+                    <ComposerBanner.Icon className="pt-0.5 text-warning [&>svg]:size-4">
+                      <ShieldIcon />
+                    </ComposerBanner.Icon>
+                    <ComposerBanner.Content className="@max-[560px]:col-end-4">
                       <ComposerPendingApprovalPanel
                         approval={activePendingApproval}
                         pendingCount={pendingApprovals.length}
                       />
                     </ComposerBanner.Content>
-                    <ComposerBanner.Actions>
+                    <ComposerBanner.Actions className="gap-1.5 @max-[560px]:col-start-2 @max-[560px]:col-end-4 @max-[560px]:row-start-2 @max-[560px]:justify-start">
                       <ComposerPendingApprovalActions
                         requestId={activePendingApproval.requestId}
                         isResponding={respondingRequestIds.includes(
@@ -6673,6 +6681,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       showMobilePendingAnswerActions && "max-sm:pb-11",
                       isComposerResting &&
                         "max-h-8 min-h-8 overflow-hidden whitespace-pre! leading-8",
+                      isComposerApprovalState && "min-h-8",
                     )}
                     placeholderClassName={cn(
                       isComposerResting &&
@@ -6688,8 +6697,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPaste={onComposerPaste}
                     placeholder={
                       isComposerApprovalState
-                        ? (activePendingApproval?.detail ??
-                          "Resolve this approval request to continue")
+                        ? "Resolve this approval request to continue"
                         : activePendingProgress
                           ? isChoiceOnlyPendingQuestion
                             ? "Choose an option above"
