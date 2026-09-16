@@ -297,7 +297,6 @@ import {
 } from "../../lib/snapShotAnimation";
 import { resizeSnapShotSource } from "../../lib/snapShotSource";
 import { basenameOfPath } from "../../pierre-icons";
-import { isElectron } from "~/env";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import {
   getComposerPromptLengthValidationMessage,
@@ -2300,17 +2299,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           label: "/model",
           description: "Switch response model for this thread",
         },
-        ...(isElectron
-          ? ([
-              {
-                id: "slash:design",
-                type: "slash-command",
-                command: "design",
-                label: "/design",
-                description: "Create editable visual directions before implementation",
-              },
-            ] as const)
-          : []),
+        {
+          id: "slash:design",
+          type: "slash-command",
+          command: "design",
+          label: "/design",
+          description: "Create editable visual directions before implementation",
+        },
         ...(planModeUiEnabled
           ? ([
               {
@@ -2338,7 +2333,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedProviderSlashCommands,
         slashMenuSkills,
       )
-        .filter((command) => !isElectron || command.name.toLowerCase() !== "design")
+        .filter((command) => command.name.toLowerCase() !== "design")
         .map((command) => ({
           id: `provider-slash-command:${selectedProvider}:${command.name}`,
           type: "provider-slash-command" as const,

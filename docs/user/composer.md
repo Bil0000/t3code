@@ -221,13 +221,16 @@ Android opens a compatible installed file viewer.
 
 ## Design before coding
 
-In the desktop app, start a message with `/design` and describe the interface. The agent creates
-four visual directions before it changes production code. The design opens in the right panel and
+In the web or desktop app, start a message with `/design` and describe the interface. The agent creates
+four visual directions before it changes production code. The design opens in its own Design tab in the right panel and
 refreshes as the agent develops it.
 
-Use the design toolbar to select, move, resize, add, edit, style, draw on, or delete elements. You
-can also add notes, undo or redo edits, and choose the artboard to implement. Changes save to the
-design automatically.
+If the thread has several designs, click the Design tab to choose one. Hold Space and drag to pan, pinch to zoom, or press Shift+1 to fit all artboards.
 
-The design stays linked to its thread. The agent sees the chosen artboard, focused element, manual
-edits, notes, and drawings. Ask it to revise or implement the design without attaching it again.
+Use the design toolbar to select, move, resize, add, edit, style, draw on, or delete elements. Arrow
+keys nudge the selected element, and Shift moves it faster. You can also add notes, undo or redo
+edits, and choose the artboard to implement. Changes save to the design automatically.
+
+The design stays linked to its thread. The agent can read the chosen artboard, saved edits, notes,
+and drawings. Select an element and use **Add to chat** to point the agent to that element.
+Ask it to revise or implement the design without attaching the whole file again.

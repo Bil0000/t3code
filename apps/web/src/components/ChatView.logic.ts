@@ -21,7 +21,7 @@ import {
   WORKTREE_SETUP_ACTIVITY_KIND,
   WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
-import { expandDesignCommand } from "@t3tools/shared/designPrompt";
+import { appendDesignContext, expandDesignCommand } from "@t3tools/shared/designPrompt";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import {
@@ -960,17 +960,19 @@ export function deriveComposerSendState(options: {
 }
 
 export function resolveProviderPromptForSend(options: {
-  isElectron: boolean;
   prompt: string;
   trimmedPrompt: string;
   threadId: string;
+  designs: ReadonlyArray<{ path: string }>;
 }): string {
-  if (!options.isElectron) return options.prompt;
   const expanded = expandDesignCommand({
     prompt: options.trimmedPrompt,
     threadId: options.threadId,
   });
-  return expanded === options.trimmedPrompt ? options.prompt : expanded;
+  return appendDesignContext(
+    expanded === options.trimmedPrompt ? options.prompt : expanded,
+    options.designs,
+  );
 }
 
 export function buildExpiredTerminalContextToastCopy(

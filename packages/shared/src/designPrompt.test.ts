@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { designPathFromUrl, expandDesignCommand, visibleDesignCommand } from "./designPrompt.ts";
+import {
+  appendDesignContext,
+  designPathFromUrl,
+  expandDesignCommand,
+  visibleDesignCommand,
+} from "./designPrompt.ts";
 
 describe("expandDesignCommand", () => {
   it("turns a design command into a thread-scoped visual design brief", () => {
@@ -11,6 +16,7 @@ describe("expandDesignCommand", () => {
 
     expect(result.startsWith("<t3_design_request>")).toBe(true);
     expect(result).toContain(".t3/designs/thread-42.html");
+    expect(result).toContain("Design craft rules, same for every model:");
     expect(visibleDesignCommand(result)).toBe("/design a billing dashboard");
     expect(visibleDesignCommand(`${result}\n\n<terminal_context>hidden</terminal_context>`)).toBe(
       "/design a billing dashboard\n\n<terminal_context>hidden</terminal_context>",
@@ -67,5 +73,41 @@ describe("expandDesignCommand", () => {
 
   it("leaves ordinary message display unchanged", () => {
     expect(visibleDesignCommand("Fix the billing dashboard")).toBe("Fix the billing dashboard");
+  });
+});
+
+describe("appendDesignContext", () => {
+  it("leaves the prompt unchanged without designs", () => {
+    expect(appendDesignContext("let's go with direction D", [])).toBe("let's go with direction D");
+  });
+
+  it("leaves an expanded design request unchanged", () => {
+    const request = expandDesignCommand({
+      prompt: "/design a billing dashboard",
+      threadId: "thread-42",
+    });
+
+    expect(appendDesignContext(request, [{ path: ".t3/designs/thread-42.html" }])).toBe(request);
+  });
+
+  it("lists every design path and hides the block from display", () => {
+    const result = appendDesignContext("let's go with direction D", [
+      { path: ".t3/designs/thread-42.html" },
+      { path: "designs/pricing.html" },
+    ]);
+
+    expect(result).toContain("<paths>\n.t3/designs/thread-42.html\ndesigns/pricing.html\n</paths>");
+    expect(result).toContain("data-t3-design-selected");
+    expect(result).toContain("Design craft rules, same for every model:");
+    expect(visibleDesignCommand(result)).toBe("let's go with direction D");
+    expect(visibleDesignCommand(`${result}\n\n<terminal_context>hidden</terminal_context>`)).toBe(
+      "let's go with direction D\n\n<terminal_context>hidden</terminal_context>",
+    );
+  });
+
+  it("escapes markup in design paths", () => {
+    expect(appendDesignContext("ship it", [{ path: "designs/<a&b>.html" }])).toContain(
+      "designs/&lt;a&amp;b&gt;.html",
+    );
   });
 });

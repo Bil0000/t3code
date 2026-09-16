@@ -7597,10 +7597,10 @@ export default function ChatView(props: ChatViewProps) {
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
     const composerReviewCommentsSnapshot: ReviewCommentContext[] = [...composerReviewComments];
     const providerPrompt = resolveProviderPromptForSend({
-      isElectron,
       prompt: promptForSend,
       trimmedPrompt: trimmed,
       threadId: threadIdForSend,
+      designs,
     });
     // Expired terminal excerpts are not sent; their chips leave the text with them.
     const messageTextForSend = composerTerminalContexts
