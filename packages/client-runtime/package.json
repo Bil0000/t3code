@@ -255,6 +255,10 @@
       "types": "./src/filePreview.ts",
       "default": "./src/filePreview.ts"
     },
+    "./design/editor": {
+      "types": "./src/design/editor.ts",
+      "default": "./src/design/editor.ts"
+    },
     "./design/document": {
       "types": "./src/design/document.ts",
       "default": "./src/design/document.ts"
