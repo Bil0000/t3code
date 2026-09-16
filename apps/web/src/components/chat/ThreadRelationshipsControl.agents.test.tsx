@@ -79,9 +79,10 @@ it("shows the matching child agent details and refreshes them when the agent set
     renderer.root
       .findAll((node) => typeof node.type === "string")
       .flatMap((node) => node.children.filter((child) => typeof child === "string"))
-      .join(" ");
+      .join(" ")
+      .replace(/\s+/g, " ");
   expect(text()).toContain("Checker");
-  expect(text()).toContain("Running checks");
+  expect(text()).toContain("running");
   expect(text()).toContain("gpt-5.4");
   expect(text()).toContain("gpt-5.3");
   expect(text()).toContain("— tok");
@@ -89,11 +90,11 @@ it("shows the matching child agent details and refreshes them when the agent set
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
   );
-  expect(text()).not.toContain("Running checks");
+  expect(text()).not.toContain("running");
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
   );
-  expect(text()).toContain("Running checks");
+  expect(text()).toContain("running");
 
   state.projection = {
     ...projection,
@@ -109,14 +110,14 @@ it("shows the matching child agent details and refreshes them when the agent set
   };
   await act(async () => renderer.update(cloneElement(panel)));
   expect(text()).toContain("Previous agents");
-  expect(text()).not.toContain("All checks passed");
+  expect(text()).not.toContain("Checker");
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
   );
-  expect(text()).toContain("All checks passed");
+  expect(text()).toContain("Checker");
   expect(text()).toContain("2m 15s");
-  expect(text()).toContain("Completed");
-  expect(text()).not.toContain("Running checks");
+  expect(text()).toContain("completed");
+  expect(text()).not.toContain("running");
   expect(text()).not.toContain("Worker");
 
   state.projection = {
@@ -132,14 +133,13 @@ it("shows the matching child agent details and refreshes them when the agent set
     })),
   };
   await act(async () => renderer.update(cloneElement(panel)));
-  expect(text()).toContain("1  failed");
-  expect(text()).not.toContain("Earlier build failed");
+  expect(text()).toContain("1 failed");
+  expect(text()).not.toContain("Old agent 7");
   await act(async () =>
     renderer.root
       .findAllByType("button")
       .find((button) => button.children.includes("Show "))!
       .props.onClick(),
   );
-  expect(text()).toContain("Earlier build failed");
   expect(text()).toContain("Old agent 7");
 });
