@@ -156,6 +156,9 @@ export function ThreadDetailsPrRow({
   const [confirmingMerge, setConfirmingMerge] = useState(false);
 
   const rowAction = resolveThreadPanelPullRequestAction(detail);
+  if (confirmingMerge && rowAction !== "merge") {
+    setConfirmingMerge(false);
+  }
   const conflicting = isPullRequestConflicting(detail);
   const checksState = detail === null ? "none" : classifyPullRequestChecks(detail.checks);
   const checksRollup = detail === null ? null : pullRequestChecksState(detail.checks);
