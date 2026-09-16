@@ -1,6 +1,10 @@
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { projectedSubagentsToRuntime } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  formatSubagentModelLabel,
+  formatSubagentTokenCount,
+  projectedSubagentsToRuntime,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
   deriveThreadRelationshipGraph,
@@ -37,7 +41,7 @@ import { useThreadProjection, useThreadShells } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
-import { AgentRow } from "../AgentsPanel";
+import { AgentElapsed } from "../AgentsPanel";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -335,14 +339,13 @@ export function ThreadRelationshipsPanel(props: {
                   ? BotIcon
                   : GitForkIcon;
               const relationship = relationshipLabel(edge, props.threadId);
+              const agent = isSubagent && !isParent ? subagentsByThreadId.get(threadId) : undefined;
               const threadTitle = relationshipThreadTitle({
-                title: node?.thread?.title ?? threadId,
+                title: node?.thread?.title ?? agent?.title ?? threadId,
                 isSubagent,
               });
-              const agent = isSubagent && !isParent ? subagentsByThreadId.get(threadId) : undefined;
-              const relationshipContent = agent ? (
-                <AgentRow agent={agent} />
-              ) : (
+              const modelLabel = agent ? formatSubagentModelLabel(agent.model, agent.effort) : null;
+              const relationshipContent = (
                 <>
                   <span className="relative -mx-0.5 grid size-4 shrink-0 place-items-center">
                     <RelationshipIcon className={THREAD_RELATIONSHIP_ICON_CLASS} />
@@ -358,12 +361,32 @@ export function ThreadRelationshipsPanel(props: {
                     <span className="block truncate text-[13px] font-medium leading-4 text-foreground/85">
                       {threadTitle}
                     </span>
+                    {agent ? (
+                      <span className="flex items-center gap-1 text-[10px] font-normal leading-3 text-muted-foreground">
+                        {modelLabel ? (
+                          <>
+                            <span className="truncate">{modelLabel}</span>
+                            <span aria-hidden>·</span>
+                          </>
+                        ) : null}
+                        <span className="shrink-0 tabular-nums">
+                          {agent.usage ? formatSubagentTokenCount(agent.usage.totalTokens) : "—"}{" "}
+                          tok
+                        </span>
+                        {agent.startedAt ? (
+                          <span className="shrink-0">
+                            · <AgentElapsed agent={agent} />
+                          </span>
+                        ) : null}
+                        <span className="sr-only">{agent.status}</span>
+                      </span>
+                    ) : null}
                   </span>
                   <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                 </>
               );
               return (
-                <li key={threadId} className="group flex items-center rounded-lg">
+                <li key={threadId} className="group flex h-9 items-center rounded-lg">
                   {isMergeTarget ? (
                     <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
                       <Tooltip>
@@ -427,15 +450,11 @@ export function ThreadRelationshipsPanel(props: {
                       <TooltipTrigger
                         render={
                           <Button
-                            size={agent ? "sm-multiline" : "sm"}
+                            size="sm"
                             variant="ghost"
                             disabled={node?.missing === true}
                             onClick={() => openThread(threadId)}
-                            className={
-                              agent
-                                ? "w-full min-w-0 justify-start text-left"
-                                : THREAD_DETAILS_PANEL_LINK_ROW_CLASS
-                            }
+                            className={THREAD_DETAILS_PANEL_LINK_ROW_CLASS}
                           />
                         }
                       >
