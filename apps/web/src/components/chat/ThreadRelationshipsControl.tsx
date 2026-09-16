@@ -135,7 +135,8 @@ function ThreadLineageGroup(props: {
           className="w-full justify-start gap-2 text-left text-muted-foreground/60"
         >
           <span className="shrink-0">
-            {props.label} ({props.rows.length})
+            {props.label}
+            {!expanded && ` (${props.rows.length})`}
           </span>
           <span aria-hidden className="h-px min-w-2 flex-1 bg-border/60" />
           {failedCount > 0 ? (
