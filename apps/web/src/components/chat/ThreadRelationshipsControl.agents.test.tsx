@@ -87,14 +87,8 @@ it("shows the matching child agent details and refreshes them when the agent set
   expect(text()).toContain("gpt-5.3");
   expect(text()).toContain("— tok");
   expect(text()).not.toContain("Unlinked agent");
-  await act(async () =>
-    renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
-  );
-  expect(text()).not.toContain("running");
-  await act(async () =>
-    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
-  );
-  expect(text()).toContain("running");
+  expect(text()).not.toContain("Active agents");
+  expect(renderer.root.findAllByProps({ type: "button", "aria-expanded": true })).toHaveLength(0);
 
   state.projection = {
     ...projection,
@@ -119,6 +113,14 @@ it("shows the matching child agent details and refreshes them when the agent set
   expect(text()).toContain("completed");
   expect(text()).not.toContain("running");
   expect(text()).not.toContain("Worker");
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
+  );
+  expect(text()).not.toContain("Checker");
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
+  );
+  expect(text()).toContain("Checker");
 
   state.projection = {
     ...projection,
