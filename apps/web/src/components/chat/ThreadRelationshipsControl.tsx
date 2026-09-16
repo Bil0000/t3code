@@ -42,6 +42,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
 import { AgentElapsed } from "../AgentsPanel";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -138,7 +139,9 @@ function ThreadLineageGroup(props: {
             {props.label} ({props.rows.length})
           </span>
           {failedCount > 0 ? (
-            <span className="ml-auto text-destructive-foreground">{failedCount} failed</span>
+            <Badge size="sm" variant="error">
+              {failedCount} failed
+            </Badge>
           ) : null}
         </Button>
       ) : null}
@@ -240,7 +243,7 @@ export function ThreadRelationshipsPanel(props: {
   });
   const groups = [
     { id: "related", label: null, rows: related, expanded: true },
-    { id: "active", label: "Active agents", rows: active, expanded: true },
+    { id: "active", label: null, rows: active, expanded: true },
     { id: "previous", label: "Previous agents", rows: previous, expanded: false },
   ];
 
@@ -291,7 +294,7 @@ export function ThreadRelationshipsPanel(props: {
       className="border-t border-border/65 px-2 pb-2.5 pt-2"
       data-thread-relationships-panel
     >
-      <div className="mb-1 flex min-h-8 items-center justify-between gap-2 px-2">
+      <div className="flex min-h-6 items-center justify-between gap-2 px-2">
         <h3
           id="thread-details-lineage-heading"
           className="text-[11px] font-medium text-muted-foreground"
