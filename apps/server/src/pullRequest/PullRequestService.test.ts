@@ -1532,52 +1532,80 @@ for (const [provider, host] of [
   ["bitbucket", "bitbucket.org"],
   ["azure-devops", "dev.azure.com"],
 ] as const) {
-  it.effect(`shares fresh ${provider} detail reads and respects rate-limit resets`, () =>
-    Effect.gen(function* () {
-      let calls = 0;
-      let limited = false;
-      const repository = provider === "azure-devops" ? "web" : "acme/web";
-      const service = yield* makeService({
-        projects: [
-          project({ id: "p1", title: "web", workspaceRoot: "/repo", repository, provider, host }),
-        ],
-        providers: [
-          fakeProvider(provider, {
-            getChangeRequest: () =>
-              Effect.gen(function* () {
-                calls += 1;
-                if (limited) {
-                  return yield* new PullRequestProviderError({
-                    provider,
-                    operation: "getChangeRequest",
-                    reason: "rate-limited",
-                    detail: "Retry after the reset.",
-                    retryAt: (yield* Clock.currentTimeMillis) + 120_000,
-                  });
-                }
-                return hostedChangeRequest("current details");
-              }),
-          }),
-        ],
-      });
-      const reference = { projectId: "p1" as ProjectId, repository, number: 1, allowStale: false };
-      yield* Effect.all([service.detail(reference), service.detail(reference)], { concurrency: 2 });
-      assert.strictEqual(calls, 1);
-      yield* TestClock.adjust("45 seconds");
-      limited = true;
-      yield* Effect.flip(service.detail(reference));
-      assert.strictEqual(calls, 2);
-      yield* TestClock.adjust("45 seconds");
-      yield* Effect.flip(service.detail(reference));
-      assert.strictEqual(calls, 2);
-      yield* TestClock.adjust("75 seconds");
-      limited = false;
-      const recovered = yield* service.detail(reference);
-      assert.strictEqual(recovered.body, "current details");
-      assert.strictEqual(calls, 3);
-    }),
+  it.effect.each(["detail", "checks"] as const)(
+    `shares fresh ${provider} %s reads and respects rate-limit resets`,
+    (read) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        let limited = false;
+        const repository = provider === "azure-devops" ? "web" : "acme/web";
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/repo", repository, provider, host }),
+          ],
+          providers: [
+            fakeProvider(provider, {
+              [read === "detail" ? "getChangeRequest" : "getChangeRequestChecks"]: () =>
+                Effect.gen(function* () {
+                  calls += 1;
+                  if (limited) {
+                    return yield* new PullRequestProviderError({
+                      provider,
+                      operation: "getChangeRequest",
+                      reason: "rate-limited",
+                      detail: "Retry after the reset.",
+                      retryAt: (yield* Clock.currentTimeMillis) + 120_000,
+                    });
+                  }
+                  return hostedChangeRequest("current details");
+                }),
+            }),
+          ],
+        });
+        const reference = {
+          projectId: "p1" as ProjectId,
+          repository,
+          number: 1,
+          allowStale: false,
+        };
+        yield* Effect.all([service[read](reference), service[read](reference)], { concurrency: 2 });
+        assert.strictEqual(calls, 1);
+        yield* TestClock.adjust("45 seconds");
+        limited = true;
+        yield* Effect.flip(service[read](reference));
+        assert.strictEqual(calls, 2);
+        yield* TestClock.adjust("45 seconds");
+        yield* Effect.flip(service[read](reference));
+        assert.strictEqual(calls, 2);
+        yield* TestClock.adjust("75 seconds");
+        limited = false;
+        const recovered = yield* service[read](reference);
+        assert.strictEqual(recovered?.state, "open");
+        assert.strictEqual(calls, 3);
+        yield* service.invalidate({ reference });
+        yield* service[read](reference);
+        assert.strictEqual(calls, 4);
+      }),
   );
 }
+
+it.effect("does not fall back to full detail when checks are unsupported", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/repo", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () => Effect.die("Unexpected full detail read"),
+        }),
+      ],
+    });
+    assert.isNull(
+      yield* service.checks({ projectId: "p1" as ProjectId, repository: "acme/web", number: 1 }),
+    );
+  }),
+);
 
 it.effect("uses a manual rate limit to pause later reads", () =>
   Effect.gen(function* () {
@@ -3924,7 +3952,7 @@ it.effect("shares linked summaries and reuses them for display without asking th
 
 it.effect("keeps routed reads separate when the GitHub account changes", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail", "diff"] as const) {
+    for (const operation of ["summary", "detail", "checks", "diff"] as const) {
       let failing = false;
       let calls = 0;
       const read = () =>
@@ -3941,6 +3969,7 @@ it.effect("keeps routed reads separate when the GitHub account changes", () =>
         providers: [
           fakeProvider("github", {
             getChangeRequestSummary: read,
+            getChangeRequestChecks: read,
             getChangeRequest: read,
             getDiff: () =>
               read().pipe(
@@ -3970,7 +3999,7 @@ it.effect("keeps routed reads separate when the GitHub account changes", () =>
 
 it.effect("isolates routed caches for two credentials belonging to the same account", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail", "diff"] as const) {
+    for (const operation of ["summary", "detail", "checks", "diff"] as const) {
       let credential = "broad";
       let calls = 0;
       const read = () =>
@@ -3995,6 +4024,7 @@ it.effect("isolates routed caches for two credentials belonging to the same acco
                 }),
               ),
             getChangeRequest: read,
+            getChangeRequestChecks: read,
             getChangeRequestSummary: read,
             getDiff: () =>
               read().pipe(

@@ -117,18 +117,38 @@ export function ThreadDetailsPrRow({
           input: { ...reference, allowStale: false },
         }),
   );
+  const supportsChecks =
+    serverConfigs.get(environmentId)?.environment.capabilities.pullRequestChecks === true;
+  const checksQuery = useEnvironmentQuery(
+    supportsChecks && reference !== null && detailQuery.data !== null
+      ? pullRequestEnvironment.checks({ environmentId, input: reference })
+      : null,
+  );
+  const detail =
+    detailQuery.data === null
+      ? null
+      : checksQuery.data !== null && checksQuery.dataUpdatedAt >= detailQuery.dataUpdatedAt
+        ? { ...detailQuery.data, ...checksQuery.data }
+        : detailQuery.data;
+  const open = reference !== null && (detail?.state ?? pr?.state) === "open";
+  const refreshKey = `${environmentId}:${project?.id}:${reference?.host}:${reference?.repository}:${number}`;
   useLiveRefresh(detailQuery.isPending ? null : detailQuery.refresh, {
-    enabled: reference !== null && (detailQuery.data?.state ?? pr?.state) === "open",
-    key: `workspace-pr:${environmentId}:${project?.id}:${reference?.host}:${reference?.repository}:${number}`,
+    enabled: open,
+    key: `workspace-pr:${refreshKey}`,
+    intervalMs: 10 * 60_000,
+  });
+  useLiveRefresh(checksQuery.isPending || detailQuery.isPending ? null : checksQuery.refresh, {
+    enabled: open && supportsChecks && !(checksQuery.isSuccess && checksQuery.data === null),
+    key: `workspace-pr-checks:${refreshKey}`,
     intervalMs: 45_000,
   });
-  const detail = detailQuery.data ?? null;
 
   const { actionPending, perform } = usePullRequestActionRunner({
     environmentId,
     reference,
     onSuccess: () => {
       detailQuery.refresh();
+      checksQuery.refresh();
       onActed?.();
     },
   });
