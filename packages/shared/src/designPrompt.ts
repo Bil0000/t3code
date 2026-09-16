@@ -73,7 +73,7 @@ export function appendDesignContext(
   prompt: string,
   designs: ReadonlyArray<{ path: string }>,
 ): string {
-  if (designs.length === 0 || prompt.includes("<t3_design_request>")) return prompt;
+  if (designs.length === 0 || DESIGN_REQUEST_PATTERN.test(prompt)) return prompt;
   return [
     prompt,
     [

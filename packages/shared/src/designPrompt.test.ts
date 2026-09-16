@@ -81,6 +81,13 @@ describe("appendDesignContext", () => {
     expect(appendDesignContext("let's go with direction D", [])).toBe("let's go with direction D");
   });
 
+  it("keeps design context when a follow-up quotes a request marker", () => {
+    const prompt = "Explain <t3_design_request>";
+    const result = appendDesignContext(prompt, [{ path: ".t3/designs/test.html" }]);
+    expect(result).toContain("<paths>\n.t3/designs/test.html\n</paths>");
+    expect(visibleDesignCommand(result)).toBe(prompt);
+  });
+
   it("leaves an expanded design request unchanged", () => {
     const request = expandDesignCommand({
       prompt: "/design a billing dashboard",
