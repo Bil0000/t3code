@@ -25,7 +25,7 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
   BotIcon,
-  ChevronRightIcon,
+  ChevronDownIcon,
   CornerLeftUpIcon,
   GitForkIcon,
   LoaderCircleIcon,
@@ -37,12 +37,13 @@ import { useMemo, useState, type ReactNode } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import { useThreadProjection, useThreadShells } from "../../state/entities";
+import { useServerConfigs, useThreadProjection, useThreadShells } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
 import { AgentElapsed } from "../AgentsPanel";
 import { Badge } from "../ui/badge";
+import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -129,20 +130,21 @@ function ThreadLineageGroup(props: {
           variant="ghost-muted"
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
-          className="w-full justify-start text-left"
+          className="w-full justify-start gap-2 text-left text-muted-foreground/60"
         >
-          <ChevronRightIcon
-            aria-hidden
-            className={cn("size-3 shrink-0", expanded && "rotate-90")}
-          />
-          <span>
+          <span className="shrink-0">
             {props.label} ({props.rows.length})
           </span>
+          <span aria-hidden className="h-px min-w-2 flex-1 bg-border/60" />
           {failedCount > 0 ? (
-            <Badge size="sm" variant="error" className="ml-auto">
+            <Badge size="sm" variant="error">
               {failedCount} failed
             </Badge>
           ) : null}
+          <ChevronDownIcon
+            aria-hidden
+            className={cn("size-3 shrink-0 transition-transform", expanded && "rotate-180")}
+          />
         </Button>
       ) : null}
       {expanded ? (
@@ -186,12 +188,20 @@ export function ThreadRelationshipsPanel(props: {
 }) {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
+  const providers = useServerConfigs().get(props.environmentId)?.providers;
   const subagentsByThreadId = useMemo(
     () =>
       new Map(
         (projection?.subagents ?? [])
           .filter((subagent) => subagent.childThreadId !== null)
-          .map((subagent) => [subagent.childThreadId, projectedSubagentsToRuntime([subagent])[0]]),
+          .map((subagent) => [
+            subagent.childThreadId,
+            {
+              ...projectedSubagentsToRuntime([subagent])[0]!,
+              driver: subagent.driver,
+              providerInstanceId: subagent.providerInstanceId,
+            },
+          ]),
       ),
     [projection?.subagents],
   );
@@ -348,10 +358,45 @@ export function ThreadRelationshipsPanel(props: {
                 isSubagent,
               });
               const modelLabel = agent ? formatSubagentModelLabel(agent.model, agent.effort) : null;
+              const provider = providers?.find(
+                (entry) =>
+                  entry.instanceId ===
+                  (agent?.providerInstanceId ?? node?.thread?.providerInstanceId),
+              );
+              const providerDriver = agent?.driver ?? provider?.driver;
+              const relationshipHint = node?.missing
+                ? "This related thread is unavailable"
+                : `Open ${relationship.toLowerCase()} in this chat`;
+              const relationshipTooltip = agent ? (
+                <div className="max-w-64 space-y-1 py-1">
+                  <div className="font-medium">{threadTitle}</div>
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+                    <dt className="text-muted-foreground">Model</dt>
+                    <dd className="text-right">{modelLabel ?? "Unknown"}</dd>
+                    <dt className="text-muted-foreground">Tokens</dt>
+                    <dd className="text-right tabular-nums">
+                      {agent.usage ? formatSubagentTokenCount(agent.usage.totalTokens) : "—"}
+                    </dd>
+                  </dl>
+                  <div className="text-muted-foreground">{relationshipHint}</div>
+                </div>
+              ) : (
+                relationshipHint
+              );
               const relationshipContent = (
                 <>
                   <span className="relative -mx-0.5 grid size-4 shrink-0 place-items-center">
-                    <RelationshipIcon className={THREAD_RELATIONSHIP_ICON_CLASS} />
+                    {isSubagent && !isParent && providerDriver ? (
+                      <ProviderInstanceIcon
+                        driverKind={providerDriver}
+                        displayName={provider?.displayName ?? providerDriver}
+                        acpRegistryIconUrl={provider?.iconUrl}
+                        iconClassName={THREAD_RELATIONSHIP_ICON_CLASS}
+                        className="z-auto"
+                      />
+                    ) : (
+                      <RelationshipIcon className={THREAD_RELATIONSHIP_ICON_CLASS} />
+                    )}
                     <span
                       className={cn(
                         "absolute -bottom-1 -right-1 size-2 rounded-full border-2 border-card",
@@ -364,28 +409,17 @@ export function ThreadRelationshipsPanel(props: {
                     <span className="block truncate text-[13px] font-medium leading-4 text-foreground/85">
                       {threadTitle}
                     </span>
-                    {agent ? (
-                      <span className="flex items-center gap-1 text-[10px] font-normal leading-3 text-muted-foreground">
-                        {modelLabel ? (
-                          <>
-                            <span className="truncate">{modelLabel}</span>
-                            <span aria-hidden>·</span>
-                          </>
-                        ) : null}
-                        <span className="shrink-0 tabular-nums">
-                          {agent.usage ? formatSubagentTokenCount(agent.usage.totalTokens) : "—"}{" "}
-                          tok
-                        </span>
-                        {agent.startedAt ? (
-                          <span className="shrink-0">
-                            · <AgentElapsed agent={agent} />
-                          </span>
-                        ) : null}
-                        <span className="sr-only">{agent.status}</span>
-                      </span>
-                    ) : null}
+                    {agent ? <span className="sr-only">{agent.status}</span> : null}
                   </span>
-                  <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  {agent ? (
+                    agent.startedAt ? (
+                      <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground">
+                        <AgentElapsed agent={agent} />
+                      </span>
+                    ) : null
+                  ) : (
+                    <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  )}
                 </>
               );
               return (
@@ -406,11 +440,7 @@ export function ThreadRelationshipsPanel(props: {
                         >
                           {relationshipContent}
                         </TooltipTrigger>
-                        <TooltipPopup side="left">
-                          {node?.missing
-                            ? "This related thread is unavailable"
-                            : `Open ${relationship.toLowerCase()} in this chat`}
-                        </TooltipPopup>
+                        <TooltipPopup side="left">{relationshipTooltip}</TooltipPopup>
                       </Tooltip>
                       <span
                         aria-hidden="true"
@@ -463,11 +493,7 @@ export function ThreadRelationshipsPanel(props: {
                       >
                         {relationshipContent}
                       </TooltipTrigger>
-                      <TooltipPopup side="left">
-                        {node?.missing
-                          ? "This related thread is unavailable"
-                          : `Open ${relationship.toLowerCase()} in this chat`}
-                      </TooltipPopup>
+                      <TooltipPopup side="left">{relationshipTooltip}</TooltipPopup>
                     </Tooltip>
                   )}
                 </li>

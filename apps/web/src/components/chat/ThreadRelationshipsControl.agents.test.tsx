@@ -13,6 +13,7 @@ vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }))
 vi.mock("../../state/entities", () => ({
   useThreadProjection: () => ({ projection: state.projection }),
   useThreadShells: () => [],
+  useServerConfigs: () => new Map(),
 }));
 vi.mock("../../lib/archivedThreadsState", () => ({
   useArchivedThreadSnapshots: () => ({ snapshots: [] }),
@@ -38,6 +39,8 @@ it("shows the matching child agent details and refreshes them when the agent set
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const agent = {
     id: "agent-1",
+    driver: "codex",
+    providerInstanceId: "codex",
     childThreadId: "child-1",
     title: "Checker",
     prompt: "Check the change",
@@ -83,9 +86,9 @@ it("shows the matching child agent details and refreshes them when the agent set
       .replace(/\s+/g, " ");
   expect(text()).toContain("Checker");
   expect(text()).toContain("running");
-  expect(text()).toContain("gpt-5.4");
-  expect(text()).toContain("gpt-5.3");
-  expect(text()).toContain("— tok");
+  expect(text()).not.toContain("gpt-5.4");
+  expect(text()).not.toContain("gpt-5.3");
+  expect(text()).not.toContain("tok");
   expect(text()).not.toContain("Unlinked agent");
   expect(text()).not.toContain("Active agents");
   expect(renderer.root.findAllByProps({ type: "button", "aria-expanded": true })).toHaveLength(0);
