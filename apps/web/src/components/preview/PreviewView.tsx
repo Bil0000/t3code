@@ -249,6 +249,7 @@ export function PreviewView({
       !bridge ||
       !runtimeTabId ||
       !designPath ||
+      !designSaver ||
       !designReady ||
       !visible ||
       isUnreachable ||
@@ -259,7 +260,7 @@ export function PreviewView({
     return () => {
       void bridge.setDesignEditing(runtimeTabId, false).catch(() => undefined);
     };
-  }, [designEditing, designPath, designReady, isUnreachable, runtimeTabId, visible]);
+  }, [designEditing, designPath, designReady, designSaver, isUnreachable, runtimeTabId, visible]);
 
   const navUrl = navStatus._tag === "Success" ? navStatus.url : null;
   const navTitle = navStatus._tag === "Success" ? navStatus.title : null;
@@ -813,7 +814,7 @@ export function PreviewView({
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}
         onToggleDesignEditing={
-          visible && !isUnreachable && previewBridge && runtimeTabId && designPath
+          visible && !isUnreachable && previewBridge && runtimeTabId && designPath && designSaver
             ? () => setDesignEditing((active) => !active)
             : undefined
         }

@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 const mocks = vi.hoisted(() => ({
   writeDesign: vi.fn(),
   designGuestReady: true,
+  designWorkspaceReady: true,
   setDesignEditing: vi.fn(async () => undefined),
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
@@ -72,8 +73,9 @@ vi.mock("~/components/files/fileSaveCoordinator", () => ({
 }));
 
 vi.mock("~/state/entities", () => ({
-  useThread: () => ({ projectId: "project-1", worktreePath: "/workspace" }),
-  useProject: () => ({ workspaceRoot: "/workspace" }),
+  useThread: () =>
+    mocks.designWorkspaceReady ? { projectId: "project-1", worktreePath: "/workspace" } : null,
+  useProject: () => (mocks.designWorkspaceReady ? { workspaceRoot: "/workspace" } : null),
 }));
 
 vi.mock("~/state/projects", () => ({
@@ -392,6 +394,7 @@ describe("PreviewView navigation", () => {
     mocks.showEmptyState = false;
     mocks.loading = false;
     mocks.designGuestReady = true;
+    mocks.designWorkspaceReady = true;
     mocks.setDesignEditing.mockClear();
     mocks.recordVisitForThread.mockClear();
   });
@@ -410,6 +413,13 @@ describe("PreviewView navigation", () => {
       await act(() => mocks.toggleDesignEditing?.());
       expect(mocks.setDesignEditing).not.toHaveBeenCalled();
       mocks.designGuestReady = true;
+      await render();
+      expect(mocks.setDesignEditing).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
+      mocks.designWorkspaceReady = false;
+      await render();
+      expect(mocks.toggleDesignEditing).toBeNull();
+      expect(mocks.setDesignEditing).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, false);
+      mocks.designWorkspaceReady = true;
       await render();
       expect(mocks.setDesignEditing).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
       mocks.loading = true;
