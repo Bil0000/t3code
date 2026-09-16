@@ -2684,11 +2684,7 @@ export function GeneralSettingsPanel() {
               }}
             >
               {(["queue", "steer"] as const).map((value) => (
-                <Toggle
-                  key={value}
-                  value={value}
-                  className="rounded-full px-3 font-normal text-muted-foreground data-pressed:text-foreground"
-                >
+                <Toggle key={value} value={value} variant="pill">
                   {value === "queue" ? "Queue" : "Steer"}
                 </Toggle>
               ))}
