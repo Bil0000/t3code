@@ -1469,9 +1469,8 @@ function renderFeedEntry(
   if (entry.type === "message") {
     const { message } = entry;
     const isUser = message.role === "user";
-    const renderedText = renderAssistantCitationsAsText(
-      isUser ? visibleDesignCommand(message.text) : message.text,
-    );
+    const visibleText = isUser ? visibleDesignCommand(message.text) : message.text;
+    const renderedText = renderAssistantCitationsAsText(visibleText);
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
@@ -1614,11 +1613,11 @@ function renderFeedEntry(
             {renderedText.trim().length > 0 ? (
               <CopyTextButton
                 accessibilityLabel="Copy message"
-                text={message.text}
+                text={visibleText}
                 onCopy={
                   message.context
                     ? () =>
-                        writeComposerContextClipboard(message.text, {
+                        writeComposerContextClipboard(visibleText, {
                           version: 1,
                           source: { environmentId: props.environmentId, messageId: message.id },
                           records: message.context!.records,
