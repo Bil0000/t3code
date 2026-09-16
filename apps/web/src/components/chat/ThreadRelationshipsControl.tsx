@@ -44,7 +44,6 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
 import { AgentElapsed } from "../AgentsPanel";
-import { Badge } from "../ui/badge";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./providerIconUtils";
 import { Button } from "../ui/button";
@@ -140,9 +139,9 @@ function ThreadLineageGroup(props: {
           </span>
           <span aria-hidden className="h-px min-w-2 flex-1 bg-border/60" />
           {failedCount > 0 ? (
-            <Badge size="sm" variant="error">
+            <span className="shrink-0 text-[10px] leading-none text-destructive-foreground">
               {failedCount} failed
-            </Badge>
+            </span>
           ) : null}
           <ChevronDownIcon
             aria-hidden
