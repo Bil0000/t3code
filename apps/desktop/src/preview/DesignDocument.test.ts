@@ -58,6 +58,11 @@ describe("resolveDesignPosition", () => {
     });
   });
 
+  it("keeps the CSS axis when only one coordinate was edited", () => {
+    expect(resolveDesignPosition("8", null, "24px 32px", 200, 100)).toEqual({ x: 8, y: 32 });
+    expect(resolveDesignPosition(null, "16", "50% 25%", 200, 100)).toEqual({ x: 100, y: 16 });
+  });
+
   it("prefers saved editor coordinates", () => {
     expect(resolveDesignPosition("8", "16", "24px 32px", 200, 100)).toEqual({
       x: 8,

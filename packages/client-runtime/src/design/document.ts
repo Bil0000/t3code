@@ -125,14 +125,11 @@ export function resolveDesignPosition(
   width: number,
   height: number,
 ): { x: number; y: number } {
-  if (storedX !== null || storedY !== null) {
-    return {
-      x: designLength(storedX ?? undefined, width),
-      y: designLength(storedY ?? undefined, height),
-    };
-  }
   const [x, y] = translate === "none" ? [] : translate.split(/\s+/);
-  return { x: designLength(x, width), y: designLength(y, height) };
+  return {
+    x: designLength(storedX ?? x, width),
+    y: designLength(storedY ?? y, height),
+  };
 }
 
 export function designPathFromUrl(url: string): string | null {
