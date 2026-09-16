@@ -74,6 +74,7 @@ describe("serializeDesignDocument", () => {
           let editorOpen = true;
           return {
             querySelectorAll: () => [],
+            style: { removeProperty: () => undefined },
             removeAttribute: (name: string) => {
               if (name === "data-t3code-design-open") editorOpen = false;
             },
@@ -182,4 +183,9 @@ describe("createDesignSelectionAnnotation", () => {
       createdAt: "2026-08-18T00:00:00.000Z",
     });
   });
+});
+
+it("reads modern CSS colors without treating OKLCH coordinates as RGB channels", () => {
+  expect(rgbToHex("oklch(0.5 0 0)", "#ffffff")).toBe("#636363");
+  expect(rgbToHex("not-a-color", "#ffffff")).toBe("#ffffff");
 });
