@@ -194,11 +194,11 @@ it("shows readable models and only differing workspace details in agent tooltips
       {
         instanceId: "codex",
         driver: "codex",
-        models: [{ slug: "gpt-5.4", name: "GPT-5.4", shortName: "GPT-5.4" }],
+        models: [{ slug: "gpt-5.4", name: "My GPT model", shortName: "My GPT" }],
       },
     ],
   });
-  state.projection = {
+  const projection = {
     thread: parent,
     runs: [],
     providerThreads: [],
@@ -220,6 +220,7 @@ it("shows readable models and only differing workspace details in agent tooltips
       },
     ],
   };
+  state.projection = projection;
   const panel = (
     <ThreadRelationshipsPanel
       environmentId={EnvironmentId.make("test")}
@@ -234,7 +235,7 @@ it("shows readable models and only differing workspace details in agent tooltips
       .findAll((node) => typeof node.type === "string")
       .flatMap((node) => node.children.filter((child) => typeof child === "string"))
       .join(" ");
-  expect(text()).toContain("GPT-5.4");
+  expect(text()).toContain("My GPT");
   expect(text()).not.toContain("Tokens");
   expect(text()).not.toContain("Open subagent");
   expect(text()).not.toContain("Project");
@@ -272,7 +273,27 @@ it("shows readable models and only differing workspace details in agent tooltips
   state.shells = [];
   state.configs.clear();
   await act(async () => renderer.update(cloneElement(panel)));
-  expect(text()).toContain("gpt-5.4");
+  expect(text()).toContain("GPT-5.4");
+  expect(text()).not.toContain("gpt-5.4");
   expect(text()).not.toContain("Project");
   expect(text()).not.toContain("Workspace");
+
+  for (const [driver, model, expected] of [
+    ["codex", "gpt-5.3-codex-spark", "GPT-5.3-Codex-Spark"],
+    ["codex", "custom/model-v2", "custom/model-v2"],
+    ["claudeAgent", "gpt-5.4", "GPT-5.4"],
+    ["claudeAgent", "claude-opus-4-6", "Claude Opus 4.6"],
+    ["cursor", "composer-2", "Composer 2"],
+    ["grok", "grok-4-fast", "Grok 4 Fast"],
+    ["antigravity", "gemini-3.8-flash-high", "Gemini 3.8 Flash High"],
+    ["opencode", "anthropic/claude-sonnet-4-6", "anthropic/Claude Sonnet 4.6"],
+    ["codex", null, "Unknown"],
+  ] as const) {
+    state.projection = {
+      ...projection,
+      subagents: [{ ...projection.subagents[0], driver, model }],
+    };
+    await act(async () => renderer.update(cloneElement(panel)));
+    expect(text()).toContain(expected);
+  }
 });

@@ -17,6 +17,7 @@ import {
   resolveLatestMergeBackRun,
 } from "@t3tools/client-runtime/state/thread-workflows";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import { formatModelSlugName } from "@t3tools/shared/model";
 import { groupBy } from "effect/Array";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -371,7 +372,11 @@ export function ThreadRelationshipsPanel(props: {
               );
               const providerDriver = agent?.driver ?? provider?.driver;
               const model = provider?.models.find((model) => model.slug === agent?.model);
-              const modelLabel = model ? getTriggerDisplayModelLabel(model) : agent?.model;
+              const modelLabel = model
+                ? getTriggerDisplayModelLabel(model)
+                : agent?.model
+                  ? formatModelSlugName(agent.model)
+                  : "Unknown";
               const project = projects.find((project) => project.id === node?.thread?.projectId);
               const differentProject =
                 currentThread && project && project.id !== currentThread.projectId ? project : null;
@@ -386,7 +391,7 @@ export function ThreadRelationshipsPanel(props: {
                   <div className="font-medium">{threadTitle}</div>
                   <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
                     <dt className="text-muted-foreground">Model</dt>
-                    <dd className="break-words text-right">{modelLabel ?? "Unknown"}</dd>
+                    <dd className="break-words text-right">{modelLabel}</dd>
                     {differentProject ? (
                       <>
                         <dt className="text-muted-foreground">Project</dt>
