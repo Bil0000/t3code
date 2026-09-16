@@ -5,7 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 
 describe("ComposerPendingApprovalActions", () => {
-  it("keeps the main decisions visible and secondary decisions in the menu", () => {
+  it("shows every default approval choice without opening a menu", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalActions
         requestId={ApprovalRequestId.make("approval-1")}
@@ -16,8 +16,8 @@ describe("ComposerPendingApprovalActions", () => {
 
     expect(markup).toContain(">Decline<");
     expect(markup).toContain(">Approve<");
-    expect(markup).not.toContain(">Cancel<");
-    expect(markup).not.toContain("Always allow this session");
+    expect(markup).toContain(">Cancel<");
+    expect(markup).toContain("Always allow this session");
   });
 
   it("shows only the approval choices advertised by an MCP server", () => {
@@ -34,7 +34,7 @@ describe("ComposerPendingApprovalActions", () => {
       />,
     );
 
-    expect(markup).not.toContain("Always allow Safari");
+    expect(markup).toContain("Always allow Safari");
     expect(markup).toContain(">Approve<");
     expect(markup).not.toContain("Always allow this session");
   });
