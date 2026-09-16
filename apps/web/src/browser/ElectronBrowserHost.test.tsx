@@ -14,6 +14,10 @@ const sessions = {
     serverEpoch: "server",
     desktopByTabId: {},
     sessions: {
+      browser: {
+        tabId: "browser",
+        navStatus: { _tag: "Loading", url: "https://example.com" },
+      },
       design: {
         tabId: "design",
         navStatus: {
@@ -34,7 +38,7 @@ vi.mock("./HostedBrowserWebview", () => ({
   HostedBrowserWebview: () => <div>Native browser</div>,
 }));
 
-it("removes design browser guests when the prepared connection changes", async () => {
+it("updates design filtering without unmounting browser guests during reconnect", async () => {
   vi.stubGlobal("window", {});
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const registry = AtomRegistry.make();
@@ -47,9 +51,16 @@ it("removes design browser guests when the prepared connection changes", async (
         </RegistryContext.Provider>,
       );
     });
-    expect(renderer!.root.findAllByType("div")).toHaveLength(2);
+    expect(renderer!.root.findAllByType("div")).toHaveLength(3);
+    const browser = renderer!.root.findAllByType("div")[1];
     await act(() => registry.set(connection, Option.some({ httpBaseUrl: "http://new-host" })));
-    expect(renderer!.root.findAllByType("div")).toHaveLength(1);
+    expect(renderer!.root.findAllByType("div")).toHaveLength(2);
+    await act(() => registry.set(connection, Option.none()));
+    expect(renderer!.root.findAllByType("div")).toHaveLength(2);
+    expect(renderer!.root.findAllByType("div")[1]).toBe(browser);
+    await act(() => registry.set(connection, Option.some({ httpBaseUrl: "http://new-host" })));
+    expect(renderer!.root.findAllByType("div")).toHaveLength(2);
+    expect(renderer!.root.findAllByType("div")[1]).toBe(browser);
   } finally {
     await act(() => renderer?.unmount());
     registry.dispose();

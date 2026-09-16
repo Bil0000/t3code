@@ -32,12 +32,14 @@ export function ElectronBrowserHost() {
             const connection = Option.getOrNull(
               get(environmentSession.preparedConnectionValueAtom(threadRef.environmentId)),
             );
-            if (!connection) return [];
             return Object.values(previewState.sessions)
               .filter(
                 (snapshot) =>
                   snapshot.navStatus._tag === "Idle" ||
-                  !designPathFromUrl(snapshot.navStatus.url, connection.httpBaseUrl),
+                  !designPathFromUrl(
+                    snapshot.navStatus.url,
+                    connection?.httpBaseUrl ?? snapshot.navStatus.url,
+                  ),
               )
               .map((snapshot) => ({
                 threadRef,
