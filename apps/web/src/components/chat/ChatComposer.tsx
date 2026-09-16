@@ -6004,27 +6004,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <ComposerBanner.Root
                 data-chat-composer-top-drawer="true"
                 variant={activePendingApproval ? "warning" : "info"}
-                className={
-                  activePendingApproval
-                    ? "px-3 [--composer-banner-padding-block:--spacing(3)]"
-                    : undefined
-                }
+                density={activePendingApproval ? "spacious" : "default"}
               >
                 {activePendingApproval ? (
                   <ComposerBanner.Row
-                    className="items-start gap-x-2 gap-y-3"
+                    layout="approval"
                     data-chat-composer-collapsed-controls="true"
                   >
-                    <ComposerBanner.Icon className="pt-0.5 text-warning [&>svg]:size-4">
+                    <ComposerBanner.Icon>
                       <ShieldIcon />
                     </ComposerBanner.Icon>
-                    <ComposerBanner.Content className="@max-[560px]:col-end-4">
+                    <ComposerBanner.Content>
                       <ComposerPendingApprovalPanel
                         approval={activePendingApproval}
                         pendingCount={pendingApprovals.length}
                       />
                     </ComposerBanner.Content>
-                    <ComposerBanner.Actions className="gap-1.5 @max-[560px]:col-start-2 @max-[560px]:col-end-4 @max-[560px]:row-start-2 @max-[560px]:justify-start">
+                    <ComposerBanner.Actions>
                       <ComposerPendingApprovalActions
                         requestId={activePendingApproval.requestId}
                         isResponding={respondingRequestIds.includes(
