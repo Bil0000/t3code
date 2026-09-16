@@ -5,7 +5,7 @@ import {
 } from "@t3tools/contracts";
 import { memo } from "react";
 import { ChevronRightIcon, TriangleAlertIcon } from "lucide-react";
-import { Button } from "../ui/button";
+import { Button, buttonVariants } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
@@ -79,24 +79,36 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
             {...composerFloatingLayerProps}
             side="top"
             align="end"
-            className="max-w-[min(22rem,calc(100vw-2rem))]"
+            className="w-56 max-w-[calc(100vw-2rem)]"
           >
-            {moreOptions.map((option) => (
-              <MenuItem
-                key={option.decision}
-                disabled={isResponding}
-                onClick={() => void onRespondToApproval(requestId, option.decision)}
-                className="items-start"
-              >
-                {option.warning ? <TriangleAlertIcon className="mt-0.5 text-warning" /> : null}
-                <span className="min-w-0 whitespace-normal wrap-break-word">
-                  {option.label}
-                  {option.warning ? (
-                    <span className="mt-1 block text-xs text-warning">{option.warning}</span>
-                  ) : null}
-                </span>
-              </MenuItem>
-            ))}
+            {moreOptions.map((option) => {
+              const item = (
+                <MenuItem
+                  key={option.decision}
+                  disabled={isResponding}
+                  aria-description={option.warning}
+                  onClick={() => void onRespondToApproval(requestId, option.decision)}
+                  className={buttonVariants({
+                    variant: "outline",
+                    size: "compact",
+                    className: "mb-1 h-auto min-h-7 w-full last:mb-0 sm:text-xs",
+                  })}
+                >
+                  {option.warning ? <TriangleAlertIcon className="size-3 text-warning" /> : null}
+                  <span className="min-w-0 whitespace-normal wrap-break-word">{option.label}</span>
+                </MenuItem>
+              );
+              return option.warning ? (
+                <Tooltip key={option.decision}>
+                  <TooltipTrigger render={item} />
+                  <TooltipPopup side="top" className="max-w-64 text-xs leading-snug">
+                    {option.warning}
+                  </TooltipPopup>
+                </Tooltip>
+              ) : (
+                item
+              );
+            })}
           </MenuPopup>
         </Menu>
       ) : null}
