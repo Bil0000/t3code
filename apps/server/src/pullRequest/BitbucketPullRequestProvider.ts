@@ -68,7 +68,10 @@ export function bitbucketProviderFailure(
   if (error._tag === "BitbucketResponseError" && error.status === 401) {
     return { reason: "unauthenticated" };
   }
-  if (error._tag === "BitbucketResponseError" && error.status === 429) {
+  if (
+    (error._tag === "BitbucketResponseError" || error._tag === "BitbucketResponseBodyReadError") &&
+    error.status === 429
+  ) {
     return {
       reason: "rate-limited",
       ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
@@ -127,7 +130,8 @@ export const make = Effect.gen(function* () {
       BitbucketUntrustedUrlError: recover,
       BitbucketRepositoryLocatorError: recover,
       BitbucketRequestError: recover,
-      BitbucketResponseBodyReadError: recover,
+      BitbucketResponseBodyReadError: (error) =>
+        error.status === 429 ? Effect.fail(error) : recover(),
       BitbucketResponseDecodeError: recover,
       BitbucketRepositoryVcsResolveError: recover,
       BitbucketRepositoryRemotesListError: recover,

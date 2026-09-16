@@ -19,9 +19,9 @@ for (const operation of [
   "listComments",
   "listCommits",
 ] as const) {
-  it.effect(
-    `preserves rate limits from ${operation} while recovering other optional-read failures`,
-    () =>
+  it.effect.each(["response", "body read"])(
+    `preserves rate limits from ${operation} on %s errors while recovering other optional-read failures`,
+    (variant) =>
       Effect.gen(function* () {
         const pullRequest = Result.getOrThrow(
           decodePullRequestJson(`{
@@ -46,12 +46,19 @@ for (const operation of [
                 listCommits: () => Effect.succeed([]),
                 [operation]: () =>
                   Effect.fail(
-                    new BitbucketApi.BitbucketResponseError({
-                      operation: "request",
-                      status,
-                      responseBodyLength: 0,
-                      retryAt: 120_000,
-                    }),
+                    variant === "response"
+                      ? new BitbucketApi.BitbucketResponseError({
+                          operation: "request",
+                          status,
+                          responseBodyLength: 0,
+                          retryAt: 120_000,
+                        })
+                      : new BitbucketApi.BitbucketResponseBodyReadError({
+                          operation: "request",
+                          status,
+                          cause: new Error("response stream failed"),
+                          retryAt: 120_000,
+                        }),
                   ),
               }),
             ),
