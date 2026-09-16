@@ -1,4 +1,5 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { fileBasename } from "@t3tools/client-runtime/markdown-links";
 import { projectedSubagentsToRuntime } from "@t3tools/client-runtime/state/subagentRuntime";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
@@ -395,9 +396,15 @@ export function ThreadRelationshipsPanel(props: {
                     {differentWorkspace ? (
                       <>
                         <dt className="text-muted-foreground">
-                          {node?.thread?.worktreePath ? "Worktree" : "Workspace"}
+                          {node?.thread?.branch
+                            ? "Branch"
+                            : node?.thread?.worktreePath
+                              ? "Worktree"
+                              : "Workspace"}
                         </dt>
-                        <dd className="break-all text-right">{differentWorkspace}</dd>
+                        <dd className="break-words text-right">
+                          {node?.thread?.branch ?? fileBasename(differentWorkspace)}
+                        </dd>
                       </>
                     ) : null}
                   </dl>

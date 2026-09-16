@@ -172,6 +172,7 @@ it("shows readable models and only differing workspace details in agent tooltips
     id: "child",
     projectId: "main",
     worktreePath: null as string | null,
+    branch: null as string | null,
     title: "Worker",
     lineage: { parentThreadId: "parent", relationshipToParent: "subagent" },
   };
@@ -242,16 +243,27 @@ it("shows readable models and only differing workspace details in agent tooltips
   state.shells = [{ environmentId: "test", source: { ...child } }];
   await act(async () => renderer.update(cloneElement(panel)));
   expect(text()).toContain("Worktree");
-  expect(text()).toContain("/main/worktrees/checker");
+  expect(text()).toContain("checker");
+  expect(text()).not.toContain("/main/worktrees");
   expect(text()).not.toContain("Project");
+
+  child.branch = "fix/checker";
+  state.shells = [{ environmentId: "test", source: { ...child } }];
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).toContain("Branch");
+  expect(text()).toContain("fix/checker");
+  expect(text()).not.toContain("Worktree");
+  expect(text()).not.toContain("/main/worktrees");
 
   child.projectId = "other";
   child.worktreePath = null;
+  child.branch = null;
   state.shells = [{ environmentId: "test", source: { ...child } }];
   await act(async () => renderer.update(cloneElement(panel)));
   expect(text()).toContain("Other project");
   expect(text()).toContain("Workspace");
-  expect(text()).toContain("/other");
+  expect(text()).toContain("other");
+  expect(text()).not.toContain("/other");
   expect(text()).not.toContain("Wrong environment");
   expect(text()).not.toContain("Worktree");
 
