@@ -37,6 +37,38 @@ afterEach(() => {
 });
 
 describe("openFileInPreview", () => {
+  it.each(["asset", "preview"])(
+    "does not present a file canceled during %s resolution",
+    async (stage) => {
+      const controller = new AbortController();
+      useRightPanelStore.getState().openDesign(threadRef, "newer-design");
+      const openPreview = vi.fn(async () => {
+        if (stage === "preview") controller.abort();
+        return AsyncResult.success(snapshot);
+      });
+      await openFileInPreview({
+        threadRef,
+        signal: controller.signal,
+        filePath: "/workspace/.t3/designs/old.html",
+        workspaceRoot: "/workspace",
+        httpBaseUrl: "http://127.0.0.1:3773",
+        createAssetUrl: async () => {
+          if (stage === "asset") controller.abort();
+          return AsyncResult.success({
+            relativeUrl: "/api/assets/old/file.html",
+            expiresAt: 1,
+            sourcePath: ".t3/designs/old.html",
+          });
+        },
+        openPreview,
+      });
+      expect(Object.values(useRightPanelStore.getState().byThreadKey)[0]?.surfaces).toEqual([
+        { id: "design", kind: "design", resourceId: "newer-design" },
+      ]);
+      if (stage === "asset") expect(openPreview).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ["design files", ".t3/designs/design-1.html", ".t3/designs/design-1.html"],
     ["web design files", ".t3/designs/design-1.html", ".t3/designs/design-1.html"],

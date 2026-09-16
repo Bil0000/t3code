@@ -1051,35 +1051,40 @@ export default function FilePreviewPanel({
     });
   };
 
-  const handleOpenInBrowser = useCallback(() => {
-    if (!absolutePath || !environmentHttpBaseUrl) return;
-    void (async () => {
-      const result = await openFileInPreview({
-        threadRef,
-        filePath: absolutePath,
-        workspaceRoot: cwd,
-        httpBaseUrl: environmentHttpBaseUrl,
-        createAssetUrl,
-        openPreview,
-      });
-      if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
-        return;
-      }
-      const error = squashAtomCommandFailure(result);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Unable to open file in browser",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-    })();
-  }, [absolutePath, createAssetUrl, cwd, environmentHttpBaseUrl, openPreview, threadRef]);
+  const handleOpenInBrowser = useCallback(
+    (signal?: AbortSignal) => {
+      if (!absolutePath || !environmentHttpBaseUrl) return;
+      void (async () => {
+        const result = await openFileInPreview({
+          threadRef,
+          filePath: absolutePath,
+          signal,
+          workspaceRoot: cwd,
+          httpBaseUrl: environmentHttpBaseUrl,
+          createAssetUrl,
+          openPreview,
+        });
+        if (signal?.aborted || result._tag === "Success" || isAtomCommandInterrupted(result)) {
+          return;
+        }
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file in browser",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      })();
+    },
+    [absolutePath, createAssetUrl, cwd, environmentHttpBaseUrl, openPreview, threadRef],
+  );
 
   useEffect(() => {
-    if (relativePath && isWorkspaceHtmlPath(relativePath)) {
-      handleOpenInBrowser();
-    }
+    if (!relativePath || !isWorkspaceHtmlPath(relativePath)) return;
+    const controller = new AbortController();
+    handleOpenInBrowser(controller.signal);
+    return () => controller.abort();
   }, [handleOpenInBrowser, relativePath]);
 
   return (

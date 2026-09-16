@@ -56,6 +56,7 @@ export async function openUrlInPreview<E>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly url: string;
   readonly designPath?: string;
+  readonly signal?: AbortSignal | undefined;
   readonly openPreview: OpenPreviewMutation<E>;
 }): Promise<AtomCommandResult<void, E | BrowserSettingsReadError>> {
   const defaults = await resolveBrowserDefaults().catch(
@@ -64,6 +65,7 @@ export async function openUrlInPreview<E>(input: {
   if (defaults instanceof BrowserSettingsReadError) {
     return AsyncResult.failure(Cause.fail(defaults));
   }
+  if (input.signal?.aborted) return AsyncResult.success(undefined);
   const result = await input.openPreview({
     environmentId: input.threadRef.environmentId,
     input: {
@@ -77,6 +79,7 @@ export async function openUrlInPreview<E>(input: {
     },
   });
   return mapAtomCommandResult(result, (snapshot) => {
+    if (input.signal?.aborted) return;
     applyPreviewServerSnapshot(input.threadRef, snapshot);
     rememberPreviewUrl(input.threadRef, input.url);
     const panel = useRightPanelStore.getState();
@@ -94,6 +97,7 @@ export async function openUrlInPreview<E>(input: {
 export async function openFileInPreview<AssetError, PreviewError>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly filePath: string;
+  readonly signal?: AbortSignal | undefined;
   readonly workspaceRoot: string | undefined;
   readonly httpBaseUrl: string;
   readonly createAssetUrl: (input: {
@@ -131,6 +135,7 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
       },
     },
   });
+  if (input.signal?.aborted) return AsyncResult.success(undefined);
   if (assetResult._tag === "Failure") {
     return AsyncResult.failure(assetResult.cause);
   }
@@ -151,6 +156,7 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
   return openUrlInPreview({
     threadRef: input.threadRef,
     url: previewUrl,
+    signal: input.signal,
     ...(previewUrl !== assetUrl && designPath ? { designPath } : {}),
     openPreview: input.openPreview,
   });
