@@ -15,6 +15,7 @@ import { useEnvironmentQuery } from "~/state/query";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Button } from "../ui/button";
+import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { groupPullRequestChecks } from "./pullRequestDetail.logic";
@@ -72,39 +73,41 @@ function ChecksBody({
   }
   return (
     <>
-      <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto">
-        {/* Keyed by position as well as by name: the host is the one that decides how many runs
+      <ScrollArea className="max-h-64">
+        <ul className="flex flex-col gap-1">
+          {/* Keyed by position as well as by name: the host is the one that decides how many runs
           share a name, and a repeated key is a rendering fault rather than a wrong list. */}
-        {visibleChecks.map((check, index) => (
-          <li key={`${index}:${check.name}`} className="flex items-center gap-2 text-xs">
-            <PullRequestCheckStatusIcon status={check.status} />
-            <Tooltip>
-              <TooltipTrigger
-                render={<span className="min-w-0 flex-1 truncate">{check.name}</span>}
-              />
-              <TooltipPopup side="top">{check.description ?? check.name}</TooltipPopup>
-            </Tooltip>
-            <span className="shrink-0 text-muted-foreground">
-              {pullRequestCheckStatusLabel(check)}
-            </span>
-            {check.url === null ? null : (
-              <button
-                type="button"
-                className="shrink-0 text-primary hover:underline"
-                onClick={() => {
-                  if (!check.url) return;
-                  void openLink(check.url).catch((error: unknown) => {
-                    console.error(error);
-                    toastManager.add({ type: "error", title: "Unable to open check details" });
-                  });
-                }}
-              >
-                Details
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
+          {visibleChecks.map((check, index) => (
+            <li key={`${index}:${check.name}`} className="flex items-center gap-2 text-xs">
+              <PullRequestCheckStatusIcon status={check.status} />
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span className="min-w-0 flex-1 truncate">{check.name}</span>}
+                />
+                <TooltipPopup side="top">{check.description ?? check.name}</TooltipPopup>
+              </Tooltip>
+              <span className="shrink-0 text-muted-foreground">
+                {pullRequestCheckStatusLabel(check)}
+              </span>
+              {check.url === null ? null : (
+                <button
+                  type="button"
+                  className="shrink-0 text-primary hover:underline"
+                  onClick={() => {
+                    if (!check.url) return;
+                    void openLink(check.url).catch((error: unknown) => {
+                      console.error(error);
+                      toastManager.add({ type: "error", title: "Unable to open check details" });
+                    });
+                  }}
+                >
+                  Details
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      </ScrollArea>
       {canCollapse ? (
         <Button
           variant="ghost"
