@@ -25,7 +25,7 @@ const DESIGN_REQUEST_PATTERN =
   /^([\s\S]*?)<t3_design_request>\n\n<original>([\s\S]*?)<\/original>\n\n[\s\S]*?\n\n<\/t3_design_request>([\s\S]*)$/;
 
 const DESIGN_CONTEXT_PATTERN =
-  /\n*<t3_design_context>\n\n<paths>\n[\s\S]*?\n\n<\/t3_design_context>/;
+  /\n*<t3_design_context>\n\n<paths>\n[\s\S]*?\n\n<\/t3_design_context>/g;
 
 const escapeXml = (value: string): string =>
   value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -87,7 +87,10 @@ export function appendDesignContext(
 }
 
 export function visibleDesignCommand(prompt: string): string {
-  const withoutContext = prompt.replace(DESIGN_CONTEXT_PATTERN, "");
+  const context = [...prompt.matchAll(DESIGN_CONTEXT_PATTERN)].at(-1);
+  const withoutContext = context
+    ? prompt.slice(0, context.index) + prompt.slice(context.index + context[0].length)
+    : prompt;
   const match = DESIGN_REQUEST_PATTERN.exec(withoutContext);
   return match
     ? `${match[1] ?? ""}${unescapeXml(match[2] ?? "")}${match[3] ?? ""}`

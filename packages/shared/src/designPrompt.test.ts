@@ -118,3 +118,13 @@ describe("appendDesignContext", () => {
     );
   });
 });
+
+it("preserves a quoted design context block when hiding the appended context", () => {
+  const quoted = appendDesignContext("Example", [{ path: ".t3/designs/example.html" }]);
+  const prompt = `Explain this:\n${quoted}`;
+  const result = appendDesignContext(prompt, [{ path: ".t3/designs/current.html" }]);
+  expect(visibleDesignCommand(result)).toBe(prompt);
+  expect(visibleDesignCommand(`${result}\n\n<terminal_context>after</terminal_context>`)).toBe(
+    `${prompt}\n\n<terminal_context>after</terminal_context>`,
+  );
+});
