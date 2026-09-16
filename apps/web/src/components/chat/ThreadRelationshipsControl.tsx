@@ -119,11 +119,12 @@ function ThreadLineageGroup(props: {
   return (
     <div>
       {props.label ? (
-        <button
-          type="button"
+        <Button
+          size="sm"
+          variant="ghost-muted"
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
-          className="flex min-h-8 w-full items-center gap-1.5 rounded-lg px-2 text-left text-[11px] font-medium text-muted-foreground hover:bg-accent/40"
+          className="h-8 w-full justify-start rounded-lg px-2 text-left text-[11px] sm:h-8 sm:text-[11px]"
         >
           <ChevronRightIcon
             aria-hidden
@@ -135,7 +136,7 @@ function ThreadLineageGroup(props: {
           {failedCount > 0 ? (
             <span className="ml-auto text-destructive-foreground">{failedCount} failed</span>
           ) : null}
-        </button>
+        </Button>
       ) : null}
       {expanded ? (
         <ThreadLineageRowList

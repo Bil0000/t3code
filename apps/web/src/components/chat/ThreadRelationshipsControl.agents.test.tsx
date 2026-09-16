@@ -86,9 +86,13 @@ it("shows the matching child agent details and refreshes them when the agent set
   expect(text()).toContain("gpt-5.3");
   expect(text()).toContain("— tok");
   expect(text()).not.toContain("Unlinked agent");
-  await act(async () => renderer.root.findByProps({ "aria-expanded": true }).props.onClick());
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
+  );
   expect(text()).not.toContain("Running checks");
-  await act(async () => renderer.root.findByProps({ "aria-expanded": false }).props.onClick());
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
+  );
   expect(text()).toContain("Running checks");
 
   state.projection = {
@@ -106,7 +110,9 @@ it("shows the matching child agent details and refreshes them when the agent set
   await act(async () => renderer.update(cloneElement(panel)));
   expect(text()).toContain("Previous agents");
   expect(text()).not.toContain("All checks passed");
-  await act(async () => renderer.root.findByProps({ "aria-expanded": false }).props.onClick());
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
+  );
   expect(text()).toContain("All checks passed");
   expect(text()).toContain("2m 15s");
   expect(text()).toContain("Completed");
