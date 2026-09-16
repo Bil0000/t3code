@@ -120,11 +120,11 @@ function ThreadLineageGroup(props: {
     <div>
       {props.label ? (
         <Button
-          size="sm"
+          size="compact"
           variant="ghost-muted"
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
-          className="h-8 w-full justify-start rounded-lg px-2 text-left text-[11px] sm:h-8 sm:text-[11px]"
+          className="w-full justify-start text-left"
         >
           <ChevronRightIcon
             aria-hidden
@@ -427,14 +427,15 @@ export function ThreadRelationshipsPanel(props: {
                       <TooltipTrigger
                         render={
                           <Button
-                            size="sm"
+                            size={agent ? "sm-multiline" : "sm"}
                             variant="ghost"
                             disabled={node?.missing === true}
                             onClick={() => openThread(threadId)}
-                            className={cn(
-                              THREAD_DETAILS_PANEL_LINK_ROW_CLASS,
-                              agent && "h-auto px-1 sm:h-auto",
-                            )}
+                            className={
+                              agent
+                                ? "w-full min-w-0 justify-start text-left"
+                                : THREAD_DETAILS_PANEL_LINK_ROW_CLASS
+                            }
                           />
                         }
                       >
