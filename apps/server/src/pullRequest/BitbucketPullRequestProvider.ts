@@ -120,12 +120,26 @@ export const make = Effect.gen(function* () {
   const recoverRead = <A>(
     read: Effect.Effect<A, BitbucketPullRequestApi.BitbucketPullRequestApiError>,
     fallback: A,
-  ) =>
-    Effect.catchIf(
-      read,
-      (error) => bitbucketProviderFailure(error).reason !== "rate-limited",
-      () => Effect.succeed(fallback),
-    );
+  ) => {
+    const recover = () => Effect.succeed(fallback);
+    return Effect.catchTags(read, {
+      BitbucketResponseError: (error) => (error.status === 429 ? Effect.fail(error) : recover()),
+      BitbucketUntrustedUrlError: recover,
+      BitbucketRepositoryLocatorError: recover,
+      BitbucketRequestError: recover,
+      BitbucketResponseBodyReadError: recover,
+      BitbucketResponseDecodeError: recover,
+      BitbucketRepositoryVcsResolveError: recover,
+      BitbucketRepositoryRemotesListError: recover,
+      BitbucketRepositoryRemoteNotFoundError: recover,
+      BitbucketPullRequestBodyReadError: recover,
+      BitbucketCheckoutError: recover,
+      BitbucketPullRequestReadError: recover,
+      BitbucketViewerUnavailableError: recover,
+      BitbucketRepositoryUnsupportedError: recover,
+      BitbucketDiffCommitError: recover,
+    });
+  };
 
   const provider: PullRequestProviderApi = {
     kind: "bitbucket",
