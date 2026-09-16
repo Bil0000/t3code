@@ -243,16 +243,23 @@ export function PreviewChromeRow({
         </InputGroup>
 
         {onToggleDesignEditing ? (
-          <Button
-            variant={designEditing ? "secondary" : "ghost"}
-            size="xs"
-            onClick={onToggleDesignEditing}
-            aria-pressed={designEditing ? "true" : "false"}
-            type="button"
-          >
-            <Pencil />
-            Edit
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant={designEditing ? "secondary" : "ghost"}
+                  size="xs"
+                  onClick={onToggleDesignEditing}
+                  aria-pressed={designEditing ? "true" : "false"}
+                  type="button"
+                />
+              }
+            >
+              <Pencil className={cn(designEditing && "text-primary")} />
+              Edit
+            </TooltipTrigger>
+            <TooltipPopup>{designEditing ? "Close design editor" : "Edit design"}</TooltipPopup>
+          </Tooltip>
         ) : null}
 
         {onPickElement ? (

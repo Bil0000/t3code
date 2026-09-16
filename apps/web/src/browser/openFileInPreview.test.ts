@@ -39,8 +39,10 @@ afterEach(() => {
 describe("openFileInPreview", () => {
   it.each([
     ["design files", ".t3/designs/design-1.html", ".t3/designs/design-1.html"],
+    ["web design files", ".t3/designs/design-1.html", ".t3/designs/design-1.html"],
     ["ordinary HTML files", "report.html", null],
   ])("adds editor metadata only when reopening %s", async (_scenario, sourcePath, designPath) => {
+    if (_scenario === "web design files") vi.stubGlobal("window", {});
     const openPreview = vi.fn(
       async (_request: {
         readonly environmentId: ScopedThreadRef["environmentId"];
@@ -65,5 +67,8 @@ describe("openFileInPreview", () => {
     const openedUrl = new URL(openPreview.mock.calls[0]?.[0].input.url ?? "");
     expect(openedUrl.searchParams.has("t3-design")).toBe(designPath !== null);
     expect(openedUrl.searchParams.get("t3-design-path")).toBe(designPath);
+    expect(Object.values(useRightPanelStore.getState().byThreadKey)[0]?.activeSurfaceId).toBe(
+      designPath ? "design" : "browser:tab-1",
+    );
   });
 });

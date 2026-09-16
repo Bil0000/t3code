@@ -1,3 +1,4 @@
+import { isWorkspaceHtmlPath } from "@t3tools/contracts";
 import { Spinner } from "~/components/ui/spinner";
 import type {
   ChatFileAttachment,
@@ -1074,6 +1075,12 @@ export default function FilePreviewPanel({
       );
     })();
   }, [absolutePath, createAssetUrl, cwd, environmentHttpBaseUrl, openPreview, threadRef]);
+
+  useEffect(() => {
+    if (relativePath && isWorkspaceHtmlPath(relativePath)) {
+      handleOpenInBrowser();
+    }
+  }, [handleOpenInBrowser, relativePath]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">

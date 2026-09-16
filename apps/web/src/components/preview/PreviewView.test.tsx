@@ -16,6 +16,8 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
   writeDesign: vi.fn(),
+  designGuestReady: true,
+  setDesignEditing: vi.fn(async () => undefined),
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
@@ -127,7 +129,7 @@ vi.mock("~/previewStateStore", () => ({
     activeTabId: "tab-1",
     desktopByTabId: {
       "tab-1": {
-        hasWebContents: true,
+        hasWebContents: mocks.designGuestReady,
         canGoBack: false,
         canGoForward: false,
         loading: mocks.loading,
@@ -239,7 +241,8 @@ vi.mock("./previewBridge", () => ({
   previewBridge: {
     navigate: mocks.navigate,
     pickElement: mocks.pickElement,
-    setDesignEditing: vi.fn(async () => undefined),
+    setDesignEditing: mocks.setDesignEditing,
+    onDesignChange: () => () => {},
     pictureInPicture: {
       open: mocks.openPictureInPicture,
       close: mocks.closePictureInPicture,
@@ -388,7 +391,37 @@ describe("PreviewView navigation", () => {
     mocks.previewUrl = "http://example.com/";
     mocks.showEmptyState = false;
     mocks.loading = false;
+    mocks.designGuestReady = true;
+    mocks.setDesignEditing.mockClear();
     mocks.recordVisitForThread.mockClear();
+  });
+
+  it("opens the design editor when its guest becomes ready and restores it after reload", async () => {
+    mocks.previewUrl =
+      "http://172.25.85.75:3773/api/assets/design?t3-design=1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html";
+    mocks.designGuestReady = false;
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(document.createElement("div") as unknown as Element);
+    const render = () =>
+      act(() => root.render(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />));
+    try {
+      await render();
+      await act(() => mocks.toggleDesignEditing?.());
+      expect(mocks.setDesignEditing).not.toHaveBeenCalled();
+      mocks.designGuestReady = true;
+      await render();
+      expect(mocks.setDesignEditing).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
+      mocks.loading = true;
+      await render();
+      expect(mocks.setDesignEditing).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, false);
+      mocks.loading = false;
+      await render();
+      expect(mocks.setDesignEditing).toHaveBeenLastCalledWith(TEST_RUNTIME_TAB_ID, true);
+    } finally {
+      await act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not rerender while loading time passes", async () => {

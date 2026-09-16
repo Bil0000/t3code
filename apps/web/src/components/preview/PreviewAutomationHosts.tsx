@@ -1,5 +1,7 @@
 "use client";
 
+import { designPathFromUrl } from "@t3tools/shared/designPrompt";
+
 import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -57,7 +59,6 @@ import {
 } from "~/browser/browserDefaults";
 import { runBrowserViewportMutation } from "~/browser/browserViewportActions";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
-import { isElectron } from "~/env";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { assetEnvironment } from "~/state/assets";
 import { useEnvironments } from "~/state/environments";
@@ -275,7 +276,6 @@ export function PreviewAutomationHosts({
   readonly getActiveThreadRef: () => ScopedThreadRef | null;
 }) {
   const { environments } = useEnvironments();
-  if (!isElectron || !previewBridge?.automation) return null;
   return (
     <>
       {/*
@@ -305,7 +305,9 @@ function PreviewAutomationHost(props: {
     () => ({
       clientId: automationClientId,
       environmentId,
-      supportedOperations: [...PREVIEW_AUTOMATION_OPERATIONS],
+      supportedOperations: previewBridge?.automation
+        ? [...PREVIEW_AUTOMATION_OPERATIONS]
+        : ["openFile"],
     }),
     [automationClientId, environmentId],
   );
@@ -322,6 +324,7 @@ function PreviewAutomationHost(props: {
   const open = useAtomCommand(previewEnvironment.open, {
     reportFailure: false,
   });
+  const navigate = useAtomCommand(previewEnvironment.navigate, { reportFailure: false });
   const resize = useAtomCommand(previewEnvironment.resize, {
     reportFailure: false,
   });
@@ -451,7 +454,38 @@ function PreviewAutomationHost(props: {
               const url = new URL(assetUrl);
               url.searchParams.set("t3-design", request.requestId);
               url.searchParams.set("t3-design-path", fileInput.path);
-              input = { url: url.toString(), open: true, reuseExistingTab: true };
+              const existing = Object.values(state.sessions).find(
+                (session) =>
+                  session.navStatus._tag !== "Idle" &&
+                  designPathFromUrl(session.navStatus.url, connection.httpBaseUrl) ===
+                    fileInput.path,
+              );
+              const result = existing
+                ? await navigate({
+                    environmentId,
+                    input: {
+                      threadId: request.threadId,
+                      tabId: existing.tabId,
+                      url: url.toString(),
+                    },
+                  })
+                : await open({
+                    environmentId,
+                    input: { threadId: request.threadId, url: url.toString() },
+                  });
+              if (result._tag === "Failure") return raiseAtomCommandFailure(result);
+              applyPreviewServerSnapshot(threadRef, result.value);
+              useRightPanelStore.getState().openDesign(threadRef, result.value.tabId);
+              const active = getActiveThreadRef();
+              return {
+                available: true,
+                visible:
+                  active?.environmentId === environmentId && active.threadId === request.threadId,
+                tabId: result.value.tabId,
+                url: url.toString(),
+                title: fileInput.path.split("/").at(-1) ?? "Design",
+                loading: true,
+              };
             } else {
               input = request.input as PreviewAutomationOpenInput;
             }
@@ -531,15 +565,11 @@ function PreviewAutomationHost(props: {
                 updatePreviewServerSnapshot(threadRef, resizeResult.value);
               }
             }
-            const opensDesign = request.operation === "openFile";
-            const shouldPresentPreview =
-              opensDesign ||
-              shouldOpenPreviewMiniPlayer(
-                input,
-                (await resolveBrowserDefaults()).autoShowFloatingPreview,
-              );
-            const explicitlySuppressed =
-              !opensDesign && explicitlySuppressesPreviewMiniPlayer(input);
+            const shouldPresentPreview = shouldOpenPreviewMiniPlayer(
+              input,
+              (await resolveBrowserDefaults()).autoShowFloatingPreview,
+            );
+            const explicitlySuppressed = explicitlySuppressesPreviewMiniPlayer(input);
             const suppressedTabs = presentationSuppressedRuntimeTabsRef.current.get(
               request.threadId,
             );
@@ -565,10 +595,7 @@ function PreviewAutomationHost(props: {
                 presentationSuppressedRuntimeTabsRef.current.delete(request.threadId);
               }
             }
-            if (opensDesign) {
-              usePreviewMiniPlayerStore.getState().close(threadRef);
-              useRightPanelStore.getState().openBrowser(threadRef, activeTabId);
-            } else if (shouldPresentPreview) {
+            if (shouldPresentPreview) {
               usePreviewMiniPlayerStore
                 .getState()
                 .open(threadRef, browserMiniPlayerSource(activeTabId));
@@ -582,22 +609,11 @@ function PreviewAutomationHost(props: {
               activeThreadRef?.environmentId === environmentId &&
               activeThreadRef.threadId === request.threadId
             ) {
-              const receipt = await waitForBrowserSurfaceReady(
+              await waitForBrowserSurfaceReady(
                 activeRuntimeTabId,
-                opensDesign
-                  ? request.timeoutMs
-                  : Math.min(request.timeoutMs, PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS),
-                opensDesign ? "right-panel" : "mini-player",
+                Math.min(request.timeoutMs, PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS),
+                "mini-player",
               );
-              if (!receipt && opensDesign) {
-                throw new PreviewAutomationViewportTimeoutError({
-                  requestId: request.requestId,
-                  environmentId,
-                  threadId: request.threadId,
-                  tabId: activeTabId,
-                  timeoutMs: request.timeoutMs,
-                });
-              }
             }
             if (reusedExistingTab && resolvedInputUrl && previewBridge) {
               assertPreviewRuntimeCurrent(threadRef, activeTabId, activeRuntimeTabId, request);
@@ -839,7 +855,16 @@ function PreviewAutomationHost(props: {
         browserActivity.release?.();
       }
     },
-    [createAssetUrl, environmentId, listPreviews, open, registry, resize, getActiveThreadRef],
+    [
+      createAssetUrl,
+      environmentId,
+      listPreviews,
+      navigate,
+      open,
+      registry,
+      resize,
+      getActiveThreadRef,
+    ],
   );
   const [requestHandlerAtom] = useState(() => Atom.make({ handle: handleRequest }));
   const setRequestHandler = useAtomSet(requestHandlerAtom);

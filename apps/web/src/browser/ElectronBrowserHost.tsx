@@ -1,5 +1,8 @@
 "use client";
 
+import { designPathFromUrl } from "@t3tools/shared/designPrompt";
+import { readPreparedConnection } from "~/state/session";
+
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
 import { useEffect, useMemo } from "react";
@@ -21,18 +24,27 @@ export function ElectronBrowserHost() {
       Object.entries(previewByThreadKey).flatMap(([threadKey, previewState]) => {
         const threadRef = parseScopedThreadKey(threadKey);
         return threadRef
-          ? Object.values(previewState.sessions).map((snapshot) => ({
-              threadRef,
-              snapshot,
-              runtimeTabId: previewRuntimeTabId(
+          ? Object.values(previewState.sessions)
+              .filter((snapshot) => {
+                const base = readPreparedConnection(threadRef.environmentId)?.httpBaseUrl;
+                return (
+                  !base ||
+                  snapshot.navStatus._tag === "Idle" ||
+                  !designPathFromUrl(snapshot.navStatus.url, base)
+                );
+              })
+              .map((snapshot) => ({
                 threadRef,
-                previewState.serverEpoch,
-                snapshot.tabId,
-              ),
-              pictureInPicture:
-                previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
-              zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
-            }))
+                snapshot,
+                runtimeTabId: previewRuntimeTabId(
+                  threadRef,
+                  previewState.serverEpoch,
+                  snapshot.tabId,
+                ),
+                pictureInPicture:
+                  previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
+                zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
+              }))
           : [];
       }),
     [previewByThreadKey],

@@ -242,13 +242,14 @@ export function PreviewView({
     setDesignEditing(false);
   }, [designPath, runtimeTabId]);
 
+  const designReady = desktopOverlay?.hasWebContents === true && !loading;
   useEffect(() => {
     const bridge = previewBridge;
     if (
       !bridge ||
       !runtimeTabId ||
       !designPath ||
-      loading ||
+      !designReady ||
       !visible ||
       isUnreachable ||
       !designEditing
@@ -256,9 +257,9 @@ export function PreviewView({
       return;
     void bridge.setDesignEditing(runtimeTabId, true);
     return () => {
-      void bridge.setDesignEditing(runtimeTabId, false);
+      void bridge.setDesignEditing(runtimeTabId, false).catch(() => undefined);
     };
-  }, [designEditing, designPath, isUnreachable, loading, runtimeTabId, visible]);
+  }, [designEditing, designPath, designReady, isUnreachable, runtimeTabId, visible]);
 
   const navUrl = navStatus._tag === "Success" ? navStatus.url : null;
   const navTitle = navStatus._tag === "Success" ? navStatus.title : null;

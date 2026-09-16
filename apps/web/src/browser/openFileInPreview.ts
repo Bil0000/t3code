@@ -55,6 +55,7 @@ export type OpenPreviewMutation<E = unknown> = (input: {
 export async function openUrlInPreview<E>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly url: string;
+  readonly designPath?: string;
   readonly openPreview: OpenPreviewMutation<E>;
 }): Promise<AtomCommandResult<void, E | BrowserSettingsReadError>> {
   const defaults = await resolveBrowserDefaults().catch(
@@ -78,7 +79,11 @@ export async function openUrlInPreview<E>(input: {
   return mapAtomCommandResult(result, (snapshot) => {
     applyPreviewServerSnapshot(input.threadRef, snapshot);
     rememberPreviewUrl(input.threadRef, input.url);
-    useRightPanelStore.getState().openBrowser(input.threadRef, snapshot.tabId);
+    const panel = useRightPanelStore.getState();
+    if (input.designPath) {
+      panel.openDesign(input.threadRef, snapshot.tabId);
+      panel.closeSurface(input.threadRef, `file:${input.designPath}`);
+    } else panel.openBrowser(input.threadRef, snapshot.tabId);
   });
 }
 
@@ -102,7 +107,10 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
     AssetError | PreviewError | BrowserPreviewUnavailableError | BrowserSettingsReadError
   >
 > {
-  if (!isPreviewSupportedInRuntime()) {
+  if (
+    !isPreviewSupportedInRuntime() &&
+    !isWorkspaceHtmlPath(mediaFileReference(input.filePath, input.workspaceRoot).relativePath ?? "")
+  ) {
     return AsyncResult.failure(
       Cause.fail(
         new BrowserPreviewUnavailableError({
@@ -143,6 +151,7 @@ export async function openFileInPreview<AssetError, PreviewError>(input: {
   return openUrlInPreview({
     threadRef: input.threadRef,
     url: previewUrl,
+    ...(previewUrl !== assetUrl && designPath ? { designPath } : {}),
     openPreview: input.openPreview,
   });
 }
