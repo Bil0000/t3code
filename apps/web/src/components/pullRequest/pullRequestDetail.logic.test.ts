@@ -15,6 +15,7 @@ import { buildMessageContext, reviewCommentContextReference } from "~/lib/compos
 import {
   buildAddSelectionToAgentHandoff,
   classifyPullRequestChecks,
+  groupPullRequestChecks,
   describePullRequestChecks,
   resolveThreadPanelPullRequestAction,
   buildAskAboutPullRequestHandoff,
@@ -53,6 +54,27 @@ import {
   writePullRequestDetailSnapshot,
 } from "./pullRequestDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
+
+it("groups checks needing attention before running and completed checks without losing any", () => {
+  const checks = (
+    [
+      "success",
+      "pending",
+      "failure",
+      "skipped",
+      "action-required",
+      "cancelled",
+      "neutral",
+      "pending",
+    ] as const
+  ).map((status, index) => ({ name: `check-${index}`, status, description: null, url: null }));
+  const grouped = groupPullRequestChecks(checks);
+  expect(grouped.attention.map((check) => check.name)).toEqual(["check-2", "check-4", "check-5"]);
+  expect(grouped.running.map((check) => check.name)).toEqual(["check-1", "check-7"]);
+  expect(grouped.completed.map((check) => check.name)).toEqual(["check-0", "check-3", "check-6"]);
+  expect(checks[0]?.status).toBe("success");
+  expect(groupPullRequestChecks([])).toEqual({ attention: [], running: [], completed: [] });
+});
 
 describe("pull request checkout commands", () => {
   it.each([

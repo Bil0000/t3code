@@ -359,12 +359,15 @@ export function ThreadDetailsPrRow({
             </TooltipTrigger>
             {rowTooltip}
           </Tooltip>
-          {checksRollup !== null ? (
-            <PullRequestChecksPopover
-              checksState={checksRollup}
-              checks={detail.checks}
-              className="h-9 px-2.5"
-            />
+          {checksRollup !== null && !conflicting && !detail.isDraft ? (
+            <>
+              <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+              <PullRequestChecksPopover
+                checksState={checksRollup}
+                checks={detail.checks}
+                variant="count"
+              />
+            </>
           ) : null}
           {trailingAction ? (
             <>

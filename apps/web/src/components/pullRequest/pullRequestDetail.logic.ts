@@ -319,6 +319,16 @@ export function describePullRequestChecks(checks: ReadonlyArray<PullRequestCheck
   return parts.join(" · ");
 }
 
+export function groupPullRequestChecks(checks: ReadonlyArray<PullRequestCheck>) {
+  return {
+    attention: checks.filter((check) =>
+      ["failure", "cancelled", "action-required"].includes(check.status),
+    ),
+    running: checks.filter((check) => check.status === "pending"),
+    completed: checks.filter((check) => ["success", "skipped", "neutral"].includes(check.status)),
+  };
+}
+
 export type ThreadPanelPullRequestAction = "resolve" | "ready" | "fix" | "merge";
 
 /**
