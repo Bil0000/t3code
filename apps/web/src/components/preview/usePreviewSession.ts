@@ -60,7 +60,9 @@ const previewSessionSyncAtom = Atom.family((threadKey: string) => {
       disposed = true;
     });
     const initialEvent = get.once(eventsAtom);
-    get.subscribe(sessionsAtom, reconcileSessions, { immediate: true });
+    get.subscribe(sessionsAtom, reconcileSessions, {
+      immediate: Object.keys(readThreadPreviewState(threadRef).sessions).length === 0,
+    });
     get.subscribe(eventsAtom, (result) => {
       eventsVersion += 1;
       applyLatestEvent(result);

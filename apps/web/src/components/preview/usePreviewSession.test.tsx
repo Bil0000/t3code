@@ -1,10 +1,17 @@
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { RegistryContext } from "@effect/atom-react";
 import { act } from "react";
 import { create } from "react-test-renderer";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import type { PreviewListResult, ScopedThreadRef } from "@t3tools/contracts";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
-import { readThreadPreviewState, resetPreviewStateForTests } from "~/previewStateStore";
+import {
+  previewStateAtom,
+  applyPreviewServerSnapshot,
+  readThreadPreviewState,
+  resetPreviewStateForTests,
+} from "~/previewStateStore";
 import { usePreviewSession } from "./usePreviewSession";
 
 vi.mock("~/state/preview", () => ({
@@ -40,19 +47,32 @@ afterEach(() => {
   resetPreviewStateForTests();
   vi.unstubAllGlobals();
 });
-it("restores existing designs before any preview surface is mounted", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  let renderer: ReturnType<typeof create> | undefined;
-  try {
-    await act(() => {
-      renderer = create(
-        <AppAtomRegistryProvider>
-          <Host />
-        </AppAtomRegistryProvider>,
-      );
-    });
-    expect(readThreadPreviewState(ref).sessions["design-tab"]).toEqual(saved.sessions[0]);
-  } finally {
-    await act(() => renderer?.unmount());
-  }
-});
+it.each([false, true])(
+  "restores designs without discarding a locally opened tab (local: %s)",
+  async (hasLocal) => {
+    const registry = AtomRegistry.make();
+    registry.set(sessionsAtom, AsyncResult.success(hasLocal ? { ...saved, sessions: [] } : saved));
+    if (hasLocal) applyPreviewServerSnapshot(ref, saved.sessions[0]!);
+    const observed: number[] = [];
+    const unsubscribe = appAtomRegistry.subscribe(previewStateAtom(scopedThreadKey(ref)), (state) =>
+      observed.push(Object.keys(state.sessions).length),
+    );
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReturnType<typeof create> | undefined;
+    try {
+      await act(() => {
+        renderer = create(
+          <RegistryContext.Provider value={registry}>
+            <Host />
+          </RegistryContext.Provider>,
+        );
+      });
+      expect(readThreadPreviewState(ref).sessions["design-tab"]).toEqual(saved.sessions[0]);
+      if (hasLocal) expect(observed).not.toContain(0);
+    } finally {
+      await act(() => renderer?.unmount());
+      unsubscribe();
+      registry.dispose();
+    }
+  },
+);
