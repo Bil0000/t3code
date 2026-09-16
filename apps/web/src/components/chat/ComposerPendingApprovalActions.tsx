@@ -4,9 +4,11 @@ import {
   type ProviderApprovalOption,
 } from "@t3tools/contracts";
 import { memo } from "react";
-import { TriangleAlertIcon } from "lucide-react";
+import { ChevronRightIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { composerFloatingLayerProps } from "./composerEventScope";
 
 interface ComposerPendingApprovalActionsProps {
   requestId: ApprovalRequestId;
@@ -31,27 +33,27 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   options = DEFAULT_APPROVAL_OPTIONS,
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
+  const primaryOptions = options.filter(
+    (option) => option.decision === "decline" || option.decision === "accept",
+  );
+  const moreOptions = options.filter(
+    (option) => option.decision !== "decline" && option.decision !== "accept",
+  );
+
   return (
     <>
-      {options.map((option) => {
+      {primaryOptions.map((option) => {
         const button = (
           <Button
             key={option.decision}
-            size="sm-multiline"
-            className="max-w-full"
-            variant={
-              option.decision === "accept"
-                ? "default"
-                : option.decision === "cancel"
-                  ? "ghost"
-                  : "outline"
-            }
+            size="xs"
+            variant={option.decision === "accept" ? "default" : "outline"}
             disabled={isResponding}
             aria-description={option.warning}
             onClick={() => void onRespondToApproval(requestId, option.decision)}
           >
             {option.warning ? <TriangleAlertIcon className="size-3 shrink-0" /> : null}
-            <span className="min-w-0 wrap-break-word">{option.label}</span>
+            <span className="max-w-40 truncate">{option.label}</span>
           </Button>
         );
         return option.warning ? (
@@ -65,6 +67,39 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
           button
         );
       })}
+      {moreOptions.length > 0 ? (
+        <Menu>
+          <MenuTrigger
+            disabled={isResponding}
+            render={<Button size="icon-xs" variant="outline" aria-label="More approval options" />}
+          >
+            <ChevronRightIcon />
+          </MenuTrigger>
+          <MenuPopup
+            {...composerFloatingLayerProps}
+            side="top"
+            align="end"
+            className="max-w-[min(22rem,calc(100vw-2rem))]"
+          >
+            {moreOptions.map((option) => (
+              <MenuItem
+                key={option.decision}
+                disabled={isResponding}
+                onClick={() => void onRespondToApproval(requestId, option.decision)}
+                className="items-start"
+              >
+                {option.warning ? <TriangleAlertIcon className="mt-0.5 text-warning" /> : null}
+                <span className="min-w-0 whitespace-normal wrap-break-word">
+                  {option.label}
+                  {option.warning ? (
+                    <span className="mt-1 block text-xs text-warning">{option.warning}</span>
+                  ) : null}
+                </span>
+              </MenuItem>
+            ))}
+          </MenuPopup>
+        </Menu>
+      ) : null}
     </>
   );
 });
