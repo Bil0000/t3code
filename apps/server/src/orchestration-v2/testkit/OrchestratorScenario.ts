@@ -493,6 +493,13 @@ export function runOrchestratorV2Scenario(
         Effect.gen(function* () {
           const reached = yield* Effect.promise(
             () => options.replayGate?.waitUntilReached(label) ?? Promise.resolve(false),
+          ).pipe(
+            Effect.timeoutOrElse({
+              duration: SCENARIO_WAIT_DEADLINE_MS,
+              orElse: () => Effect.succeed(false),
+            }),
+            TestClock.withLive,
+            Effect.ensuring(Effect.sync(() => options.replayGate?.release(label))),
           );
           if (!reached) {
             return yield* new OrchestratorV2ScenarioStepError({
@@ -500,7 +507,6 @@ export function runOrchestratorV2Scenario(
               step: `release_replay_gate:${label}:reached=false`,
             });
           }
-          options.replayGate?.release(label);
         });
 
       for (const step of scenarioSteps(scenario)) {
