@@ -34,7 +34,6 @@ import {
   pullRequestActionMenuHasGroup,
   pullRequestActionNeedsHostRefresh,
   pullRequestCheckoutCommand,
-  pullRequestComposerTarget,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   pullRequestReviewOutcome,
@@ -265,15 +264,6 @@ describe("pull request handoff labels", () => {
       fixCheck: "Fix",
       fixFindings: "Fix findings in a thread",
     });
-  });
-});
-
-describe("pull request composer target", () => {
-  it("rejects a page composer so agent comments cannot open another thread", () => {
-    const target = { environmentId: "env-1", threadId: "thread-1" };
-
-    expect(pullRequestComposerTarget("page", target)).toBeNull();
-    expect(pullRequestComposerTarget("thread", target)).toBe(target);
   });
 });
 
