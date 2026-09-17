@@ -1,6 +1,11 @@
 import { ScheduledTaskUpsertSchedule } from "@t3tools/contracts";
 import {
   RelayScheduledTaskError,
+  RelayScheduledTaskNotAuthorizedError,
+  RelayScheduledTaskRevisionConflictError,
+  RelayScheduledTaskNotFoundError,
+  RelayScheduledTaskInvalidConfigurationError,
+  RelayScheduledTaskPersistenceError,
   type RelayScheduledTaskClaim,
   type RelayScheduledTaskConfigureRequest,
   type RelayScheduledTaskEnabledRequest,
@@ -62,10 +67,9 @@ const state = (row: Row): RelayScheduledTaskState => ({
 });
 
 const revisionConflict = (row?: Row) =>
-  new RelayScheduledTaskError({
-    reason: "revision_conflict",
-    ...(row && !row.enabled && !row.deleted ? { currentState: state(row) } : {}),
-  });
+  new RelayScheduledTaskRevisionConflictError(
+    row && !row.enabled && !row.deleted ? { currentState: state(row) } : {},
+  );
 
 const nextRunAt = (row: Pick<Row, "schedule" | "timeZone">, now: string) => {
   const next = nextScheduledRunAt(
@@ -75,16 +79,14 @@ const nextRunAt = (row: Pick<Row, "schedule" | "timeZone">, now: string) => {
   return next === null ? null : DateTime.formatIso(next);
 };
 
-const make = Effect.gen(function* () {
+export const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
   const transaction = <A, E>(effect: Effect.Effect<A, E>) =>
     db.$client
       .withTransaction(effect)
       .pipe(
         Effect.mapError((error) =>
-          isScheduledTaskError(error)
-            ? error
-            : new RelayScheduledTaskError({ reason: "persistence_failed" }),
+          isScheduledTaskError(error) ? error : new RelayScheduledTaskPersistenceError({}),
         ),
       );
   const now = Effect.map(
@@ -99,7 +101,7 @@ const make = Effect.gen(function* () {
           member.publicKey === principal.environmentPublicKey,
       )
     ) {
-      return yield* new RelayScheduledTaskError({ reason: "not_authorized" });
+      return yield* new RelayScheduledTaskNotAuthorizedError({});
     }
     const links = yield* db
       .select()
@@ -112,7 +114,7 @@ const make = Effect.gen(function* () {
           isNull(relayEnvironmentLinks.revokedAt),
         ),
       );
-    if (links.length === 0) return yield* new RelayScheduledTaskError({ reason: "not_authorized" });
+    if (links.length === 0) return yield* new RelayScheduledTaskNotAuthorizedError({});
   });
   const load = Effect.fnUntraced(function* (
     principal: Principal,
@@ -123,9 +125,9 @@ const make = Effect.gen(function* () {
       .from(relayScheduledTasks)
       .where(eq(relayScheduledTasks.groupId, input.groupId))
       .for("update");
-    if (!row) return yield* new RelayScheduledTaskError({ reason: "not_found" });
+    if (!row) return yield* new RelayScheduledTaskNotFoundError({});
     yield* authorize(principal, row);
-    if (row.deleted) return yield* new RelayScheduledTaskError({ reason: "not_found" });
+    if (row.deleted) return yield* new RelayScheduledTaskNotFoundError({});
     if (row.revision !== input.revision) return yield* revisionConflict(row);
     return row;
   });
@@ -139,7 +141,7 @@ const make = Effect.gen(function* () {
           principal.environmentId as (typeof input.environmentIds)[number],
         )
       ) {
-        return yield* new RelayScheduledTaskError({ reason: "invalid_configuration" });
+        return yield* new RelayScheduledTaskInvalidConfigurationError({});
       }
       const links = yield* db
         .select()
@@ -158,7 +160,7 @@ const make = Effect.gen(function* () {
           (environmentId === principal.environmentId &&
             link.environmentPublicKey !== principal.environmentPublicKey)
         ) {
-          return yield* new RelayScheduledTaskError({ reason: "not_authorized" });
+          return yield* new RelayScheduledTaskNotAuthorizedError({});
         }
         members.push({ environmentId, publicKey: link.environmentPublicKey });
       }
@@ -194,10 +196,9 @@ const make = Effect.gen(function* () {
       const timestamp = yield* now;
       const due = yield* Effect.try({
         try: () => nextRunAt(input, timestamp),
-        catch: () => new RelayScheduledTaskError({ reason: "invalid_configuration" }),
+        catch: () => new RelayScheduledTaskInvalidConfigurationError({}),
       });
-      if (due === null)
-        return yield* new RelayScheduledTaskError({ reason: "invalid_configuration" });
+      if (due === null) return yield* new RelayScheduledTaskInvalidConfigurationError({});
       const row: Row = {
         groupId: input.groupId,
         revision: input.revision,
@@ -217,8 +218,7 @@ const make = Effect.gen(function* () {
           .values(row)
           .onConflictDoNothing()
           .returning();
-        if (inserted.length === 0)
-          return yield* new RelayScheduledTaskError({ reason: "revision_conflict" });
+        if (inserted.length === 0) return yield* new RelayScheduledTaskRevisionConflictError({});
       } else {
         yield* db
           .update(relayScheduledTasks)

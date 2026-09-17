@@ -134,27 +134,26 @@ describe("scheduled task failover", () => {
         yield* service.configure(primary, updated);
         const staleEdit = { ...updated, revision: "00000000-0000-4000-8000-000000000004" };
         const recoverable = yield* Effect.flip(service.configure(primary, staleEdit));
-        expect(recoverable.reason).toBe("revision_conflict");
-        expect(recoverable.currentState).toMatchObject({
-          revision: updated.revision,
-          enabled: false,
+        expect(recoverable).toMatchObject({
+          _tag: "RelayScheduledTaskRevisionConflictError",
+          currentState: { revision: updated.revision, enabled: false },
         });
-        expect((yield* Effect.flip(service.claim(backup, config))).reason).toBe(
-          "revision_conflict",
+        expect((yield* Effect.flip(service.claim(backup, config)))._tag).toBe(
+          "RelayScheduledTaskRevisionConflictError",
         );
         const unauthorized = yield* Effect.flip(
           service.configure({ ...primary, environmentPublicKey: "wrong-key" }, staleEdit),
         );
-        expect(unauthorized.reason).toBe("not_authorized");
-        expect(unauthorized.currentState).toBeUndefined();
+        expect(unauthorized._tag).toBe("RelayScheduledTaskNotAuthorizedError");
+        expect(unauthorized).not.toHaveProperty("currentState");
         yield* service.setEnabled(primary, { ...updated, enabled: true });
-        expect(
-          (yield* Effect.flip(service.configure(primary, staleEdit))).currentState,
-        ).toBeUndefined();
+        expect(yield* Effect.flip(service.configure(primary, staleEdit))).not.toHaveProperty(
+          "currentState",
+        );
         yield* service.remove(primary, updated);
-        expect(
-          (yield* Effect.flip(service.configure(primary, staleEdit))).currentState,
-        ).toBeUndefined();
+        expect(yield* Effect.flip(service.configure(primary, staleEdit))).not.toHaveProperty(
+          "currentState",
+        );
       }),
   );
   it.effect("rejects intervals outside the date range", () =>
@@ -166,7 +165,7 @@ describe("scheduled task failover", () => {
           schedule: { type: "interval", everyMs: Number.MAX_SAFE_INTEGER },
         }),
       );
-      expect(error.reason).toBe("invalid_configuration");
+      expect(error._tag).toBe("RelayScheduledTaskInvalidConfigurationError");
     }),
   );
   it.effect("gives the primary a startup grace period before the first fixed-time run", () =>
@@ -197,7 +196,7 @@ describe("scheduled task failover", () => {
           yield* Effect.flip(
             service.configure(primary, { ...config, timeZone: "America/New_York" }),
           ),
-        ).toMatchObject({ reason: "revision_conflict" });
+        ).toMatchObject({ _tag: "RelayScheduledTaskRevisionConflictError" });
       }),
   );
   it.effect(
@@ -252,23 +251,27 @@ describe("scheduled task failover", () => {
         revision: "00000000-0000-4000-8000-000000000003",
       };
       yield* service.configure(primary, updated);
-      expect((yield* Effect.flip(service.claim(backup, config))).reason).toBe("revision_conflict");
+      expect((yield* Effect.flip(service.claim(backup, config)))._tag).toBe(
+        "RelayScheduledTaskRevisionConflictError",
+      );
       expect(
         (yield* Effect.flip(
           service.configure(primary, {
             ...updated,
             revision: "00000000-0000-4000-8000-000000000004",
           }),
-        )).reason,
-      ).toBe("revision_conflict");
+        ))._tag,
+      ).toBe("RelayScheduledTaskRevisionConflictError");
       yield* service.setEnabled(primary, { ...updated, enabled: true });
       yield* service.setEnabled(backup, { ...updated, enabled: false });
       at("2026-09-17T01:00:00.000Z");
       expect((yield* service.claim(primary, updated)).occurrenceId).toBeNull();
       yield* service.remove(backup, updated);
-      expect((yield* Effect.flip(service.claim(primary, updated))).reason).toBe("not_found");
-      expect((yield* Effect.flip(service.configure(primary, config))).reason).toBe(
-        "revision_conflict",
+      expect((yield* Effect.flip(service.claim(primary, updated)))._tag).toBe(
+        "RelayScheduledTaskNotFoundError",
+      );
+      expect((yield* Effect.flip(service.configure(primary, config)))._tag).toBe(
+        "RelayScheduledTaskRevisionConflictError",
       );
     }),
   );
@@ -280,21 +283,23 @@ describe("scheduled task failover", () => {
         const { service, links } = yield* harness;
         expect(
           (yield* Effect.flip(service.configure(primary, { ...config, userId: "someone-else" })))
-            .reason,
-        ).toBe("not_authorized");
+            ._tag,
+        ).toBe("RelayScheduledTaskNotAuthorizedError");
         yield* service.configure(primary, config);
         expect(
           (yield* Effect.flip(
             service.claim({ ...primary, environmentPublicKey: "replacement-key" }, config),
-          )).reason,
-        ).toBe("not_authorized");
+          ))._tag,
+        ).toBe("RelayScheduledTaskNotAuthorizedError");
         expect(
           (yield* Effect.flip(
             service.get({ environmentId: "stranger", environmentPublicKey: "key" }, config),
-          )).reason,
-        ).toBe("not_authorized");
+          ))._tag,
+        ).toBe("RelayScheduledTaskNotAuthorizedError");
         links[1]!.revokedAt = "2026-09-17T00:00:01.000Z";
-        expect((yield* Effect.flip(service.claim(backup, config))).reason).toBe("not_authorized");
+        expect((yield* Effect.flip(service.claim(backup, config)))._tag).toBe(
+          "RelayScheduledTaskNotAuthorizedError",
+        );
       }),
   );
 

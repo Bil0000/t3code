@@ -89,7 +89,7 @@ export const make = Effect.gen(function* () {
       Effect.mapError((error) => {
         const recovery =
           isRelayScheduledTaskError(error) &&
-          error.reason === "revision_conflict" &&
+          error._tag === "RelayScheduledTaskRevisionConflictError" &&
           error.currentState?.enabled === false &&
           error.currentState.groupId === recoveryGroupId
             ? error.currentState
@@ -110,15 +110,17 @@ export const make = Effect.gen(function* () {
             ? "A paused setup was found. Save again to finish installing this task on both servers."
             : isRelayScheduledTaskError(error)
               ? {
-                  not_found: "This shared task has been deleted. Remove its remaining server copy.",
-                  revision_conflict:
+                  RelayScheduledTaskNotFoundError:
+                    "This shared task has been deleted. Remove its remaining server copy.",
+                  RelayScheduledTaskRevisionConflictError:
                     "This shared task changed on another server. Reload it before making changes.",
-                  not_authorized: "All task servers must be linked to the same T3 Connect account.",
-                  invalid_configuration:
+                  RelayScheduledTaskNotAuthorizedError:
+                    "All task servers must be linked to the same T3 Connect account.",
+                  RelayScheduledTaskInvalidConfigurationError:
                     "Choose distinct linked servers and a valid schedule and time zone.",
-                  persistence_failed:
+                  RelayScheduledTaskPersistenceError:
                     "The shared task coordinator could not save this change. Try again.",
-                }[error.reason]
+                }[error._tag]
               : "Could not reach the shared task coordinator. Check the T3 Connect connection.",
         });
       }),
@@ -147,12 +149,9 @@ export const make = Effect.gen(function* () {
           .claimScheduledTask({ payload: { groupId: input.groupId, revision: input.revision } })
           .pipe(
             Effect.catchTags({
-              RelayScheduledTaskError: (error) =>
-                error.reason === "not_found" ||
-                error.reason === "revision_conflict" ||
-                error.reason === "not_authorized"
-                  ? Effect.succeed(null)
-                  : Effect.fail(error),
+              RelayScheduledTaskNotFoundError: () => Effect.succeed(null),
+              RelayScheduledTaskRevisionConflictError: () => Effect.succeed(null),
+              RelayScheduledTaskNotAuthorizedError: () => Effect.succeed(null),
             }),
           ),
       );
@@ -172,10 +171,9 @@ export const make = Effect.gen(function* () {
           .deleteScheduledTask({ payload: { groupId: input.groupId, revision: input.revision } })
           .pipe(
             Effect.catchTags({
-              RelayScheduledTaskError: (error) =>
-                error.reason === "not_found" || (allowStale && error.reason === "revision_conflict")
-                  ? Effect.void
-                  : Effect.fail(error),
+              RelayScheduledTaskNotFoundError: () => Effect.void,
+              RelayScheduledTaskRevisionConflictError: (error) =>
+                allowStale ? Effect.void : Effect.fail(error),
             }),
           ),
       );

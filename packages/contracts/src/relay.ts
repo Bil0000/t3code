@@ -1131,51 +1131,91 @@ export const RelayScheduledTaskClaim = Schema.Struct({
 });
 export type RelayScheduledTaskClaim = typeof RelayScheduledTaskClaim.Type;
 
-export class RelayScheduledTaskError extends Schema.TaggedError<RelayScheduledTaskError>()(
-  "RelayScheduledTaskError",
-  {
-    currentState: Schema.optional(RelayScheduledTaskState),
-    reason: Schema.Literals([
-      "not_authorized",
-      "revision_conflict",
-      "not_found",
-      "invalid_configuration",
-      "persistence_failed",
-    ]),
-  },
+export class RelayScheduledTaskNotAuthorizedError extends Schema.TaggedError<RelayScheduledTaskNotAuthorizedError>()(
+  "RelayScheduledTaskNotAuthorizedError",
+  {},
   { httpApiStatus: 409 },
 ) {
   override get message(): string {
-    return `Scheduled task coordination failed: ${this.reason}`;
+    return "Scheduled task coordination failed: not_authorized";
   }
 }
+
+export class RelayScheduledTaskRevisionConflictError extends Schema.TaggedError<RelayScheduledTaskRevisionConflictError>()(
+  "RelayScheduledTaskRevisionConflictError",
+  { currentState: Schema.optional(RelayScheduledTaskState) },
+  { httpApiStatus: 409 },
+) {
+  override get message(): string {
+    return "Scheduled task coordination failed: revision_conflict";
+  }
+}
+
+export class RelayScheduledTaskNotFoundError extends Schema.TaggedError<RelayScheduledTaskNotFoundError>()(
+  "RelayScheduledTaskNotFoundError",
+  {},
+  { httpApiStatus: 409 },
+) {
+  override get message(): string {
+    return "Scheduled task coordination failed: not_found";
+  }
+}
+
+export class RelayScheduledTaskInvalidConfigurationError extends Schema.TaggedError<RelayScheduledTaskInvalidConfigurationError>()(
+  "RelayScheduledTaskInvalidConfigurationError",
+  {},
+  { httpApiStatus: 409 },
+) {
+  override get message(): string {
+    return "Scheduled task coordination failed: invalid_configuration";
+  }
+}
+
+export class RelayScheduledTaskPersistenceError extends Schema.TaggedError<RelayScheduledTaskPersistenceError>()(
+  "RelayScheduledTaskPersistenceError",
+  {},
+  { httpApiStatus: 409 },
+) {
+  override get message(): string {
+    return "Scheduled task coordination failed: persistence_failed";
+  }
+}
+
+export const RelayScheduledTaskError = Schema.Union([
+  RelayScheduledTaskNotAuthorizedError,
+  RelayScheduledTaskRevisionConflictError,
+  RelayScheduledTaskNotFoundError,
+  RelayScheduledTaskInvalidConfigurationError,
+  RelayScheduledTaskPersistenceError,
+]);
+export type RelayScheduledTaskError = typeof RelayScheduledTaskError.Type;
 
 const RelayServerGroup = HttpApiGroup.make("server")
   .add(
     HttpApiEndpoint.post("getScheduledTask", "/v1/scheduled-tasks/get", {
       payload: RelayScheduledTaskReference,
       success: RelayScheduledTaskState,
-      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+      error: [RelayAuthInvalidError, ...RelayScheduledTaskError.members],
     }),
     HttpApiEndpoint.post("configureScheduledTask", "/v1/scheduled-tasks/configure", {
       payload: RelayScheduledTaskConfigureRequest,
       success: RelayScheduledTaskState,
-      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+      error: [RelayAuthInvalidError, ...RelayScheduledTaskError.members],
     }),
     HttpApiEndpoint.post("setScheduledTaskEnabled", "/v1/scheduled-tasks/enabled", {
       payload: RelayScheduledTaskEnabledRequest,
       success: RelayScheduledTaskState,
-      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+      error: [RelayAuthInvalidError, ...RelayScheduledTaskError.members],
     }),
     HttpApiEndpoint.post("deleteScheduledTask", "/v1/scheduled-tasks/delete", {
       payload: RelayScheduledTaskReference,
       success: RelayOkResponse,
-      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+      error: [RelayAuthInvalidError, ...RelayScheduledTaskError.members],
     }),
     HttpApiEndpoint.post("claimScheduledTask", "/v1/scheduled-tasks/claim", {
       payload: RelayScheduledTaskReference,
       success: RelayScheduledTaskClaim,
-      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+      error: [RelayAuthInvalidError, ...RelayScheduledTaskError.members],
     }),
     HttpApiEndpoint.post(
       "publishAgentActivity",
