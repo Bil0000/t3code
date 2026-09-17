@@ -302,9 +302,10 @@ function ComposerBannerStackAlert({
                   tooltipStyle
                   side="top"
                   className="max-w-80 whitespace-normal text-pretty wrap-anywhere"
-                  viewportClassName="max-h-[min(var(--available-height),24rem,40dvh)] overflow-y-auto"
                 >
-                  {item.description}
+                  <ComposerBanner.Scroll className="max-h-[min(var(--available-height),24rem,40dvh)]">
+                    {item.description}
+                  </ComposerBanner.Scroll>
                 </PopoverPopup>
               </Popover>
             </span>
