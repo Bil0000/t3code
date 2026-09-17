@@ -62,7 +62,7 @@ export function resolveLatestMergeBackRun(projection: Projection): Run | null {
   return hasNewerActiveRun ? null : latestProviderFinishedRun;
 }
 
-export function resolveThreadProviderSession(projection: Projection): ProviderSession | null {
+function resolveThreadProviderSession(projection: Projection): ProviderSession | null {
   const activeRun = resolveActiveThreadRun(projection);
   const providerThreadId = activeRun?.providerThreadId ?? projection.thread.activeProviderThreadId;
   const activeProviderThread =
