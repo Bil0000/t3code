@@ -1,4 +1,3 @@
-import { composerRequiresModifier } from "../../composer-logic";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
@@ -73,8 +72,9 @@ import { createPortal, flushSync } from "react-dom";
 import {
   clampCollapsedComposerCursor,
   type ComposerTrigger,
+  type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
-  composerSubmissionIntentForEnter,
+  composerSubmissionIntentForKey,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
@@ -1305,7 +1305,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   } | null;
   isRunning: boolean;
   followUpBehavior: "queue" | "steer";
-  requiresSendModifier: boolean;
+  alternateShortcutLabel: string | null;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -1341,7 +1341,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
         followUpBehavior={props.followUpBehavior}
-        requiresSendModifier={props.requiresSendModifier}
+        alternateShortcutLabel={props.alternateShortcutLabel}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -1559,7 +1559,11 @@ export interface ChatComposerProps {
 
   // Callbacks
   onCompactContext: () => void;
-  onSend: (e?: { preventDefault: () => void }, dispatchMode?: ComposerDispatchMode) => void;
+  onSend: (
+    e?: { preventDefault: () => void },
+    dispatchMode?: ComposerDispatchMode,
+    submissionIntent?: ComposerSubmissionIntent,
+  ) => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
@@ -3904,7 +3908,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const submitComposer = useCallback(
-    (event?: { preventDefault: () => void }, dispatchMode?: ComposerDispatchMode) => {
+    (
+      event?: { preventDefault: () => void },
+      dispatchMode?: ComposerDispatchMode,
+      submissionIntent?: ComposerSubmissionIntent,
+    ) => {
       if (noProviderAvailable || isSendDisabled) {
         event?.preventDefault();
         return;
@@ -3952,6 +3960,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 alternateModifier: false,
                 activeTurnDefault: settings.followUpBehavior,
               }),
+            submissionIntent,
           );
           return !providerInputRejectedRef.current;
         },
@@ -4130,10 +4139,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Callbacks: command key
   // ------------------------------------------------------------------
-  const onComposerCommandKey = (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
-    event: KeyboardEvent,
-  ) => {
+  const onComposerCommandKey = (key: string, event: KeyboardEvent) => {
     if (key === "Tab" && event.shiftKey) {
       if (!planModeUiEnabled) return false;
       toggleInteractionMode();
@@ -4160,18 +4166,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (key === "ArrowUp" || key === "ArrowDown") {
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);
     }
-    const submissionIntent =
-      key === "Enter"
-        ? composerSubmissionIntentForEnter({
-            isMobileViewport,
-            shiftKey: event.shiftKey,
-            modifierKey: event.metaKey || event.ctrlKey,
-            isDraftThread: routeKind === "draft",
-            isRunning: phase === "running",
-            sendShortcut: settings.sendShortcut,
-            prompt: promptRef.current,
-          })
-        : null;
+    const submissionIntent = composerSubmissionIntentForKey({
+      event,
+      keybindings,
+      isMobileViewport,
+      isDraftThread: routeKind === "draft",
+      isRunning: phase === "running",
+      sendShortcut: settings.sendShortcut,
+      prompt: promptRef.current,
+    });
     if (submissionIntent) {
       submitComposer(
         undefined,
@@ -4180,6 +4183,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           alternateModifier: submissionIntent === "alternate",
           activeTurnDefault: settings.followUpBehavior,
         }),
+        submissionIntent,
       );
       return true;
     }
@@ -7138,7 +7142,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     followUpBehavior={settings.followUpBehavior}
-                    requiresSendModifier={composerRequiresModifier(settings.sendShortcut, prompt)}
+                    alternateShortcutLabel={shortcutLabelForCommand(
+                      keybindings,
+                      "composer.sendAlternate",
+                      {
+                        context: { composerFocus: true, composerRunning: true },
+                      },
+                    )}
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }

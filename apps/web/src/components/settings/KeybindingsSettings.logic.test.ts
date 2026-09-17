@@ -20,6 +20,8 @@ describe("KeybindingsSettings.logic", () => {
   it("lists composer, provider, and pull request commands with editable defaults", () => {
     const rows = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "");
     for (const command of [
+      "composer.sendAlternate",
+      "composer.sendBackground",
       "composer.host",
       "composer.effort",
       "composer.mode",

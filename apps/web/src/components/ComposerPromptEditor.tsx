@@ -29,13 +29,9 @@ import {
   $createLineBreakNode,
   $createParagraphNode,
   $createTextNode,
-  KEY_ARROW_DOWN_COMMAND,
   KEY_ARROW_LEFT_COMMAND,
   KEY_ARROW_RIGHT_COMMAND,
-  KEY_ARROW_UP_COMMAND,
   KEY_DOWN_COMMAND,
-  KEY_ENTER_COMMAND,
-  KEY_TAB_COMMAND,
   COMMAND_PRIORITY_HIGH,
   COPY_COMMAND,
   CUT_COMMAND,
@@ -882,10 +878,7 @@ interface ComposerPromptEditorProps {
     contextIds: string[],
   ) => void;
   onVisibleSelectionChange?: () => void;
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
-    event: KeyboardEvent,
-  ) => boolean;
+  onCommandKeyDown?: (key: string, event: KeyboardEvent) => boolean;
   onPageScrollKeyDown?: (key: "PageUp" | "PageDown") => void;
   onPageScrollKeyUp?: (key: string) => void;
   onPageScrollRelease?: () => void;
@@ -955,18 +948,12 @@ function caretLineRect(range: Range, edge: "start" | "end"): DOMRect | null {
 }
 
 function ComposerCommandKeyPlugin(props: {
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
-    event: KeyboardEvent,
-  ) => boolean;
+  onCommandKeyDown?: (key: string, event: KeyboardEvent) => boolean;
 }) {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
-    const handleCommand = (
-      key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
-      event: KeyboardEvent | null,
-    ): boolean => {
+    const handleCommand = (key: string, event: KeyboardEvent | null): boolean => {
       if (!props.onCommandKeyDown || !event) {
         return false;
       }
@@ -984,33 +971,11 @@ function ComposerCommandKeyPlugin(props: {
       return handled;
     };
 
-    const unregisterArrowDown = editor.registerCommand(
-      KEY_ARROW_DOWN_COMMAND,
-      (event) => handleCommand("ArrowDown", event),
+    return editor.registerCommand(
+      KEY_DOWN_COMMAND,
+      (event) => handleCommand(event.key, event),
       COMMAND_PRIORITY_HIGH,
     );
-    const unregisterArrowUp = editor.registerCommand(
-      KEY_ARROW_UP_COMMAND,
-      (event) => handleCommand("ArrowUp", event),
-      COMMAND_PRIORITY_HIGH,
-    );
-    const unregisterEnter = editor.registerCommand(
-      KEY_ENTER_COMMAND,
-      (event) => handleCommand("Enter", event),
-      COMMAND_PRIORITY_HIGH,
-    );
-    const unregisterTab = editor.registerCommand(
-      KEY_TAB_COMMAND,
-      (event) => handleCommand("Tab", event),
-      COMMAND_PRIORITY_HIGH,
-    );
-
-    return () => {
-      unregisterArrowDown();
-      unregisterArrowUp();
-      unregisterEnter();
-      unregisterTab();
-    };
   }, [editor, props]);
 
   return null;
