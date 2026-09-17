@@ -86,6 +86,15 @@ export function resolveThreadProviderSession(projection: Projection): ProviderSe
   );
 }
 
+export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
+  return (
+    projection != null &&
+    (resolveThreadProviderSession(projection)?.capabilities.sessions
+      .supportsProviderSwitchingViaHandoff ??
+      true)
+  );
+}
+
 /** Automatic completion/notification runs are not messages in the user's queue. */
 export function getUserQueuedThreadRuns(
   projection: Pick<Projection, "runs" | "messages">,
