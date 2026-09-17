@@ -136,7 +136,7 @@ export class GitLabIssueCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly state: IssueListState;
-      readonly involvement: IssueInvolvement;
+      readonly involvement: Exclude<IssueInvolvement, "mentioned">;
       readonly viewer: string;
       readonly limit: number;
       /** Free text for GitLab's own `search`, which matches title and description. */
@@ -265,7 +265,7 @@ function stateParam(state: IssueListState): string {
 }
 
 function involvementParams(input: {
-  readonly involvement: IssueInvolvement;
+  readonly involvement: Exclude<IssueInvolvement, "mentioned">;
   readonly viewer: string;
 }): ReadonlyArray<readonly [string, string]> {
   switch (input.involvement) {
@@ -274,11 +274,6 @@ function involvementParams(input: {
       return [["assignee_username[]", input.viewer]];
     case "authored":
       return [["author_username", input.viewer]];
-    // GitLab's project issue listing cannot express "mentioned" — its `scope` narrows to the
-    // issues the viewer created or is assigned, which is a different question. The unnarrowed
-    // page is answered rather than a filter that means something else, and nothing between here
-    // and the reader narrows it back down: a `mentioned` listing is every issue in the project.
-    case "mentioned":
     case "all":
       return [];
   }
@@ -363,7 +358,7 @@ const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly repository: string;
     readonly state: IssueListState;
-    readonly involvement: IssueInvolvement;
+    readonly involvement: Exclude<IssueInvolvement, "mentioned">;
     readonly viewer: string;
     readonly limit: number;
     readonly query?: string | undefined;

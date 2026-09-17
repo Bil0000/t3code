@@ -79,23 +79,32 @@ export const make = Effect.gen(function* () {
       cli.getViewerUsername({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
 
     listIssues: (input) =>
-      cli
-        .listIssues({
-          cwd: input.cwd,
-          repository: input.repository,
-          state: input.state,
-          involvement: input.involvement,
-          viewer: input.viewer,
-          limit: input.limit,
-          query: input.query,
-          cursor: input.cursor,
-        })
-        .pipe(
-          Effect.mapError(fail("listIssues")),
-          // GitLab is asked for its issues by update, newest first, whether or not it is being
-          // carried on from — so every page it answers is one a cursor can continue.
-          Effect.map(({ items, truncated }) => ({ items, truncated, continues: true })),
-        ),
+      input.involvement === "mentioned"
+        ? Effect.fail(
+            new IssueProviderError({
+              provider: "gitlab",
+              operation: "listIssues",
+              reason: "failed",
+              detail: "GitLab project issues do not support filtering by mentions.",
+            }),
+          )
+        : cli
+            .listIssues({
+              cwd: input.cwd,
+              repository: input.repository,
+              state: input.state,
+              involvement: input.involvement,
+              viewer: input.viewer,
+              limit: input.limit,
+              query: input.query,
+              cursor: input.cursor,
+            })
+            .pipe(
+              Effect.mapError(fail("listIssues")),
+              // GitLab is asked for its issues by update, newest first, whether or not it is being
+              // carried on from — so every page it answers is one a cursor can continue.
+              Effect.map(({ items, truncated }) => ({ items, truncated, continues: true })),
+            ),
 
     getIssue: (input) =>
       Effect.all([cli.getIssueDetail(input), cli.listLinkedMergeRequests(input)], {

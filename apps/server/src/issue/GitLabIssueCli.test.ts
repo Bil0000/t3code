@@ -5,6 +5,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
+import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
 
 const mockedExecute = vi.fn<GitLabCli.GitLabCli["Service"]["execute"]>();
 
@@ -239,25 +240,22 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
-  it.effect("narrows nothing for a mention, which GitLab's project listing cannot express", () =>
+  it.effect("refuses unsupported mentions without listing unrelated issues", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
-      const cli = yield* GitLabIssueCli.GitLabIssueCli;
-
-      yield* cli.listIssues({
-        cwd: "/w",
-        repository: "acme/web",
-        state: "open",
-        involvement: "mentioned",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      // `scope` would answer a different question, so the unnarrowed page is answered instead.
-      const path = pathOfCall(0);
-      expect(path).not.toContain("assignee_username");
-      expect(path).not.toContain("author_username");
-      expect(path).not.toContain("scope=");
+      const provider = yield* GitLabIssueProvider.make;
+      const error = yield* Effect.flip(
+        provider.listIssues({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "gitlab.com",
+          state: "open",
+          involvement: "mentioned",
+          viewer: "bilal",
+          limit: 10,
+        }),
+      );
+      expect(error.detail).toContain("do not support filtering by mentions");
+      expect(mockedExecute).not.toHaveBeenCalled();
     }),
   );
 
