@@ -18,7 +18,10 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { resolveScheduledTaskBaseRef } from "./ScheduledTasksSettings.logic";
+import {
+  resolveScheduledTaskBaseRef,
+  resolveScheduledTaskModelSelection,
+} from "./ScheduledTasksSettings.logic";
 
 export interface ScheduledTaskBackupBinding {
   readonly projectId: ProjectId | null;
@@ -29,11 +32,13 @@ export interface ScheduledTaskBackupBinding {
 export function ScheduledTaskBackupFields({
   environmentId,
   binding,
+  savedModelSelection,
   worktree,
   onChange,
 }: {
   readonly environmentId: EnvironmentId;
   readonly binding: ScheduledTaskBackupBinding;
+  readonly savedModelSelection: ModelSelection | undefined;
   readonly worktree: boolean;
   readonly onChange: (binding: ScheduledTaskBackupBinding) => void;
 }) {
@@ -127,7 +132,15 @@ export function ScheduledTaskBackupFields({
               )}
               triggerVariant="outline"
               onInstanceModelChange={(instanceId, model) =>
-                onChange({ ...binding, modelSelection: createModelSelection(instanceId, model) })
+                onChange({
+                  ...binding,
+                  modelSelection: resolveScheduledTaskModelSelection(
+                    instanceId,
+                    model,
+                    selection,
+                    savedModelSelection,
+                  ),
+                })
               }
             />
             {entry ? (

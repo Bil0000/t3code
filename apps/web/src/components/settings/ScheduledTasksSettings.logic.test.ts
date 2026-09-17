@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { resolveScheduledTaskBaseRef } from "./ScheduledTasksSettings.logic";
+import { ProviderInstanceId } from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
+import {
+  resolveScheduledTaskModelSelection,
+  resolveScheduledTaskBaseRef,
+} from "./ScheduledTasksSettings.logic";
 
 describe("scheduled task base ref", () => {
   const refs = [
@@ -19,4 +24,29 @@ describe("scheduled task base ref", () => {
     expect(resolveScheduledTaskBaseRef("", [])).toBe("");
     expect(resolveScheduledTaskBaseRef("", [{ name: "feature/test", isDefault: false }])).toBe("");
   });
+});
+
+it("restores saved options only for the same model and provider instance", () => {
+  const instanceId = ProviderInstanceId.make("codex-primary");
+  const saved = createModelSelection(instanceId, "gpt-5", [
+    { id: "reasoningEffort", value: "high" },
+    { id: "temperature", value: "0.4" },
+  ]);
+  const other = resolveScheduledTaskModelSelection(instanceId, "gpt-other", saved, saved);
+  expect(other.options).toBeUndefined();
+  expect(resolveScheduledTaskModelSelection(instanceId, saved.model, other, saved)).toEqual(saved);
+  const edited = createModelSelection(instanceId, saved.model, [
+    { id: "reasoningEffort", value: "low" },
+  ]);
+  expect(resolveScheduledTaskModelSelection(instanceId, saved.model, edited, saved)).toEqual(
+    edited,
+  );
+  expect(
+    resolveScheduledTaskModelSelection(
+      ProviderInstanceId.make("codex-backup"),
+      saved.model,
+      other,
+      saved,
+    ).options,
+  ).toBeUndefined();
 });

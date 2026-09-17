@@ -41,7 +41,10 @@ import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
 import { TraitsPicker } from "../chat/TraitsPicker";
-import { resolveScheduledTaskBaseRef } from "./ScheduledTasksSettings.logic";
+import {
+  resolveScheduledTaskBaseRef,
+  resolveScheduledTaskModelSelection,
+} from "./ScheduledTasksSettings.logic";
 import {
   ScheduledTaskBackupFields,
   type ScheduledTaskBackupBinding,
@@ -952,7 +955,13 @@ function EnvironmentScheduledTasksSettings({
                   onInstanceModelChange={(instanceId, model) =>
                     setDraft((current) => ({
                       ...current,
-                      modelSelection: createModelSelection(instanceId, model),
+                      modelSelection: resolveScheduledTaskModelSelection(
+                        instanceId,
+                        model,
+                        current.modelSelection,
+                        taskHostQuery.data?.tasks.find((task) => task.id === current.editingId)
+                          ?.modelSelection,
+                      ),
                     }))
                   }
                 />
@@ -1039,6 +1048,7 @@ function EnvironmentScheduledTasksSettings({
                       key={backupEnvironmentId}
                       environmentId={backupEnvironmentId}
                       binding={backupBinding}
+                      savedModelSelection={backupTask?.modelSelection}
                       worktree={draft.workspaceMode === "worktree"}
                       onChange={setBackupDraft}
                     />
