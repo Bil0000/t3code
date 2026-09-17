@@ -2202,7 +2202,7 @@ export default function ChatView(props: ChatViewProps) {
           </Button>
           <Button
             size="xs"
-            variant="ghost"
+            variant="default"
             onClick={() =>
               void runProjectCloneAction("Failed to retry clone", () =>
                 retryProjectClone({ environmentId, input: { projectId } }),

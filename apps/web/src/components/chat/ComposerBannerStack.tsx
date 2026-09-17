@@ -270,22 +270,17 @@ function ComposerBannerStackAlert({
       variant={item.variant}
       density="comfortable"
     >
-      <ComposerBanner.Row layout="wrap-actions-narrow">
+      <ComposerBanner.Row layout="wrap-actions">
         <ComposerBanner.Icon className="h-(--composer-banner-icon-column) self-start">
           {item.icon}
         </ComposerBanner.Icon>
-        <ComposerBanner.Content className="whitespace-nowrap">
-          <span
-            className={cn(
-              "min-w-0 font-medium leading-7 sm:leading-6",
-              typeof item.title === "string" && "truncate",
-            )}
-          >
+        <ComposerBanner.Content className="flex-col items-start gap-0.5 py-0.5">
+          <span className="w-full min-w-0 font-medium whitespace-normal wrap-anywhere">
             {item.title}
           </span>
           {item.description ? (
-            <>
-              <span className="min-w-0 shrink-[9999] truncate text-muted-foreground @max-[400px]:sr-only">
+            <span className="flex w-full min-w-0 items-start gap-1">
+              <span className="line-clamp-2 min-w-0 whitespace-normal text-muted-foreground wrap-anywhere">
                 {item.description}
               </span>
               <Popover>
@@ -296,21 +291,23 @@ function ComposerBannerStackAlert({
                       size="icon-xs"
                       variant="ghost"
                       aria-label="Show notice details"
-                      className="hidden flex-none text-muted-foreground hover:text-foreground @max-[400px]:inline-flex"
+                      className="-my-1 flex-none text-muted-foreground hover:text-foreground"
                     />
                   }
                 >
                   <InfoIcon className="size-3.5" />
                 </PopoverTrigger>
                 <PopoverPopup
+                  aria-label="Notice details"
                   tooltipStyle
                   side="top"
-                  className="max-w-72 whitespace-normal text-pretty"
+                  className="max-w-80 whitespace-normal text-pretty wrap-anywhere"
+                  viewportClassName="max-h-[min(var(--available-height),24rem,40dvh)] overflow-y-auto"
                 >
                   {item.description}
                 </PopoverPopup>
               </Popover>
-            </>
+            </span>
           ) : null}
         </ComposerBanner.Content>
         {item.actions || item.onDismiss ? (
