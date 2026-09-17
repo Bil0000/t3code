@@ -379,7 +379,12 @@ const make = Effect.gen(function* () {
             `repository.full_name="${filterLiteral(`${segments.workspace}/${segments.slug}`)}"`,
           )}`,
           decode: decodeRepositoryPermissionJson,
-        }),
+        }).pipe(
+          Effect.catchTags({
+            BitbucketResponseError: (error) =>
+              error.status === 410 ? Effect.succeed(true) : Effect.fail(error),
+          }),
+        ),
       ),
 
     listComments: (input) =>

@@ -1,6 +1,7 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import * as BitbucketIssueApi from "./BitbucketIssueApi.ts";
@@ -440,6 +441,27 @@ layer("BitbucketIssueApi.layer", (it) => {
       assert.strictEqual(filterOfCall(0), 'repository.full_name="acme/web"');
     }),
   );
+
+  for (const status of [410, 403]) {
+    it.effect(`handles repository permission HTTP ${status}`, () =>
+      Effect.gen(function* () {
+        const failure = new BitbucketApi.BitbucketResponseError({
+          operation: "request",
+          status,
+          responseBodyLength: 0,
+        });
+        mockedRequest.mockReturnValueOnce(Effect.fail(failure));
+        const api = yield* BitbucketIssueApi.BitbucketIssueApi;
+        const result = yield* Effect.result(
+          api.getRepositoryPermission({ repository: "acme/web" }),
+        );
+        assert.deepStrictEqual(
+          result,
+          status === 410 ? Result.succeed(true) : Result.fail(failure),
+        );
+      }),
+    );
+  }
 
   it.effect("fails the read when Bitbucket answers with something unreadable", () =>
     Effect.gen(function* () {
