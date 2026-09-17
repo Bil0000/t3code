@@ -95,6 +95,9 @@ function atomJsonForSegment(
   segment: Exclude<ReturnType<typeof splitPromptIntoComposerSegments>[number], { type: "text" }>,
   skillLabelFor: (name: string) => SkillMeta,
 ): InlineJson {
+  if (segment.type === "thread") {
+    return { type: "composer-thread", attrs: { source: segment.source } };
+  }
   if (segment.type === "mention") {
     return {
       type: "composer-mention",
@@ -293,6 +296,7 @@ export interface RichDocMap {
 function readAtomSource(node: ProseMirrorNode): string {
   const attrs = node.attrs as Record<string, unknown>;
   switch (node.type.name) {
+    case "composer-thread":
     case "composer-mention":
     case "composer-citation":
     case "composer-context-reference":

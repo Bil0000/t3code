@@ -1,3 +1,5 @@
+import { parseThreadContextHref, formatThreadContextLink } from "@t3tools/shared/threadContext";
+import { ThreadContextChip } from "./ThreadContextChip";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -479,7 +481,13 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "file", "t3-citation", "t3-context"],
+    href: [
+      ...(defaultSchema.protocols?.href ?? []),
+      "file",
+      "t3-citation",
+      "t3-context",
+      "t3-thread",
+    ],
     src: [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
@@ -2403,6 +2411,7 @@ function useChatMarkdownState({
     return buildFileLinkParentSuffixByPath(filePaths);
   }, [inlineCodeFileLinkMetaByText, markdownFileLinkMetaByHref]);
   const markdownUrlTransform = useCallback((href: string) => {
+    if (parseThreadContextHref(href)) return href;
     if (parseAssistantCitationHref(href)) return href;
     if (parseComposerContextHref(href)) return href;
     if (isWindowsDrivePathHref(href)) return href;
@@ -2854,6 +2863,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
       fileLinkChip,
       renderContextReference,
     } = use(ChatMarkdownRendererContext);
+    const linkedThread = href ? parseThreadContextHref(href) : null;
+    if (linkedThread)
+      return (
+        <ThreadContextChip
+          source={formatThreadContextLink(linkedThread, hastPlainTextDeep(node))}
+        />
+      );
     const citation = href ? parseAssistantCitationHref(href) : null;
     if (citation) return <AssistantCitationChip citation={citation} />;
     const contextReference = href ? parseComposerContextHref(href) : null;

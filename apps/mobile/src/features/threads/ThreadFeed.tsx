@@ -1,3 +1,4 @@
+import { parseThreadContextHref } from "@t3tools/shared/threadContext";
 import { ThreadContextDivider } from "./thread-context-divider";
 import { ThreadHandoffRow } from "./thread-handoff-row";
 import {
@@ -2164,6 +2165,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const userBubbleColor = theme["--color-user-bubble"];
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
+      const linkedThread = parseThreadContextHref(href);
+      if (linkedThread) {
+        navigation.navigate("Thread", linkedThread);
+        return;
+      }
       const presentation = resolveMarkdownLinkPresentation(href);
       if (presentation.kind === "file") {
         const relativePath = resolveWorkspaceRelativeFilePath(

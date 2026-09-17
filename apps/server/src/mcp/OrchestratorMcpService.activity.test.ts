@@ -1,5 +1,7 @@
+import { formatThreadContextLink } from "@t3tools/shared/threadContext";
 import {
   EnvironmentId,
+  MessageId,
   NodeId,
   type OrchestrationV2ThreadProjection,
   ProjectId,
@@ -17,7 +19,10 @@ import { expect, it } from "vite-plus/test";
 import { ProviderAdapterRegistryV2 } from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
-import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import {
+  ThreadManagementService,
+  ThreadManagementThreadNotFoundError,
+} from "../orchestration-v2/ThreadManagementService.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
 import {
   layer as orchestratorMcpServiceLayer,
@@ -314,5 +319,189 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
     expect(result.status).toBe("running");
     expect(result.taskId).toBe(taskId);
     expect(result.childThreadId).toBe(childThreadId);
+  }).pipe(Effect.provide(layer), Effect.runPromise);
+});
+
+it("reads user-attached foreign threads in chunks without granting write access", async () => {
+  const text = "Full thread context. ".repeat(4000);
+  const target = {
+    thread: {
+      ...baseThread({
+        threadId: childThreadId,
+        title: "Attached",
+        instanceId: parentInstanceId,
+        model: "gpt-5.4",
+      }),
+      projectId: ProjectId.make("other-project"),
+    },
+    runs: [],
+    runtimeRequests: [],
+    messages: [
+      {
+        id: "message-context",
+        role: "user",
+        text: "See [logs](t3-context://v1/terminal/logs)",
+        attachments: [
+          {
+            type: "file",
+            id: "attachment-1",
+            name: "notes.txt",
+            mimeType: "text/plain",
+            sizeBytes: 20,
+          },
+        ],
+        context: {
+          version: 1,
+          records: [
+            {
+              version: 1,
+              kind: "terminal",
+              contextId: "logs",
+              label: "logs",
+              terminalId: "terminal-1",
+              terminalLabel: "Build",
+              lineStart: 1,
+              lineEnd: 1,
+              text: "Build passed",
+            },
+          ],
+        },
+      },
+    ],
+    contextTransfers: [],
+    subagents: [],
+    updatedAt: now,
+    visibleTurnItems: [
+      {
+        position: 0,
+        visibility: "local",
+        sourceThreadId: childThreadId,
+        sourceItemId: "item-1",
+        item: {
+          type: "assistant_message",
+          text,
+          messageId: "message-1",
+          runId: null,
+          status: "completed",
+          title: null,
+          updatedAt: now,
+        },
+      },
+      {
+        position: 1,
+        visibility: "local",
+        sourceThreadId: childThreadId,
+        sourceItemId: "item-2",
+        item: {
+          type: "user_message",
+          text: "See logs",
+          messageId: "message-context",
+          runId: null,
+          status: "completed",
+          title: null,
+          updatedAt: now,
+        },
+      },
+    ],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const link = formatThreadContextLink({ environmentId, threadId: childThreadId }, "Attached");
+  const parent = {
+    ...target,
+    thread: baseThread({
+      threadId: parentThreadId,
+      title: "Parent",
+      instanceId: parentInstanceId,
+      model: "gpt-5.4",
+    }),
+    messages: [],
+  } as unknown as OrchestrationV2ThreadProjection;
+  let author: "agent" | "user" = "agent";
+  let attachedLink = link;
+  const layer = orchestratorMcpServiceLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ThreadManagementService)({
+          getThreadProjection: (threadId) =>
+            Effect.succeed(
+              threadId === childThreadId
+                ? target
+                : {
+                    ...parent,
+                    messages: [
+                      {
+                        id: MessageId.make("attached-message"),
+                        threadId: parentThreadId,
+                        runId: null,
+                        nodeId: null,
+                        role: "user",
+                        createdBy: author,
+                        creationSource: "web",
+                        text: attachedLink,
+                        attachments: [],
+                        streaming: false,
+                        createdAt: now,
+                        updatedAt: now,
+                      },
+                    ],
+                  },
+            ),
+          getProjectThread: ({ projectId, threadId }) =>
+            Effect.fail(new ThreadManagementThreadNotFoundError({ projectId, threadId })),
+        }),
+        Layer.mock(ProviderRegistry)({}),
+        Layer.mock(ScheduledTaskService)({}),
+        Layer.mock(ProviderAdapterRegistryV2)({}),
+        NodeCrypto.layer,
+      ),
+    ),
+  );
+  await Effect.gen(function* () {
+    const service = yield* OrchestratorMcpService;
+    const read = () =>
+      service.readThread(makeScope(), { threadId: childThreadId, limit: 1, maxCharsPerItem: 1000 });
+    expect((yield* Effect.result(read()))._tag).toBe("Failure");
+    author = "user";
+    attachedLink = formatThreadContextLink(
+      { environmentId: EnvironmentId.make("other-environment"), threadId: childThreadId },
+      "Attached",
+    );
+    expect((yield* Effect.result(read()))._tag).toBe("Failure");
+    attachedLink = link;
+    expect(
+      (yield* Effect.result(
+        service.readThread(makeScope(), {
+          threadId: childThreadId,
+          environmentId: EnvironmentId.make("wrong-environment"),
+        }),
+      ))._tag,
+    ).toBe("Failure");
+    const first = yield* read();
+    expect(first.thread.projectId).toBe("other-project");
+    expect(first.items[0]?.nextTextOffset).toBe(1000);
+    let reconstructed = "";
+    let offset = 0;
+    do {
+      const page = yield* service.readThread(makeScope(), {
+        threadId: childThreadId,
+        itemPosition: 0,
+        textOffset: offset,
+        maxCharsPerItem: 1000,
+      });
+      const item = page.items[0]!;
+      reconstructed += item.text?.replace(/\n…\[truncated\]$/, "");
+      if (item.nextTextOffset == null) break;
+      offset = item.nextTextOffset;
+    } while (offset <= text.length);
+    expect(reconstructed).toBe(text);
+    const contextPage = yield* service.readThread(makeScope(), {
+      threadId: childThreadId,
+      itemPosition: 1,
+    });
+    expect(contextPage.items[0]?.text).toContain("1 | Build passed");
+    expect(contextPage.items[0]?.text).toContain("notes.txt");
+    const write = yield* Effect.result(
+      service.sendToThread(makeScope(), { threadId: childThreadId, message: "Do not send" }),
+    );
+    expect(write._tag).toBe("Failure");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });

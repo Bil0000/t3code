@@ -1,3 +1,4 @@
+import { ThreadContextChip } from "./ThreadContextChip";
 import { Extension, Node, wrappingInputRule, type JSONContent } from "@tiptap/core";
 import { TaskList } from "@tiptap/extension-task-list";
 import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
@@ -311,6 +312,34 @@ function ComposerSkillNodeView({ node }: NodeViewProps) {
     </NodeViewWrapper>
   );
 }
+
+const ComposerThreadExtension = Node.create({
+  name: "composer-thread",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return { source: { default: "" } };
+  },
+  parseHTML() {
+    return [{ tag: "span[data-composer-thread]" }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ["span", { "data-composer-thread": "", ...HTMLAttributes }];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(({ node }: NodeViewProps) => (
+      <NodeViewWrapper
+        as="span"
+        className={COMPOSER_INLINE_CHIP_DECORATOR_CLASS_NAME}
+        contentEditable={false}
+      >
+        <ThreadContextChip source={String(node.attrs.source)} />
+      </NodeViewWrapper>
+    ));
+  },
+});
 
 const ComposerCitationExtension = Node.create({
   name: "composer-citation",
@@ -747,6 +776,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
         ComposerMentionExtension,
         ComposerSkillExtension,
         ComposerCitationExtension,
+        ComposerThreadExtension,
         ComposerContextReferenceExtension,
         ComposerMarkersExtension,
         ...(richText

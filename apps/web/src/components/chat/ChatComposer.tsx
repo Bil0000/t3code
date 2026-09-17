@@ -1,3 +1,6 @@
+import { THREAD_CONTEXT_DROP_EVENT } from "./threadContextDrag";
+import { collectThreadContextLinks, formatThreadContextLink } from "@t3tools/shared/threadContext";
+import { readThreadShell } from "~/state/entities";
 import { composerRequiresModifier } from "../../composer-logic";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -5914,6 +5917,44 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
   });
 
+  useEffect(() => {
+    const form = composerFormRef.current;
+    if (!form) return;
+    const onThreadDrop = (event: Event) => {
+      const refs = (event as CustomEvent<ReadonlyArray<ScopedThreadRef>>).detail;
+      if (refs.some((ref) => ref.environmentId !== environmentId)) {
+        toastManager.add({
+          type: "error",
+          title: "Use threads from this environment",
+          description: "The agent cannot read threads on another server.",
+        });
+        return;
+      }
+      const existing = new Set(
+        collectThreadContextLinks(promptRef.current).map((ref) => ref.threadId),
+      );
+      const links = refs.flatMap((ref) => {
+        if (existing.has(ref.threadId)) return [];
+        const thread = readThreadShell(ref);
+        if (!thread) return [];
+        existing.add(ref.threadId);
+        return [formatThreadContextLink(ref, thread.title)];
+      });
+      if (
+        links.length > 0 &&
+        !insertComposerTextAtEnd(`${links.join(" ")} `, { ensureLeadingBoundary: true })
+      ) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add threads",
+          description: "The composer is busy; try again once it is ready.",
+        });
+      }
+    };
+    form.addEventListener(THREAD_CONTEXT_DROP_EVENT, onThreadDrop);
+    return () => form.removeEventListener(THREAD_CONTEXT_DROP_EVENT, onThreadDrop);
+  }, [environmentId, insertComposerTextAtEnd, promptRef]);
+
   const onComposerMentionDragLeaveCapture = (event: React.DragEvent<HTMLFormElement>) => {
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
     event.stopPropagation();
@@ -6325,8 +6366,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         if (isInsideRestingComposerControlScope(event.target)) return;
         composerMentionDragHandlers.onDrop(event);
       }}
-      className="mx-auto w-full min-w-0 max-w-3xl"
+      className="mx-auto w-full min-w-0 max-w-3xl rounded-[22px] data-thread-context-over:ring-2 data-thread-context-over:ring-primary/70"
       data-chat-composer-form="true"
+      data-thread-context-drop="true"
     >
       {composerControlsCollapsed && restingControlsHost
         ? createPortal(

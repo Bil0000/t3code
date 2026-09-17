@@ -45,6 +45,7 @@ const schema = getSchemaByResolvedExtensions(
       skillLabel: { default: "" },
       skillDescription: { default: null },
     }),
+    stubAtom("composer-thread", { source: { default: "" } }),
     stubAtom("composer-citation", {
       citation: { default: null },
       source: { default: "" },
@@ -351,4 +352,9 @@ describe("composer rich text document model", () => {
     expect(collapsedToFlat(map, 3)).toBe(2);
     expect(collapsedToFlat(map, 9)).toBe(6);
   });
+});
+
+it("round-trips thread chips through the editor document", () => {
+  const value = "Discuss [A](t3-thread://v1/env/thread-1) and [B](t3-thread://v1/env/thread-2)";
+  expect(roundTrip(value).value).toBe(value);
 });

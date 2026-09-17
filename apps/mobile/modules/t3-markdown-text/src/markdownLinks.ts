@@ -1,3 +1,4 @@
+import { parseThreadContextHref } from "@t3tools/shared/threadContext";
 import {
   fileBasename,
   formatFilePathPosition,
@@ -265,6 +266,7 @@ export function resolveMarkdownFileIcon(value: string): MarkdownFileIcon {
 
 export function resolveMarkdownLinkPresentation(href: string): MarkdownLinkPresentation {
   const normalized = normalizeMarkdownLinkDestination(href);
+  if (parseThreadContextHref(normalized)) return { kind: "link", href: normalized };
   try {
     const parsed = new URL(normalizeNativeMarkdownUrl(normalized));
     if (parsed.protocol === "http:" || parsed.protocol === "https:") {

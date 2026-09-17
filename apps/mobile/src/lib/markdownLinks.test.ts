@@ -135,3 +135,12 @@ describe("resolveMarkdownLinkPresentation", () => {
     });
   });
 });
+
+it("keeps valid thread links available to in-app navigation", () => {
+  const href = "t3-thread://v1/environment-1/thread-1";
+  expect(resolveMarkdownLinkPresentation(href)).toEqual({ kind: "link", href });
+  expect(resolveMarkdownLinkPresentation("t3-thread://v1/environment-1/%ZZ")).toEqual({
+    kind: "link",
+    href: null,
+  });
+});

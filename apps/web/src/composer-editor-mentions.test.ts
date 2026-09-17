@@ -360,3 +360,12 @@ describe("selectionTouchesMentionBoundary", () => {
     ).toBe(true);
   });
 });
+
+it("keeps a thread link as one editable chip", () => {
+  const source = "[A thread](t3-thread://v1/environment-1/thread-1)";
+  expect(splitPromptIntoComposerSegments(`Compare ${source} please`)).toEqual([
+    { type: "text", text: "Compare " },
+    expect.objectContaining({ type: "thread", label: "A thread", threadId: "thread-1", source }),
+    { type: "text", text: " please" },
+  ]);
+});

@@ -1,3 +1,10 @@
+import { threadContextLinksToPlainText } from "@t3tools/shared/threadContext";
+import { createPortal } from "react-dom";
+import {
+  clearThreadContextDropTarget,
+  dropThreadContext,
+  threadContextDropTarget,
+} from "./chat/threadContextDrag";
 import { setThreadChangeRequestSnapshot } from "./ThreadStatusIndicators";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
@@ -8,6 +15,7 @@ import { replaceComposerContextReferences } from "@t3tools/shared/composerContex
 import * as Schema from "effect/Schema";
 import {
   DndContext,
+  defaultAnnouncements,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -802,7 +810,9 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
 }) {
   const { composer, draftId, onDiscard, onNavigate } = props;
   const promptPreview =
-    replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label)
+    threadContextLinksToPlainText(
+      replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label),
+    )
       .trim()
       .split("\n", 1)[0] ?? "";
   // images mirrors persistedAttachments once rehydration finishes; before
@@ -3186,8 +3196,40 @@ export default function Sidebar() {
   } | null>(null);
   const dragTargetSection = dragState?.targetSection ?? null;
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
+  const contextDragKeyRef = useRef<string | null>(null);
+  const [contextDragPoint, setContextDragPoint] = useState<{ x: number; y: number } | null>(null);
+  const moveThreadContext = useCallback((point: { x: number; y: number }) => {
+    const bounds = threadListRef.current?.getBoundingClientRect();
+    const outside = bounds !== undefined && (point.x < bounds.left || point.x > bounds.right);
+    clearThreadContextDropTarget();
+    const target = threadContextDropTarget(point);
+    target?.setAttribute("data-thread-context-over", "true");
+    setContextDragPoint(outside ? point : null);
+    return outside;
+  }, []);
+  const dropSidebarThreadContext = useCallback((point: { x: number; y: number }) => {
+    const key = contextDragKeyRef.current;
+    const target = threadContextDropTarget(point);
+    if (target && key) {
+      const selected = useThreadSelectionStore.getState().selectedThreadKeys;
+      const keys = selected.has(key) ? [...selected] : [key];
+      dropThreadContext(
+        target,
+        keys.flatMap((selectedKey) => {
+          const thread = threadByKeyRef.current.get(selectedKey);
+          return thread ? [scopeThreadRef(thread.environmentId, thread.id)] : [];
+        }),
+      );
+      return true;
+    }
+    const bounds = threadListRef.current?.getBoundingClientRect();
+    return bounds !== undefined && (point.x < bounds.left || point.x > bounds.right);
+  }, []);
   const finishThreadDrag = useCallback((started: boolean) => {
     dragSensorRef.current = null;
+    contextDragKeyRef.current = null;
+    clearThreadContextDropTarget();
+    setContextDragPoint(null);
     if (started) {
       listMotionRef.current?.release();
       setDragState(null);
@@ -3204,6 +3246,8 @@ export default function Sidebar() {
       distance: 6,
       onAttach: attachDragSensor,
       onFinish: finishThreadDrag,
+      onMove: moveThreadContext,
+      onDrop: dropSidebarThreadContext,
     }),
   );
   const sectionByThreadKey = useMemo(() => {
@@ -3346,6 +3390,7 @@ export default function Sidebar() {
   const handleThreadDragStart = useCallback(
     (event: DragStartEvent) => {
       const activeKey = String(event.active.id);
+      contextDragKeyRef.current = activeKey;
       const activeSection = sectionByThreadKey.get(activeKey);
       if (activeSection === undefined) return;
       // Stop normal section motion before dnd-kit measures the picked-up row.
@@ -4417,6 +4462,17 @@ export default function Sidebar() {
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
+      {contextDragPoint && dragState
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed z-[100] max-w-72 truncate rounded-lg border bg-popover px-3 py-2 text-sm shadow-lg"
+              style={{ left: contextDragPoint.x + 12, top: contextDragPoint.y + 12 }}
+            >
+              {threadByKey.get(dragState.activeKey)?.title ?? "Thread"}
+            </div>,
+            document.body,
+          )
+        : null}
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         className="gap-0 min-h-full"
@@ -4649,6 +4705,12 @@ export default function Sidebar() {
               timeout={400}
             >
               <DndContext
+                accessibility={{
+                  announcements: {
+                    ...defaultAnnouncements,
+                    onDragCancel: () => "Thread drag ended.",
+                  },
+                }}
                 sensors={dndSensors}
                 collisionDetection={dndCollisionDetection}
                 modifiers={[

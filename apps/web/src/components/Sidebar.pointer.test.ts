@@ -23,7 +23,9 @@ function pointer(type: string, values: Partial<PointerEvent> = {}) {
   });
 }
 
-function gesture() {
+function gesture(
+  options: Partial<ConstructorParameters<typeof SidebarPointerSensor>[0]["options"]> = {},
+) {
   const callbacks = {
     onStart: vi.fn(),
     onMove: vi.fn(),
@@ -37,7 +39,7 @@ function gesture() {
   const props = {
     active: "thread",
     event: pointer("pointerdown"),
-    options: { distance: 6, onAttach: vi.fn(), onFinish },
+    options: { distance: 6, onAttach: vi.fn(), onFinish, ...options },
     ...callbacks,
   } as unknown as SensorProps<ConstructorParameters<typeof SidebarPointerSensor>[0]["options"]>;
   const sensor = new SidebarPointerSensor(props);
@@ -61,6 +63,21 @@ afterEach(() => {
 });
 
 describe("sidebar pointer lifecycle", () => {
+  it("copies a composer drop without applying a sidebar move", () => {
+    const onDrop = vi.fn(() => true);
+    const onMove = vi.fn(() => true);
+    const drag = gesture({ onDrop, onMove });
+    document.dispatchEvent(pointer("pointermove", { clientX: 100 }));
+    document.dispatchEvent(pointer("pointermove", { clientX: 300, clientY: 400 }));
+    expect(onMove).toHaveBeenCalledWith({ x: 300, y: 400 });
+    expect(drag.onMove).not.toHaveBeenCalled();
+    document.dispatchEvent(pointer("pointerup", { clientX: 301, clientY: 401, buttons: 0 }));
+    expect(onDrop).toHaveBeenCalledExactlyOnceWith({ x: 301, y: 401 });
+    expect(drag.onEnd).not.toHaveBeenCalled();
+    expect(drag.onCancel).toHaveBeenCalledOnce();
+    expect(drag.onFinish).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
   it("keeps a click idle and starts only after the drag threshold", () => {
     const click = gesture();
     document.dispatchEvent(pointer("pointermove", { clientY: 16 }));

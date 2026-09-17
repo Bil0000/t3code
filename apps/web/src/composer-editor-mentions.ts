@@ -1,3 +1,4 @@
+import { collectThreadContextLinks } from "@t3tools/shared/threadContext";
 import type { AssistantCitation } from "@t3tools/contracts";
 import { collectAssistantCitations } from "@t3tools/shared/assistantCitations";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
@@ -7,6 +8,7 @@ import {
 } from "@t3tools/shared/composerInlineTokens";
 
 export type ComposerPromptSegment =
+  | { type: "thread"; environmentId: string; threadId: string; label: string; source: string }
   | {
       type: "text";
       text: string;
@@ -79,10 +81,12 @@ export function collectComposerPromptInlineTokens(text: string) {
   const tokens = collectComposerInlineTokens(text);
   const citations = collectAssistantCitations(text);
   const references = collectComposerContextReferences(text);
-  if (citations.length === 0 && references.length === 0) return tokens;
+  const threads = collectThreadContextLinks(text);
+  if (citations.length === 0 && references.length === 0 && threads.length === 0) return tokens;
 
   // An unfinished @ mention can otherwise consume the start of a link label.
   const links = [
+    ...threads.map((match) => ({ ...match, type: "thread" as const })),
     ...citations.map((match) => ({ ...match, type: "citation" as const })),
     ...references.map((match) => ({ ...match, type: "context-reference" as const })),
   ];
@@ -111,7 +115,9 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
       pushTextSegment(segments, text.slice(cursor, match.start));
     }
 
-    if (match.type === "citation") {
+    if (match.type === "thread") {
+      segments.push({ ...match, type: "thread" });
+    } else if (match.type === "citation") {
       segments.push({ type: "citation", citation: match.citation, source: match.source });
     } else if (match.type === "context-reference") {
       segments.push({

@@ -1,3 +1,5 @@
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
+import { collectThreadContextLinks } from "@t3tools/shared/threadContext";
 import {
   CommandId,
   isProviderAvailable,
@@ -701,10 +703,10 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
 function timelineItem(input: {
   readonly row: OrchestrationV2ThreadProjection["visibleTurnItems"][number];
   readonly maxChars: number;
+  readonly textOffset: number;
   readonly messagesByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["messages"]>;
 }): OrchestratorMcpThreadTimelineItem {
-  const text = turnItemText(input.row.item);
-  const textTruncated = text !== null && text.length > input.maxChars;
+  const itemText = turnItemText(input.row.item);
   const messageId =
     input.row.item.type === "user_message" || input.row.item.type === "assistant_message"
       ? input.row.item.messageId
@@ -715,6 +717,18 @@ function timelineItem(input: {
       : input.messagesByThreadId
           .get(input.row.sourceThreadId)
           ?.find((candidate) => candidate.id === messageId);
+  const text =
+    message?.role === "user"
+      ? [
+          projectComposerContextForProvider({
+            text: message.text,
+            records: message.context?.records ?? [],
+          }),
+          ...message.attachments.map((attachment) => `Attachment: ${jsonText(attachment)}`),
+        ].join("\n")
+      : itemText;
+  const textEnd = input.textOffset + input.maxChars;
+  const textTruncated = text !== null && text.length > textEnd;
   return {
     position: input.row.position,
     visibility: input.row.visibility,
@@ -727,8 +741,12 @@ function timelineItem(input: {
     type: input.row.item.type,
     status: input.row.item.status,
     title: input.row.item.title,
-    text: textTruncated ? `${text.slice(0, input.maxChars)}\n…[truncated]` : text,
+    text:
+      text === null
+        ? null
+        : `${text.slice(input.textOffset, textEnd)}${textTruncated ? "\n…[truncated]" : ""}`,
     textTruncated,
+    nextTextOffset: textTruncated ? textEnd : null,
     updatedAt: DateTime.formatIso(input.row.item.updatedAt),
   };
 }
@@ -1619,13 +1637,38 @@ const make = Effect.gen(function* () {
       }),
     readThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target } = yield* loadScopedThread(scope, input.threadId);
+        yield* requireCapability(scope);
+        if (input.environmentId !== undefined && input.environmentId !== scope.environmentId) {
+          return yield* failure("thread_not_found", "This thread belongs to another environment.");
+        }
+        const parent = yield* loadProjection(scope.threadId);
+        const referenced = parent.messages.some(
+          (message) =>
+            message.role === "user" &&
+            message.createdBy === "user" &&
+            collectThreadContextLinks(message.text).some(
+              (ref) => ref.environmentId === scope.environmentId && ref.threadId === input.threadId,
+            ),
+        );
+        const target =
+          input.threadId === scope.threadId
+            ? parent
+            : referenced
+              ? yield* loadProjection(input.threadId)
+              : yield* loadProjectThread(parent.thread.projectId, input.threadId);
+        if (target.thread.deletedAt !== null) {
+          return yield* failure("thread_not_found", "The attached thread is no longer available.");
+        }
         const view = input.view ?? "messages";
         const afterPosition = input.afterPosition ?? -1;
         const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
         const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
         const matching = target.visibleTurnItems
-          .filter((row) => row.position > afterPosition)
+          .filter((row) =>
+            input.itemPosition === undefined
+              ? row.position > afterPosition
+              : row.position === input.itemPosition,
+          )
           .filter(
             (row) =>
               view === "activity" ||
@@ -1658,6 +1701,7 @@ const make = Effect.gen(function* () {
         const task = directAppOwnedChildTask(parent, target);
         if (
           task !== undefined &&
+          (input.textOffset ?? 0) === 0 &&
           pageIncludesTerminalTaskResult({ parent, page, task, target, maxChars })
         ) {
           yield* readTask(scope, task.id, false, true, "thread-read-acknowledge");
@@ -1668,7 +1712,9 @@ const make = Effect.gen(function* () {
             .toSorted((left, right) => right.ordinal - left.ordinal)
             .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
             .map(threadRun),
-          items: page.map((row) => timelineItem({ row, maxChars, messagesByThreadId })),
+          items: page.map((row) =>
+            timelineItem({ row, maxChars, textOffset: input.textOffset ?? 0, messagesByThreadId }),
+          ),
           nextPosition: page.at(-1)?.position ?? null,
           hasMore: page.length < matching.length,
         } satisfies OrchestratorMcpThreadReadResult;

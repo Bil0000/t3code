@@ -69,6 +69,16 @@ returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
+## Use another thread as context
+
+On web and desktop, drag threads from the sidebar into the composer, including
+settled or snoozed threads. Add your question, then send. The agent reads the
+attached threads as needed without copying their full history into your prompt.
+Threads must belong to the same connected server.
+
+You can attach several threads. Select a thread link to open it, or delete the
+link from your draft to remove it. Attaching a thread does not change its status.
+
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose

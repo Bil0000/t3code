@@ -1,3 +1,4 @@
+import { threadContextLinksToPlainText } from "@t3tools/shared/threadContext";
 import { resolveVisibleWorktreeSetup, resolveWorktreeSetupProgress } from "./ChatView.logic";
 import * as DateTime from "effect/DateTime";
 import { restorePlanFollowUpComposer } from "./ChatView.logic";
@@ -8464,7 +8465,9 @@ export default function ChatView(props: ChatViewProps) {
           ),
         );
         const title = truncate(
-          assistantCitationsToPlainText(stripInlineContextReferences(trimmed)).trim() ||
+          threadContextLinksToPlainText(
+            assistantCitationsToPlainText(stripInlineContextReferences(trimmed)),
+          ).trim() ||
             composerAttachmentsSnapshot[0]?.name ||
             "New thread",
         );
@@ -8788,7 +8791,9 @@ export default function ChatView(props: ChatViewProps) {
         firstComposerImageName = firstComposerImage.name;
       }
     }
-    let titleSeed = assistantCitationsToPlainText(stripInlineContextReferences(trimmed)).trim();
+    let titleSeed = threadContextLinksToPlainText(
+      assistantCitationsToPlainText(stripInlineContextReferences(trimmed)),
+    ).trim();
     if (!titleSeed) {
       if (firstComposerImageName) {
         titleSeed = `Image: ${firstComposerImageName}`;
