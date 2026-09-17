@@ -501,18 +501,25 @@ export function runOrchestratorV2Scenario(
             });
           yield* Effect.tryPromise({
             try: () => gate.waitForReached(label),
-            catch: (cause) => cause,
+            catch: (cause) =>
+              new OrchestratorV2ScenarioStepError({
+                scenario: scenario.name,
+                step: `release_replay_gate:${label}:reached=false`,
+                cause,
+              }),
           }).pipe(
             Effect.timeout(SCENARIO_WAIT_DEADLINE_MS),
             Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
-            Effect.mapError(
-              (cause) =>
-                new OrchestratorV2ScenarioStepError({
-                  scenario: scenario.name,
-                  step: `release_replay_gate:${label}:reached=false`,
-                  cause,
-                }),
-            ),
+            Effect.catchTags({
+              TimeoutError: (cause) =>
+                Effect.fail(
+                  new OrchestratorV2ScenarioStepError({
+                    scenario: scenario.name,
+                    step: `release_replay_gate:${label}:reached=false`,
+                    cause,
+                  }),
+                ),
+            }),
             Effect.ensuring(Effect.sync(() => gate.release(label))),
           );
         });
