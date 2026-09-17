@@ -13,7 +13,7 @@ import {
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
   RELAY_URL_SECRET,
 } from "../cloud/config.ts";
-import { layer, ScheduledTaskCoordinator } from "./ScheduledTaskCoordinator.ts";
+import * as ScheduledTaskCoordinator from "./ScheduledTaskCoordinator.ts";
 
 const input = Schema.decodeUnknownSync(ScheduledTaskConfigureFailoverInput)({
   groupId: "8f580abe-e99c-46db-a6e3-d93f2b2c10e8",
@@ -67,7 +67,7 @@ it.effect(
       );
     };
     return Effect.gen(function* () {
-      const coordinator = yield* ScheduledTaskCoordinator;
+      const coordinator = yield* ScheduledTaskCoordinator.ScheduledTaskCoordinator;
       const failed = yield* Effect.result(coordinator.configure(input));
       expect(failed._tag).toBe("Failure");
       if (failed._tag !== "Failure") return;
@@ -90,8 +90,22 @@ it.effect(
       expect(recovered.enabled).toBe(false);
       expect(recovered.revision).toBe(input.revision);
     }).pipe(
-      Effect.provide(layer.pipe(Layer.provide(secrets))),
+      Effect.provide(ScheduledTaskCoordinator.layer.pipe(Layer.provide(secrets))),
       Effect.provideService(FetchHttpClient.Fetch, fetch),
     );
   },
+);
+
+it.effect("disables failover when no Connect credentials are available", () =>
+  Effect.gen(function* () {
+    const coordinator = yield* ScheduledTaskCoordinator.make;
+    expect(yield* coordinator.available).toBe(false);
+    const result = yield* Effect.result(coordinator.configure(input));
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure.message).toBe(
+        "Automatic switching needs all selected servers linked to the same T3 Connect account.",
+      );
+    }
+  }),
 );
