@@ -18,7 +18,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 const API_URL = "https://api.linear.app/graphql";
 const MAX_PAGE = 250;
 
-export const LINEAR_CREDENTIALS_SECRET = "issue-trackers.linear.credentials";
+const LINEAR_CREDENTIALS_SECRET = "issue-trackers.linear.credentials";
 
 const Credential = Schema.Struct({
   credentialId: Schema.String,
