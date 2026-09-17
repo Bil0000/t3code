@@ -274,12 +274,10 @@ function ComposerBannerStackAlert({
         <ComposerBanner.Icon className="h-(--composer-banner-icon-column) self-start">
           {item.icon}
         </ComposerBanner.Icon>
-        <ComposerBanner.Content className="flex-col items-start gap-0.5 py-0.5">
-          <span className="w-full min-w-0 font-medium whitespace-normal wrap-anywhere">
-            {item.title}
-          </span>
+        <ComposerBanner.Content className="whitespace-nowrap">
+          <span className="min-w-0 truncate font-medium leading-7 sm:leading-6">{item.title}</span>
           {item.description ? (
-            <span className="flex w-full min-w-0 items-start gap-1">
+            <span className="flex min-w-8 flex-1 items-center gap-1">
               <span className="min-w-0 truncate text-muted-foreground">{item.description}</span>
               <Popover>
                 <PopoverTrigger
@@ -289,7 +287,7 @@ function ComposerBannerStackAlert({
                       size="icon-xs"
                       variant="ghost"
                       aria-label="Show notice details"
-                      className="-my-1 flex-none text-muted-foreground hover:text-foreground"
+                      className="flex-none text-muted-foreground hover:text-foreground"
                     />
                   }
                 >
