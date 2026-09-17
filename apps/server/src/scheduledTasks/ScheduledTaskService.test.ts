@@ -1,3 +1,4 @@
+import { layer as scheduledTaskCoordinatorLayer } from "./ScheduledTaskCoordinator.ts";
 import * as NodeUtil from "node:util";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -194,7 +195,7 @@ it.effect(
         Effect.gen(function* () {
           yield* Layer.build(
             Layer.provideMerge(
-              scheduledTaskServiceLayer,
+              scheduledTaskServiceLayer.pipe(Layer.provide(scheduledTaskCoordinatorLayer)),
               Layer.mergeAll(
                 Layer.mock(ThreadLaunchService.ThreadLaunchService)({
                   launch: () =>
@@ -290,7 +291,7 @@ it.effect(
         Effect.gen(function* () {
           yield* Layer.build(
             Layer.provideMerge(
-              scheduledTaskServiceLayer,
+              scheduledTaskServiceLayer.pipe(Layer.provide(scheduledTaskCoordinatorLayer)),
               Layer.mergeAll(
                 Layer.mock(ThreadLaunchService.ThreadLaunchService)({
                   launch: () =>

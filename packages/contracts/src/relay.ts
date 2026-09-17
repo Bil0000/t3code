@@ -15,6 +15,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { ScheduledTaskUpsertSchedule } from "./scheduledTask.ts";
 
 export const RelayAgentAwarenessPlatform = Schema.Literals(["ios", "android"]);
 export type RelayAgentAwarenessPlatform = typeof RelayAgentAwarenessPlatform.Type;
@@ -1088,8 +1089,94 @@ const RelayDpopClientGroup = HttpApiGroup.make("dpopClient")
   .annotate(OpenApi.Description, "DPoP-authenticated client access to linked environments.")
   .middleware(RelayDpopClientAuth);
 
+const RelayScheduledTaskIdentifier = Schema.String.check(
+  Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+);
+
+export const RelayScheduledTaskReference = Schema.Struct({
+  groupId: RelayScheduledTaskIdentifier,
+  revision: RelayScheduledTaskIdentifier,
+});
+export type RelayScheduledTaskReference = typeof RelayScheduledTaskReference.Type;
+
+export const RelayScheduledTaskConfigureRequest = Schema.Struct({
+  ...RelayScheduledTaskReference.fields,
+  expectedRevision: Schema.NullOr(RelayScheduledTaskIdentifier),
+  userId: TrimmedNonEmptyString.check(Schema.isMaxLength(191)),
+  environmentIds: Schema.Array(EnvironmentId).check(Schema.isMinLength(2), Schema.isMaxLength(2)),
+  schedule: ScheduledTaskUpsertSchedule,
+  timeZone: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+});
+export type RelayScheduledTaskConfigureRequest = typeof RelayScheduledTaskConfigureRequest.Type;
+
+export const RelayScheduledTaskEnabledRequest = Schema.Struct({
+  ...RelayScheduledTaskReference.fields,
+  enabled: Schema.Boolean,
+});
+export type RelayScheduledTaskEnabledRequest = typeof RelayScheduledTaskEnabledRequest.Type;
+
+export const RelayScheduledTaskState = Schema.Struct({
+  ...RelayScheduledTaskReference.fields,
+  enabled: Schema.Boolean,
+  nextRunAt: TrimmedNonEmptyString,
+  schedule: ScheduledTaskUpsertSchedule,
+  timeZone: TrimmedNonEmptyString,
+  environmentIds: Schema.Array(EnvironmentId),
+});
+export type RelayScheduledTaskState = typeof RelayScheduledTaskState.Type;
+
+export const RelayScheduledTaskClaim = Schema.Struct({
+  ...RelayScheduledTaskState.fields,
+  occurrenceId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type RelayScheduledTaskClaim = typeof RelayScheduledTaskClaim.Type;
+
+export class RelayScheduledTaskError extends Schema.TaggedError<RelayScheduledTaskError>()(
+  "RelayScheduledTaskError",
+  {
+    currentState: Schema.optional(RelayScheduledTaskState),
+    reason: Schema.Literals([
+      "not_authorized",
+      "revision_conflict",
+      "not_found",
+      "invalid_configuration",
+      "persistence_failed",
+    ]),
+  },
+  { httpApiStatus: 409 },
+) {
+  override get message(): string {
+    return `Scheduled task coordination failed: ${this.reason}`;
+  }
+}
+
 const RelayServerGroup = HttpApiGroup.make("server")
   .add(
+    HttpApiEndpoint.post("getScheduledTask", "/v1/scheduled-tasks/get", {
+      payload: RelayScheduledTaskReference,
+      success: RelayScheduledTaskState,
+      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+    }),
+    HttpApiEndpoint.post("configureScheduledTask", "/v1/scheduled-tasks/configure", {
+      payload: RelayScheduledTaskConfigureRequest,
+      success: RelayScheduledTaskState,
+      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+    }),
+    HttpApiEndpoint.post("setScheduledTaskEnabled", "/v1/scheduled-tasks/enabled", {
+      payload: RelayScheduledTaskEnabledRequest,
+      success: RelayScheduledTaskState,
+      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+    }),
+    HttpApiEndpoint.post("deleteScheduledTask", "/v1/scheduled-tasks/delete", {
+      payload: RelayScheduledTaskReference,
+      success: RelayOkResponse,
+      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+    }),
+    HttpApiEndpoint.post("claimScheduledTask", "/v1/scheduled-tasks/claim", {
+      payload: RelayScheduledTaskReference,
+      success: RelayScheduledTaskClaim,
+      error: [RelayAuthInvalidError, RelayScheduledTaskError],
+    }),
     HttpApiEndpoint.post(
       "publishAgentActivity",
       "/v1/environments/:environmentId/threads/:threadId/agent-activity",

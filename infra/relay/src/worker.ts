@@ -1,3 +1,4 @@
+import * as ScheduledTasks from "./scheduledTasks/ScheduledTasks.ts";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle/Postgres";
@@ -211,7 +212,7 @@ export const ApiLive = Api.make(
     );
 
     const runtimeLayer = Layer.empty.pipe(
-      Layer.provideMerge(MobileRegistrations.layer),
+      Layer.provideMerge(Layer.mergeAll(MobileRegistrations.layer, ScheduledTasks.layer)),
       Layer.provideMerge(AgentActivityPublisher.layer),
       Layer.provideMerge(EnvironmentConnector.layer),
       Layer.provideMerge(EnvironmentLinker.layer),

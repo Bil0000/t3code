@@ -1,3 +1,4 @@
+import type { ScheduledTaskSchedule } from "@t3tools/contracts";
 import type {
   RelayAgentActivityAggregateState,
   RelayAgentActivityState,
@@ -190,3 +191,19 @@ export const relayDpopProofs = pgTable(
     index("idx_relay_dpop_proofs_expires_at").on(table.expiresAt),
   ],
 );
+
+export const relayScheduledTasks = pgTable("relay_scheduled_tasks", {
+  groupId: varchar("group_id", { length: 36 }).primaryKey(),
+  revision: varchar("revision", { length: 36 }).notNull(),
+  userId: varchar("user_id", { length: 191 }).notNull(),
+  members: jsonb("members")
+    .notNull()
+    .$type<ReadonlyArray<{ environmentId: string; publicKey: string }>>(),
+  schedule: jsonb("schedule").notNull().$type<ScheduledTaskSchedule>(),
+  timeZone: varchar("time_zone", { length: 100 }).notNull(),
+  enabled: boolean("enabled").notNull(),
+  deleted: boolean("deleted").notNull().default(false),
+  nextRunAt: varchar("next_run_at", { length: 64 }).notNull(),
+  activatedAt: varchar("activated_at", { length: 64 }),
+  heartbeats: jsonb("heartbeats").notNull().$type<Record<string, string>>(),
+});

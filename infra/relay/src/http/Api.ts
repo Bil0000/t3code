@@ -1,3 +1,4 @@
+import * as ScheduledTasks from "../scheduledTasks/ScheduledTasks.ts";
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import { sql as drizzleSql } from "drizzle-orm";
 import * as Crypto from "effect/Crypto";
@@ -877,9 +878,42 @@ export const serverApi = HttpApiBuilder.group(
   RelayApi,
   "server",
   Effect.fnUntraced(function* (handlers) {
+    const scheduledTasks = yield* ScheduledTasks.ScheduledTasks;
     const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
-    return handlers.handle(
+    const taskHandlers = handlers
+      .handle(
+        "configureScheduledTask",
+        Effect.fn("relay.api.server.configureScheduledTask")(function* ({ payload }) {
+          return yield* scheduledTasks.configure(yield* RelayEnvironmentPrincipal, payload);
+        }),
+      )
+      .handle(
+        "getScheduledTask",
+        Effect.fn("relay.api.server.getScheduledTask")(function* ({ payload }) {
+          return yield* scheduledTasks.get(yield* RelayEnvironmentPrincipal, payload);
+        }),
+      )
+      .handle(
+        "setScheduledTaskEnabled",
+        Effect.fn("relay.api.server.setScheduledTaskEnabled")(function* ({ payload }) {
+          return yield* scheduledTasks.setEnabled(yield* RelayEnvironmentPrincipal, payload);
+        }),
+      )
+      .handle(
+        "deleteScheduledTask",
+        Effect.fn("relay.api.server.deleteScheduledTask")(function* ({ payload }) {
+          yield* scheduledTasks.remove(yield* RelayEnvironmentPrincipal, payload);
+          return { ok: true as const };
+        }),
+      )
+      .handle(
+        "claimScheduledTask",
+        Effect.fn("relay.api.server.claimScheduledTask")(function* ({ payload }) {
+          return yield* scheduledTasks.claim(yield* RelayEnvironmentPrincipal, payload);
+        }),
+      );
+    return taskHandlers.handle(
       "publishAgentActivity",
       Effect.fn("relay.api.server.publishAgentActivity")(
         function* (args) {

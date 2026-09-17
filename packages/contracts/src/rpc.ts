@@ -289,6 +289,8 @@ import {
   ScheduledTaskDeleteInput,
   ScheduledTaskDeleteResult,
   ScheduledTaskError,
+  ScheduledTaskConfigureFailoverInput,
+  ScheduledTaskConfigureFailoverResult,
   ScheduledTaskListInput,
   ScheduledTaskListResult,
   ScheduledTaskRunNowInput,
@@ -443,6 +445,7 @@ export const WS_METHODS = {
   serverRefreshUsageRates: "server.refreshUsageRates",
 
   // Scheduled tasks
+  scheduledTasksConfigureFailover: "scheduledTasks.configureFailover",
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -1531,6 +1534,12 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsScheduledTasksConfigureFailoverRpc = Rpc.make(WS_METHODS.scheduledTasksConfigureFailover, {
+  payload: ScheduledTaskConfigureFailoverInput,
+  success: ScheduledTaskConfigureFailoverResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -1633,6 +1642,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
+  WsScheduledTasksConfigureFailoverRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,

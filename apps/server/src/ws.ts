@@ -1948,6 +1948,14 @@ const makeWsRpcLayer = (
               "orchestration_v2.thread_id": input.threadId,
             },
           ),
+        [WS_METHODS.scheduledTasksConfigureFailover]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.scheduledTasksConfigureFailover,
+            scheduledTasks.configureFailover(input),
+            {
+              "rpc.aggregate": "scheduledTasks",
+            },
+          ),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           observeRpcEffect(WS_METHODS.scheduledTasksList, scheduledTasks.list(), {
             "rpc.aggregate": "scheduledTasks",

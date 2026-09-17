@@ -5,6 +5,8 @@ import {
   ScheduledTaskError,
   ScheduledTaskId,
   ThreadId,
+  type ScheduledTaskConfigureFailoverInput,
+  type ScheduledTaskConfigureFailoverResult,
   type ScheduledTaskDeleteInput,
   type ScheduledTaskDeleteResult,
   type ScheduledTaskListResult,
@@ -31,6 +33,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { ScheduledTaskCoordinator } from "./ScheduledTaskCoordinator.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
@@ -40,6 +43,9 @@ const decodeScheduleJson = Schema.decodeUnknownEffect(
 );
 const decodeWorkspaceStrategyJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ScheduledTask.fields.workspaceStrategy),
+);
+const decodeFailoverJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ScheduledTask.fields.failover),
 );
 const decodeModelSelectionJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ScheduledTask.fields.modelSelection),
@@ -51,6 +57,7 @@ interface ScheduledTaskRow {
   readonly prompt: string;
   readonly enabled: number;
   readonly schedule_json: string;
+  readonly failover_json: string | null;
   readonly project_id: string;
   readonly thread_id: string | null;
   readonly workspace_strategy_json: string;
@@ -71,6 +78,9 @@ interface ScheduledTaskRow {
 export class ScheduledTaskService extends Context.Service<
   ScheduledTaskService,
   {
+    readonly configureFailover: (
+      input: ScheduledTaskConfigureFailoverInput,
+    ) => Effect.Effect<ScheduledTaskConfigureFailoverResult, ScheduledTaskError>;
     readonly list: () => Effect.Effect<ScheduledTaskListResult, ScheduledTaskError>;
     /** Emits the full task list on subscribe and again after every change (CRUD, run transitions, reschedules). */
     readonly subscribeList: () => Stream.Stream<ScheduledTaskListResult, ScheduledTaskError>;
@@ -138,6 +148,7 @@ const decodeRow = (row: ScheduledTaskRow) =>
       prompt: row.prompt,
       enabled: row.enabled === 1,
       schedule,
+      failover: row.failover_json == null ? null : yield* decodeFailoverJson(row.failover_json),
       projectId: row.project_id,
       threadId: row.thread_id,
       workspaceStrategy,
@@ -173,7 +184,7 @@ export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(funct
   const sql = yield* SqlClient.SqlClient;
   const rows = yield* sql<ScheduledTaskRow>`
     SELECT * FROM scheduled_tasks
-    WHERE enabled = 1 AND next_run_at IS NOT NULL
+    WHERE failover_json IS NULL AND enabled = 1 AND next_run_at IS NOT NULL
       AND next_run_at <= ${iso(now)} AND last_run_status <> 'running'
     ORDER BY next_run_at ASC, task_id ASC
   `;
@@ -207,6 +218,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const crypto = yield* Crypto.Crypto;
+    const coordinator = yield* ScheduledTaskCoordinator;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
@@ -223,6 +235,7 @@ export const layer = Layer.effect(
         prompt,
         enabled,
         schedule_json,
+        failover_json,
         project_id,
         thread_id,
         workspace_strategy_json,
@@ -255,6 +268,7 @@ export const layer = Layer.effect(
         prompt,
         enabled,
         schedule_json,
+        failover_json,
         project_id,
         thread_id,
         workspace_strategy_json,
@@ -305,6 +319,7 @@ export const layer = Layer.effect(
           prompt,
           enabled,
           schedule_json,
+          failover_json,
           project_id,
           thread_id,
           workspace_strategy_json,
@@ -327,6 +342,7 @@ export const layer = Layer.effect(
           ${task.prompt},
           ${task.enabled ? 1 : 0},
           ${JSON.stringify(task.schedule)},
+          ${task.failover ? JSON.stringify(task.failover) : null},
           ${task.projectId},
           ${task.threadId},
           ${JSON.stringify(task.workspaceStrategy)},
@@ -349,6 +365,7 @@ export const layer = Layer.effect(
           prompt = excluded.prompt,
           enabled = excluded.enabled,
           schedule_json = excluded.schedule_json,
+          failover_json = excluded.failover_json,
           project_id = excluded.project_id,
           thread_id = excluded.thread_id,
           workspace_strategy_json = excluded.workspace_strategy_json,
@@ -430,7 +447,7 @@ export const layer = Layer.effect(
           UPDATE scheduled_tasks
           SET last_run_status = 'failed',
               last_run_error = ${message},
-              next_run_at = ${nextRunAt(source, now)},
+              next_run_at = ${source.failover ? source.nextRunAt : nextRunAt(source, now)},
               updated_at = ${iso(now)},
               run_count = run_count + 1
           WHERE task_id = ${task.id} AND last_run_status = 'running'
@@ -448,6 +465,7 @@ export const layer = Layer.effect(
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
       trigger: "scheduled" | "manual",
+      occurrenceId?: string,
     ) {
       const reserved = yield* Ref.modify(activeRuns, (active) => {
         if (active.has(task.id)) return [false, active] as const;
@@ -485,16 +503,28 @@ export const layer = Layer.effect(
         if (
           trigger === "scheduled" &&
           (!active.enabled ||
-            Option.isNone(parsedNextRunAt) ||
-            DateTime.toEpochMillis(parsedNextRunAt.value) > DateTime.toEpochMillis(startedAt))
+            (occurrenceId === undefined &&
+              (Option.isNone(parsedNextRunAt) ||
+                DateTime.toEpochMillis(parsedNextRunAt.value) > DateTime.toEpochMillis(startedAt))))
         ) {
           return active;
         }
 
+        if (occurrenceId !== undefined && !active.failover) return active;
+        if (active.failover) {
+          if (
+            active.failover.revision !== task.failover?.revision ||
+            active.failover.groupId !== task.failover?.groupId
+          )
+            return active;
+          if (trigger === "manual") yield* coordinator.get(active.failover);
+          else if (occurrenceId === undefined) return active;
+        }
         yield* markRunning(active.id, startedAtIso);
         yield* notifyChanged;
 
-        const fireKey = `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`;
+        const fireKey =
+          occurrenceId ?? `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`;
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
         const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
         // Dispatch from the fresh row so prompt/model/binding edits made
@@ -553,7 +583,9 @@ export const layer = Layer.effect(
           ...scheduleSource,
           updatedAt: iso(completedAt),
           lastRunAt: startedAtIso,
-          nextRunAt: nextRunAt(scheduleSource, completedAt),
+          nextRunAt: scheduleSource.failover
+            ? scheduleSource.nextRunAt
+            : nextRunAt(scheduleSource, completedAt),
           lastRunStatus,
           lastRunError,
           runCount: scheduleSource.runCount + 1,
@@ -610,6 +642,46 @@ export const layer = Layer.effect(
       yield* notifyChanged;
     });
 
+    const runFailoverTasks = Effect.fn("ScheduledTaskService.runFailoverTasks")(function* () {
+      const replicas =
+        yield* sql<ScheduledTaskRow>`SELECT * FROM scheduled_tasks WHERE failover_json IS NOT NULL`;
+      yield* Effect.forEach(
+        replicas,
+        (row) =>
+          Effect.gen(function* () {
+            const task = yield* decodeRow(row);
+            if (!task.failover || (yield* Ref.get(activeRuns)).has(task.id)) return;
+            const state = yield* coordinator.claim(task.failover);
+            if (state === null) {
+              if (task.enabled || task.nextRunAt !== null) {
+                yield* sql`
+                  UPDATE scheduled_tasks SET enabled = 0, next_run_at = NULL
+                  WHERE task_id = ${task.id} AND failover_json = ${row.failover_json}
+                `;
+                yield* notifyChanged;
+              }
+              return;
+            }
+            const updated = yield* sql`
+              UPDATE scheduled_tasks SET enabled = ${state.enabled ? 1 : 0}, next_run_at = ${state.nextRunAt}
+              WHERE task_id = ${task.id} AND failover_json = ${row.failover_json}
+                AND updated_at = ${task.updatedAt} AND enabled = ${task.enabled ? 1 : 0}
+                AND next_run_at IS ${task.nextRunAt}
+              RETURNING task_id
+            `;
+            if (updated.length === 0) return;
+            if (task.enabled !== state.enabled || task.nextRunAt !== state.nextRunAt)
+              yield* notifyChanged;
+            if (state.occurrenceId !== null) yield* runTask(task, "scheduled", state.occurrenceId);
+          }).pipe(
+            Effect.catch(() =>
+              Effect.logWarning("Could not coordinate scheduled task", { taskId: row.task_id }),
+            ),
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
+    });
+
     const runDueTasks = Effect.fn("ScheduledTaskService.runDueTasks")(function* () {
       const now = yield* localNow;
       const tasks = yield* listDueTasks(now).pipe(
@@ -655,7 +727,7 @@ export const layer = Layer.effect(
                 UPDATE scheduled_tasks
                 SET last_run_status = 'failed',
                     last_run_error = 'Run was interrupted by a server restart.',
-                    next_run_at = ${nextRunAt(decoded.success, now)},
+                    next_run_at = ${decoded.success.failover ? decoded.success.nextRunAt : nextRunAt(decoded.success, now)},
                     updated_at = ${iso(now)},
                     run_count = run_count + 1
                 WHERE task_id IS ${row.task_id} AND last_run_status = 'running'
@@ -693,10 +765,20 @@ export const layer = Layer.effect(
       Effect.forever,
       Effect.forkScoped,
     );
+    yield* runFailoverTasks().pipe(
+      Effect.catch(() => Effect.logWarning("Shared task polling failed")),
+      Effect.delay(Duration.seconds(5)),
+      Effect.forever,
+      Effect.forkScoped,
+    );
 
     const list: ScheduledTaskService["Service"]["list"] = () =>
       listRows().pipe(
-        Effect.map((tasks) => ({ tasks })),
+        Effect.flatMap((tasks) =>
+          coordinator.available.pipe(
+            Effect.map((failoverAvailable) => ({ tasks, failoverAvailable })),
+          ),
+        ),
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
       );
 
@@ -733,6 +815,38 @@ export const layer = Layer.effect(
         // keep their run history, and so real load failures propagate instead
         // of silently resetting an existing row.
         const existingTask = yield* findTask(id);
+        const failover = input.failover === undefined ? existingTask?.failover : input.failover;
+        let sharedState = null;
+        if (failover) {
+          if (existingTask?.failover && existingTask.failover.groupId !== failover.groupId)
+            return yield* taskError(
+              "Turn off automatic switching before moving this task to a different shared schedule.",
+              { taskId: id },
+            );
+          if (input.threadId)
+            return yield* taskError("Automatic switching requires a new thread for each run.", {
+              taskId: id,
+            });
+          sharedState = yield* coordinator.get(failover);
+          if (sharedState.enabled)
+            return yield* taskError(
+              "Pause and configure the shared task before editing its server copies.",
+              { taskId: id },
+            );
+          if (
+            !isSameSchedule(sharedState.schedule, input.schedule) ||
+            sharedState.timeZone !== failover.timeZone ||
+            sharedState.environmentIds.length !== failover.environmentIds.length ||
+            sharedState.environmentIds.some((id, index) => id !== failover.environmentIds[index])
+          ) {
+            return yield* taskError(
+              "This server copy does not match the shared task configuration.",
+              { taskId: id },
+            );
+          }
+        } else if (existingTask?.failover) {
+          yield* coordinator.delete(existingTask.failover);
+        }
         // Keep the existing next_run_at when the schedule itself is untouched:
         // editing a title or prompt must not postpone (or resurrect) a due
         // run — only schedule/enabled changes restart the clock.
@@ -744,7 +858,8 @@ export const layer = Layer.effect(
           id,
           title: input.title,
           prompt: input.prompt,
-          enabled: input.enabled,
+          enabled: sharedState?.enabled ?? input.enabled,
+          failover: failover ?? null,
           schedule: input.schedule,
           projectId: input.projectId,
           threadId: input.threadId ?? null,
@@ -756,9 +871,11 @@ export const layer = Layer.effect(
           creationSource: input.creationSource ?? "web",
           createdAt: existingTask?.createdAt ?? iso(now),
           updatedAt: iso(now),
-          nextRunAt: scheduleUnchanged
-            ? existingTask.nextRunAt
-            : nextRunAt({ enabled: input.enabled, schedule: input.schedule }, now),
+          nextRunAt: sharedState
+            ? sharedState.nextRunAt
+            : scheduleUnchanged
+              ? existingTask.nextRunAt
+              : nextRunAt({ enabled: input.enabled, schedule: input.schedule }, now),
           lastRunAt: existingTask?.lastRunAt ?? null,
           lastRunStatus: existingTask?.lastRunStatus ?? "never",
           lastRunError: existingTask?.lastRunError ?? null,
@@ -772,9 +889,11 @@ export const layer = Layer.effect(
     const setEnabled: ScheduledTaskService["Service"]["setEnabled"] = (input) =>
       Effect.gen(function* () {
         const existing = yield* loadTask(input.id);
-        if (existing.enabled === input.enabled) return { task: existing };
+        if (!existing.failover && existing.enabled === input.enabled) return { task: existing };
         const now = yield* localNow;
-        const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
+        const next = existing.failover
+          ? (yield* coordinator.setEnabled(existing.failover, input.enabled)).nextRunAt
+          : nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
         // RETURNING so a task deleted between the load and this UPDATE is a
         // visible not-found error, not a false success.
         const updated = yield* sql<{ task_id: string }>`
@@ -798,8 +917,15 @@ export const layer = Layer.effect(
         };
       });
 
-    const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
-      deleteRow(input.id).pipe(Effect.andThen(notifyChanged), Effect.as({ id: input.id }));
+    const deleteTask: ScheduledTaskService["Service"]["delete"] = Effect.fn(
+      "ScheduledTaskService.delete",
+    )(function* (input) {
+      const task = yield* findTask(input.id);
+      if (task?.failover) yield* coordinator.delete(task.failover, true);
+      yield* deleteRow(input.id);
+      yield* notifyChanged;
+      return { id: input.id };
+    });
 
     const runNow: ScheduledTaskService["Service"]["runNow"] = (input: ScheduledTaskRunNowInput) =>
       Effect.gen(function* () {
@@ -812,7 +938,16 @@ export const layer = Layer.effect(
         return { task: next };
       });
 
+    const configureFailover: ScheduledTaskService["Service"]["configureFailover"] = Effect.fn(
+      "ScheduledTaskService.configureFailover",
+    )(function* (input) {
+      const state = yield* coordinator.configure(input);
+      const { expectedRevision: _, schedule: __, ...failover } = input;
+      return { failover, enabled: state.enabled, nextRunAt: state.nextRunAt };
+    });
+
     return ScheduledTaskService.of({
+      configureFailover,
       list,
       subscribeList,
       upsert,

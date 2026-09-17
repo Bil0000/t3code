@@ -1,3 +1,4 @@
+import { layer as scheduledTaskCoordinatorLayer } from "../scheduledTasks/ScheduledTaskCoordinator.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -267,6 +268,7 @@ for (const target of ["new", "existing"] as const) {
       () => {
         const harness = makeHarness();
         const scheduledTasks = ScheduledTasks.layer.pipe(
+          Layer.provide(scheduledTaskCoordinatorLayer),
           Layer.provide(Layer.mergeAll(harness.layer, NodeCrypto.layer)),
         );
         return Effect.gen(function* () {

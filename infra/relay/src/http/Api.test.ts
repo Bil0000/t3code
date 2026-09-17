@@ -1,3 +1,4 @@
+import * as ScheduledTasks from "../scheduledTasks/ScheduledTasks.ts";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import {
   RelayClientAuth,
@@ -654,7 +655,11 @@ describe("relay routing fallback", () => {
       const routes = HttpApiBuilder.layer(
         HttpApi.make("RelayApi").add(RelayApi.groups.server),
       ).pipe(
-        Layer.provide(serverApi.pipe(Layer.provide([publisher, signatures]))),
+        Layer.provide(
+          serverApi.pipe(
+            Layer.provide([publisher, signatures, Layer.mock(ScheduledTasks.ScheduledTasks, {})]),
+          ),
+        ),
         Layer.provide(auth),
         Layer.provide([NodeServices.layer, NodeHttpPlatform.layer, Etag.layerWeak]),
       );

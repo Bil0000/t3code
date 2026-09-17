@@ -1,3 +1,4 @@
+import { layer as scheduledTaskCoordinatorLayer } from "./ScheduledTaskCoordinator.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import { ScheduledTaskUpsertInput } from "@t3tools/contracts";
@@ -64,6 +65,13 @@ it.effect("preserves a due run when a save only pads the scheduled hour", () =>
       expect(rescheduled.task.nextRunAt).toBe(
         DateTime.formatIso(DateTime.toUtc(DateTime.add(dueAt, { minutes: 30 }))),
       );
-    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(dependencies))));
+    }).pipe(
+      Effect.provide(
+        ScheduledTaskService.layer.pipe(
+          Layer.provide(scheduledTaskCoordinatorLayer),
+          Layer.provide(dependencies),
+        ),
+      ),
+    );
   }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );

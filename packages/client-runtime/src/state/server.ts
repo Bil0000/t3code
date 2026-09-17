@@ -1216,6 +1216,12 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
     }),
+    configureScheduledTaskFailover: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:scheduled-task:configure-failover",
+      tag: WS_METHODS.scheduledTasksConfigureFailover,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     upsertScheduledTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:upsert",
       tag: WS_METHODS.scheduledTasksUpsert,

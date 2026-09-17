@@ -13,7 +13,7 @@ layer("053_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 53 }, (_, index) => index + 1),
+        Array.from({ length: 54 }, (_, index) => index + 1),
       );
     }),
   );
@@ -23,9 +23,9 @@ layer("053_OrchestrationV2", (it) => {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 52 });
 
-      const executed = yield* runMigrations();
+      const executed = yield* runMigrations({ toMigrationInclusive: 53 });
       assert.deepStrictEqual(executed, [[53, "OrchestrationV2"]]);
-      assert.deepStrictEqual(yield* runMigrations(), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 53 }), []);
 
       const migrations = yield* sql<{
         readonly migration_id: number;

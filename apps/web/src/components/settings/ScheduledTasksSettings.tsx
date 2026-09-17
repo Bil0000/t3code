@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { Clock3Icon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -9,20 +9,23 @@ import type {
   ProviderInteractionMode,
   RuntimeMode,
   ScheduledTask,
+  ScheduledTaskConfigureFailoverInput,
   ScheduledTaskId,
   ScheduledTaskSchedule,
   ScheduledTaskUpsertInput,
   ThreadId,
 } from "@t3tools/contracts";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { CommandId, ProviderInstanceId, ScheduledTaskError } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
+import * as Schema from "effect/Schema";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
+  type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 
-import { cn } from "../../lib/utils";
+import { cn, randomUUID } from "../../lib/utils";
 import { formatRelativeTime } from "../../timestampFormat";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
@@ -39,6 +42,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { vcsEnvironment } from "../../state/vcs";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { resolveScheduledTaskBaseRef } from "./ScheduledTasksSettings.logic";
+import {
+  ScheduledTaskBackupFields,
+  type ScheduledTaskBackupBinding,
+} from "./ScheduledTaskBackupFields";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -62,6 +69,23 @@ import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./s
 
 type ScheduleMode = "fixed" | "interval";
 type WorkspaceMode = "root" | "worktree" | "existing_worktree";
+const isScheduledTaskError = Schema.is(ScheduledTaskError);
+
+async function taskCommandValue<A, E>(request: Promise<AtomCommandResult<A, E>>): Promise<A> {
+  const result = await request;
+  if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+  return result.value;
+}
+
+function reportFailure(title: string, error: unknown) {
+  toastManager.add(
+    stackedThreadToast({
+      type: "error",
+      title,
+      description: error instanceof Error ? error.message : String(error),
+    }),
+  );
+}
 
 interface DraftState {
   readonly editingId: string | null;
@@ -78,6 +102,7 @@ interface DraftState {
   readonly baseRef: string;
   readonly existingWorktreePath: string;
   readonly modelSelection: ModelSelection | null;
+  readonly failover: ScheduledTask["failover"];
   /** Not editable in the dialog, but preserved so editing an agent-created task keeps its modes. */
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
@@ -110,6 +135,7 @@ const EMPTY_DRAFT: DraftState = {
   baseRef: "",
   existingWorktreePath: "",
   modelSelection: null,
+  failover: null,
   runtimeMode: "full-access",
   interactionMode: "default",
 };
@@ -220,6 +246,7 @@ function taskToDraft(task: ScheduledTask): DraftState {
         ? task.workspaceStrategy.worktreePath
         : "",
     modelSelection: task.modelSelection,
+    failover: task.failover,
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
   };
@@ -272,9 +299,9 @@ export function ScheduledTasksSettings(target: {
           </SelectPopup>
         </Select>
         <p className="text-xs text-muted-foreground">
-          Tasks run on this server, which must stay awake with T3 Code running. Closing a connected
-          laptop does not stop tasks on another server. Tasks do not move between servers
-          automatically. Fixed times use the server's time zone.
+          Tasks run on the selected server. Add a backup server to keep future runs going when it is
+          offline. Closing the app does not stop tasks on a running server. Without a backup, fixed
+          times use the server time zone.
         </p>
       </Field>
       {!environment || !tasksQuery.data ? (
@@ -324,6 +351,8 @@ function EnvironmentScheduledTasksSettings({
   const upsertTask = useAtomCommand(serverEnvironment.upsertScheduledTask, {
     label: "scheduled task upsert",
   });
+  const configureFailover = useAtomCommand(serverEnvironment.configureScheduledTaskFailover);
+  const setTaskEnabled = useAtomCommand(serverEnvironment.setScheduledTaskEnabled);
   const deleteTask = useAtomCommand(serverEnvironment.deleteScheduledTask, {
     label: "scheduled task delete",
   });
@@ -343,10 +372,40 @@ function EnvironmentScheduledTasksSettings({
   const [draft, setDraft] = useState<DraftState>(() =>
     linkedTask ? taskToDraft(linkedTask) : EMPTY_DRAFT,
   );
+  const [automaticBackup, setAutomaticBackup] = useState(Boolean(linkedTask?.failover));
+  const [backupEnvironmentId, setBackupEnvironmentId] = useState<EnvironmentId | null>(
+    linkedTask?.failover?.environmentIds.find((id) => id !== environmentId) ?? null,
+  );
+  const [backupDraft, setBackupDraft] = useState<ScheduledTaskBackupBinding | null>(null);
+  const pendingConfiguration = useRef<ScheduledTaskConfigureFailoverInput | null>(null);
+  const taskHostQuery = useEnvironmentQuery(
+    serverEnvironment.scheduledTasksLive({ environmentId: taskEnvironmentId, input: {} }),
+  );
+  const backupQuery = useEnvironmentQuery(
+    automaticBackup && backupEnvironmentId
+      ? serverEnvironment.scheduledTasksLive({ environmentId: backupEnvironmentId, input: {} })
+      : null,
+  );
+  const backupTask = draft.failover
+    ? backupQuery.data?.tasks.find((task) => task.failover?.groupId === draft.failover?.groupId)
+    : undefined;
+  const backupBinding = useMemo<ScheduledTaskBackupBinding>(
+    () =>
+      backupDraft ?? {
+        projectId: backupTask?.projectId ?? null,
+        modelSelection: backupTask?.modelSelection ?? null,
+        baseRef:
+          backupTask?.workspaceStrategy.type === "worktree"
+            ? backupTask.workspaceStrategy.baseRef
+            : "",
+      },
+    [backupDraft, backupTask],
+  );
   const [dialogOpen, setDialogOpen] = useState(() => linkedTask !== undefined);
   const [saving, setSaving] = useState(false);
   const editingTaskMissing =
-    draft.editingId !== null && !tasks.some((task) => task.id === draft.editingId);
+    draft.editingId !== null &&
+    !taskHostQuery.data?.tasks.some((task) => task.id === draft.editingId);
   const selectedProject = projects.find((project) => project.id === draft.projectId);
   const refsQuery = useEnvironmentQuery(
     dialogOpen && draft.workspaceMode === "worktree" && selectedProject
@@ -377,6 +436,10 @@ function EnvironmentScheduledTasksSettings({
 
   const openForCreate = useCallback(() => {
     setTaskEnvironmentId(environmentId);
+    setAutomaticBackup(false);
+    setBackupEnvironmentId(null);
+    setBackupDraft(null);
+    pendingConfiguration.current = null;
     setDraft({
       ...EMPTY_DRAFT,
       projectId: allProjects.find((project) => project.environmentId === environmentId)?.id ?? "",
@@ -387,23 +450,19 @@ function EnvironmentScheduledTasksSettings({
   const openForEdit = useCallback(
     (task: ScheduledTask) => {
       setTaskEnvironmentId(environmentId);
+      setAutomaticBackup(Boolean(task.failover));
+      setBackupEnvironmentId(
+        task.failover?.environmentIds.find((id) => id !== environmentId) ?? null,
+      );
+      setBackupDraft(null);
+      pendingConfiguration.current = null;
       setDraft(taskToDraft(task));
       setDialogOpen(true);
     },
     [environmentId],
   );
 
-  const reportFailure = (title: string, error: unknown) => {
-    toastManager.add(
-      stackedThreadToast({
-        type: "error",
-        title,
-        description: error instanceof Error ? error.message : String(error),
-      }),
-    );
-  };
-
-  const submit = useCallback(async () => {
+  const submit = async () => {
     if (saving || editingTaskMissing) return;
     const modelSelection = activeSelection;
     if (
@@ -422,6 +481,24 @@ function EnvironmentScheduledTasksSettings({
       );
       return;
     }
+    if (
+      automaticBackup &&
+      (!backupEnvironmentId ||
+        backupEnvironmentId === taskEnvironmentId ||
+        !backupBinding.projectId ||
+        !backupBinding.modelSelection ||
+        (draft.workspaceMode === "worktree" && !backupBinding.baseRef.trim()) ||
+        draft.workspaceMode === "existing_worktree" ||
+        draft.threadId ||
+        !taskHostQuery.data?.failoverAvailable ||
+        !backupQuery.data?.failoverAvailable)
+    ) {
+      reportFailure(
+        "Backup server is not ready",
+        "Connect both servers to the same T3 Connect account and select a backup project and model. Use a new thread with the project checkout or a new worktree.",
+      );
+      return;
+    }
     const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
       draft.workspaceMode === "root"
         ? { type: "root" }
@@ -434,6 +511,7 @@ function EnvironmentScheduledTasksSettings({
       prompt: draft.prompt.trim(),
       enabled: draft.enabled,
       schedule: scheduleFromDraft(draft),
+      failover: null,
       projectId: draft.projectId as ProjectId,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
       workspaceStrategy,
@@ -443,32 +521,117 @@ function EnvironmentScheduledTasksSettings({
       creationSource: "web",
     };
     setSaving(true);
-    const result = await upsertTask({ environmentId: taskEnvironmentId, input });
-    setSaving(false);
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        reportFailure("Could not save schedule task", squashAtomCommandFailure(result));
+    let configured = false;
+    try {
+      if (
+        automaticBackup &&
+        backupEnvironmentId &&
+        backupBinding.projectId &&
+        backupBinding.modelSelection
+      ) {
+        if (draft.editingId && !draft.failover) {
+          await taskCommandValue(
+            setTaskEnabled({
+              environmentId: taskEnvironmentId,
+              input: { id: draft.editingId as ScheduledTaskId, enabled: false },
+            }),
+          );
+        }
+        let previousFailover = draft.failover;
+        if (pendingConfiguration.current) {
+          const restored = await taskCommandValue(
+            configureFailover({
+              environmentId: taskEnvironmentId,
+              input: pendingConfiguration.current,
+            }),
+          );
+          previousFailover = restored.failover;
+          pendingConfiguration.current = null;
+          setDraft((current) => ({ ...current, failover: restored.failover }));
+        }
+        pendingConfiguration.current = {
+          groupId: previousFailover?.groupId ?? randomUUID(),
+          expectedRevision: previousFailover?.revision ?? null,
+          revision: randomUUID(),
+          environmentIds: previousFailover?.environmentIds.includes(backupEnvironmentId)
+            ? previousFailover.environmentIds
+            : [taskEnvironmentId, backupEnvironmentId],
+          schedule: input.schedule,
+          timeZone:
+            previousFailover?.timeZone ?? new Intl.DateTimeFormat().resolvedOptions().timeZone,
+        };
+        const { failover } = await taskCommandValue(
+          configureFailover({
+            environmentId: taskEnvironmentId,
+            input: pendingConfiguration.current,
+          }),
+        );
+        pendingConfiguration.current = null;
+        configured = true;
+        setDraft((current) => ({ ...current, failover }));
+        const sharedInput = {
+          ...input,
+          enabled: false,
+          failover,
+          commandId: CommandId.make(`scheduled-failover:${failover.groupId}`),
+        };
+        const { task } = await taskCommandValue(
+          upsertTask({
+            environmentId: taskEnvironmentId,
+            input: sharedInput,
+          }),
+        );
+        setDraft((current) => ({ ...current, editingId: task.id }));
+        await taskCommandValue(
+          upsertTask({
+            environmentId: backupEnvironmentId,
+            input: {
+              ...sharedInput,
+              id: backupTask?.id,
+              projectId: backupBinding.projectId,
+              modelSelection: backupBinding.modelSelection,
+              workspaceStrategy:
+                draft.workspaceMode === "root"
+                  ? { type: "root" }
+                  : {
+                      type: "worktree",
+                      baseRef: backupBinding.baseRef.trim(),
+                      startFromOrigin: true,
+                    },
+            },
+          }),
+        );
+        if (draft.enabled) {
+          await taskCommandValue(
+            setTaskEnabled({
+              environmentId: taskEnvironmentId,
+              input: { id: task.id, enabled: true },
+            }),
+          );
+        }
+      } else {
+        await taskCommandValue(upsertTask({ environmentId: taskEnvironmentId, input }));
       }
-      return;
+      setDialogOpen(false);
+      if (taskEnvironmentId !== environmentId) {
+        void navigate({
+          to: "/settings/scheduled-tasks",
+          search: { environmentId: taskEnvironmentId },
+        });
+      }
+    } catch (error) {
+      if (isScheduledTaskError(error) && error.recoveryFailover) {
+        pendingConfiguration.current = null;
+        setDraft((current) => ({ ...current, failover: error.recoveryFailover }));
+      }
+      reportFailure(
+        configured ? "Task paused: backup setup did not finish" : "Could not save schedule task",
+        error,
+      );
+    } finally {
+      setSaving(false);
     }
-    setDialogOpen(false);
-    if (taskEnvironmentId !== environmentId) {
-      void navigate({
-        to: "/settings/scheduled-tasks",
-        search: { environmentId: taskEnvironmentId },
-      });
-    }
-  }, [
-    activeSelection,
-    baseRef,
-    draft,
-    editingTaskMissing,
-    environmentId,
-    navigate,
-    saving,
-    taskEnvironmentId,
-    upsertTask,
-  ]);
+  };
 
   const handleDelete = useCallback(
     async (task: ScheduledTask) => {
@@ -552,11 +715,14 @@ function EnvironmentScheduledTasksSettings({
                       {task.enabled ? "Enabled" : "Paused"}
                     </Badge>
                     <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
+                    {task.failover ? <Badge variant="outline">Automatic backup</Badge> : null}
                   </div>
                   <p className="line-clamp-2 text-xs text-muted-foreground">{task.prompt}</p>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground/80">
                     <span>{scheduleLabel(task.schedule)}</span>
-                    <span>Next: {relativeLabel(task.nextRunAt)}</span>
+                    <span>
+                      Next: {task.enabled ? relativeLabel(task.nextRunAt) : "Not scheduled"}
+                    </span>
                     <span>Runs: {task.runCount}</span>
                   </div>
                   {task.lastRunError ? (
@@ -564,6 +730,23 @@ function EnvironmentScheduledTasksSettings({
                   ) : null}
                 </div>
                 <div className="flex items-start gap-1">
+                  <Switch
+                    className="mr-2 mt-1"
+                    checked={task.enabled}
+                    aria-label={`${task.enabled ? "Pause" : "Enable"} ${task.title}`}
+                    onCheckedChange={async (enabled) => {
+                      const result = await setTaskEnabled({
+                        environmentId,
+                        input: { id: task.id, enabled },
+                      });
+                      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                        reportFailure(
+                          "Could not update schedule task",
+                          squashAtomCommandFailure(result),
+                        );
+                      }
+                    }}
+                  />
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -602,7 +785,12 @@ function EnvironmentScheduledTasksSettings({
         )}
       </SettingsSection>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          if (!saving) setDialogOpen(open);
+        }}
+      >
         <DialogPopup className="max-w-xl">
           <DialogHeader>
             <DialogTitle>{draft.editingId ? "Edit task" : "New task"}</DialogTitle>
@@ -624,6 +812,9 @@ function EnvironmentScheduledTasksSettings({
                 onValueChange={(nextEnvironmentId) => {
                   if (!nextEnvironmentId || nextEnvironmentId === taskEnvironmentId) return;
                   setTaskEnvironmentId(nextEnvironmentId);
+                  setAutomaticBackup(false);
+                  setBackupEnvironmentId(null);
+                  setBackupDraft(null);
                   setDraft((current) => ({
                     ...current,
                     projectId: "",
@@ -649,7 +840,7 @@ function EnvironmentScheduledTasksSettings({
                 {draft.editingId
                   ? "To use another server, create a task there and disable this one. "
                   : "Choose the server that has the project and provider account. "}
-                This server must stay awake. Tasks do not switch servers automatically.
+                Add a backup below to switch servers automatically when this one is offline.
               </p>
             </Field>
             <Field label="Name" htmlFor="scheduled-task-title">
@@ -699,7 +890,9 @@ function EnvironmentScheduledTasksSettings({
                   <SelectPopup>
                     <SelectItem value="worktree">Create a new worktree</SelectItem>
                     <SelectItem value="root">Use the project checkout</SelectItem>
-                    <SelectItem value="existing_worktree">Use a specific checkout</SelectItem>
+                    <SelectItem value="existing_worktree" disabled={automaticBackup}>
+                      Use a specific checkout
+                    </SelectItem>
                   </SelectPopup>
                 </Select>
               </Field>
@@ -788,6 +981,90 @@ function EnvironmentScheduledTasksSettings({
                 ) : null}
               </div>
             </Field>
+
+            <div className="space-y-3 rounded-lg border border-border/70 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-xs font-medium" htmlFor="scheduled-task-backup">
+                  Switch to a backup server automatically
+                </label>
+                <Switch
+                  id="scheduled-task-backup"
+                  checked={automaticBackup}
+                  disabled={
+                    saving ||
+                    (!automaticBackup &&
+                      (Boolean(draft.threadId) || draft.workspaceMode === "existing_worktree"))
+                  }
+                  onCheckedChange={setAutomaticBackup}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                A backup takes over future runs after the preferred server is offline for 30
+                seconds. Both servers must be linked to the same T3 Connect account. Runs already
+                started stay on their server and are not started again.
+              </p>
+              {automaticBackup ? (
+                <>
+                  <Field label="Backup server">
+                    <Select
+                      value={backupEnvironmentId}
+                      disabled={saving}
+                      onValueChange={(id) => {
+                        setBackupEnvironmentId(id);
+                        setBackupDraft(null);
+                      }}
+                    >
+                      <SelectTrigger size="sm" aria-label="Backup server">
+                        <SelectValue placeholder="Select a connected server">
+                          {
+                            environments.find(
+                              (entry) => entry.environmentId === backupEnvironmentId,
+                            )?.label
+                          }
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {environments
+                          .filter((entry) => entry.environmentId !== taskEnvironmentId)
+                          .map((entry) => (
+                            <SelectItem key={entry.environmentId} value={entry.environmentId}>
+                              {entry.label}
+                            </SelectItem>
+                          ))}
+                      </SelectPopup>
+                    </Select>
+                  </Field>
+                  {backupEnvironmentId && backupQuery.data ? (
+                    <ScheduledTaskBackupFields
+                      key={backupEnvironmentId}
+                      environmentId={backupEnvironmentId}
+                      binding={backupBinding}
+                      worktree={draft.workspaceMode === "worktree"}
+                      onChange={setBackupDraft}
+                    />
+                  ) : null}
+                  {!taskHostQuery.data?.failoverAvailable ||
+                  (backupEnvironmentId && !backupQuery.data?.failoverAvailable) ? (
+                    <p className="text-xs text-destructive" role="status">
+                      Connect both servers and link them to T3 Connect before saving automatic
+                      backup.
+                    </p>
+                  ) : null}
+                  <p className="text-xs text-muted-foreground">
+                    Preferred server:{" "}
+                    {environments.find(
+                      (entry) =>
+                        entry.environmentId ===
+                        (draft.failover?.environmentIds[0] ?? taskEnvironmentId),
+                    )?.label ?? taskEnvironmentId}
+                    . Times use{" "}
+                    {draft.failover?.timeZone ??
+                      new Intl.DateTimeFormat().resolvedOptions().timeZone}
+                    .
+                  </p>
+                </>
+              ) : null}
+            </div>
 
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
@@ -894,6 +1171,7 @@ function EnvironmentScheduledTasksSettings({
                 </div>
               </div>
               <Switch
+                aria-label="Enabled"
                 checked={draft.enabled}
                 onCheckedChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
               />

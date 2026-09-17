@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import {
   CommandId,
+  EnvironmentId,
   IsoDateTime,
   ProjectId,
   ScheduledTaskId,
@@ -90,12 +91,35 @@ export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Typ
 export const ScheduledTaskRunStatus = Schema.Literals(["never", "running", "succeeded", "failed"]);
 export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
 
+export const ScheduledTaskFailover = Schema.Struct({
+  groupId: Schema.String.check(Schema.isUUID()),
+  revision: Schema.String.check(Schema.isUUID()),
+  environmentIds: Schema.Array(EnvironmentId).check(Schema.isMinLength(2), Schema.isMaxLength(2)),
+  timeZone: TrimmedNonEmptyString,
+});
+export type ScheduledTaskFailover = typeof ScheduledTaskFailover.Type;
+
+export const ScheduledTaskConfigureFailoverInput = Schema.Struct({
+  ...ScheduledTaskFailover.fields,
+  expectedRevision: Schema.NullOr(Schema.String.check(Schema.isUUID())),
+  schedule: ScheduledTaskUpsertSchedule,
+});
+export type ScheduledTaskConfigureFailoverInput = typeof ScheduledTaskConfigureFailoverInput.Type;
+
+export const ScheduledTaskConfigureFailoverResult = Schema.Struct({
+  failover: ScheduledTaskFailover,
+  enabled: Schema.Boolean,
+  nextRunAt: Schema.NullOr(IsoDateTime),
+});
+export type ScheduledTaskConfigureFailoverResult = typeof ScheduledTaskConfigureFailoverResult.Type;
+
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,
   title: TrimmedNonEmptyString,
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
   schedule: ScheduledTaskSchedule,
+  failover: Schema.optional(Schema.NullOr(ScheduledTaskFailover)),
   projectId: ProjectId,
   threadId: Schema.NullOr(ThreadId),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -119,6 +143,7 @@ export type ScheduledTaskListInput = typeof ScheduledTaskListInput.Type;
 
 export const ScheduledTaskListResult = Schema.Struct({
   tasks: Schema.Array(ScheduledTask),
+  failoverAvailable: Schema.optional(Schema.Boolean),
 });
 export type ScheduledTaskListResult = typeof ScheduledTaskListResult.Type;
 
@@ -129,6 +154,7 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
   schedule: ScheduledTaskUpsertSchedule,
+  failover: Schema.optional(Schema.NullOr(ScheduledTaskFailover)),
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -177,6 +203,7 @@ export class ScheduledTaskError extends Schema.TaggedError<ScheduledTaskError>()
   {
     message: Schema.String,
     taskId: Schema.optional(ScheduledTaskId),
+    recoveryFailover: Schema.optional(ScheduledTaskFailover),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
