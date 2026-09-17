@@ -2940,7 +2940,7 @@ it.effect("refreshes pull requests after a provider stream exits with an error",
       ["error"],
     );
     const error = written.find((item) => item.type === "error");
-    assert.include(error?.failure.message ?? "", "provider process exited");
+    assert.equal(error?.failure.message, "Provider turn failed.");
   }),
 );
 
