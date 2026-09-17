@@ -51,14 +51,15 @@ export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
   const sources = input.items
     .map((item) => {
       const reference = workItemReference(item);
-      return [
+      const source = [
         `### ${item.kind === "issue" ? "Issue" : "Pull request"}: ${reference}`,
         `Provider: ${item.provider}`,
-        `Title: ${item.title}`,
         `URL: ${item.url}`,
+        `Title: ${item.title}`,
         "Body:",
         limitSection(item.body, 4_000),
       ].join("\n");
+      return limitSection(source, Math.floor(48_000 / input.items.length) - 16);
     })
     .join("\n\n");
 
@@ -74,7 +75,7 @@ export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
       "The prompt must be ready for the user to review and send to a coding agent.",
       "",
       "Selected sources:",
-      limitSection(sources, 48_000),
+      sources,
     ].join("\n"),
     outputSchema: Schema.Struct({ prompt: Schema.String }),
   };

@@ -57,6 +57,23 @@ describe("buildWorkItemTaskPrompt", () => {
     expect(draft).toContain("https://linear.app/acme/issue/ENG-12");
   });
 
+  it("keeps all twenty selected sources when their bodies exceed the shared budget", () => {
+    const selected = Array.from({ length: 20 }, (_, index) => ({
+      ...items[0]!,
+      number: index + 1,
+      url: `https://linear.app/acme/issue/ENG-${index + 1}`,
+      body: "long body ".repeat(1_000),
+    }));
+    const sources = buildWorkItemTaskPrompt({ mode: "compound", items: selected }).prompt.split(
+      "Selected sources:\n",
+    )[1]!;
+    for (const item of selected) {
+      expect(sources).toContain(`### Issue: ENG-${item.number}\n`);
+      expect(sources).toContain(`URL: ${item.url}\n`);
+    }
+    expect(sources.length).toBeLessThanOrEqual(48_000);
+  });
+
   it("falls back when a generated task exceeds the RPC prompt limit", () => {
     const result = resolveWorkItemTaskResult(
       { mode: "compound", items },
