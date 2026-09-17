@@ -23,13 +23,10 @@ function memorySecrets(
   initial: Readonly<Record<string, string>> = {},
   options: {
     readonly failCredentialReadsAfterWrite?: boolean;
-    readonly legacyRemoveFailures?: number;
   } = {},
 ) {
   const values = new Map<string, Uint8Array>();
   let credentialsWritten = false;
-  let legacyRemoveFailures = options.legacyRemoveFailures ?? 0;
-  let legacyRemoveAttempts = 0;
   for (const [name, value] of Object.entries(initial)) values.set(name, bytes(value));
   const service = ServerSecretStore.ServerSecretStore.of({
     get: (name) => {
@@ -59,44 +56,26 @@ function memorySecrets(
         values.set(name, value);
         return value;
       }),
-    remove: (name) =>
-      Effect.suspend(() => {
-        if (name === LinearApi.LINEAR_API_TOKEN_SECRET) {
-          legacyRemoveAttempts += 1;
-          if (legacyRemoveFailures > 0) {
-            legacyRemoveFailures -= 1;
-            return Effect.fail(
-              new ServerSecretStore.SecretStoreRemoveError({ resource: name, cause: "test" }),
-            );
-          }
-        }
-        return Effect.sync(() => void values.delete(name));
-      }),
+    remove: (name) => Effect.sync(() => void values.delete(name)),
   });
-  return { service, values, legacyRemoveAttempts: () => legacyRemoveAttempts };
+  return { service, values };
 }
 
 function makeLayer(input: {
-  readonly token?: string;
   readonly envToken?: string;
   readonly credentials?: string;
   readonly failCredentialReadsAfterWrite?: boolean;
-  readonly legacyRemoveFailures?: number;
   readonly response: (body: Record<string, unknown>, authorization: string | undefined) => unknown;
 }) {
   const requests: Array<{ body: Record<string, unknown>; authorization: string | undefined }> = [];
   const secrets = memorySecrets(
     {
-      ...(input.token === undefined ? {} : { [LinearApi.LINEAR_API_TOKEN_SECRET]: input.token }),
       ...(input.credentials === undefined ? {} : { "linear.credentials": input.credentials }),
     },
     {
       ...(input.failCredentialReadsAfterWrite === undefined
         ? {}
         : { failCredentialReadsAfterWrite: input.failCredentialReadsAfterWrite }),
-      ...(input.legacyRemoveFailures === undefined
-        ? {}
-        : { legacyRemoveFailures: input.legacyRemoveFailures }),
     },
   );
   const client = HttpClient.make((request: HttpClientRequest.HttpClientRequest) => {
@@ -126,7 +105,6 @@ function makeLayer(input: {
     layer,
     requests,
     values: secrets.values,
-    legacyRemoveAttempts: secrets.legacyRemoveAttempts,
   };
 }
 
@@ -147,7 +125,20 @@ it.effect("reports a disconnected Linear account without making a request", () =
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("uses the environment token for unbound legacy teams beside saved accounts", () => {
+it.effect("does not route an absent environment token through a saved account", () => {
+  const { layer, requests } = makeLayer({
+    credentials: pool(["user-1", "saved-key"]),
+    response: () => ({}),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const error = yield* Effect.flip(api.getViewer({}));
+    assert.strictEqual(error.reason, "unauthenticated");
+    assert.deepStrictEqual(requests, []);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("uses the environment token for environment-bound teams beside saved accounts", () => {
   const { layer, requests } = makeLayer({
     envToken: "lin_api_env",
     credentials: pool(["user-1", "lin_api_saved"]),
@@ -161,23 +152,6 @@ it.effect("uses the environment token for unbound legacy teams beside saved acco
     assert.deepStrictEqual(
       requests.map(({ authorization }) => authorization),
       ["lin_api_env", "lin_api_saved"],
-    );
-  }).pipe(Effect.provide(layer));
-});
-
-it.effect("keeps unbound legacy teams on the saved token until migration completes", () => {
-  const { layer, requests } = makeLayer({
-    token: "lin_api_legacy",
-    envToken: "lin_api_env",
-    response: () => ({ data: { viewer: { id: "viewer" } } }),
-  });
-  return Effect.gen(function* () {
-    const api = yield* LinearApi.LinearApi;
-    yield* api.getViewer({});
-
-    assert.deepStrictEqual(
-      requests.map(({ authorization }) => authorization),
-      ["lin_api_legacy"],
     );
   }).pipe(Effect.provide(layer));
 });
@@ -215,7 +189,7 @@ it.effect("reports the environment account beside saved accounts", () => {
 
 it.effect("keeps Linear list continuation when the API page cap is reached", () => {
   const { layer } = makeLayer({
-    token: "lin_api_test",
+    envToken: "lin_api_test",
     response: () => ({
       data: {
         issues: {
@@ -269,7 +243,7 @@ it.effect("surfaces malformed saved credential storage", () => {
 it.effect("keeps Linear GraphQL error text out of caller-visible failures", () => {
   const errors = [{ message: "private upstream diagnostic" }];
   const { layer } = makeLayer({
-    token: "lin_api_test",
+    envToken: "lin_api_test",
     response: () => ({
       data: { viewer: { id: "user-1", name: null, email: null, avatarUrl: null } },
       errors,
@@ -283,63 +257,6 @@ it.effect("keeps Linear GraphQL error text out of caller-visible failures", () =
     assert.strictEqual(error.reason, "failed");
     assert.notInclude(error.detail, errors[0]!.message);
     assert.deepStrictEqual(error.cause, errors);
-  }).pipe(Effect.provide(layer));
-});
-
-it.effect("reports an invalid legacy key as stored so old clients can disconnect it", () => {
-  const { layer } = makeLayer({
-    token: "lin_api_invalid",
-    response: () => ({ data: { viewer: null, teams: { nodes: [] } } }),
-  });
-  return Effect.gen(function* () {
-    const api = yield* LinearApi.LinearApi;
-    assert.deepStrictEqual(yield* api.connection, {
-      status: "unauthenticated",
-      hasStoredToken: true,
-      accountName: null,
-      accountEmail: null,
-      teams: [],
-      accounts: [],
-    });
-  }).pipe(Effect.provide(layer));
-});
-
-it.effect("migrates the legacy token after it has been verified", () => {
-  const { layer, values } = makeLayer({
-    token: "lin_api_test",
-    response: () => ({
-      data: {
-        viewer: { id: "user-1", name: "Ada", email: "ada@example.com" },
-        teams: { nodes: [{ id: "team-1", key: "ENG", name: "Engineering" }] },
-      },
-    }),
-  });
-  return Effect.gen(function* () {
-    const api = yield* LinearApi.LinearApi;
-    assert.deepStrictEqual(yield* api.connection, {
-      status: "authenticated",
-      hasStoredToken: true,
-      accountName: "Ada",
-      accountEmail: "ada@example.com",
-      teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
-      accounts: [
-        {
-          credentialId: "user-1",
-          status: "authenticated",
-          accountName: "Ada",
-          accountEmail: "ada@example.com",
-          teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
-        },
-      ],
-      migratedCredentialId: "user-1",
-    });
-    assert.deepStrictEqual(
-      decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
-      decodeJson(pool(["user-1", "lin_api_test"])),
-    );
-    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), true);
-    yield* api.completeLegacyMigration;
-    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
   }).pipe(Effect.provide(layer));
 });
 
@@ -384,35 +301,6 @@ it.effect("probes a new key before appending a second saved account", () => {
       decodeJson(pool(["user-1", "lin_api_one"], ["user-2", "lin_api_two"])),
     );
   }).pipe(Effect.provide(test.layer));
-});
-
-it.effect("replaces an invalid legacy key with a valid submitted key", () => {
-  const { layer, values, requests } = makeLayer({
-    token: "lin_api_legacy",
-    response: (_body, authorization) => ({
-      data: {
-        viewer:
-          authorization === "lin_api_legacy" ? null : { id: "user-2", name: "Grace", email: null },
-        teams: { nodes: [] },
-      },
-    }),
-  });
-  return Effect.gen(function* () {
-    const api = yield* LinearApi.LinearApi;
-
-    const result = yield* api.connect("lin_api_two");
-
-    assert.strictEqual(result.connectedCredentialId, "user-2");
-    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
-    assert.deepStrictEqual(
-      decodeJson(new TextDecoder().decode(values.get(LinearApi.LINEAR_CREDENTIALS_SECRET))),
-      decodeJson(pool(["user-2", "lin_api_two"])),
-    );
-    assert.include(
-      requests.map(({ authorization }) => authorization),
-      "lin_api_two",
-    );
-  }).pipe(Effect.provide(layer));
 });
 
 it.effect("keeps every account from concurrent connects", () => {
@@ -470,63 +358,6 @@ it.effect("replaces a reconnected account without changing account order", () =>
     );
   }).pipe(Effect.provide(layer));
 });
-
-it.effect("keeps a migrated pool until legacy cleanup succeeds", () => {
-  const { layer, values, legacyRemoveAttempts } = makeLayer({
-    token: "lin_api_test",
-    legacyRemoveFailures: 1,
-    response: () => ({
-      data: {
-        viewer: { id: "user-1", name: "Ada", email: "ada@example.com" },
-        teams: { nodes: [] },
-      },
-    }),
-  });
-  return Effect.gen(function* () {
-    const api = yield* LinearApi.LinearApi;
-
-    assert.deepStrictEqual(
-      (yield* api.connection).accounts.map(({ credentialId }) => credentialId),
-      ["user-1"],
-    );
-    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), true);
-
-    yield* Effect.flip(api.completeLegacyMigration);
-    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), true);
-    yield* api.completeLegacyMigration;
-    assert.strictEqual(legacyRemoveAttempts(), 2);
-    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
-  }).pipe(Effect.provide(layer));
-});
-
-it.effect(
-  "keeps a migrated credential recoverable when disconnect cannot remove its legacy copy",
-  () => {
-    const { layer, values } = makeLayer({
-      token: "lin_api_one",
-      credentials: pool(["user-1", "lin_api_one"]),
-      legacyRemoveFailures: 1,
-      response: () => ({
-        data: {
-          viewer: { id: "user-1", name: "Ada", email: null },
-          teams: { nodes: [] },
-        },
-      }),
-    });
-    return Effect.gen(function* () {
-      const api = yield* LinearApi.LinearApi;
-
-      yield* Effect.flip(api.disconnect({ credentialId: "user-1" }));
-      assert.deepStrictEqual(
-        decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
-        decodeJson(pool(["user-1", "lin_api_one"])),
-      );
-
-      assert.strictEqual((yield* api.disconnect({ credentialId: "user-1" })).accounts.length, 0);
-      assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
-    }).pipe(Effect.provide(layer));
-  },
-);
 
 it.effect("does not reread credential storage after disconnect commits", () => {
   const { layer, values } = makeLayer({
@@ -594,24 +425,9 @@ it.effect("deletes only the selected saved account", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("disconnects a lone legacy key even when it cannot be verified", () => {
-  const { layer, values } = makeLayer({
-    token: "lin_api_invalid",
-    response: () => ({ data: { viewer: null, teams: { nodes: [] } } }),
-  });
-  return Effect.gen(function* () {
-    const api = yield* LinearApi.LinearApi;
-    assert.deepStrictEqual((yield* api.connection).accounts, []);
-
-    yield* api.disconnect(undefined);
-
-    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
-  }).pipe(Effect.provide(layer));
-});
-
 it.effect("loads Linear activity reactions from API arrays", () => {
   const { layer } = makeLayer({
-    token: "lin_api_test",
+    envToken: "lin_api_test",
     response: (body) => {
       const query = String(body.query);
       if (query.includes("reactions { nodes")) {
@@ -678,7 +494,7 @@ it.effect("loads Linear activity reactions from API arrays", () => {
 
 it.effect("creates and removes Linear issue reactions", () => {
   const { layer, requests } = makeLayer({
-    token: "lin_api_test",
+    envToken: "lin_api_test",
     response: (body) => {
       const query = String(body.query);
       if (query.includes("reactionCreate")) return { data: { reactionCreate: { success: true } } };
@@ -711,7 +527,7 @@ it.effect("creates and removes Linear issue reactions", () => {
 
 it.effect("removes Linear comment reactions from API arrays", () => {
   const { layer, requests } = makeLayer({
-    token: "lin_api_test",
+    envToken: "lin_api_test",
     response: (body) => {
       const query = String(body.query);
       if (query.includes("reactions { nodes")) {

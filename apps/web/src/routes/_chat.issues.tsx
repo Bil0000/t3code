@@ -173,13 +173,8 @@ export function stabilizeLinearProviderSummary(
   projectIds: ReadonlyArray<ProjectId>,
   projectBindings: Readonly<Record<ProjectId, LinearProjectBinding | null>>,
   hasLinearSource = false,
-  projectTeams: Readonly<Record<string, string>> = {},
 ): IssueListResult["providers"] {
-  const projectCount = projectIds.filter(
-    (projectId) =>
-      projectBindings[projectId] != null ||
-      (projectBindings[projectId] === undefined && projectTeams[projectId] !== undefined),
-  ).length;
+  const projectCount = projectIds.filter((projectId) => projectBindings[projectId] != null).length;
   if (projectCount === 0)
     return hasLinearSource ? providers : providers.filter((provider) => provider.kind !== "linear");
   const linear = providers.find((provider) => provider.kind === "linear");
@@ -200,7 +195,6 @@ export function hasLinearManagementState(
   connection: Pick<LinearConnection, "status" | "hasStoredToken"> | null | undefined,
   settings: {
     readonly projectBindings: Readonly<Record<string, LinearProjectBinding | null>>;
-    readonly projectTeams: Readonly<Record<string, string>>;
   },
   projectIds?: ReadonlyArray<ProjectId>,
 ) {
@@ -211,11 +205,6 @@ export function hasLinearManagementState(
     connection?.hasStoredToken === true ||
     Object.entries(settings.projectBindings).some(
       ([projectId, binding]) => isCurrentProject(projectId) && binding != null,
-    ) ||
-    Object.keys(settings.projectTeams).some(
-      (projectId) =>
-        isCurrentProject(projectId) &&
-        settings.projectBindings[projectId as ProjectId] === undefined,
     )
   );
 }
@@ -1077,7 +1066,6 @@ function IssuesRouteView() {
     currentProjectIds,
     linearSettings.projectBindings,
     hasCurrentLinearSource,
-    linearSettings.projectTeams,
   ).filter((entry) => entry.configured);
   const showProvider = activeHosts.length > 1;
 

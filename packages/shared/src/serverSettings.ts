@@ -284,23 +284,6 @@ export function applyServerSettingsPatch(
     projectScriptOverrides: _legacyScripts,
     ...patchForMerge
   } = patch;
-  const { linear: linearPatch, ...issueTrackingPatch } = issueTracking ?? {};
-  const {
-    projectBindingsToDelete = [],
-    projectTeamsToDelete = [],
-    ...linearPatchForMerge
-  } = linearPatch ?? {};
-  const settingsPatchForMerge = {
-    ...patchForMerge,
-    ...(issueTracking === undefined
-      ? {}
-      : {
-          issueTracking: {
-            ...issueTrackingPatch,
-            ...(linearPatch === undefined ? {} : { linear: linearPatchForMerge }),
-          },
-        }),
-  };
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
   const backgroundActivityPatch =
     backgroundActivityProfile !== undefined
@@ -336,34 +319,22 @@ export function applyServerSettingsPatch(
             },
           }
         : undefined;
-  const merged = deepMerge(current, settingsPatchForMerge);
-  const projectBindings = { ...merged.issueTracking.linear.projectBindings };
-  for (const projectId of projectBindingsToDelete) delete projectBindings[projectId];
-  const changedProjectTeams = Object.keys(linearPatchForMerge.projectTeams ?? {});
-  for (const projectId of changedProjectTeams) {
-    const id = projectId as ProjectId;
-    const existing = projectBindings[id];
-    const teamKey = linearPatchForMerge.projectTeams?.[id];
-    if (
-      existing != null &&
-      teamKey !== undefined &&
-      linearPatchForMerge.projectBindings?.[id] === undefined &&
-      !projectBindingsToDelete.includes(id)
-    ) {
-      projectBindings[id] = { ...existing, teamKey };
-    }
-  }
-  const projectTeams = { ...merged.issueTracking.linear.projectTeams };
-  for (const projectId of projectTeamsToDelete) delete projectTeams[projectId];
+  const merged = deepMerge(current, {
+    ...patchForMerge,
+    ...(issueTracking === undefined ? {} : { issueTracking }),
+  });
   const next =
-    projectBindingsToDelete.length === 0 &&
-    projectTeamsToDelete.length === 0 &&
-    changedProjectTeams.length === 0
+    issueTracking?.linear?.projectBindings === undefined
       ? merged
       : {
           ...merged,
           issueTracking: {
-            linear: { ...merged.issueTracking.linear, projectBindings, projectTeams },
+            linear: {
+              projectBindings: {
+                ...current.issueTracking.linear.projectBindings,
+                ...issueTracking.linear.projectBindings,
+              },
+            },
           },
         };
   const nextWithReplacementsBase = {

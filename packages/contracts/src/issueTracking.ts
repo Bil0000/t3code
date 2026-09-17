@@ -41,7 +41,6 @@ export type LinearConnection = typeof LinearConnection.Type;
 
 export const LinearConnectInput = Schema.Struct({
   token: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
-  mode: Schema.optionalKey(Schema.Literal("add")),
 });
 export type LinearConnectInput = typeof LinearConnectInput.Type;
 
@@ -53,9 +52,7 @@ export type LinearDisconnectInput = typeof LinearDisconnectInput.Type;
 
 export const LinearSetProjectBindingInput = Schema.Struct({
   projectId: ProjectId,
-  binding: Schema.NullOr(
-    Schema.Union([LinearProjectBinding, Schema.Struct({ teamKey: TrimmedNonEmptyString })]),
-  ),
+  binding: Schema.NullOr(LinearProjectBinding),
 });
 export type LinearSetProjectBindingInput = typeof LinearSetProjectBindingInput.Type;
 

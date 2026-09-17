@@ -615,8 +615,6 @@ it.effect("asks each host for the account signed in on that host, not on another
       ["github.com", "bilal", "assigned"],
     ]);
     assert.deepStrictEqual(result.viewers, {
-      "github.com": "bilal",
-      "github.acme.dev": "b.hassan",
       [issueSourceKey("github", "github.com")]: "bilal",
       [issueSourceKey("github", "github.acme.dev")]: "b.hassan",
       [issueProjectSourceKey("github", "github.com", "p1" as ProjectId)]: "bilal",

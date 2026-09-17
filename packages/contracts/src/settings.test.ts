@@ -803,16 +803,7 @@ describe("ServerSettings issue tracking", () => {
   it("defaults Linear project mappings to empty", () => {
     expect(decodeServerSettings({}).issueTracking.linear).toEqual({
       projectBindings: {},
-      projectTeams: {},
     });
-  });
-
-  it("accepts a full Linear project mapping replacement", () => {
-    const patch = decodeServerSettingsPatch({
-      issueTracking: { linear: { projectTeams: { project_1: "  ENG  " } } },
-    });
-
-    expect(patch.issueTracking?.linear?.projectTeams).toEqual({ project_1: "ENG" });
   });
 
   it("accepts account-aware Linear project bindings", () => {
@@ -822,6 +813,7 @@ describe("ServerSettings issue tracking", () => {
           projectBindings: {
             project_1: { credentialId: "  user-1  ", teamKey: "  ENG  " },
             project_2: null,
+            project_3: { teamKey: " ENV " },
           },
         },
       },
@@ -830,21 +822,8 @@ describe("ServerSettings issue tracking", () => {
     expect(patch.issueTracking?.linear?.projectBindings).toEqual({
       project_1: { credentialId: "user-1", teamKey: "ENG" },
       project_2: null,
+      project_3: { teamKey: "ENV" },
     });
-  });
-
-  it("accepts Linear project mapping deletions", () => {
-    const patch = decodeServerSettingsPatch({
-      issueTracking: {
-        linear: {
-          projectBindingsToDelete: [" project_1 "],
-          projectTeamsToDelete: [" project_2 "],
-        },
-      },
-    });
-
-    expect(patch.issueTracking?.linear?.projectBindingsToDelete).toEqual(["project_1"]);
-    expect(patch.issueTracking?.linear?.projectTeamsToDelete).toEqual(["project_2"]);
   });
 });
 

@@ -9,7 +9,6 @@ import { useProjects } from "../../state/entities";
 import { issueTrackingEnvironment } from "../../state/issueTracking";
 import { issueEnvironment } from "../../state/issues";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { LinearIcon } from "../Icons";
 import { LinearConnectionDialog } from "../issue/LinearConnectionDialog";
@@ -48,7 +47,6 @@ export function LinearIntegrationSettings() {
   const saveProjectBinding = useAtomCommand(issueTrackingEnvironment.linearSetProjectBinding, {
     reportFailure: false,
   });
-  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const invalidate = useAtomCommand(issueEnvironment.invalidate);
   const refreshIssues = () => {
@@ -57,28 +55,14 @@ export function LinearIntegrationSettings() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingDisconnect, setPendingDisconnect] = useState<{
-    credentialId: string | null;
+    credentialId: string;
     accountName: string;
   } | null>(null);
   const linear = connection.data;
   const accounts = linear?.accounts ?? [];
-  const legacyServerConnected =
-    linear?.status === "authenticated" && linear.hasStoredToken === true && accounts.length === 0;
-  const legacyKeyNeedsRemoval =
-    linear?.hasStoredToken === true && accounts.length === 0 && !legacyServerConnected;
-  const environmentTokenConnected =
-    linear?.environmentAccount?.status === "authenticated" ||
-    (linear?.status === "authenticated" &&
-      linear.hasStoredToken === false &&
-      accounts.length === 0);
-  const singleKeyTeamMode =
-    linear?.environmentAccount !== undefined || environmentTokenConnected || legacyServerConnected;
-  const hasCurrentProjectBinding = projects.some(
-    (project) =>
-      projectBindings[project.id] != null ||
-      (projectBindings[project.id] === undefined &&
-        linearSettings.projectTeams[project.id] !== undefined),
-  );
+  const environmentTokenConnected = linear?.environmentAccount?.status === "authenticated";
+  const singleKeyTeamMode = linear?.environmentAccount !== undefined;
+  const hasCurrentProjectBinding = projects.some((project) => projectBindings[project.id] != null);
   const teamOptions = accounts.flatMap((account) =>
     account.teams.map((team) => ({
       value: JSON.stringify([account.credentialId, team.key]),
@@ -86,9 +70,7 @@ export function LinearIntegrationSettings() {
       binding: { credentialId: account.credentialId, teamKey: team.key },
     })),
   );
-  const environmentTeamOptions = (
-    singleKeyTeamMode ? (linear?.environmentAccount?.teams ?? linear?.teams ?? []) : []
-  ).map((team) => ({
+  const environmentTeamOptions = (linear?.environmentAccount?.teams ?? []).map((team) => ({
     value: team.key,
     label: `${linear?.environmentAccount?.accountName ?? linear?.accountName ?? "Linear"} — ${team.name} (${team.key})`,
   }));
@@ -122,38 +104,6 @@ export function LinearIntegrationSettings() {
     );
   };
 
-  const setProjectTeam = (projectId: (typeof projects)[number]["id"], teamKey: string | null) => {
-    if (environmentId === null) return;
-    void runCommand(
-      () =>
-        linear?.environmentAccount === undefined
-          ? updateSettings({
-              environmentId,
-              input: {
-                patch: {
-                  issueTracking: {
-                    linear:
-                      teamKey === null
-                        ? { projectTeamsToDelete: [projectId] }
-                        : {
-                            projectBindingsToDelete: [projectId],
-                            projectTeams: { [projectId]: teamKey },
-                          },
-                  },
-                },
-              },
-            })
-          : saveProjectBinding({
-              environmentId,
-              input: {
-                projectId,
-                binding: teamKey === null ? null : { teamKey },
-              },
-            }),
-      refreshIssues,
-    );
-  };
-
   const error = actionError ?? connection.error;
 
   return (
@@ -173,7 +123,7 @@ export function LinearIntegrationSettings() {
             <Button
               size="sm"
               variant="outline"
-              disabled={!supported || busy || connection.isPending || legacyKeyNeedsRemoval}
+              disabled={!supported || busy || connection.isPending}
               onClick={() => setAddAccountOpen(true)}
             >
               <PlusIcon />
@@ -182,11 +132,7 @@ export function LinearIntegrationSettings() {
           }
         >
           {supported &&
-          (error ||
-            connection.isPending ||
-            accounts.length > 0 ||
-            singleKeyTeamMode ||
-            legacyKeyNeedsRemoval) ? (
+          (error || connection.isPending || accounts.length > 0 || singleKeyTeamMode) ? (
             <div className="space-y-2 py-3">
               {error && !pendingDisconnect ? (
                 <div className="flex items-center justify-between gap-3">
@@ -203,60 +149,6 @@ export function LinearIntegrationSettings() {
               {connection.isPending && !linear ? (
                 <p className="text-sm text-muted-foreground">Loading Linear accounts…</p>
               ) : null}
-              {legacyKeyNeedsRemoval ? (
-                <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
-                  <div>
-                    <p className="text-sm font-medium">Saved API key needs attention</p>
-                    <p className="text-xs text-muted-foreground">
-                      Disconnect it before you add another key.
-                    </p>
-                  </div>
-                  <Button
-                    size="xs"
-                    variant="destructive-outline"
-                    disabled={busy}
-                    aria-label="Disconnect saved Linear API key"
-                    onClick={() =>
-                      setPendingDisconnect({ credentialId: null, accountName: "saved API key" })
-                    }
-                  >
-                    Disconnect
-                  </Button>
-                </div>
-              ) : null}
-
-              {legacyServerConnected ? (
-                <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-sm font-medium">
-                      {linear.accountName ?? "Linear account"}
-                    </span>
-                    <RedactedSensitiveText
-                      value={linear.accountEmail}
-                      ariaLabel="Toggle Linear account email visibility"
-                      revealTooltip="Click to reveal email"
-                      hideTooltip="Click to hide email"
-                      className="max-w-full truncate"
-                    />
-                    <span className="truncate text-xs text-muted-foreground">Saved key</span>
-                  </div>
-                  <Button
-                    size="xs"
-                    variant="destructive-outline"
-                    disabled={busy}
-                    aria-label="Disconnect saved Linear API key"
-                    onClick={() =>
-                      setPendingDisconnect({
-                        credentialId: null,
-                        accountName: linear.accountName ?? "saved API key",
-                      })
-                    }
-                  >
-                    Disconnect
-                  </Button>
-                </div>
-              ) : null}
-
               {accounts.map((account) => (
                 <div
                   key={account.credentialId}
@@ -341,11 +233,12 @@ export function LinearIntegrationSettings() {
                   {projects.map((project) => {
                     const binding = projectBindings[project.id];
                     const options = [...environmentTeamOptions, ...teamOptions];
-                    const value = binding
-                      ? JSON.stringify([binding.credentialId, binding.teamKey])
-                      : binding === undefined && singleKeyTeamMode
-                        ? (linearSettings.projectTeams[project.id] ?? UNMAPPED)
-                        : UNMAPPED;
+                    const value =
+                      binding == null
+                        ? UNMAPPED
+                        : binding.credentialId === undefined
+                          ? binding.teamKey
+                          : JSON.stringify([binding.credentialId, binding.teamKey]);
                     const selectedOption = options.find((option) => option.value === value);
                     const bindingUnavailable = value !== UNMAPPED && selectedOption === undefined;
                     const selectedLabel = bindingUnavailable
@@ -363,12 +256,11 @@ export function LinearIntegrationSettings() {
                           onValueChange={(next) => {
                             if (!next) return;
                             if (next === UNMAPPED) {
-                              if (binding) setProjectBinding(project.id, null);
-                              else setProjectTeam(project.id, null);
+                              setProjectBinding(project.id, null);
                               return;
                             }
                             if (environmentTeamOptions.some((option) => option.value === next)) {
-                              setProjectTeam(project.id, next);
+                              setProjectBinding(project.id, { teamKey: next });
                               return;
                             }
                             setProjectBinding(
@@ -411,7 +303,7 @@ export function LinearIntegrationSettings() {
           </Collapsible>
         ) : null}
       </SettingsSection>
-      {addAccountOpen && environmentId !== null && !legacyKeyNeedsRemoval ? (
+      {addAccountOpen && environmentId !== null ? (
         <LinearConnectionDialog
           key={environmentId}
           open={addAccountOpen}
@@ -461,7 +353,7 @@ export function LinearIntegrationSettings() {
                   () =>
                     disconnect({
                       environmentId,
-                      input: credentialId === null ? undefined : { credentialId },
+                      input: { credentialId },
                     }),
                   () => {
                     setPendingDisconnect(null);

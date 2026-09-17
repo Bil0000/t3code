@@ -195,26 +195,26 @@ it.effect("uses the project binding credential for Linear requests", () => {
   );
 });
 
-it.effect("keeps reading legacy project team settings", () =>
+it.effect("reads an explicit environment-account project binding", () =>
   Effect.gen(function* () {
     const adapter = yield* make;
     assert.deepStrictEqual(yield* adapter.resolveSource!(PROJECT), {
       host: "linear.app",
-      repository: "LEGACY",
+      repository: "ENG",
     });
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(LinearApi.LinearApi, {} as LinearApi.LinearApi["Service"]),
         ServerSettings.layerTest({
-          issueTracking: { linear: { projectTeams: { [PROJECT.id]: "LEGACY" } } },
+          issueTracking: { linear: { projectBindings: { [PROJECT.id]: { teamKey: "ENG" } } } },
         }),
       ),
     ),
   ),
 );
 
-it.effect("does not fall back to a legacy team after a binding was cleared", () =>
+it.effect("does not resolve a cleared project binding", () =>
   Effect.gen(function* () {
     const adapter = yield* make;
     assert.isNull(yield* adapter.resolveSource!(PROJECT));
@@ -226,7 +226,6 @@ it.effect("does not fall back to a legacy team after a binding was cleared", () 
           issueTracking: {
             linear: {
               projectBindings: { [PROJECT.id]: null },
-              projectTeams: { [PROJECT.id]: "LEGACY" },
             },
           },
         }),

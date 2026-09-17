@@ -2578,10 +2578,7 @@ const makeWsRpcLayer = (
                 ...patch,
                 ...(deviceHosts ? { deviceHosts } : {}),
               };
-              const settings = yield* settingsPatch.issueTracking?.linear?.projectTeams ===
-              undefined
-                ? serverSettings.updateSettings(settingsPatch)
-                : LinearConnection.updateLegacyLinearProjectTeams(settingsPatch);
+              const settings = yield* serverSettings.updateSettings(settingsPatch);
               return ServerSettings.redactServerSettingsForClient(settings);
             }),
             {
@@ -2970,18 +2967,16 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.linearConnectionStatus,
             LinearConnection.linearConnectionStatus.pipe(
-              Effect.mapError(
-                issueTrackingError("status", "Could not migrate the Linear project bindings."),
-              ),
+              Effect.mapError(issueTrackingError("status", "Could not read the Linear accounts.")),
             ),
             { "rpc.aggregate": "issues" },
           ),
-        [WS_METHODS.linearConnect]: ({ token, mode }) =>
+        [WS_METHODS.linearConnect]: ({ token }) =>
           observeRpcEffect(
             WS_METHODS.linearConnect,
-            LinearConnection.connectLinearAccount(token, mode).pipe(
+            LinearConnection.connectLinearAccount(token).pipe(
               Effect.mapError(
-                issueTrackingError("connect", "Could not migrate the Linear project bindings."),
+                issueTrackingError("connect", "Could not connect the Linear account."),
               ),
             ),
             { "rpc.aggregate": "issues" },

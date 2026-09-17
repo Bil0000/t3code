@@ -68,13 +68,10 @@ describe("Linear connection contracts", () => {
     });
   });
 
-  it("treats a missing connect mode as legacy replace and accepts explicit add mode", () => {
-    expect(Schema.decodeUnknownSync(LinearConnectInput)({ token: " lin_api_old " })).toEqual({
-      token: "lin_api_old",
+  it("trims a new account token", () => {
+    expect(Schema.decodeUnknownSync(LinearConnectInput)({ token: " lin_api_new " })).toEqual({
+      token: "lin_api_new",
     });
-    expect(
-      Schema.decodeUnknownSync(LinearConnectInput)({ token: "lin_api_new", mode: "add" }),
-    ).toEqual({ token: "lin_api_new", mode: "add" });
   });
 
   it("decodes one saved-credential project binding command", () => {

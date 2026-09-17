@@ -614,8 +614,6 @@ export const make = Effect.gen(function* () {
           viewers[issueProjectSourceKey(result.kind, result.host, projectId)] = result.viewer;
         }
         viewers[issueSourceKey(result.kind, result.host)] ??= result.viewer;
-        // Older clients read the host-only key. New clients prefer the adapter-safe key above.
-        viewers[result.host] ??= result.viewer;
       }
 
       // One user-facing summary per adapter and host, even when internal routing has one viewer

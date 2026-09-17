@@ -24,65 +24,11 @@ import {
 const FOLDED_SERVER_SETTINGS = { ...DEFAULT_SERVER_SETTINGS, projectSettingsFolded: true };
 
 describe("serverSettings helpers", () => {
-  it("deletes selected Linear project mappings while preserving the others", () => {
+  it("replaces an account binding with an environment binding and clears it without changing other projects", () => {
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
       issueTracking: {
         linear: {
-          ...DEFAULT_SERVER_SETTINGS.issueTracking.linear,
-          projectTeams: { project_1: "ENG", project_2: "OPS" },
-          projectBindings: {
-            project_1: null,
-            project_2: { credentialId: "user-2", teamKey: "OPS" },
-          },
-        },
-      },
-    };
-
-    const linear = applyServerSettingsPatch(current, {
-      issueTracking: {
-        linear: {
-          projectBindingsToDelete: ["project_1" as ProjectId],
-          projectTeamsToDelete: ["project_1" as ProjectId],
-        },
-      },
-    });
-    expect(linear.issueTracking.linear.projectBindings).toEqual({
-      project_2: { credentialId: "user-2", teamKey: "OPS" },
-    });
-    expect(linear.issueTracking.linear.projectTeams).toEqual({ project_2: "OPS" });
-    expect(linear.issueTracking.linear).not.toHaveProperty("projectTeamsToDelete");
-  });
-
-  it("lets legacy project-team changes update a migrated binding", () => {
-    const current = {
-      ...DEFAULT_SERVER_SETTINGS,
-      issueTracking: {
-        linear: {
-          projectTeams: { project_1: "ENG" },
-          projectBindings: {
-            project_1: { credentialId: "user-1", teamKey: "ENG" },
-          },
-        },
-      },
-    };
-
-    const next = applyServerSettingsPatch(current, {
-      issueTracking: { linear: { projectTeams: { ["project_1" as ProjectId]: "OPS" } } },
-    });
-
-    expect(next.issueTracking.linear.projectTeams).toEqual({ project_1: "OPS" });
-    expect(next.issueTracking.linear.projectBindings).toEqual({
-      project_1: { credentialId: "user-1", teamKey: "OPS" },
-    });
-  });
-
-  it("keeps saved-account identity on a legacy no-op team patch", () => {
-    const current = {
-      ...DEFAULT_SERVER_SETTINGS,
-      issueTracking: {
-        linear: {
-          projectTeams: { project_1: "ENG", project_2: "OPS" },
           projectBindings: {
             project_1: { credentialId: "user-1", teamKey: "ENG" },
             project_2: { credentialId: "user-2", teamKey: "OPS" },
@@ -90,33 +36,32 @@ describe("serverSettings helpers", () => {
         },
       },
     };
-
-    const next = applyServerSettingsPatch(current, {
-      issueTracking: { linear: { projectTeams: { ["project_1" as ProjectId]: "ENG" } } },
-    });
-
-    expect(next.issueTracking.linear.projectBindings).toEqual(
-      current.issueTracking.linear.projectBindings,
-    );
-  });
-
-  it("keeps a disconnected project tombstone during a legacy team patch", () => {
-    const current = {
-      ...DEFAULT_SERVER_SETTINGS,
+    const environment = applyServerSettingsPatch(current, {
       issueTracking: {
         linear: {
-          projectTeams: {},
-          projectBindings: { project_1: null },
+          projectBindings: {
+            ["project_1" as ProjectId]: { teamKey: "ENV" },
+          },
         },
       },
-    };
-
-    const next = applyServerSettingsPatch(current, {
-      issueTracking: { linear: { projectTeams: { ["project_1" as ProjectId]: "OPS" } } },
     });
-
-    expect(next.issueTracking.linear.projectTeams).toEqual({ project_1: "OPS" });
-    expect(next.issueTracking.linear.projectBindings).toEqual({ project_1: null });
+    expect(environment.issueTracking.linear.projectBindings).toEqual({
+      project_1: { teamKey: "ENV" },
+      project_2: current.issueTracking.linear.projectBindings.project_2,
+    });
+    const cleared = applyServerSettingsPatch(environment, {
+      issueTracking: {
+        linear: {
+          projectBindings: {
+            ["project_1" as ProjectId]: null,
+          },
+        },
+      },
+    });
+    expect(cleared.issueTracking.linear.projectBindings).toEqual({
+      project_1: null,
+      project_2: current.issueTracking.linear.projectBindings.project_2,
+    });
   });
 
   it("changes a cleanup rule without replacing the machine's other rules", () => {

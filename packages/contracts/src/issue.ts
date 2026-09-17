@@ -325,7 +325,6 @@ export const IssueListProjectError = Schema.Struct({
 export type IssueListProjectError = typeof IssueListProjectError.Type;
 
 export const IssueListResult = Schema.Struct({
-  /** Signed-in accounts keyed per project source, with old source and host keys retained. */
   viewers: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
   providers: Schema.Array(IssueProviderSummary),
   /** By update, newest first, across every repository this answer covers. */

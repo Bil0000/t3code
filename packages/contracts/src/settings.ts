@@ -953,16 +953,13 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 export const LinearProjectBinding = Schema.Struct({
-  credentialId: TrimmedNonEmptyString,
+  credentialId: Schema.optionalKey(TrimmedNonEmptyString),
   teamKey: TrimmedNonEmptyString,
 });
 export type LinearProjectBinding = typeof LinearProjectBinding.Type;
 
 const LinearIssueTrackingSettings = Schema.Struct({
   projectBindings: Schema.Record(ProjectId, Schema.NullOr(LinearProjectBinding)).pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
-  projectTeams: Schema.Record(ProjectId, TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
@@ -1493,9 +1490,6 @@ export const ServerSettingsPatch = Schema.Struct({
           projectBindings: Schema.optionalKey(
             Schema.Record(ProjectId, Schema.NullOr(LinearProjectBinding)),
           ),
-          projectBindingsToDelete: Schema.optionalKey(Schema.Array(ProjectId)),
-          projectTeams: Schema.optionalKey(Schema.Record(ProjectId, TrimmedNonEmptyString)),
-          projectTeamsToDelete: Schema.optionalKey(Schema.Array(ProjectId)),
         }),
       ),
     }),

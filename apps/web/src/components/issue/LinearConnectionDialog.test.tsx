@@ -106,7 +106,7 @@ describe("Linear account dialog", () => {
 
     expect(connect).toHaveBeenCalledWith({
       environmentId: "primary",
-      input: { token: "new-key", mode: "add" },
+      input: { token: "new-key" },
     });
     expect(onConnected).toHaveBeenCalledOnce();
     expect(props.onOpenChange).toHaveBeenCalledWith(false);

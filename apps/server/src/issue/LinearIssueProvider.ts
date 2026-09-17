@@ -144,16 +144,15 @@ export const make = Effect.gen(function* () {
       settings.getSettings.pipe(
         Effect.map((value) => {
           const binding = value.issueTracking.linear.projectBindings[project.id];
-          if (binding === null) return null;
-          if (binding !== undefined) {
-            return {
-              host: "linear.app",
-              repository: binding.teamKey,
-              credentialId: binding.credentialId,
-            };
-          }
-          const legacyTeam = value.issueTracking.linear.projectTeams[project.id];
-          return legacyTeam === undefined ? null : { host: "linear.app", repository: legacyTeam };
+          return binding == null
+            ? null
+            : {
+                host: "linear.app",
+                repository: binding.teamKey,
+                ...(binding.credentialId === undefined
+                  ? {}
+                  : { credentialId: binding.credentialId }),
+              };
         }),
         Effect.orElseSucceed(() => null),
       ),

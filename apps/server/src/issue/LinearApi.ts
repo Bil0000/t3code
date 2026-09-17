@@ -18,7 +18,6 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 const API_URL = "https://api.linear.app/graphql";
 const MAX_PAGE = 250;
 
-export const LINEAR_API_TOKEN_SECRET = "linear.api-token";
 export const LINEAR_CREDENTIALS_SECRET = "linear.credentials";
 
 const Credential = Schema.Struct({
@@ -241,16 +240,11 @@ export type LinearReaction = typeof Reaction.Type;
 export type LinearConnectResult = LinearConnection & {
   readonly connectedCredentialId: string;
 };
-export type LinearConnectionResult = LinearConnection & {
-  readonly migratedCredentialId?: string;
-};
 
 export class LinearApi extends Context.Service<
   LinearApi,
   {
-    readonly environmentTokenConfigured: boolean;
-    readonly connection: Effect.Effect<LinearConnectionResult, LinearApiError>;
-    readonly completeLegacyMigration: Effect.Effect<void, LinearApiError>;
+    readonly connection: Effect.Effect<LinearConnection, LinearApiError>;
     readonly connect: (token: string) => Effect.Effect<LinearConnectResult, LinearApiError>;
     readonly disconnect: (input?: {
       readonly credentialId: string;
@@ -323,7 +317,6 @@ const make = Effect.gen(function* () {
       ),
       Effect.map((value) => Option.map(value, (bytes) => new TextDecoder().decode(bytes).trim())),
     );
-  const storedToken = readSecret(LINEAR_API_TOKEN_SECRET, "read-token");
   const storedCredentials = readSecret(LINEAR_CREDENTIALS_SECRET, "read-accounts").pipe(
     Effect.flatMap(
       Option.match({
@@ -360,17 +353,6 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-  const removeLegacyToken = secrets.remove(LINEAR_API_TOKEN_SECRET).pipe(
-    Effect.mapError(
-      (cause) =>
-        new LinearApiError({
-          operation: "remove-token",
-          reason: "failed",
-          cause,
-        }),
-    ),
-  );
-
   const requestWithToken = <S extends Schema.Codec<unknown, unknown, never, never>>(
     key: string,
     operation: string,
@@ -442,19 +424,12 @@ const make = Effect.gen(function* () {
     storedCredentials.pipe(
       Effect.flatMap((credentials) => {
         if (credentialId === undefined) {
-          return storedToken.pipe(
-            Effect.flatMap((legacy) => {
-              if (Option.isSome(legacy)) return Effect.succeed(legacy.value);
-              if (Option.isSome(config.envToken)) return Effect.succeed(config.envToken.value);
-              const onlyCredential = credentials.length === 1 ? credentials[0] : undefined;
-              if (onlyCredential !== undefined) return Effect.succeed(onlyCredential.token);
-              return Effect.fail(
-                new LinearApiError({
-                  operation: "select-account",
-                  reason: "unauthenticated",
-                  connectedAccounts: credentials.length,
-                }),
-              );
+          if (Option.isSome(config.envToken)) return Effect.succeed(config.envToken.value);
+          return Effect.fail(
+            new LinearApiError({
+              operation: "select-account",
+              reason: "unauthenticated",
+              connectedAccounts: credentials.length,
             }),
           );
         }
@@ -542,15 +517,6 @@ const make = Effect.gen(function* () {
       ...(environmentAccount === undefined ? {} : { environmentAccount }),
     };
   };
-  const failedConnection = (error: LinearApiError): LinearConnection => ({
-    status: error.reason === "unauthenticated" ? "unauthenticated" : "unverified",
-    hasStoredToken: false,
-    accountName: null,
-    accountEmail: null,
-    teams: [],
-    accounts: [],
-  });
-
   const inspectEnvironmentAccount = Option.match(config.envToken, {
     onNone: () => Effect.succeed<LinearConnection["environmentAccount"]>(undefined),
     onSome: (token) =>
@@ -579,44 +545,8 @@ const make = Effect.gen(function* () {
 
   const connectionUnlocked = Effect.gen(function* () {
     const credentials = yield* storedCredentials;
-    if (credentials.length > 0) {
-      const legacy = yield* storedToken;
-      const accounts = yield* Effect.forEach(credentials, inspectCredential);
-      const migratedCredentialId = Option.isSome(legacy)
-        ? credentials.find(({ token }) => token === legacy.value)?.credentialId
-        : undefined;
-      return {
-        ...connectionOf(accounts, true, yield* inspectEnvironmentAccount),
-        ...(migratedCredentialId === undefined ? {} : { migratedCredentialId }),
-      };
-    }
-    const legacy = yield* storedToken;
-    if (Option.isSome(legacy)) {
-      const inspected = yield* inspectToken(legacy.value);
-      if (inspected._tag === "Failure") {
-        return { ...failedConnection(inspected.error), hasStoredToken: true };
-      }
-      const account = inspected.account;
-      yield* writeCredentials([{ credentialId: account.credentialId, token: legacy.value }]);
-      return {
-        ...connectionOf([account], true, yield* inspectEnvironmentAccount),
-        migratedCredentialId: account.credentialId,
-      };
-    }
-    if (Option.isSome(config.envToken)) {
-      const account = yield* inspectEnvironmentAccount;
-      if (account === undefined) return connectionOf([], false);
-      return {
-        status: account.status,
-        hasStoredToken: false,
-        accountName: account.accountName,
-        accountEmail: account.accountEmail,
-        teams: account.teams,
-        accounts: [],
-        environmentAccount: account,
-      };
-    }
-    return connectionOf([], false);
+    const accounts = yield* Effect.forEach(credentials, inspectCredential);
+    return connectionOf(accounts, credentials.length > 0, yield* inspectEnvironmentAccount);
   });
   const connection = credentialPoolMutex.withPermits(1)(connectionUnlocked);
 
@@ -651,28 +581,11 @@ const make = Effect.gen(function* () {
     );
 
   return LinearApi.of({
-    environmentTokenConfigured: Option.isSome(config.envToken),
     connection,
-    completeLegacyMigration: credentialPoolMutex.withPermits(1)(removeLegacyToken),
     connect: (value) =>
       credentialPoolMutex.withPermits(1)(
         Effect.gen(function* () {
           const credentials = [...(yield* storedCredentials)];
-          const legacy = yield* storedToken;
-          if (credentials.length === 0 && Option.isSome(legacy)) {
-            const account = yield* probeToken(legacy.value).pipe(
-              Effect.catchTags({
-                LinearApiError: (error) =>
-                  error.reason === "unauthenticated"
-                    ? Effect.succeed(undefined)
-                    : Effect.fail(error),
-              }),
-            );
-            if (account !== undefined) {
-              credentials.push({ credentialId: account.credentialId, token: legacy.value });
-            }
-          }
-
           const token = value.trim();
           const account = yield* probeToken(token);
           const index = credentials.findIndex(
@@ -682,7 +595,6 @@ const make = Effect.gen(function* () {
           if (index === -1) credentials.push(credential);
           else credentials[index] = credential;
           yield* writeCredentials(credentials);
-          if (Option.isSome(legacy)) yield* removeLegacyToken.pipe(Effect.ignore);
           return {
             ...(yield* connectionUnlocked),
             connectedCredentialId: account.credentialId,
@@ -699,20 +611,7 @@ const make = Effect.gen(function* () {
           const credentialId =
             input?.credentialId ??
             (credentials.length === 1 ? credentials[0]?.credentialId : undefined);
-          if (credentialId === undefined) {
-            const legacy = yield* storedToken;
-            if (Option.isSome(legacy)) yield* removeLegacyToken;
-            return yield* connectionUnlocked;
-          }
-          const removed = credentials.find(
-            (credential) => credential.credentialId === credentialId,
-          );
-          if (removed !== undefined) {
-            const legacy = yield* storedToken;
-            if (Option.isSome(legacy) && legacy.value === removed.token) {
-              yield* removeLegacyToken;
-            }
-          }
+          if (credentialId === undefined) return yield* connectionUnlocked;
           const remaining = credentials.filter(
             (credential) => credential.credentialId !== credentialId,
           );

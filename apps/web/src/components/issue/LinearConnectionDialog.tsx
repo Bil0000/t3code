@@ -63,7 +63,7 @@ export function LinearConnectionDialog({
               setError(null);
               const result = await connect({
                 environmentId,
-                input: { token: token.trim(), mode: "add" },
+                input: { token: token.trim() },
               });
               setBusy(false);
               if (result._tag === "Failure") {

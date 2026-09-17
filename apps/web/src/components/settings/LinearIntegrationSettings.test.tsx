@@ -47,11 +47,9 @@ const commands = vi.hoisted(() => ({
   binding: vi.fn(),
   invalidate: vi.fn(),
   disconnect: vi.fn(),
-  settings: vi.fn(),
 }));
 const settingsState = vi.hoisted(() => ({
-  projectBindings: {} as Record<string, { credentialId: string; teamKey: string } | null>,
-  projectTeams: {} as Record<string, string>,
+  projectBindings: {} as Record<string, { credentialId?: string; teamKey: string } | null>,
 }));
 const projectsState = vi.hoisted(() => ({
   projects: [] as ReadonlyArray<{ id: string; title: string; environmentId: string }>,
@@ -74,7 +72,6 @@ vi.mock("../../hooks/useSettings", () => ({
       issueTracking: {
         linear: {
           projectBindings: settingsState.projectBindings,
-          projectTeams: settingsState.projectTeams,
         },
       },
     }),
@@ -106,7 +103,6 @@ vi.mock("../../state/query", async (importOriginal) => {
   };
 });
 vi.mock("../../state/issues", () => ({ issueEnvironment: { invalidate: "invalidate" } }));
-vi.mock("../../state/server", () => ({ serverEnvironment: { updateSettings: "settings" } }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: keyof typeof commands) => commands[command],
 }));
@@ -158,7 +154,6 @@ describe("Linear integration settings", () => {
     connectionState.error = "Linear status failed";
     settingsState.projectBindings = {};
     projectsState.projects = [];
-    settingsState.projectTeams = {};
   });
 
   it("lists saved accounts, teams, and connection controls", () => {
@@ -387,11 +382,16 @@ describe("Linear integration settings", () => {
       ],
       accounts: [],
     };
+    connectionState.data.environmentAccount = {
+      status: "authenticated",
+      accountName: "Environment account",
+      accountEmail: null,
+      teams: connectionState.data.teams,
+    };
     connectionState.error = null;
     projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
     settingsState.projectBindings = { project_1: null };
-    settingsState.projectTeams = { project_1: "ENG" };
-    commands.settings.mockResolvedValue(AsyncResult.success(undefined));
+    commands.binding.mockResolvedValue(AsyncResult.success(undefined));
 
     hooks.beginRender();
     let dialog = LinearIntegrationSettings();
@@ -409,20 +409,11 @@ describe("Linear integration settings", () => {
     (projectSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
       operations?.props.value as string,
     );
-    await commands.settings.mock.results[0]?.value;
+    await commands.binding.mock.results[0]?.value;
 
-    expect(commands.settings).toHaveBeenLastCalledWith({
+    expect(commands.binding).toHaveBeenLastCalledWith({
       environmentId: "primary",
-      input: {
-        patch: {
-          issueTracking: {
-            linear: {
-              projectBindingsToDelete: ["project_1"],
-              projectTeams: { project_1: "OPS" },
-            },
-          },
-        },
-      },
+      input: { projectId: "project_1", binding: { teamKey: "OPS" } },
     });
 
     hooks.beginRender();
@@ -438,35 +429,12 @@ describe("Linear integration settings", () => {
     (rerenderedSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
       unbound?.props.value as string,
     );
-    await commands.settings.mock.results[1]?.value;
+    await commands.binding.mock.results[1]?.value;
 
-    expect(commands.settings).toHaveBeenLastCalledWith({
+    expect(commands.binding).toHaveBeenLastCalledWith({
       environmentId: "primary",
-      input: {
-        patch: { issueTracking: { linear: { projectTeamsToDelete: ["project_1"] } } },
-      },
+      input: { projectId: "project_1", binding: null },
     });
-  });
-
-  it("keeps a healthy single-key response from an older server usable", () => {
-    connectionState.data = {
-      status: "authenticated",
-      hasStoredToken: true,
-      accountName: "Legacy account",
-      accountEmail: null,
-      teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
-      accounts: [],
-    };
-    connectionState.error = null;
-    projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
-    settingsState.projectTeams = { project_1: "ENG" };
-
-    hooks.beginRender();
-    const dialog = LinearIntegrationSettings();
-
-    expect(textContent(dialog)).toContain("Project connections");
-    expect(textContent(dialog)).toContain("Engineering (ENG)");
-    expect(textContent(dialog)).not.toContain("Saved API key needs attention");
   });
 
   it("offers environment and saved teams together", () => {
@@ -519,7 +487,7 @@ describe("Linear integration settings", () => {
     };
     connectionState.error = null;
     projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
-    settingsState.projectTeams = { project_1: "ENG" };
+    settingsState.projectBindings = { project_1: { teamKey: "ENG" } };
     commands.binding.mockResolvedValue(AsyncResult.success(undefined));
 
     hooks.beginRender();
@@ -544,50 +512,6 @@ describe("Linear integration settings", () => {
     });
   });
 
-  it("removes an invalid legacy key before another key can be added", async () => {
-    connectionState.data = {
-      status: "unverified",
-      hasStoredToken: true,
-      accountName: null,
-      accountEmail: null,
-      teams: [],
-      accounts: [],
-    };
-    connectionState.error = null;
-    commands.disconnect.mockResolvedValue(AsyncResult.success(undefined));
-
-    hooks.beginRender();
-    let dialog = LinearIntegrationSettings();
-    const addAccount = visitElements(
-      dialog,
-      (element) =>
-        element.type === Button &&
-        element.props.onClick !== undefined &&
-        Array.isArray(element.props.children) &&
-        element.props.children.includes("Add account"),
-    );
-    expect(addAccount?.props.disabled).toBe(true);
-
-    const recover = visitElements(
-      dialog,
-      (element) =>
-        element.type === Button &&
-        element.props["aria-label"] === "Disconnect saved Linear API key",
-    );
-    (recover?.props.onClick as (() => void) | undefined)?.();
-    hooks.beginRender();
-    dialog = LinearIntegrationSettings();
-    const confirm = visitElements(
-      dialog,
-      (element) => element.type === Button && element.props.children === "Disconnect saved key",
-    );
-    await (confirm?.props.onClick as (() => Promise<void>) | undefined)?.();
-
-    expect(commands.disconnect).toHaveBeenCalledWith({
-      environmentId: "primary",
-      input: undefined,
-    });
-  });
   it("does not load accounts without a supported environment", () => {
     primary.mockReturnValue(null);
     hooks.beginRender();

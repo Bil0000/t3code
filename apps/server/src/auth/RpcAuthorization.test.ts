@@ -63,9 +63,9 @@ describe("RPC authorization scopes", () => {
     );
   });
 
-  it("requires write access for Linear status because it migrates saved bindings", () => {
+  it("allows read access for the side-effect-free Linear status", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.linearConnectionStatus)).toBe(
-      AuthOrchestrationOperateScope,
+      AuthOrchestrationReadScope,
     );
   });
 

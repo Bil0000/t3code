@@ -236,7 +236,7 @@ describe("IssuesColumn", () => {
     ]);
   });
 
-  it("keeps a cached Linear provider for a current legacy environment-token team", () => {
+  it("keeps a cached Linear provider for a current environment-token team", () => {
     const linear = {
       kind: "linear",
       host: "linear.app",
@@ -246,31 +246,33 @@ describe("IssuesColumn", () => {
       detail: null,
     } as const;
     const projectId = "project_1" as ProjectId;
-    const legacyTeam = hasLinearManagementState(
+    const environmentTeam = hasLinearManagementState(
       { status: "unauthenticated", hasStoredToken: false },
-      { projectBindings: {}, projectTeams: { [projectId]: "ENG" } },
+      { projectBindings: { [projectId]: { teamKey: "ENG" } } },
     );
 
-    expect(stabilizeLinearProviderSummary([linear], [projectId], {}, legacyTeam)).toEqual([linear]);
+    expect(stabilizeLinearProviderSummary([linear], [projectId], {}, environmentTeam)).toEqual([
+      linear,
+    ]);
   });
 
-  it("recognizes legacy teams and authenticated environment tokens as Linear management state", () => {
+  it("recognizes project bindings and authenticated environment tokens as Linear management state", () => {
     expect(
       hasLinearManagementState(
         { status: "unverified", hasStoredToken: false },
-        { projectBindings: {}, projectTeams: { project_1: "ENG" } },
+        { projectBindings: { project_1: { teamKey: "ENG" } } },
       ),
     ).toBe(true);
     expect(
       hasLinearManagementState(
         { status: "authenticated", hasStoredToken: false },
-        { projectBindings: {}, projectTeams: {} },
+        { projectBindings: {} },
       ),
     ).toBe(true);
     expect(
       hasLinearManagementState(
         { status: "unauthenticated", hasStoredToken: false },
-        { projectBindings: { project_1: null }, projectTeams: { project_1: "ENG" } },
+        { projectBindings: { project_1: null } },
         ["project_1" as ProjectId],
       ),
     ).toBe(false);
