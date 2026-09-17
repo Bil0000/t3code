@@ -17,6 +17,9 @@ import {
  * than half-implemented.
  */
 const CAPABILITIES: IssueCapabilities = {
+  sorts: ["created", "updated", "comments"],
+  referenceStyle: "hash",
+  closesViaPullRequest: false,
   // `az boards work-item update --discussion` posts one, but nothing in `az boards` reads the
   // discussion back — and a composer that writes into a conversation the reader cannot see is
   // worse than no composer.

@@ -50,6 +50,14 @@ describe("shortlistWorkItemCandidates", () => {
 });
 
 describe("resolveWorkItemMatches", () => {
+  it("keeps host closing support from the inspected candidate", () => {
+    const matches = resolveWorkItemMatches(
+      [{ ...candidate(12), closesViaPullRequest: true }],
+      [{ candidate: 1, confidence: "high", reason: "Same task" }],
+    );
+    expect(matches[0]?.closesViaPullRequest).toBe(true);
+  });
+
   it("maps trusted candidates once and drops invalid model indexes", () => {
     const candidates = [candidate(34), candidate(35)];
     const matches = resolveWorkItemMatches(candidates, [

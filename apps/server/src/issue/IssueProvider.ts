@@ -113,6 +113,7 @@ export interface ProviderBatchedIssuePage {
 }
 
 export interface ProviderIssueDetail extends ProviderIssue {
+  readonly repositoryUrl?: string;
   readonly body: string;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
   readonly viewerPermissions: IssueViewerPermissions;

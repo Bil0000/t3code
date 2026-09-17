@@ -29,6 +29,9 @@ afterEach(async () => {
 const coreDetail: IssueDetail = {
   provider: "linear",
   capabilities: {
+    sorts: ["updated"],
+    referenceStyle: "hash",
+    closesViaPullRequest: false,
     comment: false,
     actions: [],
     closeReasons: [],

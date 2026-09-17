@@ -2990,6 +2990,7 @@ const makeWsRpcLayer = (
                       const detail = yield* issues.detail(reference);
                       return {
                         kind: "issue" as const,
+                        referenceStyle: detail.capabilities.referenceStyle,
                         provider: detail.provider,
                         repository: detail.repository,
                         number: detail.number,
@@ -3068,6 +3069,7 @@ const makeWsRpcLayer = (
                   ? issues.detail(reference).pipe(
                       Effect.map((detail) => ({
                         detail,
+                        referenceStyle: detail.capabilities.referenceStyle,
                         known:
                           input.relationship === "related"
                             ? detail.linkedPullRequests.map((link) =>
@@ -3093,6 +3095,7 @@ const makeWsRpcLayer = (
                   : pullRequests.detail(reference).pipe(
                       Effect.map((detail) => ({
                         detail,
+                        referenceStyle: "hash" as const,
                         known:
                           input.relationship === "related"
                             ? (detail.linkedIssues ?? []).map((link) =>
@@ -3115,9 +3118,10 @@ const makeWsRpcLayer = (
                           }),
                       ),
                     );
-              const { detail: sourceDetail, known } = yield* sourceRead;
+              const { detail: sourceDetail, referenceStyle, known } = yield* sourceRead;
               const source = {
                 kind: input.source.kind,
+                referenceStyle,
                 provider: sourceDetail.provider,
                 repository: sourceDetail.repository,
                 number: sourceDetail.number,
@@ -3192,6 +3196,8 @@ const makeWsRpcLayer = (
                       const detail = yield* issues.detail(candidateReference);
                       return {
                         kind: "issue" as const,
+                        referenceStyle: detail.capabilities.referenceStyle,
+                        closesViaPullRequest: detail.capabilities.closesViaPullRequest,
                         provider: detail.provider,
                         repository: detail.repository,
                         number: detail.number,

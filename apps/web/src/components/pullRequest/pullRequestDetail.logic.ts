@@ -948,8 +948,7 @@ export function buildLinkIssuesHandoff(
   issue: WorkItemMatch,
 ): FixFindingsHandoff {
   const kind = issue.kind === "issue" ? "issue" : "pull request";
-  const supportsClosing =
-    issue.kind === "issue" && (issue.provider === "github" || issue.provider === "gitlab");
+  const supportsClosing = issue.kind === "issue" && issue.closesViaPullRequest === true;
   return {
     prompt: [
       `Link this pull request to ${kind} #${issue.number} on \`${boundedField(issue.repository)}\`.`,

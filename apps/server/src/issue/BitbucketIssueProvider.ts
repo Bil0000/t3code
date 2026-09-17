@@ -6,6 +6,9 @@ import { IssueProviderError, type IssueAdapter, type ProviderIssue } from "./Iss
 import type { BitbucketIssue } from "./bitbucketIssueJson.ts";
 
 const CAPABILITIES: IssueCapabilities = {
+  sorts: ["updated"],
+  referenceStyle: "hash",
+  closesViaPullRequest: false,
   comment: true,
   // Bitbucket's issue tracker spans eight states with no endpoint of its own for moving between
   // them; the closest it offers is writing `state` directly, which only reaches close and reopen.

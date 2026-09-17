@@ -56,6 +56,7 @@ export const WorkItemMatchInput = Schema.Struct({
 export type WorkItemMatchInput = typeof WorkItemMatchInput.Type;
 
 export const WorkItemMatch = Schema.Struct({
+  closesViaPullRequest: Schema.optionalKey(Schema.Boolean),
   kind: Schema.Literals(["issue", "pull-request"]),
   provider: TrimmedNonEmptyString,
   repository: TrimmedNonEmptyString,

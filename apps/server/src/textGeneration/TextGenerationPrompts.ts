@@ -7,7 +7,12 @@
  * @module textGenerationPrompts
  */
 import * as Schema from "effect/Schema";
-import { WORK_ITEM_TASK_PROMPT_MAX_LENGTH, type ChatAttachment } from "@t3tools/contracts";
+import {
+  formatIssueReference,
+  type IssueReferenceStyle,
+  WORK_ITEM_TASK_PROMPT_MAX_LENGTH,
+  type ChatAttachment,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { limitTitleMessage } from "./ThreadTitleContext.ts";
 
@@ -24,6 +29,7 @@ function policyInstruction(instruction: string | undefined): ReadonlyArray<strin
 export interface WorkItemPromptSource {
   readonly kind: "issue" | "pull-request";
   readonly provider: string;
+  readonly referenceStyle?: IssueReferenceStyle;
   readonly repository: string;
   readonly number: number;
   readonly title: string;
@@ -36,12 +42,6 @@ export interface WorkItemTaskPromptInput {
   readonly items: ReadonlyArray<WorkItemPromptSource>;
 }
 
-function workItemReference(item: WorkItemPromptSource): string {
-  return item.provider === "linear"
-    ? `${item.repository}-${item.number}`
-    : `${item.repository}#${item.number}`;
-}
-
 /** One explicit model call over only the work the user selected. */
 export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
   const taskShape =
@@ -50,7 +50,7 @@ export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
       : "Write one parent task with clear, ordered subtasks. Merge duplicate work and name dependencies.";
   const sources = input.items
     .map((item) => {
-      const reference = workItemReference(item);
+      const reference = formatIssueReference(item);
       const source = [
         `### ${item.kind === "issue" ? "Issue" : "Pull request"}: ${reference}`,
         `Provider: ${item.provider}`,
@@ -84,7 +84,7 @@ export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
 export function fallbackWorkItemTaskPrompt(input: WorkItemTaskPromptInput): string {
   const sources = input.items.map(
     (item, index) =>
-      `${input.mode === "subtasks" ? `${index + 1}.` : "-"} [${item.title}](${item.url}) (${workItemReference(item)})`,
+      `${input.mode === "subtasks" ? `${index + 1}.` : "-"} [${item.title}](${item.url}) (${formatIssueReference(item)})`,
   );
   return [
     input.mode === "compound"
@@ -120,7 +120,7 @@ export function buildWorkItemMatchPrompt(input: {
       index === undefined ? "Source" : `Candidate ${index}`,
       `Type: ${source.kind}`,
       `Provider: ${source.provider}`,
-      `Reference: ${workItemReference(source)}`,
+      `Reference: ${formatIssueReference(source)}`,
       `Title: ${source.title}`,
       `URL: ${source.url}`,
       "Body:",

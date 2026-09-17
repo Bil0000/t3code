@@ -545,10 +545,7 @@ export function IssueDetailPanel({
     handoffTarget.kind === "existing-thread" && typeof handoffTarget.draftId !== "string"
       ? handoffTarget.draftId
       : null;
-  const markdownRepositoryUrl =
-    detail?.provider === "github"
-      ? new URL(detail.repository, `${new URL(detail.url).origin}/`).toString()
-      : null;
+  const markdownRepositoryUrl = detail?.repositoryUrl ?? null;
   const markdownContext = useMemo(
     () => ({ repositoryUrl: markdownRepositoryUrl, threadRef: markdownThreadRef, panelRef }),
     [markdownRepositoryUrl, markdownThreadRef, panelRef],

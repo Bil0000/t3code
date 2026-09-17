@@ -507,6 +507,7 @@ export const make = Effect.gen(function* () {
     readonly item: ProviderIssue;
   }): IssueListEntry => ({
     provider: input.project.adapter.kind,
+    referenceStyle: input.project.adapter.capabilities.referenceStyle,
     host: input.project.host,
     projectId: input.project.project.id,
     projectTitle: input.project.project.title,
@@ -624,13 +625,14 @@ export const make = Effect.gen(function* () {
         const key = issueSourceKey(result.kind, result.host);
         const held = configuredProviders.get(key);
         const configured = result.viewer !== null || held?.configured === true;
+        const capabilities = projects.find(
+          (project) => project.adapter.kind === result.kind && project.host === result.host,
+        )?.adapter.capabilities;
         configuredProviders.set(key, {
           host: result.host,
           kind: result.kind,
-          searchesOnHost:
-            projects.find(
-              (project) => project.adapter.kind === result.kind && project.host === result.host,
-            )?.adapter.capabilities.search ?? false,
+          searchesOnHost: capabilities?.search ?? false,
+          sorts: capabilities?.sorts ?? [],
           projectCount: projects.filter(
             (project) => project.adapter.kind === result.kind && project.host === result.host,
           ).length,
@@ -646,6 +648,7 @@ export const make = Effect.gen(function* () {
           host,
           kind,
           searchesOnHost: false,
+          sorts: [],
           projectCount,
           configured: false,
           detail: "This host cannot be browsed here yet.",
@@ -943,6 +946,7 @@ export const make = Effect.gen(function* () {
           Effect.mapError(toIssueError("detail")),
           Effect.map(([issue, viewer]): IssueDetail => ({
             provider: project.adapter.kind,
+            ...(issue.repositoryUrl === undefined ? {} : { repositoryUrl: issue.repositoryUrl }),
             capabilities: project.adapter.capabilities,
             viewerPermissions: issue.viewerPermissions,
             projectId: project.project.id,

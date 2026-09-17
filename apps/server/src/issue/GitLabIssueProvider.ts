@@ -10,6 +10,9 @@ import {
 } from "./IssueProvider.ts";
 
 const CAPABILITIES: IssueCapabilities = {
+  sorts: ["updated"],
+  referenceStyle: "hash",
+  closesViaPullRequest: true,
   comment: true,
   actions: ["close", "reopen"],
   // GitLab records nothing about why an issue was closed, so a close never asks for a reason.

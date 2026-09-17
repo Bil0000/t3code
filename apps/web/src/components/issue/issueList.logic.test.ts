@@ -25,6 +25,7 @@ const actor = (login: string) => ({ login, name: null, avatarUrl: null });
 function entry(overrides: Partial<IssueListEntry> & Pick<IssueListEntry, "number">) {
   return {
     provider: "github",
+    referenceStyle: "hash",
     host: "github.com",
     projectId: "project-1",
     projectTitle: "t3code",

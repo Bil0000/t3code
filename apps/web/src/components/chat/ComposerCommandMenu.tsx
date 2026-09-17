@@ -1,3 +1,4 @@
+import { formatIssueReference } from "@t3tools/contracts";
 import {
   formatProviderSkillDisplayName,
   resolveProviderSkillSourceKind,
@@ -30,11 +31,7 @@ import { PierreEntryIcon } from "./PierreEntryIcon";
 import { ComposerBanner } from "./ComposerBanner";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 
-export function composerIssueReference(issue: IssueListEntry): string {
-  return issue.provider === "linear"
-    ? `${issue.repository}-${issue.number}`
-    : `${issue.repository}#${issue.number}`;
-}
+export const composerIssueReference = formatIssueReference;
 
 export function serializeComposerIssueMention(issue: IssueListEntry): string {
   return `[@${composerIssueReference(issue)}](${issue.url}) `;

@@ -1,3 +1,4 @@
+import { IssueListSort } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type { IssueCapabilities, IssueViewerPermissions, IssueActor } from "@t3tools/contracts";
 
@@ -10,6 +11,9 @@ import {
 } from "./IssueProvider.ts";
 
 const CAPABILITIES: IssueCapabilities = {
+  sorts: IssueListSort.literals,
+  referenceStyle: "hash",
+  closesViaPullRequest: true,
   comment: true,
   actions: ["close", "reopen"],
   closeReasons: ["completed", "not-planned"],
@@ -136,6 +140,7 @@ export const make = Effect.gen(function* () {
         Effect.mapError(fail("getIssue")),
         Effect.map(([issue, supplement]): ProviderIssueDetail => ({
           ...issue,
+          repositoryUrl: new URL(input.repository, `${new URL(issue.url).origin}/`).toString(),
           author: withAvatar(issue.author, supplement.avatarsByLogin),
           assignees: issue.assignees.map(
             (assignee) => withAvatar(assignee, supplement.avatarsByLogin) ?? assignee,

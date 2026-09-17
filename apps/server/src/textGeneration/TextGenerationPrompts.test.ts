@@ -22,6 +22,7 @@ describe("buildWorkItemTaskPrompt", () => {
     {
       kind: "issue" as const,
       provider: "linear",
+      referenceStyle: "key-number" as const,
       repository: "ENG",
       number: 12,
       title: "Fix login",
@@ -92,6 +93,7 @@ describe("buildWorkItemMatchPrompt", () => {
   const source = {
     kind: "issue" as const,
     provider: "linear",
+    referenceStyle: "key-number" as const,
     repository: "ENG",
     number: 12,
     title: "Sessions expire too early",

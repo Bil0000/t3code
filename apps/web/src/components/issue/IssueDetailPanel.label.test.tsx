@@ -95,6 +95,9 @@ vi.mock("./IssuesUnavailableState", () => ({ IssuesUnavailableState: () => null 
 const detail: IssueDetail = {
   provider: "linear",
   capabilities: {
+    sorts: ["updated"],
+    referenceStyle: "hash",
+    closesViaPullRequest: false,
     comment: false,
     actions: [],
     closeReasons: [],

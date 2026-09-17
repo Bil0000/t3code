@@ -184,6 +184,7 @@ export function stabilizeLinearProviderSummary(
   const linear = providers.find((provider) => provider.kind === "linear");
   const connected = {
     kind: "linear" as const,
+    sorts: ["updated"] as const,
     host: "linear.app",
     configured: true,
     searchesOnHost: false,
@@ -733,7 +734,8 @@ function IssuesRouteView() {
   useEffect(() => {
     if (!answered) return;
     const hostOrdered =
-      sort === "best-match" && answered.providers.some((provider) => provider.kind !== "github")
+      sort === "best-match" &&
+      answered.providers.some((provider) => !provider.sorts.includes("best-match"))
         ? rankIssueMatches(answered.entries, sentQuery)
         : answered.entries;
     setOrdered((previous) => {
@@ -1277,12 +1279,13 @@ function IssuesRouteView() {
   const sortingHosts = search.host
     ? availableSortingHosts.filter((entry) => entry.host === search.host)
     : availableSortingHosts;
-  const githubSortingAvailable =
-    sortingHosts.length > 0 && sortingHosts.every((entry) => entry.kind === "github");
+  const availableSorts = (sortingHosts[0]?.sorts ?? []).filter((sort) =>
+    sortingHosts.every((provider) => provider.sorts.includes(sort)),
+  );
   const filtersMenu = (
     <div className="flex shrink-0 items-center gap-1">
       <IssueSortMenu
-        reactionsAvailable={githubSortingAvailable}
+        sorts={availableSorts}
         sort={sort}
         order={order}
         onSort={(nextSort) =>

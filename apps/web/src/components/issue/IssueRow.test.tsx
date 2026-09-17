@@ -6,6 +6,7 @@ import { IssueRow } from "./IssueRow";
 
 const entry = {
   provider: "github",
+  referenceStyle: "hash",
   host: "github.com",
   projectId: "project-1" as IssueListEntry["projectId"],
   projectTitle: "T3 Code",

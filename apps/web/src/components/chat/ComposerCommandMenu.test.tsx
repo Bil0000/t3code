@@ -11,6 +11,7 @@ import {
 
 const issue = {
   provider: "github",
+  referenceStyle: "hash",
   host: "github.com",
   projectId: "project-1" as IssueListEntry["projectId"],
   projectTitle: "Acme",
@@ -127,7 +128,19 @@ describe("ComposerCommandMenu", () => {
 
   it.each([
     { entry: issue, expected: "acme/app#12" },
-    { entry: { ...issue, provider: "linear", repository: "ENG" }, expected: "ENG-12" },
+    {
+      entry: { ...issue, provider: "linear", referenceStyle: "key-number", repository: "ENG" },
+      expected: "ENG-12",
+    },
+    {
+      entry: {
+        ...issue,
+        provider: "another-tracker",
+        referenceStyle: "key-number",
+        repository: "APP",
+      },
+      expected: "APP-12",
+    },
   ] as const)("formats host-native issue reference $expected", ({ entry, expected }) => {
     expect(composerIssueReference(entry)).toBe(expected);
   });

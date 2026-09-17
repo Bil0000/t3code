@@ -109,6 +109,9 @@ const trackerDisabled = new IssueProviderError({
 
 /** Everything a host could offer, so a fixture only narrows what its own test is about. */
 const FULL_CAPABILITIES: IssueCapabilities = {
+  sorts: ["updated"],
+  referenceStyle: "hash",
+  closesViaPullRequest: true,
   comment: true,
   actions: ["close", "reopen"],
   closeReasons: ["completed", "not-planned"],
@@ -646,6 +649,16 @@ it.effect("keeps adapters separate when they share a host and repository name", 
           },
         }),
         fakeProvider("jira", {
+          getIssue: () =>
+            Effect.succeed(
+              issueDetail(7, { repositoryUrl: "https://tracker.example.test/acme/web" }),
+            ),
+          capabilities: {
+            ...FULL_CAPABILITIES,
+            referenceStyle: "key-number",
+            sorts: ["created"],
+            closesViaPullRequest: false,
+          },
           resolveSource: (candidate) =>
             Effect.succeed(
               candidate.id === "p2"
@@ -655,7 +668,11 @@ it.effect("keeps adapters separate when they share a host and repository name", 
           getViewer: () => Effect.succeed("jira-user"),
           listIssues: ({ viewer }) => {
             asked.push(`jira:${viewer}`);
-            return Effect.succeed({ items: [], truncated: false, continues: true });
+            return Effect.succeed({
+              items: [issue(7, "2026-07-01T00:00:00Z")],
+              truncated: false,
+              continues: true,
+            });
           },
         }),
       ],
@@ -665,6 +682,18 @@ it.effect("keeps adapters separate when they share a host and repository name", 
 
     assert.deepStrictEqual(result.providers.map(({ kind }) => kind).toSorted(), ["github", "jira"]);
     assert.deepStrictEqual(asked.toSorted(), ["github:octocat", "jira:jira-user"]);
+    assert.strictEqual(result.entries[0]?.referenceStyle, "key-number");
+    assert.deepStrictEqual(result.providers.find(({ kind }) => kind === "jira")?.sorts, [
+      "created",
+    ]);
+    const detail = yield* service.detail({
+      projectId: "p2" as ProjectId,
+      provider: "jira",
+      repository: "acme/web",
+      number: 7,
+    });
+    assert.isFalse(detail.capabilities.closesViaPullRequest);
+    assert.strictEqual(detail.repositoryUrl, "https://tracker.example.test/acme/web");
   }),
 );
 

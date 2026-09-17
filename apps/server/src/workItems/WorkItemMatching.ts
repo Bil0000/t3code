@@ -5,6 +5,7 @@ interface WorkItemIdentity {
   readonly number: number;
   readonly title: string;
   readonly url: string;
+  readonly closesViaPullRequest?: boolean;
 }
 
 interface WorkItemSource extends WorkItemIdentity {
@@ -65,6 +66,9 @@ export function resolveWorkItemMatches(
           number: candidate.number,
           title: candidate.title,
           url: candidate.url,
+          ...(candidate.closesViaPullRequest === undefined
+            ? {}
+            : { closesViaPullRequest: candidate.closesViaPullRequest }),
           confidence: match.confidence,
           reason,
         },

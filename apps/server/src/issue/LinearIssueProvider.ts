@@ -13,6 +13,9 @@ import * as LinearApi from "./LinearApi.ts";
 import { IssueProviderError, type IssueAdapter, type ProviderIssue } from "./IssueProvider.ts";
 
 const CAPABILITIES: IssueCapabilities = {
+  sorts: ["updated"],
+  referenceStyle: "key-number",
+  closesViaPullRequest: false,
   comment: true,
   actions: [],
   closeReasons: [],

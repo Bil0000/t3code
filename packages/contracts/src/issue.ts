@@ -78,6 +78,17 @@ export const IssueListSort = Schema.Literals([
 ]);
 export type IssueListSort = typeof IssueListSort.Type;
 
+export const IssueReferenceStyle = Schema.Literals(["hash", "key-number"]);
+export type IssueReferenceStyle = typeof IssueReferenceStyle.Type;
+
+export function formatIssueReference(input: {
+  readonly repository: string;
+  readonly number: number;
+  readonly referenceStyle?: IssueReferenceStyle | undefined;
+}): string {
+  return `${input.repository}${input.referenceStyle === "key-number" ? "-" : "#"}${input.number}`;
+}
+
 export const IssueListOrder = Schema.Literals(["asc", "desc"]);
 export type IssueListOrder = typeof IssueListOrder.Type;
 
@@ -188,6 +199,9 @@ export type IssueLink = typeof IssueLink.Type;
  * repository, and Azure DevOps has work items instead of issues, with states of its own.
  */
 export const IssueCapabilities = Schema.Struct({
+  sorts: Schema.Array(IssueListSort),
+  referenceStyle: IssueReferenceStyle,
+  closesViaPullRequest: Schema.Boolean,
   /** A comment can be posted, and the conversation read back. */
   comment: Schema.Boolean,
   /** The state changes this host can carry out; anything absent is never offered. */
@@ -239,6 +253,7 @@ export const IssueViewerPermissions = Schema.Struct({
 export type IssueViewerPermissions = typeof IssueViewerPermissions.Type;
 
 export const IssueListEntry = Schema.Struct({
+  referenceStyle: IssueReferenceStyle,
   provider: IssueProviderKind,
   /**
    * The host below which `repository` is addressed, so the same provider kind can serve more than
@@ -306,6 +321,7 @@ export type IssueListInput = typeof IssueListInput.Type;
  * now. Two adapters can use the same host without sharing credentials.
  */
 export const IssueProviderSummary = Schema.Struct({
+  sorts: Schema.Array(IssueListSort),
   host: TrimmedNonEmptyString,
   kind: IssueProviderKind,
   /** False where a search has to be applied to the rows after they arrive. */
@@ -356,6 +372,7 @@ export const IssueInvalidateInput = Schema.Struct({
 export type IssueInvalidateInput = typeof IssueInvalidateInput.Type;
 
 export const IssueDetail = Schema.Struct({
+  repositoryUrl: Schema.optionalKey(TrimmedNonEmptyString),
   provider: IssueProviderKind,
   capabilities: IssueCapabilities,
   /** What this viewer may do, which `capabilities` says nothing about. Both narrow the page. */

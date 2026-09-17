@@ -236,8 +236,10 @@ function IssueBrowserList({
     }),
   );
   const answered = listQuery.data;
-  const githubSortingAvailable =
-    answered?.providers.some((provider) => provider.kind === "github") ?? false;
+  const sortingHosts = answered?.providers ?? [];
+  const availableSorts = (sortingHosts[0]?.sorts ?? []).filter((sort) =>
+    sortingHosts.every((provider) => provider.sorts.includes(sort)),
+  );
   const searchingHosts = useMemo(
     () =>
       new Set(
@@ -269,7 +271,7 @@ function IssueBrowserList({
     if (answered === null) return;
     const hostOrdered =
       filters.sort === "best-match" &&
-      answered.providers.some((provider) => provider.kind !== "github")
+      answered.providers.some((provider) => !provider.sorts.includes("best-match"))
         ? rankIssueMatches(answered.entries, sent)
         : answered.entries;
     setOrdered((previous) => {
@@ -416,7 +418,7 @@ function IssueBrowserList({
         />
         <div className="flex shrink-0 items-center gap-1">
           <IssueSortMenu
-            reactionsAvailable={githubSortingAvailable}
+            sorts={availableSorts}
             sort={filters.sort}
             order={filters.order}
             onSort={(sort) => onFilters({ ...filters, sort })}

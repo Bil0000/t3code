@@ -39,7 +39,7 @@ describe("issue filters", () => {
     const menu = IssueSortMenu({
       sort: "updated",
       order: "desc",
-      reactionsAvailable: false,
+      sorts: ["updated"],
       onSort: vi.fn(),
       onOrder: vi.fn(),
     });
@@ -53,8 +53,25 @@ describe("issue filters", () => {
     ]);
   });
 
+  it("offers only the reaction sorts declared by the selected providers", () => {
+    const onSort = vi.fn();
+    const menu = IssueSortMenu({
+      sort: "updated",
+      order: "desc",
+      sorts: ["reactions-heart"],
+      onSort,
+      onOrder: vi.fn(),
+    });
+    expect(
+      collect(menu, MenuRadioItem)
+        .map((item) => item.props.value)
+        .filter((value) => String(value).startsWith("reactions")),
+    ).toEqual(["reactions-heart"]);
+  });
+
   it("hides ineffective order choices for best-match sorting", () => {
     const menu = IssueSortMenu({
+      sorts: [],
       sort: "best-match",
       order: "desc",
       onSort: vi.fn(),

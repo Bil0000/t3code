@@ -31,6 +31,7 @@ const LIST_RESULT: IssueListResult = {
     {
       host: "github.com",
       kind: "github",
+      sorts: ["updated"],
       searchesOnHost: true,
       projectCount: 1,
       configured: true,
@@ -39,6 +40,7 @@ const LIST_RESULT: IssueListResult = {
     {
       host: "gitlab.com",
       kind: "gitlab",
+      sorts: ["updated"],
       searchesOnHost: true,
       projectCount: 1,
       configured: false,
@@ -48,6 +50,7 @@ const LIST_RESULT: IssueListResult = {
   entries: [
     {
       provider: "github",
+      referenceStyle: "hash",
       host: "github.com",
       projectId: "project-1" as IssueListResult["entries"][number]["projectId"],
       projectTitle: "t3code",
@@ -216,6 +219,9 @@ describe("IssueDetail", () => {
     const detail = decodeDetail({
       provider: "github",
       capabilities: {
+        sorts: ["updated"],
+        referenceStyle: "hash",
+        closesViaPullRequest: true,
         comment: true,
         actions: ["close", "reopen"],
         closeReasons: ["completed", "not-planned"],
@@ -276,6 +282,9 @@ describe("IssueDetail", () => {
 describe("IssueTemplateList", () => {
   const TEMPLATES: IssueTemplateList = {
     capabilities: {
+      sorts: ["updated"],
+      referenceStyle: "hash",
+      closesViaPullRequest: true,
       comment: true,
       actions: ["close", "reopen"],
       closeReasons: ["completed", "not-planned"],

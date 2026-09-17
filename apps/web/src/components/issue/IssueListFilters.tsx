@@ -151,9 +151,9 @@ export function IssueSortMenu({
   order,
   onSort,
   onOrder,
-  reactionsAvailable = true,
+  sorts,
 }: {
-  readonly reactionsAvailable?: boolean;
+  readonly sorts: ReadonlyArray<IssueListSort>;
   readonly sort: IssueListSort;
   readonly order: IssueListOrder;
   readonly onSort: (sort: IssueListSort) => void;
@@ -182,7 +182,7 @@ export function IssueSortMenu({
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>
-        {reactionsAvailable ? (
+        {sorts.some((sort) => sort.startsWith("reactions")) ? (
           <MenuSub>
             <MenuSubTrigger>
               <ThumbsUpIcon aria-hidden className="size-3.5" />
@@ -190,15 +190,17 @@ export function IssueSortMenu({
             </MenuSubTrigger>
             <MenuSubPopup className="min-w-48">
               <MenuRadioGroup value={sort} onValueChange={chooseSort}>
-                {REACTION_SORTS.map(([value, label, emoji]) => (
-                  <MenuRadioItem key={value} value={value}>
-                    <span className="flex items-center gap-2">
-                      {emoji ? <span aria-hidden>{emoji}</span> : null}
-                      <span className="flex-1">{label}</span>
-                      <MenuRadioItemIndicator />
-                    </span>
-                  </MenuRadioItem>
-                ))}
+                {REACTION_SORTS.filter(([value]) => sorts.includes(value)).map(
+                  ([value, label, emoji]) => (
+                    <MenuRadioItem key={value} value={value}>
+                      <span className="flex items-center gap-2">
+                        {emoji ? <span aria-hidden>{emoji}</span> : null}
+                        <span className="flex-1">{label}</span>
+                        <MenuRadioItemIndicator />
+                      </span>
+                    </MenuRadioItem>
+                  ),
+                )}
               </MenuRadioGroup>
             </MenuSubPopup>
           </MenuSub>
