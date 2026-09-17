@@ -1173,7 +1173,7 @@ export class RelayScheduledTaskInvalidConfigurationError extends Schema.TaggedEr
 
 export class RelayScheduledTaskPersistenceError extends Schema.TaggedError<RelayScheduledTaskPersistenceError>()(
   "RelayScheduledTaskPersistenceError",
-  {},
+  { cause: Schema.Defect() },
   { httpApiStatus: 409 },
 ) {
   override get message(): string {

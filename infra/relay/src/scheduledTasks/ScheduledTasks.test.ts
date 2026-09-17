@@ -324,3 +324,19 @@ describe("scheduled task failover", () => {
       }),
   );
 });
+
+it.effect("preserves the immediate transaction failure as the persistence error cause", () =>
+  Effect.gen(function* () {
+    const cause = new Error("Database unavailable");
+    const db = {
+      $client: Object.assign(() => Effect.succeed([]), {
+        withTransaction: () => Effect.fail(cause),
+      }),
+    } as unknown as RelayDb.RelayDb["Service"];
+    const service = yield* ScheduledTasks.make.pipe(Effect.provideService(RelayDb.RelayDb, db));
+    const error = yield* Effect.flip(service.get(primary, config));
+    expect(error._tag).toBe("RelayScheduledTaskPersistenceError");
+    expect(error.cause).toBe(cause);
+    expect(error.message).toBe("Scheduled task coordination failed: persistence_failed");
+  }),
+);

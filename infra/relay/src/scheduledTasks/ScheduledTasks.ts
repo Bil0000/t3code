@@ -86,7 +86,9 @@ export const make = Effect.gen(function* () {
       .withTransaction(effect)
       .pipe(
         Effect.mapError((error) =>
-          isScheduledTaskError(error) ? error : new RelayScheduledTaskPersistenceError({}),
+          isScheduledTaskError(error)
+            ? error
+            : new RelayScheduledTaskPersistenceError({ cause: error }),
         ),
       );
   const now = Effect.map(
