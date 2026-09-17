@@ -50,7 +50,7 @@ describe("serverSettings helpers", () => {
         },
       },
     });
-    expect(environment.issueTracking.connections.linear.projectBindings).toEqual({
+    expect(environment.issueTracking.connections.linear?.projectBindings).toEqual({
       project_1: { repository: "ENV" },
       project_2: current.issueTracking.connections.linear.projectBindings.project_2,
     });
@@ -68,7 +68,7 @@ describe("serverSettings helpers", () => {
         },
       },
     });
-    expect(cleared.issueTracking.connections.linear.projectBindings).toEqual({
+    expect(cleared.issueTracking.connections.linear?.projectBindings).toEqual({
       project_1: null,
       project_2: current.issueTracking.connections.linear.projectBindings.project_2,
     });
