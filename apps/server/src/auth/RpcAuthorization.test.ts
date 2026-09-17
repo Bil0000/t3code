@@ -63,6 +63,12 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("requires write access for Linear status because it migrates saved bindings", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.linearConnectionStatus)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(
