@@ -3216,8 +3216,8 @@ export default function Sidebar() {
       dropThreadContext(
         target,
         keys.flatMap((selectedKey) => {
-          const thread = threadByKeyRef.current.get(selectedKey);
-          return thread ? [scopeThreadRef(thread.environmentId, thread.id)] : [];
+          const thread = parseScopedThreadKey(selectedKey);
+          return thread ? [thread] : [];
         }),
       );
       return true;
