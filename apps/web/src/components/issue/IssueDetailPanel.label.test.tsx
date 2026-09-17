@@ -8,8 +8,17 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
 
-const commands = vi.hoisted(() => ({ comment: vi.fn(), action: vi.fn(), refresh: vi.fn() }));
-afterEach(() => vi.clearAllMocks());
+const commands = vi.hoisted(() => ({
+  comment: vi.fn(),
+  action: vi.fn(),
+  refresh: vi.fn(),
+  commentsPage: vi.fn(),
+}));
+afterEach(() => {
+  vi.clearAllMocks();
+  currentDetail = detail;
+  currentActivity = activity;
+});
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -47,7 +56,7 @@ vi.mock("~/state/issues", () => ({
 }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: (query: string) => ({
-    data: query === "detail" ? detail : activity,
+    data: query === "detail" ? currentDetail : currentActivity,
     error: null,
     isPending: false,
     refresh: commands.refresh,
@@ -55,11 +64,13 @@ vi.mock("~/state/query", () => ({
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "comment"
-      ? commands.comment
-      : command === "runAction"
-        ? commands.action
-        : async () => ({ _tag: "Success", value: undefined }),
+    command === "commentsPage"
+      ? commands.commentsPage
+      : command === "comment"
+        ? commands.comment
+        : command === "runAction"
+          ? commands.action
+          : async () => ({ _tag: "Success", value: undefined }),
 }));
 vi.mock("../sourceControl/ActivityUnavailableState", () => ({
   ActivityUnavailableState: () => null,
@@ -134,6 +145,8 @@ const activity: IssueActivity = {
   nextCommentsCursor: null,
   events: [],
 };
+let currentDetail = detail;
+let currentActivity = activity;
 
 import { IssueDetailPanel } from "./IssueDetailPanel";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
@@ -168,6 +181,51 @@ function panelHeader(panel: ReturnType<typeof IssueDetailPanel>) {
 }
 
 describe("IssueDetailPanel provider labels", () => {
+  for (const lateResponse of [false, true]) {
+    it(`drops exhausted comment pages on revision change, late response: ${lateResponse}`, async () => {
+      hooks.reset();
+      currentActivity = { ...activity, commentsTruncated: true, nextCommentsCursor: "first-page" };
+      let resolve!: (value: unknown) => void;
+      const pending = new Promise<unknown>((done) => {
+        resolve = done;
+      });
+      commands.commentsPage
+        .mockResolvedValue({ _tag: "Success", value: { comments: [], nextCursor: null } })
+        .mockReturnValueOnce(pending);
+      const summary = visitElements(renderPanel(), (element) => element.type === IssueSummaryTab)!;
+      (summary.props.onLoadMoreComments as () => void)();
+      if (!lateResponse) {
+        resolve({ _tag: "Success", value: { comments: [], nextCursor: null } });
+        await pending;
+        const exhausted = visitElements(
+          renderPanel(),
+          (element) => element.type === IssueSummaryTab,
+        )!;
+        expect(
+          (exhausted.props.detail as { nextCommentsCursor: string | null }).nextCommentsCursor,
+        ).toBeNull();
+      }
+      currentDetail = { ...detail, updatedAt: "2026-08-18T00:00:00Z" };
+      currentActivity = { ...activity, commentsTruncated: true, nextCommentsCursor: "fresh-page" };
+      renderPanel();
+      if (lateResponse) {
+        resolve({ _tag: "Success", value: { comments: [], nextCursor: null } });
+        await pending;
+      }
+      const refreshed = visitElements(
+        renderPanel(),
+        (element) => element.type === IssueSummaryTab,
+      )!;
+      expect(
+        (refreshed.props.detail as { nextCommentsCursor: string | null }).nextCommentsCursor,
+      ).toBe("fresh-page");
+      (refreshed.props.onLoadMoreComments as () => void)();
+      expect(commands.commentsPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ input: expect.objectContaining({ cursor: "fresh-page" }) }),
+      );
+    });
+  }
+
   it("matches the pull request header height and keeps the tab row stable", () => {
     hooks.reset();
     const panel = renderPanel("collapse");

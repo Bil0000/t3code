@@ -72,7 +72,7 @@ import {
   buildSolveIssueHandoff,
   issueHandoffReviewComments,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
-  mergeEarlierIssueComments,
+  mergeIssueComments,
   shouldRefreshIssueActivity,
   type IssueHandoff,
   type IssueHandoffSource,
@@ -267,7 +267,8 @@ export function IssueDetailPanel({
   );
   const coreDetail = detailQuery.data;
   const activity = activityQuery.data;
-  const loadedPage = loadedComments?.key === issueKey ? loadedComments : null;
+  const commentsKey = `${issueKey}:${coreDetail?.updatedAt}`;
+  const loadedPage = loadedComments?.key === commentsKey ? loadedComments : null;
   const detail = useMemo(
     () =>
       coreDetail === null
@@ -275,10 +276,7 @@ export function IssueDetailPanel({
         : {
             ...coreDetail,
             author: activity?.author ?? coreDetail.author,
-            comments: mergeEarlierIssueComments(
-              activity?.comments ?? [],
-              loadedPage?.comments ?? [],
-            ),
+            comments: mergeIssueComments(activity?.comments ?? [], loadedPage?.comments ?? []),
             // The host's own count, which the core read already carries: the conversation being
             // unread is not the same as there being nothing in it.
             commentCount: activity?.commentCount ?? coreDetail.commentCount,
@@ -316,17 +314,17 @@ export function IssueDetailPanel({
       return;
     }
     setLoadedComments((previous) => {
-      const comments = previous?.key === issueKey ? previous.comments : [];
+      const comments = previous?.key === commentsKey ? previous.comments : [];
       return {
-        key: issueKey,
-        comments: mergeEarlierIssueComments(comments, result.value.comments),
+        key: commentsKey,
+        comments: mergeIssueComments(comments, result.value.comments),
         nextCursor: result.value.nextCursor,
       };
     });
   }, [
     detail?.nextCommentsCursor,
+    commentsKey,
     environmentId,
-    issueKey,
     loadingMoreComments,
     readCommentsPage,
     reference,

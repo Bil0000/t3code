@@ -17,12 +17,14 @@ export function shouldRefreshIssueActivity(
   return previous !== null && previous.key === next.key && previous.updatedAt !== next.updatedAt;
 }
 
-export function mergeEarlierIssueComments(
+export function mergeIssueComments(
   current: ReadonlyArray<IssueComment>,
-  earlier: ReadonlyArray<IssueComment>,
+  page: ReadonlyArray<IssueComment>,
 ): ReadonlyArray<IssueComment> {
   const currentIds = new Set(current.map((comment) => comment.id));
-  return [...earlier.filter((comment) => !currentIds.has(comment.id)), ...current];
+  return [...page.filter((comment) => !currentIds.has(comment.id)), ...current].sort(
+    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+  );
 }
 
 export function nextIssueCommentCount(shown: number, pageSize: number): number {

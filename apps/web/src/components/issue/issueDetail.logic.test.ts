@@ -13,7 +13,7 @@ import {
   groupIssueTimelineConversations,
   issueHandoffReviewComments,
   issueCommentEditId,
-  mergeEarlierIssueComments,
+  mergeIssueComments,
   nextIssueCommentCount,
   shouldRefreshIssueActivity,
   type IssueHandoffSource,
@@ -78,9 +78,19 @@ describe("issue activity refresh", () => {
 });
 
 describe("issue comment pages", () => {
+  it("orders forward and backward pages by time while retaining current duplicates", () => {
+    const first = comment({ id: "first", createdAt: "2026-08-01T00:00:00Z" });
+    const middle = comment({ id: "middle", body: "updated", createdAt: "2026-08-02T00:00:00Z" });
+    const last = comment({ id: "last", createdAt: "2026-08-03T00:00:00Z" });
+    expect(mergeIssueComments([middle], [last, { ...middle, body: "stale" }, first])).toEqual([
+      first,
+      middle,
+      last,
+    ]);
+  });
   it("prepends older comments once while keeping host order", () => {
     expect(
-      mergeEarlierIssueComments(
+      mergeIssueComments(
         [comment({ id: "c2", body: "updated" }), comment({ id: "c3", body: "third" })],
         [comment({ id: "c1", body: "first" }), comment({ id: "c2", body: "old" })],
       ).map(({ id, body }) => [id, body]),
