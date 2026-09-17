@@ -387,7 +387,7 @@ function EnvironmentScheduledTasksSettings({
     serverEnvironment.scheduledTasksLive({ environmentId: taskEnvironmentId, input: {} }),
   );
   const backupQuery = useEnvironmentQuery(
-    automaticBackup && backupEnvironmentId
+    (automaticBackup || draft.failover) && backupEnvironmentId
       ? serverEnvironment.scheduledTasksLive({ environmentId: backupEnvironmentId, input: {} })
       : null,
   );
@@ -489,6 +489,13 @@ function EnvironmentScheduledTasksSettings({
       reportFailure(
         "Branch is required",
         "Select a project and choose the branch for the new worktree.",
+      );
+      return;
+    }
+    if (!automaticBackup && draft.failover && !backupQuery.data) {
+      reportFailure(
+        "Backup host is not ready",
+        "Connect the backup host before turning backup off.",
       );
       return;
     }
@@ -613,6 +620,11 @@ function EnvironmentScheduledTasksSettings({
         }
       } else {
         await taskCommandValue(upsertTask({ environmentId: taskEnvironmentId, input }));
+        if (draft.failover && backupEnvironmentId && backupTask) {
+          await taskCommandValue(
+            deleteTask({ environmentId: backupEnvironmentId, input: { id: backupTask.id } }),
+          );
+        }
       }
       setDialogOpen(false);
       if (taskEnvironmentId !== environmentId) {

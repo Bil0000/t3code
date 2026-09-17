@@ -1,11 +1,13 @@
 import { act, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ScheduledTask } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 const state = vi.hoisted(() => ({
   save: vi.fn(async () => ({ _tag: "Success" })),
+  tasks: [] as ScheduledTask[],
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
@@ -33,7 +35,12 @@ vi.mock("../../state/server", () => ({
 vi.mock("../../state/vcs", () => ({ vcsEnvironment: { listRefs: () => "refs" } }));
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (query: string) => ({
-    data: query === "tasks" ? { tasks: [] } : { refs: [{ name: "develop", isDefault: true }] },
+    data:
+      query === null
+        ? null
+        : query === "tasks"
+          ? { tasks: state.tasks }
+          : { refs: [{ name: "develop", isDefault: true }] },
     error: null,
   }),
 }));
@@ -96,6 +103,11 @@ vi.mock("../ui/input", () => ({ Input: "input" }));
 vi.mock("../ui/textarea", () => ({ Textarea: "textarea" }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
 vi.mock("../ui/switch", () => ({ Switch: "input" }));
+vi.mock("../ui/tooltip", () => ({
+  Tooltip: "div",
+  TooltipTrigger: "span",
+  TooltipPopup: "span",
+}));
 vi.mock("../ui/toast", () => ({
   toastManager: { add: vi.fn() },
   stackedThreadToast: (value: unknown) => value,
@@ -103,10 +115,12 @@ vi.mock("../ui/toast", () => ({
 
 import { ScheduledTasksSettings } from "./ScheduledTasksSettings";
 
+const decodeTask = Schema.decodeUnknownSync(ScheduledTask);
 let renderer: ReactTestRenderer;
 afterEach(() => {
   act(() => renderer?.unmount());
   vi.unstubAllGlobals();
+  state.tasks = [];
 });
 
 it.each(["server", "remote"])(
@@ -150,5 +164,70 @@ it.each(["server", "remote"])(
         }),
       }),
     );
+  },
+);
+
+it.each([false, true])(
+  "removes the backup only after a successful detach (failure: %s)",
+  async (fail) => {
+    state.save.mockClear();
+    const task = decodeTask({
+      id: "task",
+      title: "Review",
+      prompt: "Review changes",
+      enabled: false,
+      schedule: { type: "interval", everyMs: 60000 },
+      failover: {
+        groupId: "e6d5501c-e8e8-4a76-b06d-776d170ac39a",
+        revision: "0e2a7a35-2e09-4b87-808b-1604601e6cf2",
+        environmentIds: ["server", "remote"],
+        timeZone: "UTC",
+      },
+      projectId: "project",
+      threadId: null,
+      workspaceStrategy: { type: "root" },
+      modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdBy: "user",
+      creationSource: "web",
+      createdAt: "2026-09-17T00:00:00.000Z",
+      updatedAt: "2026-09-17T00:00:00.000Z",
+      nextRunAt: null,
+      lastRunAt: null,
+      lastRunStatus: "never",
+      lastRunError: null,
+      runCount: 0,
+    });
+    state.tasks = [task];
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    act(() => {
+      renderer = create(
+        <ScheduledTasksSettings environmentId={EnvironmentId.make("server")} taskId={task.id} />,
+      );
+    });
+    act(() =>
+      renderer.root.findByProps({ id: "scheduled-task-backup" }).props.onCheckedChange(false),
+    );
+    if (fail) state.save.mockRejectedValueOnce(new Error("Host unavailable"));
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Save task"))!
+        .props.onClick();
+    });
+    expect(state.save).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        environmentId: "server",
+        input: expect.objectContaining({ failover: null }),
+      }),
+    );
+    expect(state.save).toHaveBeenCalledTimes(fail ? 1 : 2);
+    if (!fail)
+      expect(state.save).toHaveBeenNthCalledWith(2, {
+        environmentId: "remote",
+        input: { id: task.id },
+      });
   },
 );
