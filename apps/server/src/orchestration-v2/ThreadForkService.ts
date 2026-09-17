@@ -15,6 +15,11 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import {
+  legacyThreadPullRequestKey,
+  threadPullRequestKeysEqual,
+  threadPullRequestsOf,
+} from "@t3tools/shared/threadPullRequests";
 
 export interface ThreadForkPlanV2 {
   readonly targetThread: OrchestrationV2AppThread;
@@ -62,8 +67,27 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
             cause: `Fork source run ${input.sourceRun.id} is ${input.sourceRun.status}.`,
           });
         }
+        const pullRequests = threadPullRequestsOf(input.sourceProjection.thread);
+        const branchPullRequest = input.sourceProjection.thread.branchPullRequest;
         const targetThread: OrchestrationV2AppThread = {
           ...input.sourceProjection.thread,
+          pullRequests:
+            branchPullRequest &&
+            !pullRequests.some((link) =>
+              threadPullRequestKeysEqual(link, legacyThreadPullRequestKey(branchPullRequest)),
+            )
+              ? [
+                  ...pullRequests,
+                  {
+                    ...legacyThreadPullRequestKey(branchPullRequest),
+                    url: branchPullRequest.url,
+                    source: "manual",
+                    linkedAt: DateTime.formatIso(input.createdAt),
+                    snapshot: null,
+                    stack: null,
+                  },
+                ]
+              : pullRequests,
           createdBy: input.createdBy,
           creationSource: input.creationSource,
           id: input.targetThreadId,

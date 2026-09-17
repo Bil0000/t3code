@@ -4,6 +4,7 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2AppThread,
+  type ThreadPullRequestLink,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   ProjectId,
@@ -83,9 +84,38 @@ function makeCompletedSourceRun(): OrchestrationV2Run {
   };
 }
 
-it.effect("keeps a fork awake when its source thread is snoozed", () =>
+const branchPullRequest = {
+  projectId: ProjectId.make("project:fork-snooze"),
+  repository: "pingdotgg/t3code",
+  number: 10,
+  url: "https://github.com/pingdotgg/t3code/pull/10",
+};
+const linkedPullRequest: ThreadPullRequestLink = {
+  host: "github.com",
+  repository: "pingdotgg/t3code",
+  number: 20,
+  url: "https://github.com/pingdotgg/t3code/pull/20",
+  source: "manual",
+  linkedAt: "2026-07-24T09:00:00.000Z",
+  snapshot: null,
+  stack: null,
+};
+
+it.effect.each([
+  [],
+  [linkedPullRequest],
+  [{ ...linkedPullRequest, number: 10, url: branchPullRequest.url }],
+  [
+    {
+      ...linkedPullRequest,
+      number: 10,
+      url: branchPullRequest.url,
+      source: "stack-dismissed" as const,
+    },
+  ],
+])("keeps fork state and PR links for %j", (links) =>
   Effect.gen(function* () {
-    const sourceThread = makeSourceThread();
+    const sourceThread = { ...makeSourceThread(), branchPullRequest, pullRequests: links };
     const sourceRun = makeCompletedSourceRun();
     const sourceProjection: OrchestrationV2ThreadProjection = {
       thread: sourceThread,
@@ -124,6 +154,19 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
       createdAt: forkCreatedAt,
     });
 
+    const expectedLinks = links.some((link) => link.number === 10)
+      ? links
+      : [
+          ...links,
+          {
+            ...linkedPullRequest,
+            number: 10,
+            url: branchPullRequest.url,
+            linkedAt: DateTime.formatIso(forkCreatedAt),
+          },
+        ];
+    assert.deepEqual(result.targetThread.pullRequests, expectedLinks);
+    assert.deepEqual(sourceThread.pullRequests, links);
     assert.isNull(result.targetThread.snoozedUntil);
     assert.isNull(result.targetThread.snoozedAt);
     assert.equal(result.targetThread.projectId, sourceThread.projectId);

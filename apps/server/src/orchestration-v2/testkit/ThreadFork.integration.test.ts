@@ -509,8 +509,36 @@ describe("orchestration V2 thread fork", () => {
               { type: "advance_clock", duration: "1 millis" },
               { type: "dispatch", command: materialized.commands[1]!, await: true },
               { type: "await_thread_idle", threadId: materialized.sourceThreadId },
+              {
+                type: "dispatch",
+                await: true,
+                command: {
+                  type: "thread.pull-request.link",
+                  commandId: CommandId.make("fork-source-pr"),
+                  threadId: materialized.sourceThreadId,
+                  host: "github.com",
+                  repository: "pingdotgg/t3code",
+                  number: 10,
+                  url: "https://github.com/pingdotgg/t3code/pull/10",
+                  source: "manual",
+                },
+              },
               { type: "dispatch", command: materialized.commands[2]!, await: true },
               { type: "dispatch", command: materialized.commands[3]!, await: true },
+              {
+                type: "dispatch",
+                await: true,
+                command: {
+                  type: "thread.pull-request.link",
+                  commandId: CommandId.make("fork-add-second-pr"),
+                  threadId: materialized.targetThreadId,
+                  host: "github.com",
+                  repository: "pingdotgg/t3code",
+                  number: 20,
+                  url: "https://github.com/pingdotgg/t3code/pull/20",
+                  source: "manual",
+                },
+              },
               { type: "dispatch", command: materialized.commands[4]!, await: true },
               { type: "await_thread_idle", threadId: materialized.targetThreadId },
             ],
@@ -524,6 +552,14 @@ describe("orchestration V2 thread fork", () => {
         const targetProjection = result.projections.get(materialized.targetThreadId);
         assert.isDefined(sourceProjection);
         assert.isDefined(targetProjection);
+        assert.deepEqual(
+          targetProjection.thread.pullRequests?.map((link) => link.number),
+          [10, 20],
+        );
+        assert.deepEqual(
+          sourceProjection.thread.pullRequests?.map((link) => link.number),
+          [10],
+        );
         assert.equal(targetProjection.thread.lineage.parentThreadId, materialized.sourceThreadId);
         assert.equal(targetProjection.thread.lineage.relationshipToParent, "fork");
         assert.lengthOf(targetProjection.providerSessions, 1);
