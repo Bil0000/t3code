@@ -138,9 +138,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
       Layer.provideMerge(configLayer),
     );
-    const projectId = ProjectId.make("project_1");
     const initial =
-      '{"providerInstances":{"codex_personal":{"driver":"codex","environment":[{"name":"OPENROUTER_API_KEY","value":"","sensitive":true,"valueRedacted":true}],"config":{}}},"issueTracking":{"linear":{"projectBindings":{"project_1":{"credentialId":"user-1","teamKey":"ENG"}}}}}';
+      '{"providerInstances":{"codex_personal":{"driver":"codex","environment":[{"name":"OPENROUTER_API_KEY","value":"","sensitive":true,"valueRedacted":true}],"config":{}}},"newWorktreesStartFromOrigin":false}';
 
     return Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
@@ -150,7 +149,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       yield* Effect.flip(
         serverSettings.updateSettings({
-          issueTracking: { connections: { linear: { projectBindings: { [projectId]: null } } } },
+          newWorktreesStartFromOrigin: true,
         }),
       );
 
