@@ -369,6 +369,7 @@ export function ThreadDetailsPrRow({
                 checksState={checksRollup}
                 checks={detail.checks}
                 variant="count"
+                className="text-[13px] text-foreground/80 sm:text-[13px]"
               />
             </>
           ) : null}
