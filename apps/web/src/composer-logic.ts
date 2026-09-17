@@ -26,7 +26,7 @@ export function formatAssistantCitationForComposer(citation: AssistantCitation, 
   return `${serializeAssistantCitation(withAssistantCitationComment(citation, comment))} `;
 }
 
-export function composerRequiresModifier(
+function composerRequiresModifier(
   sendShortcut: ClientSettings["sendShortcut"] | undefined,
   prompt: string,
 ) {
