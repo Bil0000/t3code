@@ -90,6 +90,7 @@ export interface ProviderListCursor {
    * slice ended before. The service drops the ones it has already sent.
    */
   readonly updatedBefore: string;
+  readonly seenAt?: ReadonlyArray<number> | undefined;
 }
 
 /** One repository's row inside an answer that spans several of them. */

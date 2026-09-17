@@ -262,8 +262,12 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
           // The boundary instant is asked for inclusively, so the host hands back the rows
           // already sent at it alongside the ones beside them — which a strictly-older read
           // would have lost instead.
-          listIssues: () =>
-            Effect.succeed({
+          listIssues: (input) => {
+            assert.deepStrictEqual(input.cursor, {
+              updatedBefore: "2026-07-02T00:00:00Z",
+              seenAt: [7],
+            });
+            return Effect.succeed({
               items: [
                 issue(7, "2026-07-02T00:00:00Z"),
                 issue(8, "2026-07-02T00:00:00Z"),
@@ -271,7 +275,8 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
               ],
               truncated: true,
               continues: true,
-            }),
+            });
+          },
         }),
       ],
     });

@@ -8,7 +8,10 @@ import {
   IssueAction,
   type IssueInvolvement,
   type IssueListState,
+  type IssueListSort,
+  type IssueListOrder,
 } from "@t3tools/contracts";
+import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import {
@@ -127,6 +130,8 @@ export class AzureDevOpsIssueCli extends Context.Service<
       /** No `mentioned`: Azure records none, and the provider refuses that filter before here. */
       readonly involvement: AzureDevOpsInvolvement;
       readonly limit: number;
+      readonly sort?: IssueListSort | undefined;
+      readonly order?: IssueListOrder | undefined;
       readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<
       { readonly items: ReadonlyArray<AzureDevOpsWorkItem>; readonly truncated: boolean },
@@ -160,13 +165,6 @@ const ACTION_STATES: Record<IssueAction, readonly [string, ...ReadonlyArray<stri
   close: ["Closed", "Done"],
   reopen: ["Active", "Committed", "Doing", "To Do", "New", "Proposed"],
 };
-
-/**
- * How often a listing doubles the window it asks Azure for when rows come back unreadable. Three
- * is where it stops: past a block of eight pages of rows this cannot place, the listing hands over
- * what it has and reports no more — a short list rather than a walk that never ends.
- */
-const MAX_LIST_WIDENINGS = 3;
 
 /** WIQL has one quote to escape, and a title filter never reaches it — but a cursor does. */
 const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
@@ -268,19 +266,40 @@ const make = Effect.gen(function* () {
       read({
         cwd: input.cwd,
         operation: "getViewer",
-        args: ["account", "show", "--query", "user.name"],
-        decode: (raw) => Result.succeed(raw.trim().replaceAll('"', "")),
+        args: [
+          "devops",
+          "invoke",
+          ...detectArgs,
+          "--area",
+          "profile",
+          "--resource",
+          "profiles",
+          "--route-parameters",
+          "id=me",
+          "--api-version",
+          "7.1",
+          "--query",
+          "emailAddress || displayName || id",
+        ],
+        decode: decodeJsonResult(Schema.NonEmptyString),
       }),
 
     listWorkItems: (input) => {
-      // Asked for one row beyond the page, which is how every provider here probes for a next
-      // slice without a second request.
-      const wanted = input.limit + 1;
       const cursorClause =
         input.cursor === undefined
           ? ""
-          : ` AND [System.ChangedDate] <= ${quoted(input.cursor.updatedBefore)}`;
-      const query = (project: string, top: number) =>
+          : ` AND [System.ChangedDate] <= ${quoted(input.cursor.updatedBefore)}` +
+            (input.cursor.seenAt?.length
+              ? ` AND [System.Id] NOT IN (${input.cursor.seenAt.join(",")})`
+              : "");
+      const sortField =
+        input.sort === "created"
+          ? "System.CreatedDate"
+          : input.sort === "comments"
+            ? "System.CommentCount"
+            : "System.ChangedDate";
+      const direction = input.order === "asc" ? "ASC" : "DESC";
+      const query = (project: string) =>
         read({
           cwd: input.cwd,
           operation: "listWorkItems",
@@ -291,41 +310,19 @@ const make = Effect.gen(function* () {
             "query",
             ...detectArgs,
             "--wiql",
-            `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = ${quoted(project)}` +
+            "SELECT [System.Id], [System.Title], [System.State], [System.CreatedDate], " +
+              "[System.ChangedDate], [System.CreatedBy], [System.AssignedTo], [System.CommentCount] " +
+              `FROM WorkItems WHERE [System.TeamProject] = ${quoted(project)}` +
               stateClause(input.state) +
               involvementClause(input.involvement) +
               cursorClause +
-              " ORDER BY [System.ChangedDate] DESC",
-            "--top",
-            String(top),
+              ` ORDER BY [${sortField}] ${direction}, [System.Id] ASC`,
           ],
           decode: decodeWorkItemsJson,
         });
 
-      /**
-       * A window wide enough to fill the page with rows this can read. `--top` bounds the window
-       * in rows Azure counted, not in rows this decoded, and the cursor can only carry on from a
-       * row it decoded — so a window whose tail is rows this cannot place would be asked for
-       * again, unchanged, on every following page. Widening steps over them instead.
-       */
-      const fill = (
-        project: string,
-        top: number,
-        widenings: number,
-      ): Effect.Effect<
-        { readonly items: ReadonlyArray<AzureDevOpsWorkItem>; readonly rawCount: number },
-        AzureDevOpsIssueCliError
-      > =>
-        query(project, top).pipe(
-          Effect.flatMap((page) =>
-            page.items.length >= wanted || page.rawCount < top || widenings === MAX_LIST_WIDENINGS
-              ? Effect.succeed(page)
-              : fill(project, top * 2, widenings + 1),
-          ),
-        );
-
       return projectName(input.cwd).pipe(
-        Effect.flatMap((project) => fill(project, wanted, 0)),
+        Effect.flatMap(query),
         Effect.map((page) => ({
           items: page.items.slice(0, input.limit),
           // Counted in rows this could read. A page that reports more without leaving a readable
@@ -339,7 +336,7 @@ const make = Effect.gen(function* () {
       read({
         cwd: input.cwd,
         operation: "getWorkItem",
-        args: ["boards", "work-item", "show", "--id", String(input.number)],
+        args: ["boards", "work-item", "show", ...detectArgs, "--id", String(input.number)],
         decode: decodeWorkItemJson,
       }).pipe(
         Effect.flatMap((item) =>
@@ -362,7 +359,16 @@ const make = Effect.gen(function* () {
       ): Effect.Effect<void, AzureDevOpsIssueCliError> =>
         executeJson({
           cwd: input.cwd,
-          args: ["boards", "work-item", "update", "--id", String(input.number), "--state", state],
+          args: [
+            "boards",
+            "work-item",
+            "update",
+            ...detectArgs,
+            "--id",
+            String(input.number),
+            "--state",
+            state,
+          ],
         }).pipe(
           Effect.asVoid,
           // Only the failure az reports for a rule it broke moves on to the next name. An unusable

@@ -50,41 +50,6 @@ function listing(items: ReadonlyArray<unknown>, project = "web") {
   );
 }
 
-/** The same, with one answer per query it makes — the last one for every query after those. */
-function listings(pages: ReadonlyArray<ReadonlyArray<unknown>>, project = "web") {
-  let asked = 0;
-  mockedExecute.mockImplementation((input) => {
-    if (input.args[0] === "repos") {
-      return Effect.succeed(output(`${project}\n`)) as ReturnType<
-        AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]
-      >;
-    }
-    const page = pages[Math.min(asked, pages.length - 1)] ?? [];
-    asked += 1;
-    return Effect.succeed(output(JSON.stringify(page))) as ReturnType<
-      AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]
-    >;
-  });
-}
-
-/** A row Azure counted and this cannot place: no link, no title, no dates. */
-const unreadable = (id: number) => ({ id, url: null, fields: null });
-
-/** A project of nothing but those, always as many rows as the query asked for. */
-function unreadableListing(project = "web") {
-  mockedExecute.mockImplementation((input) => {
-    if (input.args[0] === "repos") {
-      return Effect.succeed(output(`${project}\n`)) as ReturnType<
-        AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]
-      >;
-    }
-    const top = Number(input.args[input.args.indexOf("--top") + 1]);
-    return Effect.succeed(
-      output(JSON.stringify(Array.from({ length: top }, (_, index) => unreadable(index + 1)))),
-    ) as ReturnType<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>;
-  });
-}
-
 /** The one rule error az reports for a state a project's workflow does not have. */
 const ruleError = (argumentCount: number) =>
   new AzureDevOpsCli.AzureDevOpsCommandFailedError({
@@ -118,6 +83,8 @@ const updateArgs = (state: string) => [
   "boards",
   "work-item",
   "update",
+  "--detect",
+  "true",
   "--id",
   "7",
   "--state",
@@ -129,11 +96,6 @@ const updateArgs = (state: string) => [
 
 const statesWritten = () =>
   mockedExecute.mock.calls.map(([input]) => input.args[input.args.indexOf("--state") + 1]);
-
-const topsOf = () =>
-  mockedExecute.mock.calls
-    .filter(([input]) => input.args[0] === "boards")
-    .map(([input]) => input.args[input.args.indexOf("--top") + 1]);
 
 const wiqlOf = () => {
   const call = mockedExecute.mock.calls.find(([input]) => input.args[0] === "boards");
@@ -147,6 +109,145 @@ afterEach(() => {
 });
 
 layer((it) => {
+  it.effect("fills a page after unreadable rows without unsupported CLI options", () =>
+    Effect.gen(function* () {
+      listing([workItem(1), { id: 2 }, { id: 3 }, workItem(4), workItem(5)]);
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      const page = yield* cli.listWorkItems({
+        cwd: "/w",
+        state: "all",
+        involvement: "all",
+        limit: 2,
+      });
+      assert.deepStrictEqual(
+        page.items.map((item) => item.number),
+        [1, 4],
+      );
+      assert.isTrue(page.truncated);
+      expect(wiqlOf()).toContain("[System.Title]");
+      expect(wiqlOf()).toContain("[System.CreatedDate]");
+      expect(wiqlOf()).toContain("[System.ChangedDate]");
+      expect(mockedExecute.mock.calls[1]?.[0].args).not.toContain("--top");
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+    }),
+  );
+
+  it.effect("excludes delivered rows without skipping unseen rows at the same instant", () =>
+    Effect.gen(function* () {
+      listing([workItem(3)]);
+      const provider = yield* AzureDevOpsIssueProvider.make;
+      const page = yield* provider.listIssues({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        state: "all",
+        involvement: "all",
+        viewer: "me",
+        limit: 2,
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z", seenAt: [1, 2] },
+      });
+      expect(wiqlOf()).toContain("[System.ChangedDate] <= '2026-07-02T00:00:00Z'");
+      expect(wiqlOf()).toContain("[System.Id] NOT IN (1,2)");
+      assert.deepStrictEqual(
+        page.items.map((item) => item.number),
+        [3],
+      );
+      assert.isFalse(page.truncated);
+    }),
+  );
+
+  for (const [sort, field] of [
+    ["created", "CreatedDate"],
+    ["updated", "ChangedDate"],
+    ["comments", "CommentCount"],
+  ] as const) {
+    for (const order of ["asc", "desc"] as const) {
+      it.effect(`orders by ${sort} ${order} before limiting the page`, () =>
+        Effect.gen(function* () {
+          listing([workItem(1, { "System.CommentCount": 9 })]);
+          const provider = yield* AzureDevOpsIssueProvider.make;
+          const page = yield* provider.listIssues({
+            cwd: "/w",
+            repository: "web",
+            host: "dev.azure.com",
+            state: "all",
+            involvement: "all",
+            viewer: "me",
+            limit: 2,
+            sort,
+            order,
+          });
+          expect(wiqlOf()).toContain(`ORDER BY [System.${field}] ${order.toUpperCase()}`);
+          expect(page.items[0]?.commentCount).toBe(9);
+        }),
+      );
+    }
+  }
+
+  it.effect("reads the DevOps profile without requiring an Azure subscription", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output('"pat-user@example.com"')));
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      assert.strictEqual(yield* cli.getViewer({ cwd: "/w" }), "pat-user@example.com");
+      expect(mockedExecute.mock.calls[0]?.[0].args).toEqual([
+        "devops",
+        "invoke",
+        "--detect",
+        "true",
+        "--area",
+        "profile",
+        "--resource",
+        "profiles",
+        "--route-parameters",
+        "id=me",
+        "--api-version",
+        "7.1",
+        "--query",
+        "emailAddress || displayName || id",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }),
+  );
+
+  it.effect("detects the checkout when reading one work item", () =>
+    Effect.gen(function* () {
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      mockedExecute.mockReturnValue(Effect.succeed(output(JSON.stringify(workItem(7)))));
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      assert.strictEqual((yield* cli.getWorkItem({ cwd: "/w", number: 7 })).number, 7);
+      expect(mockedExecute.mock.calls[0]?.[0].args).toEqual([
+        "boards",
+        "work-item",
+        "show",
+        "--detect",
+        "true",
+        "--id",
+        "7",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }),
+  );
+
+  it.effect("accepts the null response for an empty WIQL result", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) =>
+        Effect.succeed(output(input.args[0] === "repos" ? "web" : "null")),
+      );
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      const page = yield* cli.listWorkItems({
+        cwd: "/w",
+        state: "all",
+        involvement: "all",
+        limit: 2,
+      });
+      assert.deepStrictEqual(page, { items: [], truncated: false });
+    }),
+  );
+
   it.effect("names the project in the query, because az boards runs at the organization", () =>
     Effect.gen(function* () {
       listing([workItem(1)], "Fabrikam Web");
@@ -351,62 +452,6 @@ layer((it) => {
         page.items.map((item) => item.number),
         [1, 3],
       );
-    }),
-  );
-
-  it.effect("widens the window rather than paging on rows it cannot read", () =>
-    Effect.gen(function* () {
-      listings([
-        [workItem(1), unreadable(2), unreadable(3)],
-        [workItem(1), unreadable(2), unreadable(3), workItem(4), workItem(5), workItem(6)],
-      ]);
-      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
-
-      const page = yield* cli.listWorkItems({
-        cwd: "/w",
-        state: "all",
-        involvement: "all",
-        limit: 2,
-      });
-
-      // `--top` counts rows Azure has, not rows this can read, so the unreadable tail would bound
-      // every following page at the same place: the cursor carries on from work item 4 instead.
-      assert.deepStrictEqual(topsOf(), ["3", "6"]);
-      assert.deepStrictEqual(
-        page.items.map((item) => item.number),
-        [1, 4],
-      );
-      assert.isTrue(page.truncated);
-    }),
-  );
-
-  it.effect("stops rather than reporting more with no row to carry on from", () =>
-    Effect.gen(function* () {
-      unreadableListing();
-      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
-
-      const page = yield* cli.listWorkItems({
-        cwd: "/w",
-        state: "all",
-        involvement: "all",
-        limit: 2,
-      });
-
-      assert.deepStrictEqual(page.items, []);
-      // Reported as truncated, this page would be asked for again from the same instant forever.
-      assert.isFalse(page.truncated);
-      assert.deepStrictEqual(topsOf(), ["3", "6", "12", "24"]);
-    }),
-  );
-
-  it.effect("asks once where Azure answered with rows it could read", () =>
-    Effect.gen(function* () {
-      listings([[workItem(1), workItem(2), workItem(3)]]);
-      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
-
-      yield* cli.listWorkItems({ cwd: "/w", state: "all", involvement: "all", limit: 2 });
-
-      assert.deepStrictEqual(topsOf(), ["3"]);
     }),
   );
 

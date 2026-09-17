@@ -725,9 +725,9 @@ export const make = Effect.gen(function* () {
             // Each host matches this its own way, and one that cannot match text at all answers
             // unnarrowed rather than failing.
             query: input.query,
-            // Only the field a host can act on: which rows have already been sent at the boundary
-            // instant is this service's business, not a provider's.
-            ...(cursor === undefined ? {} : { cursor: { updatedBefore: cursor.updatedBefore } }),
+            ...(cursor === undefined
+              ? {}
+              : { cursor: { updatedBefore: cursor.updatedBefore, seenAt: cursor.seenAt } }),
           })
           .pipe(
             Effect.map((page): RepositoryBatch => {

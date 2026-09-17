@@ -86,7 +86,7 @@ function toIssue(item: AzureDevOpsWorkItem): ProviderIssue {
     assignees: item.assignees,
     labels: [],
     milestone: null,
-    commentCount: 0,
+    commentCount: item.commentCount,
   };
 }
 
@@ -142,6 +142,8 @@ export const make = Effect.gen(function* () {
               state: input.state,
               involvement: input.involvement,
               limit: input.limit,
+              sort: input.sort,
+              order: input.order,
               ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
             })
             .pipe(

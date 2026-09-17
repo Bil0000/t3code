@@ -20,6 +20,7 @@ export interface AzureDevOpsWorkItem {
   readonly updatedAt: string;
   readonly closedAt: string | null;
   readonly description: string;
+  readonly commentCount: number;
 }
 
 /**
@@ -36,6 +37,7 @@ const Identity = Schema.Struct({
 });
 
 const Fields = Schema.Struct({
+  "System.CommentCount": Schema.optional(Schema.NullOr(Schema.Int)),
   "System.Title": Schema.optional(Schema.NullOr(Schema.String)),
   "System.State": Schema.optional(Schema.NullOr(Schema.String)),
   "System.CreatedDate": Schema.optional(Schema.NullOr(Schema.String)),
@@ -110,6 +112,7 @@ function toWorkItem(raw: unknown): AzureDevOpsWorkItem | null {
     updatedAt,
     closedAt: fields["Microsoft.VSTS.Common.ClosedDate"] ?? null,
     description: fields["System.Description"] ?? "",
+    commentCount: fields["System.CommentCount"] ?? 0,
   };
 }
 
@@ -119,14 +122,11 @@ function toWorkItem(raw: unknown): AzureDevOpsWorkItem | null {
  */
 export function decodeWorkItemsJson(
   raw: string,
-): Result.Result<
-  { readonly items: ReadonlyArray<AzureDevOpsWorkItem>; readonly rawCount: number },
-  DecodeFailure
-> {
-  const rows = decodeUnknownList(raw.trim().length === 0 ? "[]" : raw);
+): Result.Result<{ readonly items: ReadonlyArray<AzureDevOpsWorkItem> }, DecodeFailure> {
+  const rows = decodeUnknownList(raw.trim().length === 0 || raw.trim() === "null" ? "[]" : raw);
   if (!Result.isSuccess(rows)) return Result.fail(rows.failure);
   const items = rows.success.map(toWorkItem).filter((item) => item !== null);
-  return Result.succeed({ items, rawCount: rows.success.length });
+  return Result.succeed({ items });
 }
 
 /** Null where az answered with a work item this cannot place, which the caller reports as such. */
