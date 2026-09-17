@@ -1,3 +1,4 @@
+import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
@@ -493,6 +494,9 @@ const AntigravityInstallationRefreshLive = Layer.effectDiscard(
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   ThreadSettlementWorkerLive,
+  Layer.effectDiscard(StorageCleanup.make.pipe(Effect.flatMap((service) => service.start()))).pipe(
+    Layer.provide(ProjectionStoreV2.layer),
+  ),
   ThreadPullRequestWorkerLive,
   Layer.effectDiscard(
     Effect.gen(function* () {
