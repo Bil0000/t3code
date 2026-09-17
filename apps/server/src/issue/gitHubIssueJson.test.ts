@@ -921,6 +921,14 @@ contact_links:
     about: Missing what it points to
   - name: Blank URL
     url: "   "
+  - name: Script
+    url: javascript:alert(1)
+  - name: Data
+    url: data:text/html,unsafe
+  - name: Relative
+    url: //example.com/discuss
+  - name: Local
+    url: file:///tmp/contact
   - name: Community support
     url: https://example.com/discuss
 `,

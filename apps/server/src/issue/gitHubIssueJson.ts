@@ -1660,7 +1660,7 @@ export function decodeIssueTemplateConfigYaml(
     if (Exit.isFailure(link)) continue;
     const name = trimmed(link.value.name);
     const url = trimmed(link.value.url);
-    if (name === null || url === null) continue;
+    if (name === null || url === null || !/^https?:\/\//iu.test(url)) continue;
     contactLinks.push({ name, url, about: link.value.about ?? "" });
   }
   // Only an explicit `false` takes the blank issue away; anything else, including a value that is
