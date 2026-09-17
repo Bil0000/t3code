@@ -3,6 +3,7 @@ import {
   CircleXIcon,
   EllipsisIcon,
   FileJsonIcon,
+  ListFilterIcon,
   MinusIcon,
   PlusIcon,
   SearchIcon,
@@ -50,6 +51,7 @@ import { Toggle } from "../ui/toggle";
 import { toastManager } from "../ui/toast";
 import {
   buildKeybindingRows,
+  filterKeybindingRows,
   buildKeybindingCommandOptions,
   buildWhenVariableOptions,
   commandLabel,
@@ -1296,7 +1298,7 @@ function KeybindingsList(props: KeybindingsListProps) {
     props;
   const newProps: NewKeybindingProps = {
     commandOptions,
-    allRows: rows,
+    allRows: rowActions.allRows,
     variables: rowActions.variables,
     isSaving: savingCommand !== null,
     onSave: rowActions.onSave,
@@ -1370,11 +1372,16 @@ export function KeybindingsSettingsPanel() {
     availableEditors,
   );
   const [query, setQuery] = useState("");
+  const [customOnly, setCustomOnly] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [savingCommand, setSavingCommand] = useState<KeybindingCommand | null>(null);
   const [isAddingBinding, setIsAddingBinding] = useState(false);
-  const rows = useMemo(() => buildKeybindingRows(keybindings, query), [keybindings, query]);
+  const allRows = useMemo(() => buildKeybindingRows(keybindings, ""), [keybindings]);
+  const rows = useMemo(
+    () => filterKeybindingRows(allRows, query, customOnly),
+    [allRows, query, customOnly],
+  );
   // The search-target context is provided by this panel's own page container,
   // so the jump target is read from the route hash here.
   const searchTargetId = useLocation({ select: (location) => location.hash.replace(/^#/, "") });
@@ -1383,7 +1390,10 @@ export function KeybindingsSettingsPanel() {
   // A settings-search jump must not be hidden by the page's own filter.
   if (searchTargetId !== handledSearchTargetId) {
     setHandledSearchTargetId(searchTargetId);
-    if (searchTargetId.startsWith("keybinding-")) setQuery("");
+    if (searchTargetId.startsWith("keybinding-")) {
+      setQuery("");
+      setCustomOnly(false);
+    }
   }
   const commandOptions = useMemo(() => buildKeybindingCommandOptions(keybindings), [keybindings]);
   const whenVariables = useMemo(() => buildWhenVariableOptions(), []);
@@ -1521,7 +1531,7 @@ export function KeybindingsSettingsPanel() {
 
   const listProps: KeybindingsListProps = {
     rows,
-    allRows: rows,
+    allRows,
     commandOptions,
     variables: whenVariables,
     savingCommand,
@@ -1538,6 +1548,16 @@ export function KeybindingsSettingsPanel() {
         {...searchableSetting("keybindings")}
         headerAction={
           <div className="flex items-center gap-1.5">
+            <Button
+              size="xs"
+              variant={customOnly ? "secondary" : "ghost-muted"}
+              aria-label="Custom only"
+              aria-pressed={customOnly}
+              onClick={() => setCustomOnly((value) => !value)}
+            >
+              <ListFilterIcon className="size-3.5 sm:hidden" />
+              <span className="hidden sm:inline">Custom only</span>
+            </Button>
             <ExpandableHeaderSearch
               query={query}
               onChange={setQuery}

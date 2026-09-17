@@ -4,6 +4,7 @@ import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 
 import {
   buildKeybindingRows,
+  filterKeybindingRows,
   buildKeybindingCommandOptions,
   buildWhenVariableOptions,
   commandLabel,
@@ -78,6 +79,24 @@ describe("KeybindingsSettings.logic", () => {
         source: "Custom",
       }),
     ]);
+  });
+
+  it("filters custom overrides while retaining conflicts with hidden defaults", () => {
+    const original = DEFAULT_RESOLVED_KEYBINDINGS.find(
+      (binding) => binding.command === "terminal.toggle",
+    )!;
+    const custom = { ...original, command: "terminal.split" as const };
+    const bindings = [...DEFAULT_RESOLVED_KEYBINDINGS, custom];
+    const allRows = buildKeybindingRows(bindings, "");
+    const rows = filterKeybindingRows(allRows, "", true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ command: "terminal.split", source: "Custom" });
+    expect(rows[0]?.conflicts).toContain("Terminal: Toggle");
+    expect(filterKeybindingRows(allRows, "split", true)).toHaveLength(1);
+    expect(filterKeybindingRows(allRows, "toggle", true)).toHaveLength(0);
+    expect(
+      filterKeybindingRows(buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, ""), "", true),
+    ).toHaveLength(0);
   });
 
   it("captures platform-specific mod shortcuts", () => {

@@ -167,7 +167,6 @@ export function buildKeybindingRows(
   keybindings: ResolvedKeybindingsConfig,
   query: string,
 ): ReadonlyArray<KeybindingRow> {
-  const normalizedQuery = query.trim().toLowerCase();
   const rows = keybindings.map((binding, index) => {
     const defaultBinding = defaultBindingForBinding(binding);
     const key = shortcutToKeybindingInput(binding.shortcut);
@@ -202,11 +201,21 @@ export function buildKeybindingRows(
     return left.key.localeCompare(right.key);
   });
 
-  if (normalizedQuery.length === 0) {
-    return rowsWithConflicts;
+  return filterKeybindingRows(rowsWithConflicts, query, false);
+}
+
+export function filterKeybindingRows(
+  rows: ReadonlyArray<KeybindingRow>,
+  query: string,
+  customOnly: boolean,
+): ReadonlyArray<KeybindingRow> {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length === 0 && !customOnly) {
+    return rows;
   }
 
-  return rowsWithConflicts.filter((row) => {
+  return rows.filter((row) => {
+    if (customOnly && row.source !== "Custom") return false;
     return (
       row.command.toLowerCase().includes(normalizedQuery) ||
       commandLabel(row.command).toLowerCase().includes(normalizedQuery) ||
