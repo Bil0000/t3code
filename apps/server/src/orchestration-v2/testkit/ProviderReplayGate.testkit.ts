@@ -1,6 +1,7 @@
 export interface ProviderReplayGate {
   readonly beforeEmit: (label: string | undefined, signal?: AbortSignal) => Promise<void>;
   readonly hasReached: (label: string) => boolean;
+  readonly waitUntilReached: (label: string) => Promise<boolean>;
   readonly release: (label: string) => boolean;
   readonly releaseAll: () => void;
 }
@@ -10,6 +11,7 @@ interface GateState {
   released: boolean;
   readonly promise: Promise<void>;
   readonly resolve: () => void;
+  readonly arrival: PromiseWithResolvers<void>;
 }
 
 export function makeProviderReplayGate(labels: ReadonlyArray<string>): ProviderReplayGate {
@@ -27,6 +29,7 @@ export function makeProviderReplayGate(labels: ReadonlyArray<string>): ProviderR
       released: false,
       promise,
       resolve,
+      arrival: Promise.withResolvers<void>(),
     });
   }
 
@@ -40,6 +43,7 @@ export function makeProviderReplayGate(labels: ReadonlyArray<string>): ProviderR
         return Promise.resolve();
       }
       state.reached = true;
+      state.arrival.resolve();
       if (signal === undefined) {
         return state.promise;
       }
@@ -56,6 +60,12 @@ export function makeProviderReplayGate(labels: ReadonlyArray<string>): ProviderR
       });
     },
     hasReached: (label) => states.get(label)?.reached ?? false,
+    waitUntilReached: async (label) => {
+      const state = states.get(label);
+      if (state === undefined) return false;
+      await state.arrival.promise;
+      return true;
+    },
     release: (label) => {
       const state = states.get(label);
       if (state === undefined || state.released) {
