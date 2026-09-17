@@ -379,7 +379,7 @@ export function IssueCreateDialog({
       : null,
   );
   // A host with no templates to report, and a read that failed, both leave the blank form — which
-  // is what a repository with no templates offers anyway. Filing must never wait on the chooser.
+  // is what a repository with no templates offers anyway.
   const offer = templatesQuery.data ?? {
     capabilities: undefined,
     templates: [],
@@ -395,7 +395,8 @@ export function IssueCreateDialog({
   // Nothing to choose between is not a choice: a repository with no templates and nowhere else to
   // send a question opens straight onto the form, exactly as the host itself does.
   const hasChoice = offer.templates.length > 0 || offer.contactLinks.length > 0;
-  const choice: Choice | null = chosen ?? (hasChoice ? null : { kind: "blank" });
+  const choice: Choice | null =
+    chosen ?? (hasChoice || !offer.blankIssuesEnabled ? null : { kind: "blank" });
   const template: IssueTemplate | undefined =
     choice?.kind === "template"
       ? offer.templates.find((entry) => entry.key === choice.key)
@@ -442,8 +443,10 @@ export function IssueCreateDialog({
   // button is absent there, but the keyboard reaches this from every step of the dialog.
   const canFile =
     selected !== undefined &&
+    !templatesQuery.isPending &&
     can.create &&
     choice !== null &&
+    (choice.kind === "blank" ? offer.blankIssuesEnabled : template !== undefined) &&
     trimmedTitle.length > 0 &&
     complete &&
     !filing;
