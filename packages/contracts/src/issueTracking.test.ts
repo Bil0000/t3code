@@ -3,34 +3,39 @@ import * as Schema from "effect/Schema";
 
 import { WS_METHODS, WsRpcGroup } from "./rpc.ts";
 import {
-  LinearConnectInput,
-  LinearConnection,
-  LinearDisconnectInput,
-  LinearSetProjectBindingInput,
+  IssueTrackerConnectInput,
+  IssueTrackerConnection,
+  IssueTrackerDisconnectInput,
+  IssueTrackerBindInput,
 } from "./issueTracking.ts";
 
-describe("Linear connection contracts", () => {
+const decodeConnection = Schema.decodeUnknownSync(IssueTrackerConnection);
+const decodeDisconnect = Schema.decodeUnknownSync(IssueTrackerDisconnectInput);
+const decodeConnect = Schema.decodeUnknownSync(IssueTrackerConnectInput);
+const decodeBind = Schema.decodeUnknownSync(IssueTrackerBindInput);
+
+describe("Issue tracker connection contracts", () => {
   it("decodes more than one saved account without exposing tokens", () => {
-    const decoded = Schema.decodeUnknownSync(LinearConnection)({
+    const decoded = decodeConnection({
       status: "authenticated",
       hasStoredToken: true,
       accountName: "Ada",
       accountEmail: "ada@example.com",
-      teams: [],
+      projects: [],
       accounts: [
         {
           credentialId: "user-1",
           status: "authenticated",
           accountName: "Ada",
           accountEmail: "ada@example.com",
-          teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
+          projects: [{ id: "team-1", key: "ENG", name: "Engineering" }],
         },
         {
           credentialId: "user-2",
           status: "authenticated",
           accountName: "Grace",
           accountEmail: "grace@example.com",
-          teams: [{ id: "team-2", key: "OPS", name: "Operations" }],
+          projects: [{ id: "team-2", key: "OPS", name: "Operations" }],
         },
       ],
     });
@@ -40,65 +45,72 @@ describe("Linear connection contracts", () => {
   });
 
   it("keeps environment-account teams beside saved accounts", () => {
-    const decoded = Schema.decodeUnknownSync(LinearConnection)({
+    const decoded = decodeConnection({
       status: "authenticated",
       hasStoredToken: true,
       accountName: "Ada",
       accountEmail: null,
-      teams: [],
+      projects: [],
       accounts: [],
       environmentAccount: {
         status: "authenticated",
         accountName: "Environment account",
         accountEmail: null,
-        teams: [{ id: "team-env", key: "ENV", name: "Environment" }],
+        projects: [{ id: "team-env", key: "ENV", name: "Environment" }],
       },
     });
 
-    expect(decoded.environmentAccount?.teams[0]?.key).toBe("ENV");
+    expect(decoded.environmentAccount?.projects[0]?.key).toBe("ENV");
   });
 
-  it("accepts old disconnect calls without a payload", () => {
-    expect(Schema.decodeUnknownSync(LinearDisconnectInput)(undefined)).toBeUndefined();
+  it("requires a provider and an explicit credential for disconnect", () => {
+    expect(() => decodeDisconnect(undefined)).toThrow();
+    expect(() => decodeDisconnect({ credentialId: "user-1" })).toThrow();
   });
 
   it("accepts the credential being disconnected", () => {
-    expect(Schema.decodeUnknownSync(LinearDisconnectInput)({ credentialId: " user-1 " })).toEqual({
+    expect(decodeDisconnect({ provider: "linear", credentialId: " user-1 " })).toEqual({
+      provider: "linear",
       credentialId: "user-1",
     });
   });
 
   it("trims a new account token", () => {
-    expect(Schema.decodeUnknownSync(LinearConnectInput)({ token: " lin_api_new " })).toEqual({
+    expect(decodeConnect({ provider: "linear", token: " lin_api_new " })).toEqual({
+      provider: "linear",
       token: "lin_api_new",
     });
   });
 
   it("decodes one saved-credential project binding command", () => {
     expect(
-      Schema.decodeUnknownSync(LinearSetProjectBindingInput)({
+      decodeBind({
+        provider: "linear",
         projectId: " project_1 ",
-        binding: { credentialId: " user-1 ", teamKey: " ENG " },
+        binding: { credentialId: " user-1 ", repository: " ENG " },
       }),
     ).toEqual({
+      provider: "linear",
       projectId: "project_1",
-      binding: { credentialId: "user-1", teamKey: "ENG" },
+      binding: { credentialId: "user-1", repository: "ENG" },
     });
     expect(
-      Schema.decodeUnknownSync(LinearSetProjectBindingInput)({
+      decodeBind({
+        provider: "linear",
         projectId: "project_1",
-        binding: { teamKey: " ENV " },
+        binding: { repository: " ENV " },
       }),
-    ).toEqual({ projectId: "project_1", binding: { teamKey: "ENV" } });
+    ).toEqual({ provider: "linear", projectId: "project_1", binding: { repository: "ENV" } });
     expect(
-      Schema.decodeUnknownSync(LinearSetProjectBindingInput)({
+      decodeBind({
+        provider: "linear",
         projectId: "project_1",
         binding: null,
       }),
-    ).toEqual({ projectId: "project_1", binding: null });
+    ).toEqual({ provider: "linear", projectId: "project_1", binding: null });
   });
 
   it("routes the project binding command through the WebSocket RPC group", () => {
-    expect(WsRpcGroup.requests.has(WS_METHODS.linearSetProjectBinding)).toBe(true);
+    expect(WsRpcGroup.requests.has(WS_METHODS.issueTrackersBind)).toBe(true);
   });
 });

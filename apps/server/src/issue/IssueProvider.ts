@@ -1,6 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type {
+  IssueTrackerConnection,
+  IssueTrackerBindInput,
+  IssueTrackingError,
   IssueAction,
   IssueAssigneeCandidateList,
   IssueCapabilities,
@@ -172,12 +175,22 @@ export interface IssueAdapterSource extends IssueProviderContext {
   readonly repository: string;
 }
 
+export interface IssueTracker {
+  readonly status: Effect.Effect<IssueTrackerConnection, IssueTrackingError>;
+  readonly connect: (token: string) => Effect.Effect<IssueTrackerConnection, IssueTrackingError>;
+  readonly disconnect: (
+    credentialId: string,
+  ) => Effect.Effect<IssueTrackerConnection, IssueTrackingError>;
+  readonly bind: (input: IssueTrackerBindInput) => Effect.Effect<void, IssueTrackingError>;
+}
+
 /**
  * One host's issues. Implementations own their own tool and JSON shapes and hand back the neutral
  * types above; anything a host cannot do is declared in `capabilities` rather than failing at call
  * time.
  */
 export interface IssueAdapter {
+  readonly tracker?: IssueTracker;
   readonly kind: IssueProviderKind;
   readonly capabilities: IssueCapabilities;
 

@@ -8,6 +8,7 @@ import type {
 } from "@t3tools/contracts";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as LinearConnection from "./LinearConnection.ts";
 import * as LinearApi from "./LinearApi.ts";
 import { IssueProviderError, type IssueAdapter, type ProviderIssue } from "./IssueProvider.ts";
 
@@ -139,16 +140,17 @@ export const make = Effect.gen(function* () {
 
   return {
     kind: "linear",
+    tracker: yield* LinearConnection.make,
     capabilities: CAPABILITIES,
     resolveSource: (project) =>
       settings.getSettings.pipe(
         Effect.map((value) => {
-          const binding = value.issueTracking.linear.projectBindings[project.id];
+          const binding = value.issueTracking.connections.linear?.projectBindings[project.id];
           return binding == null
             ? null
             : {
                 host: "linear.app",
-                repository: binding.teamKey,
+                repository: binding.repository,
                 ...(binding.credentialId === undefined
                   ? {}
                   : { credentialId: binding.credentialId }),

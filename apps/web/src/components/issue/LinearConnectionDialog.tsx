@@ -28,7 +28,7 @@ export function LinearConnectionDialog({
   onOpenChange: (open: boolean) => void;
   onConnected: () => void;
 }) {
-  const connect = useAtomCommand(issueTrackingEnvironment.linearConnect, { reportFailure: false });
+  const connect = useAtomCommand(issueTrackingEnvironment.connect, { reportFailure: false });
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +63,7 @@ export function LinearConnectionDialog({
               setError(null);
               const result = await connect({
                 environmentId,
-                input: { token: token.trim() },
+                input: { provider: "linear", token: token.trim() },
               });
               setBusy(false);
               if (result._tag === "Failure") {

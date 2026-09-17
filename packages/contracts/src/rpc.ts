@@ -126,10 +126,11 @@ import {
 } from "./issue.ts";
 import {
   IssueTrackingError,
-  LinearConnectInput,
-  LinearConnection,
-  LinearDisconnectInput,
-  LinearSetProjectBindingInput,
+  IssueTrackerStatusInput,
+  IssueTrackerConnectInput,
+  IssueTrackerConnection,
+  IssueTrackerDisconnectInput,
+  IssueTrackerBindInput,
 } from "./issueTracking.ts";
 import {
   WorkItemMatchError,
@@ -474,10 +475,10 @@ export const WS_METHODS = {
   issuesInvalidate: "issues.invalidate",
 
   // Issue tracking connection methods
-  linearConnectionStatus: "linear.connectionStatus",
-  linearConnect: "linear.connect",
-  linearDisconnect: "linear.disconnect",
-  linearSetProjectBinding: "linear.setProjectBinding",
+  issueTrackersStatus: "issueTrackers.status",
+  issueTrackersConnect: "issueTrackers.connect",
+  issueTrackersDisconnect: "issueTrackers.disconnect",
+  issueTrackersBind: "issueTrackers.bind",
   workItemsGenerateTask: "workItems.generateTask",
   workItemsFindMatches: "workItems.findMatches",
 
@@ -1023,25 +1024,26 @@ const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
   error: IssueRpcError,
 });
 
-const WsLinearConnectionStatusRpc = Rpc.make(WS_METHODS.linearConnectionStatus, {
-  success: LinearConnection,
+const WsIssueTrackersStatusRpc = Rpc.make(WS_METHODS.issueTrackersStatus, {
+  payload: IssueTrackerStatusInput,
+  success: IssueTrackerConnection,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
-const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
-  payload: LinearConnectInput,
-  success: LinearConnection,
+const WsIssueTrackersConnectRpc = Rpc.make(WS_METHODS.issueTrackersConnect, {
+  payload: IssueTrackerConnectInput,
+  success: IssueTrackerConnection,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
-const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
-  payload: LinearDisconnectInput,
-  success: LinearConnection,
+const WsIssueTrackersDisconnectRpc = Rpc.make(WS_METHODS.issueTrackersDisconnect, {
+  payload: IssueTrackerDisconnectInput,
+  success: IssueTrackerConnection,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
-const WsLinearSetProjectBindingRpc = Rpc.make(WS_METHODS.linearSetProjectBinding, {
-  payload: LinearSetProjectBindingInput,
+const WsIssueTrackersBindRpc = Rpc.make(WS_METHODS.issueTrackersBind, {
+  payload: IssueTrackerBindInput,
   success: Schema.Void,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
@@ -1664,10 +1666,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesAssigneeCandidatesRpc,
   WsIssuesTemplatesRpc,
   WsIssuesInvalidateRpc,
-  WsLinearConnectionStatusRpc,
-  WsLinearConnectRpc,
-  WsLinearDisconnectRpc,
-  WsLinearSetProjectBindingRpc,
+  WsIssueTrackersStatusRpc,
+  WsIssueTrackersConnectRpc,
+  WsIssueTrackersDisconnectRpc,
+  WsIssueTrackersBindRpc,
   WsWorkItemsGenerateTaskRpc,
   WsWorkItemsFindMatchesRpc,
   WsPullRequestsLabelCandidatesRpc,

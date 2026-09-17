@@ -12,32 +12,32 @@ const connectionState = vi.hoisted(() => ({
     hasStoredToken: true,
     accountName: "Ada" as string | null,
     accountEmail: "ada@example.com" as string | null,
-    teams: [] as ReadonlyArray<{ id: string; key: string; name: string }>,
+    projects: [] as ReadonlyArray<{ id: string; key: string; name: string }>,
     accounts: [] as ReadonlyArray<{
       credentialId: string;
       status: "authenticated" | "unauthenticated" | "unverified";
       accountName: string;
       accountEmail: string | null;
-      teams: ReadonlyArray<{ id: string; key: string; name: string }>;
+      projects: ReadonlyArray<{ id: string; key: string; name: string }>;
     }>,
   } as {
     status: "authenticated" | "unauthenticated" | "unverified";
     hasStoredToken: boolean;
     accountName: string | null;
     accountEmail: string | null;
-    teams: ReadonlyArray<{ id: string; key: string; name: string }>;
+    projects: ReadonlyArray<{ id: string; key: string; name: string }>;
     accounts: ReadonlyArray<{
       credentialId: string;
       status: "authenticated" | "unauthenticated" | "unverified";
       accountName: string;
       accountEmail: string | null;
-      teams: ReadonlyArray<{ id: string; key: string; name: string }>;
+      projects: ReadonlyArray<{ id: string; key: string; name: string }>;
     }>;
     environmentAccount?: {
       status: "authenticated" | "unauthenticated" | "unverified";
       accountName: string;
       accountEmail: string | null;
-      teams: ReadonlyArray<{ id: string; key: string; name: string }>;
+      projects: ReadonlyArray<{ id: string; key: string; name: string }>;
     };
   },
   error: "Linear status failed" as string | null,
@@ -49,7 +49,7 @@ const commands = vi.hoisted(() => ({
   disconnect: vi.fn(),
 }));
 const settingsState = vi.hoisted(() => ({
-  projectBindings: {} as Record<string, { credentialId?: string; teamKey: string } | null>,
+  projectBindings: {} as Record<string, { credentialId?: string; repository: string } | null>,
 }));
 const projectsState = vi.hoisted(() => ({
   projects: [] as ReadonlyArray<{ id: string; title: string; environmentId: string }>,
@@ -70,8 +70,10 @@ vi.mock("../../hooks/useSettings", () => ({
   usePrimarySettings: (select: (settings: unknown) => unknown) =>
     select({
       issueTracking: {
-        linear: {
-          projectBindings: settingsState.projectBindings,
+        connections: {
+          linear: {
+            projectBindings: settingsState.projectBindings,
+          },
         },
       },
     }),
@@ -84,10 +86,10 @@ vi.mock("../../state/environments", () => ({
 vi.mock("../../state/entities", () => ({ useProjects: () => projectsState.projects }));
 vi.mock("../../state/issueTracking", () => ({
   issueTrackingEnvironment: {
-    linearStatus: vi.fn(),
-    linearConnect: "connect",
-    linearDisconnect: "disconnect",
-    linearSetProjectBinding: "binding",
+    status: vi.fn(),
+    connect: "connect",
+    disconnect: "disconnect",
+    bind: "binding",
   },
 }));
 vi.mock("../../state/query", async (importOriginal) => {
@@ -118,14 +120,14 @@ const ada = {
   status: "authenticated" as const,
   accountName: "Ada",
   accountEmail: "ada@example.com",
-  teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
+  projects: [{ id: "team-1", key: "ENG", name: "Engineering" }],
 };
 const grace = {
   credentialId: "user-2",
   status: "unverified" as const,
   accountName: "Grace",
   accountEmail: "grace@example.com",
-  teams: [{ id: "team-2", key: "OPS", name: "Operations" }],
+  projects: [{ id: "team-2", key: "OPS", name: "Operations" }],
 };
 
 function textContent(node: ReactNode): string {
@@ -148,7 +150,7 @@ describe("Linear integration settings", () => {
       hasStoredToken: true,
       accountName: "Ada",
       accountEmail: "ada@example.com",
-      teams: [],
+      projects: [],
       accounts: [ada, grace],
     };
     connectionState.error = "Linear status failed";
@@ -178,8 +180,8 @@ describe("Linear integration settings", () => {
     connectionState.error = null;
     projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
     settingsState.projectBindings = {
-      project_1: { credentialId: "user-1", teamKey: "ENG" },
-      deleted_project: { credentialId: "user-2", teamKey: "OPS" },
+      project_1: { credentialId: "user-1", repository: "ENG" },
+      deleted_project: { credentialId: "user-2", repository: "OPS" },
     };
     commands.disconnect.mockResolvedValue(AsyncResult.success(undefined));
 
@@ -206,7 +208,7 @@ describe("Linear integration settings", () => {
 
     expect(commands.disconnect).toHaveBeenCalledWith({
       environmentId: "primary",
-      input: { credentialId: "user-1" },
+      input: { provider: "linear", credentialId: "user-1" },
     });
     expect(commands.invalidate).toHaveBeenCalledWith({ environmentId: "primary", input: {} });
   });
@@ -252,8 +254,8 @@ describe("Linear integration settings", () => {
     connectionState.error = null;
     projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
     settingsState.projectBindings = {
-      project_1: { credentialId: "user-1", teamKey: "ENG" },
-      deleted_project: { credentialId: "user-2", teamKey: "OPS" },
+      project_1: { credentialId: "user-1", repository: "ENG" },
+      deleted_project: { credentialId: "user-2", repository: "OPS" },
     };
     commands.binding.mockResolvedValue(AsyncResult.success(undefined));
 
@@ -275,8 +277,9 @@ describe("Linear integration settings", () => {
     expect(commands.binding).toHaveBeenLastCalledWith({
       environmentId: "primary",
       input: {
+        provider: "linear",
         projectId: "project_1",
-        binding: { credentialId: "user-2", teamKey: "OPS" },
+        binding: { credentialId: "user-2", repository: "OPS" },
       },
     });
 
@@ -297,7 +300,7 @@ describe("Linear integration settings", () => {
     await Promise.resolve();
     expect(commands.binding).toHaveBeenLastCalledWith({
       environmentId: "primary",
-      input: { projectId: "project_1", binding: null },
+      input: { provider: "linear", projectId: "project_1", binding: null },
     });
     expect(commands.invalidate).toHaveBeenCalledWith({ environmentId: "primary", input: {} });
   });
@@ -306,7 +309,7 @@ describe("Linear integration settings", () => {
     connectionState.error = null;
     projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
     settingsState.projectBindings = {
-      project_1: { credentialId: "missing-user", teamKey: "GONE" },
+      project_1: { credentialId: "missing-user", repository: "GONE" },
     };
 
     hooks.beginRender();
@@ -335,13 +338,13 @@ describe("Linear integration settings", () => {
       hasStoredToken: false,
       accountName: null,
       accountEmail: null,
-      teams: [],
+      projects: [],
       accounts: [],
     };
     connectionState.error = null;
     projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
     settingsState.projectBindings = {
-      project_1: { credentialId: "missing-user", teamKey: "GONE" },
+      project_1: { credentialId: "missing-user", repository: "GONE" },
     };
     commands.binding.mockResolvedValue(AsyncResult.success(undefined));
 
@@ -365,7 +368,7 @@ describe("Linear integration settings", () => {
 
     expect(commands.binding).toHaveBeenCalledWith({
       environmentId: "primary",
-      input: { projectId: "project_1", binding: null },
+      input: { provider: "linear", projectId: "project_1", binding: null },
     });
     expect(commands.invalidate).toHaveBeenCalledWith({ environmentId: "primary", input: {} });
   });
@@ -376,7 +379,7 @@ describe("Linear integration settings", () => {
       hasStoredToken: false,
       accountName: "Environment account",
       accountEmail: null,
-      teams: [
+      projects: [
         { id: "team-1", key: "ENG", name: "Engineering" },
         { id: "team-2", key: "OPS", name: "Operations" },
       ],
@@ -386,7 +389,7 @@ describe("Linear integration settings", () => {
       status: "authenticated",
       accountName: "Environment account",
       accountEmail: null,
-      teams: connectionState.data.teams,
+      projects: connectionState.data.projects,
     };
     connectionState.error = null;
     projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
@@ -413,7 +416,7 @@ describe("Linear integration settings", () => {
 
     expect(commands.binding).toHaveBeenLastCalledWith({
       environmentId: "primary",
-      input: { projectId: "project_1", binding: { teamKey: "OPS" } },
+      input: { provider: "linear", projectId: "project_1", binding: { repository: "OPS" } },
     });
 
     hooks.beginRender();
@@ -433,7 +436,7 @@ describe("Linear integration settings", () => {
 
     expect(commands.binding).toHaveBeenLastCalledWith({
       environmentId: "primary",
-      input: { projectId: "project_1", binding: null },
+      input: { provider: "linear", projectId: "project_1", binding: null },
     });
   });
 
@@ -443,21 +446,21 @@ describe("Linear integration settings", () => {
       hasStoredToken: true,
       accountName: "Saved account",
       accountEmail: null,
-      teams: [],
+      projects: [],
       accounts: [
         {
           credentialId: "saved-user",
           status: "authenticated",
           accountName: "Saved account",
           accountEmail: null,
-          teams: [{ id: "team-saved", key: "SAVED", name: "Saved" }],
+          projects: [{ id: "team-saved", key: "SAVED", name: "Saved" }],
         },
       ],
       environmentAccount: {
         status: "authenticated",
         accountName: "Environment account",
         accountEmail: null,
-        teams: [{ id: "team-env", key: "ENV", name: "Environment" }],
+        projects: [{ id: "team-env", key: "ENV", name: "Environment" }],
       },
     };
     connectionState.error = null;
@@ -476,18 +479,18 @@ describe("Linear integration settings", () => {
       hasStoredToken: false,
       accountName: null,
       accountEmail: null,
-      teams: [],
+      projects: [],
       accounts: [],
       environmentAccount: {
         status: "unverified",
         accountName: "Environment account",
         accountEmail: null,
-        teams: [],
+        projects: [],
       },
     };
     connectionState.error = null;
     projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
-    settingsState.projectBindings = { project_1: { teamKey: "ENG" } };
+    settingsState.projectBindings = { project_1: { repository: "ENG" } };
     commands.binding.mockResolvedValue(AsyncResult.success(undefined));
 
     hooks.beginRender();
@@ -508,7 +511,7 @@ describe("Linear integration settings", () => {
 
     expect(commands.binding).toHaveBeenCalledWith({
       environmentId: "primary",
-      input: { projectId: "project_1", binding: null },
+      input: { provider: "linear", projectId: "project_1", binding: null },
     });
   });
 
@@ -519,7 +522,7 @@ describe("Linear integration settings", () => {
     expect(visitElements(settings, (element) => element.type === Button)?.props.disabled).toBe(
       true,
     );
-    expect(issueTrackingEnvironment.linearStatus).not.toHaveBeenCalled();
+    expect(issueTrackingEnvironment.status).not.toHaveBeenCalled();
     expect(
       visitElements(settings, (element) => element.type === LinearConnectionDialog),
     ).toBeNull();

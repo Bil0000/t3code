@@ -118,6 +118,7 @@ export type IssueError = IssueUnavailableError | IssueOperationError;
 export class IssueService extends Context.Service<
   IssueService,
   {
+    readonly tracker: IssueProviderRegistry.IssueProviderRegistry["Service"]["tracker"];
     readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
     readonly activity: (input: IssueRef) => Effect.Effect<IssueActivity, IssueError>;
@@ -1666,6 +1667,7 @@ export const make = Effect.gen(function* () {
       );
 
   return IssueService.of({
+    tracker: registry.tracker,
     list,
     detail,
     activity,

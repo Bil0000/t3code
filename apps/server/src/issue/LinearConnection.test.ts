@@ -21,7 +21,7 @@ const account = (credentialId: string) => ({
   status: "authenticated" as const,
   accountName: credentialId,
   accountEmail: null,
-  teams: [],
+  projects: [],
 });
 const PROJECT_ID = "project_1" as ProjectId;
 
@@ -30,7 +30,7 @@ const connection = (...credentialIds: ReadonlyArray<string>) => ({
   hasStoredToken: credentialIds.length > 0,
   accountName: credentialIds[0] ?? null,
   accountEmail: null,
-  teams: [],
+  projects: [],
   accounts: credentialIds.map(account),
 });
 
@@ -60,7 +60,6 @@ it.effect("adds an account without remapping existing projects", () =>
           assert.strictEqual(token, "new-token");
           return Effect.succeed({
             ...connection("user-1", "user-2"),
-            connectedCredentialId: "user-2",
           });
         },
       }),
@@ -72,9 +71,9 @@ it("emits tombstones only for bindings owned by the disconnected account", () =>
   assert.deepStrictEqual(
     clearCredentialBindings(
       {
-        project_1: { credentialId: "user-1", teamKey: "ENG" },
-        project_2: { credentialId: "user-2", teamKey: "OPS" },
-        project_3: { credentialId: "user-1", teamKey: "MOBILE" },
+        project_1: { credentialId: "user-1", repository: "ENG" },
+        project_2: { credentialId: "user-2", repository: "OPS" },
+        project_3: { credentialId: "user-1", repository: "MOBILE" },
       },
       "user-1",
     ),
@@ -89,7 +88,7 @@ it.effect("rejects project bindings outside the selected saved account", () => {
       accounts: [
         {
           ...account("user-1"),
-          teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
+          projects: [{ id: "team-1", key: "ENG", name: "Engineering" }],
         },
       ],
     }),
@@ -99,19 +98,19 @@ it.effect("rejects project bindings outside the selected saved account", () => {
     const invalidCredential = yield* Effect.flip(
       setLinearProjectBinding({
         projectId: PROJECT_ID,
-        binding: { credentialId: "user-2", teamKey: "ENG" },
+        binding: { credentialId: "user-2", repository: "ENG" },
       }),
     );
     const invalidTeam = yield* Effect.flip(
       setLinearProjectBinding({
         projectId: PROJECT_ID,
-        binding: { credentialId: "user-1", teamKey: "OPS" },
+        binding: { credentialId: "user-1", repository: "OPS" },
       }),
     );
     const unavailableAccount = yield* Effect.flip(
       setLinearProjectBinding({
         projectId: PROJECT_ID,
-        binding: { credentialId: "user-3", teamKey: "ENG" },
+        binding: { credentialId: "user-3", repository: "ENG" },
       }).pipe(
         Effect.provideService(
           LinearApi.LinearApi,
@@ -122,7 +121,7 @@ it.effect("rejects project bindings outside the selected saved account", () => {
                 {
                   ...account("user-3"),
                   status: "unverified",
-                  teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
+                  projects: [{ id: "team-1", key: "ENG", name: "Engineering" }],
                 },
               ],
             }),
@@ -133,7 +132,7 @@ it.effect("rejects project bindings outside the selected saved account", () => {
     const unavailableEnvironment = yield* Effect.flip(
       setLinearProjectBinding({
         projectId: PROJECT_ID,
-        binding: { teamKey: "ENV" },
+        binding: { repository: "ENV" },
       }),
     );
     assert.ok(LinearApi.isLinearApiError(invalidCredential));
@@ -144,32 +143,32 @@ it.effect("rejects project bindings outside the selected saved account", () => {
       [invalidCredential, invalidTeam, unavailableAccount, unavailableEnvironment].map((error) => ({
         projectId: error.projectId,
         credentialId: error.credentialId,
-        teamKey: error.teamKey,
+        repository: error.teamKey,
         bindingRejection: error.bindingRejection,
       })),
       [
         {
           projectId: PROJECT_ID,
           credentialId: "user-2",
-          teamKey: "ENG",
+          repository: "ENG",
           bindingRejection: "unknown-credential",
         },
         {
           projectId: PROJECT_ID,
           credentialId: "user-1",
-          teamKey: "OPS",
+          repository: "OPS",
           bindingRejection: "team-unavailable",
         },
         {
           projectId: PROJECT_ID,
           credentialId: "user-3",
-          teamKey: "ENG",
+          repository: "ENG",
           bindingRejection: "account-unavailable",
         },
         {
           projectId: PROJECT_ID,
           credentialId: undefined,
-          teamKey: "ENV",
+          repository: "ENV",
           bindingRejection: "environment-account-unavailable",
         },
       ],
@@ -180,7 +179,7 @@ it.effect("rejects project bindings outside the selected saved account", () => {
     assert.match(unavailableEnvironment.detail, /ENV/u);
 
     const settings = yield* ServerSettings.ServerSettingsService;
-    assert.deepStrictEqual((yield* settings.getSettings).issueTracking.linear.projectBindings, {});
+    assert.deepStrictEqual((yield* settings.getSettings).issueTracking.connections, {});
   }).pipe(
     Effect.provide(
       Layer.mergeAll(Layer.succeed(LinearApi.LinearApi, api), ServerSettings.layerTest()),
@@ -197,16 +196,20 @@ it.effect("clears a project binding without requiring a connected account", () =
     yield* setLinearProjectBinding({ projectId: PROJECT_ID, binding: null });
 
     const settings = yield* ServerSettings.ServerSettingsService;
-    assert.isNull((yield* settings.getSettings).issueTracking.linear.projectBindings[PROJECT_ID]);
+    assert.isNull(
+      (yield* settings.getSettings).issueTracking.connections.linear?.projectBindings[PROJECT_ID],
+    );
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(LinearApi.LinearApi, api),
         ServerSettings.layerTest({
           issueTracking: {
-            linear: {
-              projectBindings: {
-                [PROJECT_ID]: { credentialId: "user-1", teamKey: "ENG" },
+            connections: {
+              linear: {
+                projectBindings: {
+                  [PROJECT_ID]: { credentialId: "user-1", repository: "ENG" },
+                },
               },
             },
           },
@@ -228,7 +231,7 @@ it.effect("serializes environment-team binding with account disconnect", () =>
             status: "authenticated",
             accountName: "Environment account",
             accountEmail: null,
-            teams: [{ id: "team-env", key: "ENV", name: "Environment" }],
+            projects: [{ id: "team-env", key: "ENV", name: "Environment" }],
           },
         }),
         disconnect: () =>
@@ -242,9 +245,11 @@ it.effect("serializes environment-team binding with account disconnect", () =>
         Layer.succeed(LinearApi.LinearApi, api),
         ServerSettings.layerTest({
           issueTracking: {
-            linear: {
-              projectBindings: {
-                [PROJECT_ID]: { credentialId: "user-1", teamKey: "ENG" },
+            connections: {
+              linear: {
+                projectBindings: {
+                  [PROJECT_ID]: { credentialId: "user-1", repository: "ENG" },
+                },
               },
             },
           },
@@ -257,7 +262,7 @@ it.effect("serializes environment-team binding with account disconnect", () =>
         yield* Deferred.await(disconnectStarted);
         const bind = yield* setLinearProjectBinding({
           projectId: PROJECT_ID,
-          binding: { teamKey: "ENV" },
+          binding: { repository: "ENV" },
         }).pipe(Effect.forkChild);
 
         yield* Deferred.succeed(releaseDisconnect, undefined);
@@ -266,9 +271,12 @@ it.effect("serializes environment-team binding with account disconnect", () =>
 
         const settings = yield* ServerSettings.ServerSettingsService;
         const current = yield* settings.getSettings;
-        assert.deepStrictEqual(current.issueTracking.linear.projectBindings[PROJECT_ID], {
-          teamKey: "ENV",
-        });
+        assert.deepStrictEqual(
+          current.issueTracking.connections.linear?.projectBindings[PROJECT_ID],
+          {
+            repository: "ENV",
+          },
+        );
       }).pipe(Effect.provide(layer));
     }),
   ),
@@ -283,12 +291,14 @@ it.effect("serializes project binding writes with account disconnect", () =>
       let current = {
         ...DEFAULT_SERVER_SETTINGS,
         issueTracking: {
-          linear: {
-            ...DEFAULT_SERVER_SETTINGS.issueTracking.linear,
-            projectBindings: {} as Record<
-              ProjectId,
-              null | { readonly credentialId: string; readonly teamKey: string }
-            >,
+          connections: {
+            linear: {
+              ...DEFAULT_SERVER_SETTINGS.issueTracking.connections.linear,
+              projectBindings: {} as Record<
+                ProjectId,
+                null | { readonly credentialId: string; readonly repository: string }
+              >,
+            },
           },
         },
       };
@@ -299,7 +309,7 @@ it.effect("serializes project binding writes with account disconnect", () =>
             ? [
                 {
                   ...account("user-1"),
-                  teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
+                  projects: [{ id: "team-1", key: "ENG", name: "Engineering" }],
                 },
               ]
             : [],
@@ -314,18 +324,20 @@ it.effect("serializes project binding writes with account disconnect", () =>
         getSettings: Effect.sync(() => current),
         updateSettings: (patch: {
           readonly issueTracking?: {
-            readonly linear?: {
-              readonly projectBindings?: Readonly<
-                Record<
-                  ProjectId,
-                  null | { readonly credentialId: string; readonly teamKey: string }
-                >
-              >;
+            readonly connections?: {
+              readonly linear?: {
+                readonly projectBindings?: Readonly<
+                  Record<
+                    ProjectId,
+                    null | { readonly credentialId: string; readonly repository: string }
+                  >
+                >;
+              };
             };
           };
         }) =>
           Effect.gen(function* () {
-            const binding = patch.issueTracking?.linear?.projectBindings?.[PROJECT_ID];
+            const binding = patch.issueTracking?.connections?.linear?.projectBindings?.[PROJECT_ID];
             if (binding !== undefined && binding !== null) {
               yield* Deferred.succeed(bindingStarted, undefined);
               yield* Deferred.await(releaseBinding);
@@ -333,11 +345,13 @@ it.effect("serializes project binding writes with account disconnect", () =>
             current = {
               ...current,
               issueTracking: {
-                linear: {
-                  ...current.issueTracking.linear,
-                  projectBindings: {
-                    ...current.issueTracking.linear.projectBindings,
-                    ...(binding === undefined ? {} : { [PROJECT_ID]: binding }),
+                connections: {
+                  linear: {
+                    ...current.issueTracking.connections.linear,
+                    projectBindings: {
+                      ...current.issueTracking.connections.linear?.projectBindings,
+                      ...(binding === undefined ? {} : { [PROJECT_ID]: binding }),
+                    },
                   },
                 },
               },
@@ -351,7 +365,7 @@ it.effect("serializes project binding writes with account disconnect", () =>
       );
       const binding = yield* setLinearProjectBinding({
         projectId: PROJECT_ID,
-        binding: { credentialId: "user-1", teamKey: "ENG" },
+        binding: { credentialId: "user-1", repository: "ENG" },
       }).pipe(Effect.provide(layer), Effect.forkChild);
       yield* Deferred.await(bindingStarted);
       const disconnect = yield* disconnectLinearAccount({ credentialId: "user-1" }).pipe(
@@ -365,7 +379,7 @@ it.effect("serializes project binding writes with account disconnect", () =>
       yield* Deferred.succeed(releaseBinding, undefined);
       yield* Fiber.join(binding);
       yield* Fiber.join(disconnect);
-      assert.isNull(current.issueTracking.linear.projectBindings[PROJECT_ID]);
+      assert.isNull(current.issueTracking.connections.linear?.projectBindings[PROJECT_ID]);
       assert.isFalse(connected);
     }),
   ),
@@ -385,9 +399,11 @@ it.effect("keeps a key when clearing its project bindings fails", () => {
     getSettings: Effect.succeed({
       ...DEFAULT_SERVER_SETTINGS,
       issueTracking: {
-        linear: {
-          ...DEFAULT_SERVER_SETTINGS.issueTracking.linear,
-          projectBindings: { [PROJECT_ID]: { credentialId: "user-1", teamKey: "ENG" } },
+        connections: {
+          linear: {
+            ...DEFAULT_SERVER_SETTINGS.issueTracking.connections.linear,
+            projectBindings: { [PROJECT_ID]: { credentialId: "user-1", repository: "ENG" } },
+          },
         },
       },
     }),
@@ -398,7 +414,7 @@ it.effect("keeps a key when clearing its project bindings fails", () => {
   } as unknown as ServerSettings.ServerSettingsService["Service"]);
 
   return Effect.gen(function* () {
-    const result = yield* Effect.exit(disconnectLinearAccount(undefined));
+    const result = yield* Effect.exit(disconnectLinearAccount({ credentialId: "user-1" }));
     assert.isTrue(Exit.isFailure(result));
     assert.isTrue(keyStored);
   }).pipe(
@@ -428,18 +444,23 @@ it.effect("restores project bindings when credential deletion fails", () => {
     assert.strictEqual(error._tag, "LinearApiError");
 
     const settings = yield* ServerSettings.ServerSettingsService;
-    assert.deepStrictEqual((yield* settings.getSettings).issueTracking.linear.projectBindings, {
-      [PROJECT_ID]: { credentialId: "user-1", teamKey: "ENG" },
-    });
+    assert.deepStrictEqual(
+      (yield* settings.getSettings).issueTracking.connections.linear?.projectBindings,
+      {
+        [PROJECT_ID]: { credentialId: "user-1", repository: "ENG" },
+      },
+    );
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(LinearApi.LinearApi, api),
         ServerSettings.layerTest({
           issueTracking: {
-            linear: {
-              projectBindings: {
-                [PROJECT_ID]: { credentialId: "user-1", teamKey: "ENG" },
+            connections: {
+              linear: {
+                projectBindings: {
+                  [PROJECT_ID]: { credentialId: "user-1", repository: "ENG" },
+                },
               },
             },
           },

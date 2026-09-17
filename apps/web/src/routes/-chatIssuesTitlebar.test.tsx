@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsIcon } from "lucide-react";
-import type { IssueListEntry, LinearProjectBinding, ProjectId } from "@t3tools/contracts";
+import type { IssueListEntry, IssueTrackerProjectBinding, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../test/reactElementTree";
@@ -194,10 +194,10 @@ describe("IssuesColumn", () => {
     const project_2 = "project_2" as ProjectId;
     const deleted = "deleted" as ProjectId;
     const bindings = {
-      [project_1]: { credentialId: "user-1", teamKey: "ENG" },
+      [project_1]: { credentialId: "user-1", repository: "ENG" },
       [project_2]: null,
-      [deleted]: { credentialId: "user-2", teamKey: "OPS" },
-    } satisfies Readonly<Record<ProjectId, LinearProjectBinding | null>>;
+      [deleted]: { credentialId: "user-2", repository: "OPS" },
+    } satisfies Readonly<Record<ProjectId, IssueTrackerProjectBinding | null>>;
 
     expect(stabilizeLinearProviderSummary([github], [project_1, project_2], bindings)).toEqual([
       github,
@@ -248,7 +248,7 @@ describe("IssuesColumn", () => {
     const projectId = "project_1" as ProjectId;
     const environmentTeam = hasLinearManagementState(
       { status: "unauthenticated", hasStoredToken: false },
-      { projectBindings: { [projectId]: { teamKey: "ENG" } } },
+      { projectBindings: { [projectId]: { repository: "ENG" } } },
     );
 
     expect(stabilizeLinearProviderSummary([linear], [projectId], {}, environmentTeam)).toEqual([
@@ -260,7 +260,7 @@ describe("IssuesColumn", () => {
     expect(
       hasLinearManagementState(
         { status: "unverified", hasStoredToken: false },
-        { projectBindings: { project_1: { teamKey: "ENG" } } },
+        { projectBindings: { project_1: { repository: "ENG" } } },
       ),
     ).toBe(true);
     expect(

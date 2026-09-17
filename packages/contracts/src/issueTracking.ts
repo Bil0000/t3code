@@ -2,59 +2,65 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { LinearProjectBinding } from "./settings.ts";
+import { IssueProviderKind } from "./issue.ts";
+import { IssueTrackerProjectBinding } from "./settings.ts";
 
-export const LinearTeam = Schema.Struct({
+export const IssueTrackerProject = Schema.Struct({
   id: TrimmedNonEmptyString,
   key: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
 });
-export type LinearTeam = typeof LinearTeam.Type;
+export type IssueTrackerProject = typeof IssueTrackerProject.Type;
 
-export const LinearAccount = Schema.Struct({
+export const IssueTrackerAccount = Schema.Struct({
   credentialId: TrimmedNonEmptyString,
   status: Schema.Literals(["authenticated", "unauthenticated", "unverified"]),
   accountName: TrimmedNonEmptyString,
   accountEmail: Schema.NullOr(TrimmedNonEmptyString),
-  teams: Schema.Array(LinearTeam),
+  projects: Schema.Array(IssueTrackerProject),
 });
-export type LinearAccount = typeof LinearAccount.Type;
+export type IssueTrackerAccount = typeof IssueTrackerAccount.Type;
 
-export const LinearEnvironmentAccount = Schema.Struct({
+export const IssueTrackerEnvironmentAccount = Schema.Struct({
   status: Schema.Literals(["authenticated", "unauthenticated", "unverified"]),
   accountName: TrimmedNonEmptyString,
   accountEmail: Schema.NullOr(TrimmedNonEmptyString),
-  teams: Schema.Array(LinearTeam),
+  projects: Schema.Array(IssueTrackerProject),
 });
-export type LinearEnvironmentAccount = typeof LinearEnvironmentAccount.Type;
+export type IssueTrackerEnvironmentAccount = typeof IssueTrackerEnvironmentAccount.Type;
 
-export const LinearConnection = Schema.Struct({
+export const IssueTrackerConnection = Schema.Struct({
   status: Schema.Literals(["authenticated", "unauthenticated", "unverified"]),
   hasStoredToken: Schema.Boolean,
   accountName: Schema.NullOr(TrimmedNonEmptyString),
   accountEmail: Schema.NullOr(TrimmedNonEmptyString),
-  teams: Schema.Array(LinearTeam),
-  accounts: Schema.Array(LinearAccount).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  environmentAccount: Schema.optionalKey(LinearEnvironmentAccount),
+  projects: Schema.Array(IssueTrackerProject),
+  accounts: Schema.Array(IssueTrackerAccount).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  environmentAccount: Schema.optionalKey(IssueTrackerEnvironmentAccount),
 });
-export type LinearConnection = typeof LinearConnection.Type;
+export type IssueTrackerConnection = typeof IssueTrackerConnection.Type;
 
-export const LinearConnectInput = Schema.Struct({
+export const IssueTrackerStatusInput = Schema.Struct({ provider: IssueProviderKind });
+export type IssueTrackerStatusInput = typeof IssueTrackerStatusInput.Type;
+
+export const IssueTrackerConnectInput = Schema.Struct({
+  provider: IssueProviderKind,
   token: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
 });
-export type LinearConnectInput = typeof LinearConnectInput.Type;
+export type IssueTrackerConnectInput = typeof IssueTrackerConnectInput.Type;
 
-export const LinearDisconnectInput = Schema.Union([
-  Schema.Struct({ credentialId: TrimmedNonEmptyString }),
-  Schema.Undefined,
-]);
-export type LinearDisconnectInput = typeof LinearDisconnectInput.Type;
-
-export const LinearSetProjectBindingInput = Schema.Struct({
-  projectId: ProjectId,
-  binding: Schema.NullOr(LinearProjectBinding),
+export const IssueTrackerDisconnectInput = Schema.Struct({
+  provider: IssueProviderKind,
+  credentialId: TrimmedNonEmptyString,
 });
-export type LinearSetProjectBindingInput = typeof LinearSetProjectBindingInput.Type;
+export type IssueTrackerDisconnectInput = typeof IssueTrackerDisconnectInput.Type;
+
+export const IssueTrackerBindInput = Schema.Struct({
+  provider: IssueProviderKind,
+  projectId: ProjectId,
+  binding: Schema.NullOr(IssueTrackerProjectBinding),
+});
+export type IssueTrackerBindInput = typeof IssueTrackerBindInput.Type;
 
 export class IssueTrackingError extends Schema.TaggedError<IssueTrackingError>()(
   "IssueTrackingError",

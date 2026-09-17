@@ -231,3 +231,29 @@ it.effect("refines one unknown remote before de-duplicating its worktrees", () =
     );
   }),
 );
+
+it.effect("routes account management by provider and rejects unsupported trackers", () =>
+  Effect.gen(function* () {
+    const tracker = {
+      status: Effect.succeed({
+        status: "authenticated",
+        hasStoredToken: false,
+        accountName: null,
+        accountEmail: null,
+        projects: [],
+        accounts: [],
+      } as const),
+      connect: () => Effect.die("unused"),
+      disconnect: () => Effect.die("unused"),
+      bind: () => Effect.void,
+    };
+    const registry = yield* fromProviders([
+      { kind: "jira", tracker } as unknown as IssueAdapter,
+    ]).pipe(Effect.provide(sourceControlLayer));
+    const resolved = yield* registry.tracker("jira", "status");
+    assert.strictEqual((yield* resolved.status).status, "authenticated");
+    const error = yield* Effect.flip(registry.tracker("github", "connect"));
+    assert.strictEqual(error.operation, "connect");
+    assert.include(error.detail, "not supported for github");
+  }),
+);

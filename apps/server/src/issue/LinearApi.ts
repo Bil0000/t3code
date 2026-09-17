@@ -8,8 +8,8 @@ import * as Semaphore from "effect/Semaphore";
 import type {
   IssueListState,
   IssueInvolvement,
-  LinearAccount,
-  LinearConnection,
+  IssueTrackerAccount,
+  IssueTrackerConnection,
 } from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -18,7 +18,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 const API_URL = "https://api.linear.app/graphql";
 const MAX_PAGE = 250;
 
-export const LINEAR_CREDENTIALS_SECRET = "linear.credentials";
+export const LINEAR_CREDENTIALS_SECRET = "issue-trackers.linear.credentials";
 
 const Credential = Schema.Struct({
   credentialId: Schema.String,
@@ -221,34 +221,18 @@ export class LinearApiError extends Schema.TaggedError<LinearApiError>()("Linear
 }
 export const isLinearApiError = Schema.is(LinearApiError);
 
-export class LinearAccountSelectionRequiredError extends Schema.TaggedError<LinearAccountSelectionRequiredError>()(
-  "LinearAccountSelectionRequiredError",
-  {},
-) {
-  readonly detail = "Choose the Linear account to disconnect.";
-
-  override get message(): string {
-    return this.detail;
-  }
-}
-export const isLinearAccountSelectionRequiredError = Schema.is(LinearAccountSelectionRequiredError);
-
 export type LinearUser = typeof User.Type;
 export type LinearIssue = typeof Issue.Type;
 export type LinearComment = typeof Comment.Type;
 export type LinearReaction = typeof Reaction.Type;
-export type LinearConnectResult = LinearConnection & {
-  readonly connectedCredentialId: string;
-};
-
 export class LinearApi extends Context.Service<
   LinearApi,
   {
-    readonly connection: Effect.Effect<LinearConnection, LinearApiError>;
-    readonly connect: (token: string) => Effect.Effect<LinearConnectResult, LinearApiError>;
-    readonly disconnect: (input?: {
+    readonly connection: Effect.Effect<IssueTrackerConnection, LinearApiError>;
+    readonly connect: (token: string) => Effect.Effect<IssueTrackerConnection, LinearApiError>;
+    readonly disconnect: (input: {
       readonly credentialId: string;
-    }) => Effect.Effect<LinearConnection, LinearApiError | LinearAccountSelectionRequiredError>;
+    }) => Effect.Effect<IssueTrackerConnection, LinearApiError>;
     readonly getViewer: (input: {
       readonly credentialId?: string;
     }) => Effect.Effect<LinearUser, LinearApiError>;
@@ -455,7 +439,7 @@ const make = Effect.gen(function* () {
       Effect.flatMap((key) => requestWithToken(key, operation, document, variables, schema)),
     );
 
-  const probeToken = (key: string): Effect.Effect<LinearAccount, LinearApiError> =>
+  const probeToken = (key: string): Effect.Effect<IssueTrackerAccount, LinearApiError> =>
     requestWithToken(key, "connection", CONNECTION_QUERY, {}, ConnectionEnvelope).pipe(
       Effect.flatMap(({ data }) =>
         data.viewer === null
@@ -470,7 +454,7 @@ const make = Effect.gen(function* () {
               status: "authenticated" as const,
               accountName: clean(data.viewer.name) ?? "Linear account",
               accountEmail: clean(data.viewer.email),
-              teams: data.teams.nodes.map((team) => ({
+              projects: data.teams.nodes.map((team) => ({
                 id: team.id,
                 key: team.key,
                 name: team.name,
@@ -479,7 +463,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const inspectCredential = (credential: Credential): Effect.Effect<LinearAccount> =>
+  const inspectCredential = (credential: Credential): Effect.Effect<IssueTrackerAccount> =>
     probeToken(credential.token).pipe(
       Effect.catch((error) =>
         Effect.succeed({
@@ -487,7 +471,7 @@ const make = Effect.gen(function* () {
           status: error.reason === "unauthenticated" ? "unauthenticated" : "unverified",
           accountName: "Linear account",
           accountEmail: null,
-          teams: [],
+          projects: [],
         } as const),
       ),
     );
@@ -499,10 +483,10 @@ const make = Effect.gen(function* () {
     );
 
   const connectionOf = (
-    accounts: ReadonlyArray<LinearAccount>,
+    accounts: ReadonlyArray<IssueTrackerAccount>,
     hasStoredToken: boolean,
-    environmentAccount?: LinearConnection["environmentAccount"],
-  ): LinearConnection => {
+    environmentAccount?: IssueTrackerConnection["environmentAccount"],
+  ): IssueTrackerConnection => {
     const primary =
       environmentAccount ??
       accounts.find((account) => account.status === "authenticated") ??
@@ -512,13 +496,13 @@ const make = Effect.gen(function* () {
       hasStoredToken,
       accountName: primary?.accountName ?? null,
       accountEmail: primary?.accountEmail ?? null,
-      teams: primary?.teams ?? [],
+      projects: primary?.projects ?? [],
       accounts,
       ...(environmentAccount === undefined ? {} : { environmentAccount }),
     };
   };
   const inspectEnvironmentAccount = Option.match(config.envToken, {
-    onNone: () => Effect.succeed<LinearConnection["environmentAccount"]>(undefined),
+    onNone: () => Effect.succeed<IssueTrackerConnection["environmentAccount"]>(undefined),
     onSome: (token) =>
       inspectToken(token).pipe(
         Effect.map((inspected) => {
@@ -530,14 +514,14 @@ const make = Effect.gen(function* () {
                   : ("unverified" as const),
               accountName: "Environment account",
               accountEmail: null,
-              teams: [],
+              projects: [],
             };
           }
           return {
             status: inspected.account.status,
             accountName: inspected.account.accountName,
             accountEmail: inspected.account.accountEmail,
-            teams: inspected.account.teams,
+            projects: inspected.account.projects,
           };
         }),
       ),
@@ -595,23 +579,14 @@ const make = Effect.gen(function* () {
           if (index === -1) credentials.push(credential);
           else credentials[index] = credential;
           yield* writeCredentials(credentials);
-          return {
-            ...(yield* connectionUnlocked),
-            connectedCredentialId: account.credentialId,
-          };
+          return yield* connectionUnlocked;
         }),
       ),
     disconnect: (input) =>
       credentialPoolMutex.withPermits(1)(
         Effect.gen(function* () {
           const credentials = yield* storedCredentials;
-          if (input === undefined && credentials.length > 1) {
-            return yield* new LinearAccountSelectionRequiredError();
-          }
-          const credentialId =
-            input?.credentialId ??
-            (credentials.length === 1 ? credentials[0]?.credentialId : undefined);
-          if (credentialId === undefined) return yield* connectionUnlocked;
+          const { credentialId } = input;
           const remaining = credentials.filter(
             (credential) => credential.credentialId !== credentialId,
           );

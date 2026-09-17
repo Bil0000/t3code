@@ -31,7 +31,7 @@ function memorySecrets(
   const service = ServerSecretStore.ServerSecretStore.of({
     get: (name) => {
       if (
-        name === "linear.credentials" &&
+        name === "issue-trackers.linear.credentials" &&
         credentialsWritten &&
         options.failCredentialReadsAfterWrite === true
       ) {
@@ -46,7 +46,7 @@ function memorySecrets(
     },
     set: (name, value) =>
       Effect.sync(() => {
-        if (name === "linear.credentials") credentialsWritten = true;
+        if (name === "issue-trackers.linear.credentials") credentialsWritten = true;
         values.set(name, value);
       }),
     create: (name, value) => Effect.sync(() => void values.set(name, value)),
@@ -70,7 +70,9 @@ function makeLayer(input: {
   const requests: Array<{ body: Record<string, unknown>; authorization: string | undefined }> = [];
   const secrets = memorySecrets(
     {
-      ...(input.credentials === undefined ? {} : { "linear.credentials": input.credentials }),
+      ...(input.credentials === undefined
+        ? {}
+        : { "issue-trackers.linear.credentials": input.credentials }),
     },
     {
       ...(input.failCredentialReadsAfterWrite === undefined
@@ -118,7 +120,7 @@ it.effect("reports a disconnected Linear account without making a request", () =
       hasStoredToken: false,
       accountName: null,
       accountEmail: null,
-      teams: [],
+      projects: [],
       accounts: [],
     });
     assert.strictEqual(response.mock.calls.length, 0);
@@ -181,9 +183,9 @@ it.effect("reports the environment account beside saved accounts", () => {
     const api = yield* LinearApi.LinearApi;
     const connection = yield* api.connection;
 
-    assert.strictEqual(connection.accounts[0]?.teams[0]?.key, "SAVED");
-    assert.strictEqual(connection.environmentAccount?.teams[0]?.key, "ENV");
-    assert.strictEqual(connection.teams[0]?.key, "ENV");
+    assert.strictEqual(connection.accounts[0]?.projects[0]?.key, "SAVED");
+    assert.strictEqual(connection.environmentAccount?.projects[0]?.key, "ENV");
+    assert.strictEqual(connection.projects[0]?.key, "ENV");
   }).pipe(Effect.provide(layer));
 });
 
@@ -268,7 +270,7 @@ it.effect("probes a new key before appending a second saved account", () => {
     response: (_body, authorization) => {
       if (authorization === "lin_api_two" && !newKeyProbed) {
         assert.deepStrictEqual(
-          decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
+          decodeJson(new TextDecoder().decode(values.get("issue-trackers.linear.credentials"))),
           decodeJson(pool(["user-1", "lin_api_one"])),
         );
         newKeyProbed = true;
@@ -291,13 +293,12 @@ it.effect("probes a new key before appending a second saved account", () => {
     const api = yield* LinearApi.LinearApi;
     const result = yield* api.connect("lin_api_two");
 
-    assert.strictEqual(result.connectedCredentialId, "user-2");
     assert.deepStrictEqual(
       result.accounts.map(({ credentialId }) => credentialId),
       ["user-1", "user-2"],
     );
     assert.deepStrictEqual(
-      decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
+      decodeJson(new TextDecoder().decode(values.get("issue-trackers.linear.credentials"))),
       decodeJson(pool(["user-1", "lin_api_one"], ["user-2", "lin_api_two"])),
     );
   }).pipe(Effect.provide(test.layer));
@@ -323,7 +324,9 @@ it.effect("keeps every account from concurrent connects", () => {
       concurrency: "unbounded",
     });
 
-    const saved = decodeJson(new TextDecoder().decode(values.get("linear.credentials"))) as {
+    const saved = decodeJson(
+      new TextDecoder().decode(values.get("issue-trackers.linear.credentials")),
+    ) as {
       readonly credentials: ReadonlyArray<{ readonly credentialId: string }>;
     };
     assert.deepStrictEqual(saved.credentials.map(({ credentialId }) => credentialId).toSorted(), [
@@ -353,7 +356,7 @@ it.effect("replaces a reconnected account without changing account order", () =>
     yield* api.connect("lin_api_new");
 
     assert.deepStrictEqual(
-      decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
+      decodeJson(new TextDecoder().decode(values.get("issue-trackers.linear.credentials"))),
       decodeJson(pool(["user-1", "lin_api_new"], ["user-2", "lin_api_two"])),
     );
   }).pipe(Effect.provide(layer));
@@ -374,7 +377,7 @@ it.effect("does not reread credential storage after disconnect commits", () => {
     const api = yield* LinearApi.LinearApi;
     assert.strictEqual((yield* api.disconnect({ credentialId: "user-1" })).accounts.length, 0);
     assert.deepStrictEqual(
-      decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
+      decodeJson(new TextDecoder().decode(values.get("issue-trackers.linear.credentials"))),
       decodeJson(pool()),
     );
   }).pipe(Effect.provide(layer));
@@ -419,7 +422,7 @@ it.effect("deletes only the selected saved account", () => {
     yield* disconnect({ credentialId: "user-1" });
 
     assert.deepStrictEqual(
-      decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
+      decodeJson(new TextDecoder().decode(values.get("issue-trackers.linear.credentials"))),
       decodeJson(pool(["user-2", "lin_api_two"])),
     );
   }).pipe(Effect.provide(layer));

@@ -1,5 +1,5 @@
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import type { LinearProjectBinding } from "@t3tools/contracts";
+import type { IssueTrackerProjectBinding } from "@t3tools/contracts";
 import { ChevronRightIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -29,22 +29,28 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 const UNMAPPED = "__unmapped__";
 
+const EMPTY_TRACKER_SETTINGS: {
+  projectBindings: Readonly<Record<string, IssueTrackerProjectBinding | null>>;
+} = { projectBindings: {} };
+
 export function LinearIntegrationSettings() {
   const environment = usePrimaryEnvironment();
   const supported = environment?.serverConfig?.environment.capabilities.issues === true;
   const environmentId = supported ? environment.environmentId : null;
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const linearSettings = usePrimarySettings((settings) => settings.issueTracking.linear);
+  const linearSettings =
+    usePrimarySettings((settings) => settings.issueTracking.connections.linear) ??
+    EMPTY_TRACKER_SETTINGS;
   const projectBindings = linearSettings.projectBindings;
   const connection = useEnvironmentQuery(
     environmentId === null
       ? null
-      : issueTrackingEnvironment.linearStatus({ environmentId, input: undefined }),
+      : issueTrackingEnvironment.status({ environmentId, input: { provider: "linear" } }),
   );
-  const disconnect = useAtomCommand(issueTrackingEnvironment.linearDisconnect, {
+  const disconnect = useAtomCommand(issueTrackingEnvironment.disconnect, {
     reportFailure: false,
   });
-  const saveProjectBinding = useAtomCommand(issueTrackingEnvironment.linearSetProjectBinding, {
+  const saveProjectBinding = useAtomCommand(issueTrackingEnvironment.bind, {
     reportFailure: false,
   });
   const [addAccountOpen, setAddAccountOpen] = useState(false);
@@ -64,13 +70,13 @@ export function LinearIntegrationSettings() {
   const singleKeyTeamMode = linear?.environmentAccount !== undefined;
   const hasCurrentProjectBinding = projects.some((project) => projectBindings[project.id] != null);
   const teamOptions = accounts.flatMap((account) =>
-    account.teams.map((team) => ({
+    account.projects.map((team) => ({
       value: JSON.stringify([account.credentialId, team.key]),
       label: `${account.accountName} — ${team.name} (${team.key})`,
-      binding: { credentialId: account.credentialId, teamKey: team.key },
+      binding: { credentialId: account.credentialId, repository: team.key },
     })),
   );
-  const environmentTeamOptions = (linear?.environmentAccount?.teams ?? []).map((team) => ({
+  const environmentTeamOptions = (linear?.environmentAccount?.projects ?? []).map((team) => ({
     value: team.key,
     label: `${linear?.environmentAccount?.accountName ?? linear?.accountName ?? "Linear"} — ${team.name} (${team.key})`,
   }));
@@ -91,14 +97,14 @@ export function LinearIntegrationSettings() {
 
   const setProjectBinding = (
     projectId: (typeof projects)[number]["id"],
-    binding: LinearProjectBinding | null,
+    binding: IssueTrackerProjectBinding | null,
   ) => {
     if (environmentId === null) return;
     void runCommand(
       () =>
         saveProjectBinding({
           environmentId,
-          input: { projectId, binding },
+          input: { provider: "linear", projectId, binding },
         }),
       refreshIssues,
     );
@@ -167,7 +173,7 @@ export function LinearIntegrationSettings() {
                       <span className="truncate text-xs text-destructive">Needs attention</span>
                     ) : null}
                     <span className="truncate text-xs text-muted-foreground">
-                      {account.teams.map((team) => `${team.name} (${team.key})`).join(", ")}
+                      {account.projects.map((team) => `${team.name} (${team.key})`).join(", ")}
                     </span>
                   </div>
                   <Button
@@ -237,8 +243,8 @@ export function LinearIntegrationSettings() {
                       binding == null
                         ? UNMAPPED
                         : binding.credentialId === undefined
-                          ? binding.teamKey
-                          : JSON.stringify([binding.credentialId, binding.teamKey]);
+                          ? binding.repository
+                          : JSON.stringify([binding.credentialId, binding.repository]);
                     const selectedOption = options.find((option) => option.value === value);
                     const bindingUnavailable = value !== UNMAPPED && selectedOption === undefined;
                     const selectedLabel = bindingUnavailable
@@ -260,7 +266,7 @@ export function LinearIntegrationSettings() {
                               return;
                             }
                             if (environmentTeamOptions.some((option) => option.value === next)) {
-                              setProjectBinding(project.id, { teamKey: next });
+                              setProjectBinding(project.id, { repository: next });
                               return;
                             }
                             setProjectBinding(
@@ -353,7 +359,7 @@ export function LinearIntegrationSettings() {
                   () =>
                     disconnect({
                       environmentId,
-                      input: { credentialId },
+                      input: { provider: "linear", credentialId },
                     }),
                   () => {
                     setPendingDisconnect(null);

@@ -28,39 +28,49 @@ describe("serverSettings helpers", () => {
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
       issueTracking: {
-        linear: {
-          projectBindings: {
-            project_1: { credentialId: "user-1", teamKey: "ENG" },
-            project_2: { credentialId: "user-2", teamKey: "OPS" },
+        connections: {
+          jira: { projectBindings: { project_3: { repository: "APP" } } },
+          linear: {
+            projectBindings: {
+              project_1: { credentialId: "user-1", repository: "ENG" },
+              project_2: { credentialId: "user-2", repository: "OPS" },
+            },
           },
         },
       },
     };
     const environment = applyServerSettingsPatch(current, {
       issueTracking: {
-        linear: {
-          projectBindings: {
-            ["project_1" as ProjectId]: { teamKey: "ENV" },
+        connections: {
+          linear: {
+            projectBindings: {
+              ["project_1" as ProjectId]: { repository: "ENV" },
+            },
           },
         },
       },
     });
-    expect(environment.issueTracking.linear.projectBindings).toEqual({
-      project_1: { teamKey: "ENV" },
-      project_2: current.issueTracking.linear.projectBindings.project_2,
+    expect(environment.issueTracking.connections.linear.projectBindings).toEqual({
+      project_1: { repository: "ENV" },
+      project_2: current.issueTracking.connections.linear.projectBindings.project_2,
     });
+    expect(environment.issueTracking.connections.jira).toEqual(
+      current.issueTracking.connections.jira,
+    );
     const cleared = applyServerSettingsPatch(environment, {
       issueTracking: {
-        linear: {
-          projectBindings: {
-            ["project_1" as ProjectId]: null,
+        connections: {
+          linear: {
+            projectBindings: {
+              ["project_1" as ProjectId]: null,
+            },
           },
         },
       },
     });
-    expect(cleared.issueTracking.linear.projectBindings).toEqual({
+    expect(cleared.issueTracking.connections.linear.projectBindings).toEqual({
       project_1: null,
-      project_2: current.issueTracking.linear.projectBindings.project_2,
+      project_2: current.issueTracking.connections.linear.projectBindings.project_2,
     });
   });
 

@@ -84,7 +84,7 @@ it.effect("uses Linear user ids for viewer-comparable issue actors", () => {
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(LinearApi.LinearApi, api),
-        ServerSettings.layerTest({ issueTracking: { linear: {} } } as never),
+        ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
       ),
     ),
   );
@@ -141,7 +141,7 @@ it.effect("maps Linear comment reaction arrays into issue activity", () => {
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(LinearApi.LinearApi, api),
-        ServerSettings.layerTest({ issueTracking: { linear: {} } } as never),
+        ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
       ),
     ),
   );
@@ -183,9 +183,11 @@ it.effect("uses the project binding credential for Linear requests", () => {
         Layer.succeed(LinearApi.LinearApi, api),
         ServerSettings.layerTest({
           issueTracking: {
-            linear: {
-              projectBindings: {
-                "project-1": { credentialId: "user-1", teamKey: "ENG" },
+            connections: {
+              linear: {
+                projectBindings: {
+                  "project-1": { credentialId: "user-1", repository: "ENG" },
+                },
               },
             },
           },
@@ -207,7 +209,9 @@ it.effect("reads an explicit environment-account project binding", () =>
       Layer.mergeAll(
         Layer.succeed(LinearApi.LinearApi, {} as LinearApi.LinearApi["Service"]),
         ServerSettings.layerTest({
-          issueTracking: { linear: { projectBindings: { [PROJECT.id]: { teamKey: "ENG" } } } },
+          issueTracking: {
+            connections: { linear: { projectBindings: { [PROJECT.id]: { repository: "ENG" } } } },
+          },
         }),
       ),
     ),
@@ -224,8 +228,10 @@ it.effect("does not resolve a cleared project binding", () =>
         Layer.succeed(LinearApi.LinearApi, {} as LinearApi.LinearApi["Service"]),
         ServerSettings.layerTest({
           issueTracking: {
-            linear: {
-              projectBindings: { [PROJECT.id]: null },
+            connections: {
+              linear: {
+                projectBindings: { [PROJECT.id]: null },
+              },
             },
           },
         }),

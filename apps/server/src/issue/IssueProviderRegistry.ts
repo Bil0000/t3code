@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
+  IssueTrackingError,
   issueRepositoryKey,
   type IssueListInput,
   type IssueProviderKind,
@@ -26,6 +27,7 @@ import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
 import * as LinearIssueProvider from "./LinearIssueProvider.ts";
 import {
   issueProviderContextKey,
+  type IssueTracker,
   type IssueAdapter,
   type IssueAdapterSource,
 } from "./IssueProvider.ts";
@@ -257,6 +259,10 @@ const projectResolver = Effect.fn("IssueProviderRegistry.projectResolver")(funct
 export class IssueProviderRegistry extends Context.Service<
   IssueProviderRegistry,
   {
+    readonly tracker: (
+      provider: IssueProviderKind,
+      operation: IssueTrackingError["operation"],
+    ) => Effect.Effect<IssueTracker, IssueTrackingError>;
     readonly resolveProjects: (
       projects: ReadonlyArray<OrchestrationProjectShell>,
       filter: IssueProjectFilter,
@@ -272,6 +278,17 @@ export const fromProviders = Effect.fn("IssueProviderRegistry.fromProviders")(fu
     providers.map((provider) => [provider.kind, provider]),
   );
   return {
+    tracker: (provider: IssueProviderKind, operation: IssueTrackingError["operation"]) => {
+      const tracker = byKind.get(provider)?.tracker;
+      return tracker === undefined
+        ? Effect.fail(
+            new IssueTrackingError({
+              operation,
+              detail: `Account management is not supported for ${provider}.`,
+            }),
+          )
+        : Effect.succeed(tracker);
+    },
     resolveProjects: yield* projectResolver(byKind),
   };
 });

@@ -4941,6 +4941,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("routes tracker management and rejects providers without account management", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const error = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.issueTrackersConnect]({ provider: "github", token: "unused" }).pipe(
+            Effect.flip,
+          ),
+        ),
+      );
+      assert.equal(error._tag, "IssueTrackingError");
+      if (error._tag === "IssueTrackingError") {
+        assert.equal(error.operation, "connect");
+        assert.include(error.detail, "not supported for github");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("advertises the usable file manager and its reveal label", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({

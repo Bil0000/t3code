@@ -64,7 +64,7 @@ describe("RPC authorization scopes", () => {
   });
 
   it("allows read access for the side-effect-free Linear status", () => {
-    expect(requiredScopeForRpcMethod(WS_METHODS.linearConnectionStatus)).toBe(
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueTrackersStatus)).toBe(
       AuthOrchestrationReadScope,
     );
   });

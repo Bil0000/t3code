@@ -1,9 +1,10 @@
 import type {
-  LinearDisconnectInput,
-  LinearProjectBinding,
-  LinearSetProjectBindingInput,
+  IssueTrackerProjectBinding,
+  IssueTrackerBindInput,
   ProjectId,
 } from "@t3tools/contracts";
+import { IssueTrackingError } from "@t3tools/contracts";
+import type { IssueTracker } from "./IssueProvider.ts";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 
@@ -13,7 +14,7 @@ import * as LinearApi from "./LinearApi.ts";
 const coordinatorMutex = Semaphore.makeUnsafe(1);
 
 export function clearCredentialBindings(
-  bindings: Readonly<Record<string, LinearProjectBinding | null>>,
+  bindings: Readonly<Record<string, IssueTrackerProjectBinding | null>>,
   credentialId: string,
 ): Record<string, null> {
   return Object.fromEntries(
@@ -36,7 +37,7 @@ export const connectLinearAccount = (token: string) =>
     }),
   );
 
-export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
+export const setLinearProjectBinding = (input: Omit<IssueTrackerBindInput, "provider">) =>
   coordinatorMutex.withPermits(1)(
     Effect.gen(function* () {
       const linear = yield* LinearApi.LinearApi;
@@ -52,7 +53,7 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
             reason: "failed",
             projectId: input.projectId,
             credentialId: binding.credentialId,
-            teamKey: binding.teamKey,
+            teamKey: binding.repository,
             bindingRejection: "unknown-credential",
           });
         }
@@ -62,17 +63,17 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
             reason: "failed",
             projectId: input.projectId,
             credentialId: binding.credentialId,
-            teamKey: binding.teamKey,
+            teamKey: binding.repository,
             bindingRejection: "account-unavailable",
           });
         }
-        if (!account.teams.some(({ key }) => key === binding.teamKey)) {
+        if (!account.projects.some(({ key }) => key === binding.repository)) {
           return yield* new LinearApi.LinearApiError({
             operation: "setProjectBinding",
             reason: "failed",
             projectId: input.projectId,
             credentialId: binding.credentialId,
-            teamKey: binding.teamKey,
+            teamKey: binding.repository,
             bindingRejection: "team-unavailable",
           });
         }
@@ -80,13 +81,13 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
         const environmentAccount = connection.environmentAccount;
         if (
           environmentAccount?.status !== "authenticated" ||
-          !environmentAccount.teams.some(({ key }) => key === binding.teamKey)
+          !environmentAccount.projects.some(({ key }) => key === binding.repository)
         ) {
           return yield* new LinearApi.LinearApiError({
             operation: "setProjectBinding",
             reason: "failed",
             projectId: input.projectId,
-            teamKey: binding.teamKey,
+            teamKey: binding.repository,
             bindingRejection: "environment-account-unavailable",
           });
         }
@@ -94,40 +95,39 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
 
       const settings = yield* ServerSettings.ServerSettingsService;
       yield* settings.updateSettings({
-        issueTracking: { linear: { projectBindings: { [input.projectId]: binding } } },
+        issueTracking: {
+          connections: { linear: { projectBindings: { [input.projectId]: binding } } },
+        },
       });
     }),
   );
 
-export const disconnectLinearAccount = (input: LinearDisconnectInput) =>
+export const disconnectLinearAccount = (input: { readonly credentialId: string }) =>
   coordinatorMutex.withPermits(1)(
     Effect.gen(function* () {
       const linear = yield* LinearApi.LinearApi;
-      const connection = yield* linear.connection;
-      const credentialId =
-        input?.credentialId ??
-        (connection.accounts.length === 1 ? connection.accounts[0]?.credentialId : undefined);
+      const { credentialId } = input;
 
       const settings = yield* ServerSettings.ServerSettingsService;
       const current = yield* settings.getSettings;
-      if (credentialId === undefined) {
-        return yield* new LinearApi.LinearAccountSelectionRequiredError();
-      }
 
       const removals = clearCredentialBindings(
-        current.issueTracking.linear.projectBindings,
+        current.issueTracking.connections.linear?.projectBindings ?? {},
         credentialId,
       );
       const restorations = Object.fromEntries(
         Object.keys(removals).flatMap((projectId) => {
-          const binding = current.issueTracking.linear.projectBindings[projectId as ProjectId];
+          const binding =
+            current.issueTracking.connections.linear?.projectBindings[projectId as ProjectId];
           return binding === undefined ? [] : [[projectId, binding]];
         }),
       );
       if (Object.keys(removals).length > 0) {
         yield* settings.updateSettings({
           issueTracking: {
-            linear: { projectBindings: removals },
+            connections: {
+              linear: { projectBindings: removals },
+            },
           },
         });
       }
@@ -136,9 +136,35 @@ export const disconnectLinearAccount = (input: LinearDisconnectInput) =>
           Object.keys(restorations).length === 0
             ? Effect.void
             : settings.updateSettings({
-                issueTracking: { linear: { projectBindings: restorations } },
+                issueTracking: { connections: { linear: { projectBindings: restorations } } },
               }),
         ),
       );
     }),
   );
+
+export const make = Effect.gen(function* () {
+  const context = yield* Effect.context<
+    LinearApi.LinearApi | ServerSettings.ServerSettingsService
+  >();
+  const wrap = <
+    A,
+    E extends { readonly message: string },
+    R extends LinearApi.LinearApi | ServerSettings.ServerSettingsService,
+  >(
+    operation: IssueTrackingError["operation"],
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    effect.pipe(
+      Effect.provideContext(context),
+      Effect.mapError(
+        (cause) => new IssueTrackingError({ operation, detail: cause.message, cause }),
+      ),
+    );
+  return {
+    status: wrap("status", linearConnectionStatus),
+    connect: (token) => wrap("connect", connectLinearAccount(token)),
+    disconnect: (credentialId) => wrap("disconnect", disconnectLinearAccount({ credentialId })),
+    bind: (input) => wrap("bind", setLinearProjectBinding(input)),
+  } satisfies IssueTracker;
+});

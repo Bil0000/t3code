@@ -952,20 +952,22 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
-export const LinearProjectBinding = Schema.Struct({
+export const IssueTrackerProjectBinding = Schema.Struct({
   credentialId: Schema.optionalKey(TrimmedNonEmptyString),
-  teamKey: TrimmedNonEmptyString,
+  repository: TrimmedNonEmptyString,
 });
-export type LinearProjectBinding = typeof LinearProjectBinding.Type;
+export type IssueTrackerProjectBinding = typeof IssueTrackerProjectBinding.Type;
 
-const LinearIssueTrackingSettings = Schema.Struct({
-  projectBindings: Schema.Record(ProjectId, Schema.NullOr(LinearProjectBinding)).pipe(
+const IssueTrackerSettings = Schema.Struct({
+  projectBindings: Schema.Record(ProjectId, Schema.NullOr(IssueTrackerProjectBinding)).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
-}).pipe(Schema.withDecodingDefault(Effect.succeed({})));
+});
 
 const IssueTrackingSettings = Schema.Struct({
-  linear: LinearIssueTrackingSettings,
+  connections: Schema.Record(TrimmedNonEmptyString, IssueTrackerSettings).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 /**
  * Server settings a project may override. Every other server setting is
@@ -1485,13 +1487,7 @@ export const ServerSettingsPatch = Schema.Struct({
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   issueTracking: Schema.optionalKey(
     Schema.Struct({
-      linear: Schema.optionalKey(
-        Schema.Struct({
-          projectBindings: Schema.optionalKey(
-            Schema.Record(ProjectId, Schema.NullOr(LinearProjectBinding)),
-          ),
-        }),
-      ),
+      connections: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, IssueTrackerSettings)),
     }),
   ),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),

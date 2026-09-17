@@ -323,20 +323,16 @@ export function applyServerSettingsPatch(
     ...patchForMerge,
     ...(issueTracking === undefined ? {} : { issueTracking }),
   });
-  const next =
-    issueTracking?.linear?.projectBindings === undefined
-      ? merged
-      : {
-          ...merged,
-          issueTracking: {
-            linear: {
-              projectBindings: {
-                ...current.issueTracking.linear.projectBindings,
-                ...issueTracking.linear.projectBindings,
-              },
-            },
-          },
-        };
+  const connections = { ...merged.issueTracking.connections };
+  for (const [provider, patch] of Object.entries(issueTracking?.connections ?? {})) {
+    connections[provider] = {
+      projectBindings: {
+        ...current.issueTracking.connections[provider]?.projectBindings,
+        ...patch.projectBindings,
+      },
+    };
+  }
+  const next = { ...merged, issueTracking: { connections } };
   const nextWithReplacementsBase = {
     ...next,
     ...(worktreeCleanupPatch === undefined

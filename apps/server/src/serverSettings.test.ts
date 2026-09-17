@@ -150,7 +150,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       yield* Effect.flip(
         serverSettings.updateSettings({
-          issueTracking: { linear: { projectBindings: { [projectId]: null } } },
+          issueTracking: { connections: { linear: { projectBindings: { [projectId]: null } } } },
         }),
       );
 

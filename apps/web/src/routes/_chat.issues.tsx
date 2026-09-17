@@ -9,8 +9,8 @@ import type {
   IssueListEntry,
   IssueListResult,
   IssueListState,
-  LinearConnection,
-  LinearProjectBinding,
+  IssueTrackerConnection,
+  IssueTrackerProjectBinding,
   ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
@@ -168,10 +168,14 @@ export function mergeIssueProviderSummaries(
   return [...merged.values()];
 }
 
+const EMPTY_TRACKER_SETTINGS: {
+  projectBindings: Readonly<Record<string, IssueTrackerProjectBinding | null>>;
+} = { projectBindings: {} };
+
 export function stabilizeLinearProviderSummary(
   providers: IssueListResult["providers"],
   projectIds: ReadonlyArray<ProjectId>,
-  projectBindings: Readonly<Record<ProjectId, LinearProjectBinding | null>>,
+  projectBindings: Readonly<Record<ProjectId, IssueTrackerProjectBinding | null>>,
   hasLinearSource = false,
 ): IssueListResult["providers"] {
   const projectCount = projectIds.filter((projectId) => projectBindings[projectId] != null).length;
@@ -192,9 +196,9 @@ export function stabilizeLinearProviderSummary(
 }
 
 export function hasLinearManagementState(
-  connection: Pick<LinearConnection, "status" | "hasStoredToken"> | null | undefined,
+  connection: Pick<IssueTrackerConnection, "status" | "hasStoredToken"> | null | undefined,
   settings: {
-    readonly projectBindings: Readonly<Record<string, LinearProjectBinding | null>>;
+    readonly projectBindings: Readonly<Record<string, IssueTrackerProjectBinding | null>>;
   },
   projectIds?: ReadonlyArray<ProjectId>,
 ) {
@@ -315,13 +319,15 @@ function IssuesRouteView() {
   // The primary environment may still be connecting, or may predate this feature. In either
   // case every query remains idle until the server has explicitly advertised these APIs.
   const issueEnvironmentId = issuesSupported ? environmentId : null;
-  const linearSettings = usePrimarySettings((settings) => settings.issueTracking.linear);
+  const linearSettings =
+    usePrimarySettings((settings) => settings.issueTracking.connections.linear) ??
+    EMPTY_TRACKER_SETTINGS;
   const linearConnection = useEnvironmentQuery(
     issueEnvironmentId === null
       ? null
-      : issueTrackingEnvironment.linearStatus({
+      : issueTrackingEnvironment.status({
           environmentId: issueEnvironmentId,
-          input: undefined,
+          input: { provider: "linear" },
         }),
   );
   const selectedWorkItems = useWorkItemSelection((state) => state.items);

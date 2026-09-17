@@ -7,21 +7,21 @@ import { WS_METHODS } from "@t3tools/contracts";
 import { connectionAtomRuntime } from "../connection/runtime";
 
 export const issueTrackingEnvironment = {
-  linearStatus: createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
-    label: "environment-data:issue-tracking:linear-status",
-    tag: WS_METHODS.linearConnectionStatus,
+  status: createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+    label: "environment-data:issue-tracking:status",
+    tag: WS_METHODS.issueTrackersStatus,
     staleTimeMs: 15_000,
   }),
-  linearConnect: createEnvironmentRpcCommand(connectionAtomRuntime, {
-    label: "environment-data:issue-tracking:linear-connect",
-    tag: WS_METHODS.linearConnect,
+  connect: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issue-tracking:connect",
+    tag: WS_METHODS.issueTrackersConnect,
   }),
-  linearDisconnect: createEnvironmentRpcCommand(connectionAtomRuntime, {
-    label: "environment-data:issue-tracking:linear-disconnect",
-    tag: WS_METHODS.linearDisconnect,
+  disconnect: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issue-tracking:disconnect",
+    tag: WS_METHODS.issueTrackersDisconnect,
   }),
-  linearSetProjectBinding: createEnvironmentRpcCommand(connectionAtomRuntime, {
-    label: "environment-data:issue-tracking:linear-set-project-binding",
-    tag: WS_METHODS.linearSetProjectBinding,
+  bind: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issue-tracking:bind",
+    tag: WS_METHODS.issueTrackersBind,
   }),
 };

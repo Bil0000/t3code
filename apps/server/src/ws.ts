@@ -61,7 +61,6 @@ import {
   type RelayClientInstallProgressEvent,
   ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
-  type ServerSettingsError,
   type ServerLifecycleStreamEvent,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
@@ -69,7 +68,6 @@ import {
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
-  IssueTrackingError,
   WorkItemMatchError,
   WorkItemTaskError,
   ThreadId,
@@ -160,8 +158,6 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as IssueService from "./issue/IssueService.ts";
-import * as LinearApi from "./issue/LinearApi.ts";
-import * as LinearConnection from "./issue/LinearConnection.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { resolveWorkItemTaskResult } from "./textGeneration/TextGenerationPrompts.ts";
 import {
@@ -681,23 +677,6 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
-      const issueTrackingError =
-        (operation: IssueTrackingError["operation"], settingsDetail: string) =>
-        (
-          error:
-            | LinearApi.LinearApiError
-            | LinearApi.LinearAccountSelectionRequiredError
-            | ServerSettingsError,
-        ) =>
-          new IssueTrackingError({
-            operation,
-            detail:
-              LinearApi.isLinearApiError(error) ||
-              LinearApi.isLinearAccountSelectionRequiredError(error)
-                ? error.detail
-                : settingsDetail,
-            cause: error,
-          });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -2963,42 +2942,34 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.issuesInvalidate, issues.invalidate(input), {
             "rpc.aggregate": "issues",
           }),
-        [WS_METHODS.linearConnectionStatus]: (_input) =>
+        [WS_METHODS.issueTrackersStatus]: ({ provider }) =>
           observeRpcEffect(
-            WS_METHODS.linearConnectionStatus,
-            LinearConnection.linearConnectionStatus.pipe(
-              Effect.mapError(issueTrackingError("status", "Could not read the Linear accounts.")),
-            ),
+            WS_METHODS.issueTrackersStatus,
+            issues.tracker(provider, "status").pipe(Effect.flatMap((tracker) => tracker.status)),
             { "rpc.aggregate": "issues" },
           ),
-        [WS_METHODS.linearConnect]: ({ token }) =>
+        [WS_METHODS.issueTrackersConnect]: ({ provider, token }) =>
           observeRpcEffect(
-            WS_METHODS.linearConnect,
-            LinearConnection.connectLinearAccount(token).pipe(
-              Effect.mapError(
-                issueTrackingError("connect", "Could not connect the Linear account."),
-              ),
-            ),
+            WS_METHODS.issueTrackersConnect,
+            issues
+              .tracker(provider, "connect")
+              .pipe(Effect.flatMap((tracker) => tracker.connect(token))),
             { "rpc.aggregate": "issues" },
           ),
-        [WS_METHODS.linearDisconnect]: (input) =>
+        [WS_METHODS.issueTrackersDisconnect]: ({ provider, credentialId }) =>
           observeRpcEffect(
-            WS_METHODS.linearDisconnect,
-            LinearConnection.disconnectLinearAccount(input).pipe(
-              Effect.mapError(
-                issueTrackingError("disconnect", "Could not clear the Linear project bindings."),
-              ),
-            ),
+            WS_METHODS.issueTrackersDisconnect,
+            issues
+              .tracker(provider, "disconnect")
+              .pipe(Effect.flatMap((tracker) => tracker.disconnect(credentialId))),
             { "rpc.aggregate": "issues" },
           ),
-        [WS_METHODS.linearSetProjectBinding]: (input) =>
+        [WS_METHODS.issueTrackersBind]: (input) =>
           observeRpcEffect(
-            WS_METHODS.linearSetProjectBinding,
-            LinearConnection.setLinearProjectBinding(input).pipe(
-              Effect.mapError(
-                issueTrackingError("bind", "Could not save the Linear project binding."),
-              ),
-            ),
+            WS_METHODS.issueTrackersBind,
+            issues
+              .tracker(input.provider, "bind")
+              .pipe(Effect.flatMap((tracker) => tracker.bind(input))),
             { "rpc.aggregate": "issues" },
           ),
         [WS_METHODS.workItemsGenerateTask]: (input) =>
@@ -4136,7 +4107,6 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
     const issues = yield* IssueService.IssueService;
-    const linear = yield* LinearApi.LinearApi;
     const textGeneration = yield* TextGeneration.TextGeneration;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -4187,7 +4157,6 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(IssueService.IssueService, issues)),
-              Layer.provide(Layer.succeed(LinearApi.LinearApi, linear)),
               Layer.provide(Layer.succeed(TextGeneration.TextGeneration, textGeneration)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
