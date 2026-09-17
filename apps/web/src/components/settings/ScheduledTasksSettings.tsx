@@ -15,6 +15,8 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
+import { useNavigate } from "@tanstack/react-router";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -29,11 +31,14 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { vcsEnvironment } from "../../state/vcs";
+import { TraitsPicker } from "../chat/TraitsPicker";
+import { resolveScheduledTaskBaseRef } from "./ScheduledTasksSettings.logic";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -72,16 +77,10 @@ interface DraftState {
   readonly workspaceMode: WorkspaceMode;
   readonly baseRef: string;
   readonly existingWorktreePath: string;
-  readonly modelKey: string;
+  readonly modelSelection: ModelSelection | null;
   /** Not editable in the dialog, but preserved so editing an agent-created task keeps its modes. */
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  /**
-   * The task's original model selection. The picker only edits
-   * `instanceId:model`; keeping the source object preserves provider options
-   * (reasoning, temperature, …) when the model itself is left unchanged.
-   */
-  readonly baseModelSelection: ModelSelection | null;
 }
 
 /** JS day-of-week (0 = Sunday) rendered Monday-first, matching how people read a week. */
@@ -108,12 +107,11 @@ const EMPTY_DRAFT: DraftState = {
   projectId: "",
   threadId: "",
   workspaceMode: "worktree",
-  baseRef: "main",
+  baseRef: "",
   existingWorktreePath: "",
-  modelKey: "",
+  modelSelection: null,
   runtimeMode: "full-access",
   interactionMode: "default",
-  baseModelSelection: null,
 };
 
 /** Labelled field: a caption sitting above its control. */
@@ -142,19 +140,6 @@ function Field({
       {children}
     </div>
   );
-}
-
-function modelKey(selection: ModelSelection): string {
-  return `${selection.instanceId}:${selection.model}`;
-}
-
-function splitModelKey(value: string): ModelSelection | null {
-  const index = value.indexOf(":");
-  if (index <= 0 || index === value.length - 1) return null;
-  return {
-    instanceId: ProviderInstanceId.make(value.slice(0, index)),
-    model: value.slice(index + 1),
-  };
 }
 
 function scheduleFromDraft(draft: DraftState): ScheduledTaskSchedule {
@@ -229,15 +214,14 @@ function taskToDraft(task: ScheduledTask): DraftState {
     projectId: task.projectId,
     threadId: task.threadId ?? "",
     workspaceMode: task.workspaceStrategy.type,
-    baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
+    baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "",
     existingWorktreePath:
       task.workspaceStrategy.type === "existing_worktree"
         ? task.workspaceStrategy.worktreePath
         : "",
-    modelKey: modelKey(task.modelSelection),
+    modelSelection: task.modelSelection,
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
-    baseModelSelection: task.modelSelection,
   };
 }
 
@@ -253,6 +237,8 @@ export function ScheduledTasksSettings(target: {
   readonly taskId?: ScheduledTaskId;
 }) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { environments } = useEnvironments();
+  const navigate = useNavigate();
   const environment = useEnvironment(target.environmentId ?? primaryEnvironmentId);
   // Live subscription: the server pushes a fresh list after every change
   // (CRUD, run transitions, reschedules), so no manual refresh is needed.
@@ -264,30 +250,50 @@ export function ScheduledTasksSettings(target: {
         })
       : null,
   );
-  if (!environment || !tasksQuery.data) {
-    return (
-      <SettingsPageContainer className="max-w-3xl">
-        <SettingsSection title="Schedule Tasks" icon={<Clock3Icon className="size-3.5" />}>
-          <p className="px-5 py-4 text-xs text-muted-foreground" role="status">
-            {tasksQuery.error ??
-              (environment
-                ? "Loading automations…"
-                : target.environmentId
-                  ? "The environment for this automation is unavailable. Reconnect to view it."
-                  : "Connect an environment to manage automations.")}
-          </p>
-        </SettingsSection>
-      </SettingsPageContainer>
-    );
-  }
   return (
-    <EnvironmentScheduledTasksSettings
-      key={`${environment.environmentId}:${target.taskId ?? ""}`}
-      environmentId={environment.environmentId}
-      taskId={target.taskId}
-      tasks={tasksQuery.data.tasks}
-      error={tasksQuery.error}
-    />
+    <SettingsPageContainer className="max-w-3xl">
+      <Field label="Run on server">
+        <Select
+          value={environment?.environmentId ?? null}
+          onValueChange={(environmentId) => {
+            if (environmentId)
+              void navigate({ to: "/settings/scheduled-tasks", search: { environmentId } });
+          }}
+        >
+          <SelectTrigger size="sm" aria-label="Run on server">
+            <SelectValue placeholder="Select a server">{environment?.label}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            {environments.map((entry) => (
+              <SelectItem key={entry.environmentId} value={entry.environmentId}>
+                {entry.label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Tasks run on this server, which must stay awake with T3 Code running. Closing a connected
+          laptop does not stop tasks on another server. Tasks do not move between servers
+          automatically. Fixed times use the server's time zone.
+        </p>
+      </Field>
+      {!environment || !tasksQuery.data ? (
+        <p className="px-5 py-4 text-xs text-muted-foreground" role="status">
+          {tasksQuery.error ??
+            (environment
+              ? "Loading automations…"
+              : "Connect the selected server to manage automations.")}
+        </p>
+      ) : (
+        <EnvironmentScheduledTasksSettings
+          key={`${environment.environmentId}:${target.taskId ?? ""}`}
+          environmentId={environment.environmentId}
+          taskId={target.taskId}
+          tasks={tasksQuery.data.tasks}
+          error={tasksQuery.error}
+        />
+      )}
+    </SettingsPageContainer>
   );
 }
 
@@ -337,16 +343,26 @@ function EnvironmentScheduledTasksSettings({
   const [saving, setSaving] = useState(false);
   const editingTaskMissing =
     draft.editingId !== null && !tasks.some((task) => task.id === draft.editingId);
-  const selectedProjectTitle = projects.find((project) => project.id === draft.projectId)?.title;
+  const selectedProject = projects.find((project) => project.id === draft.projectId);
+  const refsQuery = useEnvironmentQuery(
+    dialogOpen && draft.workspaceMode === "worktree" && selectedProject
+      ? vcsEnvironment.listRefs({
+          environmentId,
+          input: { cwd: selectedProject.workspaceRoot, limit: 2 },
+        })
+      : null,
+  );
+  const baseRef = resolveScheduledTaskBaseRef(draft.baseRef, refsQuery.data?.refs ?? []);
 
-  // The real model picker is keyed by a `${instanceId}:${model}` string, which
-  // is exactly how the draft stores its selection.
   const firstInstance = instanceEntries[0];
-  const defaultModelKey =
+  const defaultModelSelection =
     firstInstance && firstInstance.models[0]
-      ? `${firstInstance.instanceId}:${firstInstance.models[0].slug}`
-      : "";
-  const activeSelection = splitModelKey(draft.modelKey || defaultModelKey);
+      ? createModelSelection(firstInstance.instanceId, firstInstance.models[0].slug)
+      : null;
+  const activeSelection = draft.modelSelection ?? defaultModelSelection;
+  const activeEntry = instanceEntries.find(
+    (entry) => entry.instanceId === activeSelection?.instanceId,
+  );
   const activeInstanceId =
     activeSelection?.instanceId ?? firstInstance?.instanceId ?? ("" as ProviderInstanceId);
   const activeModel = activeSelection?.model ?? "";
@@ -359,10 +375,9 @@ function EnvironmentScheduledTasksSettings({
     setDraft({
       ...EMPTY_DRAFT,
       projectId: projects[0]?.id ?? "",
-      modelKey: defaultModelKey,
     });
     setDialogOpen(true);
-  }, [defaultModelKey, projects]);
+  }, [projects]);
 
   const openForEdit = useCallback((task: ScheduledTask) => {
     setDraft(taskToDraft(task));
@@ -381,25 +396,29 @@ function EnvironmentScheduledTasksSettings({
 
   const submit = useCallback(async () => {
     if (saving || editingTaskMissing) return;
-    const selection = splitModelKey(draft.modelKey || defaultModelKey);
-    if (!draft.title.trim() || !draft.prompt.trim() || !draft.projectId || selection === null) {
+    const modelSelection = activeSelection;
+    if (
+      !draft.title.trim() ||
+      !draft.prompt.trim() ||
+      !draft.projectId ||
+      modelSelection === null
+    ) {
       reportFailure("Schedule task is incomplete", "Add a title, prompt, project, and model.");
       return;
     }
-    // Keep the original selection object (with provider options) when the
-    // picker still points at the same instance+model.
-    const modelSelection =
-      draft.baseModelSelection !== null &&
-      draft.baseModelSelection.instanceId === selection.instanceId &&
-      draft.baseModelSelection.model === selection.model
-        ? draft.baseModelSelection
-        : selection;
+    if (draft.workspaceMode === "worktree" && !baseRef) {
+      reportFailure(
+        "Base ref is required",
+        "Select a project and enter a base ref, or wait for its default branch to load.",
+      );
+      return;
+    }
     const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
       draft.workspaceMode === "root"
         ? { type: "root" }
         : draft.workspaceMode === "existing_worktree"
           ? { type: "existing_worktree", worktreePath: draft.existingWorktreePath.trim() }
-          : { type: "worktree", baseRef: draft.baseRef.trim() || "main", startFromOrigin: true };
+          : { type: "worktree", baseRef, startFromOrigin: true };
     const input: ScheduledTaskUpsertInput = {
       ...(draft.editingId ? { id: draft.editingId as ScheduledTaskId } : {}),
       title: draft.title.trim(),
@@ -424,7 +443,7 @@ function EnvironmentScheduledTasksSettings({
       return;
     }
     setDialogOpen(false);
-  }, [defaultModelKey, draft, editingTaskMissing, environmentId, saving, upsertTask]);
+  }, [activeSelection, baseRef, draft, editingTaskMissing, environmentId, saving, upsertTask]);
 
   const handleDelete = useCallback(
     async (task: ScheduledTask) => {
@@ -459,12 +478,11 @@ function EnvironmentScheduledTasksSettings({
     setDraft((current) => ({
       ...current,
       projectId: projects[0]?.id ?? "",
-      modelKey: current.modelKey || defaultModelKey,
     }));
-  }, [defaultModelKey, draft.projectId, projects]);
+  }, [draft.projectId, projects]);
 
   return (
-    <SettingsPageContainer className="max-w-3xl">
+    <>
       <SettingsSection
         title="Schedule Tasks"
         icon={<Clock3Icon className="size-3.5" />}
@@ -590,11 +608,13 @@ function EnvironmentScheduledTasksSettings({
                 <Select
                   value={draft.projectId}
                   onValueChange={(projectId) =>
-                    setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                    setDraft((current) => ({ ...current, projectId: projectId ?? "", baseRef: "" }))
                   }
                 >
                   <SelectTrigger size="sm">
-                    <SelectValue placeholder="Select a project">{selectedProjectTitle}</SelectValue>
+                    <SelectValue placeholder="Select a project">
+                      {selectedProject?.title}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     {projects.map((project) => (
@@ -629,8 +649,10 @@ function EnvironmentScheduledTasksSettings({
               <Field label="Base ref" htmlFor="scheduled-task-base-ref">
                 <Input
                   id="scheduled-task-base-ref"
-                  value={draft.baseRef}
-                  placeholder="main"
+                  value={baseRef}
+                  placeholder={
+                    refsQuery.isPending ? "Loading default branch…" : "Enter a branch or commit"
+                  }
                   onChange={(event) =>
                     setDraft((current) => ({ ...current, baseRef: event.target.value }))
                   }
@@ -674,9 +696,35 @@ function EnvironmentScheduledTasksSettings({
                 triggerVariant="outline"
                 triggerClassName="w-full max-w-none justify-between text-foreground/90 hover:text-foreground"
                 onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+                  setDraft((current) => ({
+                    ...current,
+                    modelSelection: createModelSelection(instanceId, model),
+                  }))
                 }
               />
+              {activeSelection && activeEntry ? (
+                <TraitsPicker
+                  provider={activeEntry.driverKind}
+                  models={activeEntry.models}
+                  model={activeSelection.model}
+                  prompt={draft.prompt}
+                  onPromptChange={(prompt) => setDraft((current) => ({ ...current, prompt }))}
+                  modelOptions={activeSelection.options}
+                  allowPromptInjectedEffort={false}
+                  planModeEnabled={settings.planModeEnabled}
+                  triggerVariant="outline"
+                  onModelOptionsChange={(options) =>
+                    setDraft((current) => ({
+                      ...current,
+                      modelSelection: createModelSelection(
+                        activeSelection.instanceId,
+                        activeSelection.model,
+                        options,
+                      ),
+                    }))
+                  }
+                />
+              ) : null}
             </Field>
 
             <div className="space-y-3">
@@ -798,6 +846,6 @@ function EnvironmentScheduledTasksSettings({
           </DialogFooter>
         </DialogPopup>
       </Dialog>
-    </SettingsPageContainer>
+    </>
   );
 }
