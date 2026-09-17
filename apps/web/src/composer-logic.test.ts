@@ -147,6 +147,25 @@ describe("composerSubmissionIntentForKey", () => {
     ).toBeNull();
   });
 
+  it.each([
+    ["mod+arrowup", { key: "ArrowUp", ctrlKey: true }],
+    ["shift+tab", { key: "Tab", shiftKey: true }],
+  ] as const)("accepts a remapped %s action", (key, event) => {
+    const keybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key, command: "composer.sendBackground", when: "composerFocus && composerDraft" },
+      ]),
+    );
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        keybindings,
+        isDraftThread: true,
+        event: { ...enter, ...event },
+      }),
+    ).toBe("background");
+  });
+
   it("uses remapped keys and removes the old action bindings", () => {
     const keybindings = mergeWithDefaultKeybindings(
       compileResolvedKeybindingsConfig([

@@ -4251,7 +4251,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Callbacks: command key
   // ------------------------------------------------------------------
   const onComposerCommandKey = (key: string, event: KeyboardEvent, isTaskItem = false) => {
-    if (key === "Tab" && event.shiftKey) {
+    const submissionIntent = composerSubmissionIntentForKey({
+      event,
+      keybindings,
+      isMobileViewport,
+      isDraftThread: routeKind === "draft",
+      isRunning: phase === "running",
+      sendShortcut: settings.sendShortcut,
+      prompt: promptRef.current,
+    });
+    if (key === "Tab" && event.shiftKey && submissionIntent === null) {
       if (!planModeUiEnabled) return false;
       toggleInteractionMode();
       return true;
@@ -4274,18 +4283,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return true;
       }
     }
-    if (key === "ArrowUp" || key === "ArrowDown") {
+    if ((key === "ArrowUp" || key === "ArrowDown") && submissionIntent === null) {
       return navigatePromptHistory(key === "ArrowUp" ? "backward" : "forward", event);
     }
-    const submissionIntent = composerSubmissionIntentForKey({
-      event,
-      keybindings,
-      isMobileViewport,
-      isDraftThread: routeKind === "draft",
-      isRunning: phase === "running",
-      sendShortcut: settings.sendShortcut,
-      prompt: promptRef.current,
-    });
     if (submissionIntent) {
       submitComposer(
         undefined,
