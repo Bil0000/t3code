@@ -48,7 +48,7 @@ import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
-import { layer as scheduledTaskCoordinatorLayer } from "../scheduledTasks/ScheduledTaskCoordinator.ts";
+import * as ScheduledTaskCoordinator from "../scheduledTasks/ScheduledTaskCoordinator.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
 
 const runtimePolicyProvided = runtimePolicyLayerFromProjectRepository.pipe(
@@ -239,7 +239,7 @@ const threadLifecycleProvided = threadLifecycleServiceLayer.pipe(
 );
 const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
   Layer.provide(
-    Layer.mergeAll(threadLaunchProvided, threadManagementProvided, scheduledTaskCoordinatorLayer),
+    Layer.mergeAll(threadLaunchProvided, threadManagementProvided, ScheduledTaskCoordinator.layer),
   ),
 );
 const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(

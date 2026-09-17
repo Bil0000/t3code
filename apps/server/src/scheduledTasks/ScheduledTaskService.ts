@@ -33,7 +33,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import { ScheduledTaskCoordinator } from "./ScheduledTaskCoordinator.ts";
+import * as ScheduledTaskCoordinator from "./ScheduledTaskCoordinator.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
@@ -218,7 +218,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const crypto = yield* Crypto.Crypto;
-    const coordinator = yield* ScheduledTaskCoordinator;
+    const coordinator = yield* ScheduledTaskCoordinator.ScheduledTaskCoordinator;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
