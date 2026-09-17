@@ -30,22 +30,23 @@ connection. Pull request diffs and provider settings keep working after the
 previous credential expires. A failed renewal affects that request; it does not
 disconnect an otherwise healthy conversation.
 
-## Run scheduled tasks with a backup server
+## Run scheduled tasks with a backup host
 
-In **Settings → Schedule Tasks**, choose the server that should run the task.
-Turn on **Switch to a backup server automatically**, then select the backup
-server, its project, and its model. Both servers must be linked to the same
-T3 Connect account and connected while you save the setup.
+In **Settings → Schedule Tasks**, choose the host that should run the task.
+Turn on **Use a backup host**, then select the backup host and the same project
+on that host. The backup uses the task’s branch, model, and effort.
+That model and its options must be available on both hosts. Both hosts must be
+linked to the same T3 Connect account and connected while you save the setup.
 
-The backup takes future runs after the preferred server has been unreachable
-for 30 seconds. Closing the client does not stop this. Both servers must be
+The backup takes future runs after the preferred host has been unreachable
+for 30 seconds. Closing the client does not stop this. Both hosts must be
 able to reach T3 Connect. Fixed times use the time zone shown in the task form.
-A run already assigned to a server is not repeated, even if that server stops
-before it can finish starting the run. Work already in progress stays on its server.
+A run already assigned to a host is not repeated, even if that host stops
+before it can finish starting the run. Work already in progress stays on its host.
 
-Pause or delete the task from either server to stop future runs on both. Turn
-off automatic backup to keep the task on the server you are editing. Editing
-the shared prompt or schedule needs both servers connected; a failed setup
+Pause or delete the task from either host to stop future runs on both. Turn
+off automatic backup to keep the task on its main host. Editing
+the shared prompt or schedule needs both hosts connected; a failed setup
 stays paused until you retry.
 
 ## Pair over a LAN or private network

@@ -47,6 +47,7 @@ vi.mock("../../providerInstances", () => ({
 }));
 vi.mock("../../modelSelection", () => ({ getCustomModelOptionsByInstance: () => new Map() }));
 vi.mock("../chat/ProviderModelPicker", () => ({ ProviderModelPicker: () => null }));
+vi.mock("./ScheduledTaskBranchPicker", () => ({ ScheduledTaskBranchPicker: () => null }));
 vi.mock("../chat/TraitsPicker", () => ({
   TraitsPicker: ({
     onModelOptionsChange,
