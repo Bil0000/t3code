@@ -309,14 +309,18 @@ function EnvironmentScheduledTasksSettings({
   readonly error: string | null;
 }) {
   useRelativeTimeTick(15_000);
+  const navigate = useNavigate();
+  const { environments } = useEnvironments();
+  const [taskEnvironmentId, setTaskEnvironmentId] = useState(environmentId);
+  const taskEnvironment = useEnvironment(taskEnvironmentId);
   const allProjects = useProjects();
   const projects = useMemo(
-    () => allProjects.filter((project) => project.environmentId === environmentId),
-    [allProjects, environmentId],
+    () => allProjects.filter((project) => project.environmentId === taskEnvironmentId),
+    [allProjects, taskEnvironmentId],
   );
-  const settings = useEnvironmentSettings(environmentId);
+  const settings = useEnvironmentSettings(taskEnvironmentId);
   const providers =
-    useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+    useAtomValue(serverEnvironment.providersValueAtom(taskEnvironmentId)) ?? EMPTY_SERVER_PROVIDERS;
   const upsertTask = useAtomCommand(serverEnvironment.upsertScheduledTask, {
     label: "scheduled task upsert",
   });
@@ -347,7 +351,7 @@ function EnvironmentScheduledTasksSettings({
   const refsQuery = useEnvironmentQuery(
     dialogOpen && draft.workspaceMode === "worktree" && selectedProject
       ? vcsEnvironment.listRefs({
-          environmentId,
+          environmentId: taskEnvironmentId,
           input: { cwd: selectedProject.workspaceRoot, limit: 2 },
         })
       : null,
@@ -372,17 +376,22 @@ function EnvironmentScheduledTasksSettings({
   );
 
   const openForCreate = useCallback(() => {
+    setTaskEnvironmentId(environmentId);
     setDraft({
       ...EMPTY_DRAFT,
-      projectId: projects[0]?.id ?? "",
+      projectId: allProjects.find((project) => project.environmentId === environmentId)?.id ?? "",
     });
     setDialogOpen(true);
-  }, [projects]);
+  }, [allProjects, environmentId]);
 
-  const openForEdit = useCallback((task: ScheduledTask) => {
-    setDraft(taskToDraft(task));
-    setDialogOpen(true);
-  }, []);
+  const openForEdit = useCallback(
+    (task: ScheduledTask) => {
+      setTaskEnvironmentId(environmentId);
+      setDraft(taskToDraft(task));
+      setDialogOpen(true);
+    },
+    [environmentId],
+  );
 
   const reportFailure = (title: string, error: unknown) => {
     toastManager.add(
@@ -434,7 +443,7 @@ function EnvironmentScheduledTasksSettings({
       creationSource: "web",
     };
     setSaving(true);
-    const result = await upsertTask({ environmentId, input });
+    const result = await upsertTask({ environmentId: taskEnvironmentId, input });
     setSaving(false);
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
@@ -443,7 +452,23 @@ function EnvironmentScheduledTasksSettings({
       return;
     }
     setDialogOpen(false);
-  }, [activeSelection, baseRef, draft, editingTaskMissing, environmentId, saving, upsertTask]);
+    if (taskEnvironmentId !== environmentId) {
+      void navigate({
+        to: "/settings/scheduled-tasks",
+        search: { environmentId: taskEnvironmentId },
+      });
+    }
+  }, [
+    activeSelection,
+    baseRef,
+    draft,
+    editingTaskMissing,
+    environmentId,
+    navigate,
+    saving,
+    taskEnvironmentId,
+    upsertTask,
+  ]);
 
   const handleDelete = useCallback(
     async (task: ScheduledTask) => {
@@ -592,6 +617,41 @@ function EnvironmentScheduledTasksSettings({
                 This automation no longer exists.
               </p>
             ) : null}
+            <Field label="Run on server">
+              <Select
+                value={taskEnvironmentId}
+                disabled={draft.editingId !== null || saving}
+                onValueChange={(nextEnvironmentId) => {
+                  if (!nextEnvironmentId || nextEnvironmentId === taskEnvironmentId) return;
+                  setTaskEnvironmentId(nextEnvironmentId);
+                  setDraft((current) => ({
+                    ...current,
+                    projectId: "",
+                    threadId: "",
+                    baseRef: "",
+                    existingWorktreePath: "",
+                    modelSelection: null,
+                  }));
+                }}
+              >
+                <SelectTrigger size="sm" aria-label="Run task on server">
+                  <SelectValue>{taskEnvironment?.label}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {environments.map((entry) => (
+                    <SelectItem key={entry.environmentId} value={entry.environmentId}>
+                      {entry.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {draft.editingId
+                  ? "To use another server, create a task there and disable this one. "
+                  : "Choose the server that has the project and provider account. "}
+                This server must stay awake. Tasks do not switch servers automatically.
+              </p>
+            </Field>
             <Field label="Name" htmlFor="scheduled-task-title">
               <Input
                 id="scheduled-task-title"
@@ -687,44 +747,46 @@ function EnvironmentScheduledTasksSettings({
             </Field>
 
             <Field label="Model">
-              <ProviderModelPicker
-                activeInstanceId={activeInstanceId}
-                model={activeModel}
-                lockedProvider={null}
-                instanceEntries={instanceEntries}
-                modelOptionsByInstance={modelOptionsByInstance}
-                triggerVariant="outline"
-                triggerClassName="w-full max-w-none justify-between text-foreground/90 hover:text-foreground"
-                onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({
-                    ...current,
-                    modelSelection: createModelSelection(instanceId, model),
-                  }))
-                }
-              />
-              {activeSelection && activeEntry ? (
-                <TraitsPicker
-                  provider={activeEntry.driverKind}
-                  models={activeEntry.models}
-                  model={activeSelection.model}
-                  prompt={draft.prompt}
-                  onPromptChange={(prompt) => setDraft((current) => ({ ...current, prompt }))}
-                  modelOptions={activeSelection.options}
-                  allowPromptInjectedEffort={false}
-                  planModeEnabled={settings.planModeEnabled}
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <ProviderModelPicker
+                  activeInstanceId={activeInstanceId}
+                  model={activeModel}
+                  lockedProvider={null}
+                  instanceEntries={instanceEntries}
+                  modelOptionsByInstance={modelOptionsByInstance}
                   triggerVariant="outline"
-                  onModelOptionsChange={(options) =>
+                  triggerClassName="text-foreground/90 hover:text-foreground"
+                  onInstanceModelChange={(instanceId, model) =>
                     setDraft((current) => ({
                       ...current,
-                      modelSelection: createModelSelection(
-                        activeSelection.instanceId,
-                        activeSelection.model,
-                        options,
-                      ),
+                      modelSelection: createModelSelection(instanceId, model),
                     }))
                   }
                 />
-              ) : null}
+                {activeSelection && activeEntry ? (
+                  <TraitsPicker
+                    provider={activeEntry.driverKind}
+                    models={activeEntry.models}
+                    model={activeSelection.model}
+                    prompt={draft.prompt}
+                    onPromptChange={(prompt) => setDraft((current) => ({ ...current, prompt }))}
+                    modelOptions={activeSelection.options}
+                    allowPromptInjectedEffort={false}
+                    planModeEnabled={settings.planModeEnabled}
+                    triggerVariant="outline"
+                    onModelOptionsChange={(options) =>
+                      setDraft((current) => ({
+                        ...current,
+                        modelSelection: createModelSelection(
+                          activeSelection.instanceId,
+                          activeSelection.model,
+                          options,
+                        ),
+                      }))
+                    }
+                  />
+                ) : null}
+              </div>
             </Field>
 
             <div className="space-y-3">
