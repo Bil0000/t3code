@@ -106,6 +106,7 @@ import {
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { truncate } from "@t3tools/shared/String";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
@@ -2350,6 +2351,7 @@ export default function ChatView(props: ChatViewProps) {
       return {
         id: `project-clone:${projectId}`,
         variant: "info",
+        compact: true,
         priority: "activity",
         icon: <DownloadIcon />,
         title: `Cloning ${name}`,
@@ -2373,6 +2375,7 @@ export default function ChatView(props: ChatViewProps) {
     return {
       id: `project-clone:${projectId}`,
       variant: cancelled ? "warning" : "error",
+      compact: true,
       icon: <DownloadIcon />,
       title: cancelled ? `Cancelled cloning ${name}` : `Failed to clone ${name}`,
       description: cancelled ? "Retry to bring in the repository." : activeProjectClone.error,
@@ -5022,7 +5025,9 @@ export default function ChatView(props: ChatViewProps) {
   const persistedLinkedThreadPullRequest = isServerThread
     ? (activeThreadShell?.linkedPullRequest ?? activeThread?.linkedPullRequest ?? null)
     : (activeThread?.linkedPullRequest ?? null);
-  const activeProjectRepository = activeProject?.repositoryIdentity?.displayName ?? null;
+  const activeProjectRepository = sourceControlRepositorySelector(
+    activeProject?.repositoryIdentity,
+  );
   const persistedLinkedThreadPullRequestStatus = useLinkedThreadPullRequest(
     activeThreadRef?.environmentId ?? null,
     persistedLinkedThreadPullRequest,
