@@ -4,6 +4,7 @@ import {
   ThreadId,
   type ScopedThreadRef,
   type PullRequestDetailView,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { act, type ReactNode, type ReactElement, type ComponentProps } from "react";
@@ -140,6 +141,7 @@ vi.mock("./PullRequestCodeTab", () => ({
 }));
 
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
+import { pullRequestPanelContext } from "./pullRequestDetail.logic";
 
 const detail: PullRequestDetailView = {
   provider: "github",
@@ -245,31 +247,69 @@ const actions = [
   "Add to agent",
 ];
 
+// The surface ChatView opens for `detail`, and the thread states it can be opened beside. The
+// context prop is derived here the way ChatView derives it, so a wrong answer from the thread's
+// link list fails these cases rather than only a hand-picked prop.
+const surface = { projectId: detail.projectId, repository: detail.repository, number: 1 };
+const link = (number: number, source: ThreadPullRequestLink["source"]): ThreadPullRequestLink => ({
+  host: "github.com",
+  repository: detail.repository,
+  number,
+  url: `https://github.com/${detail.repository}/pull/${number}`,
+  source,
+  linkedAt: "2026-09-01T00:00:00Z",
+  snapshot: null,
+  stack: null,
+});
+const stackThread = {
+  projectId: detail.projectId,
+  pullRequests: [link(3, "manual"), link(2, "stack"), link(1, "stack")],
+  // The server's one-slot field names the top layer; the panel shows the bottom one.
+  linkedPullRequest: { ...surface, number: 3, url: link(3, "manual").url },
+};
+const unrelatedThread = {
+  projectId: detail.projectId,
+  pullRequests: [link(9, "created")],
+  linkedPullRequest: { ...surface, number: 9, url: link(9, "created").url },
+};
+
 describe.each([
-  ["own PR", "thread", threadRef],
-  ["another PR beside the current thread", "page", threadRef],
-  ["PR beside an unsent draft", "page", draftId],
-  ["standalone PR page", "page", undefined],
-] as const)("%s", (_name, context, target) => {
+  ["own PR, a lower layer of the thread's stack", stackThread, threadRef],
+  ["another PR beside the current thread", unrelatedThread, threadRef],
+  ["PR beside an unsent draft", null, draftId],
+  ["standalone PR page", null, undefined],
+] as const)("%s", (_name, thread, target) => {
+  const context = thread ? pullRequestPanelContext(thread, surface) : "page";
+
+  function render() {
+    renderer = create(
+      <PullRequestDetailPanel
+        environmentId={threadRef.environmentId}
+        reference={detail}
+        context={context}
+        {...(target ? { composerDraftTarget: target, threadRef } : {})}
+        shortcutsEnabled={false}
+        getShortcutContext={() => ({
+          terminalFocus: false,
+          terminalOpen: false,
+          previewFocus: false,
+          previewOpen: false,
+        })}
+      />,
+    );
+  }
+
+  it(`${thread === stackThread ? "hides" : "offers"} the checkout`, async () => {
+    await act(async () => render());
+    const checkout = renderer.root
+      .findAllByType("button")
+      .filter((node) => node.props["aria-label"] === "Check out");
+    expect(checkout).toHaveLength(thread === stackThread ? 0 : 1);
+  });
+
   it.each(actions)("%s writes to the correct composer", async (action) => {
     if (target) useComposerDraftStore.getState().setPrompt(target, "Keep my draft");
-    await act(async () => {
-      renderer = create(
-        <PullRequestDetailPanel
-          environmentId={threadRef.environmentId}
-          reference={detail}
-          context={context}
-          {...(target ? { composerDraftTarget: target, threadRef } : {})}
-          shortcutsEnabled={false}
-          getShortcutContext={() => ({
-            terminalFocus: false,
-            terminalOpen: false,
-            previewFocus: false,
-            previewOpen: false,
-          })}
-        />,
-      );
-    });
+    await act(async () => render());
     if (action === "Add to agent") await click("Code");
     await click(target ? action : action.replace("in this thread", "in a thread"));
     const draft = useComposerDraftStore.getState().getComposerDraft(target ?? newDraftId);
