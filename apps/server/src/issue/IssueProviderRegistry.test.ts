@@ -1,10 +1,16 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { issueSourceKey, type OrchestrationProjectShell, type ProjectId } from "@t3tools/contracts";
 
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { IssueAdapter } from "./IssueProvider.ts";
 import { fromProviders } from "./IssueProviderRegistry.ts";
+
+const sourceControlLayer = Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+  resolveLink: () => Effect.die("unused"),
+  resolveHandle: () => Effect.succeed({ provider: undefined as never, context: null }),
+});
 
 const PROJECT: OrchestrationProjectShell = {
   id: "p1" as ProjectId,
@@ -22,7 +28,7 @@ it.effect("binds a project to an issue adapter without source-control types", ()
       kind: "jira",
       resolveSource: () => Effect.succeed({ host: "acme.atlassian.net", repository: "ACME" }),
     } as unknown as IssueAdapter;
-    const registry = fromProviders([jira]);
+    const registry = yield* fromProviders([jira]).pipe(Effect.provide(sourceControlLayer));
 
     const result = yield* registry.resolveProjects([PROJECT], {});
 
@@ -62,7 +68,7 @@ it.effect("keeps two adapters that share one host and repository", () =>
           candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
         ),
     } as unknown as IssueAdapter;
-    const registry = fromProviders([github, jira]);
+    const registry = yield* fromProviders([github, jira]).pipe(Effect.provide(sourceControlLayer));
 
     const result = yield* registry.resolveProjects(
       [
@@ -99,7 +105,9 @@ it.effect("keeps source-control and external issue sources for one project", () 
       kind: "linear",
       resolveSource: () => Effect.succeed({ host: "linear.app", repository: "ENG" }),
     } as unknown as IssueAdapter;
-    const registry = fromProviders([github, linear]);
+    const registry = yield* fromProviders([github, linear]).pipe(
+      Effect.provide(sourceControlLayer),
+    );
 
     const result = yield* registry.resolveProjects([project], {});
 
@@ -126,7 +134,7 @@ it.effect("keeps account-bound sources distinct on linear.app", () =>
           credentialId: candidate.id === "p1" ? "user-1" : "user-2",
         }),
     } as unknown as IssueAdapter;
-    const registry = fromProviders([linear]);
+    const registry = yield* fromProviders([linear]).pipe(Effect.provide(sourceControlLayer));
 
     const result = yield* registry.resolveProjects(
       [PROJECT, { ...PROJECT, id: "p2" as ProjectId, workspaceRoot: "/work/api" }],
@@ -162,7 +170,9 @@ it.effect("derives a self-hosted hostname from a legacy remote identity", () =>
         displayName: "group/project",
       } as unknown as OrchestrationProjectShell["repositoryIdentity"],
     };
-    const registry = fromProviders([{ kind: "gitlab" } as unknown as IssueAdapter]);
+    const registry = yield* fromProviders([{ kind: "gitlab" } as unknown as IssueAdapter]).pipe(
+      Effect.provide(sourceControlLayer),
+    );
 
     const result = yield* registry.resolveProjects([project], {});
 
@@ -200,7 +210,12 @@ it.effect("refines one unknown remote before de-duplicating its worktrees", () =
       },
     });
     const gitlab = { kind: "gitlab" } as unknown as IssueAdapter;
-    const registry = fromProviders([gitlab], sourceControl);
+    const registry = yield* fromProviders([gitlab]).pipe(
+      Effect.provideService(
+        SourceControlProviderRegistry.SourceControlProviderRegistry,
+        sourceControl,
+      ),
+    );
 
     const result = yield* registry.resolveProjects(
       [selfHosted, { ...selfHosted, id: "p2" as ProjectId, workspaceRoot: "/worktree" }],

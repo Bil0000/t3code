@@ -50,11 +50,7 @@ import {
   type ProviderIssue,
   type ProviderListCursor,
 } from "./IssueProvider.ts";
-import {
-  type IssueProjectSource,
-  IssueProviderRegistry,
-  type IssueWorkspaceProjects,
-} from "./IssueProviderRegistry.ts";
+import * as IssueProviderRegistry from "./IssueProviderRegistry.ts";
 
 /**
  * Rows per repository when the client does not ask for a page size, and rows per slice when a
@@ -210,18 +206,18 @@ function parseListCursor(raw: string): ListCursor | null {
   };
 }
 
-function sourceKeyOf(project: IssueProjectSource): string {
+function sourceKeyOf(project: IssueProviderRegistry.IssueProjectSource): string {
   return issueProviderContextKey(project.adapter.kind, project.host, project.credentialId);
 }
 
-const providerContextOf = (project: IssueProjectSource) =>
+const providerContextOf = (project: IssueProviderRegistry.IssueProjectSource) =>
   project.credentialId === undefined ? {} : { credentialId: project.credentialId };
 
 /**
  * How a listing tells two adapter repositories apart. The account also matters when one provider
  * has more than one credential for the same native repository.
  */
-function listCursorKey(project: IssueProjectSource): string {
+function listCursorKey(project: IssueProviderRegistry.IssueProjectSource): string {
   if (LEGACY_CURSOR_ADAPTERS.has(project.adapter.kind)) {
     return `${project.host} ${project.repository.toLowerCase()}`;
   }
@@ -336,12 +332,12 @@ function toIssueError(operation: string): (error: IssueProviderError) => IssueEr
 }
 
 export const make = Effect.gen(function* () {
-  const registry = yield* IssueProviderRegistry;
+  const registry = yield* IssueProviderRegistry.IssueProviderRegistry;
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
 
   const listWorkspaceProjects = (
     filter: Pick<IssueListInput, "projectId" | "host">,
-  ): Effect.Effect<IssueWorkspaceProjects, IssueError> =>
+  ): Effect.Effect<IssueProviderRegistry.IssueWorkspaceProjects, IssueError> =>
     projections.getShellSnapshot().pipe(
       Effect.mapError(
         (error) =>
@@ -360,28 +356,30 @@ export const make = Effect.gen(function* () {
    */
   const requireProject = (
     ref: Pick<IssueRef, "projectId" | "provider" | "repository">,
-  ): Effect.Effect<IssueProjectSource, IssueError> =>
+  ): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
-      Effect.flatMap(({ supported }): Effect.Effect<IssueProjectSource, IssueError> => {
-        if (supported.length === 0) {
-          return Effect.fail(new IssueUnavailableError({ reason: "provider-unsupported" }));
-        }
-        const repository = ref.repository.trim().toLowerCase();
-        const match = supported.find(
-          (project) =>
-            project.repository.toLowerCase() === repository &&
-            (ref.provider === undefined || project.adapter.kind === ref.provider),
-        );
-        if (match === undefined) {
-          return Effect.fail(
-            new IssueOperationError({
-              operation: "resolveRepository",
-              detail: "The issue does not belong to the selected project.",
-            }),
+      Effect.flatMap(
+        ({ supported }): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> => {
+          if (supported.length === 0) {
+            return Effect.fail(new IssueUnavailableError({ reason: "provider-unsupported" }));
+          }
+          const repository = ref.repository.trim().toLowerCase();
+          const match = supported.find(
+            (project) =>
+              project.repository.toLowerCase() === repository &&
+              (ref.provider === undefined || project.adapter.kind === ref.provider),
           );
-        }
-        return Effect.succeed(match);
-      }),
+          if (match === undefined) {
+            return Effect.fail(
+              new IssueOperationError({
+                operation: "resolveRepository",
+                detail: "The issue does not belong to the selected project.",
+              }),
+            );
+          }
+          return Effect.succeed(match);
+        },
+      ),
     );
 
   /**
@@ -391,7 +389,11 @@ export const make = Effect.gen(function* () {
    * a provider on the client's word. Read freshly for that reason, rather than taken from whatever
    * the detail said when the page loaded.
    */
-  const viewerPermissionsOf = (project: IssueProjectSource, ref: IssueRef, operation: string) =>
+  const viewerPermissionsOf = (
+    project: IssueProviderRegistry.IssueProjectSource,
+    ref: IssueRef,
+    operation: string,
+  ) =>
     project.adapter
       .getViewerPermissions({
         ...providerContextOf(project),
@@ -438,7 +440,7 @@ export const make = Effect.gen(function* () {
     readonly key: string;
     readonly host: string;
     readonly kind: IssueProviderKind;
-    readonly projectIds: ReadonlyArray<IssueProjectSource["project"]["id"]>;
+    readonly projectIds: ReadonlyArray<IssueProviderRegistry.IssueProjectSource["project"]["id"]>;
     readonly viewer: string | null;
     readonly error: IssueProviderError | null;
   };
@@ -451,8 +453,8 @@ export const make = Effect.gen(function* () {
   >();
 
   const resolveViewers = (
-    projects: ReadonlyArray<IssueProjectSource>,
-    viewerRoots: IssueWorkspaceProjects["viewerRoots"],
+    projects: ReadonlyArray<IssueProviderRegistry.IssueProjectSource>,
+    viewerRoots: IssueProviderRegistry.IssueWorkspaceProjects["viewerRoots"],
   ) =>
     Effect.forEach(
       new Map(projects.map((project) => [sourceKeyOf(project), project])),
@@ -500,7 +502,7 @@ export const make = Effect.gen(function* () {
     );
 
   const toEntry = (input: {
-    readonly project: IssueProjectSource;
+    readonly project: IssueProviderRegistry.IssueProjectSource;
     readonly item: ProviderIssue;
   }): IssueListEntry => ({
     provider: input.project.adapter.kind,
@@ -529,7 +531,7 @@ export const make = Effect.gen(function* () {
    * so it is said as one — the repository is simply not a place issues live.
    */
   const repositoryFailure = (
-    project: IssueProjectSource,
+    project: IssueProviderRegistry.IssueProjectSource,
     error: IssueProviderError,
   ): IssueListProjectError => ({
     projectId: project.project.id,
@@ -699,14 +701,17 @@ export const make = Effect.gen(function* () {
       }
 
       const limit = input.limit ?? DEFAULT_REPOSITORY_LIST_LIMIT;
-      const cursorOf = (project: IssueProjectSource): ListCursor | undefined =>
-        continuation?.get(listCursorKey(project));
+      const cursorOf = (
+        project: IssueProviderRegistry.IssueProjectSource,
+      ): ListCursor | undefined => continuation?.get(listCursorKey(project));
 
       /**
        * One repository asked on its own. What every host without a search across repositories
        * does, and what a batched read falls back to for a repository it could not answer for.
        */
-      const readRepository = (project: IssueProjectSource): Effect.Effect<RepositoryBatch> => {
+      const readRepository = (
+        project: IssueProviderRegistry.IssueProjectSource,
+      ): Effect.Effect<RepositoryBatch> => {
         const viewer = viewers[sourceKeyOf(project)]!;
         const key = listCursorKey(project);
         const cursor = cursorOf(project);
@@ -780,7 +785,7 @@ export const make = Effect.gen(function* () {
        * repositories as unreadable before anyone has asked it about them one at a time.
        */
       const readTogether = (
-        chunk: ReadonlyArray<IssueProjectSource>,
+        chunk: ReadonlyArray<IssueProviderRegistry.IssueProjectSource>,
       ): Effect.Effect<ReadonlyArray<RepositoryBatch>> => {
         const first = chunk[0]!;
         const readAcross = first.adapter.listIssuesAcross;
@@ -862,8 +867,8 @@ export const make = Effect.gen(function* () {
       // A host with a search across repositories is asked once for all of them; everyone else is
       // asked once each. Repositories standing at different points of the same listing are
       // different questions, so they are grouped by the boundary they carry on from.
-      const together = new Map<string, Array<IssueProjectSource>>();
-      const separate: Array<IssueProjectSource> = [];
+      const together = new Map<string, Array<IssueProviderRegistry.IssueProjectSource>>();
+      const separate: Array<IssueProviderRegistry.IssueProjectSource> = [];
       for (const project of readable) {
         if (project.adapter.listIssuesAcross === undefined) {
           separate.push(project);

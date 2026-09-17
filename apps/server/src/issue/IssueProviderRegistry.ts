@@ -125,16 +125,14 @@ function resolveProjectSource(
   };
 }
 
-function projectResolver(
+const projectResolver = Effect.fn("IssueProviderRegistry.projectResolver")(function* (
   byKind: ReadonlyMap<IssueProviderKind, IssueAdapter>,
-  sourceControlProviders?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"],
 ) {
+  const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const refineUnknownKinds = Effect.fn("IssueProviderRegistry.refineUnknownKinds")(function* (
     projects: ReadonlyArray<OrchestrationProjectShell>,
     filter: IssueProjectFilter,
   ) {
-    if (sourceControlProviders === undefined) return new Map<string, IssueProviderKind>();
-
     type Candidate = {
       readonly project: OrchestrationProjectShell;
       readonly provider: SourceControlProviderInfo;
@@ -254,7 +252,7 @@ function projectResolver(
 
     return { supported, unimplemented, viewerRoots };
   });
-}
+});
 
 export class IssueProviderRegistry extends Context.Service<
   IssueProviderRegistry,
@@ -267,17 +265,16 @@ export class IssueProviderRegistry extends Context.Service<
 >()("t3/issue/IssueProviderRegistry") {}
 
 /** Exported for tests, which stand a registry up from providers they supply themselves. */
-export function fromProviders(
+export const fromProviders = Effect.fn("IssueProviderRegistry.fromProviders")(function* (
   providers: ReadonlyArray<IssueAdapter>,
-  sourceControlProviders?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"],
-): IssueProviderRegistry["Service"] {
+) {
   const byKind = new Map<IssueProviderKind, IssueAdapter>(
     providers.map((provider) => [provider.kind, provider]),
   );
   return {
-    resolveProjects: projectResolver(byKind, sourceControlProviders),
+    resolveProjects: yield* projectResolver(byKind),
   };
-}
+});
 
 /**
  * The hosts this build can read issues from. A host with no entry here still shows up in the
@@ -291,8 +288,7 @@ const make = Effect.gen(function* () {
     AzureDevOpsIssueProvider.make,
     LinearIssueProvider.make,
   ]);
-  const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
-  return fromProviders(providers, sourceControlProviders);
+  return yield* fromProviders(providers);
 });
 
 export const layer = Layer.effect(IssueProviderRegistry, make).pipe(

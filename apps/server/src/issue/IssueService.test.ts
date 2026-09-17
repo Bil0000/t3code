@@ -20,6 +20,7 @@ import {
   type ProviderIssueDetail,
   type IssueAdapter,
 } from "./IssueProvider.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { IssueProviderRegistry, fromProviders } from "./IssueProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
 
@@ -167,7 +168,13 @@ function makeService(input: {
   return IssueService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
-        Layer.succeed(IssueProviderRegistry, fromProviders(input.providers)),
+        Layer.effect(IssueProviderRegistry, fromProviders(input.providers)).pipe(
+          Layer.provide(
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => Effect.die("unused"),
+            }),
+          ),
+        ),
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
           getShellSnapshot: () =>
             Effect.succeed({
