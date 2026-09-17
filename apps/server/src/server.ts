@@ -484,9 +484,9 @@ const AntigravityInstallationRefreshLive = Layer.effectDiscard(
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   ThreadSettlementWorkerLive,
-  Layer.effectDiscard(StorageCleanup.make.pipe(Effect.flatMap((service) => service.start()))).pipe(
-    Layer.provide(ProjectionStoreV2.layer),
-  ),
+  Layer.effectDiscard(
+    Effect.flatMap(StorageCleanup.StorageCleanup, (service) => service.start()),
+  ).pipe(Layer.provide(StorageCleanup.layer), Layer.provide(ProjectionStoreV2.layer)),
   ThreadPullRequestWorkerLive,
   Layer.effectDiscard(
     Effect.gen(function* () {
