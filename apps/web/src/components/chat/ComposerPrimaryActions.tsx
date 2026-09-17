@@ -273,7 +273,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const submitTooltip =
     submitStatus ??
     (isRunning && !isEditingQueuedMessage
-      ? `Click to ${followUpBehavior}${alternateShortcutLabel ? `, ${alternateShortcutLabel} to ${alternateAction}` : ""}`
+      ? `Click to ${followUpBehavior}, Ctrl/⌘-click${alternateShortcutLabel ? ` or ${alternateShortcutLabel}` : ""} to ${alternateAction}`
       : submitLabel);
 
   const sendButton = (
