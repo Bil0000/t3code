@@ -119,7 +119,7 @@ describe("composerSubmissionIntentForKey", () => {
           platform,
           sendShortcut,
           isDraftThread: true,
-          event: { ...modEnter, shiftKey: true },
+          event: { ...modEnter, altKey: true },
         }),
       ).toBe("background");
       expect(
@@ -142,6 +142,16 @@ describe("composerSubmissionIntentForKey", () => {
       composerSubmissionIntentForKey({
         ...input,
         isRunning: true,
+        event: { ...enter, ctrlKey: true, shiftKey: true },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not start a background thread with the queued-message shortcut", () => {
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        isDraftThread: true,
         event: { ...enter, ctrlKey: true, shiftKey: true },
       }),
     ).toBeNull();
