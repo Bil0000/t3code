@@ -2165,6 +2165,7 @@ export default function ChatView(props: ChatViewProps) {
       return {
         id: `project-clone:${projectId}`,
         variant: "info",
+        compact: true,
         priority: "activity",
         icon: <DownloadIcon />,
         title: `Cloning ${name}`,
@@ -2188,6 +2189,7 @@ export default function ChatView(props: ChatViewProps) {
     return {
       id: `project-clone:${projectId}`,
       variant: cancelled ? "warning" : "error",
+      compact: true,
       icon: <DownloadIcon />,
       title: cancelled ? `Cancelled cloning ${name}` : `Failed to clone ${name}`,
       description: cancelled ? "Retry to bring in the repository." : activeProjectClone.error,
@@ -2202,7 +2204,7 @@ export default function ChatView(props: ChatViewProps) {
           </Button>
           <Button
             size="xs"
-            variant="default"
+            variant="ghost"
             onClick={() =>
               void runProjectCloneAction("Failed to retry clone", () =>
                 retryProjectClone({ environmentId, input: { projectId } }),

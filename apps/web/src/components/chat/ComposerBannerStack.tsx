@@ -13,6 +13,7 @@ export interface ComposerBannerStackItem {
   readonly id: string;
   readonly variant: ComposerBannerVariant;
   readonly priority?: "urgent" | "activity" | "notice";
+  readonly compact?: boolean;
   readonly icon: ReactNode;
   readonly title: ReactNode;
   readonly description?: ReactNode;
@@ -270,15 +271,22 @@ function ComposerBannerStackAlert({
       variant={item.variant}
       density="comfortable"
     >
-      <ComposerBanner.Row layout="wrap-actions">
+      <ComposerBanner.Row layout={item.compact ? "wrap-actions-narrow" : "wrap-actions"}>
         <ComposerBanner.Icon className="h-(--composer-banner-icon-column) self-start">
           {item.icon}
         </ComposerBanner.Icon>
         <ComposerBanner.Content className="whitespace-nowrap">
           <span className="min-w-0 truncate font-medium leading-7 sm:leading-6">{item.title}</span>
           {item.description ? (
-            <span className="flex min-w-8 flex-1 items-center gap-1">
-              <span className="min-w-0 truncate text-muted-foreground">{item.description}</span>
+            <span className={item.compact ? "contents" : "flex min-w-8 flex-1 items-center gap-1"}>
+              <span
+                className={cn(
+                  "min-w-0 truncate text-muted-foreground",
+                  item.compact && "shrink-[9999] @max-[400px]:sr-only",
+                )}
+              >
+                {item.description}
+              </span>
               <Popover>
                 <PopoverTrigger
                   openOnHover
@@ -287,7 +295,10 @@ function ComposerBannerStackAlert({
                       size="icon-xs"
                       variant="ghost"
                       aria-label="Show notice details"
-                      className="flex-none text-muted-foreground hover:text-foreground"
+                      className={cn(
+                        "flex-none text-muted-foreground hover:text-foreground",
+                        item.compact && "hidden @max-[400px]:inline-flex",
+                      )}
                     />
                   }
                 >
