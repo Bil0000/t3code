@@ -10,6 +10,7 @@ import type {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import type * as DateTime from "effect/DateTime";
 
 import type { IdAllocatorV2Shape } from "./IdAllocator.ts";
@@ -27,6 +28,22 @@ function stringField(value: unknown, key: "message" | "code"): string | undefine
   } catch {
     return undefined;
   }
+}
+
+function causeMessage(cause: unknown): string | undefined {
+  const messages: string[] = [];
+  const seen = new Set<unknown>();
+  while (cause !== undefined && !seen.has(cause)) {
+    seen.add(cause);
+    if (Cause.isCause(cause)) {
+      cause = Cause.squash(cause);
+      continue;
+    }
+    const message = typeof cause === "string" ? cause : stringField(cause, "message");
+    if (message) messages.push(message);
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  return messages.join(": ") || undefined;
 }
 
 function redactUrl(match: string): string {
@@ -95,10 +112,7 @@ export function makeProviderFailure(input: {
   readonly class?: OrchestrationV2ProviderFailureClass;
   readonly retryable?: boolean | null;
 }): OrchestrationV2ProviderFailure {
-  const rawMessage =
-    input.message ??
-    (input.cause instanceof Error ? input.cause.message : stringField(input.cause, "message")) ??
-    DEFAULT_PROVIDER_FAILURE_MESSAGE;
+  const rawMessage = input.message ?? causeMessage(input.cause) ?? DEFAULT_PROVIDER_FAILURE_MESSAGE;
   const message = boundedText(rawMessage, MAX_PROVIDER_FAILURE_MESSAGE_LENGTH);
   const rawCode = input.code ?? stringField(input.cause, "code") ?? null;
   const code =

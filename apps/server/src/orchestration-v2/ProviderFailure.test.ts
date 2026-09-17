@@ -66,6 +66,27 @@ it("does not split a surrogate pair at the truncation boundary", () => {
   assert.notMatch(failure.message.slice(0, -1), /[\uD800-\uDBFF]$/u);
 });
 
+it("keeps nested error messages without exposing their stacks or credentials", () => {
+  const root = new Error("ACP rejected the event: api_key=nested-secret");
+  const failure = makeProviderFailure({
+    cause: new Error("Failed while ingesting orchestration V2 run execution.", {
+      cause: new Error("Failed to normalize provider event turn_item.updated.", { cause: root }),
+    }),
+  });
+
+  assert.include(failure.message, "Failed to normalize provider event turn_item.updated.");
+  assert.include(failure.message, "ACP rejected the event: api_key=[REDACTED]");
+  assert.notInclude(failure.message, "nested-secret");
+  assert.notInclude(failure.message, "ProviderFailure.test.ts");
+});
+
+it("stops at repeated errors in a cause chain", () => {
+  const cause = new Error("Repeated error");
+  cause.cause = cause;
+
+  assert.equal(makeProviderFailure({ cause }).message, "Repeated error");
+});
+
 it("does not serialize arbitrary provider causes", () => {
   const failure = makeProviderFailure({
     cause: {
