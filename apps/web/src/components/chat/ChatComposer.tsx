@@ -7366,7 +7366,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       keybindings,
                       "composer.sendAlternate",
                       {
-                        context: { composerFocus: true, composerRunning: true },
+                        context: { composerFocus: true, turnRunning: true },
                       },
                     )}
                     showPlanFollowUpPrompt={

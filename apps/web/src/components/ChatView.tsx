@@ -7134,7 +7134,7 @@ export default function ChatView(props: ChatViewProps) {
       modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
       composerFocus: document.activeElement?.getAttribute("data-testid") === "composer-editor",
       composerDraft: routeKind === "draft",
-      composerRunning: phase === "running",
+      turnRunning: phase === "running",
     }),
     [composerRef, previewPanelOpen, terminalUiState.terminalOpen, routeKind, phase],
   );

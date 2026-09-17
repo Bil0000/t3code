@@ -172,7 +172,7 @@ describe("composerSubmissionIntentForKey", () => {
         {
           key: "alt+q",
           command: "composer.sendAlternate",
-          when: "composerFocus && composerRunning",
+          when: "composerFocus && turnRunning",
         },
         {
           key: "alt+b",

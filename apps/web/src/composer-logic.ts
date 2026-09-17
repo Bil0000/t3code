@@ -54,7 +54,7 @@ export function composerSubmissionIntentForKey(input: {
     context: {
       composerFocus: true,
       composerDraft: input.isDraftThread,
-      composerRunning: input.isRunning === true,
+      turnRunning: input.isRunning === true,
     },
   });
   if (command === "composer.sendAlternate" && input.isRunning) return "alternate";
