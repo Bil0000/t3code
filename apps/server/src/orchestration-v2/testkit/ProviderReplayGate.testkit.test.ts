@@ -14,4 +14,22 @@ describe("ProviderReplayGate", () => {
     await waiting;
     expect(gate.release(label)).toBe(true);
   });
+  it("waits for replay arrival before releasing emission, including late waiters", async () => {
+    const gate = makeProviderReplayGate(["held-frame"]);
+    let reached = false;
+    const waiting = gate.waitForReached("held-frame").then(() => {
+      reached = true;
+    });
+    await Promise.resolve();
+    expect(reached).toBe(false);
+    const emission = gate.beforeEmit("held-frame");
+    await waiting;
+    expect(reached).toBe(true);
+    await gate.waitForReached("held-frame");
+    expect(gate.release("held-frame")).toBe(true);
+    await emission;
+    await expect(gate.waitForReached("missing-frame")).rejects.toThrow(
+      "Unknown provider replay gate label",
+    );
+  });
 });
