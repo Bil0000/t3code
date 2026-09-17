@@ -280,9 +280,7 @@ function ComposerBannerStackAlert({
           </span>
           {item.description ? (
             <span className="flex w-full min-w-0 items-start gap-1">
-              <span className="line-clamp-2 min-w-0 whitespace-normal text-muted-foreground wrap-anywhere">
-                {item.description}
-              </span>
+              <span className="min-w-0 truncate text-muted-foreground">{item.description}</span>
               <Popover>
                 <PopoverTrigger
                   openOnHover
