@@ -9,7 +9,18 @@ const state = vi.hoisted(() => ({
   save: vi.fn(async () => ({ _tag: "Success" })),
   tasks: [] as ScheduledTask[],
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: () => [
+    {
+      instanceId: "codex",
+      driver: "codex",
+      enabled: true,
+      installed: true,
+      status: "ready",
+      models: [{ slug: "gpt-5.4" }],
+    },
+  ],
+}));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentSettings: () => DEFAULT_UNIFIED_SETTINGS,
@@ -39,7 +50,7 @@ vi.mock("../../state/query", () => ({
       query === null
         ? null
         : query === "tasks"
-          ? { tasks: state.tasks }
+          ? { tasks: state.tasks, failoverAvailable: true }
           : { refs: [{ name: "develop", isDefault: true }] },
     error: null,
   }),
@@ -116,6 +127,34 @@ vi.mock("../ui/toast", () => ({
 import { ScheduledTasksSettings } from "./ScheduledTasksSettings";
 
 const decodeTask = Schema.decodeUnknownSync(ScheduledTask);
+const taskFixture = decodeTask({
+  id: "task",
+  title: "Review",
+  prompt: "Review changes",
+  enabled: false,
+  schedule: { type: "interval", everyMs: 60000 },
+  failover: {
+    groupId: "e6d5501c-e8e8-4a76-b06d-776d170ac39a",
+    revision: "0e2a7a35-2e09-4b87-808b-1604601e6cf2",
+    environmentIds: ["server", "remote"],
+    timeZone: "UTC",
+  },
+  projectId: "project",
+  threadId: null,
+  workspaceStrategy: { type: "root" },
+  modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  createdBy: "user",
+  creationSource: "web",
+  createdAt: "2026-09-17T00:00:00.000Z",
+  updatedAt: "2026-09-17T00:00:00.000Z",
+  nextRunAt: null,
+  lastRunAt: null,
+  lastRunStatus: "never",
+  lastRunError: null,
+  runCount: 0,
+});
 let renderer: ReactTestRenderer;
 afterEach(() => {
   act(() => renderer?.unmount());
@@ -171,34 +210,7 @@ it.each([false, true])(
   "removes the backup only after a successful detach (failure: %s)",
   async (fail) => {
     state.save.mockClear();
-    const task = decodeTask({
-      id: "task",
-      title: "Review",
-      prompt: "Review changes",
-      enabled: false,
-      schedule: { type: "interval", everyMs: 60000 },
-      failover: {
-        groupId: "e6d5501c-e8e8-4a76-b06d-776d170ac39a",
-        revision: "0e2a7a35-2e09-4b87-808b-1604601e6cf2",
-        environmentIds: ["server", "remote"],
-        timeZone: "UTC",
-      },
-      projectId: "project",
-      threadId: null,
-      workspaceStrategy: { type: "root" },
-      modelSelection: { instanceId: "codex", model: "gpt-5.4" },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      createdBy: "user",
-      creationSource: "web",
-      createdAt: "2026-09-17T00:00:00.000Z",
-      updatedAt: "2026-09-17T00:00:00.000Z",
-      nextRunAt: null,
-      lastRunAt: null,
-      lastRunStatus: "never",
-      lastRunError: null,
-      runCount: 0,
-    });
+    const task = taskFixture;
     state.tasks = [task];
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     act(() => {
@@ -231,3 +243,50 @@ it.each([false, true])(
       });
   },
 );
+
+it("keeps an enabled standalone task running when backup configuration fails", async () => {
+  state.save.mockClear();
+  const task = { ...taskFixture, enabled: true, failover: null };
+  state.tasks = [task];
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  act(() => {
+    renderer = create(
+      <ScheduledTasksSettings environmentId={EnvironmentId.make("server")} taskId={task.id} />,
+    );
+  });
+  act(() => renderer.root.findByProps({ id: "scheduled-task-backup" }).props.onCheckedChange(true));
+  act(() =>
+    renderer.root
+      .findByProps({ "aria-label": "Backup host" })
+      .parent!.props.onValueChange("remote"),
+  );
+  act(() =>
+    renderer.root
+      .findByProps({ "aria-label": "Backup project" })
+      .parent!.props.onValueChange("project"),
+  );
+  let enabled = true;
+  state.save.mockImplementation(async (...args: unknown[]) => {
+    const { input } = args[0] as { input: { groupId?: string; enabled?: boolean } };
+    if (input.groupId) throw new Error("Coordinator unavailable");
+    enabled = input.enabled ?? enabled;
+    return { _tag: "Success" };
+  });
+  try {
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Save task"))!
+        .props.onClick();
+    });
+    expect(state.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ environmentIds: ["server", "remote"] }),
+      }),
+    );
+    expect(enabled).toBe(true);
+    expect(state.save).toHaveBeenCalledTimes(1);
+  } finally {
+    state.save.mockResolvedValue({ _tag: "Success" });
+  }
+});

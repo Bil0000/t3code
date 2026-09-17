@@ -546,14 +546,6 @@ function EnvironmentScheduledTasksSettings({
         selectedBackupProjectId &&
         backupModelSelection
       ) {
-        if (draft.editingId && !draft.failover) {
-          await taskCommandValue(
-            setTaskEnabled({
-              environmentId: taskEnvironmentId,
-              input: { id: draft.editingId as ScheduledTaskId, enabled: false },
-            }),
-          );
-        }
         let previousFailover = draft.failover;
         if (pendingConfiguration.current) {
           const restored = await taskCommandValue(
