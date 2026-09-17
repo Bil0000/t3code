@@ -12,6 +12,7 @@ import type {
   CommandId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -104,6 +105,7 @@ export class OrchestratorV2ScenarioStepError extends Schema.TaggedError<Orchestr
   {
     scenario: Schema.String,
     step: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -499,13 +501,20 @@ export function runOrchestratorV2Scenario(
             });
           yield* Effect.tryPromise({
             try: () => gate.waitForReached(label),
-            catch: () =>
-              new OrchestratorV2ScenarioStepError({
-                scenario: scenario.name,
-                step: `release_replay_gate:${label}:missing`,
-              }),
-          });
-          gate.release(label);
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.timeout(SCENARIO_WAIT_DEADLINE_MS),
+            Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
+            Effect.mapError(
+              (cause) =>
+                new OrchestratorV2ScenarioStepError({
+                  scenario: scenario.name,
+                  step: `release_replay_gate:${label}:reached=false`,
+                  cause,
+                }),
+            ),
+            Effect.ensuring(Effect.sync(() => gate.release(label))),
+          );
         });
 
       for (const step of scenarioSteps(scenario)) {
