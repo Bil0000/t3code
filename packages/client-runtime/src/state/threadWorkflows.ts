@@ -87,11 +87,14 @@ function resolveThreadProviderSession(projection: Projection): ProviderSession |
 }
 
 export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
+  if (projection == null) return false;
+  const session = resolveThreadProviderSession(projection);
+  if (session !== null) {
+    return session.capabilities.sessions.supportsProviderSwitchingViaHandoff;
+  }
   return (
-    projection != null &&
-    (resolveThreadProviderSession(projection)?.capabilities.sessions
-      .supportsProviderSwitchingViaHandoff ??
-      true)
+    resolveActiveThreadRun(projection) === null &&
+    (projection.thread.historyOrigin === "v1_import" || projection.runs.length === 0)
   );
 }
 

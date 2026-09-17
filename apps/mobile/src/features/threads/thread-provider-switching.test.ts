@@ -60,13 +60,27 @@ describe("threadAllowsProviderSwitch", () => {
       threadAllowsProviderSwitch({
         thread: startedThread,
         projection: {
-          thread: { id: "thread", activeProviderThreadId: null },
+          thread: { id: "thread", activeProviderThreadId: null, historyOrigin: "v1_import" },
           runs: [],
           providerThreads: [],
           providerSessions: [],
         } as unknown as OrchestrationV2ThreadProjection,
       }),
     ).toBe(true);
+  });
+
+  it("keeps a preparing turn bound before its provider session appears", () => {
+    expect(
+      threadAllowsProviderSwitch({
+        thread: startedThread,
+        projection: {
+          thread: { id: "thread", activeProviderThreadId: null, historyOrigin: "v1_import" },
+          runs: [{ status: "preparing", providerThreadId: "provider-thread" }],
+          providerThreads: [],
+          providerSessions: [],
+        } as unknown as OrchestrationV2ThreadProjection,
+      }),
+    ).toBe(false);
   });
 
   it("keeps a started thread bound until its projection resolves a session", () => {
