@@ -467,6 +467,8 @@ it("reads user-attached foreign threads in chunks without granting write access"
     );
     expect((yield* Effect.result(read()))._tag).toBe("Failure");
     attachedLink = link;
+    const bounded = yield* service.readThread(makeScope(), { threadId: childThreadId });
+    expect(bounded.items[0]?.nextTextOffset).toBe(4_000);
     expect(
       (yield* Effect.result(
         service.readThread(makeScope(), {

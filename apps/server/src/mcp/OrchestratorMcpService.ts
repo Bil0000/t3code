@@ -1661,8 +1661,9 @@ const make = Effect.gen(function* () {
         }
         const view = input.view ?? "messages";
         const afterPosition = input.afterPosition ?? -1;
-        const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
-        const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
+        const limit = input.limit ?? (referenced ? 10 : DEFAULT_THREAD_READ_LIMIT);
+        const maxChars =
+          input.maxCharsPerItem ?? (referenced ? 4_000 : DEFAULT_THREAD_ITEM_MAX_CHARS);
         const matching = target.visibleTurnItems
           .filter((row) =>
             input.itemPosition === undefined
