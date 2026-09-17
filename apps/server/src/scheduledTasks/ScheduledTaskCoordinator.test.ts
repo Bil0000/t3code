@@ -109,3 +109,29 @@ it.effect("disables failover when no Connect credentials are available", () =>
     }
   }),
 );
+
+it.effect("allows delete retries for missing groups but rejects stale revisions", () => {
+  let reason = "not_found";
+  const fetch: typeof globalThis.fetch = async () =>
+    Response.json({ _tag: "RelayScheduledTaskError", reason }, { status: 409 });
+  return Effect.gen(function* () {
+    const coordinator = yield* ScheduledTaskCoordinator.ScheduledTaskCoordinator;
+    yield* coordinator.delete(input);
+    reason = "revision_conflict";
+    const result = yield* Effect.result(coordinator.delete(input));
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure.cause).toMatchObject({
+        _tag: "RelayScheduledTaskError",
+        reason: "revision_conflict",
+      });
+      expect(result.failure.message).toBe(
+        "This shared task changed on another server. Reload it before making changes.",
+      );
+    }
+    yield* coordinator.delete(input, true);
+  }).pipe(
+    Effect.provide(ScheduledTaskCoordinator.layer.pipe(Layer.provide(secrets))),
+    Effect.provideService(FetchHttpClient.Fetch, fetch),
+  );
+});

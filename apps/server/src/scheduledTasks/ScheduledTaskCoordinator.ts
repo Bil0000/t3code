@@ -95,6 +95,7 @@ export const make = Effect.gen(function* () {
             ? error.currentState
             : undefined;
         return new ScheduledTaskError({
+          cause: error,
           ...(recovery
             ? {
                 recoveryFailover: {
