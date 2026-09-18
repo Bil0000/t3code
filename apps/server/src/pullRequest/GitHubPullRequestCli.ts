@@ -518,7 +518,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
     }) => Effect.Effect<ProviderChangeRequestSummary, GitHubPullRequestCliError>;
 
-    readonly revalidateChecks: Effect.Success<ReturnType<typeof makeChecksRevalidator>>;
+    readonly revalidateChecks: Effect.Success<typeof makeChecksRevalidator>;
 
     readonly getPullRequestDetail: (input: {
       readonly cwd: string;
@@ -1068,7 +1068,7 @@ function actionArgs(
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
   const graphQlBudget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
-  const revalidateChecks = yield* makeChecksRevalidator(github);
+  const revalidateChecks = yield* makeChecksRevalidator;
   const routingIdentities = new Map<
     string,
     {
