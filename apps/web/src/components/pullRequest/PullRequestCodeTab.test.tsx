@@ -13,7 +13,7 @@ const { query, command, refresh, settings } = vi.hoisted(() => ({
 vi.mock("~/state/query", () => ({ useEnvironmentQuery: query }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => command }));
 vi.mock("~/state/pullRequests", () => ({
-  pullRequestEnvironment: { diff: (request: unknown) => request },
+  pullRequestEnvironment: { diff: (request: unknown) => request, filesViewed: () => "viewed" },
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomRefresh: () => refresh }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
@@ -124,8 +124,8 @@ it("loads guide pages only on request and resumes scroll loading outside the gui
     nextCursor: index === 2 ? null : String(index + 1),
     omittedFileStats: [],
   }));
-  query.mockImplementation(({ input }: { input: { cursor?: string } }) => ({
-    data: pages[Number(input.cursor ?? 0)],
+  query.mockImplementation((request: { input: { cursor?: string } } | null) => ({
+    data: request ? pages[Number(request.input.cursor ?? 0)] : null,
     error: null,
     isPending: false,
     refresh,
@@ -148,9 +148,9 @@ it("loads guide pages only on request and resumes scroll loading outside the gui
   await act(async () => {
     for (const intersect of observers) intersect();
   });
-  expect(query.mock.calls.every(([request]) => request.input.cursor === undefined)).toBe(true);
+  expect(query.mock.calls.every(([request]) => request?.input.cursor === undefined)).toBe(true);
   await click("Load more review files");
-  expect(query.mock.lastCall?.[0].input.cursor).toBe("1");
+  expect(query.mock.calls.findLast(([request]) => request !== null)?.[0].input.cursor).toBe("1");
   expect(observers.size).toBe(0);
   await click("Next review file");
   expect(renderer.root.findByType("h2").children).toEqual(["two.ts"]);
@@ -158,7 +158,7 @@ it("loads guide pages only on request and resumes scroll loading outside the gui
   await act(async () => {
     for (const intersect of observers) intersect();
   });
-  expect(query.mock.lastCall?.[0].input.cursor).toBe("2");
+  expect(query.mock.calls.findLast(([request]) => request !== null)?.[0].input.cursor).toBe("2");
 });
 
 it("opens the guide file in each commit scope and keeps manual collapses within that scope", async () => {
@@ -170,8 +170,8 @@ it("opens the guide file in each commit scope and keeps manual collapses within 
     nextCursor: null,
     omittedFileStats: [],
   }));
-  query.mockImplementation(({ input }: { input: { commit?: string } }) => ({
-    data: pages[input.commit ? 1 : 0],
+  query.mockImplementation((request: { input: { commit?: string } } | null) => ({
+    data: request ? pages[request.input.commit ? 1 : 0] : null,
     error: null,
     isPending: false,
     refresh,
@@ -205,4 +205,76 @@ it("opens the guide file in each commit scope and keeps manual collapses within 
   expect(renderer.root.findAllByType("pre")).toHaveLength(0);
   await act(async () => renderer.update(view(null)));
   expect(renderer.root.findByType("pre").children).toEqual(["all"]);
+});
+
+it("marks the guide file viewed, advances, and can reopen it", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  command.mockResolvedValue({ _tag: "Success" });
+  const files = ["one.ts", "two.ts"];
+  query.mockImplementation((request) => ({
+    data:
+      request === "viewed"
+        ? { files: [], truncated: false }
+        : {
+            patch: files
+              .map(
+                (path) =>
+                  `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${path}\n`,
+              )
+              .join(""),
+            truncated: false,
+            nextCursor: null,
+            omittedFileStats: [],
+          },
+    error: null,
+    isPending: false,
+    refresh,
+  }));
+  await act(async () => {
+    renderer = create(
+      <PullRequestCodeTab
+        environmentId={EnvironmentId.make("test")}
+        reference={{ projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 }}
+        detail={{ ...detail, capabilities: { ...detail.capabilities, viewedFiles: "environment" } }}
+        selectedCommitOid={null}
+        onSelectedCommitChange={command}
+        onRefresh={refresh}
+      />,
+    );
+  });
+  await click("Guided review");
+  expect(renderer.root.findByType("h2").children).toEqual(["one.ts"]);
+  await act(async () =>
+    renderer.root
+      .findAllByType("button")
+      .find((button) => button.children.includes("Mark viewed & next"))!
+      .props.onClick(),
+  );
+  expect(renderer.root.findByType("h2").children).toEqual(["two.ts"]);
+  await click("Previous review file");
+  expect(renderer.root.findAllByType("pre")).toHaveLength(1);
+  await act(async () =>
+    renderer.root
+      .findAllByType("button")
+      .find((button) => button.children.includes("Mark as not viewed"))!
+      .props.onClick(),
+  );
+  expect(
+    renderer.root
+      .findAllByType("button")
+      .some((button) => button.children.includes("Mark viewed & next")),
+  ).toBe(true);
+  await act(async () => renderer.unmount());
+  expect(command).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({ files: [{ path: "one.ts", viewed: false }] }),
+    }),
+  );
 });

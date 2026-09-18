@@ -564,7 +564,7 @@ it.each(["pull request", "diff version", "checkout"])(
     viewer().createEditor({ onChange: vi.fn() });
     const setSelections = vi.fn();
     editorOptions.mock.lastCall?.[0].onAttach({
-      getFile: () => ({ name: "b/file.ts", contents: "fresh" }),
+      getFile: () => ({ name: fileDiff.name, contents: "fresh" }),
       setSelections,
       focus: vi.fn(),
     });

@@ -1,5 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-import type { FileTreeBatchOperation, GitStatus } from "@pierre/trees";
+import type { FileTreeBatchOperation, FileTreeSortComparator, GitStatus } from "@pierre/trees";
 
 import { resolveFileDiffPath, resolveFileDiffPreviousPath } from "~/lib/diffRendering";
 
@@ -9,6 +9,8 @@ export interface DiffFileTreeEntry {
   readonly status: GitStatus;
   readonly previousPath?: string;
   readonly renamedWithChanges?: boolean;
+  readonly viewed?: boolean;
+  readonly viewedStale?: boolean;
 }
 
 function toGitStatus(file: FileDiffMetadata): GitStatus {
@@ -75,6 +77,34 @@ export function collectDirectoryPaths(paths: ReadonlyArray<string>): ReadonlyArr
     }
   }
   return [...directories];
+}
+
+/** A folder takes the position of its first file in the diff. */
+export function diffFileTreePositions(paths: ReadonlyArray<string>): ReadonlyMap<string, number> {
+  const positions = new Map<string, number>();
+  paths.forEach((path, index) => {
+    positions.set(path, index);
+    let directory = "";
+    for (const segment of path.split("/").slice(0, -1)) {
+      directory += `${segment}/`;
+      if (!positions.has(directory)) positions.set(directory, index);
+    }
+  });
+  return positions;
+}
+
+export function compareDiffFileTreeEntries(
+  getPositions: () => ReadonlyMap<string, number>,
+): FileTreeSortComparator {
+  return (left, right) => {
+    const positions = getPositions();
+    return (
+      (positions.get(left.path) ?? Number.MAX_SAFE_INTEGER) -
+        (positions.get(right.path) ?? Number.MAX_SAFE_INTEGER) ||
+      left.depth - right.depth ||
+      left.path.localeCompare(right.path)
+    );
+  };
 }
 
 function pathDepth(path: string): number {

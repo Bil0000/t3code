@@ -18,6 +18,8 @@ export function PullRequestGuide({
   hasMore,
   loading,
   actionPending,
+  viewed,
+  onSetViewed,
   onPrevious,
   onNext,
   onExplain,
@@ -31,6 +33,8 @@ export function PullRequestGuide({
   hasMore: boolean;
   loading: boolean;
   actionPending: boolean;
+  viewed?: boolean;
+  onSetViewed?: (viewed: boolean) => void;
   onPrevious: () => void;
   onNext: () => void;
   onExplain?: () => void;
@@ -74,6 +78,21 @@ export function PullRequestGuide({
           </Button>
         </div>
       </div>
+      {onSetViewed ? (
+        <Button
+          className="mb-3"
+          size="xs"
+          variant="outline"
+          disabled={actionPending || loading}
+          onClick={() => onSetViewed(!viewed)}
+        >
+          {viewed
+            ? "Mark as not viewed"
+            : index + 1 < count
+              ? "Mark viewed & next"
+              : "Mark as viewed"}
+        </Button>
+      ) : null}
       <h2 className="break-words text-sm font-medium [overflow-wrap:anywhere]">{path}</h2>
       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
         {describeReviewFile(file)}

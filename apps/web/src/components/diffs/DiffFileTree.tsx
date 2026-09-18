@@ -24,7 +24,9 @@ import { Tooltip, TooltipPopup } from "../ui/tooltip";
 import { DiffRenameDetails } from "./DiffRename";
 import {
   buildDiffFileTreeUpdates,
+  compareDiffFileTreeEntries,
   collectDirectoryPaths,
+  diffFileTreePositions,
   type DiffFileTreeEntry,
 } from "./diffFileTree.logic";
 
@@ -39,6 +41,7 @@ interface DiffFileTreeProps {
   readonly entries: ReadonlyArray<DiffFileTreeEntry>;
   /** Called with the file's path when the reader picks a file row. */
   readonly onSelectFile: (path: string) => void;
+  readonly onSetViewed?: (path: string, viewed: boolean) => void;
   /**
    * The file the diff is currently showing, kept selected in the tree. Bump `revealRequestId` to
    * scroll the tree to the same path again.
@@ -63,6 +66,7 @@ export function DiffFileTree({
   ref,
   entries,
   onSelectFile,
+  onSetViewed,
   selectedPath = null,
   revealRequestId = 0,
   ariaLabel,
@@ -96,6 +100,7 @@ export function DiffFileTree({
     () => new Map(entries.map((entry) => [entry.path, entry])),
     [entries],
   );
+  const entriesByPathRef = useRef(entriesByPath);
   const [hoveredRow, setHoveredRow] = useState<HTMLElement | null>(null);
   const hoveredEntry = entriesByPath.get(hoveredRow?.getAttribute("data-item-path") ?? "");
   const showPathTooltip = (event: SyntheticEvent) => {
@@ -108,6 +113,16 @@ export function DiffFileTree({
     setHoveredRow(row ?? null);
   };
   const directoryPaths = useMemo(() => collectDirectoryPaths(paths), [paths]);
+  const positions = useMemo(() => diffFileTreePositions(paths), [paths]);
+  const [ordering] = useState(() => {
+    let currentPositions: ReadonlyMap<string, number> = new Map();
+    return {
+      sort: compareDiffFileTreeEntries(() => currentPositions),
+      update: (nextPositions: ReadonlyMap<string, number>) => {
+        currentPositions = nextPositions;
+      },
+    };
+  });
   const gitStatus = useMemo<ReadonlyArray<GitStatusEntry>>(
     () => entries.map((entry) => ({ path: entry.path, status: entry.status })),
     [entries],
@@ -126,6 +141,14 @@ export function DiffFileTree({
   }, [onSelectFile, paths]);
 
   const { model } = useFileTree({
+    renderRowDecoration: ({ item }) => {
+      const entry = entriesByPathRef.current.get(item.path);
+      return entry?.viewedStale
+        ? { text: "Changed", title: "Changed since you marked it viewed" }
+        : entry?.viewed
+          ? { text: "Viewed", title: "Marked as viewed" }
+          : null;
+    },
     density: "compact",
     flattenEmptyDirectories: true,
     initialExpansion: "open",
@@ -137,6 +160,7 @@ export function DiffFileTree({
     },
     paths: [],
     search: false,
+    sort: ordering.sort,
     unsafeCSS: `${PIERRE_TREE_UNSAFE_CSS}
       [data-file-tree-virtualized-scroll='true'] {
         overflow-x: hidden;
@@ -153,17 +177,35 @@ export function DiffFileTree({
   );
 
   useEffect(() => {
+    ordering.update(positions);
     const mountedPaths = mountedPathsRef.current;
     if (mountedPaths === paths) return;
     mountedPathsRef.current = paths;
     if (mountedPaths === null) {
       model.resetPaths(paths);
-    } else {
+    } else if (mountedPaths.every((path, index) => paths[index] === path)) {
+      // PR slices only append files, so keep the existing tree and its open folders.
       const updates = buildDiffFileTreeUpdates(mountedPaths, paths);
       if (updates.length > 0) model.batch(updates);
+    } else {
+      // A refreshed diff can change the rank of existing siblings. Mutations do not reorder
+      // those rows, so rebuild while carrying the reader's folder expansion forward.
+      const collapsedDirectories = directoryPaths.filter((path) => {
+        const directory = model.getItem(path);
+        return directory !== null && "isExpanded" in directory && !directory.isExpanded();
+      });
+      model.resetPaths(paths);
+      for (const path of collapsedDirectories) {
+        const directory = model.getItem(path);
+        if (directory !== null && "collapse" in directory) directory.collapse();
+      }
     }
+  }, [directoryPaths, model, ordering, paths, positions]);
+
+  useEffect(() => {
+    entriesByPathRef.current = entriesByPath;
     model.setGitStatus(gitStatus);
-  }, [gitStatus, model, paths]);
+  }, [entriesByPath, gitStatus, model]);
 
   useEffect(() => {
     if (selectedPath === null) {
@@ -220,6 +262,33 @@ export function DiffFileTree({
       <FileTree
         model={model}
         aria-label={ariaLabel}
+        {...(onSetViewed
+          ? {
+              renderContextMenu: (item, context) => {
+                const entry = entriesByPath.get(item.path);
+                if (!entry) return null;
+                return (
+                  <div
+                    role="menu"
+                    className="rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      autoFocus
+                      className="rounded-sm px-3 py-1.5 text-xs hover:bg-accent focus:bg-accent focus:outline-none"
+                      onClick={() => {
+                        onSetViewed(item.path, !entry.viewed);
+                        context.close();
+                      }}
+                    >
+                      {entry.viewed ? "Mark as not viewed" : "Mark as viewed"}
+                    </button>
+                  </div>
+                );
+              },
+            }
+          : {})}
         onPointerMoveCapture={showPathTooltip}
         onPointerLeave={() => setHoveredRow(null)}
         onFocusCapture={showPathTooltip}
