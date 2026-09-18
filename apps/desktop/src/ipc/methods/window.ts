@@ -15,7 +15,7 @@ import {
 } from "@t3tools/contracts";
 import { WORKSPACE_IMAGE_PREVIEW_EXTENSIONS } from "@t3tools/shared/filePreview";
 import { resolveEditorCommand } from "@t3tools/shared/editor";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/hostProcess";
 import * as NodeOS from "node:os";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -336,7 +336,7 @@ export const probeRemoteEditors = DesktopIpc.makeIpcMethod({
   result: Schema.Array(EditorId),
   handler: Effect.fn("desktop.ipc.window.probeRemoteEditors")(function* () {
     const available: Array<EditorId> = [];
-    const env = yield* HostProcessEnvironment;
+    const env = yield* HostProcess.HostProcessEnvironment;
     for (const editorId of REMOTE_CAPABLE_EDITOR_IDS) {
       const editor = EDITORS.find((editor) => editor.id === editorId);
       if (editor && Option.isSome(yield* resolveEditorCommand(editor, env))) {
