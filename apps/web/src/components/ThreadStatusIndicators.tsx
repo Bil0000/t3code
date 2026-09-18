@@ -271,6 +271,7 @@ export function ThreadPullRequestBadgeControl({
       </TooltipTrigger>
       <TooltipPopup
         side="top"
+        sideOffset={showList ? 0 : 4}
         variant={showList ? "glass" : "default"}
         className={
           showList
