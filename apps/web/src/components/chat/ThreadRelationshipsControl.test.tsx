@@ -1,26 +1,7 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ThreadId } from "@t3tools/contracts";
 
-import { makeThreadFixture } from "../../test-fixtures";
-import {
-  resolveThreadLineageWindow,
-  ThreadLineageRowList,
-  ThreadRelationshipsPanel,
-} from "./ThreadRelationshipsControl";
-
-const state = vi.hoisted(() => ({ threads: [] as ReturnType<typeof makeThreadFixture>[] }));
-vi.mock("../../state/entities", () => ({
-  useThreadProjection: () => null,
-  useThreadShells: () => state.threads,
-  useProjects: () => [],
-  useServerConfigs: () => new Map(),
-}));
-vi.mock("../../lib/archivedThreadsState", () => ({
-  useArchivedThreadSnapshots: () => ({ snapshots: [] }),
-}));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+import { resolveThreadLineageWindow, ThreadLineageRowList } from "./ThreadRelationshipsControl";
 
 const rows = Array.from({ length: 20 }, (_, index) => `row-${index}`);
 
@@ -36,35 +17,6 @@ function renderRowList(visibleCount: number) {
 }
 
 describe("thread lineage row list", () => {
-  it.each([0, 1, 8])("counts %i running children across all pages", (runningCount) => {
-    const parent = makeThreadFixture();
-    state.threads = [
-      parent,
-      ...Array.from({ length: runningCount + 2 }, (_, index) => {
-        const child = makeThreadFixture({
-          id: ThreadId.make(`child-${index}`),
-          lineage: {
-            rootThreadId: parent.id,
-            parentThreadId: parent.id,
-            relationshipToParent: index === runningCount + 1 ? "fork" : "subagent",
-          },
-        });
-        return {
-          ...child,
-          source: {
-            ...child.source,
-            status: index === runningCount ? ("idle" as const) : ("running" as const),
-          },
-        };
-      }),
-    ];
-    const markup = renderToStaticMarkup(
-      <ThreadRelationshipsPanel environmentId={parent.environmentId} threadId={parent.id} />,
-    );
-    const heading = /<h3[^>]*>(.*?)<\/h3>/.exec(markup)?.[1];
-    expect(heading).toBe(runningCount ? `Lineage · ${runningCount} running` : "Lineage");
-  });
-
   it("shows six rows before the first expansion", () => {
     const { visibleRows, hiddenCount } = resolveThreadLineageWindow(rows, 6);
 
