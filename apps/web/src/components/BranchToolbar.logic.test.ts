@@ -430,6 +430,8 @@ describe("shouldShowComposerContextStrip", () => {
     (hostsRestingComposerControls) => {
       const input = {
         isDraftHeroState: false,
+        threadPanelOpen: false,
+        threadPanelPresentation: "inline" as const,
         hasActiveProject: true,
         isGitRepo: true,
         showEnvironmentIndicator: true,
@@ -442,21 +444,26 @@ describe("shouldShowComposerContextStrip", () => {
     },
   );
 
-  it.each([false, true])(
-    "hides draft context even when persistence is %s",
-    (persistInActiveThreads) => {
+  it.each([
+    { threadPanelPresentation: "inline", threadPanelOpen: false, visible: false },
+    { threadPanelPresentation: "inline", threadPanelOpen: true, visible: false },
+    { threadPanelPresentation: "popover", threadPanelOpen: false, visible: true },
+    { threadPanelPresentation: "popover", threadPanelOpen: true, visible: false },
+  ] as const)("shows draft context only with a hidden compact card: %o", (layout) => {
+    for (const persistInActiveThreads of [false, true]) {
       expect(
         shouldShowComposerContextStrip({
           isDraftHeroState: true,
+          ...layout,
           persistInActiveThreads,
           hasActiveProject: true,
           isGitRepo: true,
           showEnvironmentIndicator: true,
           hostsRestingComposerControls: false,
         }),
-      ).toBe(false);
-    },
-  );
+      ).toBe(layout.visible);
+    }
+  });
 
   it.each([
     { isGitRepo: false, showEnvironmentIndicator: true, hostsRestingComposerControls: false },
@@ -466,6 +473,8 @@ describe("shouldShowComposerContextStrip", () => {
     expect(
       shouldShowComposerContextStrip({
         isDraftHeroState: false,
+        threadPanelOpen: false,
+        threadPanelPresentation: "inline",
         persistInActiveThreads: true,
         hasActiveProject: true,
         ...context,
@@ -477,6 +486,8 @@ describe("shouldShowComposerContextStrip", () => {
     expect(
       shouldShowComposerContextStrip({
         isDraftHeroState: false,
+        threadPanelOpen: false,
+        threadPanelPresentation: "inline",
         persistInActiveThreads: true,
         hasActiveProject: true,
         isGitRepo: false,
@@ -485,6 +496,24 @@ describe("shouldShowComposerContextStrip", () => {
       }),
     ).toBe(false);
   });
+
+  it.each(["inline", "popover"] as const)(
+    "hides active-thread context when the %s card is open",
+    (threadPanelPresentation) => {
+      expect(
+        shouldShowComposerContextStrip({
+          isDraftHeroState: false,
+          threadPanelOpen: true,
+          threadPanelPresentation,
+          persistInActiveThreads: true,
+          hasActiveProject: true,
+          isGitRepo: true,
+          showEnvironmentIndicator: true,
+          hostsRestingComposerControls: true,
+        }),
+      ).toBe(false);
+    },
+  );
 });
 
 describe("resolveEffectiveEnvMode", () => {

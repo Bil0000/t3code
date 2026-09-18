@@ -1,6 +1,7 @@
 import type { EnvironmentId, EnvironmentMachineKind, VcsRef, ProjectId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { toSortableTimestamp } from "../lib/threadSort";
+import type { ThreadPanelPresentation } from "../rightPanelLayout";
 export {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
@@ -57,6 +58,8 @@ export function shouldShowEnvironmentIndicator(input: {
 
 export function shouldShowComposerContextStrip(input: {
   isDraftHeroState: boolean;
+  threadPanelOpen: boolean;
+  threadPanelPresentation: ThreadPanelPresentation;
   persistInActiveThreads: boolean;
   hasActiveProject: boolean;
   isGitRepo: boolean;
@@ -66,8 +69,10 @@ export function shouldShowComposerContextStrip(input: {
 }): boolean {
   return (
     input.hasActiveProject &&
-    !input.isDraftHeroState &&
-    input.persistInActiveThreads &&
+    !input.threadPanelOpen &&
+    (input.isDraftHeroState
+      ? input.threadPanelPresentation === "popover"
+      : input.persistInActiveThreads) &&
     (input.isGitRepo || input.showEnvironmentIndicator || input.hostsRestingComposerControls)
   );
 }
