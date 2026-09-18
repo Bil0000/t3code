@@ -882,6 +882,7 @@ export const PullRequestDetail = Schema.Struct({
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
 export const PullRequestChecks = Schema.Struct({
+  headSha: Schema.optional(TrimmedNonEmptyString),
   state: PullRequestState,
   checks: Schema.Array(PullRequestCheck),
 });
