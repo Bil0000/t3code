@@ -1588,6 +1588,43 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("keeps same-size edits visible when a temporary index is needed", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* git(cwd, ["config", "core.trustctime", "false"]);
+        yield* writeTextFile(cwd, "tracked.txt", "before\n");
+        yield* fs.utimes(path.join(cwd, "tracked.txt"), 1, 1);
+        yield* git(cwd, ["add", "tracked.txt"]);
+        yield* git(cwd, ["commit", "-m", "tracked file"]);
+        yield* writeTextFile(cwd, "tracked.txt", "after!\n");
+        yield* fs.utimes(path.join(cwd, "tracked.txt"), 1, 1);
+        const indexPath = path.join(cwd, ".git", "index");
+        yield* fs.utimes(indexPath, 1, 1);
+        const index = yield* fs.readFile(indexPath);
+        yield* writeTextFile(cwd, "untracked.txt", "new file\n");
+        for (const workingTreeScope of [undefined, "unstaged"] as const) {
+          const preview = yield* driver.getReviewDiffPreview({
+            cwd,
+            ...(workingTreeScope ? { workingTreeScope } : {}),
+          });
+          const dirty = preview.sources.find(
+            (source) => source.kind === (workingTreeScope ?? "working-tree"),
+          )!;
+          assert.include(dirty.diff, "-before");
+          assert.include(dirty.diff, "+after!");
+          assert.deepStrictEqual(
+            dirty.files?.map((file) => file.path),
+            ["tracked.txt", "untracked.txt"],
+          );
+        }
+        assert.deepStrictEqual(yield* fs.readFile(indexPath), index);
+      }),
+    );
+
     it.effect("keeps complete stats for files beyond the combined patch limit", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
