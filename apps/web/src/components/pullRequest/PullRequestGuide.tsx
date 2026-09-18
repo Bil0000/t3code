@@ -105,11 +105,13 @@ export function PullRequestGuide({
       {file.hunks.length > 0 ? (
         <nav aria-label="Changed sections" className="mt-4 flex flex-col gap-1">
           {file.hunks.map((hunk, hunkIndex) => (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               key={`${hunk.deletionStart}:${hunk.additionStart}`}
               type="button"
               onClick={() => onSelectHunk(hunkIndex)}
-              className="rounded px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="h-auto flex-col items-start gap-0 whitespace-normal text-left"
             >
               <span className="block break-words font-mono [overflow-wrap:anywhere]">
                 {hunk.hunkContext?.trim() || `Changed section ${hunkIndex + 1}`}
@@ -119,7 +121,7 @@ export function PullRequestGuide({
                   ? `Previous line ${hunk.deletionStart}`
                   : `Line ${hunk.additionStart}`}
               </span>
-            </button>
+            </Button>
           ))}
         </nav>
       ) : null}

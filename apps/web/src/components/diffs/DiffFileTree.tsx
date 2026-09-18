@@ -20,6 +20,7 @@ import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
 import { setAllDirectoriesExpanded } from "../files/fileTreeExpansion";
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup } from "../ui/tooltip";
 import { DiffRenameDetails } from "./DiffRename";
 import {
@@ -272,18 +273,19 @@ export function DiffFileTree({
                     role="menu"
                     className="rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
                   >
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       type="button"
                       role="menuitem"
                       autoFocus
-                      className="rounded-sm px-3 py-1.5 text-xs hover:bg-accent focus:bg-accent focus:outline-none"
                       onClick={() => {
                         onSetViewed(item.path, !entry.viewed);
                         context.close();
                       }}
                     >
                       {entry.viewed ? "Mark as not viewed" : "Mark as viewed"}
-                    </button>
+                    </Button>
                   </div>
                 );
               },
