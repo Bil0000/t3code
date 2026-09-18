@@ -5,7 +5,7 @@ import type {
   PullRequestRef,
   ScopedThreadRef,
 } from "@t3tools/contracts";
-import { ExternalLinkIcon, FileCode2Icon, GitCommitHorizontalIcon, PencilIcon } from "lucide-react";
+import { ExternalLinkIcon, FileCode2Icon, GitCommitHorizontalIcon } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -17,6 +17,7 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { Button } from "../ui/button";
 import { ActorName, ActorTimelineMarker, IconMarker } from "../sourceControl/TimelineRail";
 import { ConversationGroup } from "../sourceControl/ConversationGroup";
+import { PullRequestEditButton } from "./PullRequestEditButton";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -167,15 +168,11 @@ function ConversationCard({
             </PullRequestMetaLine>
           </div>
           {editable !== null && !editing ? (
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="-mt-1 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+            <PullRequestEditButton
+              className="-mt-1"
               aria-label="Edit comment"
               onClick={() => setEditing(true)}
-            >
-              <PencilIcon className="size-3" />
-            </Button>
+            />
           ) : null}
           {reactions.canReact || event.reactions.length > 0 ? (
             <PullRequestReactionBar

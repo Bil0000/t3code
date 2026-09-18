@@ -34,8 +34,8 @@ const decodeCredentialPool = Schema.decodeUnknownEffect(CredentialPoolJson);
 const encodeCredentialPool = Schema.encodeSync(CredentialPoolJson);
 
 const ApiConfig = Config.all({
-  baseUrl: Config.string("T3CODE_LINEAR_API_BASE_URL").pipe(Config.withDefault(API_URL)),
-  envToken: Config.string("T3CODE_LINEAR_API_TOKEN").pipe(Config.option),
+  baseUrl: Config.String("T3CODE_LINEAR_API_BASE_URL").pipe(Config.withDefault(API_URL)),
+  envToken: Config.String("T3CODE_LINEAR_API_TOKEN").pipe(Config.option),
 });
 
 const User = Schema.Struct({
