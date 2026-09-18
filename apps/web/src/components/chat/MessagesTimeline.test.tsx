@@ -1656,16 +1656,37 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("tool call failed");
   });
 
-  it.each([false, true])(
-    "shows plain Markdown previews for thoughts, streaming=%s",
-    async (streaming) => {
+  it.each(
+    (
+      [
+        [
+          "**Viewing image first** with *care*, ~~old~~ `code` and [context](https://example.com)",
+          "Viewing image first with care, old code and context",
+          1,
+        ],
+        ["first paragraph\n\nsecond paragraph", "first paragraph second paragraph", 0],
+        ["- first\n- second", "first second", 0],
+        ["first  \nsecond", "first second", 0],
+        ["![image description](image.png)", "image description", 0],
+        ["![](image.png)", "Thought", 0],
+        ["---", "Thought", 0],
+      ] as const
+    ).flatMap(([markdown, expected, strongCount]) =>
+      [false, true].map((streaming) => ({
+        markdown,
+        expected,
+        strongCount,
+        streaming,
+      })),
+    ),
+  )(
+    "shows a plain thought preview for $markdown, streaming=$streaming",
+    async ({ markdown, expected, strongCount, streaming }) => {
       vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
       vi.stubGlobal("requestAnimationFrame", () => 0);
       vi.stubGlobal("cancelAnimationFrame", () => {});
       const turnId = TurnId.make("turn-thought");
-      const thought = buildAssistantTimelineEntry(
-        "**Viewing image first** with *care*, ~~old~~ `code` and [context](https://example.com)",
-      );
+      const thought = buildAssistantTimelineEntry(markdown);
       let renderer: ReactTestRenderer | undefined;
       try {
         await act(() => {
@@ -1709,14 +1730,16 @@ describe("MessagesTimeline", () => {
             .flatMap((node) => node.children)
             .filter((child) => typeof child === "string")
             .join(""),
-        ).toBe("Viewing image first with care, old code and context".repeat(streaming ? 2 : 1));
+        ).toBe(
+          (streaming && expected === "Thought" ? "Thinking" : expected).repeat(streaming ? 2 : 1),
+        );
         expect(
           preview.findAll((node) =>
             ["strong", "em", "del", "code", "a"].includes(String(node.type)),
           ),
         ).toHaveLength(0);
         await act(() => preview.props.onClick());
-        expect(renderer!.root.findAllByType("strong")).toHaveLength(1);
+        expect(renderer!.root.findAllByType("strong")).toHaveLength(strongCount);
         await act(() => preview.props.onClick());
         expect(renderer!.root.findAllByType("strong")).toHaveLength(0);
       } finally {
