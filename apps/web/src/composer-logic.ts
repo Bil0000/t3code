@@ -53,7 +53,7 @@ export function composerSubmissionIntentForKey(input: {
     ...(input.platform === undefined ? {} : { platform: input.platform }),
     context: {
       composerFocus: true,
-      composerDraft: input.isDraftThread,
+      draftThreadRoute: input.isDraftThread,
       turnRunning: input.isRunning === true,
     },
   });

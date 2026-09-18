@@ -163,7 +163,7 @@ describe("composerSubmissionIntentForKey", () => {
   ] as const)("accepts a remapped %s action", (key, event) => {
     const keybindings = mergeWithDefaultKeybindings(
       compileResolvedKeybindingsConfig([
-        { key, command: "composer.sendBackground", when: "composerFocus && composerDraft" },
+        { key, command: "composer.sendBackground", when: "composerFocus && draftThreadRoute" },
       ]),
     );
     expect(
@@ -187,7 +187,7 @@ describe("composerSubmissionIntentForKey", () => {
         {
           key: "alt+b",
           command: "composer.sendBackground",
-          when: "composerFocus && composerDraft",
+          when: "composerFocus && draftThreadRoute",
         },
       ]),
     );

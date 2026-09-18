@@ -7368,7 +7368,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       {
                         context: {
                           composerFocus: true,
-                          composerDraft: routeKind === "draft",
+                          draftThreadRoute: routeKind === "draft",
                           turnRunning: true,
                         },
                       },

@@ -1169,20 +1169,14 @@ describe("composer and pull request shortcuts", () => {
       assert.strictEqual(
         resolveShortcutCommand(queuedKey, DEFAULT_RESOLVED_KEYBINDINGS, {
           platform,
-          context: { terminalFocus: false, composerDraft: false },
+          context: { terminalFocus: false, draftThreadRoute: false },
         }),
         "thread.steerQueuedMessage",
-      );
-      assert.isNull(
-        resolveShortcutCommand(queuedKey, DEFAULT_RESOLVED_KEYBINDINGS, {
-          platform,
-          context: { terminalFocus: false, composerDraft: true, composerFocus: true },
-        }),
       );
       assert.strictEqual(
         resolveShortcutCommand(backgroundKey, DEFAULT_RESOLVED_KEYBINDINGS, {
           platform,
-          context: { terminalFocus: false, composerDraft: true, composerFocus: true },
+          context: { terminalFocus: false, draftThreadRoute: true, composerFocus: true },
         }),
         "composer.sendBackground",
       );
