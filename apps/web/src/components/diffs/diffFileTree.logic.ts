@@ -42,20 +42,35 @@ function toGitStatus(file: FileDiffMetadata): GitStatus {
   }
 }
 
-/** Maps parsed diff files to tree entries, keeping the diff's own order. */
+/**
+ * Maps parsed diff files to tree entries, keeping the diff's own order. A path
+ * appears once: a type change (regular file to symlink) is a deletion plus an
+ * addition of the same path, and the tree shows the surviving file as modified.
+ */
 export function diffFileTreeEntries(
   files: ReadonlyArray<FileDiffMetadata>,
 ): ReadonlyArray<DiffFileTreeEntry> {
-  return files.map((file) => ({
-    path: resolveFileDiffPath(file),
-    status: toGitStatus(file),
-    ...(file.type === "rename-pure" || file.type === "rename-changed"
-      ? {
-          previousPath: resolveFileDiffPreviousPath(file),
-          renamedWithChanges: file.type === "rename-changed",
-        }
-      : {}),
-  }));
+  const entries = new Map<string, DiffFileTreeEntry>();
+  for (const file of files) {
+    const entry: DiffFileTreeEntry = {
+      path: resolveFileDiffPath(file),
+      status: toGitStatus(file),
+      ...(file.type === "rename-pure" || file.type === "rename-changed"
+        ? {
+            previousPath: resolveFileDiffPreviousPath(file),
+            renamedWithChanges: file.type === "rename-changed",
+          }
+        : {}),
+    };
+    const previous = entries.get(entry.path);
+    entries.set(
+      entry.path,
+      previous
+        ? { ...previous, status: previous.status === entry.status ? entry.status : "modified" }
+        : entry,
+    );
+  }
+  return [...entries.values()];
 }
 
 export function changedPathParts(previousPath: string, path: string) {
