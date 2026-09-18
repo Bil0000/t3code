@@ -33,7 +33,7 @@ function makeLayer(input: {
 }
 
 describe("GitWorkflowService", () => {
-  it.effect.each(["checkout", "pull", "refresh", "remove", "publish"])(
+  it.effect.each(["checkout", "pull", "refresh", "remove", "publish", "commit"])(
     "serializes %s with writes",
     (action) =>
       Effect.gen(function* () {
@@ -109,9 +109,9 @@ describe("GitWorkflowService", () => {
                   }),
               }),
               Layer.mock(GitManager.GitManager)({
-                runStackedAction: () =>
+                runStackedAction: (input) =>
                   Effect.sync(() => {
-                    events.push("publish");
+                    events.push(input.expectedBranch ? "publish" : "commit");
                     return {} as never;
                   }),
                 preparePullRequestThread: () =>
@@ -140,12 +140,12 @@ describe("GitWorkflowService", () => {
             ? workflow.switchRef({ cwd: "/repo/nested", refName: "other" })
             : action === "pull"
               ? workflow.pullCurrentBranch("/repo/nested")
-              : action === "publish"
+              : action === "publish" || action === "commit"
                 ? workflow.runStackedAction({
                     cwd: "/repo/nested",
                     actionId: "publish",
                     action: "commit_push",
-                    expectedBranch: "review",
+                    ...(action === "publish" ? { expectedBranch: "review" } : {}),
                   })
                 : action === "remove"
                   ? workflow.removeWorktree({
