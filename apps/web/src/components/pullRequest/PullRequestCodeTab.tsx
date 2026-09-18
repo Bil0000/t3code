@@ -20,6 +20,7 @@ import {
   InfoIcon,
   MessageSquareIcon,
   MessageSquareOffIcon,
+  PilcrowIcon,
   Rows3Icon,
   TextWrapIcon,
   TriangleAlertIcon,
@@ -233,6 +234,7 @@ function PullRequestCodeTab({
   const diffLayout = settings.diffLayout;
   const updateClientSettings = useUpdateClientSettings();
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
+  const [ignoreWhitespace, setIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
   const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
     PULL_REQUEST_FILE_TREE_STORAGE_KEY,
     false,
@@ -390,16 +392,17 @@ function PullRequestCodeTab({
       loadedSlices.map((slice) => {
         // The patch's own hash is part of the key: a refreshed page reuses its cursor, and a
         // key of position alone would keep handing back the parse of the patch it replaced.
-        const cacheKey = `pull-request:${scopeKey}:${resolvedTheme}:${slice.cursor ?? "first"}:${fnv1a32(slice.patch)}`;
+        const cacheKey = `pull-request:${scopeKey}:${resolvedTheme}:${ignoreWhitespace}:${slice.cursor ?? "first"}:${fnv1a32(slice.patch)}`;
         const cached = parseCache.current.get(cacheKey);
         if (cached) return cached;
         const parsed = getRenderablePatch(slice.patch, cacheKey, {
           compactPartialHunkOffsets: true,
+          ignoreWhitespace,
         });
         if (parsed) parseCache.current.set(cacheKey, parsed);
         return parsed;
       }),
-    [loadedSlices, resolvedTheme, scopeKey],
+    [loadedSlices, resolvedTheme, scopeKey, ignoreWhitespace],
   );
   // Ordered within a slice rather than across them: ordering the accumulated set would let a late
   // slice push a file the reader is part way through further down the page.
@@ -1123,11 +1126,6 @@ function PullRequestCodeTab({
     }
   }, [commit, onSelectedCommitChange, selectedCommit]);
   const scopeLabel = selectedCommit ? selectedCommit.messageHeadline : "All commits";
-  /**
-   * The same controls the thread diff panel carries, in the same order, minus the
-   * ignore-whitespace toggle: that is `git diff -w` on the server, and no host's pull request
-   * diff API offers it.
-   */
   const toolbar = (
     <div className="flex h-10 min-h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background px-4 text-xs text-muted-foreground">
       <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -1276,6 +1274,30 @@ function PullRequestCodeTab({
         </PullRequestMetaLine>
       </div>
       <div className="flex shrink-0 items-center gap-1">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                aria-label={
+                  ignoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
+                }
+                variant="ghost"
+                size="sm"
+                pressed={ignoreWhitespace}
+                onPressedChange={(pressed) => {
+                  setIgnoreWhitespace(Boolean(pressed));
+                  setDraft(null);
+                  setSelectedLines(null);
+                }}
+              />
+            }
+          >
+            <PilcrowIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {ignoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"}
+          </TooltipPopup>
+        </Tooltip>
         {fileKeys.length > 0 ? (
           <Tooltip>
             <TooltipTrigger
