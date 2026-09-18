@@ -8399,6 +8399,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       let statusCalls = 0;
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitManager: {
             invalidateLocalStatus: () =>
               Effect.sync(() => {
