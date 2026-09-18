@@ -171,6 +171,13 @@ it("shows the matching child agent details and refreshes them when the agent set
       .props.onClick(),
   );
   expect(text()).toContain("Old agent 7");
+
+  state.projection = {
+    ...projection,
+    subagents: [{ ...agent, childThreadId: null }],
+  };
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).toContain("Lineage · 1 running");
 });
 
 it("shows readable models and only differing workspace details in agent tooltips", async () => {

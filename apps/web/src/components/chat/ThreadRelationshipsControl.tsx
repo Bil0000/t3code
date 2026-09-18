@@ -244,7 +244,7 @@ export function ThreadRelationshipsPanel(props: {
     projection?.subagents.filter((agent) => agent.status === "running").length ??
     active.filter(({ edge }) => edge.status === "running").length;
 
-  if (relationshipRows.length === 0) {
+  if (relationshipRows.length === 0 && runningCount === 0) {
     return null;
   }
 
