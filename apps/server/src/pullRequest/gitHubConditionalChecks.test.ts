@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Redacted from "effect/Redacted";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -26,25 +27,30 @@ it.effect(
       let changed = "";
       let reads = 0;
       const requests: string[] = [];
-      const revalidate = yield* makeChecksRevalidator({
-        execute: ({ args }) =>
-          Effect.sync(() => {
-            const endpoint = args[1]!;
-            requests.push(endpoint);
-            const head = endpoint.endsWith("/pulls/1");
-            const modified = !args.includes("-H") || (endpoint.includes(changed) && changed !== "");
-            const next = endpoint.includes("check-runs") && endpoint.endsWith("page=1");
-            return {
-              exitCode: ChildProcessSpawner.ExitCode(modified ? 0 : 1),
-              stdout: modified
-                ? `HTTP/2.0 200 OK\r\nEtag: "${sha}-${changed}"\r\n${next ? 'Link: <https://api.github.com/next>; rel="next"\r\n' : ""}\r\n${head ? encodeJson({ head: { sha }, base: { repo: { id: 1 } }, headRepositoryId: 2 }) : ""}`
-                : "HTTP/2.0 304 Not Modified\r\n\r\n",
-              stderr: "",
-              stdoutTruncated: false,
-              stderrTruncated: false,
-            };
+      const revalidate = yield* makeChecksRevalidator.pipe(
+        Effect.provide(
+          Layer.mock(GitHubCli.GitHubCli)({
+            execute: ({ args }) =>
+              Effect.sync(() => {
+                const endpoint = args[1]!;
+                requests.push(endpoint);
+                const head = endpoint.endsWith("/pulls/1");
+                const modified =
+                  !args.includes("-H") || (endpoint.includes(changed) && changed !== "");
+                const next = endpoint.includes("check-runs") && endpoint.endsWith("page=1");
+                return {
+                  exitCode: ChildProcessSpawner.ExitCode(modified ? 0 : 1),
+                  stdout: modified
+                    ? `HTTP/2.0 200 OK\r\nEtag: "${sha}-${changed}"\r\n${next ? 'Link: <https://api.github.com/next>; rel="next"\r\n' : ""}\r\n${head ? encodeJson({ head: { sha }, base: { repo: { id: 1 } }, headRepositoryId: 2 }) : ""}`
+                    : "HTTP/2.0 304 Not Modified\r\n\r\n",
+                  stderr: "",
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                };
+              }),
           }),
-      });
+        ),
+      );
       const read = Effect.sync(() => {
         reads++;
         return {
@@ -104,28 +110,32 @@ it.effect("does not retain failed or incomplete reads, and supports hosts withou
     let fail = true;
     let complete = true;
     let reads = 0;
-    const revalidate = yield* makeChecksRevalidator({
-      execute: ({ args }) =>
-        unavailable
-          ? Effect.fail(
-              new GitHubCli.GitHubCliCommandError({
-                command: "gh",
-                cwd: "/repo",
-                cause: undefined,
-                httpStatus: 502,
-              }),
-            )
-          : Effect.succeed({
-              exitCode: ChildProcessSpawner.ExitCode(0),
-              stdout:
-                args.includes("-H") && etags
-                  ? "HTTP/2.0 304 Not Modified\n\n"
-                  : `HTTP/2.0 200 OK\n${etags ? 'Etag: "one"\n' : ""}\n${args[1]!.endsWith("/pulls/1") ? encodeJson({ head: { sha }, base: { repo: { id: 1 } }, headRepositoryId: 1 }) : ""}`,
-              stderr: "",
-              stdoutTruncated: false,
-              stderrTruncated: false,
-            }),
-    });
+    const revalidate = yield* makeChecksRevalidator.pipe(
+      Effect.provide(
+        Layer.mock(GitHubCli.GitHubCli)({
+          execute: ({ args }) =>
+            unavailable
+              ? Effect.fail(
+                  new GitHubCli.GitHubCliCommandError({
+                    command: "gh",
+                    cwd: "/repo",
+                    cause: undefined,
+                    httpStatus: 502,
+                  }),
+                )
+              : Effect.succeed({
+                  exitCode: ChildProcessSpawner.ExitCode(0),
+                  stdout:
+                    args.includes("-H") && etags
+                      ? "HTTP/2.0 304 Not Modified\n\n"
+                      : `HTTP/2.0 200 OK\n${etags ? 'Etag: "one"\n' : ""}\n${args[1]!.endsWith("/pulls/1") ? encodeJson({ head: { sha }, base: { repo: { id: 1 } }, headRepositoryId: 1 }) : ""}`,
+                  stderr: "",
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                }),
+        }),
+      ),
+    );
     const read = Effect.suspend(() => {
       reads++;
       return fail
@@ -171,19 +181,23 @@ it.effect("falls back when REST checks are unavailable without retrying unsuppor
   Effect.gen(function* () {
     let probes = 0;
     let reads = 0;
-    const revalidate = yield* makeChecksRevalidator({
-      execute: () => {
-        probes++;
-        return Effect.fail(
-          new GitHubCli.GitHubCliCommandError({
-            command: "gh",
-            cwd: "/repo",
-            cause: undefined,
-            httpStatus: 404,
-          }),
-        );
-      },
-    });
+    const revalidate = yield* makeChecksRevalidator.pipe(
+      Effect.provide(
+        Layer.mock(GitHubCli.GitHubCli)({
+          execute: () => {
+            probes++;
+            return Effect.fail(
+              new GitHubCli.GitHubCliCommandError({
+                command: "gh",
+                cwd: "/repo",
+                cause: undefined,
+                httpStatus: 404,
+              }),
+            );
+          },
+        }),
+      ),
+    );
     const read = Effect.sync(() => {
       reads++;
       return { state: "open" as const, checks: [] };
