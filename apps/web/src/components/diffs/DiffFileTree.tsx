@@ -105,6 +105,10 @@ export function DiffFileTree({
     [entries],
   );
   const viewedCounts = useMemo(() => diffFileTreeViewedCounts(entries), [entries]);
+  const viewedFileCount = useMemo(
+    () => entries.filter((entry) => entry.viewed === true).length,
+    [entries],
+  );
   const viewedRef = useRef({ counts: viewedCounts, onSetViewed, pending: viewedPending });
   const [hoveredRow, setHoveredRow] = useState<HTMLElement | null>(null);
   const hoveredEntry = entriesByPath.get(hoveredRow?.getAttribute("data-item-path") ?? "");
@@ -171,16 +175,64 @@ export function DiffFileTree({
     search: false,
     sort: ordering.sort,
     unsafeCSS: `${PIERRE_TREE_UNSAFE_CSS}
+      :host {
+        --trees-accent-override: var(--primary);
+        --trees-bg-muted-override: color-mix(in srgb, currentColor 7%, transparent);
+      }
+      [data-type='item']:has([data-tree-checkbox]) {
+        [data-item-section='spacing'] { order: -3; }
+        &[data-item-type='folder'] > [data-item-section='icon'] { order: -2; }
+        [data-item-section='decoration'] {
+          order: -1;
+          flex: 0 0 20px;
+          justify-content: center;
+          overflow: visible;
+        }
+        [data-item-section='content'] { flex: 1 1 auto; }
+      }
       [data-tree-checkbox] {
-        width: 14px;
-        height: 14px;
+        appearance: none;
+        display: grid;
+        place-content: center;
+        width: 16px;
+        height: 16px;
         flex-shrink: 0;
         margin: 0;
+        border: 1px solid color-mix(in srgb, var(--muted-foreground) 60%, transparent);
+        border-radius: 4px;
+        background: var(--background);
+        color: var(--primary-foreground);
         cursor: pointer;
-        accent-color: var(--primary);
       }
-      [data-item-section='decoration']:has([data-tree-checkbox]) { min-width: 18px; }
-      [data-tree-checkbox]:disabled { cursor: wait; }
+      [data-tree-checkbox]:hover:not(:disabled) { border-color: var(--foreground); }
+      [data-tree-checkbox]:checked,
+      [data-tree-checkbox]:indeterminate {
+        border-color: var(--primary);
+        background: var(--primary);
+      }
+      [data-tree-checkbox]:checked::after {
+        content: '';
+        width: 9px;
+        height: 6px;
+        border: solid currentColor;
+        border-width: 0 0 2px 2px;
+        transform: translateY(-1px) rotate(-45deg);
+      }
+      [data-tree-checkbox]:indeterminate::after {
+        content: '';
+        width: 8px;
+        height: 2px;
+        background: currentColor;
+      }
+      [data-tree-checkbox]:focus-visible {
+        outline: 2px solid var(--ring);
+        outline-offset: 2px;
+      }
+      [data-tree-checkbox]:disabled { cursor: wait; opacity: 0.5; }
+      @media (forced-colors: active) {
+        [data-tree-checkbox] { appearance: auto; }
+        [data-tree-checkbox]::after { display: none; }
+      }
       [data-type='item'] { border-radius: 5px; }
       [data-file-tree-virtualized-scroll='true'] {
         overflow-x: hidden;
@@ -276,8 +328,9 @@ export function DiffFileTree({
         data-surface-subheader
       >
         <span className="px-1 font-medium text-foreground">Files</span>
-        <span className={cn("tabular-nums", !onSetViewed && "ml-auto")}>{entries.length}</span>
-        {onSetViewed ? <span className="ml-auto px-1">Viewed</span> : null}
+        <span className="ml-auto whitespace-nowrap px-1 tabular-nums">
+          {onSetViewed ? `${viewedFileCount} / ${entries.length} viewed` : entries.length}
+        </span>
         {headerAccessory}
       </div>
       <FileTree
