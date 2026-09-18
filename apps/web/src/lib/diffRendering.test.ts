@@ -70,6 +70,14 @@ describe("getRenderablePatch", () => {
     expect(file.additionLines).toEqual(shown.files[0]!.additionLines);
     expect(file.deletionLines).toEqual(shown.files[0]!.deletionLines);
     expect(file.cacheKey).not.toBe(shown.files[0]!.cacheKey);
+    expect(resolveDiffReviewPosition(hidden.sourceFiles[0]!, 43, "additions")).toEqual({
+      kind: "added",
+      newLine: 43,
+    });
+    expect(resolveDiffReviewPosition(hidden.sourceFiles[0]!, 42, "deletions")).toEqual({
+      kind: "deleted",
+      oldLine: 42,
+    });
     expect(file.hunks[0]?.hunkContent).toContainEqual({
       type: "context",
       lines: 3,

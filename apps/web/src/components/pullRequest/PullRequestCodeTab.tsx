@@ -705,7 +705,13 @@ function PullRequestCodeTab({
       // that silently lost its first line on the other hosts would be worse than one line.
       const path = resolveFileDiffPath(file);
       const previousPath = resolveFileDiffPreviousPath(file);
-      const position = resolveDiffReviewPosition(file, range.end, range.endSide ?? range.side);
+      const sourceFile = parsedSlices
+        .flatMap((slice) => (slice?.kind === "files" ? slice.sourceFiles : []))
+        .find((candidate) => resolveFileDiffPath(candidate) === path);
+      const side = range.endSide ?? range.side;
+      const position =
+        (sourceFile && resolveDiffReviewPosition(sourceFile, range.end, side)) ??
+        resolveDiffReviewPosition(file, range.end, side);
       if (position === null) return;
       setDraft({
         fileKey: item.id,
@@ -715,7 +721,7 @@ function PullRequestCodeTab({
         range,
       });
     },
-    [canCommentOnLines, files],
+    [canCommentOnLines, files, parsedSlices],
   );
 
   // Built here because the parsed diff only lives here, and built by the same function the

@@ -47,6 +47,7 @@ export type RenderablePatch =
   | {
       kind: "files";
       files: FileDiffMetadata[];
+      sourceFiles: FileDiffMetadata[];
     }
   | {
       kind: "raw";
@@ -176,14 +177,13 @@ export function getRenderablePatch(
       normalizedPatch,
       buildPatchCacheKey(normalizedPatch, cacheScope),
     );
-    const files = parsedPatches.flatMap((parsedPatch) =>
-      parsedPatch.files.map((file) => {
-        const filtered = options.ignoreWhitespace ? hideWhitespaceChanges(file) : file;
-        return options.compactPartialHunkOffsets ? compactPartialHunkOffsets(filtered) : filtered;
-      }),
-    );
+    const sourceFiles = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
+    const files = sourceFiles.map((file) => {
+      const filtered = options.ignoreWhitespace ? hideWhitespaceChanges(file) : file;
+      return options.compactPartialHunkOffsets ? compactPartialHunkOffsets(filtered) : filtered;
+    });
     if (files.length > 0) {
-      return { kind: "files", files };
+      return { kind: "files", files, sourceFiles };
     }
 
     return {
