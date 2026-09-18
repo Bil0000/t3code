@@ -103,6 +103,8 @@ import {
 } from "../../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   BotIcon,
@@ -2722,7 +2724,13 @@ function ReasoningTraceBlock({
   }
   const label = streaming ? "Thinking" : "Thought";
   const collapsedPreview = messages.find((message) => message.text.trim().length > 0)?.text.trim();
-  const headerText = expanded ? label : (collapsedPreview ?? label);
+  const headerText = expanded ? (
+    label
+  ) : (
+    <ReactMarkdown allowedElements={[]} unwrapDisallowed skipHtml remarkPlugins={[remarkGfm]}>
+      {collapsedPreview ?? label}
+    </ReactMarkdown>
+  );
   return (
     <div className="flex flex-col">
       {showHeader ? (

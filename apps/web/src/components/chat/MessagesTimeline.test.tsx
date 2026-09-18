@@ -1656,6 +1656,75 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("tool call failed");
   });
 
+  it.each([false, true])(
+    "shows plain Markdown previews for thoughts, streaming=%s",
+    async (streaming) => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      vi.stubGlobal("requestAnimationFrame", () => 0);
+      vi.stubGlobal("cancelAnimationFrame", () => {});
+      const turnId = TurnId.make("turn-thought");
+      const thought = buildAssistantTimelineEntry(
+        "**Viewing image first** with *care*, ~~old~~ `code` and [context](https://example.com)",
+      );
+      let renderer: ReactTestRenderer | undefined;
+      try {
+        await act(() => {
+          renderer = create(
+            <MessagesTimeline
+              {...buildProps()}
+              isWorking
+              runningTurnId={turnId}
+              timelineEntries={[
+                {
+                  id: "work-entry",
+                  kind: "work",
+                  createdAt: MESSAGE_CREATED_AT,
+                  entry: {
+                    id: "work",
+                    createdAt: MESSAGE_CREATED_AT,
+                    turnId,
+                    label: "Read image",
+                    tone: "tool",
+                    itemType: "command_execution",
+                    command: "cat image.png",
+                    toolLifecycleStatus: "completed",
+                  },
+                },
+                {
+                  ...thought,
+                  message: { ...thought.message, role: "reasoning", turnId, streaming },
+                },
+              ]}
+            />,
+          );
+        });
+        await act(() => renderer!.root.findByProps({ "aria-expanded": false }).props.onClick());
+        const text = renderer!.root.findByProps({
+          className: "relative min-w-0 flex-1 truncate text-secondary-label",
+        });
+        const preview = text.parent!;
+        expect(
+          text
+            .findAll(() => true)
+            .flatMap((node) => node.children)
+            .filter((child) => typeof child === "string")
+            .join(""),
+        ).toBe("Viewing image first with care, old code and context".repeat(streaming ? 2 : 1));
+        expect(
+          preview.findAll((node) =>
+            ["strong", "em", "del", "code", "a"].includes(String(node.type)),
+          ),
+        ).toHaveLength(0);
+        await act(() => preview.props.onClick());
+        expect(renderer!.root.findAllByType("strong")).toHaveLength(1);
+        await act(() => preview.props.onClick());
+        expect(renderer!.root.findAllByType("strong")).toHaveLength(0);
+      } finally {
+        await act(() => renderer?.unmount());
+      }
+    },
+  );
+
   it("renders initial thinking as the shared live activity row", () => {
     const turnId = TurnId.make("turn-live");
     const markup = renderToStaticMarkup(
