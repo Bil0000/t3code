@@ -389,6 +389,7 @@ export function ThreadRelationshipsPanel(props: {
                     <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
                       <Tooltip>
                         <TooltipTrigger
+                          delay={200}
                           render={
                             <Button
                               size="sm"
@@ -442,6 +443,7 @@ export function ThreadRelationshipsPanel(props: {
                   ) : (
                     <Tooltip>
                       <TooltipTrigger
+                        delay={200}
                         render={
                           <Button
                             size="sm"
