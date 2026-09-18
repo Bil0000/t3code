@@ -218,6 +218,10 @@ export const ProjectFileFailure = Schema.Literals([
   "path_not_file",
   "binary_file",
   "checkout_changed",
+  "checkout_verification_failed",
+  "read_before_write_failed",
+  "contents_changed",
+  "workspace_verification_failed",
   "operation_failed",
 ]);
 export type ProjectFileFailure = typeof ProjectFileFailure.Type;
@@ -238,7 +242,6 @@ type ProjectFileFailureContext = {
   readonly cwd: string;
   readonly relativePath: string;
   readonly failure: ProjectFileFailure;
-  readonly message?: string;
   readonly resolvedPath?: string;
   readonly resolvedWorkspaceRoot?: string;
   readonly operation?: ProjectFileOperation;
@@ -285,6 +288,15 @@ export const ProjectWriteFileResult = Schema.Struct({
 });
 export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 
+const projectWriteFailureMessages: Partial<Record<ProjectFileFailure, string>> = {
+  checkout_changed: "The checkout changed. Reopen the file before saving.",
+  checkout_verification_failed: "Could not verify the checkout before saving.",
+  read_before_write_failed: "Could not read the file before saving.",
+  contents_changed:
+    "This file changed since you opened it. Your edits are still here. Refresh the review before saving.",
+  workspace_verification_failed: "Could not verify the working copy before saving.",
+};
+
 export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileError>()(
   "ProjectWriteFileError",
   {
@@ -305,6 +317,7 @@ export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileEr
       ...props,
       message:
         decodedProjectErrorMessage(props) ??
+        projectWriteFailureMessages[props.failure] ??
         `Failed to write workspace file '${props.relativePath}' in '${props.cwd}'.`,
     } as any);
   }

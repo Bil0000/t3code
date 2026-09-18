@@ -3040,8 +3040,7 @@ const makeWsRpcLayer = (
                       new ProjectWriteFileError({
                         cwd: input.cwd,
                         relativePath: input.relativePath,
-                        message: "Could not verify the checkout before saving.",
-                        failure: "operation_failed",
+                        failure: "checkout_verification_failed",
                         cause,
                       }),
                   ),
@@ -3050,7 +3049,6 @@ const makeWsRpcLayer = (
                   return yield* new ProjectWriteFileError({
                     cwd: input.cwd,
                     relativePath: input.relativePath,
-                    message: "The checkout changed. Reopen the file before saving.",
                     failure: "checkout_changed",
                   });
                 }
@@ -3062,8 +3060,7 @@ const makeWsRpcLayer = (
                       new ProjectWriteFileError({
                         cwd: input.cwd,
                         relativePath: input.relativePath,
-                        message: "Could not read the file before saving.",
-                        failure: "operation_failed",
+                        failure: "read_before_write_failed",
                         cause,
                       }),
                   ),
@@ -3075,9 +3072,7 @@ const makeWsRpcLayer = (
                   return yield* new ProjectWriteFileError({
                     cwd: input.cwd,
                     relativePath: input.relativePath,
-                    message:
-                      "This file changed since you opened it. Your edits are still here. Refresh the review before saving.",
-                    failure: "operation_failed",
+                    failure: "contents_changed",
                   });
                 }
               }
@@ -3105,8 +3100,7 @@ const makeWsRpcLayer = (
                     : new ProjectWriteFileError({
                         cwd: input.cwd,
                         relativePath: input.relativePath,
-                        failure: "operation_failed",
-                        message: "Could not verify the working copy before saving.",
+                        failure: "workspace_verification_failed",
                         cause,
                       }),
                 ),
