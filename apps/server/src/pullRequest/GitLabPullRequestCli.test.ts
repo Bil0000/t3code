@@ -963,8 +963,11 @@ layer("GitLabPullRequestCli.layer", (it) => {
                   },
                 ],
               },
-              // A plain note is the timeline's business, not the diff's.
-              { id: "def456", notes: [{ id: 3, body: "ship it", created_at: "2026-07-01Z" }] },
+              {
+                id: "def456",
+                individual_note: true,
+                notes: [{ id: 3, body: "ship it", created_at: "2026-07-01T00:00:00Z" }],
+              },
             ]),
           ),
         ),
@@ -977,7 +980,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
         number: 7,
       });
 
-      assert.strictEqual(threads.length, 1);
+      assert.strictEqual(threads.length, 2);
       expect(threads[0]).toMatchObject({
         id: "abc123",
         path: "src/a.ts",
@@ -1409,6 +1412,26 @@ layer("GitLabPullRequestCli.layer", (it) => {
       ]);
       // A JSON body, so a note rewritten to a literal `true` stays text.
       expect(callAt(0).stdin).toBe('{"body":"true"}');
+    }),
+  );
+  it.effect("edits a discussion note through its encoded thread and note ids", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.updateNote({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        discussionId: "discussion/id",
+        noteId: "42/part",
+        body: "Updated reply",
+      });
+
+      expect(argsOfCall(0)[1]).toBe(
+        "projects/acme%2Fweb/merge_requests/7/discussions/discussion%2Fid/notes/42%2Fpart",
+      );
+      expect(callAt(0).stdin).toBe('{"body":"Updated reply"}');
     }),
   );
   it.effect("reads blob ids for the marked paths at the merge request's head", () =>

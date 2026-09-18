@@ -1069,6 +1069,30 @@ describe("review thread decoding", () => {
     ]);
   });
 
+  it.each([false, true])(
+    "uses native permissions for the next resolution action: resolved=%s",
+    (isResolved) => {
+      const { threads } = expectSuccess(
+        decodeReviewThreadsJson(
+          threadsJson([
+            {
+              id: "PRRT_1",
+              path: "src/a.ts",
+              isResolved,
+              viewerCanResolve: true,
+              viewerCanReply: false,
+              viewerCanUnresolve: false,
+              comments: { nodes: [comment("c1", "Check this")] },
+            },
+          ]),
+        ),
+      );
+
+      expect(threads[0]?.thread.canResolve).toBe(!isResolved);
+      expect(threads[0]?.thread.canReply).toBe(false);
+    },
+  );
+
   it("leaves an outdated thread without a line rather than pinning it to a stale one", () => {
     const reviewThreads = expectSuccess(
       decodeReviewThreadsJson(

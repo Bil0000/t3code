@@ -153,6 +153,13 @@ export const githubMediaResponse = Effect.fn("GitHubMediaFetch.githubMediaRespon
     if (value !== undefined) forwarded[name] = value;
   }
   const response = yield* fetchFollowingRedirects(asset.url, forwarded, token);
+  return yield* mediaResponse(asset, response);
+});
+
+export const mediaResponse = Effect.fn("GitHubMediaFetch.mediaResponse")(function* (
+  asset: { readonly url: string; readonly expiresAt: number },
+  response: HttpClientResponse.HttpClientResponse | null,
+) {
   // An upload GitHub hosts never changes under its URL, so the only thing a cached copy must
   // not outlive is the signed URL that granted it — which is the same bound the URL itself has.
   const remainingSeconds = Math.floor((asset.expiresAt - (yield* Clock.currentTimeMillis)) / 1000);

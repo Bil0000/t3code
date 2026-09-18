@@ -170,7 +170,7 @@ describe("rewriting what has already been said", () => {
     }),
   );
 
-  it.effect("rewrites a positioned comment through the same note as any other", () =>
+  it.effect("keeps the discussion id when editing a thread comment", () =>
     Effect.gen(function* () {
       const provider = yield* providerWith;
       assert.isDefined(provider.updateComment);
@@ -181,6 +181,7 @@ describe("rewriting what has already been said", () => {
         host: "gitlab.com",
         number: 7,
         commentId: "42",
+        threadId: "discussion",
         kind: "review-comment",
         body: "Reworded.",
       });
@@ -190,6 +191,7 @@ describe("rewriting what has already been said", () => {
         repository: "acme/web",
         number: 7,
         noteId: "42",
+        discussionId: "discussion",
         body: "Reworded.",
       });
     }),
@@ -213,7 +215,7 @@ describe("comment links", () => {
       const provider = yield* make.pipe(
         Effect.provide(
           Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({
-            listNotes: () => Effect.succeed({ comments: [comment, reply], truncated: false }),
+            listNotes: () => Effect.succeed({ comments: [comment], truncated: false }),
             listCommits: () => Effect.succeed([]),
             listDiscussions: () =>
               Effect.succeed({
@@ -247,6 +249,7 @@ describe("comment links", () => {
         "https://gitlab.example.com:8443/team/sub%20group/web/-/merge_requests/7#note_6",
       ];
       expect(activity.comments.map((item) => item.url)).toEqual(links);
+      expect(activity.commentCount).toBe(2);
       expect(activity.reviewThreads[0]?.comments.map((item) => item.url)).toEqual(links);
     }),
   );

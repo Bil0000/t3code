@@ -125,6 +125,7 @@ import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLi
 import { PullRequestMarkdownContext } from "./PullRequestMarkdown";
 import { PullRequestCommentActionsContext } from "./PullRequestCommentActions";
 import { Checkbox } from "../ui/checkbox";
+import { PullRequestAttachmentProvider } from "./PullRequestMarkdownField";
 import { PullRequestCommentComposer } from "./PullRequestCommentComposer";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
@@ -1542,7 +1543,7 @@ export function PullRequestDetailPanel({
     return <PullRequestDetailGhost seed={matchingListEntry} />;
   }
 
-  return (
+  const panel = (
     <div className="relative flex h-full min-h-0 w-full flex-col bg-background">
       {detail &&
         (pendingEdits > 0 ||
@@ -2547,6 +2548,24 @@ export function PullRequestDetailPanel({
                 </Toggle>
               ))}
             </ToggleGroup>
+            {detail?.capabilities.comment && detail.viewerPermissions.comment ? (
+              <PullRequestCommentComposer
+                key={JSON.stringify([
+                  environmentId,
+                  reference.projectId,
+                  reference.host,
+                  reference.repository,
+                  reference.number,
+                ])}
+                environmentId={environmentId}
+                reference={reference}
+                detail={detail}
+                actionPending={actionPending}
+                onCommentAction={performCommentAction}
+                onCommented={refreshDetail}
+              />
+            ) : null}
+
             {tab === "summary" ? (
               <span className="ml-auto inline-flex shrink-0 items-center">
                 {workflowApprovalsRequired > 0 && can("approve-workflows") ? (
@@ -2727,11 +2746,16 @@ export function PullRequestDetailPanel({
               ...(detail.capabilities.review.resolve && detail.viewerPermissions.resolve
                 ? {
                     resolve: async (thread) => {
+                      if (thread.canResolve === false) return;
                       if (actionPending) return;
                       setResolvingThread(true);
                       const result = await setThreadResolution({
                         environmentId,
-                        input: { ...reference, threadId: thread.id, resolved: !thread.isResolved },
+                        input: {
+                          ...reference,
+                          threadId: thread.id,
+                          resolved: !thread.isResolved,
+                        },
                       });
                       setResolvingThread(false);
                       if (result._tag === "Failure") {
@@ -2830,27 +2854,6 @@ export function PullRequestDetailPanel({
         ) : null}
       </div>
 
-      {/* Float over the content; do not reserve a footer or padding in the PR tabs. */}
-      {detail?.capabilities.comment && detail.viewerPermissions.comment ? (
-        <div className="absolute right-4 bottom-3 z-20">
-          <PullRequestCommentComposer
-            key={JSON.stringify([
-              environmentId,
-              reference.projectId,
-              reference.host,
-              reference.repository,
-              reference.number,
-            ])}
-            environmentId={environmentId}
-            reference={reference}
-            detail={detail}
-            actionPending={actionPending}
-            onCommentAction={performCommentAction}
-            onCommented={refreshDetail}
-          />
-        </div>
-      ) : null}
-
       <AlertDialog
         open={confirmation.open}
         onOpenChange={(open) => setConfirmation((current) => ({ ...current, open }))}
@@ -2941,5 +2944,17 @@ export function PullRequestDetailPanel({
         </AlertDialogPopup>
       </AlertDialog>
     </div>
+  );
+  return (
+    <PullRequestAttachmentProvider
+      environmentId={environmentId}
+      reference={reference}
+      url={detail?.url}
+      provider={detail?.provider}
+      capabilities={detail?.capabilities.attachments}
+      cwd={detail?.workspaceRoot ?? ""}
+    >
+      {panel}
+    </PullRequestAttachmentProvider>
   );
 }

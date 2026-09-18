@@ -124,6 +124,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import { withPullRequestAttachment } from "./pullRequest/PullRequestAttachments.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -2793,6 +2794,17 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "pull-requests",
             },
           ),
+        [WS_METHODS.pullRequestsUploadAttachment]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsUploadAttachment,
+            withPullRequestViewer(
+              input,
+              withPullRequestAttachment(input, (attachment) =>
+                pullRequests.uploadAttachment({ ...input, ...attachment }),
+              ),
+            ),
+            { "rpc.aggregate": "pull-requests" },
+          ),
         [WS_METHODS.pullRequestsUpdateComment]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsUpdateComment,
@@ -3173,6 +3185,7 @@ const makeWsRpcLayer = (
                 input.resource._tag === "native-app-icon" ||
                 // GitHub media names the repository it authenticates through itself.
                 input.resource._tag === "github-media" ||
+                input.resource._tag === "pull-request-media" ||
                 (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
               ) {
                 return yield* issueAssetUrl({ resource: input.resource });

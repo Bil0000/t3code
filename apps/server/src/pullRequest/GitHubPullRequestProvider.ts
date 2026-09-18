@@ -1,3 +1,4 @@
+import { GITHUB_ATTACHMENT_CAPABILITY } from "./PullRequestAttachments.ts";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -22,6 +23,7 @@ import {
 import type { GitHubViewerAccess, GitHubWorkflowRunApproval } from "./gitHubPullRequestJson.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
+  attachments: GITHUB_ATTACHMENT_CAPABILITY,
   bypassMergeChecks: true,
   diff: true,
   comment: true,
@@ -411,6 +413,15 @@ export const make = Effect.gen(function* () {
         Effect.mapError(fail("getChangeRequest")),
         Effect.map(([detail, repository, viewerAccess]): ProviderChangeRequestDetail => ({
           ...detail.pullRequest,
+          attachments: {
+            ...GITHUB_ATTACHMENT_CAPABILITY,
+            supported:
+              viewerAccess.canWrite &&
+              (input.host === "github.com" || /^[a-z0-9-]+\.ghe\.com$/.test(input.host)),
+            ...(!viewerAccess.canWrite
+              ? { reason: "Attaching files requires write access to this repository." }
+              : {}),
+          },
           author: withAvatar(detail.pullRequest.author, new Map<string, string>(), input.host),
           checks: withWorkflowApprovals(
             detail.pullRequest.checks,
@@ -647,6 +658,8 @@ export const make = Effect.gen(function* () {
 
     comment: (input) => cli.commentOnPullRequest(input).pipe(Effect.mapError(fail("comment"))),
 
+    uploadAttachment: (input) => cli.uploadAttachment(input),
+    ...(cli.readAttachment ? { readAttachment: cli.readAttachment } : {}),
     updateComment: (input) =>
       cli
         .updateComment({

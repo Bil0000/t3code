@@ -1,11 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { FetchHttpClient } from "effect/unstable/http";
 
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import {
   LOCATION_CACHE_CAPACITY,
-  make,
+  make as makeProvider,
   MAX_DIFF_SPAWNS,
 } from "./AzureDevOpsPullRequestProvider.ts";
 import {
@@ -16,6 +17,8 @@ import {
   parseAzureDevOpsDiffCursor,
 } from "./azureDevOpsDiff.ts";
 import type { AzureDevOpsChangeEntry } from "./azureDevOpsPullRequestJson.ts";
+
+const make = makeProvider.pipe(Effect.provide(FetchHttpClient.layer));
 
 const ITERATION = { id: 3, headCommit: "head", mergeBaseCommit: "base" };
 

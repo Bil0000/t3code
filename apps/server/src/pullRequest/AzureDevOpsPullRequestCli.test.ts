@@ -1,5 +1,16 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http";
+import { NodeFileSystem } from "@effect/platform-node";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -7,10 +18,37 @@ import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
 
+const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+
 const mockedExecute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>();
+
+const attachmentRequests: HttpClientRequest.HttpClientRequest[] = [];
+const httpClient = HttpClient.make((request) =>
+  Effect.gen(function* () {
+    attachmentRequests.push(request);
+    const options = yield* Effect.serviceOption(FetchHttpClient.RequestInit);
+    expect(Option.getOrUndefined(options)?.redirect).toBe("manual");
+    return HttpClientResponse.fromWeb(
+      request,
+      request.method === "GET"
+        ? new Response(new Uint8Array([0, 255, 128]), {
+            status: 206,
+            headers: { "content-type": "image/png", "content-range": "bytes 0-2/3" },
+          })
+        : new Response(
+            '{"url":"https://dev.azure.com/acme/project/_apis/git/attachments/proof.png"}',
+            {
+              status: 201,
+            },
+          ),
+    );
+  }),
+);
 
 const layer = it.layer(
   AzureDevOpsPullRequestCli.layer.pipe(
+    Layer.provide(NodeFileSystem.layer),
+    Layer.provideMerge(Layer.succeed(HttpClient.HttpClient, httpClient)),
     Layer.provide(
       Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
         execute: mockedExecute,
@@ -183,9 +221,230 @@ function iterationRows(count: number): ReadonlyArray<Record<string, unknown>> {
 
 afterEach(() => {
   mockedExecute.mockReset();
+  attachmentRequests.length = 0;
 });
 
 layer("AzureDevOpsPullRequestCli.layer", (it) => {
+  it.effect(
+    "reads private attachment bytes only from the verified PR, including Azure GUID URLs",
+    () =>
+      Effect.gen(function* () {
+        mockedExecute.mockReturnValue(
+          Effect.succeed(
+            output(
+              json({
+                ...pullRequestRow,
+                repository: {
+                  name: "web",
+                  id: "repo-guid",
+                  project: { name: "platform", id: "project-guid" },
+                },
+              }),
+            ),
+          ),
+        );
+        const provider = yield* AzureDevOpsPullRequestProvider.make;
+        assert.isDefined(provider.readAttachment);
+        for (const path of [
+          "platform/_apis/git/repositories/web",
+          "project-guid/_apis/git/repositories/repo-guid",
+          "_apis/git/repositories/repo-guid",
+        ]) {
+          const response = yield* provider.readAttachment({
+            cwd: "/w",
+            host: "dev.azure.com",
+            repository: "web",
+            number: 42,
+            url: `https://dev.azure.com/acme/${path}/pullRequests/42/attachments/proof.png`,
+            headers: { Range: "bytes=0-2", authorization: "untrusted", cookie: "untrusted" },
+          });
+          expect(response.status).toBe(206);
+          expect(new Uint8Array(yield* response.arrayBuffer)).toEqual(
+            new Uint8Array([0, 255, 128]),
+          );
+          const request = attachmentRequests.at(-1)!;
+          expect(request.url).toBe(
+            "https://dev.azure.com/acme/platform/_apis/git/repositories/web/pullRequests/42/attachments/proof.png?api-version=7.1",
+          );
+          expect(request.headers.authorization).toBe("Basic OnRlc3QtcGF0");
+          expect(request.headers.range).toBe("bytes=0-2");
+          expect(request.headers.cookie).toBeUndefined();
+        }
+      }).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ AZURE_DEVOPS_EXT_PAT: "test-pat" }),
+        ),
+      ),
+  );
+
+  it.effect("rejects private media outside the current Azure PR before sending credentials", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output(json(pullRequestRow))));
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      assert.isDefined(provider.readAttachment);
+      const url =
+        "https://dev.azure.com/acme/platform/_apis/git/repositories/web/pullRequests/42/attachments/proof.png";
+      for (const invalid of [
+        url.replace("dev.azure.com", "other.example"),
+        url.replace("/platform/", "/other/"),
+        url.replace("/web/", "/other/"),
+        url.replace("/42/", "/43/"),
+        url.replace("proof.png", "dir%2Fproof.png"),
+        url.replace("https://", "https://untrusted@"),
+      ]) {
+        const result = yield* provider
+          .readAttachment({
+            cwd: "/w",
+            host: "dev.azure.com",
+            repository: "web",
+            number: 42,
+            url: invalid,
+            headers: {},
+          })
+          .pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+      }
+      expect(attachmentRequests).toHaveLength(0);
+      expect(
+        mockedExecute.mock.calls.every(([request]) => !request.args.includes("get-access-token")),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect("uses a server PAT without asking Azure CLI for another token", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(json(pullRequestRow))));
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      assert.isDefined(provider.uploadAttachment);
+      yield* provider.uploadAttachment({
+        cwd: "/w",
+        host: "dev.azure.com",
+        repository: "web",
+        number: 42,
+        name: "proof.png",
+        mimeType: "image/png",
+        data: new Uint8Array([0, 255]),
+        filePath: "/tmp/proof.png",
+      });
+      expect(mockedExecute).toHaveBeenCalledTimes(1);
+      expect(attachmentRequests.at(-1)?.headers.authorization).toBe("Basic OnRlc3QtcGF0");
+    }).pipe(
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({ AZURE_DEVOPS_EXT_PAT: "test-pat" }),
+      ),
+    ),
+  );
+
+  it.effect("uploads binary attachments with an Azure DevOps access token", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(json(pullRequestRow))));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output('"test-access-token"')));
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      assert.isDefined(provider.uploadAttachment);
+      const uploaded = yield* provider.uploadAttachment({
+        cwd: "/w",
+        host: "dev.azure.com",
+        repository: "web",
+        number: 42,
+        name: "proof.png",
+        mimeType: "image/png",
+        data: new Uint8Array([0, 255, 128]),
+        filePath: "/tmp/proof.png",
+      });
+      expect(argsOfCall(1)).toEqual(
+        expect.arrayContaining(["get-access-token", "499b84ac-1321-427f-aa17-267ca6975798"]),
+      );
+      const request = attachmentRequests.at(-1)!;
+      expect(request.url).toContain(
+        "/acme/platform/_apis/git/repositories/web/pullRequests/42/attachments/pending-",
+      );
+      expect(request.url).toContain("-proof.png?api-version=7.1");
+      expect(request.body._tag).toBe("Uint8Array");
+      if (request.body._tag === "Uint8Array") expect([...request.body.body]).toEqual([0, 255, 128]);
+      expect(request.headers.authorization).toBe("Bearer test-access-token");
+      expect(uploaded.markdown).toBe(
+        "![proof.png](<https://dev.azure.com/acme/project/_apis/git/attachments/proof.png>)",
+      );
+    }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({}))),
+  );
+
+  it.effect(
+    "writes and edits comments in their native thread and resolves in both directions",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const writes: { args: ReadonlyArray<string>; body: unknown; file: string }[] = [];
+        mockedExecute.mockImplementation((input) =>
+          Effect.gen(function* () {
+            const file = input.args[input.args.indexOf("--in-file") + 1];
+            if (!input.args.includes("--in-file") || !file) return output(json(pullRequestRow));
+            writes.push({
+              args: input.args,
+              body: yield* decodeJson(yield* fs.readFileString(file)),
+              file,
+            });
+            return output("{}");
+          }).pipe(Effect.orDie),
+        );
+        const provider = yield* AzureDevOpsPullRequestProvider.make;
+        const ref = { cwd: "/w", repository: "web", host: "dev.azure.com", number: 42 };
+        yield* provider.comment({ ...ref, body: "First **comment**\nsecond line" });
+        yield* provider.replyToThread({ ...ref, threadId: "7", body: "A reply" });
+        assert.isDefined(provider.updateComment);
+        yield* provider.updateComment({
+          ...ref,
+          commentId: "7:2",
+          kind: "review-comment",
+          body: "Edited",
+        });
+        yield* provider.setThreadResolution({ ...ref, threadId: "7", resolved: true });
+        yield* provider.setThreadResolution({ ...ref, threadId: "7", resolved: false });
+        expect(writes.map(({ body }) => body)).toEqual([
+          {
+            status: "active",
+            comments: [
+              {
+                parentCommentId: 0,
+                content: "First **comment**\nsecond line",
+                commentType: "text",
+              },
+            ],
+          },
+          { parentCommentId: 1, content: "A reply", commentType: "text" },
+          { content: "Edited" },
+          { status: "fixed" },
+          { status: "active" },
+        ]);
+        expect(writes[1]?.args).toEqual(
+          expect.arrayContaining(["pullRequestThreadComments", "POST", "threadId=7"]),
+        );
+        expect(writes[2]?.args).toEqual(
+          expect.arrayContaining(["PATCH", "threadId=7", "commentId=2"]),
+        );
+        for (const { file } of writes) expect(yield* fs.exists(file)).toBe(false);
+      }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("rejects invalid thread IDs before a provider request", () =>
+    Effect.gen(function* () {
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      const result = yield* provider
+        .replyToThread({
+          cwd: "/w",
+          repository: "web",
+          host: "dev.azure.com",
+          number: 42,
+          threadId: "7/thread",
+          body: "reply",
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(mockedExecute).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("asks for one row more than the page, to probe for a next page", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(3, 1))));
@@ -614,8 +873,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
       const provider = yield* AzureDevOpsPullRequestProvider.make;
 
-      // False for a remark because nothing here can post one, so there is none to rewrite.
-      expect(provider.capabilities.edit).toEqual({ changeRequest: true, comment: false });
+      expect(provider.capabilities.edit).toEqual({ changeRequest: true, comment: true });
       assert.isDefined(provider.updateChangeRequest);
       yield* provider.updateChangeRequest({
         cwd: "/w",
@@ -1235,7 +1493,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       );
       const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
 
-      const comments = yield* cli.listThreads({
+      const { comments } = yield* cli.listThreads({
         cwd: "/w",
         location: { project: "platform", repository: "web" },
         number: 42,
@@ -1270,7 +1528,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       );
       const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
 
-      const comments = yield* cli.listThreads({
+      const { comments } = yield* cli.listThreads({
         cwd: "/w",
         location: { project: "platform", repository: "web" },
         number: 42,

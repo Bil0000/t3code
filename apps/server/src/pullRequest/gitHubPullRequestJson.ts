@@ -458,6 +458,9 @@ const RawReviewThreadsSchema = Schema.Struct({
             Schema.Struct({
               id: Schema.optional(Schema.NullOr(Schema.String)),
               isResolved: Schema.optional(Schema.Boolean),
+              viewerCanResolve: Schema.optional(Schema.Boolean),
+              viewerCanReply: Schema.optional(Schema.Boolean),
+              viewerCanUnresolve: Schema.optional(Schema.Boolean),
               isOutdated: Schema.optional(Schema.Boolean),
               path: Schema.optional(Schema.NullOr(Schema.String)),
               /** Null once the thread's line has left the diff, which `isOutdated` reports. */
@@ -734,6 +737,9 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
         nodes {
           id
           isResolved
+          viewerCanResolve
+          viewerCanReply
+          viewerCanUnresolve
           isOutdated
           path
           line
@@ -1910,6 +1916,7 @@ export function decodeReviewThreadsJson(
     const path = trimmed(thread.path);
     const id = trimmed(thread.id);
     if (path === null || id === null || thread.comments.nodes.length === 0) return [];
+    const canResolve = thread.isResolved ? thread.viewerCanUnresolve : thread.viewerCanResolve;
     return [
       {
         thread: {
@@ -1923,6 +1930,8 @@ export function decodeReviewThreadsJson(
               : null,
           side: thread.diffSide?.toUpperCase() === "LEFT" ? "left" : "right",
           isResolved: thread.isResolved === true,
+          ...(canResolve === undefined ? {} : { canResolve }),
+          ...(thread.viewerCanReply === undefined ? {} : { canReply: thread.viewerCanReply }),
           isOutdated: thread.isOutdated === true,
           comments: thread.comments.nodes.map((comment) => ({
             id: comment.id,

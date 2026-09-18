@@ -1,3 +1,5 @@
+import { uploadGitLabAttachment, readGitLabAttachment } from "./PullRequestAttachments.ts";
+import type { PullRequestProviderApi } from "./PullRequestProvider.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -348,6 +350,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
       readonly noteId: string;
+      readonly discussionId?: string;
       readonly body: string;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
@@ -369,6 +372,8 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
+    readonly readAttachment?: NonNullable<PullRequestProviderApi["readAttachment"]>;
+    readonly uploadAttachment: NonNullable<PullRequestProviderApi["uploadAttachment"]>;
     readonly replyToDiscussion: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -791,7 +796,6 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  /** The positioned discussions, walked the same way and stopped by the same bound. */
   const discussionsPage = (input: {
     readonly cwd: string;
     readonly repository: string;
@@ -1151,6 +1155,8 @@ export const make = Effect.gen(function* () {
     );
 
   return GitLabPullRequestCli.of({
+    uploadAttachment: (input) => uploadGitLabAttachment(gitlab.execute, input),
+    readAttachment: (input) => readGitLabAttachment(gitlab.execute, input),
     getViewerUsername: viewerUsername,
 
     listMergeRequests: (input) => {
@@ -1409,7 +1415,7 @@ export const make = Effect.gen(function* () {
     updateNote: (input) =>
       api({
         cwd: input.cwd,
-        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/notes/${encodeURIComponent(
+        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/${input.discussionId === undefined ? "" : `discussions/${encodeURIComponent(input.discussionId)}/`}notes/${encodeURIComponent(
           input.noteId,
         )}`,
         method: "PUT",

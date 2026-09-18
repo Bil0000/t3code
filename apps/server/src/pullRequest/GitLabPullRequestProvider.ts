@@ -1,3 +1,4 @@
+import { NATIVE_ATTACHMENT_CAPABILITY } from "./PullRequestAttachments.ts";
 import * as Effect from "effect/Effect";
 import type {
   PullRequestCapabilities,
@@ -15,6 +16,10 @@ import {
 } from "./PullRequestProvider.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
+  attachments: {
+    ...NATIVE_ATTACHMENT_CAPABILITY,
+    reason: "Requires glab 1.91 or later. The GitLab server may set a smaller file limit.",
+  },
   diff: true,
   comment: true,
   actions: [
@@ -197,28 +202,38 @@ export const make = Effect.gen(function* () {
         { concurrency: 4 },
       ).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
-        Effect.map(([notes, commits, discussions, awards]): ProviderChangeRequestActivity => ({
-          reactions: awards.reactions,
-          comments: notes.comments.map((comment) => ({
-            ...comment,
-            url: commentUrl(input, comment.id),
-            reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
-          })),
-          // GitLab reports no count of its own, so the walk's own total is the host's: the
-          // notes endpoint carries every comment on the merge request, including the ones
-          // written under a discussion, and it is read until GitLab runs out.
-          commentCount: notes.comments.length,
-          commentsTruncated: notes.truncated || discussions.truncated,
-          reviewThreads: discussions.threads.map((thread) => ({
-            ...thread,
-            comments: thread.comments.map((comment) => ({
+        Effect.map(([notes, commits, discussions, awards]): ProviderChangeRequestActivity => {
+          const comments = new Map(notes.comments.map((comment) => [comment.id, comment]));
+          for (const thread of discussions.threads) {
+            for (const comment of thread.comments) {
+              comments.set(comment.id, {
+                ...comment,
+                kind: thread.path === null ? "issue-comment" : "review-comment",
+                path: thread.path,
+                reviewState: null,
+              });
+            }
+          }
+          return {
+            reactions: awards.reactions,
+            comments: [...comments.values()].map((comment) => ({
               ...comment,
               url: commentUrl(input, comment.id),
               reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
             })),
-          })),
-          commits,
-        })),
+            commentCount: comments.size,
+            commentsTruncated: notes.truncated || discussions.truncated,
+            reviewThreads: discussions.threads.map((thread) => ({
+              ...thread,
+              comments: thread.comments.map((comment) => ({
+                ...comment,
+                url: commentUrl(input, comment.id),
+                reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+              })),
+            })),
+            commits,
+          };
+        }),
       ),
 
     // The same read the detail takes it from, on its own: `user.can_merge` lives on the merge
@@ -285,8 +300,8 @@ export const make = Effect.gen(function* () {
 
     comment: (input) => cli.commentOnMergeRequest(input).pipe(Effect.mapError(fail("comment"))),
 
-    // The kind is not read: every comment this provider hands out, positioned or not, carries a
-    // plain REST note id, and one endpoint rewrites both.
+    uploadAttachment: (input) => cli.uploadAttachment(input),
+    ...(cli.readAttachment ? { readAttachment: cli.readAttachment } : {}),
     updateComment: (input) =>
       cli
         .updateNote({
@@ -294,6 +309,7 @@ export const make = Effect.gen(function* () {
           repository: input.repository,
           number: input.number,
           noteId: input.commentId,
+          ...(input.threadId === undefined ? {} : { discussionId: input.threadId }),
           body: input.body,
         })
         .pipe(Effect.mapError(fail("updateComment"))),

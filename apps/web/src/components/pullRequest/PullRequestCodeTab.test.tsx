@@ -358,3 +358,75 @@ it("marks the guide file viewed, advances, and can reopen it", async () => {
     }),
   );
 });
+
+it("keeps a reply draft when the off-diff conversation list is closed and reopened", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("window", new EventTarget());
+  const page = {
+    patch:
+      "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new\n",
+    truncated: false,
+    nextCursor: null,
+    omittedFileStats: [],
+  };
+  query.mockImplementation((request) => ({
+    data: request === null ? null : request === "viewed" ? { files: [], truncated: false } : page,
+    error: null,
+    isPending: false,
+    refresh,
+  }));
+  await act(async () => {
+    renderer = create(
+      <PullRequestCodeTab
+        environmentId={EnvironmentId.make("test")}
+        reference={{ projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 }}
+        detail={{
+          ...detail,
+          workspaceRoot: "/workspace",
+          capabilities: {
+            ...detail.capabilities,
+            review: { ...detail.capabilities.review, reply: true },
+          },
+          viewerPermissions: { ...detail.viewerPermissions, comment: true },
+          reviewThreads: [
+            {
+              id: "orphan",
+              path: null,
+              line: null,
+              side: "right",
+              isResolved: false,
+              isOutdated: false,
+              comments: [],
+            },
+          ],
+        }}
+        selectedCommitOid={null}
+        onSelectedCommitChange={command}
+        onRefresh={refresh}
+      />,
+    );
+  });
+  const toggle = () => {
+    const button = renderer.root
+      .findAllByType("button")
+      .find((node) => typeof node.props["aria-expanded"] === "boolean")!;
+    act(() => button.props.onClick({ nativeEvent: {}, preventDefault() {}, stopPropagation() {} }));
+  };
+  toggle();
+  act(() =>
+    renderer.root
+      .findAllByType("button")
+      .find((node) => node.children.includes("Reply…"))!
+      .props.onClick(),
+  );
+  act(() =>
+    renderer.root.findByType("textarea").props.onChange({
+      target: { value: "Keep this draft" },
+      currentTarget: { value: "Keep this draft" },
+      nativeEvent: {},
+    }),
+  );
+  toggle();
+  toggle();
+  expect(renderer.root.findByType("textarea").props.value).toBe("Keep this draft");
+});

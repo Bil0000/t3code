@@ -238,11 +238,13 @@ export type PullRequestThreadComment = typeof PullRequestThreadComment.Type;
  */
 export const PullRequestReviewThread = Schema.Struct({
   id: TrimmedNonEmptyString,
-  path: TrimmedNonEmptyString,
+  path: Schema.NullOr(TrimmedNonEmptyString),
   /** Null when the host anchors the thread to a file rather than to a line. */
   line: Schema.NullOr(PositiveInt),
   side: PullRequestDiffSide,
   isResolved: Schema.Boolean,
+  canResolve: Schema.optional(Schema.Boolean),
+  canReply: Schema.optional(Schema.Boolean),
   /**
    * The line the thread was written against is no longer in the diff, so it cannot be shown
    * against the code. Such a thread is listed separately rather than pinned to the wrong line.
@@ -387,7 +389,17 @@ export type PullRequestViewedFilesStore = typeof PullRequestViewedFilesStore.Typ
  * Bitbucket has no endpoint that reopens a declined pull request. Both would otherwise be dead
  * buttons.
  */
+export const PullRequestAttachmentCapability = Schema.Struct({
+  supported: Schema.Boolean,
+  maxBytes: PositiveInt,
+  acceptedExtensions: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  destination: Schema.Literals(["pull-request", "repository-downloads"]),
+  reason: Schema.optional(TrimmedNonEmptyString),
+});
+export type PullRequestAttachmentCapability = typeof PullRequestAttachmentCapability.Type;
+
 export const PullRequestCapabilities = Schema.Struct({
+  attachments: Schema.optional(PullRequestAttachmentCapability),
   bypassMergeChecks: Schema.optional(Schema.Boolean),
   /** A unified patch can be fetched for the change request. */
   diff: Schema.Boolean,
@@ -1060,6 +1072,23 @@ export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 // service rejects a body that is only whitespace.
 const CommentBody = Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536));
 
+export const PullRequestUploadAttachmentInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255), Schema.isPattern(/^[^\\/\p{Cc}]+$/u)),
+  mimeType: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(100),
+    Schema.isPattern(/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/),
+  ),
+});
+export type PullRequestUploadAttachmentInput = typeof PullRequestUploadAttachmentInput.Type;
+
+export const PullRequestUploadAttachmentResult = Schema.Struct({
+  url: TrimmedNonEmptyString,
+  markdown: TrimmedNonEmptyString,
+});
+export type PullRequestUploadAttachmentResult = typeof PullRequestUploadAttachmentResult.Type;
+
 export const PullRequestCommentInput = Schema.Struct({
   ...PullRequestRef.fields,
   body: CommentBody,
@@ -1095,6 +1124,7 @@ export type PullRequestUpdateInput = typeof PullRequestUpdateInput.Type;
 export const PullRequestCommentUpdateInput = Schema.Struct({
   ...PullRequestRef.fields,
   commentId: TrimmedNonEmptyString,
+  threadId: Schema.optional(TrimmedNonEmptyString),
   kind: Schema.Literals(["issue-comment", "review-comment"]),
   body: CommentBody,
 });

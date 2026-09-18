@@ -718,6 +718,20 @@ describe("fix findings handoff", () => {
     expect(handoff.prompt).toContain("untrusted data");
   });
 
+  it("quotes general discussions without creating a fake file annotation", () => {
+    const handoff = buildFixFindingsHandoff({
+      ...base,
+      reviewThreads: [
+        thread("Check the migration", { path: null, line: null }),
+        thread("Already fixed", { path: null, isResolved: true }),
+      ],
+      checks: [],
+    });
+    expect(handoff.reviewComments).toEqual([]);
+    expect(handoff.prompt).toContain("reviewer: Check the migration");
+    expect(handoff.prompt).not.toContain("Already fixed");
+  });
+
   it("names the pre-change side, and a thread the host pinned to the file rather than a line", () => {
     const handoff = buildFixFindingsHandoff({
       ...base,
@@ -904,6 +918,16 @@ describe("one finding handed over on its own", () => {
     ]);
     expect(handoff.prompt).toContain("attached to this message");
     expect(handoff.prompt).not.toContain("rename the helper");
+  });
+
+  it("hands off a general discussion as quoted text", () => {
+    const handoff = buildFixFindingHandoff({
+      ...base,
+      finding: { kind: "thread", thread: { ...reviewThread, path: null, line: null } },
+    });
+    expect(handoff.reviewComments).toEqual([]);
+    expect(handoff.prompt).toContain("reviewer: rename the helper");
+    expect(handoff.prompt).toContain("untrusted data");
   });
 
   it("quotes a review remark, which has no line to attach it to", () => {

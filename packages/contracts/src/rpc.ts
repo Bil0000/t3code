@@ -111,6 +111,8 @@ import {
   PullRequestActivity,
   PullRequestCommentInput,
   PullRequestCommentUpdateInput,
+  PullRequestUploadAttachmentInput,
+  PullRequestUploadAttachmentResult,
   PullRequestDetail,
   PullRequestDiffFileContentsInput,
   PullRequestDiffFileContentsResult,
@@ -406,6 +408,7 @@ export const WS_METHODS = {
   pullRequestsUpdate: "pullRequests.update",
   pullRequestsComment: "pullRequests.comment",
   pullRequestsUpdateComment: "pullRequests.updateComment",
+  pullRequestsUploadAttachment: "pullRequests.uploadAttachment",
   pullRequestsSubmitReview: "pullRequests.submitReview",
   pullRequestsReplyToThread: "pullRequests.replyToThread",
   pullRequestsSetThreadResolution: "pullRequests.setThreadResolution",
@@ -784,6 +787,12 @@ const WsPullRequestsUpdateRpc = Rpc.make(WS_METHODS.pullRequestsUpdate, {
 const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
   payload: PullRequestCommentInput,
   success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+const WsPullRequestsUploadAttachmentRpc = Rpc.make(WS_METHODS.pullRequestsUploadAttachment, {
+  payload: PullRequestUploadAttachmentInput,
+  success: PullRequestUploadAttachmentResult,
   error: PullRequestRpcError,
 });
 
@@ -1434,6 +1443,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsUpdateRpc,
   WsPullRequestsCommentRpc,
   WsPullRequestsUpdateCommentRpc,
+  WsPullRequestsUploadAttachmentRpc,
   WsPullRequestsSubmitReviewRpc,
   WsPullRequestsReplyToThreadRpc,
   WsPullRequestsSetThreadResolutionRpc,

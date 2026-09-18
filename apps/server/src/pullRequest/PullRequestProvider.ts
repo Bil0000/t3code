@@ -1,5 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
+import type { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import type {
   PullRequestStackMembership,
   PullRequestAction,
@@ -7,6 +9,7 @@ import type {
   PullRequestActor,
   PullRequestBaseComparison,
   PullRequestCapabilities,
+  PullRequestAttachmentCapability,
   PullRequestChecksState,
   PullRequestCheck,
   PullRequestComment,
@@ -206,6 +209,7 @@ export interface ProviderChangeRequestStat {
 }
 
 export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
+  readonly attachments?: PullRequestAttachmentCapability;
   readonly body: string;
   readonly changedFiles: number;
   readonly mergedAt: string | null;
@@ -320,6 +324,9 @@ export interface PullRequestProviderApi {
   >;
   readonly kind: SourceControlProviderKind;
   readonly capabilities: PullRequestCapabilities;
+  readonly getCapabilities?: (
+    input: ProviderRepositoryRef,
+  ) => Effect.Effect<PullRequestCapabilities, PullRequestProviderError>;
 
   /** The signed-in account, which is what involvement filtering compares against. */
   readonly getViewer: (input: {
@@ -548,10 +555,33 @@ export interface PullRequestProviderApi {
    * settle it, since access can be taken away between the conversation being read and the
    * rewrite being sent, and a host refuses a stranger's remark with a sentence saying so.
    */
+  readonly readAttachment?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly url: string;
+      readonly headers: Readonly<Record<string, string>>;
+    },
+  ) => Effect.Effect<
+    HttpClientResponse.HttpClientResponse,
+    PullRequestProviderError,
+    Scope.Scope | HttpClient.HttpClient
+  >;
+
+  readonly uploadAttachment?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly name: string;
+      readonly mimeType: string;
+      readonly data: Uint8Array;
+      readonly filePath: string;
+    },
+  ) => Effect.Effect<{ readonly url: string; readonly markdown: string }, PullRequestProviderError>;
+
   readonly updateComment?: (
     input: ProviderRepositoryRef & {
       readonly number: number;
       readonly commentId: string;
+      readonly threadId?: string;
       readonly kind: "issue-comment" | "review-comment";
       readonly body: string;
     },

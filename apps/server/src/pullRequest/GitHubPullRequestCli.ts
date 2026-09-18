@@ -1,3 +1,5 @@
+import { uploadGitHubAttachment, readGitHubAttachment } from "./PullRequestAttachments.ts";
+import type { PullRequestProviderApi } from "./PullRequestProvider.ts";
 import { runGitHubStackAction, type GitHubStackActionError } from "./githubStackActions.ts";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
@@ -640,6 +642,8 @@ export class GitHubPullRequestCli extends Context.Service<
     }) => Effect.Effect<PullRequestThreadCommentsResult, GitHubPullRequestCliError>;
 
     /** One `gh repo view`, which answers what the repository allows and where the viewer stands. */
+    readonly readAttachment?: NonNullable<PullRequestProviderApi["readAttachment"]>;
+    readonly uploadAttachment: NonNullable<PullRequestProviderApi["uploadAttachment"]>;
     readonly getRepositoryAccess: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -1669,6 +1673,8 @@ export const make = Effect.gen(function* () {
         );
 
   return GitHubPullRequestCli.of({
+    uploadAttachment: (input) => uploadGitHubAttachment(github.execute, input),
+    readAttachment: (input) => readGitHubAttachment(github.execute, input),
     withVerifiedCredential,
     getRoutingIdentity,
     getViewerLogin: (input) =>

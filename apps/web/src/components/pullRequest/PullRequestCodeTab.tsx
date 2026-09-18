@@ -13,7 +13,6 @@ import type {
   PullRequestRef,
   PullRequestReviewPosition,
   PullRequestReviewThread,
-  PullRequestThreadCommentsResult,
 } from "@t3tools/contracts";
 import {
   BookOpenIcon,
@@ -48,7 +47,6 @@ import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings"
 import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
-import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
@@ -73,7 +71,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DiffPanelLoadingState } from "../DiffPanelShell";
-import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
+import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { DiffFileTree, type DiffFileTreeHandle } from "../diffs/DiffFileTree";
 import { EditableDiffCodeView, type ReviewEditTargetResolver } from "../diffs/EditableDiffCodeView";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
@@ -90,7 +88,7 @@ import {
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { PendingReviewCommentCard, ReviewThreadCard } from "./PullRequestReviewAnnotation";
+import { PendingReviewCommentCard, PullRequestThreadCard } from "./PullRequestReviewAnnotation";
 import { PullRequestGuide } from "./PullRequestGuide";
 import { PullRequestReviewBar } from "./PullRequestReviewBar";
 import {
@@ -271,8 +269,8 @@ function PullRequestCodeTab({
     range: SelectedLineRange;
   } | null>(null);
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
-  const [threadPending, setThreadPending] = useState(false);
   const [orphansOpen, setOrphansOpen] = useState(false);
+  const [orphansVisited, setOrphansVisited] = useState(false);
   // Closed by default so the review form does not permanently eat vertical space below the
   // diff; opened on demand as a floating overlay instead.
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -370,18 +368,7 @@ function PullRequestCodeTab({
   const pendingComments = usePendingReviewComments(reference);
   const addComment = usePullRequestReviewStore((store) => store.addComment);
   const removeComment = usePullRequestReviewStore((store) => store.removeComment);
-  const replyToThread = useAtomCommand(pullRequestEnvironment.replyToThread, {
-    reportFailure: false,
-  });
-  const setThreadResolution = useAtomCommand(pullRequestEnvironment.setThreadResolution, {
-    reportFailure: false,
-  });
-  const updateComment = useAtomCommand(pullRequestEnvironment.updateComment, {
-    reportFailure: false,
-  });
-  const loadThreadComments = useAtomCommand(pullRequestEnvironment.threadComments, {
-    reportFailure: false,
-  });
+  const updatePendingComment = usePullRequestReviewStore((store) => store.updateComment);
   const getDiffFileContents = useAtomCommand(pullRequestEnvironment.diffFileContents);
   const loadDiffFiles = useMemo(
     () =>
@@ -1051,104 +1038,31 @@ function PullRequestCodeTab({
     [diffLayout, wordWrap, resolvedTheme, loadDiffFiles, canCommentOnLines, draft, beginComment],
   );
 
-  const runThreadCommand = useCallback(
-    async (label: string, run: () => Promise<{ readonly _tag: string }>): Promise<boolean> => {
-      if (threadPending || actionPending) return false;
-      setThreadPending(true);
-      const result = await run();
-      setThreadPending(false);
-      if (result._tag === "Failure") {
-        toastManager.add({ type: "error", title: label });
-        return false;
-      }
-      onRefresh();
-      return true;
-    },
-    [actionPending, onRefresh, threadPending],
-  );
-
-  // A conversation is the same card wired to the same commands whether it sits on its line or
-  // was stranded off the diff; only where it is drawn differs.
   const renderThreadCard = useCallback(
     (thread: PullRequestReviewThread) => (
-      <ReviewThreadCard
-        // Named with the pull request too: a thread's id is the host's own, and two pull requests
-        // can hand out the same one — which would leave one card's open editor standing over the
-        // other's conversation.
-        key={`${reference.projectId}#${reference.number}:${thread.id}`}
+      <PullRequestThreadCard
+        key={`${environmentId}:${referenceKey}:${thread.id}`}
         thread={thread}
-        workspaceRoot={detail.workspaceRoot}
-        canReply={review.reply}
-        canResolve={review.resolve}
-        canReact={detail.capabilities.reactions === true}
+        detail={detail}
         environmentId={environmentId}
         reference={reference}
-        pending={threadPending || actionPending}
+        pending={actionPending}
         fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
         fixLabel={fixFindingLabel}
         {...(onFixFinding ? { onFix: () => onFixFinding({ kind: "thread", thread }) } : {})}
-        onLoadMore={async (cursor): Promise<PullRequestThreadCommentsResult | null> => {
-          const result = await loadThreadComments({
-            environmentId,
-            input: { ...reference, threadId: thread.id, cursor },
-          });
-          if (result._tag === "Failure") {
-            toastManager.add({
-              type: "error",
-              title: "More comments could not be loaded",
-            });
-            return null;
-          }
-          return result.value;
-        }}
-        onReply={(body) =>
-          runThreadCommand("Reply could not be posted", () =>
-            replyToThread({
-              environmentId,
-              input: { ...reference, threadId: thread.id, body },
-            }),
-          )
-        }
-        // A conversation on a line is made of review comments, whatever the host filed them as.
-        canEditComment={(comment) =>
-          canEditPullRequestComment(detail, { author: comment.author, kind: "review-comment" })
-        }
-        onEditComment={(commentId, body) =>
-          runThreadCommand("The comment could not be saved", () =>
-            updateComment({
-              environmentId,
-              input: { ...reference, commentId, kind: "review-comment", body },
-            }),
-          )
-        }
-        onToggleResolved={() =>
-          void runThreadCommand("The conversation could not be updated", () =>
-            setThreadResolution({
-              environmentId,
-              input: { ...reference, threadId: thread.id, resolved: !thread.isResolved },
-            }),
-          )
-        }
-        onReacted={onRefresh}
+        onRefresh={onRefresh}
       />
     ),
     [
       detail,
       environmentId,
-      fixFindingLabel,
-      loadThreadComments,
-      onRefresh,
-      onFixFinding,
-      pendingFinding,
       reference,
-      replyToThread,
-      review.reply,
-      review.resolve,
-      runThreadCommand,
-      setThreadResolution,
-      threadPending,
+      referenceKey,
       actionPending,
-      updateComment,
+      pendingFinding,
+      fixFindingLabel,
+      onFixFinding,
+      onRefresh,
     ],
   );
 
@@ -1160,46 +1074,64 @@ function PullRequestCodeTab({
           <PendingReviewCommentCard
             key={comment.id}
             comment={comment}
+            reviewKey={reviewKey}
+            environmentId={environmentId}
+            workspaceRoot={detail.workspaceRoot}
+            pending={actionPending}
+            onEdit={(body) => updatePendingComment(reviewKey, comment.id, body)}
             onRemove={() => removeComment(reviewKey, comment.id)}
           />
         ))}
         {annotation.metadata.draft && draft ? (
-          <DiffCommentAnnotation
-            kind="draft"
-            rangeLabel={`${draft.path}:${getReviewPositionAnchor(draft.position).line}`}
-            text=""
-            submitLabel="Add to review"
-            {...(onAddToAgentSelection
-              ? {
-                  secondaryAction: {
-                    label: "Add to agent",
-                    onAction: (text: string) =>
-                      finishSelection(draft, text, (comment) =>
-                        onAddToAgentSelection({ comment, request: text }),
-                      ),
-                  },
-                }
-              : {})}
-            onCancel={() => {
-              setDraft(null);
-              setSelectedLines(null);
-            }}
-            onComment={(body) => {
-              addComment(reviewKey, {
-                id: nextPendingReviewCommentId(),
-                path: draft.path,
-                ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
-                position: draft.position,
-                body,
-              });
-              setDraft(null);
-              setSelectedLines(null);
-            }}
-          />
+          <div
+            className="mx-3 my-2 rounded-lg border border-border/70 bg-background p-3"
+            contentEditable={false}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <PullRequestMarkdownEditor
+              value=""
+              cwd={detail.workspaceRoot}
+              environmentId={environmentId}
+              label={`Comment on ${draft.path}:${getReviewPositionAnchor(draft.position).line}`}
+              placeholder="Write a review comment…"
+              saving={actionPending}
+              saveLabel="Add to review"
+              {...(onAddToAgentSelection
+                ? {
+                    secondaryAction: {
+                      label: "Add to agent",
+                      onAction: (text: string) =>
+                        finishSelection(draft, text, (comment) =>
+                          onAddToAgentSelection({ comment, request: text }),
+                        ),
+                    },
+                  }
+                : {})}
+              onCancel={() => {
+                setDraft(null);
+                setSelectedLines(null);
+              }}
+              onSave={(body) => {
+                addComment(reviewKey, {
+                  id: nextPendingReviewCommentId(),
+                  path: draft.path,
+                  ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
+                  position: draft.position,
+                  body,
+                });
+                setDraft(null);
+                setSelectedLines(null);
+              }}
+            />
+          </div>
         ) : null}
       </div>
     ),
     [
+      actionPending,
+      detail.workspaceRoot,
+      environmentId,
+      updatePendingComment,
       addComment,
       draft,
       finishSelection,
@@ -1609,7 +1541,7 @@ function PullRequestCodeTab({
   const orphanThreads = detail.reviewThreads.filter((thread) => !placedThreadIds.has(thread.id));
   // A file carrying five stranded conversations should read as that file once rather than as
   // five copies of its path.
-  const orphanFiles = new Map<string, PullRequestReviewThread[]>();
+  const orphanFiles = new Map<string | null, PullRequestReviewThread[]>();
   for (const thread of orphanThreads) {
     const existing = orphanFiles.get(thread.path);
     if (existing) existing.push(thread);
@@ -1640,7 +1572,10 @@ function PullRequestCodeTab({
         <Collapsible
           className="shrink-0 border-b border-border/60"
           open={orphansOpen}
-          onOpenChange={setOrphansOpen}
+          onOpenChange={(open) => {
+            setOrphansOpen(open);
+            if (open) setOrphansVisited(true);
+          }}
         >
           {/* Still a heading, so the section keeps its place in a screen reader's outline;
                 the count is spelled out there rather than left as a bare number. */}
@@ -1667,31 +1602,37 @@ function PullRequestCodeTab({
               </span>
             </CollapsibleTrigger>
           </h2>
-          <CollapsiblePanel>
+          <CollapsiblePanel keepMounted>
             {/* Capped: opened on a change with dozens of them, this would otherwise leave no
                   room for the diff it sits above. */}
-            <div className="max-h-64 space-y-3 overflow-auto px-4 pb-3">
-              {[...orphanFiles].map(([path, threads]) => (
-                <div key={path}>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={<p className="truncate px-3 text-xs text-muted-foreground">{path}</p>}
-                    />
-                    <TooltipPopup side="top">{path}</TooltipPopup>
-                  </Tooltip>
-                  <div className="mt-1 space-y-2">
-                    {threads.map((thread) => (
-                      <div key={thread.id}>
-                        {thread.line === null ? null : (
-                          <p className="px-3 text-xs text-muted-foreground">Line {thread.line}</p>
-                        )}
-                        {renderThreadCard(thread)}
-                      </div>
-                    ))}
+            {orphansVisited ? (
+              <div className="max-h-64 space-y-3 overflow-auto px-4 pb-3">
+                {[...orphanFiles].map(([path, threads]) => (
+                  <div key={path ?? "general"}>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <p className="truncate px-3 text-xs text-muted-foreground">
+                            {path ?? "General discussion"}
+                          </p>
+                        }
+                      />
+                      <TooltipPopup side="top">{path ?? "General discussion"}</TooltipPopup>
+                    </Tooltip>
+                    <div className="mt-1 space-y-2">
+                      {threads.map((thread) => (
+                        <div key={thread.id}>
+                          {thread.line === null ? null : (
+                            <p className="px-3 text-xs text-muted-foreground">Line {thread.line}</p>
+                          )}
+                          {renderThreadCard(thread)}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : null}
           </CollapsiblePanel>
         </Collapsible>
       ) : null}
