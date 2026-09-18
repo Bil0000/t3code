@@ -537,11 +537,11 @@ export function BranchToolbarBranchSelector({
     ref,
     () => ({
       open: () => {
-        if (isInitialBranchesLoadPending || isBranchActionPending) return;
+        if (isBranchActionPending) return;
         handleOpenChange(true);
       },
     }),
-    [handleOpenChange, isBranchActionPending, isInitialBranchesLoadPending],
+    [handleOpenChange, isBranchActionPending],
   );
 
   const triggerLabel = resolveBranchTriggerLabel({
@@ -716,7 +716,7 @@ export function BranchToolbarBranchSelector({
               "min-w-0 max-w-full font-normal text-muted-foreground/70 text-xs! hover:text-foreground/80 active:scale-100",
               displayMode === "panel" && THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
             )}
-            disabled={isInitialBranchesLoadPending || isBranchActionPending}
+            disabled={isBranchActionPending}
           >
             <GitBranchIcon
               className={cn(
