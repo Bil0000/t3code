@@ -21,9 +21,13 @@ vi.mock("~/hooks/useSettings", () => ({
   useClientSettings: () => settings,
   useUpdateClientSettings: () => command,
 }));
-vi.mock("~/hooks/useLocalStorage", () => ({
-  useLocalStorage: (_key: string, initial: unknown) => [initial, command],
-}));
+vi.mock("~/hooks/useLocalStorage", async () => {
+  const { useState } = await import("react");
+  return {
+    useLocalStorage: (_key: string, initial: unknown) => useState(initial),
+    getLocalStorageItem: () => null,
+  };
+});
 vi.mock("../diffs/EditableDiffCodeView", () => ({
   EditableDiffCodeView: ({
     items,
@@ -77,6 +81,7 @@ vi.mock("../ui/toggle-group", () => ({
 }));
 
 import PullRequestCodeTab from "./PullRequestCodeTab";
+import { DiffFileTree } from "../diffs/DiffFileTree";
 
 let renderer: ReactTestRenderer;
 const detail = {
@@ -99,8 +104,83 @@ const click = async (label: string) => {
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   settings.diffFilesCollapsed = false;
+  query.mockClear();
   vi.unstubAllGlobals();
 });
+
+it.each(["complete", "error", "scope change"])(
+  "folder viewing handles paged files: %s",
+  async (outcome) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("window", new EventTarget());
+    command.mockReset().mockResolvedValue({ _tag: "Success" });
+    const pages = [["src/a.ts"], ["src/deep/b.ts", "src-other/c.ts"]].map((paths, index) => ({
+      patch: paths
+        .map(
+          (path) =>
+            `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${path}\n`,
+        )
+        .join(""),
+      truncated: false,
+      nextCursor: index === 0 ? "1" : null,
+      omittedFileStats: [],
+    }));
+    const viewed = { files: [], truncated: false };
+    let arrived = false;
+    query.mockImplementation((request) => {
+      const later = request !== "viewed" && request?.input.cursor === "1";
+      return {
+        data: request === "viewed" ? viewed : later ? (arrived ? pages[1] : null) : pages[0],
+        error: later && arrived && outcome === "error" ? "Unavailable" : null,
+        isPending: later && !arrived,
+        refresh,
+      };
+    });
+    const view = (commit: string | null = null) => (
+      <PullRequestCodeTab
+        environmentId={EnvironmentId.make("test")}
+        reference={{ projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 }}
+        detail={{
+          ...detail,
+          commits: [{ oid: "new", messageHeadline: "New commit", committedDate: "2026-09-18" }],
+          capabilities: { ...detail.capabilities, viewedFiles: "environment" },
+        }}
+        selectedCommitOid={commit}
+        onSelectedCommitChange={command}
+        onRefresh={refresh}
+      />
+    );
+    await act(async () => {
+      renderer = create(view());
+    });
+    await click("Show file tree");
+    await act(async () => renderer.root.findByType(DiffFileTree).props.onSetViewed("src/", true));
+    expect(command).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([request]) => request?.input?.cursor === "1")).toBe(true);
+    arrived = true;
+    await act(async () => renderer.update(view(outcome === "scope change" ? "new" : null)));
+    if (outcome === "complete") {
+      expect(renderer.root.findAllByType("pre").map((node) => node.children.join(""))).toEqual([
+        "src-other/c.ts",
+      ]);
+    }
+    await act(async () => renderer.unmount());
+    if (outcome === "complete") {
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        environmentId: "test",
+        input: {
+          projectId: "project",
+          repository: "owner/repo",
+          number: 1,
+          files: [
+            { path: "src/a.ts", viewed: true },
+            { path: "src/deep/b.ts", viewed: true },
+          ],
+        },
+      });
+    } else expect(command).not.toHaveBeenCalled();
+  },
+);
 
 it("loads guide pages only on request and resumes scroll loading outside the guide", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

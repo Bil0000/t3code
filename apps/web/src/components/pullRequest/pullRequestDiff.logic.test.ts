@@ -20,6 +20,16 @@ function fileWithHunks(
   return { name: "src/app.ts", hunks } as unknown as FileDiffMetadata;
 }
 
+it("folds or reopens a folder without changing other fold choices", () => {
+  const current = new Set(["src/a.ts", "other.ts"]);
+  const folded = toggleFileDiffFoldForViewed(["src/a.ts", "src/deep/b.ts"], true, null, current);
+  expect(folded).toEqual(new Set(["src/a.ts", "src/deep/b.ts", "other.ts"]));
+  expect(toggleFileDiffFoldForViewed(["src/a.ts", "src/deep/b.ts"], false, null, folded)).toEqual(
+    new Set(["other.ts"]),
+  );
+  expect(current).toEqual(new Set(["src/a.ts", "other.ts"]));
+});
+
 describe("isLineInFileDiff", () => {
   const file = fileWithHunks([
     { deletionStart: 10, deletionCount: 3, additionStart: 10, additionCount: 5 },

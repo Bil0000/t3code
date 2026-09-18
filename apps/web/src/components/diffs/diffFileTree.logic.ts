@@ -13,6 +13,21 @@ export interface DiffFileTreeEntry {
   readonly viewedStale?: boolean;
 }
 
+export function diffFileTreeViewedCounts(entries: ReadonlyArray<DiffFileTreeEntry>) {
+  const counts = new Map<string, { total: number; viewed: number; stale: number }>();
+  for (const entry of entries) {
+    const paths = [entry.path, ...collectDirectoryPaths([entry.path])];
+    for (const path of paths) {
+      const count = counts.get(path) ?? { total: 0, viewed: 0, stale: 0 };
+      count.total++;
+      if (entry.viewed) count.viewed++;
+      if (entry.viewedStale) count.stale++;
+      counts.set(path, count);
+    }
+  }
+  return counts;
+}
+
 function toGitStatus(file: FileDiffMetadata): GitStatus {
   switch (file.type) {
     case "new":

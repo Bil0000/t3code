@@ -28,6 +28,7 @@ import {
   compareDiffFileTreeEntries,
   collectDirectoryPaths,
   diffFileTreePositions,
+  diffFileTreeViewedCounts,
   type DiffFileTreeEntry,
 } from "./diffFileTree.logic";
 
@@ -43,6 +44,7 @@ interface DiffFileTreeProps {
   /** Called with the file's path when the reader picks a file row. */
   readonly onSelectFile: (path: string) => void;
   readonly onSetViewed?: (path: string, viewed: boolean) => void;
+  readonly viewedPending?: boolean;
   /**
    * The file the diff is currently showing, kept selected in the tree. Bump `revealRequestId` to
    * scroll the tree to the same path again.
@@ -68,6 +70,7 @@ export function DiffFileTree({
   entries,
   onSelectFile,
   onSetViewed,
+  viewedPending = false,
   selectedPath = null,
   revealRequestId = 0,
   ariaLabel,
@@ -101,7 +104,8 @@ export function DiffFileTree({
     () => new Map(entries.map((entry) => [entry.path, entry])),
     [entries],
   );
-  const entriesByPathRef = useRef(entriesByPath);
+  const viewedCounts = useMemo(() => diffFileTreeViewedCounts(entries), [entries]);
+  const viewedRef = useRef({ counts: viewedCounts, onSetViewed, pending: viewedPending });
   const [hoveredRow, setHoveredRow] = useState<HTMLElement | null>(null);
   const hoveredEntry = entriesByPath.get(hoveredRow?.getAttribute("data-item-path") ?? "");
   const showPathTooltip = (event: SyntheticEvent) => {
@@ -143,12 +147,16 @@ export function DiffFileTree({
 
   const { model } = useFileTree({
     renderRowDecoration: ({ item }) => {
-      const entry = entriesByPathRef.current.get(item.path);
-      return entry?.viewedStale
-        ? { text: "Changed", title: "Changed since you marked it viewed" }
-        : entry?.viewed
-          ? { text: "Viewed", title: "Marked as viewed" }
-          : null;
+      const { counts, onSetViewed: setViewed, pending } = viewedRef.current;
+      const count = counts.get(item.path);
+      if (!setViewed || !count) return null;
+      return {
+        checked: count.viewed === count.total ? true : count.viewed > 0 ? "mixed" : false,
+        label: `Viewed: ${item.path}`,
+        title: `${count.stale > 0 ? "Changed since viewed. " : ""}${count.viewed} of ${count.total} viewed`,
+        disabled: pending,
+        onChange: (viewed) => setViewed(item.path, viewed),
+      };
     },
     density: "compact",
     flattenEmptyDirectories: true,
@@ -163,6 +171,17 @@ export function DiffFileTree({
     search: false,
     sort: ordering.sort,
     unsafeCSS: `${PIERRE_TREE_UNSAFE_CSS}
+      [data-tree-checkbox] {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        margin: 0;
+        cursor: pointer;
+        accent-color: var(--primary);
+      }
+      [data-item-section='decoration']:has([data-tree-checkbox]) { min-width: 18px; }
+      [data-tree-checkbox]:disabled { cursor: wait; }
+      [data-type='item'] { border-radius: 5px; }
       [data-file-tree-virtualized-scroll='true'] {
         overflow-x: hidden;
       }
@@ -204,9 +223,9 @@ export function DiffFileTree({
   }, [directoryPaths, model, ordering, paths, positions]);
 
   useEffect(() => {
-    entriesByPathRef.current = entriesByPath;
+    viewedRef.current = { counts: viewedCounts, onSetViewed, pending: viewedPending };
     model.setGitStatus(gitStatus);
-  }, [entriesByPath, gitStatus, model]);
+  }, [gitStatus, model, onSetViewed, viewedCounts, viewedPending]);
 
   useEffect(() => {
     if (selectedPath === null) {
@@ -257,7 +276,8 @@ export function DiffFileTree({
         data-surface-subheader
       >
         <span className="px-1 font-medium text-foreground">Files</span>
-        <span className="ml-auto tabular-nums">{entries.length}</span>
+        <span className={cn("tabular-nums", !onSetViewed && "ml-auto")}>{entries.length}</span>
+        {onSetViewed ? <span className="ml-auto px-1">Viewed</span> : null}
         {headerAccessory}
       </div>
       <FileTree
@@ -266,8 +286,9 @@ export function DiffFileTree({
         {...(onSetViewed
           ? {
               renderContextMenu: (item, context) => {
-                const entry = entriesByPath.get(item.path);
-                if (!entry) return null;
+                const count = viewedCounts.get(item.path);
+                if (!count) return null;
+                const viewed = count.viewed === count.total;
                 return (
                   <div
                     role="menu"
@@ -279,12 +300,13 @@ export function DiffFileTree({
                       type="button"
                       role="menuitem"
                       autoFocus
+                      disabled={viewedPending}
                       onClick={() => {
-                        onSetViewed(item.path, !entry.viewed);
+                        onSetViewed(item.path, !viewed);
                         context.close();
                       }}
                     >
-                      {entry.viewed ? "Mark as not viewed" : "Mark as viewed"}
+                      {viewed ? "Mark as not viewed" : "Mark as viewed"}
                     </Button>
                   </div>
                 );
@@ -303,6 +325,12 @@ export function DiffFileTree({
         onWheelCapture={() => setHoveredRow(null)}
         onClickCapture={(event) => {
           if (
+            event.nativeEvent
+              .composedPath()
+              .some(
+                (node) =>
+                  node instanceof HTMLElement && node.getAttribute("data-tree-checkbox") !== null,
+              ) ||
             event.defaultPrevented ||
             event.button !== 0 ||
             event.ctrlKey ||

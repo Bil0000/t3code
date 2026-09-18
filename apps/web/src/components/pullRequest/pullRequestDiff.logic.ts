@@ -66,15 +66,20 @@ export function describeReviewFile(file: FileDiffMetadata): string {
  * toolbar last asked, and so keeps "collapse all" from ticking anything off.
  */
 export function toggleFileDiffFoldForViewed(
-  fileKey: string,
+  fileKey: string | ReadonlyArray<string>,
   viewed: boolean,
   foldOverride: DiffFoldOverride,
   toggledFileKeys: ReadonlySet<string>,
 ): ReadonlySet<string> {
-  if (isFileDiffCollapsed(fileKey, foldOverride, toggledFileKeys) === viewed)
-    return toggledFileKeys;
+  const keys = typeof fileKey === "string" ? [fileKey] : fileKey;
+  const changed = keys.filter(
+    (key) => isFileDiffCollapsed(key, foldOverride, toggledFileKeys) !== viewed,
+  );
+  if (changed.length === 0) return toggledFileKeys;
   const next = new Set(toggledFileKeys);
-  if (next.has(fileKey)) next.delete(fileKey);
-  else next.add(fileKey);
+  for (const key of changed) {
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+  }
   return next;
 }

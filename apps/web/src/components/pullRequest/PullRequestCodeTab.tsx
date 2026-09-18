@@ -728,6 +728,69 @@ function PullRequestCodeTab({
     [effectiveFoldOverride, setViewed],
   );
 
+  const [pendingViewedFolder, setPendingViewedFolder] = useState<{
+    scope: string;
+    path: string;
+    viewed: boolean;
+  } | null>(null);
+  const viewedFolderScope = `${environmentId}:${scopeKey}:${refreshToken}`;
+  const setTreeViewed = useCallback(
+    (path: string, viewed: boolean) => {
+      if (path.endsWith("/") && nextCursor !== null) {
+        setPendingViewedFolder({ scope: viewedFolderScope, path, viewed });
+        return;
+      }
+      const targets = items.filter((item) => {
+        const filePath = resolveFileDiffPath(item.fileDiff);
+        return path.endsWith("/") ? filePath.startsWith(path) : filePath === path;
+      });
+      setViewed(
+        targets.map((item) => resolveFileDiffPath(item.fileDiff)),
+        viewed,
+      );
+      setToggledFiles((current) =>
+        toggleFileDiffFoldForViewed(
+          targets.map((item) => item.id),
+          viewed,
+          effectiveFoldOverride,
+          current,
+        ),
+      );
+    },
+    [effectiveFoldOverride, items, nextCursor, setViewed, viewedFolderScope],
+  );
+
+  useEffect(() => {
+    if (!pendingViewedFolder) return;
+    if (pendingViewedFolder.scope !== viewedFolderScope || diffQuery.error !== null) {
+      setPendingViewedFolder(null);
+      if (pendingViewedFolder.scope === viewedFolderScope) {
+        toastManager.add({
+          type: "error",
+          title: "Could not load all files. Folder was not marked viewed.",
+        });
+      }
+      return;
+    }
+    if (canLoadNextSlice) {
+      loadNextSlice();
+      return;
+    }
+    if (diffQuery.isPending || nextCursor !== null || loadedSlices.length === 0) return;
+    setTreeViewed(pendingViewedFolder.path, pendingViewedFolder.viewed);
+    setPendingViewedFolder(null);
+  }, [
+    canLoadNextSlice,
+    diffQuery.error,
+    diffQuery.isPending,
+    loadNextSlice,
+    loadedSlices.length,
+    nextCursor,
+    pendingViewedFolder,
+    setTreeViewed,
+    viewedFolderScope,
+  ]);
+
   const requestTreeReveal = useCodeViewFileReveal(viewer, scopeKey);
   const revealFile = useCallback(
     (path: string) => {
@@ -929,7 +992,7 @@ function PullRequestCodeTab({
         />
       );
       const viewedFiles = filesViewedRef.current;
-      if (!viewedFiles.enabled) return stat;
+      if (!viewedFiles.enabled || fileTreeOpen) return stat;
       const viewed = viewedFiles.isViewed(path);
       const stale = viewedFiles.isStale(path);
       return (
@@ -963,7 +1026,7 @@ function PullRequestCodeTab({
         </span>
       );
     },
-    [omittedFileStats],
+    [fileTreeOpen, omittedFileStats],
   );
 
   const diffViewOptions = useMemo(
@@ -1741,19 +1804,22 @@ function PullRequestCodeTab({
               selectedPath={guided && guideItem ? resolveFileDiffPath(guideItem.fileDiff) : null}
               {...(filesViewedEnabled
                 ? {
-                    onSetViewed: (path: string, viewed: boolean) => {
-                      const item = items.find(
-                        (item) => resolveFileDiffPath(item.fileDiff) === path,
-                      );
-                      if (item) setFileViewed(item.id, path, viewed);
-                    },
+                    onSetViewed: setTreeViewed,
+                    viewedPending: pendingViewedFolder?.scope === viewedFolderScope,
                   }
                 : {})}
               onSelectFile={revealFile}
               // The tree lists only what has arrived; a footer says so while the diff is still
               // paging, and lets the reader pull the rest in without scrolling for it.
               footer={
-                nextCursor === null ? null : (
+                pendingViewedFolder?.scope === viewedFolderScope ? (
+                  <p
+                    role="status"
+                    className="shrink-0 border-t border-border/60 p-2 text-xs text-muted-foreground"
+                  >
+                    Loading all files in this folder…
+                  </p>
+                ) : nextCursor === null ? null : (
                   <div className="shrink-0 border-t border-border/60 p-2">
                     <Button
                       type="button"

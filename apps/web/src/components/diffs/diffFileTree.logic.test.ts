@@ -8,12 +8,26 @@ import {
   collectDirectoryPaths,
   changedPathParts,
   diffFileTreePositions,
+  diffFileTreeViewedCounts,
   diffFileTreeEntries,
 } from "./diffFileTree.logic";
 
 function file(type: FileDiffMetadata["type"], name: string, prevName = name): FileDiffMetadata {
   return { type, name, prevName } as FileDiffMetadata;
 }
+
+it("counts nested viewed files without including similar folder names", () => {
+  const counts = diffFileTreeViewedCounts([
+    { path: "src/a.ts", status: "modified", viewed: true },
+    { path: "src/deep/b.ts", status: "added", viewedStale: true },
+    { path: "src-other/c.ts", status: "deleted", viewed: true },
+    { path: "README.md", status: "modified" },
+  ]);
+  expect(counts.get("src/")).toEqual({ total: 2, viewed: 1, stale: 1 });
+  expect(counts.get("src/deep/")).toEqual({ total: 1, viewed: 0, stale: 1 });
+  expect(counts.get("src-other/")).toEqual({ total: 1, viewed: 1, stale: 0 });
+  expect(counts.get("README.md")).toEqual({ total: 1, viewed: 0, stale: 0 });
+});
 
 describe("diffFileTreeEntries", () => {
   it("maps each change type to its git status under the file's current path", () => {
