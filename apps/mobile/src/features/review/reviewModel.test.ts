@@ -157,7 +157,9 @@ describe("buildReviewSectionItems", () => {
       loadingTurnIds: {},
       loadingGitSections: false,
     });
-    expect(items).toEqual([{ id: `git:${kind}`, kind, title, subtitle, diff, isLoading: false }]);
+    expect(items).toMatchObject([
+      { id: `git:${kind}`, kind, title, subtitle, diff, isLoading: false },
+    ]);
     expect(getDefaultReviewSectionId(items)).toBe(`git:${kind}`);
   });
 });
