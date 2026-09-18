@@ -224,6 +224,7 @@ export const make = Effect.gen(function* () {
       issues: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
+      gitHistory: true,
       threadSettlement: true,
       threadAutoSettlement: true,
       storageCleanup: true,
