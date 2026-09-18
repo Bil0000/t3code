@@ -949,6 +949,12 @@ for (const { platform, installPath, editor, args } of [
   },
   {
     platform: "win32",
+    installPath: "Programs/Cursor/resources/app/bin/cursor.cmd",
+    editor: "cursor",
+    args: ['^"--classic^"', '^"--goto^"', '^"/workspace^ with^ spaces/file.ts:12:4^"'],
+  },
+  {
+    platform: "win32",
     installPath: "Programs/Microsoft VS Code/bin/code.cmd",
     editor: "vscode",
     args: ['^"--goto^"', '^"/workspace^ with^ spaces/file.ts:12:4^"'],

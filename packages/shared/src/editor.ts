@@ -85,6 +85,8 @@ export const resolveEditorCommand = Effect.fn("editor.resolveEditorCommand")(fun
             : editor.label;
       for (const root of roots) {
         candidates.push(
+          path.join(root, name, "resources/app/bin", `${command}.cmd`),
+          path.join(root, name, "resources/app/bin/code.cmd"),
           path.join(root, name, "bin", `${command}.cmd`),
           path.join(root, name, "bin/code.cmd"),
         );
