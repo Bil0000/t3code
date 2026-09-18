@@ -152,6 +152,7 @@ const ReviewEditsContext = createContext<{
   requestLeave: (action: () => void) => void;
   blockLeave: (action?: () => void) => boolean;
   saving: boolean;
+  savingKeys: ReadonlySet<string>;
   publishing: ReadonlyMap<string, string>;
   publish: (environmentId: EnvironmentId, cwd: string, url: string) => Promise<boolean>;
 } | null>(null);
@@ -173,7 +174,8 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
   const focusedKey = useRef<string | null>(null);
   const [publishing, setPublishing] = useState<ReadonlyMap<string, string>>(new Map());
   const publishingRef = useRef(new Set<string>());
-  const [saving, setSaving] = useState(false);
+  const [savingKeys, setSavingKeys] = useState<ReadonlySet<string>>(new Set());
+  const saving = savingKeys.size > 0;
   const savingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
@@ -261,10 +263,14 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
     async (keys: readonly string[]) => {
       if (savingRef.current) return;
       savingRef.current = true;
-      setSaving(true);
+      const dirtyKeys = keys.filter((key) => {
+        const draft = draftsRef.current.get(key);
+        return draft && draft.contents !== draft.savedContents;
+      });
+      setSavingKeys(new Set(dirtyKeys));
       setError(null);
       try {
-        for (const key of keys) {
+        for (const key of dirtyKeys) {
           const draft = draftsRef.current.get(key);
           if (!draft || draft.contents === draft.savedContents) continue;
           if (
@@ -335,7 +341,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
         toastManager.add({ type: "error", title: "Changes were not saved", description: message });
       } finally {
         savingRef.current = false;
-        setSaving(false);
+        setSavingKeys(new Set());
       }
     },
     [update, writeFile],
@@ -463,6 +469,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
         requestLeave,
         blockLeave,
         saving,
+        savingKeys,
         publishing,
         publish,
       }}

@@ -1,4 +1,4 @@
-import { reviewPublishKey, useReviewEdits } from "../diffs/ReviewEdits";
+import { reviewEditKey, reviewPublishKey, useReviewEdits } from "../diffs/ReviewEdits";
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { useAtomValue } from "@effect/atom-react";
 import { usePullRequestStack } from "~/state/usePullRequestStack";
@@ -889,8 +889,9 @@ export function PullRequestDetailPanel({
       draft.pullRequestUrl === detail?.url,
   );
   const pendingEdits = reviewFiles.filter((draft) => draft.pendingPush).length;
-  const savingReview =
-    !!reviewEdits?.saving && reviewFiles.some((draft) => draft.contents !== draft.savedContents);
+  const savingReview = reviewFiles.some((draft) =>
+    reviewEdits?.savingKeys.has(reviewEditKey(draft)),
+  );
   const hasUnsavedEdits = reviewFiles.some((draft) => draft.contents !== draft.savedContents);
   const actionPending = pendingAction !== null || resolvingThread || savingReview || !!publishLabel;
   const [pushedReviewUrl, setPushedReviewUrl] = useState<string | null>(null);

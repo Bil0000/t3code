@@ -412,9 +412,14 @@ it("retains newer edits made while saving and blocks duplicate writes", async ()
   );
   await save();
   await change("second");
+  const otherDraft = { ...savedDraft, pullRequestUrl: "https://github.com/example/repo/pull/2" };
+  await act(async () => edits.begin(otherDraft));
+  expect(edits.savingKeys.has(key)).toBe(true);
+  expect(edits.savingKeys.has(reviewEditKey(otherDraft))).toBe(false);
   await save();
   expect(write).toHaveBeenCalledOnce();
   await act(async () => finish({ _tag: "Success" }));
+  expect(edits.savingKeys.size).toBe(0);
   expect(edits.drafts.get(key)).toMatchObject({ contents: "second", savedContents: "first" });
   expect(blockOptions.mock.lastCall?.[0].enableBeforeUnload).toBe(true);
 });
