@@ -107,11 +107,11 @@ export function PullRequestGuide({
           {file.hunks.map((hunk, hunkIndex) => (
             <Button
               variant="ghost"
-              size="sm"
+              size="sm-multiline"
               key={`${hunk.deletionStart}:${hunk.additionStart}`}
               type="button"
               onClick={() => onSelectHunk(hunkIndex)}
-              className="h-auto flex-col items-start gap-0 whitespace-normal text-left"
+              className="flex-col items-start gap-0 text-left"
             >
               <span className="block break-words font-mono [overflow-wrap:anywhere]">
                 {hunk.hunkContext?.trim() || `Changed section ${hunkIndex + 1}`}
