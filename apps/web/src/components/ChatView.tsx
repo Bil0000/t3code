@@ -251,7 +251,7 @@ import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
 import { WizardPopup } from "./ui/wizard";
-import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
+import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
@@ -400,7 +400,11 @@ import {
   RightPanelMaximizeControl,
 } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
+import {
+  ThreadDetailsPanel,
+  type ThreadDetailsPanelProps,
+  type ThreadDetailsPanelHandle,
+} from "./chat/ThreadDetailsPanel";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { AgentsPanel } from "./AgentsPanel";
 import {
@@ -1737,7 +1741,7 @@ export default function ChatView(props: ChatViewProps) {
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const composerRef = useComposerHandleContext() ?? localComposerRef;
-  const branchToolbarRef = useRef<BranchToolbarHandle>(null);
+  const threadDetailsPanelRef = useRef<ThreadDetailsPanelHandle>(null);
   const pasteAsTextShortcutUntilRef = useRef(0);
   const [restingComposerControlsHost, setRestingComposerControlsHost] =
     useState<HTMLDivElement | null>(null);
@@ -7329,27 +7333,26 @@ export default function ChatView(props: ChatViewProps) {
 
       if (
         command === "composer.host" ||
-        command === "composer.effort" ||
-        command === "composer.mode" ||
-        command === "composer.workspace"
+        command === "composer.workspace" ||
+        command === "composer.branch" ||
+        command === "composer.previousWorktree"
       ) {
         event.preventDefault();
         event.stopPropagation();
+        if (event.repeat || !activeThreadRef) return;
+        flushSync(() => {
+          useRightPanelStore
+            .getState()
+            .setThreadPanelOpen(activeThreadRef, threadPanelPresentation, true);
+        });
+        threadDetailsPanelRef.current?.openControl(command);
+        return;
+      }
+
+      if (command === "composer.effort" || command === "composer.mode") {
+        event.preventDefault();
+        event.stopPropagation();
         if (!event.repeat) composerRef.current?.openControl(command);
-        return;
-      }
-
-      if (command === "composer.branch") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!event.repeat) branchToolbarRef.current?.openBranchPicker();
-        return;
-      }
-
-      if (command === "composer.previousWorktree") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!event.repeat) branchToolbarRef.current?.usePreviousWorktree();
         return;
       }
 
@@ -7415,6 +7418,7 @@ export default function ChatView(props: ChatViewProps) {
     getShortcutContext,
     toggleRightPanel,
     toggleThreadPanel,
+    threadPanelPresentation,
     toggleTerminalVisibility,
     composerRef,
   ]);
@@ -10106,6 +10110,12 @@ export default function ChatView(props: ChatViewProps) {
     ) : null
   ) : null;
   const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
+    ref: threadDetailsPanelRef,
+    autoEnvironmentLabel,
+    onAutoEnvironment:
+      draftId && !envLocked && hasMultipleEnvironments && loadBalancingSettings.loadBalancingEnabled
+        ? onAutoEnvironment
+        : undefined,
     forceNewWorktree: multipleModelSelections !== null,
     environmentId: activeThread.environmentId,
     threadId: activeThread.id,
@@ -10709,7 +10719,6 @@ export default function ChatView(props: ChatViewProps) {
                             <div className="pointer-events-auto">
                               <BranchToolbar
                                 forceNewWorktree={multipleModelSelections !== null}
-                                ref={branchToolbarRef}
                                 environmentId={activeThread.environmentId}
                                 threadId={activeThread.id}
                                 showGitControls={isGitRepo}

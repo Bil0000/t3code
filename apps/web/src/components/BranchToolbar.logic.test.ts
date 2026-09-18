@@ -442,56 +442,48 @@ describe("shouldShowComposerContextStrip", () => {
     },
   );
 
-  it("keeps the environment indicator visible for a non-Git project", () => {
+  it.each([false, true])(
+    "hides draft context even when persistence is %s",
+    (persistInActiveThreads) => {
+      expect(
+        shouldShowComposerContextStrip({
+          isDraftHeroState: true,
+          persistInActiveThreads,
+          hasActiveProject: true,
+          isGitRepo: true,
+          showEnvironmentIndicator: true,
+          hostsRestingComposerControls: false,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    { isGitRepo: false, showEnvironmentIndicator: true, hostsRestingComposerControls: false },
+    { isGitRepo: false, showEnvironmentIndicator: false, hostsRestingComposerControls: true },
+    { isGitRepo: true, showEnvironmentIndicator: false, hostsRestingComposerControls: false },
+  ])("keeps active-thread context when enabled: %o", (context) => {
     expect(
       shouldShowComposerContextStrip({
-        isDraftHeroState: true,
-        persistInActiveThreads: false,
+        isDraftHeroState: false,
+        persistInActiveThreads: true,
         hasActiveProject: true,
-        isGitRepo: false,
-        showEnvironmentIndicator: true,
-        hostsRestingComposerControls: false,
+        ...context,
       }),
     ).toBe(true);
   });
 
-  it("hides the strip when a non-Git project has nothing to show", () => {
+  it("hides active-thread context when there is nothing to show", () => {
     expect(
       shouldShowComposerContextStrip({
-        isDraftHeroState: true,
-        persistInActiveThreads: false,
+        isDraftHeroState: false,
+        persistInActiveThreads: true,
         hasActiveProject: true,
         isGitRepo: false,
         showEnvironmentIndicator: false,
         hostsRestingComposerControls: false,
       }),
     ).toBe(false);
-  });
-
-  it("keeps the strip for visible resting composer controls in a non-Git thread", () => {
-    expect(
-      shouldShowComposerContextStrip({
-        isDraftHeroState: true,
-        persistInActiveThreads: false,
-        hasActiveProject: true,
-        isGitRepo: false,
-        showEnvironmentIndicator: false,
-        hostsRestingComposerControls: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("shows Git controls without requiring an environment indicator", () => {
-    expect(
-      shouldShowComposerContextStrip({
-        isDraftHeroState: true,
-        persistInActiveThreads: false,
-        hasActiveProject: true,
-        isGitRepo: true,
-        showEnvironmentIndicator: false,
-        hostsRestingComposerControls: false,
-      }),
-    ).toBe(true);
   });
 });
 

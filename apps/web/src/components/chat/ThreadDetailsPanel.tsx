@@ -1,16 +1,22 @@
 import type {
   EditorId,
   EnvironmentId,
+  KeybindingCommand,
   ProjectScript,
   ResolvedKeybindingsConfig,
   ThreadId,
 } from "@t3tools/contracts";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
+import { type Ref, useImperativeHandle, useRef } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
-import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
-import { BranchToolbar } from "../BranchToolbar";
+import {
+  shouldShowEnvironmentIndicator,
+  type EnvMode,
+  type EnvironmentOption,
+} from "../BranchToolbar.logic";
+import { BranchToolbar, type BranchToolbarHandle } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
 import GitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
@@ -31,7 +37,14 @@ interface VersionMismatchIssue {
   readonly serverLabel: string;
 }
 
+export interface ThreadDetailsPanelHandle {
+  openControl: (command: KeybindingCommand) => void;
+}
+
 export interface ThreadDetailsPanelProps {
+  ref?: Ref<ThreadDetailsPanelHandle>;
+  autoEnvironmentLabel?: string | undefined;
+  onAutoEnvironment?: (() => void) | undefined;
   forceNewWorktree?: boolean;
   mode: "inline" | "popover";
   onClose?: () => void;
@@ -69,7 +82,24 @@ export interface ThreadDetailsPanelProps {
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
 }
 
-export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
+export function ThreadDetailsPanel({ ref, ...props }: ThreadDetailsPanelProps) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const branchToolbarRef = useRef<BranchToolbarHandle>(null);
+  useImperativeHandle(ref, () => ({
+    openControl: (command) => {
+      if (command === "composer.branch") {
+        branchToolbarRef.current?.openBranchPicker();
+      } else if (command === "composer.previousWorktree") {
+        branchToolbarRef.current?.usePreviousWorktree();
+      } else {
+        const trigger = cardRef.current?.querySelector<HTMLButtonElement>(
+          `button[data-composer-shortcut~="${command}"]:not(:disabled)`,
+        );
+        trigger?.focus({ preventScroll: true });
+        trigger?.click();
+      }
+    },
+  }));
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
     props.activeProjectScripts ? props.gitCwd : null,
@@ -101,6 +131,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
   const card = (
     <div
+      ref={cardRef}
       className={cn(
         // A single-track grid, because a grid area is a definite containing block: the card's own
         // height is "content, clamped by max-height", which percentages treat as indefinite — as
@@ -145,13 +176,23 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           ) : null}
 
           <div className="flex flex-col">
-            {props.availableEnvironments.length > 1 ? (
+            {shouldShowEnvironmentIndicator({
+              activeEnvironment:
+                props.availableEnvironments.find(
+                  (environment) => environment.environmentId === props.environmentId,
+                ) ?? null,
+              canPickEnvironment: props.availableEnvironments.length > 1,
+            }) ? (
               <BranchToolbarEnvironmentSelector
                 displayMode="panel"
                 envLocked={props.envLocked}
                 environmentId={props.environmentId}
                 availableEnvironments={props.availableEnvironments}
-                onEnvironmentChange={props.onEnvironmentChange}
+                {...(props.availableEnvironments.length > 1
+                  ? { onEnvironmentChange: props.onEnvironmentChange }
+                  : {})}
+                autoEnvironmentLabel={props.autoEnvironmentLabel}
+                onAutoEnvironment={props.onAutoEnvironment}
               />
             ) : null}
 
@@ -190,7 +231,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           >
             <div className="flex flex-col">
               {props.isGitRepo ? (
-                <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
+                <BranchToolbar
+                  ref={branchToolbarRef}
+                  layout="panel"
+                  panelSection="branch"
+                  {...branchToolbarProps}
+                />
               ) : null}
               {props.activeProjectName ? (
                 <GitActionsControl

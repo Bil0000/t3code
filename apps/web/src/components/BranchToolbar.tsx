@@ -603,6 +603,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         {panelSection !== "branch" ? (
           <BranchToolbarEnvModeSelector
             displayMode="panel"
+            forceNewWorktree={forceNewWorktree}
             envLocked={envModeLocked}
             effectiveEnvMode={effectiveEnvMode}
             activeWorktreePath={activeWorktreePath}
@@ -615,12 +616,18 @@ export const BranchToolbar = memo(function BranchToolbar({
         {panelSection !== "workspace" ? (
           <BranchToolbarBranchSelector
             displayMode="panel"
+            forceNewWorktree={forceNewWorktree}
+            ref={branchSelectorRef}
             className="w-full"
             environmentId={environmentId}
             threadId={threadId}
             {...(draftId ? { draftId } : {})}
             envLocked={envLocked}
-            {...(effectiveEnvModeOverride ? { effectiveEnvModeOverride } : {})}
+            {...(forceNewWorktree
+              ? { effectiveEnvModeOverride: "worktree" }
+              : effectiveEnvModeOverride
+                ? { effectiveEnvModeOverride }
+                : {})}
             {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
             {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
             startFromOrigin={startFromOrigin}
