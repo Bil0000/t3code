@@ -1028,22 +1028,23 @@ it.effect.skipIf(windowsHost)("ignores unusable app bundles and keeps PATH launc
     const path = yield* Path.Path;
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-editor-priority-" });
     const executable = path.join(home, "Applications/Cursor.app/Contents/Resources/app/bin/code");
-    yield* fs.makeDirectory(executable, { recursive: true });
     const env = { HOME: home, PATH: path.join(home, "bin") };
     const discover = Effect.gen(function* () {
       const launcher = yield* ExternalLauncher.ExternalLauncher;
       return yield* launcher.resolveAvailableEditors();
     });
-    assert.notInclude(
+    const before = yield* discover.pipe(Effect.provide(testLayer({ platform: "darwin", env })));
+    yield* fs.makeDirectory(executable, { recursive: true });
+    assert.deepEqual(
       yield* discover.pipe(Effect.provide(testLayer({ platform: "darwin", env }))),
-      "cursor",
+      before,
     );
     yield* fs.remove(executable, { recursive: true });
     yield* fs.writeFileString(executable, "#!/bin/sh\n");
     yield* fs.chmod(executable, 0o644);
-    assert.notInclude(
+    assert.deepEqual(
       yield* discover.pipe(Effect.provide(testLayer({ platform: "darwin", env }))),
-      "cursor",
+      before,
     );
     yield* fs.chmod(executable, 0o755);
     yield* fs.makeDirectory(env.PATH);
