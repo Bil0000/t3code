@@ -1435,6 +1435,8 @@ function IssuesRouteView() {
                   previewFocus: false,
                   previewOpen: false,
                   modelPickerOpen: false,
+                  isWeb: !isElectron,
+                  isDesktop: isElectron,
                 })}
                 key={activeSurface.id}
                 environmentId={issueEnvironmentId}
