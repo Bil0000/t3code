@@ -3,6 +3,8 @@ import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { assert, it, describe } from "@effect/vitest";
+import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -75,6 +77,31 @@ const makeSuccessfulHandle = (stdout: string) =>
     getInputFd: () => Sink.drain,
     getOutputFd: () => Stream.empty,
   });
+
+const makeHangingHandle = () =>
+  ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Effect.never,
+    isRunning: Effect.succeed(true),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: Sink.drain,
+    stdout: Stream.empty,
+    stderr: Stream.empty,
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+
+const makeGitHistoryOutput = (count: number): string =>
+  Array.from(
+    { length: count },
+    (_, index) =>
+      `${index.toString(16).padStart(40, "0")}\x00\x00commit ${index}\x00Test\x00test@example.com\x002026-08-12T00:00:00Z\x00\x00`,
+  ).join("");
+
+const makeGitCommitFilesOutput = (count: number): string =>
+  Array.from({ length: count }, (_, index) => `A\x00file-${index}.ts\x00`).join("");
 
 const makeTmpDir = (
   prefix = "git-vcs-driver-test-",
@@ -185,9 +212,9 @@ it.effect("bounds Git bursts across drivers without timing out queued commands",
       { concurrency: "unbounded" },
     ).pipe(Effect.forkChild);
 
-    yield* TestClock.adjust("2 seconds");
-    assert.equal(yield* Queue.size(starts), 8);
+    yield* Effect.all(Array.from({ length: 8 }, () => Queue.take(starts)));
     assert.equal(peak, 8);
+    yield* TestClock.adjust("2 seconds");
     yield* Deferred.succeed(gate, undefined);
     const results = yield* Fiber.join(burst);
     assert.equal(results.length, 16);
@@ -251,6 +278,49 @@ it.effect.each([{ timeoutMs: null }, { timeoutMs: 30_001 }])(
       assert.equal((yield* Fiber.join(slow)).stdout, "ok");
       assert.equal(active, 0);
     }).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("bounds internal history Git commands", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const starts = yield* Queue.unbounded<void>();
+    let active = 0;
+    let peak = 0;
+    const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const spawner = ChildProcessSpawner.make((command) =>
+      ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+        ? Effect.acquireRelease(
+            Effect.gen(function* () {
+              peak = Math.max(peak, ++active);
+              yield* Queue.offer(starts, undefined);
+              return ChildProcessSpawner.makeHandle({
+                ...makeSuccessfulHandle(makeGitHistoryOutput(1)),
+                exitCode: Deferred.await(gate).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              });
+            }),
+            () => Effect.sync(() => active--),
+          )
+        : delegate.spawn(command),
+    );
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver));
+
+    const burst = yield* Effect.forEach(
+      Array.from({ length: 16 }),
+      () => driver.getHistory({ cwd }),
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkChild);
+
+    yield* Effect.all(Array.from({ length: 8 }, () => Queue.take(starts)));
+    assert.equal(peak, 8);
+    yield* Deferred.succeed(gate, undefined);
+    assert.equal((yield* Fiber.join(burst)).length, 16);
+    assert.equal(peak, 8);
+    assert.equal(active, 0);
+  }).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 for (const location of ["root", "nested", "worktree"] as const) {
@@ -337,6 +407,35 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     ]);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("times out getCommitDiff.show after its explicit 10-second command timeout", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const showSpawned = yield* Deferred.make<void>();
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args.includes("show")
+          ? Deferred.succeed(showSpawned, undefined).pipe(Effect.as(makeHangingHandle()))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const diff = yield* Effect.forkChild(
+        driver.getCommitDiff({ cwd, hash: "HEAD" }).pipe(Effect.exit),
+      );
+      yield* Deferred.await(showSpawned);
+      yield* TestClock.adjust("10 seconds");
+      const result = yield* Fiber.join(diff);
+      if (result._tag !== "Failure") return assert.fail("Expected getCommitDiff to time out.");
+      assert.match(Cause.pretty(result.cause), /GitVcsDriver\.getCommitDiff\.show/);
+      assert.match(Cause.pretty(result.cause), /Git command timed out\./);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
 
 it.effect("invalidates origin remote cache when a driver mutation adds origin", () =>
   Effect.gen(function* () {
@@ -622,6 +721,1125 @@ it.effect("fails a ref snapshot when for-each-ref exits unsuccessfully", () =>
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
+it.effect("returns paginated commit history with author, parent, and decoration details", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "SECOND.md", "second\n");
+    yield* git(cwd, ["add", "SECOND.md"]);
+    yield* git(cwd, ["commit", "-m", "second commit"], {
+      GIT_AUTHOR_NAME: "Ada Lovelace",
+      GIT_AUTHOR_EMAIL: "ada@example.com",
+      GIT_AUTHOR_DATE: "2026-08-09T12:00:00+00:00",
+      GIT_COMMITTER_NAME: "Ada Lovelace",
+      GIT_COMMITTER_EMAIL: "ada@example.com",
+      GIT_COMMITTER_DATE: "2026-08-09T12:00:00+00:00",
+    });
+    yield* git(cwd, ["tag", "v2"]);
+
+    const firstPage = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.equal(firstPage.isRepo, true);
+    assert.equal(firstPage.commits.length, 1);
+    assert.equal(firstPage.hasMore, true);
+    assert.equal(typeof firstPage.nextCursor, "string");
+    assert.equal(firstPage.commits[0]?.subject, "second commit");
+    assert.equal(firstPage.commits[0]?.authorName, "Ada Lovelace");
+    assert.equal(firstPage.commits[0]?.authorEmail, "ada@example.com");
+    assert.equal(firstPage.commits[0]?.authoredAt, "2026-08-09T12:00:00Z");
+    assert.equal(firstPage.commits[0]?.parentHashes.length, 1);
+    assert.equal(firstPage.commits[0]?.refs.includes(`HEAD -> ${initialBranch}`), true);
+    assert.equal(firstPage.commits[0]?.refs.includes("tag: v2"), true);
+
+    const fullPage = yield* driver.getHistory({ cwd, limit: 2 });
+    assert.equal(fullPage.commits.length, 2);
+    assert.match(fullPage.commits[1]?.hash ?? "", /^[0-9a-f]{40}$/);
+    assert.equal(fullPage.commits[0]?.parentHashes[0], fullPage.commits[1]?.hash);
+
+    assert.ok(firstPage.nextCursor);
+    const secondPage = yield* driver.getHistory({ cwd, cursor: firstPage.nextCursor, limit: 1 });
+    assert.equal(secondPage.commits.length, 1);
+    assert.equal(secondPage.hasMore, false);
+    assert.equal(secondPage.nextCursor, null);
+    assert.equal(secondPage.commits[0]?.subject, "initial commit");
+
+    const reusedCursor = yield* driver.getHistory({ cwd, cursor: firstPage.nextCursor, limit: 1 });
+    assert.deepEqual(reusedCursor.commits, secondPage.commits);
+    assert.equal(reusedCursor.hasMore, false);
+    assert.equal(reusedCursor.nextCursor, null);
+
+    yield* git(cwd, ["branch", "history-test", "HEAD~1"]);
+    const branchHistory = yield* driver.getHistory({
+      cwd,
+      revision: "refs/heads/history-test",
+      limit: 10,
+    });
+    assert.deepEqual(
+      branchHistory.commits.map((commit) => commit.subject),
+      ["initial commit"],
+    );
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("returns history from refs when HEAD is unborn", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    yield* git(cwd, ["symbolic-ref", "HEAD", "refs/heads/unborn"]);
+
+    const history = yield* driver.getHistory({ cwd });
+
+    assert.equal(history.isRepo, true);
+    assert.equal(history.commits[0]?.subject, "initial commit");
+    assert.include(history.commits[0]?.refs ?? [], initialBranch);
+    assert.equal(history.hasMore, false);
+    assert.equal(history.nextCursor, null);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("includes a detached HEAD commit after caching the attached branch", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* driver.getHistory({ cwd });
+    yield* git(cwd, ["checkout", "--detach"]);
+    yield* writeTextFile(cwd, "detached.md", "detached\n");
+    yield* git(cwd, ["add", "detached.md"]);
+    yield* git(cwd, ["commit", "-m", "detached history commit"]);
+
+    const history = yield* driver.getHistory({ cwd });
+
+    assert.include(
+      history.commits.map((commit) => commit.subject),
+      "detached history commit",
+    );
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("does not resolve detached HEAD again when continuing a history snapshot", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const headResolutions = yield* Ref.make(0);
+      const spawner = ChildProcessSpawner.make((command) => {
+        if (
+          ChildProcess.isStandardCommand(command) &&
+          command.args.includes("rev-parse") &&
+          command.args.includes("HEAD^{commit}")
+        ) {
+          return Ref.update(headResolutions, (count) => count + 1).pipe(
+            Effect.andThen(delegate.spawn(command)),
+          );
+        }
+        return delegate.spawn(command);
+      });
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* initRepoWithCommit(cwd).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver));
+      yield* writeTextFile(cwd, "second.md", "second\n");
+      yield* driver.execute({
+        operation: "GitVcsDriver.test.secondCommit",
+        cwd,
+        args: ["add", "second.md"],
+      });
+      yield* driver.execute({
+        operation: "GitVcsDriver.test.secondCommit",
+        cwd,
+        args: ["commit", "-m", "second"],
+      });
+      yield* driver.execute({
+        operation: "GitVcsDriver.test.detachHead",
+        cwd,
+        args: ["checkout", "--detach"],
+      });
+
+      const first = yield* driver.getHistory({ cwd, limit: 1 });
+      assert.ok(first.nextCursor);
+      const initialResolutions = yield* Ref.get(headResolutions);
+
+      yield* driver.getHistory({ cwd, cursor: first.nextCursor, limit: 1 });
+
+      assert.equal(yield* Ref.get(headResolutions), initialResolutions);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("keeps a history page stable after refs move", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    for (const name of ["second", "third"]) {
+      yield* writeTextFile(cwd, `${name}.md`, `${name}\n`);
+      yield* git(cwd, ["add", "."]);
+      yield* git(cwd, ["commit", "-m", name]);
+    }
+    const first = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.ok(first.nextCursor);
+    yield* writeTextFile(cwd, "new.md", "new\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "new"]);
+    yield* git(cwd, ["branch", "moved-after-snapshot"]);
+    const second = yield* driver.getHistory({ cwd, cursor: first.nextCursor, limit: 2 });
+    assert.deepEqual(
+      second.commits.map((commit) => commit.subject),
+      ["second", "initial commit"],
+    );
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("reuses an idempotent history cursor when injected Crypto yields", () =>
+  Effect.gen(function* () {
+    const randomBytesGate = yield* Deferred.make<void>();
+    const randomBytesStarts = yield* Queue.unbounded<void>();
+    const randomBytesCalls = yield* Ref.make(0);
+    const baseCrypto = yield* Crypto.Crypto;
+    const crypto = {
+      ...baseCrypto,
+      randomBytes: (size: number) =>
+        Effect.gen(function* () {
+          const call = yield* Ref.updateAndGet(randomBytesCalls, (count) => count + 1);
+          if (call > 2) {
+            yield* Queue.offer(randomBytesStarts, undefined);
+            yield* Deferred.await(randomBytesGate);
+          }
+          return new Uint8Array(size).fill(call);
+        }),
+    };
+    const driver = yield* makeGitVcsDriverCore().pipe(Effect.provideService(Crypto.Crypto, crypto));
+    const cwd = yield* makeTmpDir();
+    const runGit = (args: ReadonlyArray<string>) =>
+      git(cwd, args).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver));
+    yield* driver.initRepo({ cwd }).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver));
+    yield* runGit(["config", "user.email", "test@test.com"]);
+    yield* runGit(["config", "user.name", "Test"]);
+    yield* writeTextFile(cwd, "README.md", "# test\n");
+    yield* runGit(["add", "."]);
+    yield* runGit(["commit", "-m", "initial commit"]);
+    yield* writeTextFile(cwd, "second.md", "second\n");
+    yield* runGit(["add", "second.md"]);
+    yield* runGit(["commit", "-m", "second"]);
+    yield* writeTextFile(cwd, "third.md", "third\n");
+    yield* runGit(["add", "third.md"]);
+    yield* runGit(["commit", "-m", "third"]);
+
+    const first = yield* driver
+      .getHistory({ cwd, limit: 1 })
+      .pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver));
+    assert.ok(first.nextCursor);
+    const replay = yield* Effect.all(
+      [
+        driver
+          .getHistory({ cwd, cursor: first.nextCursor, limit: 1 })
+          .pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver)),
+        driver
+          .getHistory({ cwd, cursor: first.nextCursor, limit: 1 })
+          .pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, driver)),
+      ],
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkChild);
+    yield* Effect.all(Array.from({ length: 2 }, () => Queue.take(randomBytesStarts)));
+    yield* Deferred.succeed(randomBytesGate, undefined);
+    const [left, right] = yield* Fiber.join(replay);
+
+    assert.ok(left.nextCursor);
+    assert.equal(left.nextCursor, right.nextCursor);
+  }).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("rejects an unknown history cursor with the typed expiry error", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const error = yield* driver
+      .getHistory({ cwd, cursor: "not-a-history-snapshot" })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "VcsSnapshotExpiredError");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("rejects a history cursor reused for another revision", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "second.md", "second\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "second"]);
+    const first = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.ok(first.nextCursor);
+    const error = yield* driver
+      .getHistory({ cwd, revision: `refs/heads/${initialBranch}`, cursor: first.nextCursor })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "VcsSnapshotExpiredError");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("expires a history cursor after its TestClock TTL", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "second.md", "second\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "second"]);
+
+    const first = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.ok(first.nextCursor);
+    yield* TestClock.adjust("5 minutes");
+    const error = yield* driver.getHistory({ cwd, cursor: first.nextCursor }).pipe(Effect.flip);
+    assert.equal(error._tag, "VcsSnapshotExpiredError");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("rejects a history cursor from another linked worktree", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const worktreesRoot = yield* makeTmpDir("git-vcs-driver-worktrees-");
+    const pathService = yield* Path.Path;
+    const linkedWorktree = pathService.join(worktreesRoot, "linked");
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "second.md", "second\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "second"]);
+    yield* git(cwd, ["worktree", "add", "-b", "history-linked", linkedWorktree]);
+
+    const first = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.ok(first.nextCursor);
+    const error = yield* driver
+      .getHistory({ cwd: linkedWorktree, cursor: first.nextCursor })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "VcsSnapshotExpiredError");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("caps history output at complete NUL records", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+          ? Effect.succeed(
+              makeSuccessfulHandle(`${makeGitHistoryOutput(1)}${"x".repeat(512 * 1024 + 1)}`),
+            )
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const history = yield* driver.getHistory({ cwd });
+      assert.deepEqual(
+        history.commits.map((commit) => commit.subject),
+        ["commit 0"],
+      );
+      assert.equal(history.capped, true);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("reports capped history snapshots without a phantom sentinel page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const logCommands = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+          ? Ref.update(logCommands, (commands) => [...commands, command.args]).pipe(
+              Effect.as(makeSuccessfulHandle(makeGitHistoryOutput(1_001))),
+            )
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      let page = yield* driver.getHistory({ cwd, limit: 200 });
+      assert.equal(page.commits.length, 200);
+      assert.equal(page.hasMore, true);
+      for (let index = 0; index < 3; index += 1) {
+        assert.ok(page.nextCursor);
+        page = yield* driver.getHistory({ cwd, cursor: page.nextCursor, limit: 200 });
+        assert.equal(page.commits.length, 200);
+        assert.equal(page.hasMore, true);
+      }
+      assert.ok(page.nextCursor);
+      page = yield* driver.getHistory({ cwd, cursor: page.nextCursor, limit: 200 });
+      assert.equal(page.commits.length, 200);
+      assert.equal(page.hasMore, false);
+      assert.equal(page.nextCursor, null);
+      assert.equal(page.capped, true);
+      assert.deepEqual(yield* Ref.get(logCommands), [
+        [
+          "log",
+          "-z",
+          "--date-order",
+          "--decorate=short",
+          "--max-count=1001",
+          "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00%D",
+          "--branches",
+          "--remotes",
+          "--tags",
+          "HEAD",
+        ],
+      ]);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("evicts the oldest history snapshot and invalidates only its cursor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+          ? Effect.succeed(makeSuccessfulHandle(makeGitHistoryOutput(2)))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+      const cursors: Array<string> = [];
+      for (let index = 0; index < 65; index += 1) {
+        const page = yield* driver.getHistory({ cwd, limit: 1 });
+        assert.ok(page.nextCursor);
+        cursors.push(page.nextCursor);
+      }
+
+      const expired = yield* driver.getHistory({ cwd, cursor: cursors[0] }).pipe(Effect.flip);
+      assert.equal(expired._tag, "VcsSnapshotExpiredError");
+      const retained = yield* driver.getHistory({ cwd, cursor: cursors[1], limit: 1 });
+      assert.equal(retained.commits.length, 1);
+      assert.equal(retained.hasMore, false);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("does not retain completed history snapshots in the session cap", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const logCalls = yield* Ref.make(0);
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "log"
+          ? Ref.updateAndGet(logCalls, (count) => count + 1).pipe(
+              Effect.map((count) =>
+                makeSuccessfulHandle(makeGitHistoryOutput(count === 1 ? 2 : 1)),
+              ),
+            )
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const first = yield* driver.getHistory({ cwd, limit: 1 });
+      assert.ok(first.nextCursor);
+      for (let index = 0; index < 64; index += 1) {
+        const completed = yield* driver.getHistory({ cwd, limit: 1 });
+        assert.equal(completed.hasMore, false);
+      }
+
+      const retained = yield* driver.getHistory({ cwd, cursor: first.nextCursor, limit: 1 });
+      assert.equal(retained.commits.length, 1);
+      assert.equal(retained.hasMore, false);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("returns full commit details and root commit changed files", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "SECOND.md", "second\n");
+    yield* git(cwd, ["add", "SECOND.md"]);
+    yield* git(cwd, ["commit", "-m", "second subject", "-m", "second body\nwith another line"]);
+    yield* git(cwd, ["tag", "v2"]);
+
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+    const details = yield* driver.getCommitDetails({ cwd, hash });
+
+    assert.equal(details.isRepo, true);
+    assert.equal(details.commit?.hash, hash);
+    assert.equal(details.commit?.subject, "second subject");
+    assert.equal(details.commit?.body, "second body\nwith another line\n");
+    assert.equal(details.commit?.authorName, "Test");
+    assert.equal(details.commit?.authorEmail, "test@test.com");
+    assert.equal(details.commit?.parentHashes.length, 1);
+    assert.include(details.commit?.refs ?? [], "tag: v2");
+    const files = yield* driver.listCommitFiles({ cwd, hash });
+    assert.deepEqual(files.files, [{ status: "A", path: "SECOND.md" }]);
+
+    const paged = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+    assert.equal(paged.hasMore, false);
+    assert.equal(paged.nextCursor, null);
+
+    const diff = yield* driver.getCommitDiff({ cwd, hash });
+    assert.equal(diff.isRepo, true);
+    assert.equal(diff.truncated, false);
+    assert.include(diff.diff, "diff --git a/SECOND.md b/SECOND.md");
+    assert.include(diff.diff, "+second");
+
+    const fileDiff = yield* driver.getCommitDiff({ cwd, hash, filePath: "SECOND.md" });
+    assert.include(fileDiff.diff, "+second");
+
+    const initialHash = details.commit?.parentHashes[0];
+    assert.ok(initialHash);
+    const initialFiles = yield* driver.listCommitFiles({ cwd, hash: initialHash });
+    assert.deepEqual(initialFiles.files, [{ status: "A", path: "README.md" }]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("returns a null commit when the requested commit is absent", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+
+    const details = yield* driver.getCommitDetails({
+      cwd,
+      hash: "0000000000000000000000000000000000000000",
+    });
+
+    assert.deepEqual(details, { commit: null, isRepo: true });
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("lists only files represented by a merge commit's first-parent patch", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* git(cwd, ["checkout", "-b", "feature"]);
+    yield* writeTextFile(cwd, "feature.md", "feature\n");
+    yield* git(cwd, ["add", "feature.md"]);
+    yield* git(cwd, ["commit", "-m", "feature change"]);
+    yield* git(cwd, ["checkout", initialBranch]);
+    yield* writeTextFile(cwd, "main.md", "main\n");
+    yield* git(cwd, ["add", "main.md"]);
+    yield* git(cwd, ["commit", "-m", "main change"]);
+    yield* git(cwd, ["merge", "--no-ff", "feature", "-m", "merge feature"]);
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+    const files = yield* driver.listCommitFiles({ cwd, hash });
+    const diff = yield* driver.getCommitDiff({ cwd, hash });
+
+    assert.deepEqual(files.files, [{ status: "A", path: "feature.md" }]);
+    assert.include(diff.diff, "diff --git a/feature.md b/feature.md");
+    assert.notInclude(diff.diff, "diff --git a/main.md b/main.md");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("treats commit diff file paths containing pathspec magic as literals", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "report[1].md", "literal path\n");
+    yield* writeTextFile(cwd, "report1.md", "wildcard match\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "add similar report paths"]);
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+    const diff = yield* driver.getCommitDiff({ cwd, hash, filePath: "report[1].md" });
+
+    assert.include(diff.diff, "literal path");
+    assert.notInclude(diff.diff, "wildcard match");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("keeps a/ and b/ prefixes in commit diffs when the repository disables them", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* git(cwd, ["config", "diff.noprefix", "true"]);
+    yield* git(cwd, ["config", "diff.mnemonicPrefix", "true"]);
+    yield* writeTextFile(cwd, "README.md", "commit diff\n");
+    yield* git(cwd, ["add", "README.md"]);
+    yield* git(cwd, ["commit", "-m", "commit diff"]);
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+    const diff = yield* driver.getCommitDiff({ cwd, hash });
+
+    assert.include(diff.diff, "diff --git a/README.md b/README.md");
+    assert.include(diff.diff, "--- a/README.md");
+    assert.include(diff.diff, "+++ b/README.md");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("gets commit diffs for repository-root paths from a nested project directory", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const pathService = yield* Path.Path;
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* writeTextFile(cwd, "apps/server/inside.md", "inside\n");
+    yield* writeTextFile(cwd, "packages/contracts/outside.md", "outside\n");
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "add files across the repository"]);
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+    const nestedCwd = pathService.join(cwd, "apps/server");
+
+    const files = yield* driver.listCommitFiles({ cwd: nestedCwd, hash });
+    assert.deepEqual(files.files, [
+      { status: "A", path: "apps/server/inside.md" },
+      { status: "A", path: "packages/contracts/outside.md" },
+    ]);
+
+    const insideDiff = yield* driver.getCommitDiff({
+      cwd: nestedCwd,
+      hash,
+      filePath: "apps/server/inside.md",
+    });
+    const outsideDiff = yield* driver.getCommitDiff({
+      cwd: nestedCwd,
+      hash,
+      filePath: "packages/contracts/outside.md",
+    });
+
+    assert.include(insideDiff.diff, "+inside");
+    assert.include(outsideDiff.diff, "+outside");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("keeps gpg signature output out of history and commit details records", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+
+    // Stand-in for gpg: git prints whatever it writes ahead of the log records.
+    const gpgProgram = pathService.join(cwd, "fake-gpg.sh");
+    yield* fileSystem.writeFileString(
+      gpgProgram,
+      '#!/bin/sh\necho "gpg: Signature made by a fake signer" 1>&2\nexit 0\n',
+    );
+    yield* fileSystem.chmod(gpgProgram, 0o755);
+    yield* git(cwd, ["config", "gpg.program", gpgProgram.replaceAll("\\", "/")]);
+    yield* git(cwd, ["config", "log.showSignature", "true"]);
+
+    const tree = yield* git(cwd, ["rev-parse", "HEAD^{tree}"]);
+    const parent = yield* git(cwd, ["rev-parse", "HEAD"]);
+    yield* writeTextFile(
+      cwd,
+      "signed-commit-object",
+      `tree ${tree}\nparent ${parent}\n` +
+        "author Test <test@test.com> 1700000000 +0000\n" +
+        "committer Test <test@test.com> 1700000000 +0000\n" +
+        "gpgsig -----BEGIN PGP SIGNATURE-----\n \n aaaa\n -----END PGP SIGNATURE-----\n" +
+        "\nsigned subject\n",
+    );
+    const hash = yield* git(cwd, [
+      "hash-object",
+      "-w",
+      "-t",
+      "commit",
+      pathService.join(cwd, "signed-commit-object"),
+    ]);
+    yield* git(cwd, ["update-ref", "HEAD", hash]);
+
+    const history = yield* driver.getHistory({ cwd, limit: 1 });
+    assert.match(history.commits[0]?.hash ?? "", /^[0-9a-f]{40}$/);
+    assert.equal(history.commits[0]?.hash, hash);
+    assert.equal(history.commits[0]?.subject, "signed subject");
+
+    const details = yield* driver.getCommitDetails({ cwd, hash });
+    assert.match(details.commit?.hash ?? "", /^[0-9a-f]{40}$/);
+    assert.equal(details.commit?.subject, "signed subject");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("pages commit files idempotently and retains the snapshot through its TTL", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    for (const name of ["second", "third"]) {
+      yield* writeTextFile(cwd, `${name}.md`, `${name}\n`);
+    }
+    yield* git(cwd, ["add", "."]);
+    yield* git(cwd, ["commit", "-m", "add files"]);
+    const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+    const first = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+    assert.deepEqual(first.files, [{ status: "A", path: "second.md" }]);
+    assert.ok(first.nextCursor);
+    const second = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor, limit: 1 });
+    assert.equal(second.hasMore, false);
+    assert.equal(second.nextCursor, null);
+    const replay = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor, limit: 1 });
+    assert.deepEqual(replay, second);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect(
+  "rejects commit-file cursors after TestClock expiry and across worktree or hash bindings",
+  () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const worktreesRoot = yield* makeTmpDir("git-vcs-driver-worktrees-");
+      const pathService = yield* Path.Path;
+      const linked = pathService.join(worktreesRoot, "linked");
+      yield* initRepoWithCommit(cwd);
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      yield* writeTextFile(cwd, "second.md", "second\n");
+      yield* writeTextFile(cwd, "third.md", "third\n");
+      yield* git(cwd, ["add", "."]);
+      yield* git(cwd, ["commit", "-m", "second"]);
+      const hash = yield* git(cwd, ["rev-parse", "HEAD"]);
+      yield* git(cwd, ["worktree", "add", "-b", "commit-files-linked", linked]);
+      const first = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+      assert.ok(first.nextCursor);
+      const wrongWorktree = yield* driver
+        .listCommitFiles({ cwd: linked, hash, cursor: first.nextCursor })
+        .pipe(Effect.flip);
+      assert.equal(wrongWorktree._tag, "VcsSnapshotExpiredError");
+      const second = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+      assert.ok(second.nextCursor);
+      const wrongHash = yield* driver
+        .listCommitFiles({
+          cwd,
+          hash: yield* git(cwd, ["rev-parse", "HEAD~1"]),
+          cursor: second.nextCursor,
+        })
+        .pipe(Effect.flip);
+      assert.equal(wrongHash._tag, "VcsSnapshotExpiredError");
+      const third = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+      assert.ok(third.nextCursor);
+      yield* TestClock.adjust("1 minute");
+      const refreshed = yield* driver.listCommitFiles({ cwd, hash, cursor: third.nextCursor });
+      assert.equal(refreshed.hasMore, false);
+      yield* TestClock.adjust("90 seconds");
+      const replayed = yield* driver.listCommitFiles({ cwd, hash, cursor: third.nextCursor });
+      assert.deepEqual(replayed, refreshed);
+      yield* TestClock.adjust("2 minutes");
+      const expired = yield* driver
+        .listCommitFiles({ cwd, hash, cursor: third.nextCursor })
+        .pipe(Effect.flip);
+      assert.equal(expired._tag, "VcsSnapshotExpiredError");
+    }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect(
+  "enforces commit-file retained bytes, file cap, and 64-session eviction through synthetic git output",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const output = makeGitCommitFilesOutput(2_001);
+        const spawner = ChildProcessSpawner.make((command) =>
+          ChildProcess.isStandardCommand(command) && command.args[0] === "diff-tree"
+            ? Effect.succeed(makeSuccessfulHandle(output))
+            : delegate.spawn(command),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        const cwd = yield* makeTmpDir();
+        yield* driver.initRepo({ cwd });
+        const hash = "a".repeat(40);
+        const first = yield* driver.listCommitFiles({ cwd, hash, limit: 100 });
+        assert.equal(first.files.length, 100);
+        assert.equal(first.capped, true);
+        assert.ok(first.nextCursor);
+        const cursors = [first.nextCursor];
+        for (let index = 0; index < 64; index += 1) {
+          const page = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
+          assert.ok(page.nextCursor);
+          cursors.push(page.nextCursor);
+        }
+        const evicted = yield* driver
+          .listCommitFiles({ cwd, hash, cursor: cursors[0] })
+          .pipe(Effect.flip);
+        assert.equal(evicted._tag, "VcsSnapshotExpiredError");
+        const retained = yield* driver.listCommitFiles({ cwd, hash, cursor: cursors[1], limit: 1 });
+        assert.equal(retained.files.length, 1);
+      }),
+    ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("caps commit-file output at complete NUL records", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args[0] === "diff-tree"
+          ? Effect.succeed(
+              makeSuccessfulHandle(`A\x00complete.ts\x00${"x".repeat(512 * 1024 + 1)}`),
+            )
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+      const files = yield* driver.listCommitFiles({ cwd, hash: "a".repeat(40) });
+      assert.deepEqual(files.files, [{ status: "A", path: "complete.ts" }]);
+      assert.equal(files.capped, true);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("excludes internal refs from history while including normal branch history", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const currentHead = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+    const normalBranchCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-m",
+      "normal branch history",
+    ]);
+    yield* git(cwd, ["update-ref", "refs/heads/feature/normal-history", normalBranchCommit]);
+
+    const internalCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-m",
+      "internal checkpoint history",
+    ]);
+    yield* git(cwd, ["update-ref", "refs/t3/checkpoints/test", internalCommit]);
+
+    const mergeCommit = yield* git(cwd, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-p",
+      normalBranchCommit,
+      "-m",
+      "visible merge history",
+    ]);
+    yield* git(cwd, ["update-ref", "HEAD", mergeCommit]);
+
+    const history = yield* driver.getHistory({ cwd, limit: 10 });
+    const subjects = history.commits.map((commit) => commit.subject);
+    const merge = history.commits.find((commit) => commit.hash === mergeCommit);
+
+    assert.include(subjects, "normal branch history");
+    assert.notInclude(subjects, "internal checkpoint history");
+    assert.deepEqual(merge?.parentHashes, [currentHead, normalBranchCommit]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("keeps ref namespaces isolated and marks current and origin default refs", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const remote = yield* makeTmpDir("git-vcs-driver-remote-");
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* git(cwd, ["branch", "feature/local"]);
+    yield* git(cwd, ["tag", "release/v1"]);
+    yield* git(remote, ["init", "--bare"]);
+    yield* git(cwd, ["remote", "add", "origin", remote]);
+    yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+    yield* git(cwd, ["remote", "set-head", "origin", initialBranch]);
+
+    const local = yield* driver.listHistoryRefs({ cwd, namespace: "local", refresh: true });
+    const remotes = yield* driver.listHistoryRefs({ cwd, namespace: "remote" });
+    const tags = yield* driver.listHistoryRefs({ cwd, namespace: "tag" });
+
+    const expectedRepositoryKey =
+      (yield* HostProcessPlatform) === "win32"
+        ? local.repositoryKey?.toLowerCase()
+        : local.repositoryKey;
+    assert.ok(local.repositoryKey);
+    assert.equal(local.repositoryKey, expectedRepositoryKey);
+    assert.equal(remotes.repositoryKey, local.repositoryKey);
+    assert.equal(tags.repositoryKey, local.repositoryKey);
+    assert.isTrue(local.refs.every((ref) => ref.kind === "local"));
+    assert.equal(local.currentRef?.name, initialBranch);
+    assert.isTrue(remotes.refs.every((ref) => ref.kind === "remote"));
+    assert.equal(
+      remotes.refs.find((ref) => ref.name === `origin/${initialBranch}`)?.isDefault,
+      true,
+    );
+    assert.equal(remotes.currentRef, null);
+    assert.deepEqual(
+      tags.refs.map((ref) => ref.name),
+      ["release/v1"],
+    );
+    assert.isTrue(tags.refs.every((ref) => ref.kind === "tag"));
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("marks the local default branch in history refs", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const remote = yield* makeTmpDir("git-vcs-driver-remote-");
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* git(cwd, ["branch", "feature/local"]);
+    yield* git(cwd, ["tag", "release/v1"]);
+    yield* git(remote, ["init", "--bare"]);
+    yield* git(cwd, ["remote", "add", "origin", remote]);
+    yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+    yield* git(cwd, ["remote", "set-head", "origin", initialBranch]);
+
+    const local = yield* driver.listHistoryRefs({ cwd, namespace: "local", refresh: true });
+    const tags = yield* driver.listHistoryRefs({ cwd, namespace: "tag" });
+
+    assert.equal(local.refs.find((ref) => ref.name === initialBranch)?.isDefault, true);
+    assert.equal(local.refs.find((ref) => ref.name === "feature/local")?.isDefault, false);
+    assert.equal(local.currentRef?.isDefault, true);
+    assert.isTrue(tags.refs.every((ref) => !ref.isDefault));
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("filters history refs with a case-insensitive substring query", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* git(cwd, ["branch", "feature/Valid-1"]);
+    yield* git(cwd, ["branch", "feature/other"]);
+
+    const refs = yield* driver.listHistoryRefs({ cwd, query: "VALID-1" });
+
+    assert.deepEqual(
+      refs.refs.map((ref) => ref.name),
+      ["feature/Valid-1"],
+    );
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("reports the current history ref when a filter excludes it", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    const { initialBranch } = yield* initRepoWithCommit(cwd);
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    yield* git(cwd, ["branch", "feature/other"]);
+
+    const refs = yield* driver.listHistoryRefs({ cwd, query: "other" });
+
+    assert.deepEqual(
+      refs.refs.map((ref) => ref.name),
+      ["feature/other"],
+    );
+    assert.equal(refs.currentRef?.name, initialBranch);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("keeps every remote default ref and reports upstream divergence", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const remoteRefsOutput = [
+        "refs/remotes/origin/HEAD\trefs/remotes/origin/main\t\t\t",
+        "refs/remotes/origin/main\t\t\t\t",
+        "refs/remotes/upstream/HEAD\trefs/remotes/upstream/release\t\t\t",
+        "refs/remotes/upstream/release\t\t\t\t",
+      ].join("\0");
+      const localRefsOutput = "refs/heads/feature\t\torigin/feature\t[ahead 2, behind 3]\t\0";
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args.includes("for-each-ref")
+          ? Effect.succeed(
+              makeSuccessfulHandle(
+                command.args.at(-1) === "refs/remotes/" ? remoteRefsOutput : localRefsOutput,
+              ),
+            )
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const remotes = yield* driver.listHistoryRefs({ cwd, namespace: "remote" });
+      const locals = yield* driver.listHistoryRefs({ cwd, namespace: "local" });
+
+      assert.isTrue(remotes.refs.every((ref) => ref.isDefault));
+      assert.equal(locals.refs[0]?.aheadCount, 2);
+      assert.equal(locals.refs[0]?.behindCount, 3);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("does not retain completed history-ref snapshots in the session cap", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const refScans = yield* Ref.make(0);
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args.includes("for-each-ref")
+          ? Ref.updateAndGet(refScans, (count) => count + 1).pipe(
+              Effect.map((count) =>
+                makeSuccessfulHandle(
+                  count === 1
+                    ? "refs/heads/feature/first\t\t\t\t\0refs/heads/feature/second\t\t\t\t\0"
+                    : "refs/heads/feature/completed\t\t\t\t\0",
+                ),
+              ),
+            )
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const first = yield* driver.listHistoryRefs({ cwd, limit: 1 });
+      assert.ok(first.nextCursor);
+      for (let index = 0; index < 64; index += 1) {
+        const completed = yield* driver.listHistoryRefs({ cwd, limit: 1 });
+        assert.equal(completed.nextCursor, null);
+      }
+
+      const retained = yield* driver.listHistoryRefs({ cwd, cursor: first.nextCursor, limit: 1 });
+      assert.equal(retained.refs.length, 1);
+      assert.equal(retained.nextCursor, null);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect(
+  "caps ref snapshots, expires cursors, evicts sessions, and invalidates on mutations",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const refOutput = [
+          ...Array.from(
+            { length: 10_001 },
+            (_, index) =>
+              `refs/heads/feature/${index.toString().padStart(5, "0")}-${"x".repeat(128)}\t\t\t`,
+          ),
+          "refs/heads/release/Needle\t\t\t",
+        ].join("\0");
+        const spawner = ChildProcessSpawner.make((command) =>
+          ChildProcess.isStandardCommand(command) && command.args.includes("for-each-ref")
+            ? Effect.succeed(makeSuccessfulHandle(refOutput))
+            : delegate.spawn(command),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd).pipe(
+          Effect.provideService(GitVcsDriver.GitVcsDriver, driver),
+        );
+
+        const filtered = yield* driver.listHistoryRefs({ cwd, query: "needle", refresh: true });
+        assert.deepEqual(
+          filtered.refs.map((ref) => ref.name),
+          ["release/Needle"],
+        );
+        assert.equal(filtered.isComplete, true);
+
+        const first = yield* driver.listHistoryRefs({ cwd, limit: 1, refresh: true });
+        assert.equal(first.isComplete, false);
+        assert.equal(first.refs.length, 1);
+        assert.ok(first.nextCursor);
+        const unknown = yield* driver
+          .listHistoryRefs({ cwd, cursor: "unknown-cursor" })
+          .pipe(Effect.flip);
+        assert.equal(unknown._tag, "VcsSnapshotExpiredError");
+        const mismatch = yield* driver
+          .listHistoryRefs({ cwd, cursor: first.nextCursor, namespace: "tag" })
+          .pipe(Effect.flip);
+        assert.equal(mismatch._tag, "VcsSnapshotExpiredError");
+        const queryMismatch = yield* driver
+          .listHistoryRefs({ cwd, cursor: first.nextCursor, query: "feature" })
+          .pipe(Effect.flip);
+        assert.equal(queryMismatch._tag, "VcsSnapshotExpiredError");
+        const linkedWorktree = yield* makeTmpDir("git-vcs-driver-linked-");
+        yield* git(cwd, ["worktree", "add", "-b", "feature/linked", linkedWorktree]).pipe(
+          Effect.provideService(GitVcsDriver.GitVcsDriver, driver),
+        );
+        const worktreeMismatch = yield* driver
+          .listHistoryRefs({ cwd: linkedWorktree, cursor: first.nextCursor })
+          .pipe(Effect.flip);
+        assert.equal(worktreeMismatch._tag, "VcsSnapshotExpiredError");
+        const second = yield* driver.listHistoryRefs({ cwd, cursor: first.nextCursor, limit: 1 });
+        assert.equal(second.refs.length, 1);
+        const reused = yield* driver.listHistoryRefs({ cwd, cursor: first.nextCursor, limit: 1 });
+        assert.deepEqual(reused.refs, second.refs);
+        assert.equal(reused.isComplete, second.isComplete);
+        assert.equal(reused.nextCursor, second.nextCursor);
+        assert.ok(second.nextCursor);
+        yield* TestClock.adjust("2 minutes");
+        const expired = yield* driver
+          .listHistoryRefs({ cwd, cursor: second.nextCursor })
+          .pipe(Effect.flip);
+        assert.equal(expired._tag, "VcsSnapshotExpiredError");
+
+        const cursors: Array<string> = [];
+        for (let index = 0; index < 33; index += 1) {
+          const page = yield* driver.listHistoryRefs({ cwd, limit: 1, refresh: true });
+          assert.ok(page.nextCursor);
+          cursors.push(page.nextCursor);
+        }
+        const evicted = yield* driver
+          .listHistoryRefs({ cwd, cursor: cursors[0] })
+          .pipe(Effect.flip);
+        assert.equal(evicted._tag, "VcsSnapshotExpiredError");
+        const retained = yield* driver.listHistoryRefs({ cwd, cursor: cursors[1], limit: 1 });
+        assert.equal(retained.refs.length, 1);
+
+        const mutationCursor = retained.nextCursor;
+        assert.ok(mutationCursor);
+        yield* driver.createRef({ cwd, refName: "feature/invalidate" });
+        const invalidated = yield* driver
+          .listHistoryRefs({ cwd, cursor: mutationCursor })
+          .pipe(Effect.flip);
+        assert.equal(invalidated._tag, "VcsSnapshotExpiredError");
+      }),
+    ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("caps ref output at complete NUL records", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const refOutput = [
+        ...Array.from(
+          { length: 10_001 },
+          (_, index) => `refs/heads/feature/${index.toString().padStart(5, "0")}\t\t\t`,
+        ),
+        `refs/heads/overflow/${"x".repeat(2 * 1024 * 1024)}`,
+      ].join("\0");
+      const spawner = ChildProcessSpawner.make((command) =>
+        ChildProcess.isStandardCommand(command) && command.args.includes("for-each-ref")
+          ? Effect.succeed(makeSuccessfulHandle(refOutput))
+          : delegate.spawn(command),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir();
+      yield* driver.initRepo({ cwd });
+
+      const refs = yield* driver.listHistoryRefs({ cwd, refresh: true });
+
+      assert.equal(refs.refs.length, 100);
+      assert.equal(refs.isComplete, false);
+    }),
+  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
 it.effect("marks the current branch when worktree metadata is unavailable", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -818,7 +2036,68 @@ it.effect("backs off and logs failed fetch attempts across linked worktrees", ()
       assert.equal(yield* Ref.get(fetchAttempts), 3);
       assert.lengthOf(warnings, 3);
     }),
-  ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+  ).pipe(
+    Effect.provideService(HostProcessPlatform, "win32"),
+    Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
+);
+
+it.effect("uses the original Git directory casing for Windows refresh commands", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fetchGitDirs = yield* Ref.make<ReadonlyArray<string>>([]);
+      const spawner = ChildProcessSpawner.make((command) => {
+        if (
+          ChildProcess.isStandardCommand(command) &&
+          command.args.includes("fetch") &&
+          command.args.includes("--git-dir")
+        ) {
+          const gitDir = command.args[command.args.indexOf("--git-dir") + 1];
+          if (gitDir) {
+            return Ref.update(fetchGitDirs, (current) => [...current, gitDir]).pipe(
+              Effect.as(makeSuccessfulHandle("")),
+            );
+          }
+        }
+        return delegate.spawn(command);
+      });
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      const cwd = yield* makeTmpDir("GitVcsDriverCase-");
+      const remote = yield* makeTmpDir("GitVcsDriverRemote-");
+      const pathService = yield* Path.Path;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const runGit = (workingDirectory: string, args: ReadonlyArray<string>) =>
+        driver.execute({
+          operation: "GitVcsDriver.test.windowsGitDirCasing",
+          cwd: workingDirectory,
+          args,
+          timeoutMs: 10_000,
+        });
+
+      yield* driver.initRepo({ cwd });
+      yield* runGit(cwd, ["config", "user.email", "test@test.com"]);
+      yield* runGit(cwd, ["config", "user.name", "Test"]);
+      yield* writeTextFile(cwd, "README.md", "# test\n");
+      yield* runGit(cwd, ["add", "."]);
+      yield* runGit(cwd, ["commit", "-m", "initial commit"]);
+      const branch = (yield* runGit(cwd, ["branch", "--show-current"])).stdout.trim();
+      yield* runGit(remote, ["init", "--bare"]);
+      yield* runGit(cwd, ["remote", "add", "origin", remote]);
+      yield* runGit(cwd, ["push", "-u", "origin", branch]);
+      const commonDir = (yield* runGit(cwd, ["rev-parse", "--git-common-dir"])).stdout.trim();
+      const originalGitDir = yield* fileSystem.realPath(pathService.resolve(cwd, commonDir));
+
+      yield* driver.statusDetailsRemote(cwd);
+
+      assert.deepEqual(yield* Ref.get(fetchGitDirs), [originalGitDir]);
+    }),
+  ).pipe(
+    Effect.provideService(HostProcessPlatform, "win32"),
+    Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer))),
+  ),
 );
 
 for (const scenario of [
@@ -1297,36 +2576,38 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("keeps untracked filenames with pathspec magic in the review", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* writeTextFile(cwd, ":(exclude)after.ts", "literal pathspec contents\n");
-        yield* writeTextFile(cwd, "ordinary.ts", "ordinary contents\n");
-        const indexBefore = yield* git(cwd, ["ls-files", "--stage"]);
+    it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+      "keeps untracked filenames with pathspec magic in the review",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          yield* writeTextFile(cwd, ":(exclude)after.ts", "literal pathspec contents\n");
+          yield* writeTextFile(cwd, "ordinary.ts", "ordinary contents\n");
+          const indexBefore = yield* git(cwd, ["ls-files", "--stage"]);
 
-        const preview = yield* driver.getReviewDiffPreview({ cwd, ignoreWhitespace: false });
-        const diff = preview.sources.find((source) => source.kind === "working-tree")?.diff ?? "";
+          const preview = yield* driver.getReviewDiffPreview({ cwd, ignoreWhitespace: false });
+          const diff = preview.sources.find((source) => source.kind === "working-tree")?.diff ?? "";
 
-        assert.include(diff, "+literal pathspec contents");
-        assert.include(diff, "+ordinary contents");
-        const scoped = yield* driver.getReviewDiffPreview({
-          cwd,
-          file: {
-            path: ":(exclude)after.ts",
-            previousPath: null,
-            sourceKind: "working-tree",
-          },
-        });
-        const scopedSource = scoped.sources.find((source) => source.kind === "working-tree")!;
-        assert.deepStrictEqual(scopedSource.files, [
-          { path: ":(exclude)after.ts", previousPath: null, additions: 1, deletions: 0 },
-        ]);
-        assert.include(scopedSource.diff, "+literal pathspec contents");
-        assert.notInclude(scopedSource.diff, "ordinary.ts");
-        assert.strictEqual(yield* git(cwd, ["ls-files", "--stage"]), indexBefore);
-      }),
+          assert.include(diff, "+literal pathspec contents");
+          assert.include(diff, "+ordinary contents");
+          const scoped = yield* driver.getReviewDiffPreview({
+            cwd,
+            file: {
+              path: ":(exclude)after.ts",
+              previousPath: null,
+              sourceKind: "working-tree",
+            },
+          });
+          const scopedSource = scoped.sources.find((source) => source.kind === "working-tree")!;
+          assert.deepStrictEqual(scopedSource.files, [
+            { path: ":(exclude)after.ts", previousPath: null, additions: 1, deletions: 0 },
+          ]);
+          assert.include(scopedSource.diff, "+literal pathspec contents");
+          assert.notInclude(scopedSource.diff, "ordinary.ts");
+          assert.strictEqual(yield* git(cwd, ["ls-files", "--stage"]), indexBefore);
+        }),
     );
 
     it.effect("detects an unstaged rename with edits without mutating a split index", () =>

@@ -175,6 +175,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.pullRequests).toBe(true);
       expect(second.capabilities.workItemLinks).toBe(true);
       expect(second.capabilities.requiredWorktreeBootstrap).toBe(true);
+      expect(second.capabilities.gitHistory).toBe(true);
       expect(second.capabilities.usagePriceOverrides).toBe(true);
       expect(second.capabilities.threadActiveReorder).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
