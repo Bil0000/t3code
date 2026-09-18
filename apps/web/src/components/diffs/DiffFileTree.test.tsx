@@ -272,6 +272,8 @@ describe("diff tree file activation", () => {
     const folder = model().getItem("src/features/")!;
     if (!("isExpanded" in folder)) throw new Error("Expected the directory handle");
     expect(folder.isExpanded()).toBe(false);
+    await act(async () => model().setSearch(".ts"));
+    expect(model().getSearchMatchingPaths()).toEqual([files[1]!.path, files[0]!.path]);
   });
 
   it("does not echo controlled selection, but lets the reader activate it", async () => {

@@ -123,6 +123,31 @@ export function diffFileTreePositions(paths: ReadonlyArray<string>): ReadonlyMap
   return positions;
 }
 
+export function orderFilesByTree<T>(
+  files: ReadonlyArray<T>,
+  getPath: (file: T) => string,
+): ReadonlyArray<T> {
+  const positions = diffFileTreePositions(files.map(getPath));
+  return files
+    .map((file) => {
+      let path = "";
+      const segments = getPath(file).split("/");
+      const ranks = segments.map((segment, index) => {
+        path += segment + (index < segments.length - 1 ? "/" : "");
+        return positions.get(path)!;
+      });
+      return { file, ranks };
+    })
+    .sort((left, right) => {
+      for (let index = 0; index < Math.min(left.ranks.length, right.ranks.length); index++) {
+        const difference = left.ranks[index]! - right.ranks[index]!;
+        if (difference !== 0) return difference;
+      }
+      return left.ranks.length - right.ranks.length;
+    })
+    .map(({ file }) => file);
+}
+
 export function compareDiffFileTreeEntries(
   getPositions: () => ReadonlyMap<string, number>,
 ): FileTreeSortComparator {

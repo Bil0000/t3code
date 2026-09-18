@@ -232,7 +232,6 @@ it("loads guide pages only on request and resumes scroll loading outside the gui
   await click("Load more review files");
   expect(query.mock.calls.findLast(([request]) => request !== null)?.[0].input.cursor).toBe("1");
   expect(observers.size).toBe(0);
-  await click("Next review file");
   expect(renderer.root.findByType("h2").children).toEqual(["two.ts"]);
   await click("Guided review");
   await act(async () => {
@@ -240,6 +239,104 @@ it("loads guide pages only on request and resumes scroll loading outside the gui
   });
   expect(query.mock.calls.findLast(([request]) => request !== null)?.[0].input.cursor).toBe("2");
 });
+
+it.each([false, true])(
+  "guide page loading follows inserted files unless selected manually: %s",
+  async (manual) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("window", new EventTarget());
+    const pages = [["src/a.ts", "README.md"], ["src/b.ts"]].map((paths, index) => ({
+      patch: paths
+        .map(
+          (path) =>
+            `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${path === "README.md" ? 'import "./src/a";' : path}\n`,
+        )
+        .join(""),
+      truncated: false,
+      nextCursor: index === 0 ? "1" : null,
+      omittedFileStats: [],
+    }));
+    let arrived = false;
+    query.mockImplementation((request) => ({
+      data: request ? (request.input.cursor ? (arrived ? pages[1] : null) : pages[0]) : null,
+      error: null,
+      isPending: Boolean(request?.input.cursor) && !arrived,
+      refresh,
+    }));
+    const view = () => (
+      <PullRequestCodeTab
+        environmentId={EnvironmentId.make("test")}
+        reference={{ projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 }}
+        detail={detail}
+        selectedCommitOid={null}
+        onSelectedCommitChange={command}
+        onRefresh={refresh}
+      />
+    );
+    await act(async () => {
+      renderer = create(view());
+    });
+    await click("Show file tree");
+    await click("Guided review");
+    await click("Next review file");
+    expect(renderer.root.findByType("h2").children).toEqual(["README.md"]);
+    await click("Load more review files");
+    if (manual) await click("Previous review file");
+    arrived = true;
+    await act(async () => renderer.update(view()));
+    expect(renderer.root.findByType("h2").children).toEqual([manual ? "src/a.ts" : "src/b.ts"]);
+  },
+);
+
+it.each([false, true])(
+  "shows and guides both sides of a file type change, paged: %s",
+  async (paged) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("window", new EventTarget());
+    const deletion =
+      "diff --git a/app.ts b/app.ts\ndeleted file mode 100644\n--- a/app.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n";
+    const addition =
+      "diff --git a/app.ts b/app.ts\nnew file mode 120000\n--- /dev/null\n+++ b/app.ts\n@@ -0,0 +1 @@\n+target.ts\n";
+    const data = {
+      patch: deletion + (paged ? "" : addition),
+      truncated: false,
+      nextCursor: paged ? "1" : null,
+      omittedFileStats: [],
+    };
+    query.mockImplementation((request) => ({
+      data: request
+        ? request.input.cursor
+          ? { ...data, patch: addition, nextCursor: null }
+          : data
+        : null,
+      error: null,
+      isPending: false,
+      refresh,
+    }));
+    await act(async () => {
+      renderer = create(
+        <PullRequestCodeTab
+          environmentId={EnvironmentId.make("test")}
+          reference={{ projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 }}
+          detail={detail}
+          selectedCommitOid={null}
+          onSelectedCommitChange={command}
+          onRefresh={refresh}
+        />,
+      );
+    });
+    expect(renderer.root.findAllByType("pre")).toHaveLength(paged ? 1 : 2);
+    await click("Show file tree");
+    expect(renderer.root.findAllByType("pre")).toHaveLength(paged ? 1 : 2);
+    expect(renderer.root.findByType(DiffFileTree).props.entries).toEqual([
+      { path: "app.ts", status: paged ? "deleted" : "modified" },
+    ]);
+    await click("Guided review");
+    expect(renderer.root.findByType("pre").children).toEqual([]);
+    await click(paged ? "Load more review files" : "Next review file");
+    expect(renderer.root.findByType("pre").children).toEqual(["target.ts"]);
+  },
+);
 
 it("opens the guide file in each commit scope and keeps manual collapses within that scope", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

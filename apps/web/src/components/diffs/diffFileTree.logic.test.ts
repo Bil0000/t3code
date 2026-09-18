@@ -10,6 +10,7 @@ import {
   diffFileTreePositions,
   diffFileTreeViewedCounts,
   diffFileTreeEntries,
+  orderFilesByTree,
 } from "./diffFileTree.logic";
 
 function file(type: FileDiffMetadata["type"], name: string, prevName = name): FileDiffMetadata {
@@ -115,6 +116,35 @@ describe("collectDirectoryPaths", () => {
 });
 
 describe("diff tree reading order", () => {
+  it("keeps nested folders contiguous using the first file in review order", () => {
+    const paths = ["lib/b.ts", "ui/a.ts", "lib/c.ts", "ui/a.test.ts", "lib/b.test.ts", "lock"];
+    expect(orderFilesByTree(paths, (path) => path)).toEqual([
+      "lib/b.ts",
+      "lib/c.ts",
+      "lib/b.test.ts",
+      "ui/a.ts",
+      "ui/a.test.ts",
+      "lock",
+    ]);
+    expect(orderFilesByTree(paths.toReversed(), (path) => path)).toEqual([
+      "lock",
+      "lib/b.test.ts",
+      "lib/c.ts",
+      "lib/b.ts",
+      "ui/a.test.ts",
+      "ui/a.ts",
+    ]);
+  });
+
+  it("keeps both sides of a type change and handles empty input", () => {
+    const removed = file("deleted", "src/app.ts");
+    const added = file("new", "src/app.ts");
+    expect(
+      orderFilesByTree([removed, file("change", "README.md"), added], (file) => file.name),
+    ).toEqual([removed, added, file("change", "README.md")]);
+    expect(orderFilesByTree([], String)).toEqual([]);
+  });
+
   it("places folders and files where their first diff appears", () => {
     const paths = [
       "apps/mobile/src/state/shell.ts",

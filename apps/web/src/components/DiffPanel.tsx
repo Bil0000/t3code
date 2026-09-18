@@ -568,6 +568,7 @@ export default function DiffPanel({
       ? DateTime.formatIso(branchDiffPreview.data.generatedAt)
       : undefined,
     preview: renderablePatch,
+    fileTreeOpen,
   });
   const refreshDiffFromUserAction = refreshBranchDiffPreview;
 

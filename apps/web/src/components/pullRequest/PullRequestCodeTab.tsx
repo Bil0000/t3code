@@ -75,7 +75,7 @@ import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { DiffFileTree, type DiffFileTreeHandle } from "../diffs/DiffFileTree";
 import { EditableDiffCodeView, type ReviewEditTargetResolver } from "../diffs/EditableDiffCodeView";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
-import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
+import { diffFileTreeEntries, orderFilesByTree } from "../diffs/diffFileTree.logic";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -256,9 +256,11 @@ function PullRequestCodeTab({
     Schema.Boolean,
   );
   const [guided, setGuided] = useState(false);
-  const [guideSelection, setGuideSelection] = useState<{ scope: string; path: string } | null>(
-    null,
-  );
+  const [guideSelection, setGuideSelection] = useState<{ scope: string; id: string } | null>(null);
+  const [pendingGuidePage, setPendingGuidePage] = useState<{
+    scope: string;
+    fileIds: ReadonlySet<string>;
+  } | null>(null);
   const [guideLine, setGuideLine] = useState<{
     scope: string;
     target: CodeViewLineScrollTarget;
@@ -418,12 +420,16 @@ function PullRequestCodeTab({
   );
   // Ordered within a slice rather than across them: ordering the accumulated set would let a late
   // slice push a file the reader is part way through further down the page.
-  const files = useMemo(
+  const reviewFiles = useMemo(
     () =>
       parsedSlices.flatMap((parsed) =>
         parsed?.kind === "files" ? orderDiffFiles(parsed.files) : [],
       ),
     [parsedSlices],
+  );
+  const files = useMemo(
+    () => (fileTreeOpen ? orderFilesByTree(reviewFiles, resolveFileDiffPath) : reviewFiles),
+    [fileTreeOpen, reviewFiles],
   );
   const filePaths = useMemo(() => files.map((file) => resolveFileDiffPath(file)), [files]);
   // Offered under a commit scope as well as from the whole change, because reading a change one
@@ -450,6 +456,7 @@ function PullRequestCodeTab({
   useEffect(() => {
     if (appliedRefreshToken.current === refreshToken) return;
     appliedRefreshToken.current = refreshToken;
+    setPendingGuidePage(null);
     setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
     refreshFirstDiffPage();
     refreshFilesViewed();
@@ -604,11 +611,7 @@ function PullRequestCodeTab({
   );
   const guideIndex = Math.max(
     0,
-    items.findIndex(
-      (item) =>
-        guideSelection?.scope === scopeKey &&
-        resolveFileDiffPath(item.fileDiff) === guideSelection.path,
-    ),
+    items.findIndex((item) => guideSelection?.scope === scopeKey && item.id === guideSelection.id),
   );
   const guideItem = items[guideIndex];
   const visibleItems = useMemo(
@@ -780,10 +783,13 @@ function PullRequestCodeTab({
 
   const requestTreeReveal = useCodeViewFileReveal(viewer, scopeKey);
   const revealFile = useCallback(
-    (path: string) => {
-      const item = items.find((candidate) => resolveFileDiffPath(candidate.fileDiff) === path);
+    (path: string, id?: string) => {
+      const item = items.find((candidate) =>
+        id ? candidate.id === id : resolveFileDiffPath(candidate.fileDiff) === path,
+      );
       if (item === undefined) return;
-      if (guided) setGuideSelection({ scope: scopeKey, path });
+      setPendingGuidePage(null);
+      if (guided) setGuideSelection({ scope: scopeKey, id: item.id });
       setSelectedLines(null);
       if (item.collapsed === true) toggleFile(item.id);
       requestTreeReveal(item.id);
@@ -791,10 +797,23 @@ function PullRequestCodeTab({
     [guided, items, requestTreeReveal, scopeKey, toggleFile],
   );
 
+  useEffect(() => {
+    if (!pendingGuidePage) return;
+    if (!guided || pendingGuidePage.scope !== scopeKey) {
+      setPendingGuidePage(null);
+      return;
+    }
+    const added = items.find((item) => !pendingGuidePage.fileIds.has(item.id));
+    if (added) revealFile(resolveFileDiffPath(added.fileDiff), added.id);
+  }, [guided, items, pendingGuidePage, revealFile, scopeKey]);
+
   const selectGuideFile = (index: number) => {
     const item = items[index];
-    if (item) revealFile(resolveFileDiffPath(item.fileDiff));
-    else if (nextCursor !== null) loadNextSlice();
+    if (item) revealFile(resolveFileDiffPath(item.fileDiff), item.id);
+    else if (nextCursor !== null) {
+      setPendingGuidePage({ scope: scopeKey, fileIds: new Set(items.map((item) => item.id)) });
+      loadNextSlice();
+    }
   };
   const expandGuideFile = useEffectEvent(() => {
     if (guideItem?.collapsed) toggleFile(guideItem.id);
