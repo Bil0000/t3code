@@ -8,7 +8,7 @@ import {
 } from "effect/unstable/http";
 import type { ResolvedAsset } from "./AssetAccess.ts";
 import { mediaResponse } from "./GitHubMediaFetch.ts";
-import { PullRequestService } from "../pullRequest/PullRequestService.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 
 export const pullRequestMediaResponse = Effect.fn("PullRequestMediaFetch.response")(function* (
   asset: Extract<ResolvedAsset, { readonly kind: "pull-request-media" }>,
@@ -19,7 +19,7 @@ export const pullRequestMediaResponse = Effect.fn("PullRequestMediaFetch.respons
     const value = requestHeaders[name];
     if (value !== undefined) headers[name] = value;
   }
-  const service = yield* PullRequestService;
+  const service = yield* PullRequestService.PullRequestService;
   let response: HttpClientResponse.HttpClientResponse | null = yield* service.readAttachment({
     ...asset.reference,
     provider: asset.provider,
