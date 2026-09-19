@@ -1299,7 +1299,7 @@ export default function DiffPanel({
                       (node): node is HTMLElement =>
                         node instanceof HTMLElement && node.hasAttribute("data-title"),
                     );
-                    const filePath = title?.textContent;
+                    const filePath = title?.getAttribute("data-file-path") ?? title?.textContent;
                     // The filename remains the explicit "open in editor" affordance.
                     if (filePath) {
                       openDiffFile(filePath);
@@ -1322,7 +1322,8 @@ export default function DiffPanel({
                       (node): node is HTMLElement =>
                         node instanceof HTMLElement && node.hasAttribute("data-title"),
                     );
-                    const filePath = title?.textContent?.trim();
+                    const filePath =
+                      title?.getAttribute("data-file-path") ?? title?.textContent?.trim();
                     if (!filePath) return;
                     event.preventDefault();
                     onFileContextMenu(

@@ -40,15 +40,35 @@ export function DiffRenameDetails({ previousPath, path, withChanges }: DiffRenam
   );
 }
 
-export function DiffRenameBadge(props: DiffRenameProps) {
+export function DiffRenameHeader(props: DiffRenameProps) {
+  const parts = changedPathParts(props.previousPath, props.path);
+  const directory = parts.prefix.slice(0, parts.prefix.lastIndexOf("/") + 1);
+  const prefix = parts.prefix.slice(directory.length);
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<span tabIndex={0} />}
-        className="ml-1 shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[10px] text-warning-foreground"
+        render={<span tabIndex={0} data-title data-file-path={props.path} />}
+        className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`${props.withChanges ? "Renamed and modified" : "Renamed"}: ${props.previousPath} → ${props.path}`}
       >
-        Renamed
+        <span className="min-w-0 truncate">
+          {prefix}
+          <span className="rounded-sm bg-error/15 text-error-foreground">{parts.before}</span>
+          {parts.suffix}
+        </span>
+        <span className="shrink-0 text-muted-foreground" aria-hidden="true">
+          →
+        </span>
+        <span className="min-w-0 truncate">
+          {prefix}
+          <span className="rounded-sm bg-success/15 text-success-foreground">{parts.after}</span>
+          {parts.suffix}
+        </span>
+        {directory ? (
+          <span className="min-w-0 max-w-[40%] truncate text-muted-foreground">
+            {directory.slice(0, -1)}
+          </span>
+        ) : null}
       </TooltipTrigger>
       <TooltipPopup>
         <DiffRenameDetails {...props} />

@@ -15,7 +15,7 @@ import {
   resolveFileDiffPreviousPath,
 } from "~/lib/diffRendering";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
-import { DiffRenameBadge } from "./DiffRename";
+import { DiffRenameHeader } from "./DiffRename";
 import { useDiffSearch } from "./DiffSearch";
 
 const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
@@ -211,6 +211,16 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   line-height: 1 !important;
 }
 
+[data-diffs-header]:is([data-change-type="rename-pure"], [data-change-type="rename-changed"])
+  :is([data-prev-name], [data-title], [data-rename-icon]) {
+  display: none !important;
+}
+
+[data-diffs-header]:is([data-change-type="rename-pure"], [data-change-type="rename-changed"])
+  ::slotted([slot="header-filename-suffix"]) {
+  min-width: 0;
+}
+
 [data-diffs-header] [data-metadata] {
   align-items: center !important;
   line-height: 1 !important;
@@ -312,14 +322,14 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
       )
         return renderHeaderFilenameSuffix?.(item);
       return (
-        <>
-          <DiffRenameBadge
+        <div className="flex min-w-0 items-center gap-1.5">
+          <DiffRenameHeader
             previousPath={resolveFileDiffPreviousPath(item.fileDiff)}
             path={resolveFileDiffPath(item.fileDiff)}
             withChanges={item.fileDiff.type === "rename-changed"}
           />
           {renderHeaderFilenameSuffix?.(item)}
-        </>
+        </div>
       );
     },
     [renderHeaderFilenameSuffix],
