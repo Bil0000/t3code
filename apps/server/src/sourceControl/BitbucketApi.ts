@@ -123,6 +123,7 @@ export class BitbucketResponseBodyReadError extends Schema.TaggedError<Bitbucket
   {
     operation: BitbucketApiOperation,
     status: Schema.Int,
+    retryAt: Schema.optional(Schema.Number),
     cause: Schema.Defect(),
   },
 ) {
@@ -596,6 +597,7 @@ function responseError(
   // only its length is reported anyway.
   return Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
+    const retryAt = retryAtFromHeader(response.headers["retry-after"], now);
     const collected = yield* collectUint8StreamText({
       stream: response.stream,
       maxBytes: DEFAULT_MAX_RESPONSE_BYTES,
@@ -605,6 +607,7 @@ function responseError(
           new BitbucketResponseBodyReadError({
             operation,
             status: response.status,
+            retryAt,
             cause,
           }),
       ),
@@ -613,7 +616,7 @@ function responseError(
       operation,
       status: response.status,
       responseBodyLength: collected.text.length,
-      retryAt: retryAtFromHeader(response.headers["retry-after"], now),
+      retryAt,
     });
   });
 }
