@@ -2741,6 +2741,8 @@ export function makeClaudeAdapterV2(
               readonly status: OrchestrationV2Subagent["status"];
               /** True only once the member's own transcript supplied the answer. */
               readonly answeredFromTranscript: boolean;
+              /** First instant this member was seen, so settling cannot restamp it. */
+              readonly startedAt: DateTime.Utc;
             }
           >(),
         );
@@ -3515,6 +3517,7 @@ export function makeClaudeAdapterV2(
             const settled = status !== "running";
             const awaitingTranscript = settled && previous?.answeredFromTranscript !== true;
             if (previous?.status === status && !awaitingTranscript) continue;
+            const startedAt = previous?.startedAt ?? now;
 
             const nodeId = idAllocator.derive.nodeFromProviderItem({
               driver: CLAUDE_PROVIDER,
@@ -3578,7 +3581,7 @@ export function makeClaudeAdapterV2(
               model,
               status,
               result: member.result ?? null,
-              startedAt: now,
+              startedAt,
               completedAt: settled ? now : null,
               updatedAt: now,
             } satisfies OrchestrationV2Subagent;
@@ -3592,7 +3595,7 @@ export function makeClaudeAdapterV2(
               nativeItemRef: task.nativeTaskRef,
               runtimeRequestId: null,
               checkpointScopeId: null,
-              startedAt: now,
+              startedAt,
               completedAt: settled ? now : null,
             };
             for (const node of [
@@ -3660,7 +3663,7 @@ export function makeClaudeAdapterV2(
             }
 
             yield* Ref.update(workflowMemberStates, (current) =>
-              new Map(current).set(memberKey, { status, answeredFromTranscript }),
+              new Map(current).set(memberKey, { status, answeredFromTranscript, startedAt }),
             );
           }
         });

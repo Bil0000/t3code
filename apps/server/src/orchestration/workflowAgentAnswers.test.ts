@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vite-plus/test";
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { afterAll, describe, expect, it } from "vite-plus/test";
 
-import { parseWorkflowAgentAnswers } from "./workflowAgentAnswers.ts";
+import { parseWorkflowAgentAnswers, readWorkflowAgentAnswers } from "./workflowAgentAnswers.ts";
 
 const line = (value: unknown) => `${JSON.stringify(value)}\n`;
 
@@ -57,4 +63,29 @@ describe("parseWorkflowAgentAnswers", () => {
       ),
     ).toEqual(["complete"]);
   });
+});
+
+// Must sit under ~/.claude/projects: readContainedWorkflowFile rejects any path
+// outside it, so a tmpdir would fail containment instead of exercising the read.
+const root = NodePath.join(NodeOS.homedir(), ".claude", "projects", "__wf_answers_test__");
+NodeFS.mkdirSync(root, { recursive: true });
+
+afterAll(() => {
+  NodeFS.rmSync(root, { recursive: true, force: true });
+});
+
+describe("readWorkflowAgentAnswers", () => {
+  // The under-cap case is the control: without it a read stuck on [] would pass.
+  effectIt.effect("reads a transcript's turns, but none when the read was capped", () =>
+    Effect.gen(function* () {
+      const turn = assistant("a", [{ type: "text", text: "the answer" }]);
+      const filler = line({ type: "user", message: { role: "user", content: "x".repeat(4096) } });
+      NodeFS.writeFileSync(NodePath.join(root, "agent-small.jsonl"), turn);
+      NodeFS.writeFileSync(NodePath.join(root, "agent-huge.jsonl"), turn + filler.repeat(160));
+      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "small" })).toEqual([
+        "the answer",
+      ]);
+      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "huge" })).toEqual([]);
+    }),
+  );
 });
