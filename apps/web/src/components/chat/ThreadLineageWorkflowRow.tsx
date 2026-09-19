@@ -98,6 +98,8 @@ export function ThreadLineageWorkflowRow(props: {
   const [expanded, setExpanded] = useState(false);
   const { group } = props;
   const label = group.workflow.workflowName ?? group.workflow.title;
+  const hasMembers =
+    group.unphasedMembers.length > 0 || group.phases.some((phase) => phase.members.length > 0);
   return (
     <li className="group">
       <div className="flex h-9 items-center rounded-lg">
@@ -125,9 +127,8 @@ export function ThreadLineageWorkflowRow(props: {
           {group.unphasedMembers.map((member) => (
             <MemberRow key={member.id} member={member} onOpen={props.onOpenThread} />
           ))}
-          {/* Reachable: a coordinator becomes a group at task_started, before
-              its first member exists. */}
-          {group.phases.length === 0 && group.unphasedMembers.length === 0 ? (
+          {/* Reachable: coordinator, or declared phases, with no members yet. */}
+          {!hasMembers ? (
             <li className="px-7 py-1 text-[11px] text-muted-foreground/70">No agents yet</li>
           ) : null}
         </ul>
