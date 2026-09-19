@@ -3506,9 +3506,8 @@ export function makeClaudeAdapterV2(
           const seen = yield* Ref.get(workflowMemberStates);
 
           for (const member of input.workflow.agents) {
-            // Derived from the coordinator's own ids, not from its task id:
-            // a task id is unique only within one provider thread, and the
-            // coordinator's node id already carries that scoping.
+            // Extends the coordinator node id; provider-thread scope lives on
+            // the child thread ids, not here.
             const memberKey = `${input.coordinator.task.id}:agent:${member.index}`;
             const previous = seen.get(memberKey);
             // Every member state but queued is already a subagent status, and a

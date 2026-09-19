@@ -68,12 +68,10 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
       );
     }
 
-    // TOCTOU-safe read (review finding): open FIRST, then verify what was
-    // actually opened via the file descriptor. Re-checking the path after
-    // open would race against a swap; fstat on the handle cannot. The two
-    // containment checks fail with their own tagged reasons (not manufactured
-    // Errors folded into read-failed); "read-failed" is reserved for genuine
-    // platform failures with the real cause attached.
+    // fd inode vs path inode catches a swapped leaf, not a swapped intermediate
+    // dir; root is 0700 ~/.claude, so that already needs the uid we run as.
+    // Both containment checks fail with their own tagged reason; "read-failed"
+    // is reserved for genuine platform failures with the real cause attached.
     const read = yield* Effect.tryPromise({
       try: async () => {
         const handle = await NodeFSP.open(resolved, "r");
@@ -82,9 +80,6 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
           if (!stat.isFile()) {
             return { failure: "not-regular-file" as const };
           }
-          // The opened inode must be the same one realpath resolved to: a
-          // process swapping the path between realpath and open changes the
-          // inode, which this comparison catches.
           const pathStat = await NodeFSP.lstat(resolved);
           if (stat.ino !== pathStat.ino || stat.dev !== pathStat.dev) {
             return { failure: "changed-during-read" as const };
