@@ -10,7 +10,7 @@ import {
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
 } from "./previewAutomation.ts";
-import { SnapShotSource } from "./orchestration.ts";
+import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
@@ -1129,7 +1129,6 @@ export interface DesktopBridge {
   getClientPlatform?: () => string;
   setNotificationBadge?: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear?: (listener: () => void) => () => void;
-  onTrackpadScrollEnd?: (listener: () => void) => () => void;
   /**
    * The OS locale as a BCP-47 tag, which the renderer cannot read for itself:
    * the packaged app ships only the `en-US` Chromium locale pak, so
