@@ -279,7 +279,7 @@ export const make = Effect.gen(function* () {
       );
       const attachmentAuth = yield* cli
         .resolveRepository(input)
-        .pipe(Effect.mapError((cause) => failure("attachmentCapabilities", cause.detail)));
+        .pipe(Effect.orElseSucceed(() => null));
       const statuses = yield* page(
         {
           ...input,
@@ -291,9 +291,9 @@ export const make = Effect.gen(function* () {
         ...forgejoChangeRequest(pr),
         attachments: {
           ...NATIVE_ATTACHMENT_CAPABILITY,
-          supported: attachmentAuth.command === "fj",
+          supported: attachmentAuth?.command === "fj",
           reason:
-            attachmentAuth.command === "fj"
+            attachmentAuth?.command === "fj"
               ? "Uploads use this server’s fj account."
               : "Attachment uploads require fj authentication. tea does not support multipart uploads.",
         },

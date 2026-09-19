@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { ForgejoCli, type ForgejoApiInput } from "../sourceControl/ForgejoCli.ts";
+import { ForgejoCli, ForgejoCliError, type ForgejoApiInput } from "../sourceControl/ForgejoCli.ts";
 import { make } from "./ForgejoPullRequestProvider.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -20,6 +20,15 @@ it.effect("uses released Gitea resolution APIs without advertising them on Forge
       const provider = yield* make.pipe(
         Effect.provide(
           Layer.mock(ForgejoCli)({
+            resolveRepository: () =>
+              Effect.fail(
+                new ForgejoCliError({
+                  command: "fj",
+                  cwd: "/repo",
+                  detail: "No attachment account",
+                  reason: "authentication",
+                }),
+              ),
             api: (input) => {
               calls.push(input);
               const body =
@@ -44,7 +53,9 @@ it.effect("uses released Gitea resolution APIs without advertising them on Forge
                           merged_at: null,
                           labels: [],
                         }
-                      : { version };
+                      : input.path.includes("/statuses/")
+                        ? []
+                        : { version };
               return Effect.succeed({
                 exitCode: ChildProcessSpawner.ExitCode(0),
                 stdout: encodeJson(body),
@@ -76,6 +87,10 @@ it.effect("uses released Gitea resolution APIs without advertising them on Forge
         expect(calls).toHaveLength(1);
       }
       expect(calls.filter((call) => call.path === "version")).toHaveLength(1);
+      const detail = yield* provider.getChangeRequest(ref);
+      expect(detail.title).toBe("PR");
+      expect(detail.attachments?.supported).toBe(false);
+      expect(detail.attachments?.reason).toContain("fj authentication");
     }
   }),
 );
