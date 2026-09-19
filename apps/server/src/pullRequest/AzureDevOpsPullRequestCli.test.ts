@@ -427,6 +427,31 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       }).pipe(Effect.provide(NodeFileSystem.layer)),
   );
 
+  it.effect("sets native approve and wait-for-author votes", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      for (const vote of ["approve", "wait-for-author"] as const) {
+        yield* cli.setReviewVote({ cwd: "/w", number: 42, vote });
+      }
+      expect(argsOfCall(0)).toEqual([
+        "repos",
+        "pr",
+        "set-vote",
+        "--detect",
+        "true",
+        "--id",
+        "42",
+        "--vote",
+        "approve",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+      expect(argsOfCall(1)).toContain("wait-for-author");
+    }),
+  );
+
   it.effect("rejects invalid thread IDs before a provider request", () =>
     Effect.gen(function* () {
       const provider = yield* AzureDevOpsPullRequestProvider.make;

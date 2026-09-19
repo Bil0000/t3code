@@ -520,6 +520,7 @@ describe("decodeIterationChangesJson", () => {
           changeEntries: [
             {
               changeType: "rename",
+              changeTrackingId: 12,
               sourceServerItem: "/docs/old.md",
               item: { path: "/docs/new.md", objectId: "aaaa", originalObjectId: "aaaa" },
             },
@@ -536,6 +537,7 @@ describe("decodeIterationChangesJson", () => {
     expect(page.changes).toEqual([
       {
         path: "docs/new.md",
+        changeTrackingId: 12,
         oldPath: "docs/old.md",
         changeKind: "rename-pure",
         objectId: "aaaa",

@@ -449,6 +449,7 @@ const RawIterationSchema = Schema.Struct({
 const RawIterationPageSchema = Schema.Struct({ value: Schema.Array(Schema.Unknown) });
 
 const RawChangeEntrySchema = Schema.Struct({
+  changeTrackingId: Schema.optional(Schema.NullOr(Schema.Int)),
   changeType: Schema.optional(Schema.NullOr(Schema.String)),
   sourceServerItem: Schema.optional(Schema.NullOr(Schema.String)),
   /** Where a renamed file came from. Azure states it here on an iteration's changes. */
@@ -493,6 +494,7 @@ export interface AzureDevOpsIteration {
  * Azure reports by naming the file's previous home rather than as a delete and an add.
  */
 export interface AzureDevOpsChangeEntry {
+  readonly changeTrackingId?: number;
   readonly path: string;
   readonly oldPath: string;
   readonly changeKind: "new" | "deleted" | "change" | "rename-pure" | "rename-changed";
@@ -595,6 +597,7 @@ export function decodeIterationChangesJson(
     const oldPath =
       toRepositoryPath(change.sourceServerItem) ?? toRepositoryPath(change.originalPath) ?? path;
     changes.push({
+      ...(change.changeTrackingId == null ? {} : { changeTrackingId: change.changeTrackingId }),
       path,
       oldPath,
       changeKind: toChangeKind(change.changeType, oldPath !== path),

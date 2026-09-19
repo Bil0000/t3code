@@ -89,7 +89,12 @@ const CAPABILITIES: PullRequestCapabilities = {
   // `az repos pr list` filters by status, creator, reviewer and branch, and by no text at all.
   search: false,
   reactions: false,
-  review: { inlineComment: false, reply: true, resolve: true, verdicts: [] },
+  review: {
+    inlineComment: true,
+    reply: true,
+    resolve: true,
+    verdicts: ["comment", "approve", "request-changes"],
+  },
   // `az repos pr reviewer add` and `remove` name identities, and nothing anywhere in `az repos`
   // lists the ones this repository could name — that lives behind the identity and graph APIs, a
   // different service with its own permissions. So the page takes a name here rather than being
@@ -868,9 +873,76 @@ export const make = Effect.gen(function* () {
       });
     },
 
-    // Declared unsupported above, so the service refuses these before a provider is reached.
-    // They exist because every provider answers the whole port.
-    submitReview: () => unsupported("submitReview"),
+    submitReview: Effect.fn("AzureDevOpsPullRequestProvider.submitReview")(function* (input) {
+      const threads: Array<Parameters<typeof cli.writeThread>[0]> = [];
+      if (input.comments.length > 0) {
+        const scope = yield* diffScope(input).pipe(Effect.mapError(fail("submitReview")));
+        const latest = scope?.iterations.at(-1);
+        if (!scope || !latest)
+          return yield* new PullRequestProviderError({
+            provider: "azure-devops",
+            operation: "submitReview",
+            reason: "failed",
+            detail:
+              "Azure DevOps did not return the review iteration. Refresh the pull request before submitting.",
+          });
+        const changes = yield* listLatestChanges({ ...input, ...scope }).pipe(
+          Effect.mapError(fail("submitReview")),
+        );
+        for (const comment of input.comments) {
+          const change = changes.changes.find(
+            (entry) =>
+              entry.path === comment.path &&
+              (comment.oldPath === undefined || entry.oldPath === comment.oldPath),
+          );
+          if (!change?.changeTrackingId || change.changeTrackingId < 1)
+            return yield* new PullRequestProviderError({
+              provider: "azure-devops",
+              operation: "submitReview",
+              reason: "failed",
+              detail: `Azure DevOps did not return the review position for ${comment.path}. Refresh the pull request before submitting.`,
+            });
+          const position = comment.position;
+          const left =
+            position.kind === "deleted" ||
+            (position.kind === "context" && position.side === "left");
+          const anchor = { line: left ? position.oldLine : position.newLine, offset: 1 };
+          threads.push({
+            ...input,
+            location: scope.location,
+            resource: "pullRequestThreads",
+            method: "POST",
+            body: {
+              status: "active",
+              comments: [{ parentCommentId: 0, content: comment.body, commentType: "text" }],
+              threadContext: {
+                filePath: `/${change.path}`,
+                ...(left
+                  ? { leftFileStart: anchor, leftFileEnd: anchor }
+                  : { rightFileStart: anchor, rightFileEnd: anchor }),
+              },
+              pullRequestThreadContext: {
+                changeTrackingId: change.changeTrackingId,
+                iterationContext: {
+                  firstComparingIteration: latest.id,
+                  secondComparingIteration: latest.id,
+                },
+              },
+            },
+          });
+        }
+      }
+      for (const thread of threads)
+        yield* cli.writeThread(thread).pipe(Effect.mapError(fail("submitReview")));
+      if (input.body.trim()) yield* provider.comment(input);
+      if (input.verdict !== "comment")
+        yield* cli
+          .setReviewVote({
+            ...input,
+            vote: input.verdict === "approve" ? "approve" : "wait-for-author",
+          })
+          .pipe(Effect.mapError(fail("submitReview")));
+    }),
 
     replyToThread: (input) =>
       writeThread(input, {

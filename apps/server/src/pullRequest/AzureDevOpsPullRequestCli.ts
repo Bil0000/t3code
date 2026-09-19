@@ -214,6 +214,12 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
       readonly cwd: string;
     }) => Effect.Effect<string, AzureDevOpsPullRequestCliError>;
 
+    readonly setReviewVote: (input: {
+      readonly cwd: string;
+      readonly number: number;
+      readonly vote: "approve" | "wait-for-author";
+    }) => Effect.Effect<void, AzureDevOpsPullRequestCliError>;
+
     readonly writeThread: (input: {
       readonly cwd: string;
       readonly location: AzureDevOpsRepositoryLocation;
@@ -806,6 +812,21 @@ export const make = Effect.gen(function* () {
               ],
             })
             .pipe(Effect.asVoid),
+
+    setReviewVote: (input) =>
+      executeJson({
+        cwd: input.cwd,
+        args: [
+          "repos",
+          "pr",
+          "set-vote",
+          ...detectArgs,
+          "--id",
+          String(input.number),
+          "--vote",
+          input.vote,
+        ],
+      }).pipe(Effect.asVoid),
 
     runPullRequestAction: (input) =>
       azure
