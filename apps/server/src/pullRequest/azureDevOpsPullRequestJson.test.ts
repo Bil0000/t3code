@@ -246,7 +246,11 @@ describe("decodeThreadsJson", () => {
             {
               id: 8,
               status: "fixed",
-              threadContext: { filePath: "/src/a.ts", leftFileStart: { line: 12 } },
+              threadContext: {
+                filePath: "/src/a.ts",
+                leftFileStart: { line: 12 },
+                rightFileStart: null,
+              },
               comments: [
                 { id: 1, content: "Question", publishedDate: "2026-07-02T00:00:00Z" },
                 { id: 2, content: "Answer", publishedDate: "2026-07-02T01:00:00Z" },
