@@ -13,6 +13,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
@@ -78,23 +79,33 @@ describe("normalizeDispatchCommand attachments", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it.effect(
-    "checks decoded image bytes and removes files when upload sizes understate the total",
-    () =>
-      Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
-        const dataUrl = `data:image/png;base64,${Buffer.alloc(10 * 1024 * 1024).toString("base64")}`;
-        const command = turnStartCommand({
-          attachments: [
-            { dataUrl, sizeBytes: 1 },
-            { dataUrl, sizeBytes: 1 },
-            { dataUrl: "data:image/png;base64,YQ==", sizeBytes: 1 },
-          ],
-        });
-        const error = yield* normalizeDispatchCommand(command).pipe(Effect.flip);
-        expect(error.message).toContain("20 MiB");
-        expect(NodeFS.readdirSync(config.attachmentsDir)).toEqual([]);
-      }).pipe(Effect.provide(testLayer)),
+  it.effect("rejects decoded image overflow before writing it and removes earlier files", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      let writtenBytes = 0;
+      const dataUrl = `data:image/png;base64,${Buffer.alloc(10 * 1024 * 1024).toString("base64")}`;
+      const command = turnStartCommand({
+        attachments: [
+          { dataUrl, sizeBytes: 1 },
+          { dataUrl, sizeBytes: 1 },
+          { dataUrl: "data:image/png;base64,YQ==", sizeBytes: 0 },
+        ],
+      });
+      const error = yield* normalizeDispatchCommand(command).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fileSystem,
+          writeFile: (path, data, options) => {
+            writtenBytes += data.byteLength;
+            return fileSystem.writeFile(path, data, options);
+          },
+        }),
+        Effect.flip,
+      );
+      expect(error.message).toContain("20 MiB");
+      expect(writtenBytes).toBe(20 * 1024 * 1024);
+      expect(NodeFS.readdirSync(config.attachmentsDir)).toEqual([]);
+    }).pipe(Effect.provide(testLayer)),
   );
 
   it.effect("rejects duplicate client ids before persisting attachments", () =>

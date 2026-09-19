@@ -159,11 +159,12 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       }
     }
     const claimedAttachmentPaths: string[] = [];
+    const attachmentsWithDecodedSizes = [...attachments];
     // Context records bind to attachments by the id the client knew; they follow the rename.
     const finalAttachmentIdByClientId = new Map<string, string>();
     const normalizedAttachments = yield* Effect.forEach(
       attachments,
-      (attachment) =>
+      (attachment, index) =>
         Effect.gen(function* () {
           if (!("dataUrl" in attachment)) {
             const claim = planAttachmentClaim({
@@ -255,6 +256,11 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
             sizeBytes: bytes.byteLength,
             ...(attachment.source ? { source: attachment.source } : {}),
           };
+          attachmentsWithDecodedSizes[index] = persistedAttachment;
+          const decodedLimitError = getProviderAttachmentLimitError(attachmentsWithDecodedSizes);
+          if (decodedLimitError) {
+            return yield* new OrchestrationDispatchCommandError({ message: decodedLimitError });
+          }
 
           const attachmentPath = resolveAttachmentPath({
             attachmentsDir: serverConfig.attachmentsDir,
@@ -290,15 +296,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
           return persistedAttachment;
         }),
       { concurrency: 1 },
-    ).pipe(
-      Effect.tap((normalized) => {
-        const error = getProviderAttachmentLimitError(normalized);
-        return error
-          ? Effect.fail(new OrchestrationDispatchCommandError({ message: error }))
-          : Effect.void;
-      }),
-      Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)),
-    );
+    ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
 
     if (canonicalCommand.type === "thread.user-input.respond") {
       let index = 0;
