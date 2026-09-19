@@ -1,3 +1,4 @@
+// Path joining only; the filesystem access lives in readContainedWorkflowFile.
 // @effect-diagnostics nodeBuiltinImport:off
 /**
  * Reads what a workflow member actually answered.
