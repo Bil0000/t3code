@@ -1,6 +1,40 @@
 import { githubMediaFetchUrl } from "./githubMedia.ts";
 import type { SourceControlProviderKind } from "@t3tools/contracts";
 
+export function isPullRequestMediaRedirectAllowed(
+  provider: SourceControlProviderKind,
+  originalOrigin: string,
+  next: URL,
+): boolean {
+  if (next.protocol !== "https:" || next.username || next.password) return false;
+  if (next.origin === originalOrigin) return true;
+  if (next.port) return false;
+  const host = next.hostname;
+  switch (provider) {
+    case "github":
+      return (
+        /^[a-z0-9-]+\.githubusercontent\.com$/.test(host) ||
+        host === "github-production-user-asset-6210df.s3.amazonaws.com" ||
+        host === "github-cloud.s3.amazonaws.com"
+      );
+    case "bitbucket":
+      return /^bbuseruploads\.s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$/.test(host);
+    case "gitlab":
+    case "forgejo":
+      return (
+        /^(?:[a-z0-9.-]+\.)?s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com$/.test(host) ||
+        /^(?:[a-z0-9.-]+\.)?storage\.googleapis\.com$/.test(host)
+      );
+    case "azure-devops":
+      return (
+        /^[a-z0-9]+\.blob\.core\.windows\.net$/.test(host) ||
+        /^[a-z0-9-]+\.vsblob\.(?:vsassets\.io|visualstudio\.com)$/.test(host)
+      );
+    default:
+      return false;
+  }
+}
+
 export function pullRequestMediaUrl(input: {
   readonly provider: SourceControlProviderKind;
   readonly host: string | undefined;
@@ -12,15 +46,7 @@ export function pullRequestMediaUrl(input: {
   try {
     if (input.provider === "github") {
       if (input.host !== "github.com") return null;
-      const media = githubMediaFetchUrl(input.url);
-      if (!media) return null;
-      const parsed = new URL(media);
-      const path = parsed.pathname.replace(/^\//, "");
-      return path.startsWith("user-attachments/") ||
-        path.startsWith(`${input.repository}/`) ||
-        path.startsWith(`media/${input.repository}/`)
-        ? media
-        : null;
+      return githubMediaFetchUrl(input.url);
     }
     const origin = new URL(`https://${input.host}`);
     const source =

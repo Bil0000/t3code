@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { isPullRequestMediaRedirectAllowed } from "@t3tools/shared/pullRequestMedia";
 import {
   FetchHttpClient,
   HttpClient,
@@ -25,6 +26,7 @@ export const pullRequestMediaResponse = Effect.fn("PullRequestMediaFetch.respons
     url: asset.url,
     headers,
   });
+  const originalOrigin = new URL(response.request.url).origin;
   const httpClient = HttpClient.withScope(yield* HttpClient.HttpClient);
   for (let hop = 0; response.status >= 300 && response.status < 400; hop++) {
     const location = response.headers.location;
@@ -32,8 +34,8 @@ export const pullRequestMediaResponse = Effect.fn("PullRequestMediaFetch.respons
       response = null;
       break;
     }
-    const next = new URL(location, response.request.url);
-    if (next.protocol !== "https:" || next.username || next.password) {
+    const next = URL.parse(location, response.request.url);
+    if (next === null || !isPullRequestMediaRedirectAllowed(asset.provider, originalOrigin, next)) {
       response = null;
       break;
     }

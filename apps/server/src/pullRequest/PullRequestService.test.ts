@@ -7039,6 +7039,8 @@ it.effect("validates private attachment provider and account before provider rea
   Effect.gen(function* () {
     const received: string[] = [];
     const provider = fakeProvider("github", {
+      withVerifiedCredential: (_, use) =>
+        use({ accountId: "101", viewer: "octocat", credentialFingerprint: "credential-a" }),
       readAttachment: (input) =>
         Effect.sync(() => {
           received.push(input.url);
@@ -7066,21 +7068,24 @@ it.effect("validates private attachment provider and account before provider rea
       host: "github.com",
       number: 1,
       provider: "github" as const,
-      url: "https://github.com/acme/web/blob/main/shot.png",
+      expectedAccountId: "101",
+      url: "https://github.com/other/repo/blob/main/shot.png",
       headers: {},
     };
     assert.strictEqual((yield* service.readAttachment(input)).status, 200);
     for (const invalid of [
       { ...input, provider: "gitlab" as const },
       { ...input, url: "https://other.example/shot.png" },
-      { ...input, expectedAccountId: "other-account" },
+      { ...input, expectedAccountId: "202" },
     ]) {
       assert.strictEqual(
         (yield* service.readAttachment(invalid).pipe(Effect.flip))._tag,
         "PullRequestOperationError",
       );
     }
-    assert.deepStrictEqual(received, ["https://raw.githubusercontent.com/acme/web/main/shot.png"]);
+    assert.deepStrictEqual(received, [
+      "https://raw.githubusercontent.com/other/repo/main/shot.png",
+    ]);
   }).pipe(
     Effect.provideService(
       HttpClient.HttpClient,

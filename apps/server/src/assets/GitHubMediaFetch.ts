@@ -1,5 +1,6 @@
 import * as Mime from "effect/unstable/http/Mime";
 import { githubMediaFileName } from "@t3tools/shared/githubMedia";
+import { isPullRequestMediaRedirectAllowed } from "@t3tools/shared/pullRequestMedia";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -131,8 +132,9 @@ const fetchFollowingRedirects = Effect.fn("GitHubMediaFetch.fetchFollowingRedire
     if (response.status < 300 || response.status >= 400) return response;
     // A chain this long is not GitHub answering with bytes, and its body is not the media.
     if (!location || hop >= MAX_REDIRECTS) return null;
-    const next = new URL(location, target);
-    if (next.protocol !== "https:") return null;
+    const next = URL.parse(location, target);
+    if (next === null || !isPullRequestMediaRedirectAllowed("github", new URL(url).origin, next))
+      return null;
     target = next.toString();
   }
 });

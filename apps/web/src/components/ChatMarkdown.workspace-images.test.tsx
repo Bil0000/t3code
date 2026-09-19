@@ -517,6 +517,7 @@ it.each([
     "github.com",
     "https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789012",
   ],
+  ["github", "github.com", "https://raw.githubusercontent.com/other/repo/main/image.png"],
   ["bitbucket", "bitbucket.org", "https://bitbucket.org/owner/repo/downloads/shot.png"],
   [
     "gitlab",

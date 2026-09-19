@@ -36,7 +36,7 @@ describe("pullRequestMediaUrl", () => {
       pullRequestMediaUrl({ ...base, host: undefined, url: `/uploads/${hash}/shot.png` }),
     ).toBeNull();
   });
-  it("recognizes each provider attachment route and current GitHub repository", () => {
+  it("recognizes each provider attachment route and GitHub media from other repositories", () => {
     for (const [provider, host, repository, url] of [
       [
         "forgejo",
@@ -67,7 +67,7 @@ describe("pullRequestMediaUrl", () => {
         number: 7,
         url: "https://raw.githubusercontent.com/other/repo/main/shot.png",
       }),
-    ).toBeNull();
+    ).toBe("https://raw.githubusercontent.com/other/repo/main/shot.png");
   });
 });
 
