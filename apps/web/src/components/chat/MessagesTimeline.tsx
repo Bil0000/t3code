@@ -99,6 +99,9 @@ import {
 } from "../../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Root, RootContent } from "mdast";
 import { T3Wordmark } from "../T3Wordmark";
 import { ThreadContextChip } from "../ThreadContextChip";
 import {
@@ -3413,6 +3416,15 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
                 {getQuestionAnswerPreview(row.entry.questionAnswer)}
               </span>
             </span>
+          ) : row.entry.itemType === "reasoning" ? (
+            <ReactMarkdown
+              remarkPlugins={[
+                remarkGfm,
+                [remarkThoughtPreview, row.active ? "Thinking" : "Thought"],
+              ]}
+            >
+              {row.entry.detail ?? label}
+            </ReactMarkdown>
           ) : (
             label
           )
@@ -4783,6 +4795,28 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
 
 const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation();
 
+function remarkThoughtPreview(fallback: string) {
+  return (tree: Root) => {
+    const plainText = (node: Root | RootContent): string => {
+      if (node.type === "html" || node.type === "definition") return "";
+      if ("alt" in node) return node.alt ?? "";
+      if ("value" in node) return node.value;
+      if ("children" in node) {
+        const separator = ["root", "blockquote", "list", "listItem", "table", "tableRow"].includes(
+          node.type,
+        )
+          ? " "
+          : "";
+        return node.children.map(plainText).join(separator);
+      }
+      return node.type === "break" ? " " : "";
+    };
+    tree.children = [
+      { type: "text", value: plainText(tree).replace(/\s+/g, " ").trim() || fallback },
+    ];
+  };
+}
+
 function ReasoningTraceContent({ entries }: { entries: ReadonlyArray<TimelineWorkEntry> }) {
   const ctx = use(TimelineRowCtx);
   const { isWorking, latestRunId } = use(TimelineRowActivityCtx);
@@ -4955,7 +4989,21 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 headingClass,
               )}
             >
-              {previewText}
+              {isReasoning && !expanded ? (
+                <ReactMarkdown
+                  remarkPlugins={[
+                    remarkGfm,
+                    [
+                      remarkThoughtPreview,
+                      workEntry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought",
+                    ],
+                  ]}
+                >
+                  {workEntry.detail ?? previewText}
+                </ReactMarkdown>
+              ) : (
+                previewText
+              )}
             </span>
             {answerPreview ? (
               <span
