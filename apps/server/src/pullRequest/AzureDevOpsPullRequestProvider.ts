@@ -337,9 +337,6 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.mapError(fail("writeThread")));
   });
 
-  const attachmentFailure = (operation: "uploadAttachment" | "readAttachment", detail: string) =>
-    new PullRequestProviderError({ provider: "azure-devops", operation, reason: "failed", detail });
-
   const attachmentScope = Effect.fn("AzureDevOpsPullRequestProvider.attachmentScope")(function* (
     input: { readonly cwd: string; readonly number: number },
     operation: "uploadAttachment" | "readAttachment",
@@ -354,10 +351,12 @@ export const make = Effect.gen(function* () {
       !projectPath ||
       !pullRequest.location
     ) {
-      return yield* attachmentFailure(
+      return yield* new PullRequestProviderError({
+        provider: "azure-devops",
         operation,
-        "Azure DevOps did not return a supported pull request URL.",
-      );
+        reason: "failed",
+        detail: "Azure DevOps did not return a supported pull request URL.",
+      });
     }
     const location = pullRequest.location;
     return {
@@ -376,29 +375,45 @@ export const make = Effect.gen(function* () {
     ) {
       const pat = yield* Config.String("AZURE_DEVOPS_EXT_PAT").pipe(
         Config.option,
-        Effect.mapError(() =>
-          attachmentFailure(operation, "Could not read Azure DevOps attachment credentials."),
+        Effect.mapError(
+          (cause) =>
+            new PullRequestProviderError({
+              provider: "azure-devops",
+              operation,
+              reason: "failed",
+              detail: "Could not read Azure DevOps attachment credentials.",
+              cause,
+            }),
         ),
       );
       if (Option.isSome(pat) && pat.value.trim()) {
         request = request.pipe(HttpClientRequest.basicAuth("", pat.value));
       } else {
-        const token = yield* cli
-          .getAttachmentAccessToken(input)
-          .pipe(
-            Effect.mapError(() =>
-              attachmentFailure(
+        const token = yield* cli.getAttachmentAccessToken(input).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PullRequestProviderError({
+                provider: "azure-devops",
                 operation,
-                "Attachments require az login or AZURE_DEVOPS_EXT_PAT on the server.",
-              ),
-            ),
-          );
+                reason: "failed",
+                detail: "Attachments require az login or AZURE_DEVOPS_EXT_PAT on the server.",
+                cause,
+              }),
+          ),
+        );
         request = request.pipe(HttpClientRequest.bearerToken(token));
       }
       return yield* httpClient.execute(request).pipe(
         Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
-        Effect.mapError(() =>
-          attachmentFailure(operation, "Could not access the Azure DevOps attachment."),
+        Effect.mapError(
+          (cause) =>
+            new PullRequestProviderError({
+              provider: "azure-devops",
+              operation,
+              reason: "failed",
+              detail: "Could not access the Azure DevOps attachment.",
+              cause,
+            }),
         ),
       );
     },
@@ -758,25 +773,33 @@ export const make = Effect.gen(function* () {
           "uploadAttachment",
         );
         if (response.status < 200 || response.status >= 300)
-          return yield* attachmentFailure(
-            "uploadAttachment",
-            `Azure DevOps rejected the attachment (HTTP ${response.status}).`,
-          );
+          return yield* new PullRequestProviderError({
+            provider: "azure-devops",
+            operation: "uploadAttachment",
+            reason: "failed",
+            detail: `Azure DevOps rejected the attachment (HTTP ${response.status}).`,
+          });
         const attachment = yield* HttpClientResponse.schemaBodyJson(
           Schema.Struct({ url: Schema.String }),
         )(response).pipe(
-          Effect.mapError(() =>
-            attachmentFailure(
-              "uploadAttachment",
-              "Azure DevOps returned an invalid attachment URL.",
-            ),
+          Effect.mapError(
+            (cause) =>
+              new PullRequestProviderError({
+                provider: "azure-devops",
+                operation: "uploadAttachment",
+                reason: "failed",
+                detail: "Azure DevOps returned an invalid attachment URL.",
+                cause,
+              }),
           ),
         );
         if (!URL.canParse(attachment.url) || new URL(attachment.url).protocol !== "https:")
-          return yield* attachmentFailure(
-            "uploadAttachment",
-            "Azure DevOps returned an invalid attachment URL.",
-          );
+          return yield* new PullRequestProviderError({
+            provider: "azure-devops",
+            operation: "uploadAttachment",
+            reason: "failed",
+            detail: "Azure DevOps returned an invalid attachment URL.",
+          });
         return {
           url: attachment.url,
           markdown: attachmentMarkdown(attachment.url, input.name, input.mimeType),
@@ -788,15 +811,24 @@ export const make = Effect.gen(function* () {
       const scope = yield* attachmentScope(input, "readAttachment");
       const url = URL.canParse(input.url) ? new URL(input.url) : null;
       if (!url || url.origin !== scope.url.origin || url.username || url.password) {
-        return yield* attachmentFailure(
-          "readAttachment",
-          "The attachment URL does not belong to this pull request.",
-        );
+        return yield* new PullRequestProviderError({
+          provider: "azure-devops",
+          operation: "readAttachment",
+          reason: "failed",
+          detail: "The attachment URL does not belong to this pull request.",
+        });
       }
       const [path, projectPath] = yield* Effect.try({
         try: () =>
           [decodeURIComponent(url.pathname), decodeURIComponent(scope.projectPath)] as const,
-        catch: () => attachmentFailure("readAttachment", "Invalid attachment path."),
+        catch: (cause) =>
+          new PullRequestProviderError({
+            provider: "azure-devops",
+            operation: "readAttachment",
+            reason: "failed",
+            detail: "Invalid attachment path.",
+            cause,
+          }),
       });
       const match =
         /^(.*)\/_apis\/git\/repositories\/([^/]+)\/pullRequests\/(\d+)\/attachments\/([^/]+)$/i.exec(
@@ -822,10 +854,12 @@ export const make = Effect.gen(function* () {
         match[4] === "." ||
         match[4] === ".."
       ) {
-        return yield* attachmentFailure(
-          "readAttachment",
-          "The attachment URL does not belong to this pull request.",
-        );
+        return yield* new PullRequestProviderError({
+          provider: "azure-devops",
+          operation: "readAttachment",
+          reason: "failed",
+          detail: "The attachment URL does not belong to this pull request.",
+        });
       }
       const headers = Object.fromEntries(
         Object.entries(input.headers).filter(([name]) =>

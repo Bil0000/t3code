@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import {
   FetchHttpClient,
   HttpClient,
+  HttpClientError,
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http";
@@ -19,6 +20,7 @@ import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
 
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+const encodeDefect = Schema.encodeSync(Schema.fromJsonString(Schema.Defect()));
 
 const mockedExecute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>();
 
@@ -311,6 +313,87 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       ).toBe(true);
     }),
   );
+
+  for (const operation of ["readAttachment", "uploadAttachment"] as const) {
+    for (const failure of ["token", "http", "config"] as const) {
+      it.effect(`preserves ${failure} causes for ${operation} without exposing credentials`, () =>
+        Effect.gen(function* () {
+          mockedExecute.mockReturnValueOnce(Effect.succeed(output(json(pullRequestRow))));
+          const tokenFailure = new AzureDevOpsCli.AzureDevOpsCliAuthenticationError({
+            command: "az",
+            cwd: "/w",
+            operation: "execute",
+            argumentCount: 1,
+            cause: new Error("Token lookup refused"),
+          });
+          mockedExecute.mockReturnValueOnce(Effect.fail(tokenFailure));
+          let httpFailure: HttpClientError.HttpClientError | undefined;
+          const provider = yield* AzureDevOpsPullRequestProvider.make.pipe(
+            Effect.provideService(
+              HttpClient.HttpClient,
+              HttpClient.make((request) => {
+                httpFailure = new HttpClientError.HttpClientError({
+                  reason: new HttpClientError.TransportError({
+                    request,
+                    cause: new Error("Transport unavailable"),
+                  }),
+                });
+                return Effect.fail(httpFailure);
+              }),
+            ),
+          );
+          assert.isDefined(provider.readAttachment);
+          assert.isDefined(provider.uploadAttachment);
+          const ref = { cwd: "/w", host: "dev.azure.com", repository: "web", number: 42 };
+          const result = yield* (
+            operation === "readAttachment"
+              ? provider
+                  .readAttachment({
+                    ...ref,
+                    url: "https://dev.azure.com/acme/platform/_apis/git/repositories/web/pullRequests/42/attachments/proof.png",
+                    headers: {},
+                  })
+                  .pipe(Effect.asVoid)
+              : provider
+                  .uploadAttachment({
+                    ...ref,
+                    name: "proof.png",
+                    mimeType: "image/png",
+                    data: new Uint8Array([1]),
+                    filePath: "/tmp/proof.png",
+                  })
+                  .pipe(Effect.asVoid)
+          ).pipe(
+            Effect.provideService(
+              ConfigProvider.ConfigProvider,
+              failure === "config"
+                ? ConfigProvider.make(() =>
+                    Effect.fail(
+                      new ConfigProvider.SourceError({ message: "Configuration unavailable" }),
+                    ),
+                  )
+                : ConfigProvider.fromUnknown(
+                    failure === "token" ? {} : { AZURE_DEVOPS_EXT_PAT: "private-test-token" },
+                  ),
+            ),
+            Effect.flip,
+          );
+          expect(result.operation).toBe(operation);
+          if (failure === "config") expect(result.cause).toMatchObject({ _tag: "ConfigError" });
+          else expect(result.cause).toBe(failure === "token" ? tokenFailure : httpFailure);
+          expect(result.detail).not.toContain("private-test-token");
+          expect(result.message).not.toContain("private-test-token");
+          const encodedFailure = encodeDefect(result);
+          expect(encodedFailure).not.toContain("private-test-token");
+          if (failure === "http") {
+            const authorization = httpFailure?.request.headers.authorization;
+            assert.isDefined(authorization);
+            expect(encodedFailure).not.toContain(authorization);
+          }
+        }),
+      );
+    }
+  }
 
   it.effect("uses a server PAT without asking Azure CLI for another token", () =>
     Effect.gen(function* () {
