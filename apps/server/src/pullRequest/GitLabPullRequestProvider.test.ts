@@ -42,6 +42,15 @@ describe("gitLabViewerPermissions", () => {
     });
   });
 
+  it("offers request changes only to an eligible reviewer", () => {
+    expect(
+      gitLabViewerPermissions({ viewerCanMerge: true, canRequestChanges: true }).verdicts,
+    ).toContain("request-changes");
+    expect(
+      gitLabViewerPermissions({ viewerCanMerge: true, canRequestChanges: false }).verdicts,
+    ).not.toContain("request-changes");
+  });
+
   it("names no way of updating a branch it will not let this viewer update", () => {
     // The action and the strategy behind it go together: a button offered with nothing to press
     // it with, or a strategy left standing next to a withheld button, is a half-refusal.
@@ -101,11 +110,42 @@ describe("getChangeRequest base freshness", () => {
       Effect.provide(
         Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({
           getMergeRequestDetail: () => Effect.succeed({ ...detail, ...divergence }),
+          getRequestChangesViewer: () => Effect.succeed(null),
           getProjectMergeCapabilities: () =>
             Effect.succeed({ merge: true, squash: true, rebase: true }),
         }),
       ),
     );
+
+  for (const viewer of [null, "bilal", "octocat"]) {
+    it.effect(`gates request changes on host support and reviewer assignment: ${viewer}`, () =>
+      Effect.gen(function* () {
+        const provider = yield* make;
+        const input = { cwd: "/w", repository: "acme/web", host: "gitlab.com", number: 7 };
+        const capabilities = yield* provider.getCapabilities!(input);
+        const result = yield* provider.getChangeRequest(input);
+        const permissions = yield* provider.getViewerPermissions(input);
+        expect(capabilities.review.verdicts.includes("request-changes")).toBe(viewer !== null);
+        expect(result.viewerPermissions?.verdicts.includes("request-changes")).toBe(
+          viewer === "octocat",
+        );
+        expect(permissions.verdicts.includes("request-changes")).toBe(viewer === "octocat");
+      }).pipe(
+        Effect.provide(
+          Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({
+            getRequestChangesViewer: () => Effect.succeed(viewer),
+            getMergeRequestDetail: () =>
+              Effect.succeed({
+                ...detail,
+                reviewers: [{ login: "octocat", avatarUrl: null, name: null }],
+              }),
+            getProjectMergeCapabilities: () =>
+              Effect.succeed({ merge: true, squash: true, rebase: true }),
+          }),
+        ),
+      ),
+    );
+  }
 
   it.effect("reads a counted divergence as a branch that has fallen behind", () =>
     Effect.gen(function* () {

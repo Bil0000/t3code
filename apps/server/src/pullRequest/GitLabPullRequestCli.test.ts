@@ -1,11 +1,14 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const mockedExecute = vi.fn<GitLabCli.GitLabCli["Service"]["execute"]>();
 
 const layer = it.layer(
@@ -991,6 +994,169 @@ layer("GitLabPullRequestCli.layer", (it) => {
       assert.strictEqual(threads[0]?.comments.length, 2);
     }),
   );
+
+  for (const [name, response, expected] of [
+    [
+      "18.8 without mutation",
+      { data: { __type: null, currentUser: { username: "octocat" } } },
+      null,
+    ],
+    [
+      "18.9 with mutation",
+      {
+        data: {
+          __type: { name: "MergeRequestRequestChangesInput" },
+          currentUser: { username: "octocat" },
+        },
+      },
+      "octocat",
+    ],
+    ["disabled introspection", { errors: [{ message: "Introspection is disabled" }] }, null],
+  ] as const) {
+    it.effect(`detects request-changes support: ${name}`, () =>
+      Effect.gen(function* () {
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output(encodeJson(response))));
+        const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+        expect(yield* cli.getRequestChangesViewer({ cwd: "/w" })).toBe(expected);
+        expect(decodeJson(callAt(0).stdin ?? "{}")).toMatchObject({
+          query: expect.stringContaining('__type(name: "MergeRequestRequestChangesInput")'),
+        });
+      }),
+    );
+  }
+
+  for (const ErrorType of [
+    GitLabCli.GitLabCliCommandError,
+    GitLabCli.GitLabCliRateLimitError,
+    GitLabCli.GitLabCliAuthenticationError,
+    GitLabCli.GitLabCliUnavailableError,
+  ]) {
+    it.effect(`handles capability probe failure: ${ErrorType.name}`, () =>
+      Effect.gen(function* () {
+        const failure = new ErrorType({
+          command: "glab",
+          cwd: "/w",
+          operation: "execute",
+          cause: "host refusal",
+        });
+        mockedExecute.mockReturnValueOnce(Effect.fail(failure));
+        const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+        const result = yield* Effect.result(cli.getRequestChangesViewer({ cwd: "/w" }));
+        if (failure._tag !== "GitLabCliCommandError") {
+          expect(result).toMatchObject({ _tag: "Failure", failure });
+        } else {
+          expect(result).toMatchObject({ _tag: "Success", success: null });
+        }
+      }),
+    );
+  }
+
+  for (const failure of [
+    "unsupported",
+    "no-permission",
+    "not-reviewer",
+    "payload-error",
+    "graphql-error",
+    null,
+  ]) {
+    it.effect(`requests changes without publishing unrelated drafts: ${failure ?? "success"}`, () =>
+      Effect.gen(function* () {
+        mockedExecute.mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              encodeJson({
+                data: {
+                  __type:
+                    failure === "unsupported" ? null : { name: "MergeRequestRequestChangesInput" },
+                  currentUser: { username: "octocat" },
+                  project: {
+                    mergeRequest: {
+                      userPermissions: { updateMergeRequest: failure !== "no-permission" },
+                    },
+                  },
+                },
+              }),
+            ),
+          ),
+        );
+        if (failure !== "unsupported" && failure !== "no-permission") {
+          mockedExecute.mockReturnValueOnce(
+            Effect.succeed(
+              output(
+                mergeRequestJson({
+                  reviewers: failure === "not-reviewer" ? [] : [reviewer],
+                }),
+              ),
+            ),
+          );
+        }
+        if (
+          failure !== "unsupported" &&
+          failure !== "no-permission" &&
+          failure !== "not-reviewer"
+        ) {
+          mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+          mockedExecute.mockReturnValueOnce(
+            Effect.succeed(
+              output(
+                encodeJson(
+                  failure === "graphql-error"
+                    ? { errors: [{ message: "Permission denied" }] }
+                    : {
+                        data: {
+                          mergeRequestRequestChanges: {
+                            errors: failure === "payload-error" ? ["Reviewer not found"] : [],
+                          },
+                        },
+                      },
+                ),
+              ),
+            ),
+          );
+        }
+        const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+        const result = yield* Effect.result(
+          cli.submitReview({
+            cwd: "/w",
+            repository: "acme/web",
+            number: 7,
+            verdict: "request-changes",
+            body: "Please fix this",
+            comments: [],
+          }),
+        );
+        expect(result._tag).toBe(failure === null ? "Success" : "Failure");
+        const writes = mockedExecute.mock.calls
+          .map(([input]) => input)
+          .filter(
+            (input) =>
+              input.args.some((arg) => arg.endsWith("/notes")) ||
+              input.stdin?.includes("mutation("),
+          );
+        if (
+          failure === "unsupported" ||
+          failure === "no-permission" ||
+          failure === "not-reviewer"
+        ) {
+          expect(writes).toEqual([]);
+        } else {
+          expect(writes).toHaveLength(2);
+          const mutation = decodeJson(writes[1]!.stdin ?? "{}");
+          expect(mutation).toMatchObject({
+            query: expect.stringContaining("mergeRequestRequestChanges"),
+            variables: { projectPath: "acme/web", iid: "7" },
+          });
+        }
+        expect(
+          mockedExecute.mock.calls.some(([input]) =>
+            input.args.some((arg) => arg.includes("draft_notes")),
+          ),
+        ).toBe(false);
+        if (failure === "payload-error" && result._tag === "Failure")
+          expect(result.failure.detail).toContain("GitLab did not confirm");
+      }),
+    );
+  }
 
   it.effect("sends a review as its comments, then its summary, then the verdict", () =>
     Effect.gen(function* () {

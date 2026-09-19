@@ -49,9 +49,7 @@ const CAPABILITIES: PullRequestCapabilities = {
     inlineComment: true,
     reply: true,
     resolve: true,
-    // No "changes requested": GitLab has approval and unresolved discussions, and nothing that
-    // says a merge request has been reviewed and rejected.
-    verdicts: ["comment", "approve"],
+    verdicts: ["comment", "approve", "request-changes"],
   },
   reviewers: { request: true, listCandidates: true },
   edit: { changeRequest: true, comment: true },
@@ -85,6 +83,7 @@ const MERGE_ACTIONS: ReadonlySet<string> = new Set([
  */
 export function gitLabViewerPermissions(input: {
   readonly viewerCanMerge: boolean;
+  readonly canRequestChanges?: boolean;
 }): PullRequestViewerPermissions {
   return {
     // Arming the merge and taking the arming back are the merge, deferred, so they answer to
@@ -94,7 +93,9 @@ export function gitLabViewerPermissions(input: {
     ),
     comment: true,
     resolve: true,
-    verdicts: CAPABILITIES.review.verdicts,
+    verdicts: CAPABILITIES.review.verdicts.filter(
+      (verdict) => verdict !== "request-changes" || input.canRequestChanges === true,
+    ),
     requestReviewers: true,
     ...(input.viewerCanMerge ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
@@ -130,6 +131,19 @@ export const make = Effect.gen(function* () {
   const provider: PullRequestProviderApi = {
     kind: "gitlab",
     capabilities: CAPABILITIES,
+    getCapabilities: (input) =>
+      cli.getRequestChangesViewer(input).pipe(
+        Effect.mapError(fail("getCapabilities")),
+        Effect.map((viewer) => ({
+          ...CAPABILITIES,
+          review: {
+            ...CAPABILITIES.review,
+            verdicts: CAPABILITIES.review.verdicts.filter(
+              (verdict) => verdict !== "request-changes" || viewer !== null,
+            ),
+          },
+        })),
+      ),
 
     getViewer: (input) =>
       cli.getViewerUsername({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
@@ -158,14 +172,20 @@ export const make = Effect.gen(function* () {
         [
           cli.getMergeRequestDetail(input),
           cli.getProjectMergeCapabilities({ cwd: input.cwd, repository: input.repository }),
+          cli.getRequestChangesViewer(input),
         ],
         { concurrency: 2 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
-        Effect.map(([mergeRequest, mergeCapabilities]): ProviderChangeRequestDetail => ({
+        Effect.map(([mergeRequest, mergeCapabilities, viewer]): ProviderChangeRequestDetail => ({
           ...mergeRequest,
           mergeCapabilities,
-          viewerPermissions: gitLabViewerPermissions(mergeRequest),
+          viewerPermissions: gitLabViewerPermissions({
+            ...mergeRequest,
+            canRequestChanges:
+              viewer !== null &&
+              mergeRequest.reviewers.some((reviewer) => reviewer.login === viewer),
+          }),
           // A GitLab too old to count the divergence says nothing here rather than "up to
           // date": the banner is worth missing, and a wrong all-clear is not worth showing.
           baseComparison:
@@ -241,9 +261,18 @@ export const make = Effect.gen(function* () {
     // The same read the detail takes it from, on its own: `user.can_merge` lives on the merge
     // request, so there is no cheaper thing to ask GitLab.
     getViewerPermissions: (input) =>
-      cli
-        .getMergeRequestDetail(input)
-        .pipe(Effect.mapError(fail("getViewerPermissions")), Effect.map(gitLabViewerPermissions)),
+      Effect.all([cli.getMergeRequestDetail(input), cli.getRequestChangesViewer(input)], {
+        concurrency: 2,
+      }).pipe(
+        Effect.mapError(fail("getViewerPermissions")),
+        Effect.map(([detail, viewer]) =>
+          gitLabViewerPermissions({
+            ...detail,
+            canRequestChanges:
+              viewer !== null && detail.reviewers.some((reviewer) => reviewer.login === viewer),
+          }),
+        ),
+      ),
 
     getDiff: (input) => cli.getMergeRequestDiff(input).pipe(Effect.mapError(fail("getDiff"))),
 

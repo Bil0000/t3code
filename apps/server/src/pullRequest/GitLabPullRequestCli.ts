@@ -179,6 +179,52 @@ export class GitLabDiffFileContentsUnavailableError extends Schema.TaggedError<G
   }
 }
 
+const decodeRequestChangesViewer = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        __type: Schema.NullOr(Schema.Struct({ name: Schema.String })),
+        currentUser: Schema.NullOr(Schema.Struct({ username: Schema.String })),
+        project: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              mergeRequest: Schema.NullOr(
+                Schema.Struct({
+                  userPermissions: Schema.Struct({ updateMergeRequest: Schema.Boolean }),
+                }),
+              ),
+            }),
+          ),
+        ),
+      }),
+    }),
+  ),
+);
+
+const encodeGraphqlRequest = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+const decodeRequestChangesResult = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      errors: Schema.optional(Schema.Array(Schema.Struct({ message: Schema.String }))),
+      data: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            mergeRequestRequestChanges: Schema.NullOr(
+              Schema.Struct({ errors: Schema.Array(Schema.String) }),
+            ),
+          }),
+        ),
+      ),
+    }),
+  ),
+);
+
+export class GitLabReviewError extends Schema.TaggedError<GitLabReviewError>()(
+  "GitLabReviewError",
+  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {}
+
 export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
   | GitLabMergeRequestReadError
@@ -187,7 +233,8 @@ export type GitLabPullRequestCliError =
   | GitLabDiffCommitParentUnavailableError
   | GitLabDiffFileContentsUnavailableError
   | GitLabDiffRefsUnavailableError
-  | GitLabViewerUnavailableError;
+  | GitLabViewerUnavailableError
+  | GitLabReviewError;
 
 /** GitLab's own ceiling on `per_page`, so a larger page has to be walked. */
 const MAX_PAGE_SIZE = 100;
@@ -221,6 +268,12 @@ export interface GitLabMergeRequestDiffSlice {
 export class GitLabPullRequestCli extends Context.Service<
   GitLabPullRequestCli,
   {
+    readonly getRequestChangesViewer: (input: {
+      readonly cwd: string;
+      readonly repository?: string;
+      readonly number?: number;
+    }) => Effect.Effect<string | null, GitLabPullRequestCliError>;
+
     readonly getViewerUsername: (input: {
       readonly cwd: string;
     }) => Effect.Effect<string, GitLabPullRequestCliError>;
@@ -1154,10 +1207,47 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const getRequestChangesViewer = (input: {
+    readonly cwd: string;
+    readonly repository?: string;
+    readonly number?: number;
+  }) =>
+    api({
+      cwd: input.cwd,
+      path: "graphql",
+      method: "POST",
+      stdin: encodeGraphqlRequest(
+        input.number === undefined
+          ? {
+              query:
+                '{ __type(name: "MergeRequestRequestChangesInput") { name } currentUser { username } }',
+            }
+          : {
+              query:
+                'query($projectPath: ID!, $iid: String!) { __type(name: "MergeRequestRequestChangesInput") { name } currentUser { username } project(fullPath: $projectPath) { mergeRequest(iid: $iid) { userPermissions { updateMergeRequest } } } }',
+              variables: { projectPath: input.repository, iid: String(input.number) },
+            },
+      ),
+    }).pipe(
+      Effect.flatMap((result) => decodeRequestChangesViewer(result.stdout)),
+      Effect.map((result) =>
+        result.data.__type?.name === "MergeRequestRequestChangesInput" &&
+        (input.number === undefined ||
+          result.data.project?.mergeRequest?.userPermissions.updateMergeRequest === true)
+          ? (result.data.currentUser?.username ?? null)
+          : null,
+      ),
+      Effect.catchTags({
+        GitLabCliCommandError: () => Effect.succeed(null),
+        SchemaError: () => Effect.succeed(null),
+      }),
+    );
+
   return GitLabPullRequestCli.of({
     uploadAttachment: (input) => uploadGitLabAttachment(gitlab.execute, input),
     readAttachment: (input) => readGitLabAttachment(gitlab.execute, input),
     getViewerUsername: viewerUsername,
+    getRequestChangesViewer,
 
     listMergeRequests: (input) => {
       const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
@@ -1428,10 +1518,20 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const project = projectPath(input.repository);
         const mergeRequest = `projects/${project}/merge_requests/${input.number}`;
-        // GitLab has no pending review to attach comments to, so a review is replayed as the
-        // requests it is made of: the line comments, then the summary, then the verdict. A
-        // failure part-way therefore leaves what was already posted in place, which is why
-        // the verdict goes last — a half-sent review is never an approval.
+        if (input.verdict === "request-changes") {
+          const viewer = yield* getRequestChangesViewer(input);
+          if (viewer === null) {
+            return yield* new GitLabReviewError({
+              detail: "Request changes is unavailable for this account on this GitLab server.",
+            });
+          }
+          const detail = yield* mergeRequestDetail(input);
+          if (!detail.reviewers.some((reviewer) => reviewer.login === viewer)) {
+            return yield* new GitLabReviewError({
+              detail: "You must be an assigned reviewer to request changes on this merge request.",
+            });
+          }
+        }
         if (input.comments.length > 0) {
           const refs = yield* getDiffRefs(input);
           yield* Effect.forEach(
@@ -1473,6 +1573,40 @@ export const make = Effect.gen(function* () {
         }
         if (input.verdict === "approve") {
           yield* api({ cwd: input.cwd, path: `${mergeRequest}/approve`, method: "POST" });
+        }
+        if (input.verdict === "request-changes") {
+          const result = yield* api({
+            cwd: input.cwd,
+            path: "graphql",
+            method: "POST",
+            stdin: encodeGraphqlRequest({
+              query:
+                "mutation($projectPath: ID!, $iid: String!) { mergeRequestRequestChanges(input: { projectPath: $projectPath, iid: $iid }) { errors } }",
+              variables: { projectPath: input.repository, iid: String(input.number) },
+            }),
+          });
+          const response = yield* decodeRequestChangesResult(result.stdout).pipe(
+            Effect.mapError(
+              (cause) =>
+                new GitLabMergeRequestReadError({
+                  command: "glab",
+                  cwd: input.cwd,
+                  operation: "requestChanges",
+                  cause,
+                }),
+            ),
+          );
+          if (
+            (response.errors?.length ?? 0) > 0 ||
+            !response.data?.mergeRequestRequestChanges ||
+            response.data.mergeRequestRequestChanges.errors.length > 0
+          ) {
+            return yield* new GitLabReviewError({
+              detail:
+                "GitLab did not confirm the request for changes. Check your reviewer assignment and permission to update this merge request.",
+              cause: response,
+            });
+          }
         }
       }),
 

@@ -126,6 +126,7 @@ On web and desktop, open **Threads** in a pull request's Summary to find open or
 conversations. Reply in a thread, edit your comments, or resolve and reopen a thread where the
 host and your permissions allow it. Azure DevOps supports these comment actions and line reviews.
 In Azure DevOps, **Request changes** sets your vote to **Waiting for author**.
+GitLab 18.9 or later supports **Request changes** for assigned reviewers when GraphQL introspection is enabled.
 
 Use **Attach files**, paste images, or drop files into a description, comment, or reply editor.
 Uploads go to the source host before you post or save. Removing the link or cancelling the draft
