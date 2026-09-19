@@ -1,26 +1,6 @@
 import type { SelectedWorkItem } from "~/workItemSelection";
-import { describe, expect, it } from "vite-plus/test";
-
-import {
-  createGeneratedWorkItemDraft,
-  WORK_ITEM_MODE_HELP,
-  WORK_ITEM_SELECTION_BAR_CLASS_NAME,
-  workItemGeneratingDraft,
-} from "./WorkItemSelectionBar";
-type Deferred<T> = {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  return {
-    promise: new Promise<T>((next) => {
-      resolve = next;
-    }),
-    resolve,
-  };
-}
+import { describe, expect, it, vi } from "vite-plus/test";
+import { createWorkItemDraft, workItemTaskPrompt } from "./WorkItemSelectionBar";
 
 const item: SelectedWorkItem = {
   kind: "issue",
@@ -34,160 +14,73 @@ const item: SelectedWorkItem = {
 };
 
 describe("work item task draft", () => {
-  it("centers selected-item actions inside the list column", () => {
-    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain("absolute");
-    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain(
-      "bottom-[calc(env(safe-area-inset-bottom)+1rem)]",
+  it("opens a complete draft with source links and no enrichment step", async () => {
+    const setPrompt = vi.fn();
+    const clear = vi.fn();
+    await expect(
+      createWorkItemDraft({
+        mode: "compound",
+        items: [item],
+        openThread: async () => ({ draftId: "draft-1" }),
+        setPrompt,
+        clear,
+        isSelectionCurrent: () => true,
+      }),
+    ).resolves.toBe(true);
+    expect(setPrompt).toHaveBeenCalledExactlyOnceWith(
+      "draft-1",
+      workItemTaskPrompt("compound", [item]),
     );
-    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain("w-[min(calc(100%-2rem),48rem)]");
-    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).not.toContain("100vw");
+    expect(setPrompt.mock.calls[0]?.[1]).toContain(item.url);
+    expect(setPrompt.mock.calls[0]?.[1]).not.toContain("Generating");
+    expect(clear).toHaveBeenCalledOnce();
   });
 
-  it("shows the exact help for each task shape", () => {
-    expect(WORK_ITEM_MODE_HELP).toEqual({
-      compound: "Combines the selected items into one task.",
-      subtasks: "Splits the selected items into steps under one parent task.",
+  it("uses a single task regardless of the previous multi-selection mode", () => {
+    expect(workItemTaskPrompt("subtasks", [item])).toBe(workItemTaskPrompt("compound", [item]));
+  });
+
+  it("preserves separate fixes and safely delimits source titles", () => {
+    const other = { ...item, number: 13, title: 'A title\n"with quotes"', url: `${item.url}3` };
+    const prompt = workItemTaskPrompt("compound", [item, other]);
+    expect(prompt).toContain("keep unrelated fixes separate");
+    expect(JSON.parse(prompt.split("\n").at(-1)!)).toMatchObject({
+      title: other.title,
+      number: other.number,
+      url: other.url,
     });
+    expect(workItemTaskPrompt("subtasks", [item, other])).toContain(
+      "subtasks under one parent task",
+    );
   });
 
-  it("opens a marked draft before AI generation resolves", async () => {
-    const generation = deferred<
-      | { readonly _tag: "Failure" }
-      | {
-          readonly _tag: "Success";
-          readonly value: { readonly prompt: string; readonly generated: boolean };
-        }
-    >();
-    let prompt: string | undefined;
-    let opened = false;
-
-    const creating = createGeneratedWorkItemDraft({
-      mode: "compound",
-      items: [item],
-      openThread: async () => {
-        opened = true;
-        return { draftId: "draft-1" };
-      },
-      generate: () => generation.promise,
-      getPrompt: () => prompt,
-      setPrompt: (_draftId, next) => {
-        prompt = next;
-      },
-      isSelectionCurrent: () => true,
-      clear: () => undefined,
-    });
-
-    await Promise.resolve();
-    expect(opened).toBe(true);
-    expect(prompt).toBe(workItemGeneratingDraft("compound", [item]));
-
-    generation.resolve({ _tag: "Success", value: { prompt: "AI task", generated: true } });
-    await expect(creating).resolves.toEqual({ status: "success", generated: true });
-  });
-
-  it("does not replace a marked draft after the user edits it", async () => {
-    const generation = deferred<
-      | { readonly _tag: "Failure" }
-      | {
-          readonly _tag: "Success";
-          readonly value: { readonly prompt: string; readonly generated: boolean };
-        }
-    >();
-    let prompt: string | undefined;
-
-    const creating = createGeneratedWorkItemDraft({
-      mode: "subtasks",
-      items: [item],
-      openThread: async () => ({ draftId: "draft-1" }),
-      generate: () => generation.promise,
-      getPrompt: () => prompt,
-      setPrompt: (_draftId, next) => {
-        prompt = next;
-      },
-      isSelectionCurrent: () => true,
-      clear: () => undefined,
-    });
-
-    await Promise.resolve();
-    prompt = "My edited task";
-    generation.resolve({ _tag: "Success", value: { prompt: "AI task", generated: true } });
-    await creating;
-
-    expect(prompt).toBe("My edited task");
-  });
-
-  it("keeps a newer selection when an older generation completes", async () => {
-    const generation = deferred<{
-      readonly _tag: "Success";
-      readonly value: { readonly prompt: string; readonly generated: boolean };
-    }>();
-    let prompt: string | undefined;
-    let clears = 0;
-    const creating = createGeneratedWorkItemDraft({
+  it.each([true, false])("only clears a selection still current: %s", async (current) => {
+    const clear = vi.fn();
+    await createWorkItemDraft({
       mode: "compound",
       items: [item],
       openThread: async () => ({ draftId: "draft-1" }),
-      generate: () => generation.promise,
-      getPrompt: () => prompt,
-      setPrompt: (_draftId, next) => {
-        prompt = next;
-      },
-      isSelectionCurrent: () => false,
-      clear: () => {
-        clears += 1;
-      },
+      setPrompt: vi.fn(),
+      clear,
+      isSelectionCurrent: () => current,
     });
-
-    await Promise.resolve();
-    generation.resolve({ _tag: "Success", value: { prompt: "AI task", generated: true } });
-    await creating;
-
-    expect(clears).toBe(0);
+    expect(clear).toHaveBeenCalledTimes(current ? 1 : 0);
   });
 
-  it("replaces an untouched generating marker after generation fails", async () => {
-    let prompt: string | undefined;
-    const creating = createGeneratedWorkItemDraft({
-      mode: "compound",
-      items: [item],
-      openThread: async () => ({ draftId: "draft-1" }),
-      generate: async () => ({ _tag: "Failure" }),
-      getPrompt: () => prompt,
-      setPrompt: (_draftId, next) => {
-        prompt = next;
-      },
-      isSelectionCurrent: () => true,
-      clear: () => undefined,
-    });
-
-    await expect(creating).resolves.toEqual({ status: "generation-failure" });
-
-    expect(prompt).toContain("AI task generation failed");
-    expect(prompt).toContain(item.url);
-    expect(prompt).not.toContain("Generating a task");
-  });
-
-  it("keeps an edited draft when generation fails", async () => {
-    const generation = deferred<{ readonly _tag: "Failure" }>();
-    let prompt: string | undefined;
-    const creating = createGeneratedWorkItemDraft({
-      mode: "subtasks",
-      items: [item],
-      openThread: async () => ({ draftId: "draft-1" }),
-      generate: () => generation.promise,
-      getPrompt: () => prompt,
-      setPrompt: (_draftId, next) => {
-        prompt = next;
-      },
-      isSelectionCurrent: () => true,
-      clear: () => undefined,
-    });
-
-    await Promise.resolve();
-    prompt = "My edited task";
-    generation.resolve({ _tag: "Failure" });
-    await creating;
-
-    expect(prompt).toBe("My edited task");
+  it("preserves the selection when a thread cannot open", async () => {
+    const setPrompt = vi.fn();
+    const clear = vi.fn();
+    await expect(
+      createWorkItemDraft({
+        mode: "compound",
+        items: [item],
+        openThread: async () => null,
+        setPrompt,
+        clear,
+        isSelectionCurrent: () => true,
+      }),
+    ).resolves.toBe(false);
+    expect(setPrompt).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
   });
 });

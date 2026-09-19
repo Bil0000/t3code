@@ -178,11 +178,21 @@ its key and project connections.
 
 **Hand one to an agent**
 
-- **Solve** starts a thread on the issue, with the issue attached as context
+- **Solve** opens a new worktree draft with the issue attached as context. Review the prompt, then send it.
 - **Ask** and **Explain** answer a question about the issue without changing any code
 - **Add to composer** attaches the issue to a thread you are already in, rather than starting a
   new one
 - Issue content is marked as untrusted context. Review it before sending it to an agent.
+
+Select several issues or pull requests to prepare one task or a parent task with subtasks.
+The draft contains their source links immediately; preparing it does not make a separate model call.
+The agent fetches the details when you send the prompt. **Find matches** uses your configured text
+model to suggest related work or possible duplicates.
+
+Agents can use `link_issue`, `list_thread_issues`, and `unlink_issue` to keep issues with their
+current thread. The thread header's **Linked issues** button opens each issue or removes its link.
+An issue's **Linked threads** section takes you back to those conversations, where you can follow
+their linked pull requests. These controls are available on web and desktop.
 
 ## Linked pull requests
 
