@@ -1152,8 +1152,29 @@ layer("GitLabPullRequestCli.layer", (it) => {
             input.args.some((arg) => arg.includes("draft_notes")),
           ),
         ).toBe(false);
-        if (failure === "payload-error" && result._tag === "Failure")
-          expect(result.failure.detail).toContain("GitLab did not confirm");
+        if (result._tag === "Failure") {
+          const unavailable = failure === "unsupported" || failure === "no-permission";
+          expect(result.failure).toMatchObject({
+            _tag: unavailable
+              ? "GitLabRequestChangesUnavailableError"
+              : failure === "not-reviewer"
+                ? "GitLabReviewerRequiredError"
+                : "GitLabRequestChangesRejectedError",
+            number: 7,
+          });
+          expect(result.failure.detail).toBe(
+            unavailable
+              ? "Request changes is unavailable for this account on this GitLab server."
+              : failure === "not-reviewer"
+                ? "You must be an assigned reviewer to request changes on this merge request."
+                : "GitLab did not confirm the request for changes. Check your reviewer assignment and permission to update this merge request.",
+          );
+          if (failure === "payload-error") {
+            expect(result.failure.cause).toEqual({
+              data: { mergeRequestRequestChanges: { errors: ["Reviewer not found"] } },
+            });
+          }
+        }
       }),
     );
   }

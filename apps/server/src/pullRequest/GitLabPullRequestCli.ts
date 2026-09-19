@@ -220,10 +220,44 @@ const decodeRequestChangesResult = Schema.decodeUnknownEffect(
   ),
 );
 
-export class GitLabReviewError extends Schema.TaggedError<GitLabReviewError>()(
-  "GitLabReviewError",
-  { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
-) {}
+export class GitLabRequestChangesUnavailableError extends Schema.TaggedError<GitLabRequestChangesUnavailableError>()(
+  "GitLabRequestChangesUnavailableError",
+  { number: Schema.Int },
+) {
+  get detail(): string {
+    return "Request changes is unavailable for this account on this GitLab server.";
+  }
+
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+export class GitLabReviewerRequiredError extends Schema.TaggedError<GitLabReviewerRequiredError>()(
+  "GitLabReviewerRequiredError",
+  { number: Schema.Int },
+) {
+  get detail(): string {
+    return "You must be an assigned reviewer to request changes on this merge request.";
+  }
+
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+export class GitLabRequestChangesRejectedError extends Schema.TaggedError<GitLabRequestChangesRejectedError>()(
+  "GitLabRequestChangesRejectedError",
+  { number: Schema.Int, cause: Schema.Defect() },
+) {
+  get detail(): string {
+    return "GitLab did not confirm the request for changes. Check your reviewer assignment and permission to update this merge request.";
+  }
+
+  override get message(): string {
+    return this.detail;
+  }
+}
 
 export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
@@ -234,7 +268,9 @@ export type GitLabPullRequestCliError =
   | GitLabDiffFileContentsUnavailableError
   | GitLabDiffRefsUnavailableError
   | GitLabViewerUnavailableError
-  | GitLabReviewError;
+  | GitLabRequestChangesUnavailableError
+  | GitLabReviewerRequiredError
+  | GitLabRequestChangesRejectedError;
 
 /** GitLab's own ceiling on `per_page`, so a larger page has to be walked. */
 const MAX_PAGE_SIZE = 100;
@@ -1521,15 +1557,11 @@ export const make = Effect.gen(function* () {
         if (input.verdict === "request-changes") {
           const viewer = yield* getRequestChangesViewer(input);
           if (viewer === null) {
-            return yield* new GitLabReviewError({
-              detail: "Request changes is unavailable for this account on this GitLab server.",
-            });
+            return yield* new GitLabRequestChangesUnavailableError({ number: input.number });
           }
           const detail = yield* mergeRequestDetail(input);
           if (!detail.reviewers.some((reviewer) => reviewer.login === viewer)) {
-            return yield* new GitLabReviewError({
-              detail: "You must be an assigned reviewer to request changes on this merge request.",
-            });
+            return yield* new GitLabReviewerRequiredError({ number: input.number });
           }
         }
         if (input.comments.length > 0) {
@@ -1601,9 +1633,8 @@ export const make = Effect.gen(function* () {
             !response.data?.mergeRequestRequestChanges ||
             response.data.mergeRequestRequestChanges.errors.length > 0
           ) {
-            return yield* new GitLabReviewError({
-              detail:
-                "GitLab did not confirm the request for changes. Check your reviewer assignment and permission to update this merge request.",
+            return yield* new GitLabRequestChangesRejectedError({
+              number: input.number,
               cause: response,
             });
           }
