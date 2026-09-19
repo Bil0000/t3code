@@ -5,7 +5,7 @@ import * as Path from "effect/Path";
 import {
   type ClientOrchestrationCommand,
   type UserInputAttachments,
-  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  getProviderAttachmentLimitError,
   type IsoDateTime,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
@@ -142,13 +142,9 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       canonicalCommand.type === "thread.turn.start"
         ? canonicalCommand.message.attachments
         : Object.values(canonicalCommand.attachmentsByQuestionId ?? {}).flat();
-    if (
-      canonicalCommand.type === "thread.user-input.respond" &&
-      attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS
-    ) {
-      return yield* new OrchestrationDispatchCommandError({
-        message: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per question response.`,
-      });
+    const attachmentLimitError = getProviderAttachmentLimitError(attachments);
+    if (attachmentLimitError) {
+      return yield* new OrchestrationDispatchCommandError({ message: attachmentLimitError });
     }
     if (canonicalCommand.type === "thread.turn.start") {
       const clientAttachmentIds = new Set<string>();
@@ -286,6 +282,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
                 }),
             ),
           );
+          claimedAttachmentPaths.push(attachmentPath);
           if (attachment.id !== undefined) {
             finalAttachmentIdByClientId.set(attachment.id, attachmentId);
           }
@@ -293,7 +290,15 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
           return persistedAttachment;
         }),
       { concurrency: 1 },
-    ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
+    ).pipe(
+      Effect.tap((normalized) => {
+        const error = getProviderAttachmentLimitError(normalized);
+        return error
+          ? Effect.fail(new OrchestrationDispatchCommandError({ message: error }))
+          : Effect.void;
+      }),
+      Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)),
+    );
 
     if (canonicalCommand.type === "thread.user-input.respond") {
       let index = 0;

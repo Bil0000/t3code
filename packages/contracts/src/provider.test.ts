@@ -121,6 +121,55 @@ describe("ProviderSessionStartInput", () => {
 });
 
 describe("ProviderSendTurnInput", () => {
+  it("accepts 20 attachments and rejects 21", () => {
+    const attachments = Array.from({ length: 20 }, (_, index) => ({
+      type: "image",
+      id: `image-${index}`,
+      name: "image.png",
+      mimeType: "image/png",
+      sizeBytes: 1,
+    }));
+    expect(
+      decodeProviderSendTurnInput({ threadId: "thread-1", attachments }).attachments,
+    ).toHaveLength(20);
+    expect(() =>
+      decodeProviderSendTurnInput({
+        threadId: "thread-1",
+        attachments: [...attachments, attachments[0]],
+      }),
+    ).toThrow();
+  });
+
+  it.each(["image", "file"])(
+    "caps total image bytes for %s attachments without charging videos",
+    (type) => {
+      const image = {
+        type,
+        id: "image",
+        name: "image.png",
+        mimeType: "image/png",
+        sizeBytes: 10 * 1024 * 1024,
+      };
+      const video = {
+        type: "file",
+        id: "video",
+        name: "video.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 50 * 1024 * 1024,
+      };
+      expect(
+        decodeProviderSendTurnInput({ threadId: "thread-1", attachments: [image, image, video] })
+          .attachments,
+      ).toHaveLength(3);
+      expect(() =>
+        decodeProviderSendTurnInput({
+          threadId: "thread-1",
+          attachments: [image, image, { ...image, sizeBytes: 1 }],
+        }),
+      ).toThrow(/20 MiB/);
+    },
+  );
+
   it("accepts codex modelSelection", () => {
     const parsed = decodeProviderSendTurnInput({
       threadId: "thread-1",

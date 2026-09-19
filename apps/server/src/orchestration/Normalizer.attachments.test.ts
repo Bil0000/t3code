@@ -59,6 +59,44 @@ function turnStartCommand(input: {
 }
 
 describe("normalizeDispatchCommand attachments", () => {
+  it.effect("accepts 20 inline images and rejects 21 before writing files", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const attachments = Array.from({ length: 20 }, () => ({
+        dataUrl: "data:image/png;base64,cGl4ZWxz",
+        sizeBytes: 6,
+      }));
+      const rejected = yield* normalizeDispatchCommand(
+        turnStartCommand({ attachments: [...attachments, attachments[0]!] }),
+      ).pipe(Effect.flip);
+      expect(rejected.message).toContain("up to 20");
+      expect(NodeFS.readdirSync(config.attachmentsDir)).toEqual([]);
+      const accepted = yield* normalizeDispatchCommand(turnStartCommand({ attachments }));
+      if (accepted.type !== "thread.turn.start") throw new Error("Wrong command");
+      expect(accepted.message.attachments).toHaveLength(20);
+      expect(NodeFS.readdirSync(config.attachmentsDir)).toHaveLength(20);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect(
+    "checks decoded image bytes and removes files when upload sizes understate the total",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const dataUrl = `data:image/png;base64,${Buffer.alloc(10 * 1024 * 1024).toString("base64")}`;
+        const command = turnStartCommand({
+          attachments: [
+            { dataUrl, sizeBytes: 1 },
+            { dataUrl, sizeBytes: 1 },
+            { dataUrl: "data:image/png;base64,YQ==", sizeBytes: 1 },
+          ],
+        });
+        const error = yield* normalizeDispatchCommand(command).pipe(Effect.flip);
+        expect(error.message).toContain("20 MiB");
+        expect(NodeFS.readdirSync(config.attachmentsDir)).toEqual([]);
+      }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("rejects duplicate client ids before persisting attachments", () =>
     Effect.gen(function* () {
       const error = yield* normalizeDispatchCommand(
@@ -464,25 +502,25 @@ describe("question attachments", () => {
         answers: { first: "", second: "" },
         createdAt: "2026-08-01T00:00:00.000Z",
         attachmentsByQuestionId: {
-          first: Array.from({ length: 4 }, () => attachment),
-          second: Array.from({ length: 5 }, () => attachment),
+          first: Array.from({ length: 10 }, () => attachment),
+          second: Array.from({ length: 11 }, () => attachment),
         },
       };
       const failure = yield* normalizeDispatchCommand(command).pipe(Effect.flip);
-      expect(failure.message).toContain("up to 8");
+      expect(failure.message).toContain("up to 20");
       expect(NodeFS.readdirSync(config.attachmentsDir)).toEqual([`${id}.txt`]);
       const accepted = {
         ...command,
         attachmentsByQuestionId: {
           ...command.attachmentsByQuestionId,
-          second: Array.from({ length: 4 }, () => attachment),
+          second: Array.from({ length: 10 }, () => attachment),
         },
       };
       const normalized = yield* normalizeDispatchCommand(accepted);
       if (normalized.type !== "thread.user-input.respond") throw new Error("Wrong command");
       const attachments = Object.values(normalized.attachmentsByQuestionId!).flat();
-      expect(attachments).toHaveLength(8);
-      expect(new Set(attachments.map((item) => item.id)).size).toBe(8);
+      expect(attachments).toHaveLength(20);
+      expect(new Set(attachments.map((item) => item.id)).size).toBe(20);
       for (const item of attachments) {
         expect(item.name).toBe(attachment.name);
         expect(
