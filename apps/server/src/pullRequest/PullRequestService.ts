@@ -1898,10 +1898,23 @@ export const make = Effect.gen(function* () {
 
   const runAction = (input: PullRequestActionInput): Effect.Effect<string, PullRequestError> =>
     requireProject(input).pipe(
-      Effect.flatMap((project): Effect.Effect<string, PullRequestError> => {
+      Effect.bindTo("project"),
+      Effect.bind(
+        "capabilities",
+        ({ project }) =>
+          project.api
+            .getCapabilities?.({
+              cwd: project.project.workspaceRoot,
+              repository: project.repository,
+              host: project.host,
+            })
+            .pipe(Effect.mapError(toPullRequestError("runAction"))) ??
+          Effect.succeed(project.api.capabilities),
+      ),
+      Effect.flatMap(({ project, capabilities }): Effect.Effect<string, PullRequestError> => {
         if (
           input.bypassMergeChecks === true &&
-          (project.api.capabilities.bypassMergeChecks !== true ||
+          (capabilities.bypassMergeChecks !== true ||
             input.action !== "merge" ||
             input.stackNumber !== undefined)
         ) {
@@ -1914,7 +1927,7 @@ export const make = Effect.gen(function* () {
         }
         if (
           input.stackNumber !== undefined &&
-          (project.api.capabilities.stackActions !== true ||
+          (capabilities.stackActions !== true ||
             !["merge", "update-branch"].includes(input.action) ||
             input.expectedStackHeads === undefined ||
             (input.action === "update-branch" && input.updateMethod !== "rebase"))
@@ -1928,7 +1941,7 @@ export const make = Effect.gen(function* () {
         }
         // The surface hides what a host cannot do, and this refuses it as well: a request that
         // reached here anyway must not be handed to a provider that never claimed the action.
-        if (!project.api.capabilities.actions.includes(input.action)) {
+        if (!capabilities.actions.includes(input.action)) {
           return Effect.fail(
             new PullRequestOperationError({
               operation: "runAction",
@@ -1941,7 +1954,7 @@ export const make = Effect.gen(function* () {
         // rebase would quietly merge instead of failing.
         if (
           input.mergeMethod !== undefined &&
-          !project.api.capabilities.mergeMethods.includes(input.mergeMethod)
+          !capabilities.mergeMethods.includes(input.mergeMethod)
         ) {
           return Effect.fail(
             new PullRequestOperationError({
@@ -1954,7 +1967,7 @@ export const make = Effect.gen(function* () {
         // must not be asked to rebase and left to pick something else.
         if (
           input.updateMethod !== undefined &&
-          !(project.api.capabilities.updateMethods ?? []).includes(input.updateMethod)
+          !(capabilities.updateMethods ?? []).includes(input.updateMethod)
         ) {
           return Effect.fail(
             new PullRequestOperationError({
@@ -2156,7 +2169,20 @@ export const make = Effect.gen(function* () {
     "PullRequestService.uploadAttachment",
   )(function* (input) {
     const project = yield* requireProject(input);
-    const capability = project.api.capabilities.attachments;
+    const ref = {
+      cwd: project.project.workspaceRoot,
+      repository: project.repository,
+      host: project.host,
+      number: input.number,
+    };
+    const [capabilities, changeRequest] = yield* Effect.all(
+      [
+        project.api.getCapabilities?.(ref) ?? Effect.succeed(project.api.capabilities),
+        project.api.getChangeRequest(ref),
+      ],
+      { concurrency: 2 },
+    ).pipe(Effect.mapError(toPullRequestError("uploadAttachment")));
+    const capability = changeRequest.attachments ?? capabilities.attachments;
     if (!capability?.supported || !project.api.uploadAttachment) {
       return yield* new PullRequestOperationError({
         operation: "uploadAttachment",

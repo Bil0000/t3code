@@ -6882,13 +6882,15 @@ it.effect("keeps Azure continuation cursors separate for repositories with the s
 it.effect("requires current host permission for an explicit merge-check bypass", () =>
   Effect.gen(function* () {
     let allowed = false;
+    let hostAllowsBypass = true;
     const calls: boolean[] = [];
     const provider = fakeProvider("github");
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
         fakeProvider("github", {
-          capabilities: { ...provider.capabilities, bypassMergeChecks: true },
+          getCapabilities: () =>
+            Effect.succeed({ ...provider.capabilities, bypassMergeChecks: hostAllowsBypass }),
           getViewerPermissions: (input) =>
             provider
               .getViewerPermissions(input)
@@ -6917,6 +6919,10 @@ it.effect("requires current host permission for an explicit merge-check bypass",
     yield* Effect.flip(service.runAction(input));
     yield* service.runAction({ ...input, bypassMergeChecks: false });
     yield* Effect.flip(service.runAction({ ...input, action: "close" }));
+    allowed = true;
+    hostAllowsBypass = false;
+    const hostDenied = yield* Effect.flip(service.runAction(input));
+    assert.include(hostDenied.message, "cannot bypass");
     assert.deepStrictEqual(calls, [true, false]);
   }),
 );
@@ -6953,7 +6959,24 @@ it.effect("refuses bypass requests on every host without the capability", () =>
 it.effect("uploads attachments without posting a comment and checks provider limits first", () =>
   Effect.gen(function* () {
     const received: string[] = [];
+    const attachmentCapability = {
+      supported: true,
+      maxBytes: 3,
+      destination: "pull-request" as const,
+    };
+    let supported = true;
+    let attachmentOverride: typeof attachmentCapability | undefined;
     const provider = fakeProvider("gitlab", {
+      getCapabilities: () =>
+        Effect.succeed({
+          ...provider.capabilities,
+          attachments: { ...attachmentCapability, supported },
+        }),
+      getChangeRequest: () =>
+        Effect.succeed({
+          ...hostedChangeRequest("Description"),
+          ...(attachmentOverride === undefined ? {} : { attachments: attachmentOverride }),
+        }),
       uploadAttachment: (input) =>
         Effect.sync(() => {
           received.push(`${input.host}/${input.repository}/${input.name}`);
@@ -6977,7 +7000,7 @@ it.effect("uploads attachments without posting a comment and checks provider lim
           ...provider,
           capabilities: {
             ...provider.capabilities,
-            attachments: { supported: true, maxBytes: 3, destination: "pull-request" },
+            attachments: { ...attachmentCapability, supported: false, maxBytes: 100 },
           },
         },
       ],
@@ -6998,7 +7021,17 @@ it.effect("uploads attachments without posting a comment and checks provider lim
       .uploadAttachment({ ...input, data: new Uint8Array(4) })
       .pipe(Effect.flip);
     assert.include(error.message, "between 1 and 3 bytes");
-    assert.strictEqual(received.length, 1);
+    supported = false;
+    const unsupported = yield* service.uploadAttachment(input).pipe(Effect.flip);
+    assert.include(unsupported.message, "does not support");
+    attachmentOverride = { ...attachmentCapability, maxBytes: 2 };
+    const tooLarge = yield* service.uploadAttachment(input).pipe(Effect.flip);
+    assert.include(tooLarge.message, "between 1 and 2 bytes");
+    yield* service.uploadAttachment({ ...input, data: new Uint8Array(2) });
+    attachmentOverride = { ...attachmentCapability, supported: false };
+    const disabled = yield* service.uploadAttachment(input).pipe(Effect.flip);
+    assert.include(disabled.message, "does not support");
+    assert.strictEqual(received.length, 2);
   }),
 );
 

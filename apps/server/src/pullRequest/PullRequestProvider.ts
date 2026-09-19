@@ -556,14 +556,6 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & { readonly number: number; readonly body: string },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
-  /**
-   * Rewrites a remark somebody already posted. Only called when `capabilities.edit.comment` is
-   * true, with an id exactly as the conversation carried it.
-   *
-   * Whether this remark is the reader's to rewrite is the host's own answer: no read here can
-   * settle it, since access can be taken away between the conversation being read and the
-   * rewrite being sent, and a host refuses a stranger's remark with a sentence saying so.
-   */
   readonly readAttachment?: (
     input: ProviderRepositoryRef & {
       readonly number: number;
@@ -586,6 +578,14 @@ export interface PullRequestProviderApi {
     },
   ) => Effect.Effect<{ readonly url: string; readonly markdown: string }, PullRequestProviderError>;
 
+  /**
+   * Rewrites a remark somebody already posted. Only called when `capabilities.edit.comment` is
+   * true, with an id exactly as the conversation carried it.
+   *
+   * Whether this remark is the reader's to rewrite is the host's own answer: no read here can
+   * settle it, since access can be taken away between the conversation being read and the
+   * rewrite being sent, and a host refuses a stranger's remark with a sentence saying so.
+   */
   readonly updateComment?: (
     input: ProviderRepositoryRef & {
       readonly number: number;
