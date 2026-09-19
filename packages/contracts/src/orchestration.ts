@@ -163,9 +163,9 @@ export const ProviderUserInputAnswers = Schema.Record(Schema.String, Schema.Unkn
 export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
-export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 20;
+export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 100;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const PROVIDER_SEND_TURN_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
+const PROVIDER_SEND_TURN_MAX_TOTAL_IMAGE_BYTES = 80 * 1024 * 1024;
 export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES = [
   "image/gif",
@@ -387,7 +387,7 @@ export function getProviderAttachmentLimitError(
     0,
   );
   if (imageBytes > PROVIDER_SEND_TURN_MAX_TOTAL_IMAGE_BYTES) {
-    return "Images can total up to 20 MiB per message or question response. Use smaller images or send fewer at once.";
+    return "Images can total up to 80 MiB per message or question response. Use smaller images or send fewer at once.";
   }
 }
 

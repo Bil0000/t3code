@@ -14,8 +14,8 @@ to keep a large paste editable in the composer instead.
 
 ## Attach files
 
-Attach up to 20 files per message. Each image can be up to 10 MiB, with at most
-20 MiB of images in one message. Other files, including videos, can be up to
+Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
+80 MiB of images in one message. Other files, including videos, can be up to
 50 MiB each, subject to the environment's upload support and limit. The agent
 receives them on the environment's machine. Provider and model limits still
 apply, including images already in the conversation. A video attachment gives

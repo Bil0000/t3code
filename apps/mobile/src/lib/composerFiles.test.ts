@@ -478,12 +478,12 @@ describe("composer file attachments", () => {
       mocks.pickMedia.mockResolvedValue({ canceled: false, assets: [image, video] });
 
       const result = await pickComposerMedia({
-        existingCount: 19,
+        existingCount: 99,
         maxVideoBytes: 50 * 1024 * 1024,
       });
 
       expect(result.attachments).toEqual([expect.objectContaining({ type: "image" })]);
-      expect(result.error).toBe("You can attach up to 20 attachments per message.");
+      expect(result.error).toBe("You can attach up to 100 attachments per message.");
       expect(mocks.pickMedia).toHaveBeenCalledWith(expect.objectContaining({ selectionLimit: 1 }));
       expect(mocks.copy).not.toHaveBeenCalled();
     });
@@ -628,9 +628,9 @@ describe("composer file attachments", () => {
   });
 
   it("does not open the picker when the draft has no remaining attachment slots", async () => {
-    await expect(pickComposerFiles({ existingCount: 20 })).resolves.toEqual({
+    await expect(pickComposerFiles({ existingCount: 100 })).resolves.toEqual({
       files: [],
-      error: "You can attach up to 20 files per message.",
+      error: "You can attach up to 100 files per message.",
     });
 
     expect(mocks.pickFile).not.toHaveBeenCalled();
@@ -841,7 +841,7 @@ describe("composer file attachments", () => {
       ],
     });
 
-    const result = await pickComposerFiles({ existingCount: 19, maxBytes: 1024 * 1024 });
+    const result = await pickComposerFiles({ existingCount: 99, maxBytes: 1024 * 1024 });
 
     expect(result.files.map((file) => file.name)).toEqual(["report.pdf"]);
   });
