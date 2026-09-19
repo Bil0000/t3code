@@ -11,12 +11,12 @@ import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-export const WORK_ITEM_MODE_HELP = {
+const WORK_ITEM_MODE_HELP = {
   compound: "Combines the selected items into one task.",
   subtasks: "Splits the selected items into steps under one parent task.",
 } as const;
 
-export const WORK_ITEM_SELECTION_BAR_CLASS_NAME =
+const WORK_ITEM_SELECTION_BAR_CLASS_NAME =
   "absolute bottom-[calc(env(safe-area-inset-bottom)+1rem)] left-1/2 z-50 flex w-[min(calc(100%-2rem),48rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur";
 
 export function workItemTaskPrompt(

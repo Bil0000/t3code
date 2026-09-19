@@ -610,7 +610,7 @@ export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequest
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
 
-export const IssuesToolkitRegistrationLive = McpServer.toolkit(IssuesToolkit).pipe(
+const IssuesToolkitRegistrationLive = McpServer.toolkit(IssuesToolkit).pipe(
   Layer.provide(IssuesToolkitHandlersLive),
 );
 
