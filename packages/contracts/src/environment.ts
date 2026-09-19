@@ -98,6 +98,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server exposes the issue list, detail, activity, and mutation APIs. Absent on servers from
       before the issue workspace shipped, so clients must not probe them. */
   issues: Schema.optionalKey(Schema.Boolean),
+  workItemLinks: Schema.optionalKey(Schema.Boolean),
   /** Server understands canonical inline context links plus their message context records.
       Absent on servers from before inline context shipped, which drop the records and forward
       the links as literal text -- so a client must serialize context the legacy way for them. */

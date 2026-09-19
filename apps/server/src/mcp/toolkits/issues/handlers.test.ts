@@ -4,6 +4,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type IssueDetail,
+  type PullRequestDetail,
   type OrchestrationCommand,
   type OrchestrationThreadShell,
   type ThreadIssueLink,
@@ -18,6 +19,8 @@ import * as Stream from "effect/Stream";
 import type { Tool } from "effect/unstable/ai";
 
 import * as IssueService from "../../../issue/IssueService.ts";
+import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
+import * as WorkItemLinks from "../../../workItems/WorkItemLinks.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -36,6 +39,14 @@ const issue: ThreadIssueLink = {
   url: "https://github.com/t3tools/t3code/issues/7",
   title: "Canonical issue",
 };
+const pullRequest = {
+  provider: "github",
+  repository: "t3tools/t3code",
+  number: 9,
+  url: "https://github.com/t3tools/t3code/pull/9",
+  title: "Canonical pull request",
+};
+const savedLink = { issue, pullRequest };
 
 const thread = (issues: ReadonlyArray<ThreadIssueLink> = []): OrchestrationThreadShell => ({
   id: threadId,
@@ -75,6 +86,8 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 ) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
   const detailRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+  const pullRequestDetailRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+  const savedLinkRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Ref.update(commands, (recorded) => [...recorded, command]).pipe(Effect.as({ sequence: 1 }));
   const dependencies = Layer.mergeAll(
@@ -92,6 +105,25 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       detail: (ref) =>
         Ref.update(detailRequests, (recorded) => [...recorded, ref]).pipe(
           Effect.as(issue as IssueDetail),
+        ),
+    }),
+    Layer.mock(WorkItemLinks.WorkItemLinks)({
+      list: (input) =>
+        Ref.update(savedLinkRequests, (requests) => [...requests, { list: input }]).pipe(
+          Effect.as({ links: [savedLink], truncated: false }),
+        ),
+      link: (input) =>
+        Ref.update(savedLinkRequests, (requests) => [...requests, { link: input }]).pipe(
+          Effect.as(savedLink),
+        ),
+      unlink: (input) =>
+        Ref.update(savedLinkRequests, (requests) => [...requests, { unlink: input }]),
+    }),
+    Layer.mock(PullRequestService.PullRequestService)({
+      withRoutingCredential: (_ref, operation) => operation,
+      detail: (ref) =>
+        Ref.update(pullRequestDetailRequests, (recorded) => [...recorded, ref]).pipe(
+          Effect.as(pullRequest as PullRequestDetail),
         ),
     }),
     Layer.succeed(
@@ -119,7 +151,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(dependencies),
     );
-  return { commands, detailRequests, call };
+  return { commands, detailRequests, pullRequestDetailRequests, savedLinkRequests, call };
 });
 
 describe("issue toolkit handlers", () => {
@@ -178,6 +210,45 @@ describe("issue toolkit handlers", () => {
         capability: "issues",
         threadId,
       });
+    }),
+  );
+
+  it.effect("uses the thread project to resolve saved link tools", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const refs = {
+        issue: { repository: "t3tools/t3code", number: 7, provider: "github" },
+        pullRequest: { repository: "t3tools/t3code", number: 9 },
+      };
+      expect(yield* harness.call("link_issue_to_pull_request", refs)).toEqual(savedLink);
+      expect(
+        yield* harness.call("list_issue_pull_request_links", {
+          source: { kind: "issue", ...refs.issue },
+        }),
+      ).toEqual({ links: [savedLink], truncated: false });
+      yield* harness.call("unlink_issue_from_pull_request", refs);
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([
+        { projectId, ...refs.issue },
+        { projectId, ...refs.issue },
+      ]);
+      expect(yield* Ref.get(harness.pullRequestDetailRequests)).toEqual([
+        { projectId, ...refs.pullRequest },
+      ]);
+      expect(yield* Ref.get(harness.savedLinkRequests)).toEqual([
+        {
+          link: {
+            issue: { projectId, ...refs.issue },
+            pullRequest: { projectId, ...refs.pullRequest },
+          },
+        },
+        { list: { source: { provider: "github", url: issue.url } } },
+        {
+          unlink: {
+            issue: { provider: "github", url: issue.url },
+            pullRequest: { provider: "github", url: pullRequest.url },
+          },
+        },
+      ]);
     }),
   );
 });

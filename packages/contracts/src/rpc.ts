@@ -133,6 +133,12 @@ import {
   IssueTrackerBindInput,
 } from "./issueTracking.ts";
 import {
+  WorkItemLink,
+  WorkItemLinkError,
+  WorkItemLinkInput,
+  WorkItemLinksInput,
+  WorkItemLinksResult,
+  WorkItemUnlinkInput,
   WorkItemMatchError,
   WorkItemMatchInput,
   WorkItemMatchResult,
@@ -483,6 +489,9 @@ export const WS_METHODS = {
   issueTrackersBind: "issueTrackers.bind",
   workItemsGenerateTask: "workItems.generateTask",
   workItemsFindMatches: "workItems.findMatches",
+  workItemsListLinks: "workItems.listLinks",
+  workItemsLink: "workItems.link",
+  workItemsUnlink: "workItems.unlink",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -1066,6 +1075,24 @@ const WsWorkItemsFindMatchesRpc = Rpc.make(WS_METHODS.workItemsFindMatches, {
   payload: WorkItemMatchInput,
   success: WorkItemMatchResult,
   error: Schema.Union([WorkItemMatchError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkItemsListLinksRpc = Rpc.make(WS_METHODS.workItemsListLinks, {
+  payload: WorkItemLinksInput,
+  success: WorkItemLinksResult,
+  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkItemsLinkRpc = Rpc.make(WS_METHODS.workItemsLink, {
+  payload: WorkItemLinkInput,
+  success: WorkItemLink,
+  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkItemsUnlinkRpc = Rpc.make(WS_METHODS.workItemsUnlink, {
+  payload: WorkItemUnlinkInput,
+  success: Schema.Void,
+  error: Schema.Union([WorkItemLinkError, EnvironmentAuthorizationError]),
 });
 
 /** Read when the label menu opens, for the same reason the reviewer candidates are. */
@@ -1681,6 +1708,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssueTrackersBindRpc,
   WsWorkItemsGenerateTaskRpc,
   WsWorkItemsFindMatchesRpc,
+  WsWorkItemsListLinksRpc,
+  WsWorkItemsLinkRpc,
+  WsWorkItemsUnlinkRpc,
   WsPullRequestsLabelCandidatesRpc,
   WsPullRequestsSetLabelsRpc,
   WsSourceControlLookupRepositoryRpc,

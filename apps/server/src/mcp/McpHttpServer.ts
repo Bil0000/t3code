@@ -32,6 +32,7 @@ import {
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import { IssuesToolkitHandlersLive } from "./toolkits/issues/handlers.ts";
+import * as WorkItemLinks from "../workItems/WorkItemLinks.ts";
 import { IssuesToolkit } from "./toolkits/issues/tools.ts";
 import {
   DeviceScreenshotToolkitHandlersLive,
@@ -611,7 +612,7 @@ export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequest
 );
 
 const IssuesToolkitRegistrationLive = McpServer.toolkit(IssuesToolkit).pipe(
-  Layer.provide(IssuesToolkitHandlersLive),
+  Layer.provide(IssuesToolkitHandlersLive.pipe(Layer.provide(WorkItemLinks.layer))),
 );
 
 const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(

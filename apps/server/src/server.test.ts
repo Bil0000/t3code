@@ -4960,6 +4960,29 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves saved work item link reads and idempotent unlink over websocket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const issue = { provider: "linear", url: "https://linear.app/team/issue/ABC-123" };
+      const pullRequest = { provider: "github", url: "https://github.com/team/repo/pull/7" };
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const before = yield* client[WS_METHODS.workItemsListLinks]({ source: issue });
+            yield* client[WS_METHODS.workItemsUnlink]({ issue, pullRequest });
+            const after = yield* client[WS_METHODS.workItemsListLinks]({ source: pullRequest });
+            return { before, after };
+          }),
+        ),
+      );
+      assert.deepEqual(result, {
+        before: { links: [], truncated: false },
+        after: { links: [], truncated: false },
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("advertises the usable file manager and its reveal label", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({

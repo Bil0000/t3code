@@ -160,6 +160,7 @@ import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as IssueService from "./issue/IssueService.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { resolveWorkItemTaskResult } from "./textGeneration/TextGenerationPrompts.ts";
+import * as WorkItemLinks from "./workItems/WorkItemLinks.ts";
 import {
   resolveWorkItemMatches,
   shortlistWorkItemCandidates,
@@ -666,6 +667,7 @@ const makeWsRpcLayer = (
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const issues = yield* IssueService.IssueService;
+      const workItemLinks = yield* WorkItemLinks.WorkItemLinks;
       const textGeneration = yield* TextGeneration.TextGeneration;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2980,6 +2982,18 @@ const makeWsRpcLayer = (
               .pipe(Effect.flatMap((tracker) => tracker.bind(input))),
             { "rpc.aggregate": "issues" },
           ),
+        [WS_METHODS.workItemsListLinks]: (input) =>
+          observeRpcEffect(WS_METHODS.workItemsListLinks, workItemLinks.list(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.workItemsLink]: (input) =>
+          observeRpcEffect(WS_METHODS.workItemsLink, workItemLinks.link(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.workItemsUnlink]: (input) =>
+          observeRpcEffect(WS_METHODS.workItemsUnlink, workItemLinks.unlink(input), {
+            "rpc.aggregate": "issues",
+          }),
         [WS_METHODS.workItemsGenerateTask]: (input) =>
           observeRpcEffect(
             WS_METHODS.workItemsGenerateTask,
@@ -4167,6 +4181,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+              Layer.provide(WorkItemLinks.layer),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),

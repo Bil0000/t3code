@@ -69,6 +69,16 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("separates saved work item link reads from writes", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.workItemsListLinks)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.workItemsLink)).toBe(AuthOrchestrationOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.workItemsUnlink)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(
