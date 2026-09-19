@@ -211,11 +211,11 @@ describe("comment links", () => {
         path: "src/app.ts",
         reviewState: null,
       };
-      const reply = { ...comment, id: "6", body: "Updated." };
+      const reply = { ...comment, id: "6", body: "Updated.", createdAt: "2026-07-03T00:00:00Z" };
       const provider = yield* make.pipe(
         Effect.provide(
           Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({
-            listNotes: () => Effect.succeed({ comments: [comment], truncated: false }),
+            listNotes: () => Effect.succeed({ comments: [reply], truncated: true }),
             listCommits: () => Effect.succeed([]),
             listDiscussions: () =>
               Effect.succeed({

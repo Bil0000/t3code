@@ -216,11 +216,13 @@ export const make = Effect.gen(function* () {
           }
           return {
             reactions: awards.reactions,
-            comments: [...comments.values()].map((comment) => ({
-              ...comment,
-              url: commentUrl(input, comment.id),
-              reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
-            })),
+            comments: [...comments.values()]
+              .map((comment) => ({
+                ...comment,
+                url: commentUrl(input, comment.id),
+                reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+              }))
+              .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
             commentCount: comments.size,
             commentsTruncated: notes.truncated || discussions.truncated,
             reviewThreads: discussions.threads.map((thread) => ({
