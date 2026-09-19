@@ -124,14 +124,15 @@ export const withPullRequestAttachment = Effect.fn("PullRequestAttachments.read"
     yield* fs.writeFile(filePath, data, { mode: 0o600 });
     return { filePath, data };
   }).pipe(
-    Effect.catchTag("PlatformError", () =>
-      Effect.fail(
-        new PullRequestOperationError({
-          operation: "uploadAttachment",
-          detail: "The attachment could not be read. Upload it again.",
-        }),
-      ),
-    ),
+    Effect.catchTags({
+      PlatformError: () =>
+        Effect.fail(
+          new PullRequestOperationError({
+            operation: "uploadAttachment",
+            detail: "The attachment could not be read. Upload it again.",
+          }),
+        ),
+    }),
   );
   return yield* Effect.scoped(Effect.flatMap(prepared, use));
 });

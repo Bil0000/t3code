@@ -701,17 +701,18 @@ export const make = Effect.gen(function* () {
           });
         }),
       ).pipe(
-        Effect.catchTag("PlatformError", (cause) =>
-          Effect.fail(
-            new AzureDevOpsCli.AzureDevOpsCommandFailedError({
-              operation: "execute",
-              command: "az",
-              cwd: input.cwd,
-              argumentCount: 0,
-              cause,
-            }),
-          ),
-        ),
+        Effect.catchTags({
+          PlatformError: (cause) =>
+            Effect.fail(
+              new AzureDevOpsCli.AzureDevOpsCommandFailedError({
+                operation: "execute",
+                command: "az",
+                cwd: input.cwd,
+                argumentCount: 0,
+                cause,
+              }),
+            ),
+        }),
       );
     }),
 
