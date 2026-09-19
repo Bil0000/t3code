@@ -503,9 +503,9 @@ function withRateLimitBackoff(
   options?: { readonly viewerAllowsPause: boolean },
 ): PullRequestProviderApi {
   const key = { provider: api.kind, host };
-  const protect = <A>(
+  const protect = <A, R>(
     operation: string,
-    effect: Effect.Effect<A, PullRequestProviderError>,
+    effect: Effect.Effect<A, PullRequestProviderError, R>,
     allowPaused: boolean,
   ) =>
     limits.check(key, allowPaused ? { allowPaused: true } : undefined).pipe(
@@ -537,9 +537,9 @@ function withRateLimitBackoff(
       ),
     );
   const wrap =
-    <Args extends ReadonlyArray<unknown>, A>(
+    <Args extends ReadonlyArray<unknown>, A, R>(
       operation: string,
-      call: (...args: Args) => Effect.Effect<A, PullRequestProviderError>,
+      call: (...args: Args) => Effect.Effect<A, PullRequestProviderError, R>,
       allowPaused = false,
     ) =>
     (...args: Args) =>
@@ -616,7 +616,9 @@ function withRateLimitBackoff(
           updateChangeRequest: interactive("updateChangeRequest", api.updateChangeRequest),
         }),
     comment: interactive("comment", api.comment),
-    ...(api.readAttachment === undefined ? {} : { readAttachment: api.readAttachment }),
+    ...(api.readAttachment === undefined
+      ? {}
+      : { readAttachment: wrap("readAttachment", api.readAttachment) }),
     ...(api.uploadAttachment === undefined
       ? {}
       : { uploadAttachment: interactive("uploadAttachment", api.uploadAttachment) }),

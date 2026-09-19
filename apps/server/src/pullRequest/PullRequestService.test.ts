@@ -7035,6 +7035,67 @@ it.effect("uploads attachments without posting a comment and checks provider lim
   }),
 );
 
+it.effect("pauses attachment reads after host rate limits and resumes them when quota resets", () =>
+  Effect.gen(function* () {
+    for (const source of ["attachment", "action"] as const) {
+      let reads = 0;
+      let limited = true;
+      const rateLimit = new PullRequestProviderError({
+        provider: "github",
+        operation: "readAttachment",
+        reason: "rate-limited",
+        detail: "GitHub API rate limit exceeded.",
+      });
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            runAction: () => Effect.fail(rateLimit),
+            readAttachment: (input) =>
+              Effect.gen(function* () {
+                reads++;
+                if (limited) return yield* rateLimit;
+                return HttpClientResponse.fromWeb(
+                  HttpClientRequest.get(input.url),
+                  new Response("image"),
+                );
+              }),
+          }),
+        ],
+      });
+      const input = {
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        host: "github.com",
+        number: 1,
+        provider: "github" as const,
+        url: "https://github.com/acme/web/blob/main/shot.png",
+        headers: {},
+      };
+      yield* Effect.flip(
+        source === "attachment"
+          ? service.readAttachment(input)
+          : service.runAction({ ...input, action: "close" }),
+      );
+      limited = false;
+      const paused = yield* service.readAttachment(input).pipe(Effect.flip);
+      assert.include(paused.message, "paused");
+      assert.strictEqual(reads, source === "attachment" ? 1 : 0);
+      yield* TestClock.adjust("30 seconds");
+      assert.strictEqual((yield* service.readAttachment(input)).status, 200);
+      assert.strictEqual(reads, source === "attachment" ? 2 : 1);
+    }
+  }).pipe(
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("Provider owns read")),
+    ),
+    Effect.scoped,
+  ),
+);
+
 it.effect("validates private attachment provider and account before provider reads", () =>
   Effect.gen(function* () {
     const received: string[] = [];
