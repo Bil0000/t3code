@@ -8,11 +8,14 @@ import { MinusIcon, PlusIcon } from "lucide-react";
 import { useState, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
 
 import { findProjectOnChangeRequestHost, parseChangeRequestUrl } from "~/lib/openPullRequestLink";
+import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 
 import { pullRequestListLines } from "../pullRequest/pullRequestListLines";
 import { linkedPullRequestSnapshotStatus, prStatusIndicator } from "../ThreadStatusIndicators";
+import { Button } from "../ui/button";
 import { ThreadDetailsPrRow } from "./ThreadDetailsPrRow";
+import { THREAD_DETAILS_PANEL_ROW_CLASS } from "./threadDetailsPanelStyles";
 
 function ThreadDetailsPrLinkRow({
   environmentId,
@@ -85,10 +88,14 @@ export function ThreadDetailsPrRows({
             />
           ))
         : null}
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => setExpanded(!expanded)}
-        className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg border border-transparent px-2.5 text-left text-[13px] font-medium text-muted-foreground/70 hover:bg-black/[0.055] hover:text-foreground/80 dark:hover:bg-white/[0.075]"
+        className={cn(
+          THREAD_DETAILS_PANEL_ROW_CLASS,
+          "w-full text-muted-foreground/70 hover:text-foreground/80 active:scale-100",
+        )}
       >
         {expanded ? (
           <MinusIcon aria-hidden className="-mx-0.5 size-4 shrink-0" />
@@ -96,7 +103,7 @@ export function ThreadDetailsPrRows({
           <PlusIcon aria-hidden className="-mx-0.5 size-4 shrink-0" />
         )}
         {expanded ? "Show less" : `Show ${rest.length} more`}
-      </button>
+      </Button>
     </>
   );
 }
