@@ -36,6 +36,7 @@ vi.mock("../workItems/WorkItemMatches", () => ({
   WorkItemMatchButton: () => null,
   WorkItemMatchRows: () => null,
 }));
+vi.mock("../workItems/SavedWorkItemLinks", () => ({ SavedWorkItemLinks: () => null }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 vi.mock("../ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => children,

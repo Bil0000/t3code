@@ -31,6 +31,7 @@ import {
   WorkItemMatchButton,
   WorkItemMatchRows,
 } from "../workItems/WorkItemMatches";
+import { SavedWorkItemLinks } from "../workItems/SavedWorkItemLinks";
 import { Button } from "../ui/button";
 import { PullRequestEditButton } from "./PullRequestEditButton";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -887,6 +888,10 @@ export function PullRequestSummaryTab({
             />
           </div>
         )}
+        <SavedWorkItemLinks
+          environmentId={environmentId}
+          source={{ kind: "pull-request", reference, provider: detail.provider, url: detail.url }}
+        />
       </Section>
 
       <Section key={`checks:${detail.url}`} title="Checks" defaultOpen={false}>

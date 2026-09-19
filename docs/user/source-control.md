@@ -194,6 +194,19 @@ current thread. The thread header's **Linked issues** button opens each issue or
 An issue's **Linked threads** section takes you back to those conversations, where you can follow
 their linked pull requests. These controls are available on web and desktop.
 
+### Link issues and pull requests
+
+Use **Link pull request** in an issue's related work, or **Link issue** in a pull request's related
+work. A saved link appears on both items. Open or unlink it from either side.
+
+These links are saved in T3 Code on the connected environment. They do not change the host's PR
+text or close an issue. Host-reported links remain visible separately. Use **Refresh saved links**
+to pick up changes made by an agent or another client.
+
+Agents can use `link_issue_to_pull_request`, `unlink_issue_from_pull_request`, and
+`list_issue_pull_request_links` for the current thread's project. Agent tools resolve the items
+through the host; the UI can remove a saved link without a host request.
+
 ## Linked pull requests
 
 A thread can hold several pull requests, including reviews from another repository on the same host.

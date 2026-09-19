@@ -58,6 +58,7 @@ import {
   WorkItemMatchButton,
   WorkItemMatchRows,
 } from "../workItems/WorkItemMatches";
+import { SavedWorkItemLinks } from "../workItems/SavedWorkItemLinks";
 
 export function IssueEditor({
   environmentId,
@@ -540,6 +541,10 @@ export function IssueSummaryTab({
             />
           </div>
         )}
+        <SavedWorkItemLinks
+          environmentId={environmentId}
+          source={{ kind: "issue", reference, provider: detail.provider, url: detail.url }}
+        />
       </SummarySection>
 
       {linkedThreads.length > 0 ? (
