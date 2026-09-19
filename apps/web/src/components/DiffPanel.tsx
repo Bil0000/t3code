@@ -43,6 +43,7 @@ import {
   buildFileDiffIdentityKey,
   getDiffCollapseIconClassName,
   getDiffLineStat,
+  getDiffPatchFileIndexes,
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
@@ -360,17 +361,15 @@ export default function DiffPanel({
     : diffIgnoreWhitespace
       ? "Show whitespace changes before staging."
       : undefined;
-  const patchFileIndexes = useMemo(() => {
-    const indexes = new Map<string, number>();
-    if (selectedGitSource?.kind !== "staged" && selectedGitSource?.kind !== "unstaged")
-      return indexes;
-    selectedGitSource.diff.split(/(?=^diff --git )/m).forEach((patch, index) => {
-      const parsed = getRenderablePatch(patch);
-      if (parsed?.kind === "files" && parsed.files[0])
-        indexes.set(resolveFileDiffPath(parsed.files[0]), index);
-    });
-    return indexes;
-  }, [selectedGitSource]);
+  const patchFileIndexes = useMemo(
+    () =>
+      getDiffPatchFileIndexes(
+        selectedGitSource?.kind === "staged" || selectedGitSource?.kind === "unstaged"
+          ? selectedGitSource.diff
+          : "",
+      ),
+    [selectedGitSource],
+  );
   const applyPatch = useCallback(
     async (fileDiff: FileDiffMetadata, hunkIndex?: number) => {
       const preview = branchDiffPreview.data;
@@ -382,7 +381,7 @@ export default function DiffPanel({
         (selectedGitScope !== "staged" && selectedGitScope !== "unstaged")
       )
         return;
-      const fileIndex = patchFileIndexes.get(resolveFileDiffPath(fileDiff));
+      const fileIndex = patchFileIndexes.get(buildFileDiffIdentityKey(fileDiff));
       if (fileIndex === undefined) return;
       setApplyingPatch(true);
       try {
