@@ -79,6 +79,7 @@ export interface ThreadFeedActivity {
     | "eye"
     | "globe"
     | "hammer"
+    | "lock"
     | "message"
     | "warning"
     | "wrench"
@@ -417,6 +418,7 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "web_search":
       return "globe";
     case "approval_request":
+      return item.requestKind === "permission" ? "lock" : "message";
     case "user_input_request":
     case "user_message":
     case "assistant_message":
