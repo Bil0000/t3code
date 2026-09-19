@@ -76,7 +76,7 @@ function IssueRowImpl({
           <span
             className={cn(
               "flex items-center",
-              onToggleSelection && "group-hover/row:opacity-0 group-focus-within/row:opacity-0",
+              onToggleSelection && "group-hover/row:opacity-0",
               selectionChecked && "opacity-0",
             )}
           >
@@ -164,7 +164,7 @@ function IssueRowImpl({
             "absolute top-1/2 left-3 z-10 -translate-y-1/2 transition-opacity",
             selectionChecked
               ? "opacity-100"
-              : "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100",
+              : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
           )}
           onCheckedChange={() => onToggleSelection(entry)}
         />

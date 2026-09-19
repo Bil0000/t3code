@@ -19,6 +19,7 @@ import {
   BookOpenIcon,
   CircleCheckIcon,
   CircleDotIcon,
+  CircleSlashIcon,
   ExternalLinkIcon,
   HammerIcon,
   LinkIcon,
@@ -28,8 +29,6 @@ import {
   PaperclipIcon,
   PencilLineIcon,
   RefreshCwIcon,
-  TagIcon,
-  UserPlusIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -78,7 +77,7 @@ import {
   type IssueHandoffSource,
 } from "./issueDetail.logic";
 import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
-import { IssueSummaryTab } from "./IssueSummaryTab";
+import { IssueEditor, IssueSummaryTab } from "./IssueSummaryTab";
 import { IssuesUnavailableState } from "./IssuesUnavailableState";
 import { IssueTimelineTab } from "./IssueTimelineTab";
 import { getIssueProviderPresentation, resolveIssueState } from "./issuePresentation";
@@ -204,9 +203,7 @@ export function IssueDetailPanel({
   const issueKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
   const [timelineOrder, setTimelineOrder] = useState<"oldest" | "newest">("newest");
-  // Both live here rather than in the tab that shows them, because the menu that opens them is
-  // in this header and the summary is a tab away when it is pressed.
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState<"title" | "description" | null>(null);
   const [openPicker, setOpenPicker] = useState<"labels" | "assignees" | null>(null);
   const mountedTabs = useMountedTabs(tab);
   const [chromeCondensed, setChromeCondensed] = useState(false);
@@ -452,11 +449,6 @@ export function IssueDetailPanel({
     );
   };
 
-  /**
-   * Hands the issue over as a task in a composer, and leaves it there to be read before it is
-   * sent. Nothing is checked out and no code is touched: an issue is a description of work, not
-   * the work, and which branch to do it on is the thread's question rather than this panel's.
-   */
   const startHandoff = async (
     kind: string,
     build: (source: IssueHandoffSource) => IssueHandoff,
@@ -477,13 +469,16 @@ export function IssueDetailPanel({
       task.prompt.length > 0
         ? "The task is in the composer — read it over, then send."
         : "The issue is in the composer — type your message, then send.";
-    if (inPlaceDraft !== null) {
+    if (kind !== "solve" && inPlaceDraft !== null) {
       writeHandoff(inPlaceDraft, task);
       toastManager.add({ type: "success", title: "Added to this thread", description });
       return;
     }
     setHandoff(kind);
-    const opened = await newThread(scopeProjectRef(environmentId, detail.projectId)).then(
+    const opened = await newThread(
+      scopeProjectRef(environmentId, detail.projectId),
+      kind === "solve" ? { envMode: "worktree", branch: null, worktreePath: null } : undefined,
+    ).then(
       (session) => session,
       () => null,
     );
@@ -507,26 +502,10 @@ export function IssueDetailPanel({
     detail?.capabilities.actions.includes(action) === true &&
     detail.viewerPermissions.actions.includes(action);
   const canEdit = detail?.capabilities.edit === true && detail.viewerPermissions.edit;
-  // A host that takes labels but will not say which a repository has has nothing to open a picker
-  // on, so the menu item that opens one goes with it.
-  const canLabel =
-    detail?.capabilities.labels === true &&
-    detail.capabilities.listLabelCandidates &&
-    detail.viewerPermissions.labels;
-  const canAssign =
-    detail?.capabilities.assignees === true &&
-    detail.capabilities.listAssigneeCandidates &&
-    detail.viewerPermissions.assignees;
   const closeReasons = detail?.capabilities.closeReasons ?? [];
   const statePresentation = detail
     ? resolveIssueState({ state: detail.state, stateReason: detail.stateReason })
     : null;
-  // The pickers live in the summary's meta row, so the menu items that open them bring the reader
-  // to the tab holding them first: a popup anchored to a hidden row opens nowhere.
-  const openPickerOnSummary = (picker: "labels" | "assignees") => {
-    setTab("summary");
-    setOpenPicker(picker);
-  };
   // Every hand-off quotes the conversation, and until the activity read lands there is none to
   // quote — an agent handed the issue mid-read gets the argument with the argument missing, and
   // the read that lands afterwards cannot amend a composer already written. So the controls wait
@@ -537,9 +516,7 @@ export function IssueDetailPanel({
     handoff === kind ? "Opening..." : activityPending ? `${label} (loading comments)` : label;
   const solveDescription = activityPending
     ? "Waiting for the issue's comments, which go with the task"
-    : inPlaceDraft === null
-      ? "Opens a thread on this project holding the task"
-      : "Puts the task in this thread's composer";
+    : "Opens a thread for this issue in a worktree";
 
   const markdownThreadRef =
     handoffTarget.kind === "existing-thread" && typeof handoffTarget.draftId !== "string"
@@ -709,34 +686,6 @@ export function IssueDetailPanel({
                       {handoffLabel("attach", "Add to composer")}
                     </MenuItem>
                   )}
-                  {canEdit || canLabel || canAssign ? (
-                    <>
-                      <MenuSeparator />
-                      {canEdit ? (
-                        <MenuItem
-                          onClick={() => {
-                            setTab("summary");
-                            setEditing(true);
-                          }}
-                        >
-                          <PencilLineIcon className="size-3.5" />
-                          Edit title and description
-                        </MenuItem>
-                      ) : null}
-                      {canLabel ? (
-                        <MenuItem onClick={() => openPickerOnSummary("labels")}>
-                          <TagIcon className="size-3.5" />
-                          Labels
-                        </MenuItem>
-                      ) : null}
-                      {canAssign ? (
-                        <MenuItem onClick={() => openPickerOnSummary("assignees")}>
-                          <UserPlusIcon className="size-3.5" />
-                          Assignees
-                        </MenuItem>
-                      ) : null}
-                    </>
-                  ) : null}
                   <MenuSeparator />
                   <MenuItem onClick={() => openLinkInBrowser(detail.url)}>
                     <ArrowUpRightIcon className="size-3.5" />
@@ -772,17 +721,19 @@ export function IssueDetailPanel({
                         closeReasons.map((reason) => (
                           <MenuItem
                             key={reason}
-                            variant="destructive"
                             disabled={actionPending}
                             onClick={() => setConfirmClose({ reference, reason })}
                           >
-                            <CircleCheckIcon className="size-3.5" />
+                            {reason === "completed" ? (
+                              <CircleCheckIcon className="size-3.5 text-violet-600 dark:text-violet-300/90" />
+                            ) : (
+                              <CircleSlashIcon className="size-3.5 text-zinc-500 dark:text-zinc-400/80" />
+                            )}
                             {CLOSE_REASON_LABELS[reason]}
                           </MenuItem>
                         ))
                       ) : (
                         <MenuItem
-                          variant="destructive"
                           disabled={actionPending}
                           onClick={() => setConfirmClose({ reference, reason: null })}
                         >
@@ -807,7 +758,7 @@ export function IssueDetailPanel({
               </Menu>
               {/* Handing the issue to an agent is the reason to open one at all, so it is a
                   button of its own wherever the panel is — beside a thread as much as on the
-                  page. The label goes once the chrome condenses; the button itself does not. */}
+                  page. */}
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -826,7 +777,7 @@ export function IssueDetailPanel({
                   ) : (
                     <>
                       <HammerIcon className="size-3" />
-                      <span className={cn(condensed && "sr-only")}>Solve</span>
+                      <span>Solve</span>
                     </>
                   )}
                 </TooltipTrigger>
@@ -857,14 +808,12 @@ export function IssueDetailPanel({
             {detail && statePresentation ? (
               <div className="col-span-2 min-w-0 px-4 pb-2 pt-1">
                 <SourceControlMetaLine className="min-w-0 text-xs text-muted-foreground">
-                  <Badge
-                    variant="outline"
-                    className={cn("h-5 gap-1 rounded px-1.5", statePresentation.toneClassName)}
-                  >
-                    <statePresentation.Icon aria-hidden className="size-3" />
-                    {statePresentation.label}
-                  </Badge>
                   <SourceControlActorLabel actor={detail.author} className="font-medium" />
+                  {detail.assignees.length > 0 ? (
+                    <span className="truncate">
+                      Assigned to {detail.assignees.map((assignee) => assignee.login).join(", ")}
+                    </span>
+                  ) : null}
                   <span className="shrink-0">
                     updated {formatRelativeTimeLabel(detail.updatedAt)}
                   </span>
@@ -898,18 +847,28 @@ export function IssueDetailPanel({
             {detail && statePresentation ? (
               <div className="col-span-2 mt-1 min-w-0 px-4 pb-4">
                 <div className="group flex items-start gap-1">
-                  <h1 className="min-w-0 flex-1 text-base font-semibold leading-snug">
-                    {detail.title}
-                  </h1>
-                  {canEdit ? (
+                  {editing === "title" ? (
+                    <IssueEditor
+                      key={detail.url}
+                      field="title"
+                      environmentId={environmentId}
+                      detail={detail}
+                      onDone={() => setEditing(null)}
+                      onSaved={refreshDetail}
+                    />
+                  ) : (
+                    <h1 className="min-w-0 flex-1 text-base font-semibold leading-snug">
+                      {detail.title}
+                    </h1>
+                  )}
+                  {canEdit && editing !== "title" ? (
                     <Button
                       size="icon-xs"
                       variant="ghost"
                       aria-label="Edit issue title"
-                      className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                      className="shrink-0 text-muted-foreground"
                       onClick={() => {
-                        setTab("summary");
-                        setEditing(true);
+                        setEditing("title");
                       }}
                     >
                       <PencilLineIcon className="size-3" />
@@ -1042,8 +1001,8 @@ export function IssueDetailPanel({
                   loadingMoreComments={loadingMoreComments}
                   activityPending={activityPending}
                   activityError={activityError}
-                  editing={editing}
-                  onEditingChange={setEditing}
+                  editing={editing === "description"}
+                  onEditingChange={(value) => setEditing(value ? "description" : null)}
                   openPicker={openPicker}
                   onOpenPickerChange={setOpenPicker}
                   // The section's own button knows only about a hand-off already under way, so
@@ -1115,7 +1074,7 @@ export function IssueDetailPanel({
             </AlertDialogClose>
             <Button
               size="sm"
-              variant="destructive"
+              variant="outline"
               disabled={actionPending}
               onClick={() => {
                 const pending = confirmClose;
@@ -1124,7 +1083,7 @@ export function IssueDetailPanel({
                 void perform("close", pending.reference, pending.reason ?? undefined);
               }}
             >
-              Close issue
+              {confirmClose?.reason ? CLOSE_REASON_LABELS[confirmClose.reason] : "Close issue"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

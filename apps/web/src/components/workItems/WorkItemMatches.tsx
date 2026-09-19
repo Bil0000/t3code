@@ -5,7 +5,7 @@ import type {
   WorkItemMatchInput,
   WorkItemMatchRelationship,
 } from "@t3tools/contracts";
-import { ArrowUpRightIcon, LinkIcon, LoaderIcon, SparklesIcon } from "lucide-react";
+import { ArrowUpRightIcon, LinkIcon, LoaderIcon, SearchIcon } from "lucide-react";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { findWorkItemMatches } from "~/state/workItems";
@@ -31,9 +31,9 @@ export function WorkItemMatchButton({
       {busy ? (
         <LoaderIcon aria-hidden className="size-3 animate-spin" />
       ) : (
-        <SparklesIcon aria-hidden className="size-3" />
+        <SearchIcon aria-hidden className="size-3" />
       )}
-      {busy ? "Finding..." : loaded ? "Refresh with AI" : "Find with AI"}
+      {busy ? "Finding..." : loaded ? "Refresh" : "Find matches"}
     </Button>
   );
 }
@@ -57,7 +57,7 @@ export function WorkItemMatchRows({
   return (
     <div className="space-y-1">
       <p className="px-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        Suggested by AI
+        Suggestions
       </p>
       {matches.map((match) => (
         <div

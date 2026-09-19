@@ -6,6 +6,8 @@ import type {
   IssueRef,
   WorkItemMatch,
 } from "@t3tools/contracts";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowDownUpIcon,
   MessageSquareIcon,
@@ -15,14 +17,17 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { issueEnvironment } from "~/state/issues";
+import { useThreadShellsForProjectRefs } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { PullRequestMarkdownEditor as SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
+import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
+import { EMPTY_COMPOSER_CONTEXT_RECORDS } from "../composerContextPresentation";
 import {
   SourceControlActorLabel,
   SourceControlActorAvatar,
@@ -54,39 +59,38 @@ import {
   WorkItemMatchRows,
 } from "../workItems/WorkItemMatches";
 
-/**
- * Rewriting the issue where it is read, rather than in a dialog over the top of it: what the
- * description says in context is most of what an edit is about. The fields open on what the host
- * currently holds and are abandoned wholesale on cancel — half an edit is not worth keeping.
- */
-function IssueEditor({
+export function IssueEditor({
   environmentId,
   detail,
+  field,
   onDone,
   onSaved,
 }: {
   environmentId: EnvironmentId;
   detail: IssueDetailView;
+  field: "title" | "description";
   onDone: () => void;
   onSaved: () => void;
 }) {
-  const [initialTitle] = useState(detail.title);
-  const [initialBody] = useState(detail.body);
-  const [title, setTitle] = useState(initialTitle);
+  const [initialValue] = useState(field === "title" ? detail.title : detail.body);
+  const [draft, setDraft] = useState(initialValue);
+  const [cursor, setCursor] = useState(initialValue.length);
+  const editorRef = useRef<ComposerPromptEditorHandle>(null);
   const [saving, setSaving] = useState(false);
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
 
-  const trimmedTitle = title.trim();
-  const changedTitle = trimmedTitle !== initialTitle;
+  useEffect(() => {
+    if (field === "description") editorRef.current?.focusAtEnd();
+  }, [field]);
 
-  const save = async (body: string) => {
-    const changedBody = body !== initialBody;
+  const save = async (value: string) => {
+    const next = field === "title" ? value.trim() : value;
     if (saving) return;
-    if (trimmedTitle.length === 0) {
+    if (field === "title" && next.length === 0) {
       toastManager.add({ type: "error", title: "Enter an issue title" });
       return;
     }
-    if (!changedTitle && !changedBody) {
+    if (next === initialValue) {
       onDone();
       return;
     }
@@ -97,9 +101,7 @@ function IssueEditor({
         projectId: detail.projectId,
         repository: detail.repository,
         number: detail.number,
-        // Only what changed: a rename should not resend a description nobody edited.
-        ...(changedTitle ? { title: trimmedTitle } : {}),
-        ...(changedBody ? { body } : {}),
+        ...(field === "title" ? { title: next } : { body: next }),
       },
     });
     setSaving(false);
@@ -118,25 +120,86 @@ function IssueEditor({
     onSaved();
   };
 
+  if (field === "title") {
+    return (
+      <div className="flex min-w-0 flex-1 flex-wrap gap-2">
+        <Input
+          autoFocus
+          disabled={saving}
+          className="min-w-0 flex-1"
+          value={draft}
+          aria-label="Issue title"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !saving) {
+              event.preventDefault();
+              event.stopPropagation();
+              onDone();
+            }
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              event.stopPropagation();
+              void save(draft);
+            }
+          }}
+        />
+        <Button size="xs" variant="outline" disabled={saving} onClick={() => void save(draft)}>
+          {saving ? "Saving..." : "Save"}
+        </Button>
+        <Button size="xs" variant="ghost" disabled={saving} onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+    );
+  }
   return (
-    <div className="space-y-2">
-      <Input
+    <div
+      className="space-y-2"
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+        if (event.key === "Escape" && !saving) {
+          event.preventDefault();
+          event.stopPropagation();
+          onDone();
+        }
+      }}
+    >
+      <ComposerPromptEditor
+        value={draft}
+        cursor={cursor}
+        editorRef={editorRef}
+        richTextEnabled
+        contextRecords={EMPTY_COMPOSER_CONTEXT_RECORDS}
+        skills={[]}
         disabled={saving}
-        value={title}
-        aria-label="Issue title"
-        onChange={(event) => setTitle(event.target.value)}
-      />
-      <SourceControlMarkdownEditor
-        allowEmpty
-        value={initialBody}
-        cwd={detail.workspaceRoot}
-        environmentId={environmentId}
         label="Issue description"
         placeholder="Describe the issue"
-        saving={saving}
-        onSave={(body) => void save(body)}
-        onCancel={onDone}
+        containerClassName="rounded-lg border border-border/60 p-3"
+        className="min-h-36 max-h-96"
+        onCommandKeyDown={(key, event) => {
+          if (
+            key !== "Enter" ||
+            (!event.metaKey && !event.ctrlKey) ||
+            event.shiftKey ||
+            event.altKey
+          )
+            return false;
+          if (!saving) void save(draft);
+          return true;
+        }}
+        onChange={(value, nextCursor) => {
+          setDraft(value);
+          setCursor(nextCursor);
+        }}
       />
+      <div className="flex justify-end gap-2">
+        <Button size="xs" variant="ghost" disabled={saving} onClick={onDone}>
+          Cancel
+        </Button>
+        <Button size="xs" variant="outline" disabled={saving} onClick={() => void save(draft)}>
+          {saving ? "Saving..." : "Save"}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -200,6 +263,24 @@ export function IssueSummaryTab({
   onLoadMoreComments: () => void;
   loadingMoreComments: boolean;
 }) {
+  const navigate = useNavigate();
+  const projectRefs = useMemo(
+    () => [scopeProjectRef(environmentId, detail.projectId)],
+    [environmentId, detail.projectId],
+  );
+  const threads = useThreadShellsForProjectRefs(projectRefs);
+  const linkedThreads = threads.filter(
+    (thread) =>
+      thread.environmentId === environmentId &&
+      thread.projectId === detail.projectId &&
+      (thread.issues ?? []).some(
+        (issue) =>
+          issue.provider === detail.provider &&
+          issue.repository.toLowerCase() === detail.repository.toLowerCase() &&
+          issue.number === detail.number &&
+          issue.url === detail.url,
+      ),
+  );
   // Keyed by the issue, so opening another one starts at the end of its conversation rather than
   // wherever the last one had been read back to.
   const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
@@ -351,6 +432,7 @@ export function IssueSummaryTab({
               key={detail.url}
               environmentId={environmentId}
               detail={detail}
+              field="description"
               onDone={() => onEditingChange(false)}
               onSaved={onRefresh}
             />
@@ -366,7 +448,7 @@ export function IssueSummaryTab({
                 <Button
                   size="icon-xs"
                   variant="ghost"
-                  className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                  className="shrink-0 text-muted-foreground"
                   aria-label="Edit description"
                   onClick={() => onEditingChange(true)}
                 >
@@ -459,6 +541,33 @@ export function IssueSummaryTab({
           </div>
         )}
       </SummarySection>
+
+      {linkedThreads.length > 0 ? (
+        <SummarySection title="Linked threads" count={linkedThreads.length}>
+          <div className="space-y-0.5">
+            {linkedThreads.map((thread) => (
+              <button
+                key={`${thread.environmentId}:${thread.id}`}
+                type="button"
+                aria-label={`Open thread ${thread.title}`}
+                onClick={() =>
+                  void navigate({
+                    to: "/$environmentId/$threadId",
+                    params: { environmentId: thread.environmentId, threadId: thread.id },
+                  })
+                }
+                className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
+              >
+                <MessageSquareIcon
+                  aria-hidden
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                />
+                <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+              </button>
+            ))}
+          </div>
+        </SummarySection>
+      ) : null}
 
       <SummarySection
         title="Possible duplicate issues"

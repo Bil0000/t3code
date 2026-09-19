@@ -1,4 +1,5 @@
 import type { EnvironmentId, IssueActivity, IssueDetail } from "@t3tools/contracts";
+import type { DraftId } from "~/composerDraftStore";
 import { Cause } from "effect";
 import { IssueSummaryTab } from "./IssueSummaryTab";
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
@@ -13,6 +14,7 @@ const commands = vi.hoisted(() => ({
   action: vi.fn(),
   refresh: vi.fn(),
   commentsPage: vi.fn(),
+  newThread: vi.fn(),
 }));
 afterEach(() => {
   vi.clearAllMocks();
@@ -41,7 +43,7 @@ vi.mock("react/compiler-runtime", async () => {
 vi.mock("~/composerDraftStore", () => ({
   useComposerDraftStore: { getState: () => ({}) },
 }));
-vi.mock("~/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
+vi.mock("~/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => commands.newThread }));
 vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => undefined }));
 vi.mock("~/localApi", () => ({ readLocalApi: () => null }));
 vi.mock("~/state/issues", () => ({
@@ -163,7 +165,10 @@ function textContent(node: unknown): string {
   return isValidElement<{ children?: ReactNode }>(node) ? textContent(node.props.children) : "";
 }
 
-function renderPanel(chromeVariant?: "full" | "collapse") {
+function renderPanel(
+  chromeVariant?: "full" | "collapse",
+  handoffTarget?: Parameters<typeof IssueDetailPanel>[0]["handoffTarget"],
+) {
   hooks.beginRender();
   return IssueDetailPanel({
     environmentId: "environment-1" as EnvironmentId,
@@ -172,7 +177,7 @@ function renderPanel(chromeVariant?: "full" | "collapse") {
       repository: "acme/project",
       number: 42,
     },
-    handoffTarget: { kind: "new-thread" },
+    handoffTarget: handoffTarget ?? { kind: "new-thread" },
     ...(chromeVariant ? { chromeVariant } : {}),
   });
 }
@@ -294,7 +299,7 @@ describe("IssueDetailPanel provider labels", () => {
       panel,
       (element) =>
         element.type === TooltipPopup &&
-        textContent(element.props.children) === "Opens a thread on this project holding the task",
+        textContent(element.props.children) === "Opens a thread for this issue in a worktree",
     );
     const markup = renderToStaticMarkup(cloneElement(menu!, { open: true }));
 
@@ -308,6 +313,28 @@ describe("IssueDetailPanel provider labels", () => {
     // here, while the MenuItem assertion above checks the child mounted in that root.
     expect(markup).toContain('aria-haspopup="menu"');
   });
+});
+
+it("opens Solve in a worktree even beside a thread for the same project", async () => {
+  hooks.reset();
+  commands.newThread.mockResolvedValueOnce(null);
+  const panel = renderPanel(undefined, {
+    kind: "existing-thread",
+    projectRef: { environmentId: "environment-1" as EnvironmentId, projectId: detail.projectId },
+    draftId: "existing-draft" as DraftId,
+  });
+  const trigger = visitElements(
+    panel,
+    (element) =>
+      element.type === TooltipTrigger && textContent(element.props.children).includes("Solve"),
+  );
+  const button = visitElements(trigger, (element) => element.type === Button);
+  (button!.props.onClick as () => void)();
+  expect(commands.newThread).toHaveBeenCalledWith(
+    { environmentId: "environment-1", projectId: detail.projectId },
+    { envMode: "worktree", branch: null, worktreePath: null },
+  );
+  await Promise.resolve();
 });
 
 it.each(["comment-failed", "action-failed", "success"])(
