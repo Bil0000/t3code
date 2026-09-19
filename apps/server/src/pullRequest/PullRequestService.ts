@@ -500,7 +500,7 @@ function withRateLimitBackoff(
   api: PullRequestProviderApi,
   host: string,
   limits: SourceControlRateLimit.SourceControlRateLimit["Service"],
-  options?: { readonly viewerAllowsPause: boolean },
+  options?: { readonly viewerAllowsPause?: boolean; readonly preflightAllowsPause?: boolean },
 ): PullRequestProviderApi {
   const key = { provider: api.kind, host };
   const protect = <A, R>(
@@ -554,7 +554,13 @@ function withRateLimitBackoff(
     capabilities: api.capabilities,
     ...(api.getCapabilities === undefined
       ? {}
-      : { getCapabilities: wrap("getCapabilities", api.getCapabilities) }),
+      : {
+          getCapabilities: wrap(
+            "getCapabilities",
+            api.getCapabilities,
+            options?.preflightAllowsPause === true,
+          ),
+        }),
     // Refused during a pause like any other read, except for the caller that asks for the
     // bypass: a lookup that failed is not held, so letting every background read through would
     // spawn this host's CLI on each of them and re-extend the pause it was already in.
@@ -577,7 +583,11 @@ function withRateLimitBackoff(
       : {
           listChangeRequestStats: wrap("listChangeRequestStats", api.listChangeRequestStats),
         }),
-    getChangeRequest: wrap("getChangeRequest", api.getChangeRequest),
+    getChangeRequest: wrap(
+      "getChangeRequest",
+      api.getChangeRequest,
+      options?.preflightAllowsPause === true,
+    ),
     ...(api.getChangeRequestPreview === undefined
       ? {}
       : { getChangeRequestPreview: wrap("getChangeRequestPreview", api.getChangeRequestPreview) }),
@@ -730,6 +740,7 @@ export const make = Effect.gen(function* () {
 
   const listWorkspaceProjects = (
     filter: Pick<PullRequestListInput, "projectId" | "projectIds" | "host">,
+    options?: { readonly preflightAllowsPause: boolean },
   ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
     (filter.projectId === undefined
       ? projections.getProjectShells(filter.projectIds)
@@ -805,7 +816,7 @@ export const make = Effect.gen(function* () {
           supported.push({
             cursorKey: key,
             project,
-            api: withRateLimitBackoff(api, host, rateLimits),
+            api: withRateLimitBackoff(api, host, rateLimits, options),
             repository,
             host,
             remote:
@@ -825,8 +836,11 @@ export const make = Effect.gen(function* () {
    * targeting can fall back to another checkout on the host. Azure derives its organization
    * from the checkout, so it requires a matching repository.
    */
-  const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
-    listWorkspaceProjects({ projectId: ref.projectId }).pipe(
+  const requireProject = (
+    ref: PullRequestRef,
+    options?: { readonly preflightAllowsPause: boolean },
+  ): Effect.Effect<SupportedProject, PullRequestError> =>
+    listWorkspaceProjects({ projectId: ref.projectId }, options).pipe(
       Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
         const own = supported[0];
         const repository = ref.repository.trim();
@@ -854,6 +868,7 @@ export const make = Effect.gen(function* () {
         // the complete repository identity before narrowing those checkouts by host.
         return listWorkspaceProjects(
           repositoryKey.startsWith("dev.azure.com/") ? {} : { host },
+          options,
         ).pipe(
           Effect.flatMap(({ supported }) => {
             const onHost = supported.filter((candidate) => candidate.host === host);
@@ -1899,7 +1914,7 @@ export const make = Effect.gen(function* () {
     );
 
   const runAction = (input: PullRequestActionInput): Effect.Effect<string, PullRequestError> =>
-    requireProject(input).pipe(
+    requireProject(input, { preflightAllowsPause: true }).pipe(
       Effect.bindTo("project"),
       Effect.bind(
         "capabilities",
@@ -2170,7 +2185,7 @@ export const make = Effect.gen(function* () {
   const uploadAttachment: PullRequestService["Service"]["uploadAttachment"] = Effect.fn(
     "PullRequestService.uploadAttachment",
   )(function* (input) {
-    const project = yield* requireProject(input);
+    const project = yield* requireProject(input, { preflightAllowsPause: true });
     const ref = {
       cwd: project.project.workspaceRoot,
       repository: project.repository,
@@ -2305,7 +2320,7 @@ export const make = Effect.gen(function* () {
             detail: "A reply cannot be empty.",
           }),
         )
-      : requireProject(input)
+      : requireProject(input, { preflightAllowsPause: true })
     ).pipe(
       Effect.flatMap((project) =>
         (
@@ -2355,7 +2370,7 @@ export const make = Effect.gen(function* () {
     );
 
   const setThreadResolution: PullRequestService["Service"]["setThreadResolution"] = (input) =>
-    requireProject(input).pipe(
+    requireProject(input, { preflightAllowsPause: true }).pipe(
       Effect.flatMap((project) =>
         (
           project.api.getCapabilities?.({

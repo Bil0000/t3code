@@ -7040,6 +7040,12 @@ it.effect("pauses attachment reads after host rate limits and resumes them when 
     for (const source of ["attachment", "action"] as const) {
       let reads = 0;
       let limited = true;
+      let preflightLimited = false;
+      const writes: string[] = [];
+      const capabilities = {
+        ...fakeProvider("github").capabilities,
+        attachments: { supported: true, maxBytes: 10, destination: "pull-request" as const },
+      };
       const rateLimit = new PullRequestProviderError({
         provider: "github",
         operation: "readAttachment",
@@ -7052,7 +7058,31 @@ it.effect("pauses attachment reads after host rate limits and resumes them when 
         ],
         providers: [
           fakeProvider("github", {
-            runAction: () => Effect.fail(rateLimit),
+            getCapabilities: () =>
+              preflightLimited ? Effect.fail(rateLimit) : Effect.succeed(capabilities),
+            getChangeRequest: () => Effect.succeed(hostedChangeRequest("Description")),
+            runAction: () =>
+              limited
+                ? Effect.fail(rateLimit)
+                : Effect.sync(() => {
+                    writes.push("action");
+                  }),
+            replyToThread: () =>
+              Effect.sync(() => {
+                writes.push("reply");
+              }),
+            setThreadResolution: () =>
+              Effect.sync(() => {
+                writes.push("resolve");
+              }),
+            uploadAttachment: () =>
+              Effect.sync(() => {
+                writes.push("upload");
+                return {
+                  url: "https://github.com/user-attachments/assets/file",
+                  markdown: "[file](https://github.com/user-attachments/assets/file)",
+                };
+              }),
             readAttachment: (input) =>
               Effect.gen(function* () {
                 reads++;
@@ -7083,9 +7113,28 @@ it.effect("pauses attachment reads after host rate limits and resumes them when 
       const paused = yield* service.readAttachment(input).pipe(Effect.flip);
       assert.include(paused.message, "paused");
       assert.strictEqual(reads, source === "attachment" ? 1 : 0);
+      const upload = {
+        ...input,
+        attachmentId: "pending-file",
+        name: "file.png",
+        mimeType: "image/png",
+        filePath: "/tmp/file.png",
+        data: new Uint8Array([1]),
+      };
+      yield* service.uploadAttachment(upload);
+      yield* service.runAction({ ...input, action: "close" });
+      yield* service.replyToThread({ ...input, threadId: "thread", body: "Reply" });
+      yield* service.setThreadResolution({ ...input, threadId: "thread", resolved: true });
+      assert.deepStrictEqual(writes, ["upload", "action", "reply", "resolve"]);
+      assert.include((yield* service.readAttachment(input).pipe(Effect.flip)).message, "paused");
+      assert.include((yield* service.detail(input).pipe(Effect.flip)).message, "paused");
       yield* TestClock.adjust("30 seconds");
       assert.strictEqual((yield* service.readAttachment(input)).status, 200);
       assert.strictEqual(reads, source === "attachment" ? 2 : 1);
+      preflightLimited = true;
+      const denied = yield* service.uploadAttachment(upload).pipe(Effect.flip);
+      assert.include(denied.message, "GitHub API rate limit exceeded");
+      assert.deepStrictEqual(writes, ["upload", "action", "reply", "resolve"]);
     }
   }).pipe(
     Effect.provideService(
