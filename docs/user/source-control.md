@@ -118,8 +118,19 @@ for ten minutes during a GitHub outage; new credentials must be verified first. 
 an uncertain result is never automatically retried elsewhere. Listings, diffs, and checkout or
 PR creation from Git actions continue to use the project's environment.
 
-For Azure DevOps, use the host website to change comments. Bitbucket does not support reopening a
-declined pull request.
+Bitbucket does not support reopening a declined pull request.
+
+### Discuss changes and attach files
+
+On web and desktop, open **Threads** in a pull request's Summary to find open or resolved
+conversations. Reply in a thread, edit your comments, or resolve and reopen a thread where the
+host and your permissions allow it. Azure DevOps supports these comment actions in T3 Code.
+
+Use **Attach files**, paste images, or drop files into a description, comment, or reply editor.
+Uploads go to the source host before you post or save. Removing the link or cancelling the draft
+does not delete an uploaded file. Bitbucket uploads use the repository's Downloads area.
+Host permissions, file limits, and authentication requirements are shown in the editor; a failed
+upload can be retried or removed before posting.
 
 ### Mark files as viewed
 
