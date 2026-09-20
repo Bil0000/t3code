@@ -41,6 +41,7 @@ export function EditableDiffCodeView<LAnnotation>({
   editing,
   viewerKey,
   renderHeaderFilenameSuffix,
+  renderHeaderMetadata,
   ...props
 }: Omit<StyledDiffCodeViewProps<LAnnotation>, "items" | "initialItems"> & {
   items: readonly CodeViewItem<LAnnotation>[];
@@ -58,15 +59,49 @@ export function EditableDiffCodeView<LAnnotation>({
       mounted.current = false;
     };
   }, []);
-  const editItems = useMemo(
+  const editItems = useMemo<readonly CodeViewItem<LAnnotation>[]>(
     () =>
       items.map((item) => {
-        const file = prepared.get(item.id);
-        if (!file || item.type !== "diff" || !edits?.drafts.has(file.key)) return item;
+        if (item.type !== "diff" || !edits) return item;
         const target = editing?.(resolveFileDiffPath(item.fileDiff));
+        if (!target) return item;
+        const key = reviewEditKey(target);
+        const draft = edits.drafts.get(key);
+        if (!draft) return item;
+        const file = prepared.get(item.id);
+        if (target.readOnly) {
+          const source = file?.key === key ? file.fileDiff : item.fileDiff;
+          const readonlyDiff = source.isPartial
+            ? null
+            : parseDiffFromFile(
+                source.type === "new"
+                  ? null
+                  : {
+                      name: source.prevName ?? source.name,
+                      contents: source.deletionLines.join(""),
+                    },
+                { name: source.name, contents: draft.contents },
+              );
+          if (!readonlyDiff?.hunks.length) {
+            return {
+              id: item.id,
+              type: "file",
+              file: { name: source.name, contents: draft.contents },
+              ...(item.collapsed === undefined ? {} : { collapsed: item.collapsed }),
+              edit: false,
+              version: (item.version ?? 0) + 1,
+            };
+          }
+          return {
+            ...item,
+            fileDiff: readonlyDiff,
+            edit: false,
+            version: (item.version ?? 0) + 1,
+          };
+        }
         if (
-          !target ||
-          reviewEditKey(target) !== file.key ||
+          !file ||
+          key !== file.key ||
           target.pullRequestUrl !== file.pullRequestUrl ||
           item.version !== file.version
         )
@@ -92,7 +127,7 @@ export function EditableDiffCodeView<LAnnotation>({
         onAttach: (editor) => {
           const file = editor.getFile();
           const target = file && editing?.(resolveFileDiffPath(file));
-          if (!target) return;
+          if (!target || target.readOnly) return;
           key = reviewEditKey(target);
           const request = focusRequest.current;
           if (request?.key !== key) return;
@@ -116,6 +151,7 @@ export function EditableDiffCodeView<LAnnotation>({
     const target = editing(filePath);
     if (
       !target ||
+      target.readOnly ||
       isWorkspaceAudioPreviewPath(filePath) ||
       isWorkspaceImagePreviewPath(filePath) ||
       isWorkspaceVideoPreviewPath(filePath)
@@ -171,6 +207,11 @@ export function EditableDiffCodeView<LAnnotation>({
       key={viewerKey}
       items={editItems}
       createEditor={createEditor}
+      renderHeaderMetadata={(item) =>
+        renderHeaderMetadata?.(
+          item.type === "file" ? (items.find((source) => source.id === item.id) ?? item) : item,
+        )
+      }
       onItemEditChange={(item, file) => {
         const entry = prepared.get(item.id);
         if (entry) edits?.change(entry.key, file.contents);
@@ -199,6 +240,7 @@ export function EditableDiffCodeView<LAnnotation>({
           const target = editing(filePath);
           if (
             !target ||
+            target.readOnly ||
             isWorkspaceAudioPreviewPath(filePath) ||
             isWorkspaceImagePreviewPath(filePath) ||
             isWorkspaceVideoPreviewPath(filePath)
@@ -229,7 +271,9 @@ export function EditableDiffCodeView<LAnnotation>({
         },
       }}
       renderHeaderFilenameSuffix={(item) => {
-        const target = item.type === "diff" && editing?.(resolveFileDiffPath(item.fileDiff));
+        const target = editing?.(
+          item.type === "diff" ? resolveFileDiffPath(item.fileDiff) : item.file.name,
+        );
         const draft = target && edits?.drafts.get(reviewEditKey(target));
         return (
           <>
@@ -244,7 +288,11 @@ export function EditableDiffCodeView<LAnnotation>({
                     />
                   }
                 />
-                <TooltipPopup>Unsaved changes · Cmd/Ctrl+S to save</TooltipPopup>
+                <TooltipPopup>
+                  {target.readOnly
+                    ? "Unsaved changes · Pull request is read-only"
+                    : "Unsaved changes · Cmd/Ctrl+S to save"}
+                </TooltipPopup>
               </Tooltip>
             )}
           </>

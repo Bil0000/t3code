@@ -160,7 +160,10 @@ import {
   stripPullRequestHandoffReferences,
   writePullRequestDetailSnapshot,
 } from "./pullRequestDetail.logic";
-import { canEditPullRequestChangeRequest } from "./pullRequestEditing.logic";
+import {
+  canEditPullRequestChangeRequest,
+  getPullRequestFileEditReason,
+} from "./pullRequestEditing.logic";
 import {
   resolvePickableEnvironments,
   type PickableEnvironment,
@@ -881,6 +884,12 @@ export function PullRequestDetailPanel({
     reportFailure: false,
   });
   const reviewEdits = useReviewEdits();
+  const fileEditReason = detail ? getPullRequestFileEditReason(detail) : null;
+  const fixUnavailable = detail?.state !== "open";
+  const setPullRequestReadOnly = reviewEdits?.setPullRequestReadOnly;
+  useLayoutEffect(() => {
+    if (detail) setPullRequestReadOnly?.(environmentId, detail.url, fileEditReason);
+  }, [detail, environmentId, fileEditReason, setPullRequestReadOnly]);
   const publishLabel =
     detail && reviewEdits?.publishing.get(reviewPublishKey(environmentId, detail.url));
   const reviewFiles = [...(reviewEdits?.drafts.values() ?? [])].filter(
@@ -1382,7 +1391,7 @@ export function PullRequestDetailPanel({
 
   /** One finding, handed over on its own — the surfaces that show findings call this. */
   const startFixFinding = (finding: PullRequestFinding) => {
-    if (!detail) return;
+    if (!detail || fixUnavailable) return;
     void startHandoff(
       pullRequestFindingKey(finding),
       buildFixFindingHandoff({
@@ -1397,7 +1406,7 @@ export function PullRequestDetailPanel({
   };
 
   const startFixFindings = () => {
-    if (!detail) return;
+    if (!detail || fixUnavailable) return;
     void startHandoff(
       "findings",
       buildFixFindingsHandoff({
@@ -1517,6 +1526,17 @@ export function PullRequestDetailPanel({
     !detail.isDraft &&
     !conflicting &&
     allowedMergeMethods.length > 1;
+  const confirmationAllowed =
+    can(confirmAction) &&
+    (confirmAction === "merge"
+      ? primaryAction === "merge" || showsMergeNow
+      : confirmAction === "enable-auto-merge"
+        ? primaryAction === "enable-auto-merge" || (showsAutoMerge && !autoMergeArmed)
+        : confirmAction === "close"
+          ? detail?.state === "open"
+          : confirmAction === "revert"
+            ? detail?.state === "merged"
+            : workflowApprovalsRequired > 0);
   // The pull request number carries this state in the overview and the right-panel tab mirrors
   // it. Conflicts take the action slot while they need a person, but do not change the PR state.
   const statePresentation = detail
@@ -1547,6 +1567,7 @@ export function PullRequestDetailPanel({
     <div className="relative flex h-full min-h-0 w-full flex-col bg-background">
       {detail &&
         (pendingEdits > 0 ||
+          (hasUnsavedEdits && fileEditReason !== null) ||
           publishLabel ||
           savingReview ||
           (pushedReviewUrl === detail.url && !hasUnsavedEdits)) && (
@@ -1558,6 +1579,7 @@ export function PullRequestDetailPanel({
             <span className="text-xs text-muted-foreground">
               {publishLabel ||
                 (savingReview && "Saving changes...") ||
+                (fileEditReason && `${fileEditReason} Your edits are kept.`) ||
                 (pendingEdits > 0
                   ? `${pendingEdits} saved ${pendingEdits === 1 ? "file" : "files"} ready to push`
                   : "Changes pushed")}
@@ -1565,9 +1587,15 @@ export function PullRequestDetailPanel({
             {pendingEdits > 0 && (
               <Button
                 size="sm"
-                disabled={actionPending || reviewEdits?.saving || hasUnsavedEdits}
-                title={hasUnsavedEdits ? "Save your edits with Cmd/Ctrl+S first" : undefined}
+                disabled={
+                  actionPending || reviewEdits?.saving || hasUnsavedEdits || fileEditReason !== null
+                }
+                title={
+                  fileEditReason ??
+                  (hasUnsavedEdits ? "Save your edits with Cmd/Ctrl+S first" : undefined)
+                }
                 onClick={async () => {
+                  if (fileEditReason) return;
                   const url = detail.url;
                   if (await reviewEdits?.publish(environmentId, detail.workspaceRoot, url)) {
                     setPushedReviewUrl(url);
@@ -2077,7 +2105,13 @@ export function PullRequestDetailPanel({
                       </span>
                     </span>
                   </MenuItem>
-                  <MenuItem disabled={actionPending || handoff !== null} onClick={startFixFindings}>
+                  <MenuItem
+                    disabled={actionPending || handoff !== null || fixUnavailable}
+                    title={
+                      fixUnavailable ? "Fixes are only available on open pull requests." : undefined
+                    }
+                    onClick={startFixFindings}
+                  >
                     <HammerIcon className="size-3.5" />
                     {handoff === "findings" ? "Preparing..." : handoffLabels.fixFindings}
                   </MenuItem>
@@ -2794,7 +2828,7 @@ export function PullRequestDetailPanel({
                     actionPending={actionPending}
                     fixFindingLabel={handoffLabels.fixFinding}
                     fixCheckLabel={handoffLabels.fixCheck}
-                    onFixFinding={startFixFinding}
+                    {...(!fixUnavailable ? { onFixFinding: startFixFinding } : {})}
                     onRefresh={refreshDetail}
                   />
                 </div>
@@ -2842,7 +2876,7 @@ export function PullRequestDetailPanel({
                       onSelectedCommitChange={selectCodeCommit}
                       pendingFinding={handoff}
                       fixFindingLabel={handoffLabels.fixFinding}
-                      onFixFinding={startFixFinding}
+                      {...(!fixUnavailable ? { onFixFinding: startFixFinding } : {})}
                       onRefresh={refreshDetail}
                       refreshToken={codeRefreshToken}
                     />
@@ -2910,8 +2944,9 @@ export function PullRequestDetailPanel({
             <Button
               size="sm"
               variant={confirmAction === "close" ? "destructive" : "default"}
-              disabled={actionPending}
+              disabled={actionPending || !confirmationAllowed}
               onClick={() => {
+                if (actionPending || !confirmationAllowed) return;
                 const action = confirmAction;
                 setConfirmation((current) => ({ ...current, open: false }));
                 if (action === "merge")

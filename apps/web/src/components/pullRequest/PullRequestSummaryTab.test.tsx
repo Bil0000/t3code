@@ -5,6 +5,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("~/state/pullRequests", () => ({ pullRequestEnvironment: {} }));
+vi.mock("~/state/query", () => ({
+  useEnvironmentQuery: () => ({ data: null, error: null, isPending: false }),
+}));
 vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("./PullRequestMarkdown", () => ({
   PullRequestMarkdown: ({ text }: { text: string }) => <p>{text}</p>,
@@ -144,6 +147,29 @@ it("keeps an unsaved description when collapsed and reopened", () => {
   click("Description");
   expect(renderer.root.findByType("textarea").props.value).toBe("Unsaved description");
 });
+
+it.each(["closed", "merged"] as const)(
+  "removes the reviewer picker when a pull request becomes %s",
+  (state) => {
+    const value: PullRequestDetailView = {
+      ...detail,
+      capabilities: { ...detail.capabilities, reviewers: { request: true, listCandidates: true } },
+      viewerPermissions: { ...detail.viewerPermissions, requestReviewers: true },
+    };
+    act(() => {
+      renderer = create(render(value));
+    });
+    const buttons = () =>
+      renderer.root
+        .findAllByType("button")
+        .filter((button) => button.props["aria-label"] === "Request a review");
+    expect(buttons()).toHaveLength(1);
+    act(() => renderer.update(render({ ...value, isDraft: true })));
+    expect(buttons()).toHaveLength(1);
+    act(() => renderer.update(render({ ...value, state })));
+    expect(buttons()).toHaveLength(0);
+  },
+);
 
 it("opens bot reports in pages without hiding human comments", () => {
   const value: PullRequestDetailView = {

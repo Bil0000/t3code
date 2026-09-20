@@ -48,6 +48,7 @@ import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
+import { getPullRequestFileEditReason } from "./pullRequestEditing.logic";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
@@ -393,9 +394,12 @@ function PullRequestCodeTab({
       inlineComment: hostReview.inlineComment && viewer.comment,
       reply: hostReview.reply && viewer.comment,
       resolve: hostReview.resolve && viewer.resolve,
-      verdicts: hostReview.verdicts.filter((verdict) => viewer.verdicts.includes(verdict)),
+      verdicts: hostReview.verdicts.filter(
+        (verdict) =>
+          viewer.verdicts.includes(verdict) && (detail.state === "open" || verdict === "comment"),
+      ),
     };
-  }, [detail.capabilities.review, detail.viewerPermissions]);
+  }, [detail.capabilities.review, detail.state, detail.viewerPermissions]);
   // A comment is posted against the pull request's head diff, so a line number taken from one
   // commit's own diff would land somewhere else entirely. Commenting waits for the whole change.
   const canCommentOnLines = review.inlineComment && commit === null;
@@ -964,9 +968,10 @@ function PullRequestCodeTab({
             filePath,
             expectedBranch: null,
             pullRequestUrl: detail.url,
+            readOnly: getPullRequestFileEditReason(detail) !== null,
           }
         : null,
-    [commit, detail.projectId, detail.url, detail.workspaceRoot, environmentId],
+    [commit, detail, environmentId],
   );
   // Read through refs rather than closed over. The viewer memoizes each visible file's header
   // portal on the callback below, so a fresh identity on every tick, and on every refresh of the

@@ -82,6 +82,8 @@ vi.mock("../ui/toggle-group", () => ({
 
 import PullRequestCodeTab from "./PullRequestCodeTab";
 import { DiffFileTree } from "../diffs/DiffFileTree";
+import { EditableDiffCodeView } from "../diffs/EditableDiffCodeView";
+import { pullRequestReviewKey, usePullRequestReviewStore } from "./pullRequestReviewStore";
 
 let renderer: ReactTestRenderer;
 const detail = {
@@ -101,12 +103,144 @@ const click = async (label: string) => {
       .props.onClick(new Event("click")),
   );
 };
+it.each([
+  { state: "merged", isDraft: false, commit: null, readOnly: true },
+  { state: "closed", isDraft: false, commit: null, readOnly: true },
+  { state: "open", isDraft: false, commit: null, readOnly: false },
+  { state: "open", isDraft: true, commit: null, readOnly: false },
+  { state: "open", isDraft: false, commit: "historical", readOnly: true },
+] as const)(
+  "gates file edits for $state, draft=$isDraft, commit=$commit",
+  async ({ state, isDraft, commit, readOnly }) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    query.mockImplementation((request) => ({
+      data: request
+        ? {
+            patch:
+              "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new\n",
+            truncated: false,
+            nextCursor: null,
+            omittedFileStats: [],
+          }
+        : null,
+      error: null,
+      isPending: false,
+      refresh,
+    }));
+    await act(async () => {
+      renderer = create(
+        <PullRequestCodeTab
+          environmentId={EnvironmentId.make("test")}
+          reference={{ projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 }}
+          detail={{
+            ...detail,
+            state,
+            isDraft,
+            headBranch: "feature",
+            capabilities: { ...detail.capabilities, diff: true },
+          }}
+          selectedCommitOid={commit}
+          onSelectedCommitChange={command}
+          onRefresh={refresh}
+        />,
+      );
+    });
+    const target = renderer.root.findByType(EditableDiffCodeView).props.editing("file.ts");
+    if (commit) expect(target).toBeNull();
+    else expect(target).toMatchObject({ readOnly });
+  },
+);
 afterEach(async () => {
   await act(async () => renderer?.unmount());
   settings.diffFilesCollapsed = false;
   query.mockClear();
   vi.unstubAllGlobals();
 });
+
+it.each(["closed", "merged"] as const)(
+  "keeps the review draft but removes formal verdicts after a PR becomes %s",
+  async (state) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    query.mockImplementation((request) => ({
+      data: request
+        ? { patch: "", truncated: false, nextCursor: null, omittedFileStats: [] }
+        : null,
+      error: null,
+      isPending: false,
+      refresh,
+    }));
+    const reference = {
+      projectId: ProjectId.make("review-state"),
+      repository: "owner/repo",
+      number: 1,
+    };
+    const key = pullRequestReviewKey(reference);
+    const pending = {
+      id: "pending",
+      path: "file.ts",
+      position: { kind: "added", newLine: 1 },
+      body: "Keep this draft",
+    } as const;
+    usePullRequestReviewStore.getState().clear(key);
+    usePullRequestReviewStore.getState().addComment(key, pending);
+    usePullRequestReviewStore.getState().setSummary(key, "Keep this summary");
+    const render = (currentState: PullRequestDetailView["state"], isDraft = false) => (
+      <PullRequestCodeTab
+        environmentId={EnvironmentId.make("test")}
+        reference={reference}
+        detail={{
+          ...detail,
+          state: currentState,
+          isDraft,
+          capabilities: {
+            ...detail.capabilities,
+            review: {
+              inlineComment: true,
+              reply: true,
+              resolve: true,
+              verdicts: ["comment", "approve", "request-changes"],
+            },
+          },
+          viewerPermissions: {
+            ...detail.viewerPermissions,
+            comment: true,
+            verdicts: ["comment", "approve", "request-changes"],
+          },
+        }}
+        selectedCommitOid={null}
+        onSelectedCommitChange={command}
+        onRefresh={refresh}
+      />
+    );
+    await act(async () => {
+      renderer = create(render("open"));
+    });
+    await act(async () =>
+      renderer.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Review"))!
+        .props.onClick(),
+    );
+    const labels = () =>
+      renderer.root
+        .findAllByType("button")
+        .flatMap((button) =>
+          button
+            .findAllByType("span")
+            .flatMap((span) => span.children.filter((child) => typeof child === "string")),
+        );
+    expect(labels()).toContain("Approve");
+    expect(labels()).toContain("Request changes");
+    await act(async () => renderer.update(render("open", true)));
+    expect(labels()).toContain("Approve");
+    await act(async () => renderer.update(render(state)));
+    expect(labels()).not.toContain("Approve");
+    expect(labels()).not.toContain("Request changes");
+    expect(labels()).toContain("Comment");
+    expect(usePullRequestReviewStore.getState().drafts[key]).toEqual([pending]);
+    expect(usePullRequestReviewStore.getState().summaries[key]).toBe("Keep this summary");
+  },
+);
 
 it.each(["complete", "error", "scope change"])(
   "folder viewing handles paged files: %s",

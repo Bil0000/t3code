@@ -787,7 +787,8 @@ export function PullRequestSummaryTab({
                   nobody why, and "you need write access" is the answer to the question a reader
                   actually has. Azure DevOps is the exception — it takes a reviewer but will not
                   say who could be one, so there is nothing to open. */}
-              {detail.capabilities.reviewers.request &&
+              {detail.state === "open" &&
+              detail.capabilities.reviewers.request &&
               detail.capabilities.reviewers.listCandidates ? (
                 <PullRequestReviewerPicker
                   environmentId={environmentId}

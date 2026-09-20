@@ -42,6 +42,7 @@ export interface ReviewEditTarget {
   pullRequestUrl?: string;
   projectId?: ProjectId | undefined;
   onSaved?: () => void;
+  readOnly?: boolean;
 }
 
 interface ReviewDraft extends ReviewEditTarget {
@@ -154,6 +155,11 @@ const ReviewEditsContext = createContext<{
   saving: boolean;
   savingKeys: ReadonlySet<string>;
   publishing: ReadonlyMap<string, string>;
+  setPullRequestReadOnly: (
+    environmentId: EnvironmentId,
+    url: string,
+    reason: string | null,
+  ) => void;
   publish: (environmentId: EnvironmentId, cwd: string, url: string) => Promise<boolean>;
 } | null>(null);
 
@@ -174,6 +180,26 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
   const focusedKey = useRef<string | null>(null);
   const [publishing, setPublishing] = useState<ReadonlyMap<string, string>>(new Map());
   const publishingRef = useRef(new Set<string>());
+  const [readOnlyReasons, setReadOnlyReasons] = useState<ReadonlyMap<string, string>>(new Map());
+  const readOnlyPullRequests = useRef(readOnlyReasons);
+  const setPullRequestReadOnly = useCallback(
+    (environmentId: EnvironmentId, url: string, reason: string | null) => {
+      const key = reviewPublishKey(environmentId, url);
+      if ((readOnlyPullRequests.current.get(key) ?? null) === reason) return;
+      const next = new Map(readOnlyPullRequests.current);
+      if (reason) next.set(key, reason);
+      else next.delete(key);
+      readOnlyPullRequests.current = next;
+      setReadOnlyReasons(next);
+    },
+    [],
+  );
+  const checkWritable = useCallback((draft: ReviewEditTarget) => {
+    const reason =
+      draft.pullRequestUrl &&
+      readOnlyPullRequests.current.get(reviewPublishKey(draft.environmentId, draft.pullRequestUrl));
+    if (reason) throw new Error(reason + " Your edits are still here.");
+  }, []);
   const [savingKeys, setSavingKeys] = useState<ReadonlySet<string>>(new Set());
   const saving = savingKeys.size > 0;
   const savingRef = useRef(false);
@@ -181,6 +207,13 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const writeFile = useAtomCommand(projectEnvironment.writeFile, { reportFailure: false });
   const dirty = [...drafts.values()].some((draft) => draft.contents !== draft.savedContents);
+  const blockedSaveReason = [...drafts.values()].flatMap((draft) => {
+    const reason =
+      draft.pullRequestUrl && draft.contents !== draft.savedContents
+        ? readOnlyReasons.get(reviewPublishKey(draft.environmentId, draft.pullRequestUrl))
+        : undefined;
+    return reason ? [reason] : [];
+  })[0];
   const blocker = useBlocker({
     shouldBlockFn: ({ current, next }) => {
       if (current.routeId === "/_chat/pull-requests" && next.routeId === current.routeId) {
@@ -236,6 +269,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
   );
   const begin = useCallback(
     (draft: ReviewDraft) => {
+      checkWritable(draft);
       const key = reviewEditKey(draft);
       const current = draftsRef.current.get(key);
       if (current && (current.pendingPush || current.contents !== current.savedContents))
@@ -243,13 +277,19 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
       update(new Map(draftsRef.current).set(key, draft));
       return draft;
     },
-    [update],
+    [checkWritable, update],
   );
   const change = useCallback(
     (key: string, contents: string) => {
       const current = draftsRef.current.get(key);
       if (
         current &&
+        !(
+          current.pullRequestUrl &&
+          readOnlyPullRequests.current.has(
+            reviewPublishKey(current.environmentId, current.pullRequestUrl),
+          )
+        ) &&
         !(
           current.pullRequestUrl &&
           publishingRef.current.has(reviewPublishKey(current.environmentId, current.pullRequestUrl))
@@ -273,6 +313,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
         for (const key of dirtyKeys) {
           const draft = draftsRef.current.get(key);
           if (!draft || draft.contents === draft.savedContents) continue;
+          checkWritable(draft);
           if (
             draft.pullRequestUrl &&
             publishingRef.current.has(reviewPublishKey(draft.environmentId, draft.pullRequestUrl))
@@ -309,6 +350,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
               workspace = { cwd: prepared.value.worktreePath, branch: prepared.value.branch };
             }
           }
+          checkWritable(draft);
           const result = await writeFile({
             environmentId: draft.environmentId,
             input: {
@@ -317,6 +359,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
               contents: draft.contents,
               expectedBranch: workspace?.branch ?? draft.expectedBranch,
               expectedContents: draft.savedContents,
+              ...(draft.pullRequestUrl ? { pullRequestUrl: draft.pullRequestUrl } : {}),
             },
           });
           if (result._tag === "Failure") throw new Error(formatEnvironmentQueryError(result.cause));
@@ -344,12 +387,21 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
         setSavingKeys(new Set());
       }
     },
-    [update, writeFile],
+    [checkWritable, update, writeFile],
   );
   const publish = useCallback(
     async (environmentId: EnvironmentId, cwd: string, url: string) => {
       const key = reviewPublishKey(environmentId, url);
       if (savingRef.current || publishingRef.current.has(key)) return false;
+      const readOnlyReason = readOnlyPullRequests.current.get(key);
+      if (readOnlyReason) {
+        toastManager.add({
+          type: "error",
+          title: "Changes were not pushed",
+          description: readOnlyReason + " Your saved edits are still here.",
+        });
+        return false;
+      }
       const files = [...draftsRef.current.entries()].filter(
         ([, draft]) =>
           draft.environmentId === environmentId &&
@@ -471,6 +523,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
         saving,
         savingKeys,
         publishing,
+        setPullRequestReadOnly,
         publish,
       }}
     >
@@ -492,7 +545,8 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
                 ? "Wait for commit and push to finish."
                 : saving
                   ? "Wait for the save to finish."
-                  : "Your review edits will be lost if you leave without saving."}
+                  : (blockedSaveReason ??
+                    "Your review edits will be lost if you leave without saving.")}
               {error && (
                 <span role="alert" className="mt-2 block text-destructive">
                   {error}
@@ -518,7 +572,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
               Discard
             </Button>
             <Button
-              disabled={saving || publishing.size > 0}
+              disabled={saving || publishing.size > 0 || blockedSaveReason !== undefined}
               onClick={() => void save([...draftsRef.current.keys()])}
             >
               {saving ? "Saving..." : "Save"}

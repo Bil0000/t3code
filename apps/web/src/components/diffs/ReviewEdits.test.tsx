@@ -1,4 +1,4 @@
-import { parseDiffFromFile } from "@pierre/diffs";
+import { FileRenderer, parseDiffFromFile } from "@pierre/diffs";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId, TurnId } from "@t3tools/contracts";
 import { act, useEffect, type ReactNode } from "react";
@@ -248,6 +248,75 @@ it("keeps failed saves dirty and permits a retry", async () => {
   expect(toast).toHaveBeenCalledOnce();
   await save();
   expect(edits.drafts.get(key)?.savedContents).toBe("changed");
+});
+it.each(["ctrlKey", "metaKey"])(
+  "keeps closed PR drafts and blocks %s save, dialog save, and publish",
+  async (modifier) => {
+    await mount();
+    const url = "https://github.com/example/repo/pull/1";
+    const draft = {
+      ...savedDraft,
+      pullRequestUrl: url,
+      workspace: { cwd: "/review", branch: "feature" },
+      pendingPush: true,
+    };
+    const draftKey = reviewEditKey(draft);
+    await act(async () => {
+      edits.begin(draft);
+      edits.change(draftKey, "unsaved");
+      edits.focus(draftKey);
+      edits.setPullRequestReadOnly(target.environmentId, url, "This PR is merged.");
+    });
+    await save(modifier);
+    await act(async () => edits.change(draftKey, "late editor event"));
+    expect(edits.drafts.get(draftKey)).toMatchObject({
+      contents: "unsaved",
+      savedContents: "saved",
+    });
+    await blockNavigation();
+    expect(
+      renderer.root.findAllByType("button").find((button) => button.children.join("") === "Save")
+        ?.props.disabled,
+    ).toBe(true);
+    await click("Save");
+    expect(write).not.toHaveBeenCalled();
+    expect(prepareWorkspace).not.toHaveBeenCalled();
+    await click("Discard");
+    expect(blocker.proceed).toHaveBeenCalledOnce();
+    expect(edits.drafts.get(draftKey)).toMatchObject({ contents: "saved", pendingPush: true });
+    await act(async () => {
+      expect(await edits.publish(target.environmentId, target.cwd, url)).toBe(false);
+    });
+    expect(publish).not.toHaveBeenCalled();
+    await act(async () => {
+      edits.setPullRequestReadOnly(target.environmentId, url, null);
+      expect(await edits.publish(target.environmentId, target.cwd, url)).toBe(true);
+    });
+  },
+);
+
+it("does not save when the PR closes while its workspace is being prepared", async () => {
+  await mount();
+  const url = "https://github.com/example/repo/pull/1";
+  const draft = { ...savedDraft, pullRequestUrl: url };
+  const draftKey = reviewEditKey(draft);
+  let finish!: (value: unknown) => void;
+  prepareWorkspace.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+  await act(async () => {
+    edits.begin(draft);
+    edits.change(draftKey, "unsaved");
+    edits.focus(draftKey);
+  });
+  await save();
+  await act(async () => {
+    edits.setPullRequestReadOnly(target.environmentId, url, "This PR is closed.");
+    finish({
+      _tag: "Success",
+      value: { worktreePath: "/review", branch: "feature", isOnPullRequestHead: true },
+    });
+  });
+  expect(write).not.toHaveBeenCalled();
+  expect(edits.drafts.get(draftKey)?.contents).toBe("unsaved");
 });
 it("keeps edits and explains when an older server rejects PR saving", async () => {
   await mount();
@@ -601,12 +670,21 @@ it("prepares visible PR code before a click and retains edits across folding", a
   );
   const item = { type: "diff" as const, id: "file.ts", fileDiff, version: 1 };
   const prTarget = { ...target, pullRequestUrl: "https://github.com/example/repo/pull/1" };
-  const view = (collapsed = false) => (
+  const loadDiffFiles = vi.fn().mockRejectedValue(new Error("Source repository is gone"));
+  const view = (collapsed = false, readOnly = false, partial = false) => (
     <ReviewEditsProvider>
       <Probe />
       <EditableDiffCodeView
-        items={[{ ...item, collapsed, version: collapsed ? 2 : 1 }]}
-        editing={() => prTarget}
+        items={[
+          {
+            ...item,
+            fileDiff: partial ? { ...fileDiff, isPartial: true } : fileDiff,
+            collapsed,
+            version: collapsed ? 2 : 1,
+          },
+        ]}
+        editing={() => ({ ...prTarget, readOnly })}
+        options={{ loadDiffFiles }}
       />
     </ReviewEditsProvider>
   );
@@ -638,6 +716,36 @@ it("prepares visible PR code before a click and retains edits across folding", a
   expect(
     renderer.root.findByType(StyledDiffCodeView).props.items[0].fileDiff.additionLines.join(""),
   ).toBe("unsaved PR edit");
+  await act(async () => renderer.update(view(true, true)));
+  let readonlyItem = renderer.root.findByType(StyledDiffCodeView).props.items[0];
+  expect(readonlyItem.edit).toBe(false);
+  expect(readonlyItem.fileDiff.additionLines.join("")).toBe("unsaved PR edit");
+  await act(async () => renderer.update(view()));
+  await act(async () => edits.change(reviewEditKey(prTarget), "old"));
+  await act(async () => renderer.update(view(false, true)));
+  readonlyItem = renderer.root.findByType(StyledDiffCodeView).props.items[0];
+  const bodyRenderer = new FileRenderer();
+  const revertedBody = await bodyRenderer.asyncRender(readonlyItem.file);
+  expect(bodyRenderer.renderPartialHTML(revertedBody.contentAST).replace(/<[^>]*>/g, "")).toBe(
+    "old",
+  );
+  await act(async () => renderer.update(view()));
+  await act(async () => edits.change(reviewEditKey(prTarget), "unsaved PR edit"));
+  await act(async () => edits.focus(reviewEditKey(prTarget)));
+  await save();
+  await act(async () => renderer.unmount());
+  await act(async () => {
+    renderer = create(view(false, true, true));
+  });
+  expect(edits.drafts.get(reviewEditKey(prTarget))?.pendingPush).toBe(true);
+  readonlyItem = renderer.root.findByType(StyledDiffCodeView).props.items[0];
+  expect(readonlyItem.edit).toBe(false);
+  const body = await bodyRenderer.asyncRender(readonlyItem.file);
+  expect(bodyRenderer.renderPartialHTML(body.contentAST).replace(/<[^>]*>/g, "")).toBe(
+    "unsaved PR edit",
+  );
+  bodyRenderer.cleanUp();
+  expect(loadDiffFiles).not.toHaveBeenCalled();
 });
 
 it("saves PR files in one workspace, restores saved edits, and retries a failed push", async () => {
@@ -664,6 +772,7 @@ it("saves PR files in one workspace, restores saved edits, and retries a failed 
       contents: "PR edit",
       expectedContents: "saved",
       expectedBranch: "t3-review/feature",
+      pullRequestUrl: url,
     },
     {
       cwd: "/review",
@@ -671,6 +780,7 @@ it("saves PR files in one workspace, restores saved edits, and retries a failed 
       contents: "PR edit",
       expectedContents: "saved",
       expectedBranch: "t3-review/feature",
+      pullRequestUrl: url,
     },
   ]);
   await act(async () => renderer.unmount());
