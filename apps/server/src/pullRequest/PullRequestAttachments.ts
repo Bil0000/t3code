@@ -141,24 +141,30 @@ export const uploadGitHubAttachment = Effect.fn("PullRequestAttachments.github")
   execute: GitHubCli["Service"]["execute"],
   input: UploadInput,
 ) {
-  const failure = (detail: string) =>
-    new PullRequestProviderError({
+  const host = input.host.toLowerCase();
+  if (host !== "github.com" && !/^[a-z0-9-]+\.ghe\.com$/.test(host))
+    return yield* new PullRequestProviderError({
       provider: "github",
       operation: "uploadAttachment",
       reason: "failed",
-      detail,
+      detail: "Attachments are not supported on GitHub Enterprise Server.",
     });
-  const host = input.host.toLowerCase();
-  if (host !== "github.com" && !/^[a-z0-9-]+\.ghe\.com$/.test(host))
-    return yield* failure("Attachments are not supported on GitHub Enterprise Server.");
   const extension = /\.[^.]+$/.exec(input.name)?.[0].toLowerCase() ?? "";
   const contentType = GITHUB_CONTENT_TYPES[extension];
   if (!contentType)
-    return yield* failure(
-      "GitHub accepts PNG, JPG, GIF, WebP, SVG, MP4, MOV, and WebM attachments.",
-    );
+    return yield* new PullRequestProviderError({
+      provider: "github",
+      operation: "uploadAttachment",
+      reason: "failed",
+      detail: "GitHub accepts PNG, JPG, GIF, WebP, SVG, MP4, MOV, and WebM attachments.",
+    });
   if (contentType.startsWith("image/") && input.data.byteLength > 10 * 1024 * 1024)
-    return yield* failure("GitHub images must be at most 10 MB.");
+    return yield* new PullRequestProviderError({
+      provider: "github",
+      operation: "uploadAttachment",
+      reason: "failed",
+      detail: "GitHub images must be at most 10 MB.",
+    });
   const result = yield* execute({
     cwd: input.cwd,
     args: [
@@ -167,12 +173,37 @@ export const uploadGitHubAttachment = Effect.fn("PullRequestAttachments.github")
       "--hostname",
       host,
     ],
-  }).pipe(Effect.mapError((error) => failure(error.message)));
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new PullRequestProviderError({
+          provider: "github",
+          operation: "uploadAttachment",
+          reason: "failed",
+          detail: "GitHub repository upload permissions could not be checked.",
+          cause,
+        }),
+    ),
+  );
   const repository = yield* decodeGitHubRepository(result.stdout).pipe(
-    Effect.mapError(() => failure("GitHub did not return repository upload permissions.")),
+    Effect.mapError(
+      (cause) =>
+        new PullRequestProviderError({
+          provider: "github",
+          operation: "uploadAttachment",
+          reason: "failed",
+          detail: "GitHub did not return repository upload permissions.",
+          cause,
+        }),
+    ),
   );
   if (!repository.permissions.push)
-    return yield* failure("Attaching files requires write access to this repository.");
+    return yield* new PullRequestProviderError({
+      provider: "github",
+      operation: "uploadAttachment",
+      reason: "failed",
+      detail: "Attaching files requires write access to this repository.",
+    });
   const url = new URL(`https://uploads.${host}/user-attachments/assets`);
   url.search = new URLSearchParams({
     name: input.name,
@@ -194,9 +225,29 @@ export const uploadGitHubAttachment = Effect.fn("PullRequestAttachments.github")
       input.filePath,
     ],
     timeoutMs: 120_000,
-  }).pipe(Effect.mapError((error) => failure(error.message)));
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new PullRequestProviderError({
+          provider: "github",
+          operation: "uploadAttachment",
+          reason: "failed",
+          detail: "GitHub attachment upload failed.",
+          cause,
+        }),
+    ),
+  );
   const asset = yield* decodeGitHubAsset(uploaded.stdout).pipe(
-    Effect.mapError(() => failure("GitHub returned no attachment URL.")),
+    Effect.mapError(
+      (cause) =>
+        new PullRequestProviderError({
+          provider: "github",
+          operation: "uploadAttachment",
+          reason: "failed",
+          detail: "GitHub returned no attachment URL.",
+          cause,
+        }),
+    ),
   );
   return {
     url: asset.url,
@@ -210,13 +261,6 @@ export const uploadGitLabAttachment = Effect.fn("PullRequestAttachments.gitlab")
   execute: GitLabCli["Service"]["execute"],
   input: UploadInput,
 ) {
-  const failure = (detail: string) =>
-    new PullRequestProviderError({
-      provider: "gitlab",
-      operation: "uploadAttachment",
-      reason: "failed",
-      detail,
-    });
   const uploaded = yield* execute({
     cwd: input.cwd,
     args: [
@@ -230,9 +274,29 @@ export const uploadGitLabAttachment = Effect.fn("PullRequestAttachments.gitlab")
       `file=@${input.filePath}`,
     ],
     timeoutMs: 120_000,
-  }).pipe(Effect.mapError((error) => failure(error.message)));
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new PullRequestProviderError({
+          provider: "gitlab",
+          operation: "uploadAttachment",
+          reason: "failed",
+          detail: "GitLab attachment upload failed. Update glab and try again.",
+          cause,
+        }),
+    ),
+  );
   const asset = yield* decodeGitLabAsset(uploaded.stdout).pipe(
-    Effect.mapError(() => failure("GitLab returned no attachment URL.")),
+    Effect.mapError(
+      (cause) =>
+        new PullRequestProviderError({
+          provider: "gitlab",
+          operation: "uploadAttachment",
+          reason: "failed",
+          detail: "GitLab returned no attachment URL.",
+          cause,
+        }),
+    ),
   );
   const url = new URL(asset.full_path, `https://${input.host}`).toString();
   return { url, markdown: attachmentMarkdown(url, input.name, input.mimeType) };
@@ -243,16 +307,14 @@ export const readGitLabAttachment = Effect.fn("PullRequestAttachments.readGitLab
     execute: GitLabCli["Service"]["execute"],
     input: Parameters<NonNullable<PullRequestProviderApi["readAttachment"]>>[0],
   ) {
-    const fail = (detail: string) =>
-      new PullRequestProviderError({
-        provider: "gitlab",
-        reason: "failed",
-        operation: "readAttachment",
-        detail,
-      });
     const url = pullRequestMediaUrl({ ...input, provider: "gitlab" });
     if (!url)
-      return yield* fail("This attachment does not belong to the selected GitLab repository.");
+      return yield* new PullRequestProviderError({
+        provider: "gitlab",
+        operation: "readAttachment",
+        reason: "failed",
+        detail: "This attachment does not belong to the selected GitLab repository.",
+      });
     const path = new URL(url).pathname.split("/").slice(-2).join("/");
     const endpoint = `https://${input.host}/api/v4/projects/${encodeURIComponent(input.repository)}/uploads/${path}`;
     const client = HttpClient.withScope(yield* HttpClient.HttpClient);
@@ -261,12 +323,26 @@ export const readGitLabAttachment = Effect.fn("PullRequestAttachments.readGitLab
         cwd: input.cwd,
         args: ["auth", "status", "--hostname", input.host, "--show-token"],
         env: { NO_COLOR: "1", GLAB_DEBUG_HTTP: "" },
-      }).pipe(Effect.mapError(() => fail("Sign in with glab to view private GitLab attachments.")));
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new PullRequestProviderError({
+              provider: "gitlab",
+              operation: "readAttachment",
+              reason: "failed",
+              detail: "Sign in with glab to view private GitLab attachments.",
+              cause,
+            }),
+        ),
+      );
       const token = /Token found in [^:\r\n]+: ([^\r\n]+)/.exec(auth.stderr)?.[1]?.trim();
       if (!token || /[\s\p{Cc}]/u.test(token))
-        return yield* fail(
-          "glab did not provide an attachment credential. Update glab and sign in again.",
-        );
+        return yield* new PullRequestProviderError({
+          provider: "gitlab",
+          operation: "readAttachment",
+          reason: "failed",
+          detail: "glab did not provide an attachment credential. Update glab and sign in again.",
+        });
       const headers: Record<string, string> = {
         "accept-encoding": "identity",
         authorization: `Bearer ${token}`,
@@ -277,8 +353,15 @@ export const readGitLabAttachment = Effect.fn("PullRequestAttachments.readGitLab
         .execute(HttpClientRequest.get(endpoint).pipe(HttpClientRequest.setHeaders(headers)))
         .pipe(
           Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
-          Effect.mapError(() =>
-            fail("GitLab attachment download failed. GitLab 17.4 or later is required."),
+          Effect.mapError(
+            (cause) =>
+              new PullRequestProviderError({
+                provider: "gitlab",
+                operation: "readAttachment",
+                reason: "failed",
+                detail: "GitLab attachment download failed. GitLab 17.4 or later is required.",
+                cause,
+              }),
           ),
         );
       if (response.status !== 401 || attempt === 1) return response;
@@ -291,21 +374,30 @@ export const readGitHubAttachment = Effect.fn("PullRequestAttachments.readGitHub
     execute: GitHubCli["Service"]["execute"],
     input: Parameters<NonNullable<PullRequestProviderApi["readAttachment"]>>[0],
   ) {
-    const fail = (detail: string) =>
-      new PullRequestProviderError({
-        provider: "github",
-        reason: "failed",
-        operation: "readAttachment",
-        detail,
-      });
     const url = pullRequestMediaUrl({ ...input, provider: "github" });
     if (!url)
-      return yield* fail("This attachment does not belong to the selected GitHub repository.");
+      return yield* new PullRequestProviderError({
+        provider: "github",
+        operation: "readAttachment",
+        reason: "failed",
+        detail: "This attachment does not belong to the selected GitHub repository.",
+      });
     const output = yield* execute({
       cwd: input.cwd,
       args: ["auth", "token", "--hostname", input.host],
       env: { GH_DEBUG: "" },
-    }).pipe(Effect.mapError(() => fail("Sign in with gh to view private GitHub attachments.")));
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new PullRequestProviderError({
+            provider: "github",
+            operation: "readAttachment",
+            reason: "failed",
+            detail: "Sign in with gh to view private GitHub attachments.",
+            cause,
+          }),
+      ),
+    );
     const headers: Record<string, string> = {
       "accept-encoding": "identity",
       authorization: `Bearer ${output.stdout.trim()}`,
@@ -317,7 +409,16 @@ export const readGitHubAttachment = Effect.fn("PullRequestAttachments.readGitHub
       .execute(HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(headers)))
       .pipe(
         Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
-        Effect.mapError(() => fail("GitHub attachment download failed.")),
+        Effect.mapError(
+          (cause) =>
+            new PullRequestProviderError({
+              provider: "github",
+              operation: "readAttachment",
+              reason: "failed",
+              detail: "GitHub attachment download failed.",
+              cause,
+            }),
+        ),
       );
   },
 );

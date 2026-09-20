@@ -3,6 +3,7 @@ import {
   FetchHttpClient,
   HttpClient,
   HttpClientRequest,
+  HttpClientError,
   HttpClientResponse,
 } from "effect/unstable/http";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -16,8 +17,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { ProjectId } from "@t3tools/contracts";
 import { attachmentFileExtension, createPendingAttachmentId } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
-import type { GitHubCli } from "../sourceControl/GitHubCli.ts";
-import type { GitLabCli } from "../sourceControl/GitLabCli.ts";
+import { GitHubCliCommandError, type GitHubCli } from "../sourceControl/GitHubCli.ts";
+import { GitLabCliCommandError, type GitLabCli } from "../sourceControl/GitLabCli.ts";
 import { ForgejoCli } from "../sourceControl/ForgejoCli.ts";
 import * as ForgejoProvider from "./ForgejoPullRequestProvider.ts";
 import {
@@ -30,6 +31,7 @@ import {
 } from "./PullRequestAttachments.ts";
 
 const projectId = Schema.decodeSync(ProjectId)("p1");
+const encodeDefect = Schema.encodeEffect(Schema.fromJsonString(Schema.Defect()));
 
 const input = {
   cwd: "/repo",
@@ -335,3 +337,118 @@ it.effect("retries GitLab once when glab refreshes an expired OAuth token", () =
     Effect.scoped,
   );
 });
+
+for (const provider of ["github", "gitlab"] as const) {
+  it.effect(`retains ${provider} upload failures without exposing raw output`, () =>
+    Effect.gen(function* () {
+      const githubFailure = new GitHubCliCommandError({
+        command: "gh",
+        cwd: "/repo",
+        cause: new Error("Command failed"),
+      });
+      const gitlabFailure = new GitLabCliCommandError({
+        operation: "execute",
+        command: "glab",
+        cwd: "/repo",
+        cause: new Error("Command failed"),
+      });
+      for (const stage of provider === "github"
+        ? ["permissions", "upload", "decode"]
+        : ["upload", "decode"]) {
+        const github = vi
+          .fn<GitHubCli["Service"]["execute"]>()
+          .mockReturnValue(
+            stage === "decode"
+              ? Effect.succeed(output("private-test-token"))
+              : Effect.fail(githubFailure),
+          );
+        if (stage !== "permissions")
+          github.mockReturnValueOnce(
+            Effect.succeed(output('{"id":42,"permissions":{"push":true}}')),
+          );
+        const gitlab = vi
+          .fn<GitLabCli["Service"]["execute"]>()
+          .mockReturnValue(
+            stage === "decode"
+              ? Effect.succeed(output("private-test-token"))
+              : Effect.fail(gitlabFailure),
+          );
+        const error = yield* (
+          provider === "github"
+            ? uploadGitHubAttachment(github, input)
+            : uploadGitLabAttachment(gitlab, { ...input, host: "gitlab.example" })
+        ).pipe(Effect.flip);
+        if (stage === "decode") expect(error.cause).toMatchObject({ _tag: "SchemaError" });
+        else expect(error.cause).toBe(provider === "github" ? githubFailure : gitlabFailure);
+        expect(error.detail).not.toContain("private-test-token");
+        expect(error.message).not.toContain("private-test-token");
+      }
+    }),
+  );
+  for (const stage of ["auth", "http"] as const) {
+    it.effect(`retains ${provider} ${stage} read failures without exposing credentials`, () => {
+      const githubFailure = new GitHubCliCommandError({
+        command: "gh",
+        cwd: "/repo",
+        cause: new Error("Command failed"),
+      });
+      const gitlabFailure = new GitLabCliCommandError({
+        operation: "execute",
+        command: "glab",
+        cwd: "/repo",
+        cause: new Error("Command failed"),
+      });
+      const github = vi
+        .fn<GitHubCli["Service"]["execute"]>()
+        .mockReturnValue(
+          stage === "auth"
+            ? Effect.fail(githubFailure)
+            : Effect.succeed(output("private-test-token")),
+        );
+      const gitlab = vi.fn<GitLabCli["Service"]["execute"]>().mockReturnValue(
+        stage === "auth"
+          ? Effect.fail(gitlabFailure)
+          : Effect.succeed({
+              ...output(""),
+              stderr: "Token found in keyring: private-test-token",
+            }),
+      );
+      let httpFailure: HttpClientError.HttpClientError | undefined;
+      return Effect.gen(function* () {
+        const error = yield* (
+          provider === "github"
+            ? readGitHubAttachment(github, {
+                ...input,
+                url: "https://github.com/owner/repo/blob/main/shot.png",
+                headers: {},
+              })
+            : readGitLabAttachment(gitlab, {
+                ...input,
+                host: "gitlab.example",
+                url: `/uploads/${"a".repeat(32)}/shot.png`,
+                headers: {},
+              })
+        ).pipe(Effect.flip);
+        expect(error.cause).toBe(
+          stage === "http" ? httpFailure : provider === "github" ? githubFailure : gitlabFailure,
+        );
+        expect(error.detail).not.toContain("private-test-token");
+        expect(yield* encodeDefect(error)).not.toContain("private-test-token");
+      }).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            httpFailure = new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({
+                request,
+                cause: new Error("Command failed"),
+              }),
+            });
+            return Effect.fail(httpFailure);
+          }),
+        ),
+        Effect.scoped,
+      );
+    });
+  }
+}
