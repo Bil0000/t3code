@@ -16,6 +16,7 @@ import {
   EnvironmentId,
   EventId,
   GitCommandError,
+  GitManagerError,
   KeybindingRule,
   MessageId,
   ExternalLauncherCommandNotFoundError,
@@ -7278,7 +7279,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const path = yield* Path.Path;
       const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-guarded-write-" });
       let branch: string | null = "review";
+      let state: "open" | "closed" | "merged" = "open";
       let invalidated = false;
+      let lookupFails = false;
       yield* buildAppUnderTest({
         layers: {
           vcsDriver: {
@@ -7296,6 +7299,27 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             isInsideWorkTree: () => Effect.succeed(true),
           },
           gitManager: {
+            resolvePullRequest: ({ reference }) => {
+              assert.equal(reference, "https://github.com/acme/web/pull/7");
+              if (lookupFails)
+                return Effect.fail(
+                  new GitManagerError({
+                    operation: "resolvePullRequest",
+                    cwd,
+                    detail: "Host lookup failed",
+                  }),
+                );
+              return Effect.succeed({
+                pullRequest: {
+                  number: 7,
+                  title: "Review",
+                  url: reference,
+                  baseBranch: "main",
+                  headBranch: "review",
+                  state,
+                },
+              });
+            },
             invalidateLocalStatus: () =>
               Effect.sync(() => {
                 invalidated = true;
@@ -7325,6 +7349,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               relativePath: "file.ts",
               contents: "saved",
               expectedBranch: "review",
+              pullRequestUrl: "https://github.com/acme/web/pull/7",
             };
             yield* client[WS_METHODS.projectsWriteFile](input);
             assert.isTrue(invalidated);
@@ -7357,6 +7382,29 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }
               assert.equal(yield* fs.readFileString(path.join(cwd, "file.ts")), "saved");
             }
+            branch = "review";
+            for (const nextState of ["closed", "merged"] as const) {
+              state = nextState;
+              const result = yield* client[WS_METHODS.projectsWriteFile]({
+                ...input,
+                contents: "edit after merge",
+              }).pipe(Effect.flip);
+              assert.propertyVal(result, "failure", "pull_request_not_open");
+              assert.equal(yield* fs.readFileString(path.join(cwd, "file.ts")), "saved");
+            }
+            lookupFails = true;
+            const unavailable = yield* client[WS_METHODS.projectsWriteFile]({
+              ...input,
+              contents: "pending edit",
+            }).pipe(Effect.flip);
+            assert.propertyVal(unavailable, "failure", "pull_request_verification_failed");
+            assert.equal(yield* fs.readFileString(path.join(cwd, "file.ts")), "saved");
+            yield* client[WS_METHODS.projectsWriteFile]({
+              cwd,
+              relativePath: "file.ts",
+              contents: "local edit",
+            });
+            assert.equal(yield* fs.readFileString(path.join(cwd, "file.ts")), "local edit");
           }),
         ),
       );

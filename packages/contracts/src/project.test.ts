@@ -41,6 +41,11 @@ describe("project RPC errors", () => {
   it.each([
     ["checkout_changed", "The checkout changed. Reopen the file before saving."],
     ["checkout_verification_failed", "Could not verify the checkout before saving."],
+    ["pull_request_not_open", "This PR is no longer open for edits. Your edits are still here."],
+    [
+      "pull_request_verification_failed",
+      "Could not verify this PR before saving. Your edits are still here.",
+    ],
     ["read_before_write_failed", "Could not read the file before saving."],
     [
       "contents_changed",

@@ -3096,6 +3096,31 @@ const makeWsRpcLayer = (
                   });
                 }
               }
+              if (input.pullRequestUrl !== undefined) {
+                const { pullRequest } = yield* gitWorkflow
+                  .resolvePullRequest({
+                    cwd: input.cwd,
+                    reference: input.pullRequestUrl,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProjectWriteFileError({
+                          cwd: input.cwd,
+                          relativePath: input.relativePath,
+                          failure: "pull_request_verification_failed",
+                          cause,
+                        }),
+                    ),
+                  );
+                if (pullRequest.state !== "open") {
+                  return yield* new ProjectWriteFileError({
+                    cwd: input.cwd,
+                    relativePath: input.relativePath,
+                    failure: "pull_request_not_open",
+                  });
+                }
+              }
               return yield* workspaceFileSystem.writeFile(input).pipe(
                 Effect.tap(() =>
                   input.expectedBranch !== undefined

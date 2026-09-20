@@ -219,6 +219,8 @@ export const ProjectFileFailure = Schema.Literals([
   "binary_file",
   "checkout_changed",
   "checkout_verification_failed",
+  "pull_request_not_open",
+  "pull_request_verification_failed",
   "read_before_write_failed",
   "contents_changed",
   "workspace_verification_failed",
@@ -280,6 +282,7 @@ export const ProjectWriteFileInput = Schema.Struct({
   contents: Schema.String,
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   expectedContents: Schema.optional(Schema.String),
+  pullRequestUrl: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProjectWriteFileInput = typeof ProjectWriteFileInput.Type;
 
@@ -291,6 +294,9 @@ export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 const projectWriteFailureMessages: Partial<Record<ProjectFileFailure, string>> = {
   checkout_changed: "The checkout changed. Reopen the file before saving.",
   checkout_verification_failed: "Could not verify the checkout before saving.",
+  pull_request_not_open: "This PR is no longer open for edits. Your edits are still here.",
+  pull_request_verification_failed:
+    "Could not verify this PR before saving. Your edits are still here.",
   read_before_write_failed: "Could not read the file before saving.",
   contents_changed:
     "This file changed since you opened it. Your edits are still here. Refresh the review before saving.",

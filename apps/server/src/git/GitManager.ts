@@ -679,6 +679,23 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
 
   const sourceControlProvider = (cwd: string) => sourceControlProviders.resolve({ cwd });
+  const requireOpenPullRequest = Effect.fn("requireOpenPullRequest")(function* (
+    cwd: string,
+    reference: string,
+  ) {
+    const pullRequest = yield* (yield* sourceControlProvider(cwd)).getChangeRequest({
+      cwd,
+      reference,
+    });
+    if (pullRequest.state !== "open") {
+      return yield* new GitManagerError({
+        operation: "runStackedAction",
+        cwd,
+        detail: "This PR is no longer open for edits.",
+      });
+    }
+    return pullRequest;
+  });
   const serverSettingsService = yield* ServerSettings.ServerSettingsService;
   // Optional: git actions also run from the CLI and tests without orchestration.
   const projectionQuery = yield* Effect.serviceOption(
@@ -1884,6 +1901,7 @@ export const make = Effect.gen(function* () {
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
     stagedOnly?: boolean,
+    pullRequestUrl?: string,
   ) {
     const emit = (event: GitActionProgressPayload) =>
       progressReporter && actionId
@@ -1968,6 +1986,7 @@ export const make = Effect.gen(function* () {
             },
           }
         : null;
+    if (pullRequestUrl) yield* requireOpenPullRequest(cwd, pullRequestUrl);
     const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
       ...(suggestion.stagedTree
         ? {
@@ -2353,6 +2372,14 @@ export const make = Effect.gen(function* () {
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
 
+      if (input.mode === "review" && pullRequest.state !== "open") {
+        return yield* new GitManagerError({
+          operation: "preparePullRequestThread",
+          cwd: input.cwd,
+          detail: "This PR is no longer open for edits.",
+        });
+      }
+
       if (input.mode === "local") {
         yield* (yield* sourceControlProvider(input.cwd)).checkoutChangeRequest({
           cwd: input.cwd,
@@ -2642,11 +2669,8 @@ export const make = Effect.gen(function* () {
           });
         }
         if (input.pullRequestUrl) {
-          const pullRequest = yield* (yield* sourceControlProvider(input.cwd)).getChangeRequest({
-            cwd: input.cwd,
-            reference: input.pullRequestUrl,
-          });
-          if (!initialStatus.branch || pullRequest.state !== "open") {
+          const pullRequest = yield* requireOpenPullRequest(input.cwd, input.pullRequestUrl);
+          if (!initialStatus.branch) {
             return yield* new GitManagerError({
               operation: "runStackedAction",
               cwd: input.cwd,
@@ -2801,6 +2825,7 @@ export const make = Effect.gen(function* () {
                   options?.progressReporter,
                   progress.actionId,
                   input.stagedOnly,
+                  input.pullRequestUrl,
                 ),
               ),
             )
@@ -2815,6 +2840,11 @@ export const make = Effect.gen(function* () {
               })
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("push"))),
+                Effect.tap(() =>
+                  input.pullRequestUrl
+                    ? requireOpenPullRequest(input.cwd, input.pullRequestUrl)
+                    : Effect.void,
+                ),
                 Effect.flatMap(() =>
                   gitCore.pushCurrentBranch(
                     input.cwd,

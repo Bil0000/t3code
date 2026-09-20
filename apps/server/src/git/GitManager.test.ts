@@ -4736,6 +4736,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         yield* runGit(cwd, ["push", "origin", "HEAD:refs/pull/77/head"]);
         NodeFS.writeFileSync(NodePath.join(cwd, "review.txt"), "unrelated local work\n");
         let generated = false;
+        let state: "open" | "closed" | "merged" = "open";
         const projectId = ProjectId.make("review-project");
         const forgejoPullRequest =
           provider === "forgejo"
@@ -4764,8 +4765,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             Layer.mock(SourceControlProvider)({
               kind: provider,
               getChangeRequest: () =>
-                Effect.succeed(
-                  forgejoPullRequest ?? {
+                Effect.succeed({
+                  ...(forgejoPullRequest ?? {
                     provider,
                     number: 77,
                     title: "Review",
@@ -4774,8 +4775,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                     headRefName: "feature/review",
                     state: "open",
                     updatedAt: Option.none(),
-                  },
-                ),
+                  }),
+                  state,
+                }),
               getRepositoryCloneUrls: ({ repository }) => {
                 expect(repository).toBe("team/repo");
                 return Effect.succeed({ nameWithOwner: repository!, url: remote, sshUrl: remote });
@@ -4849,6 +4851,104 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           filePaths: ["unrelated.txt"],
         }).pipe(Effect.result);
         expect(wrongBranch._tag).toBe("Failure");
+        const before = (yield* runGit(reviewCwd, ["rev-parse", "HEAD"])).stdout;
+        const worktrees = (yield* runGit(cwd, ["worktree", "list", "--porcelain"])).stdout;
+        for (const nextState of ["closed", "merged"] as const) {
+          state = nextState;
+          const preparation = yield* preparePullRequestThread(manager, {
+            cwd,
+            reference: url,
+            mode: "review",
+          }).pipe(Effect.flip);
+          expect(preparation.message).toContain("no longer open for edits");
+          expect((yield* runGit(cwd, ["worktree", "list", "--porcelain"])).stdout).toBe(worktrees);
+          const publish = yield* runStackedAction(manager, {
+            cwd: reviewCwd,
+            action: "commit_push",
+            expectedBranch: prepared.branch,
+            pullRequestUrl: url,
+            filePaths: ["unrelated.txt"],
+            commitMessage: "Do not publish",
+          }).pipe(Effect.flip);
+          expect(publish.message).toContain("no longer open for edits");
+          expect((yield* runGit(reviewCwd, ["rev-parse", "HEAD"])).stdout).toBe(before);
+          expect(NodeFS.readFileSync(NodePath.join(reviewCwd, "unrelated.txt"), "utf8")).toBe(
+            "do not publish\n",
+          );
+        }
+      }),
+  );
+
+  it.effect.each(["title", "push"] as const)(
+    "stops publishing when the PR merges during %s",
+    (phase) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir("t3code-pr-merge-race-");
+        yield* initRepo(cwd);
+        const remote = yield* createBareRemote();
+        yield* runGit(cwd, ["remote", "add", "origin", remote]);
+        yield* runGit(cwd, ["push", "-u", "origin", "main"]);
+        const before = (yield* runGit(cwd, ["rev-parse", "HEAD"])).stdout;
+        let state: "open" | "merged" = "open";
+        const url = "https://github.com/acme/web/pull/7";
+        const adapter = yield* SourceControlProvider.pipe(
+          Effect.provide(
+            Layer.mock(SourceControlProvider)({
+              kind: "github",
+              getChangeRequest: () =>
+                Effect.succeed({
+                  provider: "github",
+                  number: 7,
+                  title: "Review",
+                  url,
+                  baseRefName: "main",
+                  headRefName: "main",
+                  state,
+                  updatedAt: Option.none(),
+                }),
+              getDefaultBranch: () => Effect.succeed("main"),
+              listChangeRequests: () => Effect.succeed([]),
+            }),
+          ),
+        );
+        const { manager } = yield* makeManager({
+          sourceControlProvider: adapter,
+          textGeneration: {
+            generateCommitMessage: () =>
+              Effect.sync(() => {
+                if (phase === "title") state = "merged";
+                return { subject: "Review changes", body: "" };
+              }),
+          },
+        });
+        NodeFS.writeFileSync(NodePath.join(cwd, "README.md"), "pending review edit\n");
+        const error = yield* runStackedAction(
+          manager,
+          {
+            cwd,
+            action: "commit_push",
+            expectedBranch: "main",
+            pullRequestUrl: url,
+            filePaths: ["README.md"],
+          },
+          {
+            progressReporter: {
+              publish: (event) =>
+                Effect.sync(() => {
+                  if (phase === "push" && event.kind === "phase_started" && event.phase === "push")
+                    state = "merged";
+                }),
+            },
+          },
+        ).pipe(Effect.flip);
+        expect(error.message).toContain("no longer open for edits");
+        expect((yield* runGit(cwd, ["rev-parse", "origin/main"])).stdout).toBe(before);
+        const head = (yield* runGit(cwd, ["rev-parse", "HEAD"])).stdout;
+        if (phase === "title") expect(head).toBe(before);
+        else expect(head).not.toBe(before);
+        expect(NodeFS.readFileSync(NodePath.join(cwd, "README.md"), "utf8")).toBe(
+          "pending review edit\n",
+        );
       }),
   );
 
