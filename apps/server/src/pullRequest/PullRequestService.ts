@@ -942,6 +942,33 @@ export const make = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(toPullRequestError(operation)));
 
+  const requireOpenForReview = (
+    project: SupportedProject,
+    ref: PullRequestRef,
+    operation: string,
+  ) =>
+    project.api
+      .getChangeRequest({
+        cwd: project.project.workspaceRoot,
+        repository: project.repository,
+        host: project.host,
+        number: ref.number,
+      })
+      .pipe(
+        Effect.mapError(toPullRequestError(operation)),
+        Effect.flatMap((changeRequest) =>
+          changeRequest.state === "open"
+            ? Effect.void
+            : Effect.fail(
+                new PullRequestOperationError({
+                  operation,
+                  detail:
+                    "Only open change requests can receive approvals, change requests, or review requests.",
+                }),
+              ),
+        ),
+      );
+
   /**
    * The cursors the page sent back, read once before any host is asked anything. Null where the
    * page sent none, which is the listing read from its newest row.
@@ -2034,36 +2061,72 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
-            return project.api
-              .runAction({
-                cwd: project.project.workspaceRoot,
-                repository: project.repository,
-                host: project.host,
-                number: input.number,
-                action: input.action,
-                ...(input.stackNumber === undefined ? {} : { stackNumber: input.stackNumber }),
-                ...(input.expectedStackHeads === undefined
-                  ? {}
-                  : { expectedStackHeads: input.expectedStackHeads }),
-                ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
-                ...(input.bypassMergeChecks === true ? { bypassMergeChecks: true } : {}),
-                ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
-              })
-              .pipe(
-                // Once the authorized provider action starts, a failure may leave partial
-                // remote updates. Validation and permission failures above changed nothing.
-                Effect.ensuring(
-                  input.stackNumber === undefined
-                    ? Effect.void
-                    : refreshAfterTurn(project.project.id),
-                ),
-                Effect.mapError(toPullRequestError("runAction")),
-                Effect.as(
-                  project.api.kind === "azure-devops"
-                    ? input.repository.trim()
-                    : project.repository,
-                ),
-              );
+            return (
+              input.stackNumber === undefined &&
+              ["merge", "enable-auto-merge", "close", "revert"].includes(input.action)
+                ? project.api
+                    .getChangeRequest({
+                      cwd: project.project.workspaceRoot,
+                      repository: project.repository,
+                      host: project.host,
+                      number: input.number,
+                    })
+                    .pipe(
+                      Effect.mapError(toPullRequestError("runAction")),
+                      Effect.flatMap((changeRequest) => {
+                        const allowed =
+                          input.action === "revert"
+                            ? changeRequest.state === "merged"
+                            : changeRequest.state === "open" &&
+                              (input.action === "close" || !changeRequest.isDraft);
+                        return allowed
+                          ? Effect.void
+                          : Effect.fail(
+                              new PullRequestOperationError({
+                                operation: "runAction",
+                                detail:
+                                  "This action is not available in the change request's current state.",
+                              }),
+                            );
+                      }),
+                    )
+                : Effect.void
+            ).pipe(
+              Effect.andThen(() =>
+                project.api
+                  .runAction({
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                    action: input.action,
+                    ...(input.stackNumber === undefined ? {} : { stackNumber: input.stackNumber }),
+                    ...(input.expectedStackHeads === undefined
+                      ? {}
+                      : { expectedStackHeads: input.expectedStackHeads }),
+                    ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+                    ...(input.bypassMergeChecks === true ? { bypassMergeChecks: true } : {}),
+                    ...(input.updateMethod === undefined
+                      ? {}
+                      : { updateMethod: input.updateMethod }),
+                  })
+                  .pipe(
+                    // Once the authorized provider action starts, a failure may leave partial
+                    // remote updates. Validation and permission failures above changed nothing.
+                    Effect.ensuring(
+                      input.stackNumber === undefined
+                        ? Effect.void
+                        : refreshAfterTurn(project.project.id),
+                    ),
+                    Effect.mapError(toPullRequestError("runAction")),
+                    Effect.as(
+                      project.api.kind === "azure-devops"
+                        ? input.repository.trim()
+                        : project.repository,
+                    ),
+                  ),
+              ),
+            );
           }),
         );
       }),
@@ -2260,7 +2323,7 @@ export const make = Effect.gen(function* () {
     );
 
   const submitReview: PullRequestService["Service"]["submitReview"] = (input) =>
-    requireProject(input).pipe(
+    requireProject(input, { preflightAllowsPause: true }).pipe(
       Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
         const review = project.api.capabilities.review;
         const refuse = (detail: string) =>
@@ -2296,17 +2359,25 @@ export const make = Effect.gen(function* () {
                 "You need write access on this repository to comment on a line of a change request.",
               );
             }
-            return project.api
-              .submitReview({
-                cwd: project.project.workspaceRoot,
-                repository: project.repository,
-                host: project.host,
-                number: input.number,
-                verdict: input.verdict,
-                body: input.body,
-                comments: input.comments,
-              })
-              .pipe(Effect.mapError(toPullRequestError("submitReview")));
+            return (
+              input.verdict === "comment"
+                ? Effect.void
+                : requireOpenForReview(project, input, "submitReview")
+            ).pipe(
+              Effect.andThen(() =>
+                project.api
+                  .submitReview({
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                    verdict: input.verdict,
+                    body: input.body,
+                    comments: input.comments,
+                  })
+                  .pipe(Effect.mapError(toPullRequestError("submitReview"))),
+              ),
+            );
           }),
         );
       }),
@@ -2490,7 +2561,7 @@ export const make = Effect.gen(function* () {
     );
 
   const requestReviewers: PullRequestService["Service"]["requestReviewers"] = (input) =>
-    requireProject(input).pipe(
+    requireProject(input, { preflightAllowsPause: true }).pipe(
       Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
         if (!project.api.capabilities.reviewers.request) {
           return Effect.fail(
@@ -2510,16 +2581,24 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
-            return project.api
-              .setReviewerRequest({
-                cwd: project.project.workspaceRoot,
-                repository: project.repository,
-                host: project.host,
-                number: input.number,
-                reviewers: input.reviewers,
-                requested: input.requested,
-              })
-              .pipe(Effect.mapError(toPullRequestError("requestReviewers")));
+            return (
+              input.requested
+                ? requireOpenForReview(project, input, "requestReviewers")
+                : Effect.void
+            ).pipe(
+              Effect.andThen(() =>
+                project.api
+                  .setReviewerRequest({
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                    reviewers: input.reviewers,
+                    requested: input.requested,
+                  })
+                  .pipe(Effect.mapError(toPullRequestError("requestReviewers"))),
+              ),
+            );
           }),
         );
       }),

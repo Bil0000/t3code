@@ -381,7 +381,7 @@ function fakeProvider(
         requestReviewers: true,
       }),
     listChangeRequests: () => Effect.succeed({ items: [], truncated: false, continues: true }),
-    getChangeRequest: () => Effect.die("unused"),
+    getChangeRequest: () => Effect.succeed(hostedChangeRequest("Description")),
     getChangeRequestActivity: () => Effect.die("unused"),
     getDiff: () => Effect.die("unused"),
     runAction: () => Effect.void,
@@ -2515,6 +2515,7 @@ it.effect(
         ],
         providers: [
           fakeProvider("github", {
+            getChangeRequest: () => Effect.succeed(hostedChangeRequest("Description")),
             submitReview: () => {
               approved = true;
               return Effect.void;
@@ -2538,6 +2539,111 @@ it.effect(
       assert.isTrue(approved);
     }),
 );
+
+for (const state of ["open", "closed", "merged"] as const) {
+  it.effect(`limits formal reviews and reviewer requests to open change requests: ${state}`, () =>
+    Effect.gen(function* () {
+      let currentState: ProviderChangeRequest["state"] = "open";
+      let isDraft = false;
+      const writes: string[] = [];
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            getChangeRequest: () =>
+              Effect.succeed({
+                ...hostedChangeRequest("Description"),
+                state: currentState,
+                isDraft,
+              }),
+            submitReview: (input) =>
+              Effect.sync(() => {
+                writes.push(input.verdict);
+              }),
+            setReviewerRequest: () =>
+              Effect.sync(() => {
+                writes.push("request-reviewers");
+              }),
+            comment: () =>
+              Effect.sync(() => {
+                writes.push("comment");
+              }),
+            replyToThread: () =>
+              Effect.sync(() => {
+                writes.push("reply");
+              }),
+            setThreadResolution: () =>
+              Effect.sync(() => {
+                writes.push("resolve");
+              }),
+          }),
+        ],
+      });
+      const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+      yield* service.detail(reference);
+      currentState = state;
+      for (const draft of [false, true]) {
+        isDraft = draft;
+        for (const verdict of ["approve", "request-changes"] as const) {
+          const submit = service.submitReview({
+            ...reference,
+            verdict,
+            body: "Review",
+            comments: [
+              { path: "file.ts", position: { kind: "added", newLine: 1 }, body: "Line comment" },
+            ],
+          });
+          if (state === "open") yield* submit;
+          else assert.include((yield* Effect.flip(submit)).message, "Only open change requests");
+        }
+        const request = service.requestReviewers({
+          ...reference,
+          reviewers: [{ id: "reviewer", kind: "user" }],
+          requested: true,
+        });
+        if (state === "open") yield* request;
+        else assert.include((yield* Effect.flip(request)).message, "Only open change requests");
+      }
+      assert.deepStrictEqual(
+        writes,
+        state === "open"
+          ? [
+              "approve",
+              "request-changes",
+              "request-reviewers",
+              "approve",
+              "request-changes",
+              "request-reviewers",
+            ]
+          : [],
+      );
+      writes.length = 0;
+      yield* service.requestReviewers({
+        ...reference,
+        reviewers: [{ id: "reviewer", kind: "user" }],
+        requested: false,
+      });
+      yield* service.submitReview({
+        ...reference,
+        verdict: "comment",
+        body: "Discussion",
+        comments: [],
+      });
+      yield* service.comment({ ...reference, body: "Discussion" });
+      yield* service.replyToThread({ ...reference, threadId: "thread", body: "Reply" });
+      yield* service.setThreadResolution({ ...reference, threadId: "thread", resolved: true });
+      assert.deepStrictEqual(writes, [
+        "request-reviewers",
+        "comment",
+        "comment",
+        "reply",
+        "resolve",
+      ]);
+    }),
+  );
+}
 
 it.effect("refuses to resolve a conversation on a host that cannot", () =>
   Effect.gen(function* () {
@@ -6927,6 +7033,71 @@ it.effect("requires current host permission for an explicit merge-check bypass",
   }),
 );
 
+it.effect("checks the current lifecycle before confirmed actions reach a permissive host", () =>
+  Effect.gen(function* () {
+    let state: ProviderChangeRequest["state"] = "open";
+    let isDraft = false;
+    const writes: string[] = [];
+    const provider = fakeProvider("azure-devops");
+    const actions = ["merge", "enable-auto-merge", "close", "revert"] as const;
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "org/project/_git/web",
+          provider: "azure-devops",
+          host: "dev.azure.com",
+        }),
+      ],
+      providers: [
+        fakeProvider("azure-devops", {
+          capabilities: { ...provider.capabilities, actions },
+          getViewerPermissions: (input) =>
+            provider
+              .getViewerPermissions(input)
+              .pipe(Effect.map((permissions) => ({ ...permissions, actions }))),
+          getChangeRequest: () =>
+            Effect.succeed({ ...hostedChangeRequest("Description"), state, isDraft }),
+          runAction: (input) =>
+            Effect.sync(() => {
+              writes.push(input.action);
+            }),
+        }),
+      ],
+    });
+    const reference = {
+      projectId: "p1" as ProjectId,
+      repository: "org/project/_git/web",
+      host: "dev.azure.com",
+      number: 1,
+    };
+    yield* service.detail(reference);
+    for (const nextState of ["open", "closed", "merged"] as const) {
+      state = nextState;
+      for (const draft of [false, true]) {
+        isDraft = draft;
+        for (const action of actions) {
+          writes.length = 0;
+          const valid =
+            action === "revert"
+              ? state === "merged"
+              : state === "open" && (action === "close" || !isDraft);
+          const run = service.runAction({ ...reference, action });
+          if (valid) {
+            yield* run;
+            assert.deepStrictEqual(writes, [action]);
+          } else {
+            assert.include((yield* Effect.flip(run)).message, "current state");
+            assert.deepStrictEqual(writes, []);
+          }
+        }
+      }
+    }
+  }),
+);
+
 it.effect("refuses bypass requests on every host without the capability", () =>
   Effect.gen(function* () {
     for (const kind of ["github", "gitlab", "bitbucket", "azure-devops"] as const) {
@@ -7075,6 +7246,14 @@ it.effect("pauses attachment reads after host rate limits and resumes them when 
               Effect.sync(() => {
                 writes.push("resolve");
               }),
+            submitReview: () =>
+              Effect.sync(() => {
+                writes.push("review");
+              }),
+            setReviewerRequest: () =>
+              Effect.sync(() => {
+                writes.push("request-reviewers");
+              }),
             uploadAttachment: () =>
               Effect.sync(() => {
                 writes.push("upload");
@@ -7125,7 +7304,20 @@ it.effect("pauses attachment reads after host rate limits and resumes them when 
       yield* service.runAction({ ...input, action: "close" });
       yield* service.replyToThread({ ...input, threadId: "thread", body: "Reply" });
       yield* service.setThreadResolution({ ...input, threadId: "thread", resolved: true });
-      assert.deepStrictEqual(writes, ["upload", "action", "reply", "resolve"]);
+      yield* service.submitReview({ ...input, verdict: "approve", body: "", comments: [] });
+      yield* service.requestReviewers({
+        ...input,
+        reviewers: [{ id: "reviewer", kind: "user" }],
+        requested: true,
+      });
+      assert.deepStrictEqual(writes, [
+        "upload",
+        "action",
+        "reply",
+        "resolve",
+        "review",
+        "request-reviewers",
+      ]);
       assert.include((yield* service.readAttachment(input).pipe(Effect.flip)).message, "paused");
       assert.include((yield* service.detail(input).pipe(Effect.flip)).message, "paused");
       yield* TestClock.adjust("30 seconds");
@@ -7134,7 +7326,14 @@ it.effect("pauses attachment reads after host rate limits and resumes them when 
       preflightLimited = true;
       const denied = yield* service.uploadAttachment(upload).pipe(Effect.flip);
       assert.include(denied.message, "GitHub API rate limit exceeded");
-      assert.deepStrictEqual(writes, ["upload", "action", "reply", "resolve"]);
+      assert.deepStrictEqual(writes, [
+        "upload",
+        "action",
+        "reply",
+        "resolve",
+        "review",
+        "request-reviewers",
+      ]);
     }
   }).pipe(
     Effect.provideService(
