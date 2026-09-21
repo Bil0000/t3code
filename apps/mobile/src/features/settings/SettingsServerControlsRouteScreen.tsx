@@ -1,7 +1,6 @@
 import { useNavigation } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
-import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import {
   type ResponseStreamingMode,
@@ -12,8 +11,8 @@ import {
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
   type ProjectScopedServerSettingKey,
 } from "@t3tools/contracts";
-import { useRef, useState, type ComponentProps } from "react";
-import { Pressable, View } from "react-native";
+import { useRef, useState } from "react";
+import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { RUNTIME_MODE_CHOICES } from "../threads/thread-settings-options";
@@ -26,7 +25,6 @@ import {
 } from "./components/SettingsEnvironmentFilterHeader";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
-import { SettingsControlRow } from "./components/SettingsControlRow";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
@@ -34,6 +32,7 @@ import {
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
   resolveMobileSettingsTargets,
+  uniformMobileSetting,
   type ScopedMobileSettingsTarget,
 } from "./settings-scoped-server";
 
@@ -147,11 +146,8 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   const displayTargets = pendingWrites > 0 && pendingTargets !== null ? pendingTargets : targets;
   const hasConnectedSelection = targets.length > 0;
   const reference = displayTargets[0] ?? null;
-  const uniform = <K extends keyof ServerSettings>(key: K): ServerSettings[K] | null => {
-    if (reference === null) return null;
-    const value = reference.settings[key];
-    return displayTargets.every((entry) => entry.settings[key] === value) ? value : null;
-  };
+  const uniform = <K extends keyof ServerSettings>(key: K) =>
+    uniformMobileSetting(displayTargets, key);
   // `uniform` folds a real null into "mixed"; nullable keys need the distinction.
   const isMixed = (key: keyof ServerSettings) =>
     reference === null ||
@@ -322,7 +318,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
               {props.page === "source-control" ? (
                 <>
                   <SettingsSection title="Default branch">
-                    <FanoutSwitchRow
+                    <SettingsSwitchRow
                       icon="arrow.down.circle"
                       label="Automatically pull"
                       subtitle="Keep the default branch current when there are no local changes."
@@ -332,7 +328,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     />
                   </SettingsSection>
                   <SettingsSection title="Worktrees">
-                    <FanoutSwitchRow
+                    <SettingsSwitchRow
                       icon="arrow.triangle.branch"
                       label="Start from origin"
                       subtitle="Base new worktrees on the remote branch."
@@ -367,7 +363,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     ))}
                   </SettingsSection>
                   <SettingsSection title="Preview browser">
-                    <FanoutSwitchRow
+                    <SettingsSwitchRow
                       icon="globe"
                       label="Agent browser access"
                       subtitle="Allow agents to use the in-app preview browser."
@@ -403,7 +399,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     </SettingsSection>
                   ) : null}
                   <SettingsSection title="Updates">
-                    <FanoutSwitchRow
+                    <SettingsSwitchRow
                       icon="arrow.clockwise"
                       label="Check provider updates"
                       subtitle={
@@ -416,7 +412,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       onValueChange={(value) => write({ enableProviderUpdateChecks: value })}
                     />
                     <View className="border-t border-border-subtle">
-                      <FanoutSwitchRow
+                      <SettingsSwitchRow
                         icon="arrow.uturn.forward"
                         label="Continue after restart"
                         subtitle={
@@ -456,46 +452,5 @@ function MixedValuesLabel(props: { readonly projectSelected: boolean }) {
     >
       Mixed
     </Text>
-  );
-}
-
-function FanoutSwitchRow(props: {
-  readonly icon: ComponentProps<typeof SymbolView>["name"];
-  readonly label: string;
-  readonly subtitle: string;
-  readonly value: boolean | null;
-  readonly disabled: boolean;
-  readonly onValueChange: (value: boolean) => void;
-}) {
-  if (props.value !== null) {
-    return (
-      <SettingsSwitchRow
-        icon={props.icon}
-        label={props.label}
-        subtitle={props.subtitle}
-        value={props.value}
-        disabled={props.disabled}
-        onValueChange={props.onValueChange}
-      />
-    );
-  }
-
-  return (
-    <SettingsControlRow
-      disabled={props.disabled}
-      icon={props.icon}
-      label={props.label}
-      subtitle={props.subtitle}
-    >
-      <Pressable
-        accessibilityLabel={`Set ${props.label} on for selected environments`}
-        accessibilityRole="button"
-        disabled={props.disabled}
-        className="rounded-full bg-subtle px-3 py-2 active:opacity-70"
-        onPress={() => props.onValueChange(true)}
-      >
-        <Text className="text-sm font-t3-medium text-foreground">Mixed · Set on</Text>
-      </Pressable>
-    </SettingsControlRow>
   );
 }
