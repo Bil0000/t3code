@@ -20,6 +20,9 @@ import {
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
 
+const PHASE_CONTROL_CLASS =
+  "flex h-7 w-full cursor-pointer items-center justify-end rounded-md px-2.5 text-[10px] font-medium text-muted-foreground/65 hover:bg-black/[0.055] hover:text-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]";
+
 /** Members run under the coordinator's provider, so they share its glyph. */
 function WorkflowMemberRow({
   member,
@@ -91,8 +94,10 @@ export function ThreadLineageWorkflowRow({
   readonly onOpenThread: (threadId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [openPhases, setOpenPhases] = useState<ReadonlySet<number>>(() => new Set());
   const label = group.workflow.workflowName ?? group.workflow.title;
   const phases = group.phases.filter((phase) => phase.members.length > 0);
+  const allOpen = phases.length > 0 && phases.every((phase) => openPhases.has(phase.index));
   return (
     // The flag lets the lineage list trade its compact height for the open tree.
     <li className="group" data-workflow-expanded={expanded ? "" : undefined}>
@@ -118,30 +123,62 @@ export function ThreadLineageWorkflowRow({
       </div>
       {expanded ? (
         <ul className="m-0 list-none p-0 ps-5">
+          {phases.length > 1 ? (
+            <li>
+              <button
+                type="button"
+                onClick={() =>
+                  setOpenPhases(allOpen ? new Set() : new Set(phases.map((phase) => phase.index)))
+                }
+                className={PHASE_CONTROL_CLASS}
+              >
+                {allOpen ? "Collapse all" : "Expand all"}
+              </button>
+            </li>
+          ) : null}
           {phases.map((phase) => (
             <li key={phase.index}>
-              <p
+              <button
+                type="button"
+                aria-expanded={openPhases.has(phase.index)}
+                onClick={() =>
+                  setOpenPhases((open) => {
+                    const next = new Set(open);
+                    if (!next.delete(phase.index)) next.add(phase.index);
+                    return next;
+                  })
+                }
                 className={cn(
-                  "m-0 flex items-baseline gap-2 px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.08em]",
-                  phase.state === "running" ? "text-info" : "text-muted-foreground/65",
+                  PHASE_CONTROL_CLASS,
+                  "justify-start gap-2 font-semibold uppercase tracking-[0.08em]",
+                  phase.state === "running" && "text-info",
                 )}
               >
                 <span className="min-w-0 truncate">{phase.title}</span>
                 <span className="ms-auto shrink-0 tabular-nums">
                   {phase.settledCount}/{phase.members.length}
                 </span>
-              </p>
-              <ul className="m-0 list-none p-0">
-                {phase.members.map((member) => (
-                  <WorkflowMemberRow
-                    key={member.id}
-                    member={member}
-                    provider={provider}
-                    driver={driver}
-                    onOpen={onOpenThread}
-                  />
-                ))}
-              </ul>
+                <ChevronDownIcon
+                  aria-hidden
+                  className={cn(
+                    "size-3 shrink-0 transition-transform",
+                    !openPhases.has(phase.index) && "-rotate-90",
+                  )}
+                />
+              </button>
+              {openPhases.has(phase.index) ? (
+                <ul className="m-0 list-none p-0">
+                  {phase.members.map((member) => (
+                    <WorkflowMemberRow
+                      key={member.id}
+                      member={member}
+                      provider={provider}
+                      driver={driver}
+                      onOpen={onOpenThread}
+                    />
+                  ))}
+                </ul>
+              ) : null}
             </li>
           ))}
           {group.unphasedMembers.map((member) => (

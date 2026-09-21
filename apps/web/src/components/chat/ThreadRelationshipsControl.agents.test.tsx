@@ -95,6 +95,16 @@ it("opens the correct chat for every workflow phase and unphased member", async 
       (node) =>
         node.type === "button" && String(node.props["aria-label"]).startsWith("Open Member"),
     );
+  const clickLabelled = async (label: string) =>
+    act(async () =>
+      renderer.root
+        .findAllByType("button")
+        .find((button) => button.children.includes(label))!
+        .props.onClick(),
+    );
+  // Phases start closed, so only the unphased member shows.
+  expect(memberButtons()).toHaveLength(1);
+  await clickLabelled("Expand all");
   expect(memberButtons()).toHaveLength(7);
   for (const agent of agents) {
     await act(async () =>
@@ -110,6 +120,19 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   // Six of the seven members settled; only the last phase still has one running.
   expect(rendered).toContain('"6","/","7"');
   expect(rendered).toContain('"1","/","2"');
+  const phaseButtons = renderer.root.findAll(
+    (node) =>
+      node.type === "button" && node.props["aria-expanded"] === true && !node.props["aria-label"],
+  );
+  expect(phaseButtons).toHaveLength(3);
+  for (const phase of phaseButtons) {
+    await act(async () => phase.props.onClick());
+    expect(memberButtons()).toHaveLength(5);
+    await act(async () => phase.props.onClick());
+    expect(memberButtons()).toHaveLength(7);
+  }
+  await clickLabelled("Collapse all");
+  expect(memberButtons()).toHaveLength(1);
   await act(async () =>
     renderer.root.findByProps({ "aria-label": "Collapse Checkout review" }).props.onClick(),
   );
