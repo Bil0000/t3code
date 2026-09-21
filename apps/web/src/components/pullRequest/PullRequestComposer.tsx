@@ -65,12 +65,29 @@ export function PullRequestComposer({
       }}
     >
       <PopoverTrigger
-        render={<Button size="compact" variant="glass" className="rounded-full shadow-lg" />}
+        render={
+          <Button
+            size="icon"
+            variant="glass"
+            className="rounded-full shadow-lg [--glass-opacity:50%]"
+          />
+        }
+        // The only label this control has, so the pending count belongs in it: the badge beside
+        // the icon is decorative and a reader who cannot see it still needs the number.
+        aria-label={
+          pendingComments.length > 0
+            ? `Review pull request, ${pendingComments.length} ${pendingComments.length === 1 ? "comment" : "comments"} pending`
+            : !canComment
+              ? "Review pull request"
+              : "Comment on pull request"
+        }
       >
-        <MessageSquareIcon className="size-3.5" />
-        {canComment && pendingComments.length === 0 ? "Comment" : "Review"}
+        <MessageSquareIcon className="size-4" />
         {pendingComments.length > 0 ? (
-          <span className="flex size-4 items-center justify-center rounded-full bg-accent text-[10px] tabular-nums text-accent-foreground">
+          <span
+            aria-hidden
+            className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-[9px] font-semibold tabular-nums text-white"
+          >
             {pendingComments.length}
           </span>
         ) : null}
