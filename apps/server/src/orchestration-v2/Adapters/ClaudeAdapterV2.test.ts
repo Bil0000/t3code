@@ -7099,7 +7099,30 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             result: "Launched the workflow.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "launching turn terminal");
+        yield* Queue.take(harness.terminalReceipts);
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-unrelated-failure"),
+            text: "Do another task.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000001014",
+            result: "Another task failed.",
+            terminalReason: "api_error",
+            isError: true,
+          }),
+        );
+        yield* Queue.take(harness.terminalReceipts);
+        assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, "running");
+        assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "running");
 
         // The run outlives the turn that launched it, so this snapshot arrives
         // with no turn context at all.

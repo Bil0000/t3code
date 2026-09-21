@@ -4537,7 +4537,11 @@ export function makeClaudeAdapterV2(
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
           if (input.status !== "completed") {
             for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
-              if (subagent.task.workflow === undefined || subagent.task.status !== "running")
+              if (
+                subagent.task.workflow === undefined ||
+                subagent.task.status !== "running" ||
+                subagent.task.runId !== input.context.input.runId
+              )
                 continue;
               yield* updateClaudeSubagentNode({
                 context: input.context,
