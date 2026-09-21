@@ -44,6 +44,7 @@ export function PullRequestComposer({
   onReviewSubmitted: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [reviewPending, setReviewPending] = useState(false);
   const [requestedMode, setRequestedMode] = useState<"comment" | "review">("comment");
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const reviewRef = useRef<HTMLTextAreaElement>(null);
@@ -141,6 +142,7 @@ export function PullRequestComposer({
                 variant="ghost"
                 aria-label="Discard pending line comments"
                 title="Discard pending line comments"
+                disabled={reviewPending}
                 onClick={() => clearComments(reviewKey)}
               >
                 <Trash2Icon className="size-3.5" />
@@ -164,6 +166,8 @@ export function PullRequestComposer({
               verdicts={verdicts}
               requestChangesSummaryRequired={detail.provider === "forgejo"}
               textareaRef={reviewRef}
+              pending={reviewPending}
+              onPendingChange={setReviewPending}
               onSubmitted={() => {
                 setOpen(false);
                 onReviewSubmitted();

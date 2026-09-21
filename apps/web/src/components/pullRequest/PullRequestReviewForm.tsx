@@ -53,6 +53,8 @@ export function PullRequestReviewForm({
   verdicts,
   requestChangesSummaryRequired,
   textareaRef,
+  pending,
+  onPendingChange,
   onSubmitted,
 }: {
   environmentId: EnvironmentId;
@@ -60,9 +62,10 @@ export function PullRequestReviewForm({
   verdicts: ReadonlyArray<PullRequestReviewVerdict>;
   requestChangesSummaryRequired: boolean;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  pending: boolean;
+  onPendingChange: (pending: boolean) => void;
   onSubmitted: () => void;
 }) {
-  const [pending, setPending] = useState(false);
   const [requestedVerdict, setRequestedVerdict] = useState<PullRequestReviewVerdict>("comment");
   const comments = usePendingReviewComments(reference);
   const reviewKey = pullRequestReviewKey(reference);
@@ -85,7 +88,7 @@ export function PullRequestReviewForm({
     if (pending) return;
     const submittedBody = body;
     const submittedComments = comments;
-    setPending(true);
+    onPendingChange(true);
     const result = await submitReview({
       environmentId,
       input: {
@@ -95,7 +98,7 @@ export function PullRequestReviewForm({
         comments: submittedComments,
       },
     });
-    setPending(false);
+    onPendingChange(false);
     if (result._tag === "Failure") {
       // The draft is kept: whatever went wrong, retyping the review is not the answer.
       toastManager.add({ type: "error", title: "The review could not be submitted" });
