@@ -76,16 +76,21 @@ afterAll(() => {
 
 describe("readWorkflowAgentAnswers", () => {
   // The under-cap case is the control: without it a read stuck on [] would pass.
-  effectIt.effect("reads a transcript's turns, but none when the read was capped", () =>
+  effectIt.effect("reads final answers from both small and capped transcripts", () =>
     Effect.gen(function* () {
       const turn = assistant("a", [{ type: "text", text: "the answer" }]);
       const filler = line({ type: "user", message: { role: "user", content: "x".repeat(4096) } });
       NodeFS.writeFileSync(NodePath.join(root, "agent-small.jsonl"), turn);
-      NodeFS.writeFileSync(NodePath.join(root, "agent-huge.jsonl"), turn + filler.repeat(160));
+      NodeFS.writeFileSync(
+        NodePath.join(root, "agent-huge.jsonl"),
+        turn + filler.repeat(160) + assistant("final", [{ type: "text", text: "final answer" }]),
+      );
       expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "small" })).toEqual([
         "the answer",
       ]);
-      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "huge" })).toEqual([]);
+      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "huge" })).toEqual([
+        "final answer",
+      ]);
     }),
   );
 });

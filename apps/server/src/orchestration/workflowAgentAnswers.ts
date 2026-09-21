@@ -82,9 +82,10 @@ export const readWorkflowAgentAnswers = Effect.fn("orchestration.readWorkflowAge
       path: NodePath.join(input.transcriptDir, `agent-${input.agentId}.jsonl`),
       extension: ".jsonl",
       byteCap: TRANSCRIPT_BYTE_CAP,
+      tail: true,
     });
-    // A capped read keeps the head, but a member's final answer is at the tail:
-    // fall back to the progress excerpt rather than show a mid-run turn as final.
-    return file.truncated ? [] : parseWorkflowAgentAnswers(file.contents);
+    return parseWorkflowAgentAnswers(
+      file.truncated ? file.contents.slice(file.contents.indexOf("\n") + 1) : file.contents,
+    );
   },
 );

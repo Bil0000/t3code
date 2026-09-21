@@ -29,6 +29,7 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
     readonly path: string;
     readonly extension: string;
     readonly byteCap: number;
+    readonly tail?: boolean;
   }) {
     const { byteCap } = input;
     const requested = input.path;
@@ -86,7 +87,8 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
           }
           const truncated = stat.size > byteCap;
           const buffer = Buffer.alloc(Math.min(stat.size, byteCap));
-          const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+          const offset = input.tail ? Math.max(0, stat.size - byteCap) : 0;
+          const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
           return {
             contents: buffer.subarray(0, bytesRead).toString("utf8"),
             truncated,
