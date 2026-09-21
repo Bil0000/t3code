@@ -9,7 +9,7 @@
  * summary as a comment or the reverse.
  */
 import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@t3tools/contracts";
-import { MessageSquareIcon, XIcon } from "lucide-react";
+import { MessageSquareIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { Button } from "../ui/button";
@@ -48,6 +48,7 @@ export function PullRequestComposer({
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const reviewRef = useRef<HTMLTextAreaElement>(null);
   const pendingComments = usePendingReviewComments(reference);
+  const clearComments = usePullRequestReviewStore((store) => store.clear);
   // A summary typed but not sent is review work too, and it outlives the popover. Selected as a
   // boolean rather than the text, so typing one does not re-render the composer per keystroke.
   const reviewKey = pullRequestReviewKey(reference);
@@ -104,6 +105,7 @@ export function PullRequestComposer({
         ) : null}
       </PopoverTrigger>
       <PopoverPopup
+        keepMounted
         side="top"
         align="end"
         sideOffset={8}
@@ -132,16 +134,28 @@ export function PullRequestComposer({
               {mode === "review" ? "Review pull request" : "Comment on pull request"}
             </PopoverTitle>
           )}
-          <PopoverClose
-            render={<Button size="icon-xs" variant="ghost" />}
-            aria-label="Close composer"
-          >
-            <XIcon className="size-3.5" />
-          </PopoverClose>
+          <div className="flex items-center gap-1">
+            {mode === "review" && pendingComments.length > 0 ? (
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Discard pending line comments"
+                title="Discard pending line comments"
+                onClick={() => clearComments(reviewKey)}
+              >
+                <Trash2Icon className="size-3.5" />
+              </Button>
+            ) : null}
+            <PopoverClose
+              render={<Button size="icon-xs" variant="ghost" />}
+              aria-label="Close composer"
+            >
+              <XIcon className="size-3.5" />
+            </PopoverClose>
+          </div>
         </div>
-        {/* Both panes stay mounted and the inactive one is only hidden. Unmounting would drop
-            the comment draft on every toggle, and reset the submit guard of a form whose request
-            is still in flight — enough to send the same review twice. */}
+        {/* Keep both forms mounted across toggles and dismissal so drafts and in-flight
+            submit guards survive closing and reopening the composer. */}
         {verdicts.length > 0 ? (
           <div hidden={mode !== "review"}>
             <PullRequestReviewForm
