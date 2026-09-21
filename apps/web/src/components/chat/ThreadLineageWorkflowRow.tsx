@@ -21,6 +21,23 @@ import {
 } from "./threadDetailsPanelStyles";
 
 /**
+ * Wall clock for the phase: its members run in parallel, so the span from the
+ * first start to the last finish is the time the phase actually took. Shaped
+ * for AgentElapsed, which ticks it while the phase is still running.
+ */
+function phaseElapsed(phase: AgentPanelWorkflowGroup["phases"][number]) {
+  const instants = (key: "startedAt" | "completedAt") =>
+    phase.members.map((member) => member[key]).filter((value) => value !== null);
+  const started = instants("startedAt").sort();
+  const completed = instants("completedAt").sort();
+  return {
+    status: phase.state === "running" ? ("running" as const) : ("completed" as const),
+    startedAt: started[0] ?? null,
+    completedAt: phase.state === "done" ? (completed.at(-1) ?? null) : null,
+  };
+}
+
+/**
  * Phase state as the panel already says it elsewhere: a coloured dot, and the
  * running phase tinted so the active step is findable without reading counts.
  */
@@ -136,7 +153,7 @@ export function ThreadLineageWorkflowRow({
             const open = openPhases.has(phase.index);
             const status = phaseStatus(phase);
             return (
-              <li key={phase.index}>
+              <li key={phase.index} className="mt-2 first:mt-0">
                 {/* Chevron sits in the member glyph's box, so titles share a column. */}
                 <button
                   type="button"
@@ -160,6 +177,9 @@ export function ThreadLineageWorkflowRow({
                     className={cn("size-3 shrink-0 transition-transform", !open && "-rotate-90")}
                   />
                   <span className="min-w-0 flex-1 truncate">{phase.title}</span>
+                  <span className="shrink-0 font-normal normal-case tracking-normal opacity-70">
+                    <AgentElapsed agent={phaseElapsed(phase)} />
+                  </span>
                   <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", status.dot)} />
                   <span className="shrink-0 tabular-nums">
                     {phase.settledCount}/{phase.members.length}

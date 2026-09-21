@@ -57,6 +57,9 @@ it("opens the correct chat for every workflow phase and unphased member", async 
     model: "claude-sonnet-4-6",
     result: `Result ${index}`,
     totalTokens: 1200,
+    // Staggered starts, so a phase spans longer than either member's own run.
+    startedAt: 1_700_000_000_000 + index * 1000,
+    durationMs: 5000,
   }));
   state.projection = {
     thread: { id: "parent", lineage: { relationshipToParent: null } },
@@ -124,6 +127,8 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   // The phase holding the running member reports itself as the active one.
   expect(rendered).toContain("running");
   expect(rendered).toContain("done");
+  // Members 0 and 1 start a second apart and run 5s each, so Inspect took 6s.
+  expect(rendered).toContain('"6s"');
   for (const phase of phaseButtons()) {
     await act(async () => phase.props.onClick());
     expect(memberButtons()).toHaveLength(5);
