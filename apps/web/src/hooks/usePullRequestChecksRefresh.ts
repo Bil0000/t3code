@@ -12,7 +12,8 @@ export function usePullRequestChecksRefresh(input: {
     key: input.key,
     enabled: input.enabled,
     intervalMs:
-      input.checks.length === 0 || input.checks.some((check) => check.status === "pending")
+      input.checks.length === 0 ||
+      input.checks.some((check) => check.status === "pending" || check.status === "action-required")
         ? 45_000
         : 60_000,
   });
