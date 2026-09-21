@@ -17,7 +17,11 @@ import { Popover, PopoverClose, PopoverPopup, PopoverTitle, PopoverTrigger } fro
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { PullRequestCommentForm } from "./PullRequestCommentForm";
 import { PullRequestReviewForm } from "./PullRequestReviewForm";
-import { usePendingReviewComments } from "./pullRequestReviewStore";
+import {
+  pullRequestReviewKey,
+  usePendingReviewComments,
+  usePullRequestReviewStore,
+} from "./pullRequestReviewStore";
 
 export function PullRequestComposer({
   environmentId,
@@ -44,6 +48,13 @@ export function PullRequestComposer({
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const reviewRef = useRef<HTMLTextAreaElement>(null);
   const pendingComments = usePendingReviewComments(reference);
+  // A summary typed but not sent is review work too, and it outlives the popover. Selected as a
+  // boolean rather than the text, so typing one does not re-render the composer per keystroke.
+  const reviewKey = pullRequestReviewKey(reference);
+  const summaryStarted = usePullRequestReviewStore(
+    (store) => (store.summaries[reviewKey] ?? "").trim().length > 0,
+  );
+  const reviewStarted = pendingComments.length > 0 || summaryStarted;
 
   // What is offered is the intersection of two different questions: what this host can do at
   // all, and what this account may do on this repository. Either one saying no means a control
@@ -60,7 +71,7 @@ export function PullRequestComposer({
     <Popover
       open={open}
       onOpenChange={(next) => {
-        if (next) setRequestedMode(pendingComments.length > 0 ? "review" : "comment");
+        if (next) setRequestedMode(reviewStarted ? "review" : "comment");
         setOpen(next);
       }}
     >
@@ -77,7 +88,7 @@ export function PullRequestComposer({
         aria-label={
           pendingComments.length > 0
             ? `Review pull request, ${pendingComments.length} ${pendingComments.length === 1 ? "comment" : "comments"} pending`
-            : !canComment
+            : reviewStarted || !canComment
               ? "Review pull request"
               : "Comment on pull request"
         }
