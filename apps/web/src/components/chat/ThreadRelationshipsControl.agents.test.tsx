@@ -105,17 +105,15 @@ it("opens the correct chat for every workflow phase and unphased member", async 
       params: { environmentId: "remote", threadId: agent.childThreadId },
     });
   }
-  const phaseButtons = renderer.root.findAll(
-    (node) =>
-      node.type === "button" && node.props["aria-expanded"] === true && !node.props["aria-label"],
+  const rendered = JSON.stringify(renderer.toJSON());
+  for (const phase of phases) expect(rendered).toContain(phase.title);
+  // Six of the seven members settled; only the last phase still has one running.
+  expect(rendered).toContain('"6","/","7"');
+  expect(rendered).toContain('"1","/","2"');
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Collapse Checkout review" }).props.onClick(),
   );
-  expect(phaseButtons).toHaveLength(3);
-  for (const phase of phaseButtons) {
-    await act(async () => phase.props.onClick());
-    expect(memberButtons()).toHaveLength(5);
-    await act(async () => phase.props.onClick());
-    expect(memberButtons()).toHaveLength(7);
-  }
+  expect(memberButtons()).toHaveLength(0);
   expect(state.navigate).toHaveBeenCalledTimes(7);
 });
 

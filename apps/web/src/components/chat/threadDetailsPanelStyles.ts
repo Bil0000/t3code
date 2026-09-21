@@ -24,8 +24,6 @@ export const THREAD_DETAILS_PANEL_SELECT_ROW_CLASS = `${THREAD_DETAILS_PANEL_ROW
 
 export const THREAD_DETAILS_PANEL_LINK_ROW_CLASS = `flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-start gap-2.5 rounded-lg border border-transparent bg-transparent px-2.5 text-left text-[13px] font-medium text-foreground/80 disabled:cursor-not-allowed disabled:opacity-55 sm:h-9 sm:text-[13px] ${THREAD_DETAILS_PANEL_ROW_SURFACE_CLASS}`;
 
-export const THREAD_DETAILS_PANEL_LINK_MULTILINE_ROW_CLASS = `${THREAD_DETAILS_PANEL_LINK_ROW_CLASS} h-12 sm:h-12`;
-
 // No transition on the group: the halves are Buttons whose background snaps (their base only
 // transitions shadow), so an eased group tint would land frames later and the hover would
 // visibly commit in two steps.

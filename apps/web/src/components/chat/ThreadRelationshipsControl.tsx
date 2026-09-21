@@ -57,7 +57,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   THREAD_DETAILS_PANEL_ICON_ACTION_CLASS,
   THREAD_DETAILS_PANEL_LINK_ROW_CLASS,
-  THREAD_DETAILS_PANEL_LINK_MULTILINE_ROW_CLASS,
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
@@ -91,11 +90,13 @@ export function ThreadLineageRowList(props: {
         component: this sits inside an already scrolling panel, where a
         max-height-only virtual viewport measures badly. Every row is a focusable
         button, so keyboard users reach and scroll the region through the rows
-        themselves and the container needs no extra tab stop of its own.
+        themselves and the container needs no extra tab stop of its own. An
+        expanded workflow asks for a taller window, so it raises the bound while
+        its tree is open.
       */}
       <ul
         aria-label="Related threads"
-        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0 has-data-workflow:max-h-[min(32rem,60dvh)]"
+        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0 has-data-workflow-expanded:max-h-[min(28rem,55dvh)]"
       >
         {props.children}
       </ul>
@@ -391,10 +392,11 @@ export function ThreadRelationshipsPanel(props: {
               ) : (
                 relationshipHint
               );
+              const elapsed = agent?.startedAt ? <AgentElapsed agent={agent} /> : null;
               const relationshipContent = (
                 <>
                   <ThreadRelationshipIcon
-                    driver={isSubagent && !isParent && !workflowGroup ? providerDriver : undefined}
+                    driver={isSubagent && !isParent ? providerDriver : undefined}
                     provider={provider}
                     fallbackIcon={RelationshipIcon}
                     status={edge.status}
@@ -403,21 +405,21 @@ export function ThreadRelationshipsPanel(props: {
                     <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
                       {threadTitle}
                     </span>
-                    {workflowGroup ? <ThreadLineageWorkflowCount group={workflowGroup} /> : null}
                     {agent ? <span className="sr-only">{agent.status}</span> : null}
                   </span>
                   {agent ? (
-                    agent.startedAt ? (
-                      <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
-                        <AgentElapsed agent={agent} />
-                      </span>
-                    ) : null
+                    <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
+                      {workflowGroup ? <ThreadLineageWorkflowCount group={workflowGroup} /> : null}
+                      {workflowGroup && elapsed ? " · " : null}
+                      {elapsed}
+                    </span>
                   ) : (
                     <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                   )}
                 </>
               );
-              // A workflow wraps this row; everything else renders it directly.
+              // A workflow pairs this row with a disclosure, so it renders as the
+              // leading half of a split row; everything else renders it directly.
               const relationshipLink = (
                 <Tooltip>
                   <TooltipTrigger
@@ -430,7 +432,7 @@ export function ThreadRelationshipsPanel(props: {
                         onClick={() => openThread(threadId)}
                         className={
                           workflowGroup
-                            ? THREAD_DETAILS_PANEL_LINK_MULTILINE_ROW_CLASS
+                            ? THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS
                             : THREAD_DETAILS_PANEL_LINK_ROW_CLASS
                         }
                       />
@@ -446,6 +448,8 @@ export function ThreadRelationshipsPanel(props: {
                   <ThreadLineageWorkflowRow
                     key={threadId}
                     group={workflowGroup}
+                    provider={provider}
+                    driver={providerDriver}
                     onOpenThread={(memberThreadId) => openThread(memberThreadId as ThreadId)}
                     header={relationshipLink}
                   />
