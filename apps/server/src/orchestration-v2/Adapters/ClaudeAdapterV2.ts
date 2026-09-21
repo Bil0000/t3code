@@ -3649,7 +3649,7 @@ export function makeClaudeAdapterV2(
                 ? transcript
                 : member.result === undefined
                   ? []
-                  : [member.result];
+                  : [`Partial answer from workflow progress:\n\n${member.result}`];
               for (const [index, answer] of turns.entries()) {
                 const ordinal = 200 + index;
                 yield* emitWorkflowMemberMessage({
@@ -4535,6 +4535,17 @@ export function makeClaudeAdapterV2(
           readonly result?: SDKResultMessage;
         }) {
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
+          if (input.status !== "completed") {
+            for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
+              if (subagent.task.workflow === undefined || subagent.task.status !== "running")
+                continue;
+              yield* updateClaudeSubagentNode({
+                context: input.context,
+                taskId,
+                status: input.status === "failed" ? "failed" : "cancelled",
+              });
+            }
+          }
           for (const toolCall of input.context.toolCalls.values()) {
             const artifacts = buildToolCallArtifacts({
               context: input.context,

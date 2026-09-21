@@ -6974,6 +6974,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ["stopped", true],
     ["failed", true],
     ["completed", true],
+    ["interrupted", false],
+    ["query_failed", false],
   ] as const)(
     "settles workflow members when the coordinator reports %s, between turns=%s",
     ([status, betweenTurns]) =>
@@ -7008,20 +7010,21 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             );
             yield* Queue.take(harness.terminalReceipts);
           }
-          yield* Queue.offer(
-            harness.sdkMessages,
-            claudeSdkFrame({
-              type: "system",
-              subtype: "task_notification",
-              task_id: WORKFLOW_TASK_ID,
-              tool_use_id: WORKFLOW_TOOL_USE_ID,
-              status,
-              output_file: "/tmp/workflow.output",
-              summary: "Workflow finished.",
-              uuid: "00000000-0000-4000-8000-000000001011",
-              session_id: WAKE_NATIVE_SESSION,
-            }),
-          );
+          if (status !== "interrupted" && status !== "query_failed")
+            yield* Queue.offer(
+              harness.sdkMessages,
+              claudeSdkFrame({
+                type: "system",
+                subtype: "task_notification",
+                task_id: WORKFLOW_TASK_ID,
+                tool_use_id: WORKFLOW_TOOL_USE_ID,
+                status,
+                output_file: "/tmp/workflow.output",
+                summary: "Workflow finished.",
+                uuid: "00000000-0000-4000-8000-000000001011",
+                session_id: WAKE_NATIVE_SESSION,
+              }),
+            );
           if (betweenTurns) {
             yield* Queue.take(harness.continuationReceipts);
             yield* harness.runtime.startTurn(
@@ -7043,10 +7046,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             makeResultFrame({
               uuid: "00000000-0000-4000-8000-000000001012",
               result: "Finished.",
+              isError: status === "query_failed",
+              ...(status === "query_failed" ? { terminalReason: "api_error" as const } : {}),
+              ...(status === "interrupted" ? { terminalReason: "aborted_streaming" as const } : {}),
             }),
           );
           yield* Queue.take(harness.terminalReceipts);
-          const expected = status === "stopped" ? "cancelled" : status;
+          const expected =
+            status === "stopped" || status === "interrupted"
+              ? "cancelled"
+              : status === "query_failed"
+                ? "failed"
+                : status;
           for (const index of [1, 2]) {
             const updates = workflowMemberEvents(harness.events, index);
             const member = updates.at(-1)?.subagent;
@@ -7114,7 +7125,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.deepEqual(
           threadMessages(harness.events, secondThreadId).map((event) => event.message.text),
-          ["Reply with exactly: A2", "A2 excerpt"],
+          ["Reply with exactly: A2", "Partial answer from workflow progress:\n\nA2 excerpt"],
         );
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
