@@ -6,16 +6,15 @@ import type {
   AgentPanelWorkflowGroup,
   RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import { AgentElapsed, StatusDot } from "../AgentsPanel";
+import { AgentElapsed } from "../AgentsPanel";
+import { ThreadRelationshipIcon } from "./ThreadRelationshipIcon";
+import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { THREAD_DETAILS_PANEL_LINK_ROW_CLASS } from "./threadDetailsPanelStyles";
-
-/** Beyond this the dots crowd the run's name out of a ~312px card. */
-const MAX_INLINE_DOTS = 4;
 
 function MemberRow({
   member,
@@ -36,12 +35,12 @@ function MemberRow({
         onClick={() => threadId !== null && onOpen(threadId)}
         className={cn(
           THREAD_DETAILS_PANEL_LINK_ROW_CLASS,
-          "h-6 gap-2 pl-7 pr-2.5 text-[12px] font-normal sm:h-6 sm:text-[12px]",
+          "h-9 gap-2 pl-7 pr-2.5 text-[13px] font-medium sm:h-9 sm:text-[13px]",
         )}
       >
-        <StatusDot status={member.status} />
+        <ThreadRelationshipIcon status={member.status} />
         <span className="min-w-0 flex-1 truncate text-left">{member.title}</span>
-        <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <AgentElapsed agent={member} />
         </span>
       </Button>
@@ -56,37 +55,29 @@ function PhaseRows({
   phase: AgentPanelWorkflowGroup["phases"][number];
   onOpen: (threadId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(true);
   if (phase.members.length === 0) return null;
   return (
-    <>
-      <li className="flex h-5 items-center gap-1.5 px-2.5">
-        <CheckIcon
-          aria-hidden
-          className={cn(
-            "size-2.5 shrink-0 text-success-foreground",
-            phase.state !== "done" && "invisible",
-          )}
-        />
-        <span
-          className={cn(
-            "min-w-0 truncate text-[10px] font-medium uppercase tracking-wider",
-            phase.state === "done"
-              ? "text-success-foreground"
-              : phase.state === "running"
-                ? "text-info-foreground"
-                : "text-muted-foreground/70",
-          )}
-        >
-          {phase.title}
-        </span>
-        <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
-          {phase.settledCount}/{phase.members.length}
-        </span>
-      </li>
-      {phase.members.map((member) => (
-        <MemberRow key={member.id} member={member} onOpen={onOpen} />
-      ))}
-    </>
+    <li>
+      <CollapsibleSectionHeader
+        expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        accessory={
+          <span className="tabular-nums">
+            {phase.settledCount}/{phase.members.length} settled
+          </span>
+        }
+      >
+        {phase.title}
+      </CollapsibleSectionHeader>
+      {expanded ? (
+        <ul className="m-0 list-none p-0">
+          {phase.members.map((member) => (
+            <MemberRow key={member.id} member={member} onOpen={onOpen} />
+          ))}
+        </ul>
+      ) : null}
+    </li>
   );
 }
 
@@ -137,19 +128,18 @@ export function ThreadLineageWorkflowRow(props: {
   );
 }
 
-/** Status dots for the collapsed row, capped so they cannot crowd out its name. */
-export function ThreadLineageWorkflowDots({ group }: { group: AgentPanelWorkflowGroup }) {
+export function ThreadLineageWorkflowCount({ group }: { group: AgentPanelWorkflowGroup }) {
   const members = [...group.phases.flatMap((phase) => phase.members), ...group.unphasedMembers];
-  if (members.length === 0) return null;
+  const settled = members.filter(
+    (member) =>
+      member.status === "completed" ||
+      member.status === "failed" ||
+      member.status === "cancelled" ||
+      member.status === "interrupted",
+  ).length;
   return (
-    <span
-      className="flex shrink-0 items-center gap-0.5"
-      aria-label={`${members.length} agents`}
-      role="img"
-    >
-      {members.slice(0, MAX_INLINE_DOTS).map((member) => (
-        <StatusDot key={member.id} status={member.status} />
-      ))}
+    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+      {settled}/{members.length} settled
     </span>
   );
 }

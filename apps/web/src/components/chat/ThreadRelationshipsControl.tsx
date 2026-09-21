@@ -49,7 +49,7 @@ import {
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AgentElapsed } from "./AgentElapsed";
-import { ThreadLineageWorkflowDots, ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
+import { ThreadLineageWorkflowCount, ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
 import { ThreadRelationshipIcon } from "./ThreadRelationshipIcon";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -391,18 +391,18 @@ export function ThreadRelationshipsPanel(props: {
               const relationshipContent = (
                 <>
                   <ThreadRelationshipIcon
-                    driver={isSubagent && !isParent ? providerDriver : undefined}
+                    driver={isSubagent && !isParent && !workflowGroup ? providerDriver : undefined}
                     provider={provider}
                     fallbackIcon={RelationshipIcon}
                     status={edge.status}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
-                      {threadTitle}
+                      {workflowGroup ? `Workflow · ${threadTitle}` : threadTitle}
                     </span>
                     {agent ? <span className="sr-only">{agent.status}</span> : null}
                   </span>
-                  {workflowGroup ? <ThreadLineageWorkflowDots group={workflowGroup} /> : null}
+                  {workflowGroup ? <ThreadLineageWorkflowCount group={workflowGroup} /> : null}
                   {agent ? (
                     agent.startedAt ? (
                       <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
