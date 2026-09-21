@@ -56,6 +56,15 @@ describe("parseWorkflowAgentAnswers", () => {
     ).toEqual([]);
   });
 
+  it("preserves answer indentation and ignores blank text", () => {
+    expect(
+      parseWorkflowAgentAnswers(
+        assistant("a", [{ type: "text", text: "    indented code" }]) +
+          assistant("b", [{ type: "text", text: "   " }]),
+      ),
+    ).toEqual(["    indented code"]);
+  });
+
   it("survives a trailing line the byte cap cut in half", () => {
     expect(
       parseWorkflowAgentAnswers(
@@ -82,6 +91,10 @@ describe("readWorkflowAgentAnswers", () => {
       const filler = line({ type: "user", message: { role: "user", content: "x".repeat(4096) } });
       NodeFS.writeFileSync(NodePath.join(root, "agent-small.jsonl"), turn);
       NodeFS.writeFileSync(
+        NodePath.join(root, "agent-boundary.jsonl"),
+        filler.repeat(160) + turn + " ".repeat(512 * 1024 - Buffer.byteLength(turn)),
+      );
+      NodeFS.writeFileSync(
         NodePath.join(root, "agent-huge.jsonl"),
         turn + filler.repeat(160) + assistant("final", [{ type: "text", text: "final answer" }]),
       );
@@ -91,6 +104,9 @@ describe("readWorkflowAgentAnswers", () => {
       expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "huge" })).toEqual([
         "final answer",
       ]);
+      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "boundary" })).toEqual(
+        ["the answer"],
+      );
     }),
   );
 });

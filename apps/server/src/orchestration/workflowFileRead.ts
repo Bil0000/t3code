@@ -86,8 +86,8 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
             return { failure: "changed-during-read" as const };
           }
           const truncated = stat.size > byteCap;
-          const buffer = Buffer.alloc(Math.min(stat.size, byteCap));
-          const offset = input.tail ? Math.max(0, stat.size - byteCap) : 0;
+          const buffer = Buffer.alloc(Math.min(stat.size, byteCap + (input.tail ? 1 : 0)));
+          const offset = input.tail ? stat.size - buffer.length : 0;
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
           return {
             contents: buffer.subarray(0, bytesRead).toString("utf8"),

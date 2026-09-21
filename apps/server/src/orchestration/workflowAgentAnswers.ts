@@ -53,8 +53,8 @@ export function parseWorkflowAgentAnswers(contents: string): ReadonlyArray<strin
     if (!Array.isArray(content)) continue;
     const body = content
       .filter((block) => text(field(block, "type")) === "text")
-      .map((block) => text(field(block, "text")))
-      .filter((value): value is string => value !== undefined)
+      .map((block) => field(block, "text"))
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       .join("\n\n");
     if (body.length === 0) continue;
 
