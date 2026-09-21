@@ -944,7 +944,10 @@ export function deriveAgentPanelModel({
     const phaseTitles = new Map<number, string>();
     for (const member of workflowMembers) {
       if (member.phaseIndex === null) continue;
-      phaseTitles.set(member.phaseIndex, member.phaseTitle ?? `Phase ${member.phaseIndex + 1}`);
+      phaseTitles.set(
+        member.phaseIndex,
+        member.phaseTitle ?? phaseTitles.get(member.phaseIndex) ?? `Phase ${member.phaseIndex + 1}`,
+      );
     }
     for (const phase of workflow.phases) phaseTitles.set(phase.index, phase.title);
     const knownPhases = Array.from(phaseTitles.entries())

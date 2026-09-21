@@ -191,6 +191,14 @@ describe("deriveAgentPanelModel over a dynamic workflow", () => {
     expect(group?.unphasedMembers).toEqual([]);
   });
 
+  it.each([false, true])("keeps a reported phase title, missing title first=%s", (missingFirst) => {
+    const agents = [member({ phaseTitle: "Review" }), member({ index: 2, phaseTitle: undefined })];
+    const model = panelOf([
+      subagent({ workflow: { phases: [], agents: missingFirst ? agents.toReversed() : agents } }),
+    ]);
+    expect(model.workflows[0]?.phases[0]?.title).toBe("Review");
+  });
+
   it("keeps a settled run's members reachable under the coordinator", () => {
     const model = panelOf([
       subagent({
