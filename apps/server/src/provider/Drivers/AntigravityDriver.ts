@@ -1,6 +1,7 @@
 import { withAgentDeviceEnvironment } from "../../mcp/McpProviderSession.ts";
 import { AntigravitySettings, ProviderDriverKind, ProviderSetupError } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import {
   NodeRuntimeUnavailableError,
   nodeRuntimeUnavailableMessage,
@@ -93,6 +94,7 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
       const path = yield* Path.Path;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const serverConfig = yield* ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
       const installation = yield* AntigravityInstallation;
       const loggers = yield* ProviderEventLoggers;
       const modelManifest = yield* ModelManifest.ModelManifest;
@@ -409,6 +411,7 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
         path,
         idAllocator,
         serverConfig,
+        selfInvocation,
         makeRuntime,
         withProcess: authFlow.withProcess,
         defaultModel,
