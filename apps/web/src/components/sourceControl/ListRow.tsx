@@ -75,7 +75,7 @@ export function ListRow({
         // viewport shows, not what the pages have loaded. The intrinsic size keeps the
         // scrollbar honest while a row is skipped.
         "[contain-intrinsic-block-size:54px] [content-visibility:auto]",
-        selected ? "bg-accent" : "hover:bg-accent/60",
+        "hover:bg-accent/60",
       )}
     >
       {glyph}
