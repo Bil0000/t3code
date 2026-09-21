@@ -90,6 +90,13 @@ describe("readWorkflowAgentAnswers", () => {
       const turn = assistant("a", [{ type: "text", text: "the answer" }]);
       const filler = line({ type: "user", message: { role: "user", content: "x".repeat(4096) } });
       NodeFS.writeFileSync(NodePath.join(root, "agent-small.jsonl"), turn);
+      const edgeAnswer = "x".repeat(
+        512 * 1024 + 1 - Buffer.byteLength(assistant("edge", [{ type: "text", text: "" }])),
+      );
+      NodeFS.writeFileSync(
+        NodePath.join(root, "agent-edge.jsonl"),
+        assistant("edge", [{ type: "text", text: edgeAnswer }]),
+      );
       NodeFS.writeFileSync(
         NodePath.join(root, "agent-boundary.jsonl"),
         filler.repeat(160) + turn + " ".repeat(512 * 1024 - Buffer.byteLength(turn)),
@@ -100,6 +107,9 @@ describe("readWorkflowAgentAnswers", () => {
       );
       expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "small" })).toEqual([
         "the answer",
+      ]);
+      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "edge" })).toEqual([
+        edgeAnswer,
       ]);
       expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "huge" })).toEqual([
         "final answer",
