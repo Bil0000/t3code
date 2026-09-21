@@ -46,6 +46,7 @@ import {
   buildDocJson,
   buildTiptapContent,
   collapsedToFlat,
+  ComposerCodeExtension,
   ComposerTaskItemExtension,
   flatToCollapsed,
   flatToMarkdown,
@@ -137,7 +138,7 @@ export interface ComposerPromptEditorProps {
   ) => void;
   onVisibleSelectionChange?: () => void;
   onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
+    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Escape",
     event: KeyboardEvent,
     isTaskItem?: boolean,
   ) => boolean;
@@ -727,6 +728,20 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     );
   }, []);
 
+  const editorAttributes = useMemo(
+    () => ({
+      class: cn(
+        "composer-tiptap block max-h-50 min-h-17.5 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none",
+        className,
+      ),
+      "data-testid": "composer-editor",
+      "data-composer-rich-text": richText ? "true" : "false",
+      "aria-placeholder": placeholder,
+      ...(label ? { "aria-label": label } : {}),
+    }),
+    [className, placeholder, richText, label],
+  );
+
   const editor = useEditor(
     {
       extensions: [
@@ -743,8 +758,9 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           dropcursor: false,
           gapcursor: false,
           trailingNode: false,
+          code: false,
           // Plain mode has no marks: typed markers stay literal characters.
-          ...(richText ? {} : { bold: false, italic: false, strike: false, code: false }),
+          ...(richText ? {} : { bold: false, italic: false, strike: false }),
         }),
         ComposerMentionExtension,
         ComposerSkillExtension,
@@ -753,6 +769,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
         ComposerMarkersExtension,
         ...(richText
           ? [
+              ComposerCodeExtension,
               TaskList,
               ComposerTaskItemExtension.extend({
                 addInputRules() {
@@ -789,16 +806,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
       ),
       editable: !disabled,
       editorProps: {
-        attributes: {
-          class: cn(
-            "composer-tiptap block max-h-50 min-h-17.5 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word bg-transparent leading-relaxed text-foreground focus:outline-none",
-            className,
-          ),
-          "data-testid": "composer-editor",
-          "data-composer-rich-text": richText ? "true" : "false",
-          "aria-placeholder": placeholder,
-          ...(label ? { "aria-label": label } : {}),
-        },
+        attributes: editorAttributes,
         handleKeyDown: (view, event) => {
           if (
             isMacPlatform(navigator.platform) &&
@@ -907,7 +915,9 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
                 ? ("ArrowDown" as const)
                 : event.key === "ArrowUp"
                   ? ("ArrowUp" as const)
-                  : null;
+                  : event.key === "Escape"
+                    ? ("Escape" as const)
+                    : null;
           if (!key) return false;
           const handled = handler(key, event);
           if (handled) {
@@ -997,6 +1007,17 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
   useEffect(() => {
     editorHolder.current = editor;
   }, [editor]);
+
+  // Tiptap forwards option changes to the view from a passive effect, so a
+  // class change here would reach the ProseMirror element one tick after
+  // React commits. The chat composer measures its resting and expanded
+  // geometry in layout effects that run first, and it clamps the prompt
+  // through `className`, so the attributes are pushed to the view here for
+  // those measurements to see the layout they are about to reserve for.
+  useLayoutEffect(() => {
+    if (!editor?.isInitialized) return;
+    editor.view.setProps({ attributes: editorAttributes });
+  }, [editor, editorAttributes]);
 
   const readSnapshot = useCallback(() => {
     const snapshot = snapshotRef.current;

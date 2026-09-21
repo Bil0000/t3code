@@ -40,8 +40,9 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   PullRequestActorLabel,
   PullRequestCheckStatusIcon,
-  PullRequestReviewOutcomeBadge,
   pullRequestCheckStatusLabel,
+  PullRequestLabelChip,
+  PullRequestReviewOutcomeBadge,
   pullRequestReviewOutcomeLabel,
   pullRequestReviewOutcomeRingClassName,
   pullRequestReviewOutcomeStaleLabel,
@@ -67,11 +68,8 @@ import { PullRequestCommentBody } from "./PullRequestCommentBody";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
-import { pullRequestLabelColor } from "./pullRequestList.logic";
-import {
-  SummaryMetaRow as MetaRow,
-  SummarySection as Section,
-} from "../sourceControl/SummaryMetaRow";
+import { SummaryMetaRow as MetaRow } from "../sourceControl/SummaryMetaRow";
+import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
 
 /** One reviewer, however a host happens to have cased their login this time. */
 function reviewerKey(login: string): string {
@@ -279,6 +277,74 @@ function CollapsedComment({
   );
 }
 
+function Section({
+  title,
+  defaultOpen = true,
+  keepMounted = false,
+  actions,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  keepMounted?: boolean;
+  /** Heading controls stay separate from the collapse trigger so they remain independently usable. */
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const headingRef = useRef<HTMLDivElement>(null);
+  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      const heading = headingRef.current;
+      const section = heading?.closest<HTMLElement>("[data-pull-request-summary-section]");
+      const scroller = heading?.closest<HTMLElement>("[data-pull-request-summary-scroll]");
+      if (heading && section && scroller) {
+        const target = sectionCollapseAnchorScrollTop({
+          scrollTop: scroller.scrollTop,
+          viewportTop: scroller.getBoundingClientRect().top,
+          sectionTop: section.getBoundingClientRect().top,
+          headingTop: heading.getBoundingClientRect().top,
+        });
+        // Synchronous with the press: React commits the collapsed height before the browser
+        // paints, so the reader sees the heading they pressed stay put rather than a jump first.
+        if (target !== null) scroller.scrollTop = target;
+      }
+    }
+    setOpen(nextOpen);
+  };
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpenWithScrollAnchor}
+      render={<section aria-label={title} />}
+      data-pull-request-summary-section
+    >
+      {/* The heading rides the top of the scroll box the way a diff's file header does, so a
+          section can be collapsed from wherever its body has been read to rather than only from
+          where it started. Opaque, because the rows it covers scroll beneath it. */}
+      <div
+        ref={headingRef}
+        className="sticky top-0 z-10 flex w-full items-center bg-background pr-4"
+      >
+        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-xs font-medium text-muted-foreground hover:text-foreground">
+          <span>{title}</span>
+          <ChevronRightIcon
+            aria-hidden
+            className={cn(
+              "size-3.5 text-muted-foreground/60 transition-transform",
+              open && "rotate-90",
+            )}
+          />
+        </CollapsibleTrigger>
+        {actions}
+      </div>
+      <CollapsiblePanel keepMounted={keepMounted}>
+        <div className="px-4 pb-4">{children}</div>
+      </CollapsiblePanel>
+    </Collapsible>
+  );
+}
+
 function CommentGroup({
   label,
   comments,
@@ -387,6 +453,7 @@ export function PullRequestSummaryTab({
   reference,
   detail,
   activityPending,
+  checksStale = false,
   activityError,
   pendingFinding,
   fixFindingLabel = "Fix in a thread",
@@ -395,12 +462,14 @@ export function PullRequestSummaryTab({
   onLinkIssues,
   onOpenLinkedIssue,
   onRefresh,
+  onRefreshChecks = onRefresh,
 }: {
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef | null;
   reference: PullRequestRef;
   detail: PullRequestDetailView;
   activityPending: boolean;
+  checksStale?: boolean;
   activityError: string | null;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
@@ -420,6 +489,7 @@ export function PullRequestSummaryTab({
    */
   onOpenLinkedIssue?: (link: IssueLink & { readonly provider: string }) => void;
   onRefresh: () => void;
+  onRefreshChecks?: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
   // rather than wherever the last one had been read back to.
@@ -759,22 +829,14 @@ export function PullRequestSummaryTab({
                 {detail.labels.length === 0 ? (
                   <span className="text-muted-foreground">None</span>
                 ) : (
-                  detail.labels.map((label) => {
-                    const dot = pullRequestLabelColor(label.color);
-                    return (
-                      <span
-                        key={label.name}
-                        className="inline-flex max-w-48 items-center gap-1.5 rounded-full bg-muted/40 py-0.5 pl-1.5 pr-2 text-xs"
-                      >
-                        <span
-                          aria-hidden
-                          className="size-2 shrink-0 rounded-full bg-muted-foreground"
-                          {...(dot ? { style: { backgroundColor: dot } } : {})}
-                        />
-                        <span className="truncate">{label.name}</span>
-                      </span>
-                    );
-                  })
+                  detail.labels.map((label) => (
+                    <PullRequestLabelChip
+                      key={label.name}
+                      label={label}
+                      size="default"
+                      className="max-w-48"
+                    />
+                  ))
                 )}
                 {detail.capabilities.labels === true ? (
                   <PullRequestLabelPicker
@@ -895,7 +957,14 @@ export function PullRequestSummaryTab({
       </Section>
 
       <Section key={`checks:${detail.url}`} title="Checks" defaultOpen={false}>
-        {detail.checks.length === 0 ? (
+        {checksStale ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Check details are out of date.</span>
+            <Button size="xs" variant="ghost" onClick={onRefreshChecks}>
+              Refresh
+            </Button>
+          </div>
+        ) : detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
           detail.checks.map((check, index) => {

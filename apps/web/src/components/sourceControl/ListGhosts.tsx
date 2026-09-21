@@ -282,13 +282,6 @@ function WorkItemDetailGhost({
   );
 }
 
-export function PullRequestDetailGhost({ seed }: { seed?: PullRequestListEntry | null }) {
-  return (
-    <WorkItemDetailGhost label="Loading pull request" {...(seed === undefined ? {} : { seed })} />
-  );
-}
-
-/** People-shaped: an avatar and a name, in the reviewer picker's own row height. */
 export function PeopleGhost({ rows = 4 }: { rows?: number }) {
   return (
     <div
