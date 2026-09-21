@@ -283,7 +283,7 @@ function EnabledSavedWorkItemLinks({
               an issue.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={(event) => void submit(event)}>
+          <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
             <DialogPanel className="space-y-3">
               <label className="block text-xs">
                 Project
