@@ -146,7 +146,7 @@ export function useLiveRefresh(
     const visible = () => document.visibilityState === "visible";
     const onArrival = () => {
       const now = Date.now();
-      if (visible()) lastInteractedAt = now;
+      if (now - lastInteractedAt >= LIVE_REFRESH_IDLE_AFTER_MS) return;
       const lastRefreshedAt = lastRefreshedAtByView.get(viewId);
       if (lastRefreshedAt === undefined) {
         // Nothing read yet, so nothing to refresh: the mount's own read is what fills this in.
