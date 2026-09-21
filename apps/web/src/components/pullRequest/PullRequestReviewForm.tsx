@@ -1,7 +1,8 @@
 /**
- * The review half of the floating composer: how many line comments the review is holding, its
- * summary, and the verdict that sends the lot. The popover around it belongs to
- * PullRequestComposer.
+ * The review half of the floating composer: the summary and the verdict that sends it, together
+ * with whatever line comments the review is holding. The count of those lives on the composer's
+ * trigger and mode toggle, and each pending card can be dropped from the diff, so neither is
+ * repeated here. The popover around it belongs to PullRequestComposer.
  */
 import type { EnvironmentId, PullRequestRef, PullRequestReviewVerdict } from "@t3tools/contracts";
 import { CheckIcon, MessageSquareIcon, XCircleIcon } from "lucide-react";
@@ -67,7 +68,6 @@ export function PullRequestReviewForm({
   // the keyed line-comment drafts makes the selected pull request's body correct on the first
   // render, before an effect could reset state left behind by the previous one.
   const body = usePullRequestReviewStore((store) => store.summaries[reviewKey] ?? "");
-  const clear = usePullRequestReviewStore((store) => store.clear);
   const removeComments = usePullRequestReviewStore((store) => store.removeComments);
   const setSummary = usePullRequestReviewStore((store) => store.setSummary);
   const clearSummary = usePullRequestReviewStore((store) => store.clearSummary);
@@ -116,22 +116,10 @@ export function PullRequestReviewForm({
 
   return (
     <>
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span>
-          {comments.length === 0
-            ? "No line comments yet"
-            : `${comments.length} ${comments.length === 1 ? "comment" : "comments"} pending`}
-        </span>
-        {comments.length > 0 ? (
-          <Button size="xs" variant="ghost" disabled={pending} onClick={() => clear(reviewKey)}>
-            Discard
-          </Button>
-        ) : null}
-      </div>
       <Textarea
         ref={textareaRef}
         size="sm"
-        className="mt-2 [&_textarea]:max-h-64"
+        className="[&_textarea]:max-h-64"
         value={body}
         placeholder={
           requestChangesSummaryRequired && verdicts.includes("request-changes")
