@@ -9,7 +9,7 @@ import type {
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import { AgentElapsed } from "../AgentsPanel";
+import { AgentElapsed } from "./AgentElapsed";
 import { ThreadRelationshipIcon } from "./ThreadRelationshipIcon";
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { cn } from "../../lib/utils";
