@@ -144,8 +144,6 @@ export function ThreadDetailsPrRow({
     enabled: open && supportsChecks && !(checksQuery.isSuccess && checksQuery.data === null),
     key: `workspace-pr-checks:${refreshKey}`,
     checks: detail?.checks ?? [],
-    headSha: checksQuery.data?.headSha,
-    updatedAt: checksQuery.dataUpdatedAt,
   });
 
   const { actionPending, perform } = usePullRequestActionRunner({

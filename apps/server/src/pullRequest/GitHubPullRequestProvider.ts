@@ -364,11 +364,7 @@ export const make = Effect.gen(function* () {
 
     getChangeRequestChecks: (input) =>
       cli.revalidateChecks(input, readChecks(input)).pipe(
-        Effect.map(({ state, checks, headSha }) => ({
-          state,
-          checks,
-          ...(headSha == null ? {} : { headSha }),
-        })),
+        Effect.map(({ state, checks }) => ({ state, checks })),
         Effect.mapError(fail("getChangeRequestChecks")),
       ),
 

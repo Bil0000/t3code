@@ -5,7 +5,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 import { usePullRequestChecksRefresh } from "./usePullRequestChecksRefresh";
 
-it("polls quiet PRs each minute, speeds up for runs and pushes, resumes from idle, and stops for closed PRs", () => {
+it("polls quiet PRs each minute, speeds up for pending or missing checks, resumes from idle, and stops for closed PRs", () => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000_000);
   const document = Object.assign(new EventTarget(), { visibilityState: "visible" });
@@ -13,16 +13,13 @@ it("polls quiet PRs each minute, speeds up for runs and pushes, resumes from idl
   vi.stubGlobal("window", new EventTarget());
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const refresh = vi.fn();
-  let updatedAt = Date.now();
   let renderer: ReactTestRenderer | undefined;
   function Probe({
     status = "success",
-    headSha = "one",
     enabled = true,
     busy = false,
   }: {
     status?: PullRequestCheck["status"] | null;
-    headSha?: string;
     enabled?: boolean;
     busy?: boolean;
   }) {
@@ -30,14 +27,11 @@ it("polls quiet PRs each minute, speeds up for runs and pushes, resumes from idl
       refresh: busy ? null : refresh,
       enabled,
       key: "test-pr-checks",
-      headSha,
-      updatedAt,
       checks: status === null ? [] : [{ name: "CI", status, description: null, url: null }],
     });
     return null;
   }
   const update = (props: Parameters<typeof Probe>[0]) => {
-    updatedAt = Date.now();
     act(() => renderer?.update(createElement(Probe, props)));
   };
   const advance = (ms: number) => act(() => vi.advanceTimersByTime(ms));
@@ -57,13 +51,13 @@ it("polls quiet PRs each minute, speeds up for runs and pushes, resumes from idl
     update({ status: "failure" });
     advance(60_000);
     expect(refresh).toHaveBeenCalledTimes(3);
-    update({ headSha: "two", status: null });
+    update({ status: null });
     for (let tick = 0; tick < 3; tick++) {
       advance(45_000);
-      update({ headSha: "two", status: null });
+      update({ status: null });
     }
     expect(refresh).toHaveBeenCalledTimes(6);
-    advance(59_999);
+    advance(44_999);
     expect(refresh).toHaveBeenCalledTimes(6);
     advance(1);
     expect(refresh).toHaveBeenCalledTimes(7);

@@ -87,7 +87,8 @@ it.effect(
       sha = "b".repeat(40);
       changed = "/pulls/1";
       requests.length = 0;
-      expect((yield* poll()).headSha).toBe(sha);
+      yield* poll();
+      expect(reads).toBe(6);
       expect(
         requests
           .filter((endpoint) => endpoint.includes("/commits/"))
