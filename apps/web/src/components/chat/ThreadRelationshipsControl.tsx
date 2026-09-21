@@ -92,7 +92,7 @@ export function ThreadLineageRowList(props: {
       */}
       <ul
         aria-label="Related threads"
-        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0"
+        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0 has-data-workflow:max-h-[min(32rem,60dvh)]"
       >
         {props.children}
       </ul>
@@ -398,11 +398,11 @@ export function ThreadRelationshipsPanel(props: {
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
-                      {workflowGroup ? `Workflow · ${threadTitle}` : threadTitle}
+                      {threadTitle}
                     </span>
+                    {workflowGroup ? <ThreadLineageWorkflowCount group={workflowGroup} /> : null}
                     {agent ? <span className="sr-only">{agent.status}</span> : null}
                   </span>
-                  {workflowGroup ? <ThreadLineageWorkflowCount group={workflowGroup} /> : null}
                   {agent ? (
                     agent.startedAt ? (
                       <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
@@ -425,7 +425,7 @@ export function ThreadRelationshipsPanel(props: {
                         variant="ghost"
                         disabled={node?.missing === true}
                         onClick={() => openThread(threadId)}
-                        className={THREAD_DETAILS_PANEL_LINK_ROW_CLASS}
+                        className={`${THREAD_DETAILS_PANEL_LINK_ROW_CLASS} ${workflowGroup ? "h-12 sm:h-12" : ""}`}
                       />
                     }
                   >

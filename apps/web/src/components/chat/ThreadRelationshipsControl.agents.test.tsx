@@ -42,6 +42,81 @@ afterEach(async () => {
   state.projects = [];
   state.configs.clear();
   state.showTooltips = false;
+  state.navigate.mockClear();
+});
+
+it("opens the correct chat for every workflow phase and unphased member", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const phases = ["Inspect", "Improve", "Verify"].map((title, index) => ({ index, title }));
+  const agents = Array.from({ length: 7 }, (_, index) => ({
+    index,
+    label: `Member ${index}`,
+    state: index === 4 ? "failed" : index === 5 ? "running" : "completed",
+    ...(index < 6 ? { phaseIndex: Math.floor(index / 2) } : {}),
+    childThreadId: `member-chat-${index}`,
+    model: "claude-sonnet-4-6",
+    result: `Result ${index}`,
+    totalTokens: 1200,
+  }));
+  state.projection = {
+    thread: { id: "parent", lineage: { relationshipToParent: null } },
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [
+      {
+        id: "workflow",
+        driver: "claudeAgent",
+        providerInstanceId: "claudeAgent",
+        childThreadId: "workflow-chat",
+        title: "Checkout review",
+        status: "running",
+        startedAt: null,
+        completedAt: null,
+        updatedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+        workflow: { name: "Checkout review", phases, agents },
+      },
+    ],
+  };
+  await act(async () => {
+    renderer = create(
+      <ThreadRelationshipsPanel
+        environmentId={EnvironmentId.make("remote")}
+        threadId={ThreadId.make("parent")}
+      />,
+    );
+  });
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Expand Checkout review" }).props.onClick(),
+  );
+  const memberButtons = () =>
+    renderer.root.findAll(
+      (node) =>
+        node.type === "button" && String(node.props["aria-label"]).startsWith("Open Member"),
+    );
+  expect(memberButtons()).toHaveLength(7);
+  for (const agent of agents) {
+    await act(async () =>
+      renderer.root.findByProps({ "aria-label": `Open ${agent.label} chat` }).props.onClick(),
+    );
+    expect(state.navigate).toHaveBeenLastCalledWith({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: "remote", threadId: agent.childThreadId },
+    });
+  }
+  const phaseButtons = renderer.root.findAll(
+    (node) =>
+      node.type === "button" && node.props["aria-expanded"] === true && !node.props["aria-label"],
+  );
+  expect(phaseButtons).toHaveLength(3);
+  for (const phase of phaseButtons) {
+    await act(async () => phase.props.onClick());
+    expect(memberButtons()).toHaveLength(5);
+    await act(async () => phase.props.onClick());
+    expect(memberButtons()).toHaveLength(7);
+  }
+  expect(state.navigate).toHaveBeenCalledTimes(7);
 });
 
 it("shows the matching child agent details and refreshes them when the agent settles", async () => {
