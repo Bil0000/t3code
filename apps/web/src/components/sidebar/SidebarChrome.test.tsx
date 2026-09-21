@@ -3,16 +3,16 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { SidebarUtilityMenu } from "./SidebarChrome";
 
-const { environments, navigate } = vi.hoisted(() => ({
-  environments: vi.fn(),
+const { issuesSupported, navigate } = vi.hoisted(() => ({
+  issuesSupported: vi.fn(),
   navigate: vi.fn(),
 }));
 vi.mock("../../state/environments", () => ({
-  useEnvironments: () => ({ environments: environments() }),
+  useIssuesSupported: issuesSupported,
+  usePullRequestsSupported: () => false,
 }));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigate,
-  useCanGoBack: () => false,
   useLocation: () => null,
   Link: "a",
 }));
@@ -36,11 +36,8 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-it.each([false, true])("shows Issues when secondary support is %s", async (supported) => {
-  environments.mockReturnValue([
-    { serverConfig: { environment: { capabilities: {} } } },
-    { serverConfig: { environment: { capabilities: { issues: supported } } } },
-  ]);
+it.each([false, true])("shows Issues when primary support is %s", async (supported) => {
+  issuesSupported.mockReturnValue(supported);
   await act(() => {
     renderer = create(<SidebarUtilityMenu />);
   });

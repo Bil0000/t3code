@@ -12,7 +12,8 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import {
   IssueProviderError,
   type ProviderBatchedIssue,
@@ -167,6 +168,7 @@ function fakeProvider(
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<IssueAdapter>;
+  readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
   return IssueService.make.pipe(
     Effect.provide(
@@ -178,14 +180,11 @@ function makeService(input: {
             }),
           ),
         ),
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 1,
-              projects: input.projects,
-              threads: [],
-              updatedAt: "2026-07-01T00:00:00Z",
-            }),
+        Layer.mock(ProjectService.ProjectService)({
+          listShells: () => Effect.succeed(input.projects),
+        }),
+        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+          resolve: input.resolveRepositoryIdentity ?? (() => Effect.succeed(null)),
         }),
       ),
     ),
@@ -209,6 +208,143 @@ const labelling = (service: IssueService.IssueService["Service"]) =>
 
 const assigning = (service: IssueService.IssueService["Service"]) =>
   service.setAssignees({ ...REFERENCE, assignees: ["bilal"] });
+
+it.effect("resolves a cold project shell before its first issue listing", () =>
+  Effect.gen(function* () {
+    const hydrated = project({
+      id: "p1",
+      title: "web",
+      workspaceRoot: "/a",
+      repository: "acme/web",
+      host: "github.acme.dev",
+    });
+    const resolved: string[] = [];
+    let listCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a" })],
+      resolveRepositoryIdentity: (cwd) => {
+        resolved.push(cwd);
+        return Effect.succeed(hydrated.repositoryIdentity ?? null);
+      },
+      providers: [
+        fakeProvider("github", {
+          resolveSource: (candidate) => {
+            assert.strictEqual(candidate.repositoryIdentity, hydrated.repositoryIdentity);
+            return Effect.succeed(null);
+          },
+          getViewer: ({ host }) => {
+            assert.strictEqual(host, "github.acme.dev");
+            return Effect.succeed("enterprise-user");
+          },
+          listIssues: ({ cwd, repository, host, viewer }) => {
+            listCalls += 1;
+            assert.deepStrictEqual(
+              [cwd, repository, host, viewer],
+              ["/a", "acme/web", "github.acme.dev", "enterprise-user"],
+            );
+            return Effect.succeed({
+              items: [issue(7, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: false,
+            });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(resolved, ["/a"]);
+    assert.strictEqual(listCalls, 1);
+    assert.deepStrictEqual(
+      result.entries.map(({ projectId, provider, host, repository, number }) => [
+        projectId,
+        provider,
+        host,
+        repository,
+        number,
+      ]),
+      [["p1", "github", "github.acme.dev", "acme/web", 7]],
+    );
+    assert.strictEqual(result.providers[0]?.projectCount, 1);
+  }),
+);
+
+it.effect("resolves a cold project shell before its first issue detail", () =>
+  Effect.gen(function* () {
+    const hydrated = project({
+      id: "p1",
+      title: "web",
+      workspaceRoot: "/a",
+      repository: "group/sub/project",
+      provider: "gitlab",
+      host: "gitlab.acme.dev",
+    });
+    const resolved: string[] = [];
+    let detailCalls = 0;
+    const service = yield* makeService({
+      projects: [{ ...hydrated, repositoryIdentity: null }],
+      resolveRepositoryIdentity: (cwd) => {
+        resolved.push(cwd);
+        return Effect.succeed(hydrated.repositoryIdentity ?? null);
+      },
+      providers: [
+        fakeProvider("gitlab", {
+          getIssue: (input) => {
+            detailCalls += 1;
+            assert.deepStrictEqual(input, {
+              cwd: "/a",
+              repository: "group/sub/project",
+              host: "gitlab.acme.dev",
+              number: 7,
+            });
+            return Effect.succeed(issueDetail(7));
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.detail({
+      ...REFERENCE,
+      provider: "gitlab",
+      repository: "GROUP/SUB/PROJECT",
+    });
+
+    assert.deepStrictEqual(resolved, ["/a"]);
+    assert.strictEqual(detailCalls, 1);
+    assert.deepStrictEqual(
+      [result.projectId, result.provider, result.repository, result.number],
+      ["p1", "gitlab", "group/sub/project", 7],
+    );
+  }),
+);
+
+it.effect("preserves a hydrated project identity without resolving it again", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      resolveRepositoryIdentity: () => Effect.die("must not resolve a hydrated identity"),
+      providers: [
+        fakeProvider("github", {
+          resolveSource: (candidate) => {
+            assert.strictEqual(candidate.repositoryIdentity, ONE_PROJECT[0]!.repositoryIdentity);
+            return Effect.succeed(null);
+          },
+          listIssues: () =>
+            Effect.succeed({
+              items: [issue(7, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: false,
+            }),
+          getIssue: () => Effect.succeed(issueDetail(7)),
+        }),
+      ],
+    });
+
+    assert.strictEqual((yield* service.list({ state: "open" })).entries[0]?.repository, "acme/web");
+    assert.strictEqual((yield* service.detail(REFERENCE)).repository, "acme/web");
+  }),
+);
 
 it.effect("puts every host's issues on one page, newest update first", () =>
   Effect.gen(function* () {

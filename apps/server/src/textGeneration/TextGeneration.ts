@@ -2,11 +2,11 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type {
+  BranchNamingOptions,
   ChatAttachment,
   ModelSelection,
   ProviderInstanceId,
   WorkItemMatchRelationship,
-  WorkItemTaskMode,
 } from "@t3tools/contracts";
 import { TextGenerationError } from "@t3tools/contracts";
 
@@ -54,6 +54,7 @@ export interface PrContentGenerationResult {
 }
 
 export interface BranchNameGenerationInput {
+  naming?: BranchNamingOptions | undefined;
   cwd: string;
   message: string;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
@@ -81,10 +82,10 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
-export interface WorkItemTaskGenerationInput {
+export interface WorkItemMatchGenerationInput {
   cwd: string;
-  mode: WorkItemTaskMode;
-  items: ReadonlyArray<{
+  relationship: WorkItemMatchRelationship;
+  source: {
     readonly kind: "issue" | "pull-request";
     readonly provider: string;
     readonly repository: string;
@@ -92,19 +93,8 @@ export interface WorkItemTaskGenerationInput {
     readonly title: string;
     readonly url: string;
     readonly body: string;
-  }>;
-  modelSelection: ModelSelection;
-}
-
-export interface WorkItemTaskGenerationResult {
-  prompt: string;
-}
-
-export interface WorkItemMatchGenerationInput {
-  cwd: string;
-  relationship: WorkItemMatchRelationship;
-  source: WorkItemTaskGenerationInput["items"][number];
-  candidates: ReadonlyArray<WorkItemTaskGenerationInput["items"][number]>;
+  };
+  candidates: ReadonlyArray<WorkItemMatchGenerationInput["source"]>;
   modelSelection: ModelSelection;
 }
 
@@ -148,10 +138,6 @@ export class TextGeneration extends Context.Service<
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
 
-    readonly generateWorkItemTask: (
-      input: WorkItemTaskGenerationInput,
-    ) => Effect.Effect<WorkItemTaskGenerationResult, TextGenerationError>;
-
     readonly findWorkItemMatches: (
       input: WorkItemMatchGenerationInput,
     ) => Effect.Effect<WorkItemMatchGenerationResult, TextGenerationError>;
@@ -163,7 +149,6 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateWorkItemTask"
   | "findWorkItemMatches";
 
 const resolveInstance = (
@@ -216,10 +201,6 @@ export const make = Effect.gen(function* () {
             return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
           }),
         ),
-      ),
-    generateWorkItemTask: (input) =>
-      resolveInstance(registry, "generateWorkItemTask", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generateWorkItemTask(input)),
       ),
     findWorkItemMatches: (input) =>
       resolveInstance(registry, "findWorkItemMatches", input.modelSelection.instanceId).pipe(

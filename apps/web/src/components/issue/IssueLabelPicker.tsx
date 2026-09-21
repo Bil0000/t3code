@@ -7,14 +7,15 @@
  */
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, IssueLabelCandidate, IssueRef } from "@t3tools/contracts";
-import { TagIcon } from "lucide-react";
+import { CheckIcon, TagIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { issueEnvironment } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { EntityPicker, EntityPickerOption } from "../sourceControl/EntityPicker";
+import { PullRequestCandidatePicker } from "../pullRequest/PullRequestCandidatePicker";
+import { pullRequestLabelColor } from "../pullRequest/pullRequestList.logic";
 import { readableFailure } from "../sourceControl/handoff";
 import { toastManager } from "../ui/toast";
 
@@ -114,53 +115,49 @@ export function IssueLabelPicker({
   };
 
   return (
-    <EntityPicker
+    <PullRequestCandidatePicker
       icon={<TagIcon className="size-3.5" />}
       label="Change the labels"
       allowed={allowed}
-      disallowedReason="Changing labels needs write access on this repository"
+      disabledReason="Changing labels needs write access on this repository"
       open={open}
       onOpenChange={onOpenChange}
-      searchLabel="Search labels"
       query={query}
       onQueryChange={setQuery}
-      message={
-        candidatesQuery.isPending
-          ? "Reading this repository's labels…"
-          : candidatesQuery.error !== null
-            ? `The labels could not be read. ${candidatesQuery.error}`
-            : candidates.length === 0
-              ? query.length > 0
-                ? "No label matches that."
-                : "This repository has no labels to put on."
-              : null
-      }
-      note={
-        // Typing filters what arrived; it does not ask the host again, so this says what the list
-        // is rather than offering a search that would find nothing further.
-        candidatesQuery.data?.truncated === true
-          ? "This repository has more labels than are listed here. Put the rest on from the host."
-          : null
-      }
+      searchLabel="Search labels"
+      isPending={candidatesQuery.isPending && candidatesQuery.data === null}
+      error={candidatesQuery.data === null ? candidatesQuery.error : null}
+      candidates={candidates}
+      emptyLabel="This repository has no labels to put on."
+      noMatchLabel="No label matches that."
+      errorLabel="The labels could not be read."
+      truncated={candidatesQuery.data?.truncated === true}
+      truncatedLabel="This repository has more labels than are listed here. Put the rest on from the host."
+      candidateKey={(candidate) => candidate.name}
+      disabled={pending !== null}
+      onSelect={(candidate) => void toggle(candidate)}
     >
-      {candidates.map((candidate) => (
-        <EntityPickerOption
-          key={candidate.name}
-          checked={appliedNames.has(candidate.name)}
-          checkedLabel="Already on"
-          disabled={pending !== null}
-          onSelect={() => void toggle(candidate)}
-        >
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium">{candidate.name}</span>
-            {candidate.description ? (
-              <span className="block truncate text-[11px] text-muted-foreground">
-                {candidate.description}
-              </span>
+      {(candidate) => {
+        const dot = pullRequestLabelColor(candidate.color);
+        return (
+          <>
+            <span
+              aria-hidden
+              className="size-2 shrink-0 rounded-full bg-muted-foreground"
+              {...(dot ? { style: { backgroundColor: dot } } : {})}
+            />
+            <span className="min-w-0 flex-1 truncate">
+              {candidate.name}
+              {candidate.description ? (
+                <span className="text-muted-foreground"> · {candidate.description}</span>
+              ) : null}
+            </span>
+            {appliedNames.has(candidate.name) ? (
+              <CheckIcon aria-label="Already on" className="size-3.5 shrink-0" />
             ) : null}
-          </span>
-        </EntityPickerOption>
-      ))}
-    </EntityPicker>
+          </>
+        );
+      }}
+    </PullRequestCandidatePicker>
   );
 }

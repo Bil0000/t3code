@@ -1,6 +1,7 @@
 import type { IssueCloseReason, IssueProviderKind, IssueState } from "@t3tools/contracts";
 import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon, TicketIcon } from "lucide-react";
-import { pullRequestLabelColor } from "../pullRequest/pullRequestList.logic";
+import { PULL_REQUEST_STATE_PRESENTATION } from "../pullRequest/pullRequestIcons";
+import { PullRequestLabelChip } from "../pullRequest/pullRequestPresentation";
 
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { cn } from "~/lib/utils";
@@ -43,22 +44,18 @@ export function resolveIssueState(input: {
   readonly stateReason: IssueCloseReason | null;
 }): StatePresentation {
   if (input.state === "open") {
-    return {
-      label: "Open",
-      toneClassName: "text-emerald-600 dark:text-emerald-300/90",
-      Icon: CircleDotIcon,
-    };
+    return { ...PULL_REQUEST_STATE_PRESENTATION.open, Icon: CircleDotIcon };
   }
   if (input.stateReason === "not-planned") {
     return {
+      ...PULL_REQUEST_STATE_PRESENTATION.draft,
       label: "Closed as not planned",
-      toneClassName: "text-zinc-500 dark:text-zinc-400/80",
       Icon: CircleSlashIcon,
     };
   }
   return {
+    ...PULL_REQUEST_STATE_PRESENTATION.merged,
     label: "Closed as completed",
-    toneClassName: "text-violet-600 dark:text-violet-300/90",
     Icon: CircleCheckIcon,
   };
 }
@@ -90,9 +87,9 @@ export function IssueStateGlyph({
 }
 
 const LABEL_SLOTS = [
-  { pill: "", overflow: "@xl/pr-row-meta:hidden" },
-  { pill: "hidden @xl/pr-row-meta:inline-flex", overflow: "@3xl/pr-row-meta:hidden" },
-  { pill: "hidden @3xl/pr-row-meta:inline-flex", overflow: "" },
+  { overflow: "@xl/pr-row-meta:hidden" },
+  { overflow: "@3xl/pr-row-meta:hidden" },
+  { overflow: "" },
 ] as const;
 
 export function IssueRowLabels({
@@ -106,26 +103,23 @@ export function IssueRowLabels({
       {LABEL_SLOTS.map((slot, index) => {
         const label = labels[index];
         if (!label) return null;
-        const dot = pullRequestLabelColor(label.color);
         const remaining = labels.length - index - 1;
         return (
-          <span
+          <PullRequestLabelChip
             key={label.name}
-            className={cn(
-              "inline-flex max-w-40 min-w-0 items-center gap-1 rounded-full border border-border/70 bg-muted/40 py-0 pl-1 pr-1.5 text-[10px] leading-3.5 text-muted-foreground",
-              slot.pill,
-            )}
+            label={label}
+            className={
+              index === 0
+                ? ""
+                : index === 1
+                  ? "hidden @xl/pr-row-meta:inline-flex"
+                  : "hidden @3xl/pr-row-meta:inline-flex"
+            }
           >
-            <span
-              aria-hidden
-              className="size-2 shrink-0 rounded-full bg-muted-foreground"
-              {...(dot ? { style: { backgroundColor: dot } } : {})}
-            />
-            <span className="truncate">{label.name}</span>
             {remaining > 0 ? (
               <span className={cn("shrink-0", slot.overflow)}>+{remaining}</span>
             ) : null}
-          </span>
+          </PullRequestLabelChip>
         );
       })}
     </span>
@@ -139,22 +133,9 @@ export function IssueLabelChips({
 }) {
   return (
     <>
-      {labels.map((label) => {
-        const dot = pullRequestLabelColor(label.color);
-        return (
-          <span
-            key={label.name}
-            className="inline-flex max-w-48 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 py-0.5 pl-1.5 pr-2 text-xs"
-          >
-            <span
-              aria-hidden
-              className="size-2 shrink-0 rounded-full bg-muted-foreground"
-              {...(dot ? { style: { backgroundColor: dot } } : {})}
-            />
-            <span className="truncate">{label.name}</span>
-          </span>
-        );
-      })}
+      {labels.map((label) => (
+        <PullRequestLabelChip key={label.name} label={label} size="default" className="max-w-48" />
+      ))}
     </>
   );
 }

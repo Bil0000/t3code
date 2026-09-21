@@ -5,7 +5,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { DetailTabStrip } from "./DetailTabStrip";
-import { EntityPicker } from "./EntityPicker";
 import {
   ListFilterMenu,
   ListFilterRadioGroup,
@@ -52,7 +51,6 @@ describe("list filter menu", () => {
     if (!button) return;
     expect(button.type).toBe(Button);
     expect(button.props).toMatchObject({ size: "default", variant: "outline" });
-    expect(button.props.className).toContain("--control-icon-color");
   });
 
   it("keeps summary values aligned in a fixed label grid", () => {
@@ -94,39 +92,6 @@ describe("list filter menu", () => {
     expect(field.props["aria-label"]).toBe("Search pull requests");
     expect(field.props.placeholder).toBe("Search pull requests, or label:bug");
     expect(field.props.type).toBe("search");
-  });
-
-  it("uses the compact input primitive in entity pickers", () => {
-    const picker = EntityPicker({
-      icon: null,
-      label: "Assign people",
-      allowed: true,
-      disallowedReason: "Unavailable",
-      open: true,
-      onOpenChange: vi.fn(),
-      searchLabel: "Search people",
-      query: "",
-      onQueryChange: vi.fn(),
-      message: null,
-      note: null,
-      children: null,
-    });
-    const popup = Children.toArray(picker.props.children).find(
-      (child) =>
-        isValidElement(child) &&
-        (child.props as { readonly className?: string }).className === "w-72 p-0",
-    ) as ReactElement<{ readonly children: ReactNode }>;
-    const frame = Children.toArray(popup.props.children)[0] as ReactElement<{
-      readonly children: ReactNode;
-    }>;
-    const field = Children.only(frame.props.children) as ReactElement<{
-      readonly "aria-label": string;
-      readonly size: string;
-    }>;
-
-    expect(field.type).not.toBe("input");
-    expect(field.props["aria-label"]).toBe("Search people");
-    expect(field.props.size).toBe("compact");
   });
 
   it("hides the native scrollbar on detail tabs", () => {

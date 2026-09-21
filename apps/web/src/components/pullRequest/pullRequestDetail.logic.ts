@@ -7,14 +7,14 @@ import {
   type PullRequestActor,
   type PullRequestBaseComparison,
   type PullRequestCheck,
-  type PullRequestChecksState,
+  type PullRequestChecksState as ContractPullRequestChecksState,
   type PullRequestComment,
   type PullRequestCommit,
   type PullRequestContextMetadata,
   type PullRequestDetailView,
   type PullRequestMergeability,
-  type PullRequestMergeMethod,
   type PullRequestReaction,
+  type PullRequestMergeMethod,
   type PullRequestRef,
   type RepositoryIdentity,
   type PullRequestReviewThread,
@@ -84,7 +84,7 @@ export function resolvePullRequestPrimaryControl(input: {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
   readonly mergeability: PullRequestMergeability;
-  readonly checksState: PullRequestChecksState | null;
+  readonly checksState: ContractPullRequestChecksState | null;
   readonly autoMergeEnabled: boolean | undefined;
   readonly hasMergeMethod: boolean;
   readonly canMerge: boolean;
@@ -139,6 +139,22 @@ export function pullRequestCheckoutCommand(
     case "unknown":
       return null;
   }
+}
+
+/** Build a checkout command from identity metadata while the detail request is still pending. */
+export function loadingPullRequestCheckoutCommand(
+  reference: PullRequestRef,
+  identity: RepositoryIdentity | null | undefined,
+): string | null {
+  const host = reference.host?.trim().toLowerCase();
+  const provider =
+    identity?.provider ??
+    (host === "github.com" ? "github" : host === "gitlab.com" ? "gitlab" : null);
+  if (provider !== "github" && provider !== "gitlab" && provider !== "azure-devops") return null;
+  if (identity?.provider !== undefined && host && pullRequestHostOf(identity, provider) !== host) {
+    return null;
+  }
+  return pullRequestCheckoutCommand(provider, reference.number, "");
 }
 
 /** Activity changes only when the same host resource reports a newer revision. */
@@ -257,6 +273,130 @@ export function isStackedPullRequestBase(
     ? defaultRef.name.slice(remotePrefix.length)
     : defaultRef.name;
   return defaultBranch !== baseBranch;
+}
+
+/** The slice of a detail that decides which actions it offers. */
+export type PullRequestActionableDetail = Pick<
+  PullRequestDetail,
+  "state" | "isDraft" | "mergeability" | "capabilities" | "viewerPermissions" | "mergeCapabilities"
+>;
+
+/**
+ * The host says which strategies it offers at all; the repository narrows that to the ones it
+ * actually allows.
+ */
+export function allowedPullRequestMergeMethods(
+  detail: Pick<PullRequestActionableDetail, "capabilities" | "mergeCapabilities"> | null,
+): ReadonlyArray<PullRequestMergeMethod> {
+  return detail === null
+    ? []
+    : detail.capabilities.mergeMethods.filter((method) => detail.mergeCapabilities[method]);
+}
+
+/** The reader's preference where the repository allows it, and the first allowed method else. */
+export function resolveSelectedMergeMethod(
+  allowedMergeMethods: ReadonlyArray<PullRequestMergeMethod>,
+  preferred: PullRequestMergeMethod,
+): PullRequestMergeMethod {
+  return allowedMergeMethods.includes(preferred) ? preferred : (allowedMergeMethods[0] ?? "merge");
+}
+
+/**
+ * Two questions, both of which have to say yes: whether this host can do it at all, and whether
+ * this account may. A reader with read access on someone else's project sees the pull request and
+ * none of the buttons that would only ever be refused.
+ */
+function canPerformPullRequestAction(
+  detail: Pick<PullRequestActionableDetail, "capabilities" | "viewerPermissions"> | null,
+  action: PullRequestAction,
+): boolean {
+  return (
+    detail !== null &&
+    detail.capabilities.actions.includes(action) &&
+    detail.viewerPermissions.actions.includes(action)
+  );
+}
+
+export function isPullRequestConflicting(
+  detail: Pick<PullRequestActionableDetail, "state" | "mergeability"> | null,
+): boolean {
+  return detail?.state === "open" && detail.mergeability === "conflicting";
+}
+
+/** The checks as one word. Failing outranks running: a red run is already worth acting on. */
+export type PullRequestChecksState = "none" | "pending" | "failing" | "passing";
+
+export function classifyPullRequestChecks(
+  checks: ReadonlyArray<PullRequestCheck>,
+): PullRequestChecksState {
+  if (checks.length === 0) return "none";
+  if (checks.some((check) => check.status === "failure" || check.status === "cancelled")) {
+    return "failing";
+  }
+  if (checks.some((check) => check.status === "pending" || check.status === "action-required")) {
+    return "pending";
+  }
+  return "passing";
+}
+
+/**
+ * The checks with every live facet, unlike the single-facet summary: a run with failures in it
+ * still says how much is in flight — "7 of 16 running · 1 failed" — because both numbers change
+ * what a reader does next.
+ */
+export function describePullRequestChecks(checks: ReadonlyArray<PullRequestCheck>): string {
+  if (checks.length === 0) return "No checks reported";
+  const failed = checks.filter(
+    (check) => check.status === "failure" || check.status === "cancelled",
+  ).length;
+  const pending = checks.filter((check) => check.status === "pending").length;
+  const actionRequired = checks.filter((check) => check.status === "action-required").length;
+  const passed = checks.filter((check) => check.status === "success").length;
+  const parts: string[] = [];
+  if (pending > 0) parts.push(`${pending} of ${checks.length} running`);
+  if (actionRequired > 0) parts.push(`${actionRequired} of ${checks.length} awaiting action`);
+  if (failed > 0) {
+    parts.push(parts.length > 0 ? `${failed} failed` : `${failed} of ${checks.length} failing`);
+  }
+  if (parts.length === 0) {
+    return passed === checks.length ? "All checks passed" : `${passed} of ${checks.length} passing`;
+  }
+  return parts.join(" · ");
+}
+
+export function groupPullRequestChecks(checks: ReadonlyArray<PullRequestCheck>) {
+  return {
+    attention: checks.filter((check) =>
+      ["failure", "cancelled", "action-required"].includes(check.status),
+    ),
+    running: checks.filter((check) => check.status === "pending"),
+    completed: checks.filter((check) => ["success", "skipped", "neutral"].includes(check.status)),
+  };
+}
+
+export type ThreadPanelPullRequestAction = "resolve" | "ready" | "fix" | "merge";
+
+/**
+ * Which single action the thread panel's compact pull request row offers, ranked by what
+ * unblocks the merge next: conflicts stop everything, a draft is not up for review yet, failing
+ * checks want fixing, and only a clean open pull request earns Merge. While checks run the slot
+ * stays empty — the row shows their progress instead of an action that would race them.
+ */
+export function resolveThreadPanelPullRequestAction(
+  detail: (PullRequestActionableDetail & Pick<PullRequestDetail, "checks">) | null,
+): ThreadPanelPullRequestAction | null {
+  if (detail === null || detail.state !== "open") return null;
+  if (isPullRequestConflicting(detail)) return "resolve";
+  if (detail.isDraft) {
+    return canPerformPullRequestAction(detail, "ready") ? "ready" : null;
+  }
+  const checks = classifyPullRequestChecks(detail.checks);
+  if (checks === "failing") return "fix";
+  if (checks === "pending") return null;
+  return canPerformPullRequestAction(detail, "merge") &&
+    allowedPullRequestMergeMethods(detail).length > 0
+    ? "merge"
+    : null;
 }
 
 /** Chronological ascending, oldest to newest — reversed for the "newest" reading order. */
@@ -633,7 +773,7 @@ export interface FixFindingsHandoff {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
 }
 
-export { handoffPrompt, handoffReviewComments } from "../sourceControl/handoff";
+export { handoffPrompt, handoffReviewComments, readableFailure } from "../sourceControl/handoff";
 /**
  * Every chip a hand-off leaves in the composer is named after the pull request it came from —
  * `pull-request-context:`, `pull-request-finding:`, `pull-request-selection:` — which is what
@@ -1007,44 +1147,6 @@ export function buildAddSelectionToAgentHandoff(input: {
     prompt: bounded(input.request),
     reviewComments: [pullRequestContextComment(input, []), { ...input.comment, text: "" }],
   };
-}
-
-/**
- * The internal wrapper every failed operation arrives in: which operation ran, and which tool
- * said no. A reader has no use for either.
- */
-const OPERATION_PREFIX = /^Pull request operation \w+ failed:\s*/iu;
-
-/**
- * Sentences that report only that a tool exited: true, and no help at all. Anything else the
- * host says is worth more than what this page could invent, so only these are replaced.
- */
-const TOOL_NOISE = [
-  /^(github|gitlab|bitbucket|azure devops)?\s*(cli|api)?\s*(command\s*)?failed\.?$/iu,
-  /^exited? with (code|status) \d+\.?$/iu,
-  /^unknown error\.?$/iu,
-];
-
-/** How much of a host's own message a toast can carry before it stops being read. */
-const FAILURE_DETAIL_MAX_LENGTH = 320;
-
-/**
- * What to put under a failed action. The host's own sentence when it said something — it knows
- * why, and this page does not — and otherwise what to go and check, because "the command failed"
- * leaves the reader pressing the same button again.
- */
-export function readableFailure(failure: unknown, hint: string): string {
-  const raw =
-    failure instanceof Error ? failure.message : typeof failure === "string" ? failure : "";
-  const detail = raw.replace(OPERATION_PREFIX, "").trim();
-  if (detail.length === 0 || TOOL_NOISE.some((pattern) => pattern.test(detail))) return hint;
-  const bounded =
-    detail.length <= FAILURE_DETAIL_MAX_LENGTH
-      ? detail
-      : `${detail.slice(0, FAILURE_DETAIL_MAX_LENGTH - 1)}…`;
-  // The host's words alone: the hint is a guess about why, and a guess printed under a reason
-  // that contradicts it is worse than no guess at all.
-  return bounded;
 }
 
 /**

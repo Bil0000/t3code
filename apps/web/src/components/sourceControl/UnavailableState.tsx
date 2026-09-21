@@ -2,14 +2,7 @@ import { RefreshIcon } from "../ui/refresh-icon";
 import type { ReactNode } from "react";
 
 import { Button } from "../ui/button";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "../ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 
 export function UnavailableState({
   icon,
@@ -28,7 +21,7 @@ export function UnavailableState({
   refreshing?: boolean;
 }) {
   return (
-    <Empty className="min-h-0 justify-center-safe overflow-y-auto px-4 py-16 md:px-4 [&>*]:shrink-0">
+    <Empty className="min-h-0 justify-center-safe overflow-y-auto [&>*]:shrink-0">
       <EmptyMedia variant="icon">{icon}</EmptyMedia>
       <EmptyHeader>
         <EmptyTitle>{title}</EmptyTitle>
@@ -37,7 +30,7 @@ export function UnavailableState({
         <EmptyDescription>{error}</EmptyDescription>
       </EmptyHeader>
       {onRetry || action ? (
-        <EmptyContent className="flex-row flex-wrap justify-center gap-2">
+        <div className="flex flex-wrap justify-center gap-2">
           {onRetry ? (
             <Button
               size="sm"
@@ -46,12 +39,12 @@ export function UnavailableState({
               disabled={refreshing}
               aria-busy={refreshing}
             >
-              <RefreshIcon className="size-3.5" refreshing={refreshing} />
+              <RefreshIcon size="sm" refreshing={refreshing} />
               Retry
             </Button>
           ) : null}
           {action}
-        </EmptyContent>
+        </div>
       ) : null}
     </Empty>
   );

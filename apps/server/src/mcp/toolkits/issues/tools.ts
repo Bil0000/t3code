@@ -19,8 +19,7 @@ import * as Toolkit from "effect/unstable/ai/Toolkit";
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as WorkItemLinks from "../../../workItems/WorkItemLinks.ts";
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 export const IssueTargetInput = Schema.Struct({
@@ -52,8 +51,7 @@ export const IssueToolError = Schema.Union([
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
-  OrchestrationEngine.OrchestrationEngineService,
-  ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+  Orchestrator.OrchestratorV2,
   IssueService.IssueService,
 ];
 
@@ -73,8 +71,11 @@ const LinkIssueTool = Tool.make("link_issue", {
 
 const UnlinkIssueTool = Tool.make("unlink_issue", {
   description:
-    "Remove an issue link from this thread. The issue itself stays unchanged. Unlinking an issue that is not linked succeeds with wasLinked=false.",
-  parameters: IssueTargetInput,
+    "Remove an issue link from this thread. Pass its URL when the same repository and number are linked from more than one host. The issue itself stays unchanged. Unlinking an issue that is not linked succeeds with wasLinked=false.",
+  parameters: Schema.Struct({
+    ...IssueTargetInput.fields,
+    url: Schema.optional(TrimmedNonEmptyString),
+  }),
   success: Schema.Struct({ wasLinked: Schema.Boolean }),
   failure: IssueToolError,
   dependencies,

@@ -12,19 +12,19 @@ vi.mock("~/state/entities", () => ({
   useThreadShellsForProjectRefs: () => linkedThreadShells,
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => update }));
-vi.mock("../sourceControl/HostMarkdown", () => ({ HostMarkdown: () => null }));
+vi.mock("../pullRequest/PullRequestMarkdown", () => ({ PullRequestMarkdown: () => null }));
 vi.mock("../ComposerPromptEditor", () => ({
   ComposerPromptEditor: ({
     value,
-    label,
+    ariaLabel,
     onChange,
   }: {
     value: string;
-    label: string;
+    ariaLabel: string;
     onChange: (value: string, cursor: number) => void;
   }) => (
     <textarea
-      aria-label={label}
+      aria-label={ariaLabel}
       rows={6}
       value={value}
       onChange={(event) => onChange(event.target.value, event.target.value.length)}
@@ -133,8 +133,6 @@ const props: ComponentProps<typeof IssueSummaryTab> = {
   onLoadMoreComments: vi.fn(),
   loadingMoreComments: false,
   onRefresh: vi.fn(),
-  actionPending: false,
-  onCommentAction: async () => ({ commentPosted: false }),
 };
 
 it("uses rich text without a Write/Preview switch, keeps the draft, and saves only the description", async () => {
@@ -203,6 +201,26 @@ it("names the comment order toggle by its visible state", async () => {
   expect(button("Oldest first").props["aria-label"] ?? "Oldest first").toContain("Oldest first");
 });
 
+it("keeps assignee avatars visible and names them for screen readers", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const assignee = { login: "bilal", name: null, avatarUrl: null };
+  await act(() => {
+    renderer = create(
+      <IssueSummaryTab {...props} editing={false} detail={{ ...detail, assignees: [assignee] }} />,
+    );
+  });
+  const avatar = renderer.root.find(
+    (node) => node.type === "span" && node.props["aria-hidden"] && node.children.includes("B"),
+  );
+  for (let node = avatar.parent; node !== null; node = node.parent) {
+    expect(String(node.props.className ?? "")).not.toContain("sr-only");
+  }
+  const login = renderer.root.find(
+    (node) => node.type === "span" && node.children.includes("bilal"),
+  );
+  expect(login.props.className).toBe("sr-only");
+});
+
 it("shows only threads linked to this issue and opens the matching thread", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const issue = {
@@ -218,7 +236,7 @@ it("shows only threads linked to this issue and opens the matching thread", asyn
       projectId: detail.projectId,
       id: "thread-1",
       title: "Fix the issue",
-      issues: [issue],
+      issues: [{ ...issue, url: `${detail.url}?source=web#comment` }],
     },
     {
       environmentId: props.environmentId,

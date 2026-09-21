@@ -13,6 +13,8 @@ import {
   IssueTemplateList,
   issueTemplateAnswersComplete,
   IssueUpdateInput,
+  ThreadIssueKey,
+  ThreadIssueLink,
   type IssueTemplateField,
 } from "./issue.ts";
 
@@ -22,8 +24,18 @@ const decodeCreate = Schema.decodeUnknownSync(IssueCreateInput);
 const decodeUpdate = Schema.decodeUnknownSync(IssueUpdateInput);
 const decodeDetail = Schema.decodeUnknownSync(IssueDetail);
 const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
+const decodeThreadIssueKey = Schema.decodeUnknownSync(ThreadIssueKey);
+const decodeThreadIssueLink = Schema.decodeUnknownOption(ThreadIssueLink);
 const GITHUB_SOURCE = issueSourceKey("github", "github.com");
 const GITLAB_SOURCE = issueSourceKey("gitlab", "gitlab.com");
+
+it("accepts legacy unlink keys and keeps host URLs while links require a URL", () => {
+  const key = { provider: "github", repository: "t3tools/t3code", number: 1 };
+  const hostedKey = { ...key, url: "https://github.acme.test/t3tools/t3code/issues/1" };
+  expect(decodeThreadIssueKey(key)).toEqual(key);
+  expect(decodeThreadIssueKey(hostedKey)).toEqual(hostedKey);
+  expect(decodeThreadIssueLink({ ...key, title: "Issue 1" })._tag).toBe("None");
+});
 
 const LIST_RESULT: IssueListResult = {
   viewers: { [GITHUB_SOURCE]: "bilal", [GITLAB_SOURCE]: "bilal.hassan" },

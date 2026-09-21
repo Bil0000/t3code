@@ -14,7 +14,6 @@ import {
   readIssueListSnapshot,
   writeIssueListSnapshot,
   scoreIssueMatch,
-  resolveProjectScope,
 } from "./issueList.logic";
 
 const VIEWERS = { [issueSourceKey("github", "github.com")]: "Bilal" } as const;
@@ -285,24 +284,6 @@ describe("carrying rows already read into filters nothing has answered yet", () 
 
   it("holds on to everything when nothing narrows it", () => {
     expect(narrowIssuesToFilters(rows, everything)).toEqual(rows);
-  });
-});
-
-describe("resolveProjectScope", () => {
-  const projects = [{ id: "p1" }, { id: "p2" }];
-
-  it("keeps an id the environment has", () => {
-    expect(resolveProjectScope("p2", projects, true)).toBe("p2");
-  });
-
-  it("drops an id from another environment", () => {
-    expect(resolveProjectScope("p9", projects, false)).toBe("p9");
-    expect(resolveProjectScope("p9", projects, true)).toBeUndefined();
-  });
-
-  it("keeps an id while the projects are still unknown", () => {
-    // Dropping here would list every project for a moment before narrowing back down.
-    expect(resolveProjectScope("p9", [], false)).toBe("p9");
   });
 });
 

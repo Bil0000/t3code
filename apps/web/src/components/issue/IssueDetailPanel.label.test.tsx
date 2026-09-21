@@ -1,7 +1,6 @@
 import type { EnvironmentId, IssueActivity, IssueDetail } from "@t3tools/contracts";
 import type { DraftId } from "~/composerDraftStore";
 import { Cause } from "effect";
-import { IssueSummaryTab } from "./IssueSummaryTab";
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -77,10 +76,10 @@ vi.mock("~/state/use-atom-command", () => ({
 vi.mock("../sourceControl/ActivityUnavailableState", () => ({
   ActivityUnavailableState: () => null,
 }));
-vi.mock("../sourceControl/actorPresentation", () => ({
-  SourceControlActorLabel: () => null,
-  SourceControlActorAvatar: () => null,
-  SourceControlMetaLine: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+vi.mock("../pullRequest/pullRequestPresentation", () => ({
+  PullRequestActorLabel: () => null,
+  PullRequestActorAvatar: () => null,
+  PullRequestMetaLine: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../sourceControl/DetailTabStrip", () => ({
   DetailTabStrip: ({ children }: { children?: ReactNode }) => (
@@ -155,6 +154,8 @@ let currentActivity = activity;
 
 import { IssueDetailPanel } from "./IssueDetailPanel";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
+import { CommentComposer } from "../sourceControl/CommentComposer";
+import { IssueSummaryTab } from "./IssueSummaryTab";
 import { Button } from "../ui/button";
 import { Menu, MenuItem } from "../ui/menu";
 import { TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -189,8 +190,9 @@ function panelHeader(panel: ReturnType<typeof IssueDetailPanel>) {
 }
 
 describe("IssueDetailPanel provider labels", () => {
-  for (const lateResponse of [false, true]) {
-    it(`drops exhausted comment pages on revision change, late response: ${lateResponse}`, async () => {
+  it.each([false, true])(
+    "drops exhausted comment pages on revision change, late response: %s",
+    async (lateResponse) => {
       hooks.reset();
       currentActivity = { ...activity, commentsTruncated: true, nextCommentsCursor: "first-page" };
       let resolve!: (value: unknown) => void;
@@ -231,8 +233,8 @@ describe("IssueDetailPanel provider labels", () => {
       expect(commands.commentsPage).toHaveBeenLastCalledWith(
         expect.objectContaining({ input: expect.objectContaining({ cursor: "fresh-page" }) }),
       );
-    });
-  }
+    },
+  );
 
   it("matches the pull request header height and keeps the tab row stable", () => {
     hooks.reset();
@@ -346,8 +348,13 @@ it.each(["comment-failed", "action-failed", "success"])(
       outcome === "comment-failed" ? failure : { _tag: "Success" },
     );
     commands.action.mockResolvedValue(outcome === "action-failed" ? failure : { _tag: "Success" });
-    const summary = visitElements(renderPanel(), (element) => element.type === IssueSummaryTab);
-    const onCommentAction = summary!.props.onCommentAction as (
+    currentDetail = {
+      ...detail,
+      capabilities: { ...detail.capabilities, comment: true },
+      viewerPermissions: { ...detail.viewerPermissions, comment: true },
+    };
+    const composer = visitElements(renderPanel(), (element) => element.type === CommentComposer);
+    const onCommentAction = composer!.props.onCommentAction as (
       body: string,
       action: "close",
     ) => Promise<{ commentPosted: boolean }>;

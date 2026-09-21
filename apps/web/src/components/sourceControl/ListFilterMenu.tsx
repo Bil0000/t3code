@@ -9,13 +9,12 @@
  * narrowed.
  */
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { FolderGit2Icon, LayersIcon, ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import { FolderGit2Icon, LayersIcon, ListFilterIcon, SearchIcon } from "lucide-react";
 import type { ElementType, ReactNode } from "react";
-
-import { cn } from "~/lib/utils";
 
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import {
   Menu,
   MenuGroupLabel,
@@ -61,7 +60,7 @@ export function ListSearchInput({
   return (
     <InputGroup className="min-w-0 flex-1 **:[input]:h-9 sm:**:[input]:h-8">
       <InputGroupAddon>
-        {busy ? <LoaderIcon aria-hidden className="animate-spin" /> : <SearchIcon aria-hidden />}
+        {busy ? <Spinner aria-hidden /> : <SearchIcon aria-hidden />}
       </InputGroupAddon>
       <InputGroupInput
         type="search"
@@ -85,16 +84,7 @@ export function ListFilterMenu({
 }) {
   return (
     <Menu>
-      <MenuTrigger
-        render={
-          <Button
-            className={cn(filterCount > 0 && "[--control-icon-color:currentColor]")}
-            size="default"
-            variant="outline"
-            aria-label={label}
-          />
-        }
-      >
+      <MenuTrigger render={<Button size="default" variant="outline" aria-label={label} />}>
         <ListFilterIcon className="size-4" />
         <span>Filters</span>
         {filterCount > 0 ? (
@@ -103,7 +93,7 @@ export function ListFilterMenu({
           </span>
         ) : null}
       </MenuTrigger>
-      <MenuPopup align="end" side="bottom" className="min-w-56">
+      <MenuPopup align="end" side="bottom">
         {children}
       </MenuPopup>
     </Menu>
@@ -116,7 +106,7 @@ export function ListFilterRadioGroup<Value extends string>({
   options,
   onChange,
 }: {
-  label: string;
+  label?: string;
   value: Value;
   options: ReadonlyArray<ListFilterOption<Value>>;
   onChange: (value: Value) => void;
@@ -128,7 +118,7 @@ export function ListFilterRadioGroup<Value extends string>({
         if (next !== value) onChange(next as Value);
       }}
     >
-      <MenuGroupLabel>{label}</MenuGroupLabel>
+      {label ? <MenuGroupLabel>{label}</MenuGroupLabel> : null}
       {options.map((option) => {
         const item = (
           <MenuRadioItem
@@ -152,9 +142,7 @@ export function ListFilterRadioGroup<Value extends string>({
         return (
           <Tooltip key={option.value}>
             <TooltipTrigger render={item} />
-            <TooltipPopup side="top" className="max-w-80">
-              {option.unavailable}
-            </TooltipPopup>
+            <TooltipPopup side="top">{option.unavailable}</TooltipPopup>
           </Tooltip>
         );
       })}
@@ -229,11 +217,7 @@ export function ListProjectFilterGroup({
                 )}
                 <span className="min-w-0 flex-1 truncate">{project.title}</span>
                 <MenuRadioItemIndicator />
-                {reason === undefined ? null : (
-                  <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
-                    Unavailable
-                  </span>
-                )}
+                {reason === undefined ? null : <span className="shrink-0">· Unavailable</span>}
               </span>
             </MenuRadioItem>
           );
@@ -241,9 +225,7 @@ export function ListProjectFilterGroup({
           return (
             <Tooltip key={project.id}>
               <TooltipTrigger render={item} />
-              <TooltipPopup side="top" className="max-w-80">
-                {reason}
-              </TooltipPopup>
+              <TooltipPopup side="top">{reason}</TooltipPopup>
             </Tooltip>
           );
         })}

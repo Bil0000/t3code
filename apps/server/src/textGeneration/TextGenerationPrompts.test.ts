@@ -1,4 +1,4 @@
-import { TextGenerationError, WORK_ITEM_TASK_PROMPT_MAX_LENGTH } from "@t3tools/contracts";
+import { TextGenerationError } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -7,87 +7,12 @@ import {
   buildPrContentPrompt,
   buildThreadTitlePrompt,
   buildWorkItemMatchPrompt,
-  buildWorkItemTaskPrompt,
-  fallbackWorkItemTaskPrompt,
-  resolveWorkItemTaskResult,
 } from "./TextGenerationPrompts.ts";
 import {
   normalizeCliError,
   sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
-
-describe("buildWorkItemTaskPrompt", () => {
-  const items = [
-    {
-      kind: "issue" as const,
-      provider: "linear",
-      referenceStyle: "key-number" as const,
-      repository: "ENG",
-      number: 12,
-      title: "Fix login",
-      url: "https://linear.app/acme/issue/ENG-12",
-      body: "Sessions expire too early.",
-    },
-    {
-      kind: "pull-request" as const,
-      provider: "github",
-      repository: "acme/app",
-      number: 34,
-      title: "Keep sessions alive",
-      url: "https://github.com/acme/app/pull/34",
-      body: "Refreshes sessions before expiry.",
-    },
-  ];
-
-  it("substitutes selected sources and changes shape by mode", () => {
-    const compoundPrompt = buildWorkItemTaskPrompt({ mode: "compound", items }).prompt;
-    const subtaskPrompt = buildWorkItemTaskPrompt({ mode: "subtasks", items }).prompt;
-
-    expect(compoundPrompt).toContain("ENG-12");
-    expect(compoundPrompt).toContain("Sessions expire too early.");
-    expect(compoundPrompt).toContain("acme/app#34");
-    expect(compoundPrompt).not.toBe(subtaskPrompt);
-  });
-
-  it("keeps a deterministic draft when AI is unavailable", () => {
-    const draft = fallbackWorkItemTaskPrompt({ mode: "subtasks", items });
-    expect(draft).toContain("Fix login");
-    expect(draft).toContain("(ENG-12)");
-    expect(draft).not.toContain("ENG#12");
-    expect(draft).toContain("https://linear.app/acme/issue/ENG-12");
-  });
-
-  it("keeps all twenty selected sources when their bodies exceed the shared budget", () => {
-    const selected = Array.from({ length: 20 }, (_, index) => ({
-      ...items[0]!,
-      number: index + 1,
-      url: `https://linear.app/acme/issue/ENG-${index + 1}`,
-      body: "long body ".repeat(1_000),
-    }));
-    const sources = buildWorkItemTaskPrompt({ mode: "compound", items: selected }).prompt.split(
-      "Selected sources:\n",
-    )[1]!;
-    for (const item of selected) {
-      expect(sources).toContain(`### Issue: ENG-${item.number}\n`);
-      expect(sources).toContain(`URL: ${item.url}\n`);
-    }
-    expect(sources.length).toBeLessThanOrEqual(48_000);
-  });
-
-  it("falls back when a generated task exceeds the RPC prompt limit", () => {
-    const result = resolveWorkItemTaskResult(
-      { mode: "compound", items },
-      "x".repeat(WORK_ITEM_TASK_PROMPT_MAX_LENGTH + 1),
-    );
-
-    expect(result).toEqual({
-      prompt: fallbackWorkItemTaskPrompt({ mode: "compound", items }),
-      generated: false,
-    });
-    expect(result.prompt.length).toBeLessThanOrEqual(WORK_ITEM_TASK_PROMPT_MAX_LENGTH);
-  });
-});
 
 describe("buildWorkItemMatchPrompt", () => {
   const source = {
@@ -230,6 +155,39 @@ describe("buildPrContentPrompt", () => {
 });
 
 describe("buildBranchNamePrompt", () => {
+  it("requests a semantic prefix as part of the same branch response", () => {
+    const { prompt, outputSchema } = buildBranchNamePrompt({
+      message: "Add search",
+      naming: { mode: "semantic", prefix: "ignored", instructions: "ignored instruction" },
+    });
+    expect(prompt).toContain("feat/add-search");
+    expect(prompt).not.toContain("ignored instruction");
+    expect(toJsonSchemaObject(outputSchema)).toMatchObject({ required: ["branch"] });
+  });
+  it("appends custom instructions without imposing a prefix, case or word limit", () => {
+    const { prompt } = buildBranchNamePrompt({
+      message: "Add search",
+      naming: {
+        mode: "custom",
+        prefix: "ignored",
+        instructions: "Use Julius/ABC-123 and preserve capitalization.",
+      },
+    });
+    expect(prompt).toContain("Use Julius/ABC-123 and preserve capitalization.");
+    expect(prompt).toContain("complete branch name");
+    expect(prompt).not.toContain("2-6 words");
+    expect(prompt).not.toContain("lowercase");
+    expect(prompt).not.toContain("no issue prefixes");
+  });
+  it("asks for just the fragment in static mode", () => {
+    const { prompt } = buildBranchNamePrompt({
+      message: "Add search",
+      naming: { mode: "static", prefix: "team", instructions: "ignored instruction" },
+    });
+    expect(prompt).toContain("without a prefix or namespace");
+    expect(prompt).not.toContain("ignored instruction");
+  });
+
   it("includes the user message in the prompt", () => {
     const result = buildBranchNamePrompt({
       message: "Fix the login timeout bug",

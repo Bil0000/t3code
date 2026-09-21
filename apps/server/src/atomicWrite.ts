@@ -1,29 +1,32 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import { resolveSymlinkTarget } from "@t3tools/shared/symlink";
 
+/**
+ * Replaces a file's contents via a sibling temp file and rename. A symlinked
+ * target is resolved first so the link survives and its destination is
+ * rewritten, since renaming over the link itself would swap it for a regular file.
+ */
 export const writeFileStringAtomically = (input: {
   readonly filePath: string;
   readonly contents: string;
 }) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const targetDirectory = path.dirname(input.filePath);
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const targetPath = yield* resolveSymlinkTarget(input.filePath);
+      const targetDirectory = path.dirname(targetPath);
 
-    yield* fs.makeDirectory(targetDirectory, { recursive: true });
-    const tempDirectory = yield* fs.makeTempDirectory({
-      directory: targetDirectory,
-      prefix: `${path.basename(input.filePath)}.`,
-    });
-    const tempPath = path.join(tempDirectory, "contents.tmp");
+      yield* fs.makeDirectory(targetDirectory, { recursive: true });
+      const tempDirectory = yield* fs.makeTempDirectoryScoped({
+        directory: targetDirectory,
+        prefix: `${path.basename(targetPath)}.`,
+      });
+      const tempPath = path.join(tempDirectory, "contents.tmp");
 
-    yield* Effect.gen(function* () {
       yield* fs.writeFileString(tempPath, input.contents);
-      yield* fs.rename(tempPath, input.filePath);
-    }).pipe(
-      Effect.ensuring(
-        fs.remove(tempDirectory, { recursive: true, force: true }).pipe(Effect.ignoreCause),
-      ),
-    );
-  });
+      yield* fs.rename(tempPath, targetPath);
+    }),
+  );

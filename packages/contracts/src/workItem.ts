@@ -72,9 +72,6 @@ export class WorkItemLinkError extends Schema.TaggedError<WorkItemLinkError>()(
   }
 }
 
-export const WorkItemTaskMode = Schema.Literals(["compound", "subtasks"]);
-export type WorkItemTaskMode = typeof WorkItemTaskMode.Type;
-
 export const WorkItemTaskSourceRef = Schema.Struct({
   kind: Schema.Literals(["issue", "pull-request"]),
   provider: Schema.optionalKey(TrimmedNonEmptyString),
@@ -82,38 +79,6 @@ export const WorkItemTaskSourceRef = Schema.Struct({
   number: PositiveInt,
 });
 export type WorkItemTaskSourceRef = typeof WorkItemTaskSourceRef.Type;
-
-export const WorkItemTaskInput = Schema.Struct({
-  projectId: ProjectId,
-  mode: WorkItemTaskMode,
-  items: Schema.Array(WorkItemTaskSourceRef).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
-});
-export type WorkItemTaskInput = typeof WorkItemTaskInput.Type;
-
-export const WORK_ITEM_TASK_PROMPT_MAX_LENGTH = 65_536;
-
-export const WorkItemTaskResult = Schema.Struct({
-  prompt: Schema.String.check(
-    Schema.isNonEmpty(),
-    Schema.isMaxLength(WORK_ITEM_TASK_PROMPT_MAX_LENGTH),
-  ),
-  generated: Schema.Boolean,
-});
-export type WorkItemTaskResult = typeof WorkItemTaskResult.Type;
-
-export class WorkItemTaskError extends Schema.TaggedError<WorkItemTaskError>()(
-  "WorkItemTaskError",
-  {
-    operation: Schema.Literals(["read-source", "generate"]),
-    source: WorkItemTaskSourceRef,
-    detail: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Work item task generation failed during ${this.operation}: ${this.detail}`;
-  }
-}
 
 export const WorkItemMatchRelationship = Schema.Literals(["related", "duplicate"]);
 export type WorkItemMatchRelationship = typeof WorkItemMatchRelationship.Type;

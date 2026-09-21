@@ -21,20 +21,16 @@ export function ThreadIssueLinks({ threadRef }: { threadRef: ScopedThreadRef }) 
         <CircleDotIcon aria-hidden className="size-3.5" />
         {issues.length}
       </PopoverTrigger>
-      <PopoverPopup align="end" className="w-80">
-        <PopoverTitle className="mb-2 text-sm">Linked issues</PopoverTitle>
+      <PopoverPopup align="end" width="md">
+        <PopoverTitle className="mb-2">Linked issues</PopoverTitle>
         <div className="max-h-64 space-y-1 overflow-y-auto">
           {issues.map((issue) => (
-            <div
-              key={JSON.stringify([issue.provider, issue.repository, issue.number])}
-              className="flex items-center gap-1"
-            >
+            <div key={issue.url} className="flex items-center gap-1">
               <button
                 type="button"
                 className="min-w-0 flex-1 rounded-sm px-1 py-1 text-left text-xs hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() =>
                   useRightPanelStore.getState().openIssue(threadRef, {
-                    environmentId: threadRef.environmentId,
                     projectId: thread.projectId,
                     provider: issue.provider,
                     repository: issue.repository,
@@ -49,7 +45,7 @@ export function ThreadIssueLinks({ threadRef }: { threadRef: ScopedThreadRef }) 
               </button>
               <Button
                 size="icon-xs"
-                variant="ghost"
+                variant="ghost-muted"
                 aria-label={`Unlink ${issue.title}`}
                 disabled={pending}
                 onClick={async () => {
@@ -63,6 +59,7 @@ export function ThreadIssueLinks({ threadRef }: { threadRef: ScopedThreadRef }) 
                           provider: issue.provider,
                           repository: issue.repository,
                           number: issue.number,
+                          url: issue.url,
                         },
                       },
                     });

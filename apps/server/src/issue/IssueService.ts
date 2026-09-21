@@ -43,7 +43,8 @@ import {
   type IssueProviderKind,
 } from "@t3tools/contracts";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import {
   issueProviderContextKey,
   type IssueProviderError,
@@ -334,12 +335,13 @@ function toIssueError(operation: string): (error: IssueProviderError) => IssueEr
 
 export const make = Effect.gen(function* () {
   const registry = yield* IssueProviderRegistry.IssueProviderRegistry;
-  const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projects = yield* ProjectService.ProjectService;
+  const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
 
   const listWorkspaceProjects = (
     filter: Pick<IssueListInput, "projectId" | "host">,
   ): Effect.Effect<IssueProviderRegistry.IssueWorkspaceProjects, IssueError> =>
-    projections.getShellSnapshot().pipe(
+    projects.listShells().pipe(
       Effect.mapError(
         (error) =>
           new IssueOperationError({
@@ -348,7 +350,19 @@ export const make = Effect.gen(function* () {
             cause: error,
           }),
       ),
-      Effect.flatMap((snapshot) => registry.resolveProjects(snapshot.projects, filter)),
+      Effect.flatMap((shells) =>
+        Effect.forEach(
+          shells,
+          (project) =>
+            project.repositoryIdentity != null
+              ? Effect.succeed(project)
+              : repositoryIdentities
+                  .resolve(project.workspaceRoot)
+                  .pipe(Effect.map((repositoryIdentity) => ({ ...project, repositoryIdentity }))),
+          { concurrency: REPOSITORY_CONCURRENCY },
+        ),
+      ),
+      Effect.flatMap((shells) => registry.resolveProjects(shells, filter)),
     );
 
   /**

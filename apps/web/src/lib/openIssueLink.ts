@@ -1,133 +1,9 @@
-import type { LocalApi } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
-
 import { sourceControlHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-
-export class IssueLinkOpenError extends Schema.TaggedError<IssueLinkOpenError>()(
-  "IssueLinkOpenError",
-  {
-    targetOrigin: Schema.NullOr(Schema.String),
-    cause: Schema.Defect(),
-  },
-) {
-  static fromCause(targetUrl: string, cause: unknown): IssueLinkOpenError {
-    let targetOrigin: string | null = null;
-    try {
-      targetOrigin = new URL(targetUrl).origin;
-    } catch {
-      // Keep malformed URLs out of diagnostics while preserving the open failure below.
-    }
-    return new IssueLinkOpenError({ targetOrigin, cause });
-  }
-
-  override get message(): string {
-    return this.targetOrigin === null
-      ? "Unable to open issue link."
-      : `Unable to open issue link at ${this.targetOrigin}.`;
-  }
-}
-
-export async function openIssueLink(
-  shell: Pick<LocalApi["shell"], "openExternal">,
-  targetUrl: string,
-): Promise<void> {
-  try {
-    const url = new URL(targetUrl);
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      throw new Error("Issue links must use HTTP or HTTPS.");
-    }
-    await shell.openExternal(targetUrl);
-  } catch (cause) {
-    throw IssueLinkOpenError.fromCause(targetUrl, cause);
-  }
-}
-
-/**
- * An issue the page can open, named the way the page names one: the host below which the
- * repository is addressed, the repository path as that host writes it, and the number.
- *
- * The two strings are what `sourceControlHostOf` and the project's `repositoryIdentity` produce
- * from a git remote — lower case, no port, the full path below the host — because the page matches
- * a link against those. Anything else opens nothing.
- */
-export interface IssueUrlLink {
-  readonly host: string;
-  readonly repository: string;
-  readonly number: number;
-}
-
-/** The host itself, one of its subdomains, or an install named after the provider. */
-function isHostOf(hostname: string, apex: string, label?: string): boolean {
-  if (hostname === apex || hostname.endsWith(`.${apex}`)) return true;
-  return label !== undefined && hostname.startsWith(`${label}.`);
-}
-
-/**
- * The repository and number behind an issue URL on a host the page can read, or null for
- * anything else — a pull request, a commit, a repository root, a host this cannot tell apart from
- * an ordinary link. Null means the system browser, so a doubtful match is worse than no match: it
- * takes the reader out of their browser and into a page that cannot find the issue.
- *
- * Each host is recognised by the path shape it alone uses, guarded by a hostname it could
- * plausibly be served from, since self-hosted installs are named whatever their admin chose:
- * GitLab's `/-/` marker is unique enough to trust on any hostname, while `/issues/` is generic
- * enough — GitHub and Bitbucket both spell it the same way — that it is only believed from a host
- * that looks like the one it names.
- */
-export function parseIssueUrl(targetUrl: string): IssueUrlLink | null {
-  let url: URL;
-  try {
-    url = new URL(targetUrl);
-  } catch {
-    return null;
-  }
-  // `javascript:`, `mailto:` and friends have no host to speak of and nothing to open.
-  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  // Nothing here tries to tell a lookalike hostname from a real one — `github.com.evil.test`,
-  // `github.com-evil.test` and the rest are an open set, and blocking spellings of it costs real
-  // hosts (`gitlab.com.br` is a registrable domain, not a disguise). What a claim is worth is
-  // decided where it is used: only a link matching a repository this workspace has checked out
-  // opens the page, and everything else stays the ordinary link it was.
-  const host = url.hostname.toLowerCase();
-
-  // GitHub, and any Enterprise install: /{owner}/{repo}/issues/{n}
-  if (isHostOf(host, "github.com", "github")) {
-    const match = /^\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim(host, match);
-  }
-  // GitLab, self-hosted included: /{group}/[{subgroup}/...]{repo}/-/issues/{n}. The `/-/`
-  // separator is GitLab's own, so the hostname is not asked about.
-  const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
-  if (gitlab) return claim(host, gitlab);
-  // Bitbucket Cloud: /{workspace}/{repo}/issues/{n}. The same path shape GitHub's own issues
-  // wear, which is why the GitHub check above runs first and this one is gated on its own host.
-  if (isHostOf(host, "bitbucket.org", "bitbucket")) {
-    const match = /^\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim(host, match);
-  }
-  // Azure DevOps, both the current host and the per-organisation one it replaced — the
-  // organisation lives in the hostname there, so only the project remains in the path. A work
-  // item belongs to the team project, not to one of the git repositories under it, so the capture
-  // is `{organisation}/{project}` or just `{project}`; `claim` below matches it against every
-  // repository that project holds rather than one exact path.
-  if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
-    const match = /^\/((?:[^/]+\/)?[^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim(host, match);
-  }
-  return null;
-}
-
-function claim(host: string, match: RegExpExecArray | null): IssueUrlLink | null {
-  const repository = match?.[1];
-  const number = Number(match?.[2]);
-  return repository && Number.isSafeInteger(number) && number > 0
-    ? { host, repository: repository.toLowerCase(), number }
-    : null;
-}
 
 /**
  * The project an issue link belongs to, or nothing. Matched the way the server matches: the
@@ -141,9 +17,9 @@ function claim(host: string, match: RegExpExecArray | null): IssueUrlLink | null
  * the whole repository path into the link, so there the match is exact — a nested GitLab project
  * is a different repository from the group above it, not the same one seen from further down.
  */
-export function findProjectForIssue(
+function findProjectForIssue(
   projects: ReadonlyArray<EnvironmentProject>,
-  link: IssueUrlLink,
+  link: { readonly host: string; readonly repository: string },
 ): EnvironmentProject | undefined {
   return projects.find((project) => {
     const identity = project.repositoryIdentity;
@@ -169,6 +45,19 @@ export function repositoryForProjectLink(project: EnvironmentProject, fallback: 
   return project.repositoryIdentity?.displayName ?? fallback;
 }
 
+export function linkedPullRequestTarget(
+  project: EnvironmentProject,
+  link: { readonly repository: string; readonly number: number; readonly url: string },
+) {
+  const parsed = parseChangeRequestUrl(link.url);
+  return {
+    projectId: project.id,
+    ...(parsed === null ? {} : { host: parsed.authority ?? parsed.host }),
+    repository: repositoryForProjectLink(project, link.repository),
+    number: link.number,
+  };
+}
+
 /**
  * The project a linked issue or change request belongs to, or nothing. A link carries the
  * repository it was filed in, which need not be the one on screen — a cross-repository reference
@@ -190,7 +79,7 @@ export function findProjectForLink(
   } catch {
     return undefined;
   }
-  return findProjectForIssue(projects, { host, repository: link.repository, number: link.number });
+  return findProjectForIssue(projects, { host, repository: link.repository });
 }
 
 /**
@@ -207,7 +96,12 @@ export function openLinkInBrowser(targetUrl: string): void {
     return;
   }
 
-  void openIssueLink(api.shell, targetUrl).catch((error) => {
+  const protocol = URL.canParse(targetUrl) ? new URL(targetUrl).protocol : null;
+  const opened =
+    protocol === "https:" || protocol === "http:"
+      ? api.shell.openExternal(targetUrl)
+      : Promise.reject(new Error("Issue links must use HTTP or HTTPS."));
+  void opened.catch((error) => {
     console.error(error);
     toastManager.add(
       stackedThreadToast({

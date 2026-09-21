@@ -7,12 +7,12 @@ import type {
   WorkItemMatch,
 } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { normalizeWorkItemLinkKey } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowDownUpIcon,
   MessageSquareIcon,
   MilestoneIcon,
-  PencilIcon,
   TagIcon,
   UsersIcon,
 } from "lucide-react";
@@ -29,14 +29,14 @@ import { PullRequestMarkdownEditor as SourceControlMarkdownEditor } from "../pul
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import { EMPTY_COMPOSER_CONTEXT_RECORDS } from "../composerContextPresentation";
 import {
-  SourceControlActorLabel,
-  SourceControlActorAvatar,
-} from "../sourceControl/actorPresentation";
-import { CommentComposer } from "../sourceControl/CommentComposer";
-import { HostMarkdown } from "../sourceControl/HostMarkdown";
+  PullRequestActorLabel,
+  PullRequestActorAvatar,
+} from "../pullRequest/pullRequestPresentation";
+import { PullRequestMarkdown } from "../pullRequest/PullRequestMarkdown";
 import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
 import { readableFailure } from "../sourceControl/handoff";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
+import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { IssueLabelChips } from "./issuePresentation";
@@ -173,7 +173,7 @@ export function IssueEditor({
         contextRecords={EMPTY_COMPOSER_CONTEXT_RECORDS}
         skills={[]}
         disabled={saving}
-        label="Issue description"
+        ariaLabel="Issue description"
         placeholder="Describe the issue"
         containerClassName="rounded-lg border border-border/60 p-3"
         className="min-h-36 max-h-96"
@@ -228,8 +228,6 @@ export function IssueSummaryTab({
   onLoadMoreComments,
   loadingMoreComments,
   onRefresh,
-  actionPending,
-  onCommentAction,
 }: {
   environmentId: EnvironmentId;
   reference: IssueRef;
@@ -256,11 +254,6 @@ export function IssueSummaryTab({
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
   onOpenAiMatch: (match: WorkItemMatch) => void;
   onRefresh: () => void;
-  actionPending: boolean;
-  onCommentAction: (
-    body: string,
-    action: "close" | "reopen",
-  ) => Promise<{ readonly commentPosted: boolean }>;
   onLoadMoreComments: () => void;
   loadingMoreComments: boolean;
 }) {
@@ -270,6 +263,7 @@ export function IssueSummaryTab({
     [environmentId, detail.projectId],
   );
   const threads = useThreadShellsForProjectRefs(projectRefs);
+  const detailUrl = normalizeWorkItemLinkKey(detail).url;
   const linkedThreads = threads.filter(
     (thread) =>
       thread.environmentId === environmentId &&
@@ -279,7 +273,7 @@ export function IssueSummaryTab({
           issue.provider === detail.provider &&
           issue.repository.toLowerCase() === detail.repository.toLowerCase() &&
           issue.number === detail.number &&
-          issue.url === detail.url,
+          normalizeWorkItemLinkKey(issue).url === detailUrl,
       ),
   );
   // Keyed by the issue, so opening another one starts at the end of its conversation rather than
@@ -369,10 +363,11 @@ export function IssueSummaryTab({
                 <span className="text-muted-foreground">Nobody</span>
               ) : (
                 detail.assignees.map((actor) => (
-                  <SourceControlActorLabel
+                  <PullRequestActorLabel
                     key={actor.login}
                     actor={actor}
-                    className="shrink-0 gap-0 [&>span:last-child]:sr-only"
+                    variant="avatar"
+                    className="shrink-0"
                   />
                 ))
               )}
@@ -439,22 +434,17 @@ export function IssueSummaryTab({
             />
           ) : (
             <div className="flex items-start gap-1">
-              <HostMarkdown
+              <PullRequestMarkdown
                 className="min-w-0 flex-1"
                 text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
                 cwd={detail.workspaceRoot}
                 environmentId={environmentId}
               />
               {detail.capabilities.edit && detail.viewerPermissions.edit ? (
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  className="shrink-0 text-muted-foreground"
+                <PullRequestEditButton
                   aria-label="Edit description"
                   onClick={() => onEditingChange(true)}
-                >
-                  <PencilIcon className="size-3" />
-                </Button>
+                />
               ) : null}
             </div>
           )}
@@ -509,7 +499,7 @@ export function IssueSummaryTab({
                     />
                     <span className="min-w-0 flex-1 truncate">{link.title}</span>
                     {link.closesIssue ? (
-                      <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
+                      <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-3xs text-muted-foreground">
                         closes this
                       </span>
                     ) : null}
@@ -605,8 +595,8 @@ export function IssueSummaryTab({
           !activityPending && !activityError && detail.comments.length > 0 ? (
             <Button
               size="xs"
-              variant="ghost"
-              className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+              variant="ghost-muted"
+              className="shrink-0"
               onClick={() => setCommentOrder(commentOrder === "newest" ? "oldest" : "newest")}
             >
               <ArrowDownUpIcon aria-hidden className="size-3" />
@@ -628,7 +618,7 @@ export function IssueSummaryTab({
         ) : (
           <>
             {detail.commentsTruncated && detail.nextCommentsCursor == null ? (
-              <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
+              <p className="mb-2 rounded-md border border-warning/30 bg-warning-surface px-2 py-1.5 text-xs">
                 Only {detail.comments.length} comments are available here. Open the issue on the
                 host to read the rest.
               </p>
@@ -656,7 +646,7 @@ export function IssueSummaryTab({
                             />
                           }
                         >
-                          <SourceControlActorAvatar actor={comment.author} />
+                          <PullRequestActorAvatar actor={comment.author} />
                         </TooltipTrigger>
                         <TooltipPopup>
                           {comment.author?.name ?? comment.author?.login ?? "ghost"}
@@ -677,22 +667,17 @@ export function IssueSummaryTab({
                       />
                     ) : (
                       <div className="mt-2 flex items-start gap-1">
-                        <HostMarkdown
+                        <PullRequestMarkdown
                           className="min-w-0 flex-1"
                           text={comment.body}
                           cwd={detail.workspaceRoot}
                           environmentId={environmentId}
                         />
                         {canEditIssueComment(detail, comment) ? (
-                          <Button
-                            size="icon-xs"
-                            variant="ghost"
-                            className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                          <PullRequestEditButton
                             aria-label="Edit comment"
                             onClick={() => setCommentScope({ issue: detail.url, id: comment.id })}
-                          >
-                            <PencilIcon className="size-3" />
-                          </Button>
+                          />
                         ) : null}
                       </div>
                     )}
@@ -712,30 +697,6 @@ export function IssueSummaryTab({
             )}
           </>
         )}
-        {/* Posting is a core capability and remains usable even if the activity read failed. */}
-        {detail.capabilities.comment && detail.viewerPermissions.comment ? (
-          <CommentComposer
-            key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
-            environmentId={environmentId}
-            detail={detail}
-            label="Comment on this issue"
-            command={issueEnvironment.comment}
-            actionPending={actionPending}
-            followUpAction={
-              detail.state === "open" &&
-              detail.capabilities.actions.includes("close") &&
-              detail.viewerPermissions.actions.includes("close")
-                ? "close"
-                : detail.state === "closed" &&
-                    detail.capabilities.actions.includes("reopen") &&
-                    detail.viewerPermissions.actions.includes("reopen")
-                  ? "reopen"
-                  : null
-            }
-            onCommentAction={onCommentAction}
-            onCommented={onRefresh}
-          />
-        ) : null}
       </SummarySection>
     </div>
   );

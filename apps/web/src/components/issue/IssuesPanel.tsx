@@ -13,7 +13,6 @@ import {
   CircleCheckIcon,
   CircleDotIcon,
   LayersIcon,
-  LoaderIcon,
   PenLineIcon,
   UserCheckIcon,
 } from "lucide-react";
@@ -26,6 +25,7 @@ import { useEnvironmentQuery } from "~/state/query";
 
 import type { IssueTabStatus } from "../RightPanelTabs";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
 import { ListGhost } from "../sourceControl/ListGhosts";
@@ -134,12 +134,7 @@ function ProjectIssues({
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex items-center border-b border-border/50 px-1.5 py-1">
-          <Button
-            variant="ghost"
-            size="xs"
-            className="gap-1.5 text-muted-foreground"
-            onClick={() => onSelect(null)}
-          >
+          <Button variant="ghost-muted" size="xs" onClick={() => onSelect(null)}>
             <ArrowLeftIcon className="size-3.5" />
             All issues
           </Button>
@@ -483,7 +478,7 @@ function IssueBrowserList({
                 >
                   {loadingMore ? (
                     <span className="flex items-center gap-2">
-                      <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
+                      <Spinner aria-hidden size="sm" />
                       Loading more
                     </span>
                   ) : null}

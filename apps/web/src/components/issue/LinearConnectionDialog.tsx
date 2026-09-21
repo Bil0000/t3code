@@ -44,8 +44,8 @@ export function LinearConnectionDialog({
     <Dialog open={open} onOpenChange={closeDialog}>
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-lg">
-            <LinearIcon className="size-4.5" />
+          <DialogTitle className="flex items-center">
+            <LinearIcon className="me-2 size-4.5" />
             Add Linear account
           </DialogTitle>
           <DialogDescription>

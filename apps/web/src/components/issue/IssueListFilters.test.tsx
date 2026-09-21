@@ -2,9 +2,10 @@ import { isValidElement, type ReactElement } from "react";
 import { LayersIcon } from "lucide-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { MenuItem, MenuRadioItem, MenuSeparator } from "../ui/menu";
+import { MenuRadioItem, MenuSeparator } from "../ui/menu";
 import { TooltipPopup } from "../ui/tooltip";
-import { IssueSortMenu, renderIssueProviderMenuRadioGroup } from "./IssueListFilters";
+import { ListFilterRadioGroup } from "../sourceControl/ListFilterMenu";
+import { IssueSortMenu } from "./IssueListFilters";
 
 function collect(
   node: unknown,
@@ -23,7 +24,7 @@ function collect(
 describe("issue filters", () => {
   it("does not reset the list scope when the current provider is selected again", () => {
     const onChange = vi.fn();
-    const group = renderIssueProviderMenuRadioGroup({
+    const group = ListFilterRadioGroup({
       value: "linear.app",
       options: [],
       onChange,
@@ -85,8 +86,8 @@ describe("issue filters", () => {
     expect(collect(menu, MenuSeparator)).toHaveLength(0);
   });
 
-  it("uses styled help for unavailable providers and Linear settings", () => {
-    const group = renderIssueProviderMenuRadioGroup({
+  it("explains unavailable providers in a tooltip", () => {
+    const group = ListFilterRadioGroup({
       value: "",
       options: [
         {
@@ -98,18 +99,12 @@ describe("issue filters", () => {
         { value: "linear.app", label: "Linear", Icon: LayersIcon },
       ],
       onChange: vi.fn(),
-      onManageLinear: vi.fn(),
     });
     const popups = collect(group, TooltipPopup).map((popup) => popup.props.children);
     const items = collect(group, MenuRadioItem);
-    const settings = collect(group, MenuItem).find(
-      (item) => item.props["aria-label"] === "Linear settings",
-    );
 
-    expect(popups).toEqual(expect.arrayContaining(["Not authenticated", "Linear settings"]));
+    expect(popups).toEqual(["Not authenticated"]);
     expect(items).toHaveLength(2);
     expect(items.every((item) => item.props.title === undefined)).toBe(true);
-    expect(settings).toBeDefined();
-    expect(settings?.props.title).toBeUndefined();
   });
 });

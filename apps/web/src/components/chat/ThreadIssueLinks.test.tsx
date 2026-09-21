@@ -33,7 +33,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-it("opens the linked issue in its thread environment and unlinks by identity", async () => {
+it("opens the linked issue as the thread panel's own tab and unlinks by identity", async () => {
   shell.mockReturnValue({ projectId: "project-1", issues: [issue] });
   await act(() => {
     renderer = create(<ThreadIssueLinks threadRef={ref} />);
@@ -47,7 +47,6 @@ it("opens the linked issue in its thread environment and unlinks by identity", a
       .props.onClick(),
   );
   expect(openIssue).toHaveBeenCalledWith(ref, {
-    environmentId: "remote",
     projectId: "project-1",
     provider: "github",
     repository: "acme/app",
@@ -60,7 +59,30 @@ it("opens the linked issue in its thread environment and unlinks by identity", a
     environmentId: "remote",
     input: {
       threadId: "thread-1",
-      issueUnlink: { provider: "github", repository: "acme/app", number: 12 },
+      issueUnlink: {
+        provider: "github",
+        repository: "acme/app",
+        number: 12,
+        url: "https://github.com/acme/app/issues/12",
+      },
+    },
+  });
+});
+
+it("unlinks only the selected host's issue when two hosts share its repository and number", async () => {
+  const enterprise = { ...issue, url: "https://github.acme.test/acme/app/issues/12" };
+  shell.mockReturnValue({ projectId: "project-1", issues: [issue, enterprise] });
+  await act(() => {
+    renderer = create(<ThreadIssueLinks threadRef={ref} />);
+  });
+  const unlinkButtons = renderer.root.findAllByProps({ "aria-label": "Unlink Fix refresh" });
+  expect(unlinkButtons).toHaveLength(2);
+  await act(() => unlinkButtons[1]!.props.onClick());
+  expect(update).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "remote",
+    input: {
+      threadId: "thread-1",
+      issueUnlink: { provider: "github", repository: "acme/app", number: 12, url: enterprise.url },
     },
   });
 });

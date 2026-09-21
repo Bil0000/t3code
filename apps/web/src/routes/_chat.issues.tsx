@@ -1,4 +1,8 @@
 import { isTerminalFocused } from "~/lib/terminalFocus";
+import { Spinner } from "~/components/ui/spinner";
+import { Separator } from "~/components/ui/separator";
+import { primaryServerKeybindingsAtom } from "~/state/server";
+import { cn } from "~/lib/utils";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { sourceControlHostOf, ThreadId } from "@t3tools/contracts";
 import type {
@@ -14,18 +18,29 @@ import type {
   ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   AtSignIcon,
   CircleCheckIcon,
   CircleDotIcon,
   LayersIcon,
-  LoaderIcon,
   PenLineIcon,
   Plug2Icon,
   UserCheckIcon,
+  UsersIcon,
+  type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 
 import {
   filterIssueQueryResults,
@@ -36,6 +51,7 @@ import {
   partitionIssuesWithPriority,
   rankIssueMatches,
   readIssueListSnapshot,
+  scoreIssueMatch,
   writeIssueListSnapshot,
   type IssuePartitionsSnapshot,
 } from "../components/issue/issueList.logic";
@@ -50,17 +66,17 @@ import {
   useListSearchShortcut,
 } from "../components/sourceControl/ListTitlebarControls";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
+import { IssueFiltersMenu, IssueSortMenu } from "../components/issue/IssueListFilters";
 import {
-  IssueFiltersMenu,
-  renderIssueProviderMenuRadioGroup,
-  IssueSortMenu,
-} from "../components/issue/IssueListFilters";
-import { ListSearchInput, type ListFilterOption } from "../components/sourceControl/ListFilterMenu";
+  ListFilterRadioGroup,
+  ListSearchInput,
+  type ListFilterOption,
+} from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
 import { WorkItemSelectionBarHost } from "../components/workItems/WorkItemSelectionBar";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
-import { resolveProjectScope } from "../components/sourceControl/projectScope";
+import { resolveProjectScope } from "../components/pullRequest/pullRequestList.logic";
 import { RightPanelTabs, type IssueTabStatus } from "../components/RightPanelTabs";
 import {
   WorkspaceBreadcrumb,
@@ -69,7 +85,12 @@ import {
 } from "../components/WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { useEscapeToGoBack } from "../hooks/useNavigateBack";
+import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { MenuItem, MenuSeparator } from "../components/ui/menu";
@@ -87,6 +108,7 @@ import {
 import { useDebouncedValue } from "../state/queries";
 import {
   findProjectForLink,
+  linkedPullRequestTarget,
   openLinkInBrowser,
   repositoryForProjectLink,
 } from "../lib/openIssueLink";
@@ -214,6 +236,42 @@ export function hasLinearManagementState(
   );
 }
 
+function getShortcutContext() {
+  return {
+    terminalFocus: isTerminalFocused(),
+    terminalOpen: false,
+    previewFocus: false,
+    previewOpen: false,
+    modelPickerOpen: false,
+    isWeb: !isElectron,
+    isDesktop: isElectron,
+  };
+}
+
+const GROUP_ICONS: Record<string, LucideIcon> = {
+  assigned: UserCheckIcon,
+  authored: PenLineIcon,
+  others: UsersIcon,
+};
+
+function IssueGroupHeader({
+  group,
+}: {
+  group: { key: string; label: string; entries: ReadonlyArray<unknown> };
+}) {
+  const Icon = GROUP_ICONS[group.key] ?? LayersIcon;
+  return (
+    <div className="flex items-center gap-2 px-3 pb-1 text-xs font-medium text-muted-foreground/70">
+      <Icon aria-hidden className="size-3.5 shrink-0" />
+      <h2 className="shrink-0">{group.label}</h2>
+      <span className="shrink-0 tabular-nums text-muted-foreground/50">{group.entries.length}</span>
+      <Separator className="min-w-2 flex-1" />
+    </div>
+  );
+}
+
+const MATCHED_ELSEWHERE_SCORE = 10;
+
 interface CompactFilterAction {
   readonly connected: boolean;
   readonly onClick: () => void;
@@ -310,8 +368,10 @@ export const Route = createFileRoute("/_chat/issues")({
 });
 
 function IssuesRouteView() {
+  useEscapeToGoBack();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const primaryEnvironment = usePrimaryEnvironment();
   const environmentId = primaryEnvironment?.environmentId ?? null;
   const capabilityKnown = primaryEnvironment !== null && primaryEnvironment.serverConfig !== null;
@@ -390,8 +450,44 @@ function IssuesRouteView() {
       ? selectedRightPanelSurface
       : null;
   const activeIssueSurface = activeSurface?.kind === "issue" ? activeSurface : null;
+  const selectedPanelSurface =
+    selectedRightPanelSurface?.kind === "issue" ||
+    selectedRightPanelSurface?.kind === "pull-request"
+      ? selectedRightPanelSurface
+      : null;
+  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
+    usePanelAnimationSettings();
+  const rightPanelPresenceValue = useMemo(
+    () => ({ activeSurface: selectedPanelSurface, surfaces: rightPanelState.surfaces }),
+    [rightPanelState.surfaces, selectedPanelSurface],
+  );
+  const rightPanelPresence = usePanelPresence(
+    rightPanelState.isOpen && selectedPanelSurface !== null,
+    rightPanelPresenceValue,
+    panelAnimationsActive,
+    rightPanelRef?.threadId ?? null,
+    panelAnimationDurationMs,
+  );
+  const rightPanelPresent = rightPanelPresence.present;
+  const renderedSurface = rightPanelPresence.value?.activeSurface ?? null;
+  const renderedRightPanelSurfaces = rightPanelPresence.value?.surfaces ?? [];
+  const openIssueDetail = useEnvironmentQuery(
+    issueEnvironmentId === null || activeIssueSurface === null
+      ? null
+      : issueEnvironment.detail({
+          environmentId: issueEnvironmentId,
+          input: {
+            projectId: activeIssueSurface.projectId as ProjectId,
+            ...(activeIssueSurface.provider === undefined
+              ? {}
+              : { provider: activeIssueSurface.provider }),
+            repository: activeIssueSurface.repository,
+            number: activeIssueSurface.number,
+          },
+        }),
+  ).data;
   const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
-  const activeIssueSurfaceId = activeIssueSurface?.id;
+  const activeIssueSurfaceId = renderedSurface?.kind === "issue" ? renderedSurface.id : undefined;
   const handleIssueTabStatusChange = useCallback(
     (status: IssueTabStatus) => {
       if (activeIssueSurfaceId === undefined) return;
@@ -1045,6 +1141,7 @@ function IssuesRouteView() {
         : clearedSelection,
     );
 
+  const rightPanelAvailable = selectedRightPanelSurface !== null;
   const toggleRightPanel = () => {
     if (rightPanelRef === null) return;
     if (rightPanelState.isOpen) {
@@ -1132,14 +1229,19 @@ function IssuesRouteView() {
   const panelToggleControls = (
     <PanelLayoutControls
       showTerminalControl={false}
+      showThreadPanelControl={false}
       terminalAvailable={false}
       terminalOpen={false}
       terminalShortcutLabel={null}
-      rightPanelAvailable={selectedRightPanelSurface !== null}
+      threadPanelOpen={false}
+      threadPanelPresentation="inline"
+      threadPanelShortcutLabel={null}
+      threadPanelHasAttention={false}
+      onToggleThreadPanel={() => undefined}
+      rightPanelAvailable={rightPanelAvailable}
       rightPanelOpen={rightPanelState.isOpen}
-      rightPanelShortcutLabel={null}
+      rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
       rightPanelUnavailableLabel="Select an issue first"
-      liveAgentCount={0}
       onToggleTerminal={() => undefined}
       onToggleRightPanel={toggleRightPanel}
     />
@@ -1171,7 +1273,11 @@ function IssuesRouteView() {
       ) : firstLoad ? (
         <ListGhost rows={7} label="Loading issues" />
       ) : listQuery.error && listData === null ? (
-        <IssuesUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
+        <IssuesUnavailableState
+          error={listQuery.error}
+          refreshing={listQuery.isPending}
+          onRetry={() => listQuery.refresh()}
+        />
       ) : carriedToNothing ? (
         <ListGhost rows={7} label="Loading issues" />
       ) : entries.length === 0 ? (
@@ -1196,11 +1302,7 @@ function IssuesRouteView() {
         <div className="space-y-3">
           {groups.map((group) => (
             <div key={group.key} className="space-y-0.5">
-              {group.label ? (
-                <h2 className="px-3 pb-0.5 text-xs font-medium text-muted-foreground/70">
-                  {group.label}
-                </h2>
-              ) : null}
+              {group.label ? <IssueGroupHeader group={group} /> : null}
               {group.entries.map((entry) => {
                 const selectionChecked =
                   issueEnvironmentId !== null &&
@@ -1221,6 +1323,10 @@ function IssuesRouteView() {
                     showProjectTitle
                     showProvider={showProvider}
                     reactionSort={sort}
+                    matchedElsewhere={
+                      typedQuery.length > 0 &&
+                      scoreIssueMatch(entry, typedQuery) <= MATCHED_ELSEWHERE_SCORE
+                    }
                     selectionChecked={selectionChecked}
                     selected={isIssueEntryOpen(selected, entry)}
                     onSelect={selectEntry}
@@ -1234,19 +1340,19 @@ function IssuesRouteView() {
       )}
 
       {listQuery.error && listData !== null ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
-          <span>The latest request failed. Showing the last issues loaded.</span>
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
+          <span>{listQuery.error} Showing the last issues loaded.</span>
           <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
             Retry
           </Button>
         </div>
       ) : null}
       {listData?.truncated && entries.length > 0 ? (
-        <div ref={sentinelRef} className="flex justify-center py-2 text-xs text-muted-foreground">
+        <div ref={sentinelRef} className="flex justify-center py-3 text-xs text-muted-foreground">
           {loadingMore ? (
             <span className="flex items-center gap-2">
-              <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
-              Loading more
+              <Spinner aria-hidden size="sm" />
+              {sentCursors === null ? "Updating issues" : "Loading more"}
             </span>
           ) : null}
         </div>
@@ -1336,7 +1442,29 @@ function IssuesRouteView() {
       updateListScope({ host, sort: undefined, order: undefined }),
     searchInput,
     filtersMenu,
-    rightPanelControl: !issuesSupported || rightPanelState.isOpen ? null : panelToggleControls,
+    rightPanelControl: !issuesSupported ? null : (
+      <span
+        aria-hidden
+        className={cn(
+          "shrink-0",
+          rightPanelState.isOpen ? "-ml-3 w-0" : "w-7 sm:w-5",
+          panelAnimationsActive && "transition-[width,margin] ease-out",
+        )}
+        style={
+          panelAnimationsActive
+            ? { transitionDuration: `${panelAnimationDurationMs}ms` }
+            : undefined
+        }
+      />
+    ),
+    titlebarControls: !issuesSupported ? null : rightPanelPresent ? (
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-full w-7 [-webkit-app-region:no-drag]"
+      />
+    ) : (
+      openPanelControls
+    ),
     rightPanelOpen: rightPanelState.isOpen,
     listBody,
   };
@@ -1375,24 +1503,71 @@ function IssuesRouteView() {
     selectSurfaceInUrl(null);
   };
 
+  const copyIssueFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    const url = openIssueDetail?.url;
+    if (!url) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    void writeTextToClipboard(url, "issue link").then(
+      (didCopy) => {
+        if (didCopy)
+          toastManager.add({ type: "success", title: "Issue link copied", description: url });
+      },
+      (error) => {
+        toastManager.add({
+          type: "error",
+          title: "Failed to copy issue link",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      },
+    );
+  });
+  const closeActiveSurfaceFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (activeSurface === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) closeSurface(activeSurface);
+  });
+  const toggleRightPanelFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (!rightPanelAvailable) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) toggleRightPanel();
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isCommandPaletteOpen()) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: getShortcutContext(),
+      });
+      if (command === "rightPanel.close") closeActiveSurfaceFromShortcut(event);
+      if (command === "rightPanel.toggle") toggleRightPanelFromShortcut(event);
+      if (command === "thread.copyReference") copyIssueFromShortcut(event);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [keybindings]);
+
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="relative flex min-h-0 flex-1">
-        {issuesSupported && rightPanelState.isOpen ? openPanelControls : null}
+        {issuesSupported && rightPanelPresent ? openPanelControls : null}
         <WorkItemSelectionBarHost>
           <IssuesColumn {...columnProps} />
         </WorkItemSelectionBarHost>
 
-        {rightPanelState.isOpen && activeSurface && issueEnvironmentId !== null ? (
+        {rightPanelPresent && renderedSurface && issueEnvironmentId !== null ? (
           <RightPanelTabs
             mode="inline"
+            open={rightPanelState.isOpen}
             widthStorageKey="t3code:issue-panel-width"
             // Default to roughly half the viewport: an issue's conversation needs more room
             // than a chat, so the 540px chat-preview default squashes it. SSR has no window,
             // so fall back to a reasonable width.
             defaultWidth={typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2)}
-            surfaces={rightPanelState.surfaces}
-            activeSurfaceId={activeSurface.id}
+            surfaces={renderedRightPanelSurfaces}
+            activeSurfaceId={renderedSurface.id}
             pendingSurfaceIds={EMPTY_PENDING_SURFACES}
             previewSessions={EMPTY_PREVIEW_SESSIONS}
             desktopByTabId={EMPTY_PREVIEW_DESKTOP_STATE}
@@ -1411,7 +1586,6 @@ function IssuesRouteView() {
             onAddPullRequest={() => undefined}
             onAddIssue={() => undefined}
             onAddPullRequests={() => undefined}
-            onAddAgents={() => undefined}
             onAddDevice={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
@@ -1420,31 +1594,21 @@ function IssuesRouteView() {
             pullRequestAvailable={false}
             issueAvailable={false}
             pullRequestsAvailable={false}
-            agentsAvailable={false}
             deviceAvailable={false}
-            liveAgentCount={0}
             environmentId={issueEnvironmentId}
             issueStatuses={issueTabStatuses}
           >
-            {activeSurface.kind === "pull-request" ? (
+            {renderedSurface.kind === "pull-request" ? (
               <PullRequestDetailPanel
-                shortcutsEnabled
-                getShortcutContext={() => ({
-                  terminalFocus: isTerminalFocused(),
-                  terminalOpen: false,
-                  previewFocus: false,
-                  previewOpen: false,
-                  modelPickerOpen: false,
-                  isWeb: !isElectron,
-                  isDesktop: isElectron,
-                })}
-                key={activeSurface.id}
+                shortcutsEnabled={activeSurface?.id === renderedSurface.id}
+                getShortcutContext={getShortcutContext}
+                key={renderedSurface.id}
                 environmentId={issueEnvironmentId}
                 panelRef={rightPanelRef}
                 reference={{
-                  projectId: activeSurface.projectId as ProjectId,
-                  repository: activeSurface.repository,
-                  number: activeSurface.number,
+                  projectId: renderedSurface.projectId as ProjectId,
+                  repository: renderedSurface.repository,
+                  number: renderedSurface.number,
                 }}
                 refreshToken={detailRefreshToken}
                 // Merging or closing one of these can close the issue it was opened from, so the
@@ -1478,16 +1642,16 @@ function IssuesRouteView() {
               />
             ) : (
               <IssueDetailPanel
-                key={activeSurface.id}
+                key={renderedSurface.id}
                 environmentId={issueEnvironmentId}
                 panelRef={rightPanelRef}
                 reference={{
-                  projectId: activeSurface.projectId as ProjectId,
-                  ...(activeSurface.provider === undefined
+                  projectId: renderedSurface.projectId as ProjectId,
+                  ...(renderedSurface.provider === undefined
                     ? {}
-                    : { provider: activeSurface.provider }),
-                  repository: activeSurface.repository,
-                  number: activeSurface.number,
+                    : { provider: renderedSurface.provider }),
+                  repository: renderedSurface.repository,
+                  number: renderedSurface.number,
                 }}
                 refreshToken={detailRefreshToken}
                 // There is no thread behind this panel, so handing an issue to an agent starts
@@ -1502,11 +1666,9 @@ function IssuesRouteView() {
                     openLinkInBrowser(link.url);
                     return;
                   }
-                  useRightPanelStore.getState().openPullRequest(rightPanelRef, {
-                    projectId: project.id,
-                    repository: repositoryForProjectLink(project, link.repository),
-                    number: link.number,
-                  });
+                  useRightPanelStore
+                    .getState()
+                    .openPullRequest(rightPanelRef, linkedPullRequestTarget(project, link));
                   selectSurfaceInUrl(null);
                 }}
                 // Closing or reopening changes the row this panel was opened from, so the list
@@ -1557,38 +1719,16 @@ function IssuesRouteView() {
  * live in a menu. Same options, same handler — only the footprint changes.
  */
 export function CompactFilterMenu<Value extends string>({
-  label,
-  value,
-  options,
-  onChange,
   action,
-  outlined = false,
-}: {
-  label: string;
-  value: Value;
-  options: ReadonlyArray<ListFilterOption<Value>>;
-  onChange: (value: Value) => void;
+  ...props
+}: Omit<ComponentProps<typeof SharedCompactFilterMenu<Value>>, "children" | "className"> & {
   action?: CompactFilterAction | undefined;
-  outlined?: boolean;
 }) {
-  const inlineLinearSettings =
-    action?.connected === true && options.some((option) => option.value === "linear.app");
+  const { value, options, onChange } = props;
   return (
-    <SharedCompactFilterMenu
-      label={label}
-      value={value}
-      options={options}
-      onChange={onChange}
-      outlined={outlined}
-      className={outlined ? "min-w-0 max-w-44 flex-1 @lg/issue-list:flex-none" : ""}
-    >
-      {renderIssueProviderMenuRadioGroup({
-        value,
-        options,
-        onChange: (next) => onChange(next as Value),
-        ...(inlineLinearSettings ? { onManageLinear: action.onClick } : {}),
-      })}
-      {action && !inlineLinearSettings ? (
+    <SharedCompactFilterMenu {...props}>
+      <ListFilterRadioGroup value={value} options={options} onChange={onChange} />
+      {action ? (
         <>
           <MenuSeparator />
           <MenuItem onClick={action.onClick}>
@@ -1623,6 +1763,7 @@ export function IssuesColumn({
   searchInput,
   filtersMenu,
   rightPanelControl,
+  titlebarControls = null,
   rightPanelOpen,
   listBody,
 }: {
@@ -1640,6 +1781,7 @@ export function IssuesColumn({
   searchInput: ReactNode;
   filtersMenu: ReactNode;
   rightPanelControl: ReactNode;
+  titlebarControls?: ReactNode;
   rightPanelOpen: boolean;
   listBody: ReactNode;
 }) {
@@ -1688,7 +1830,12 @@ export function IssuesColumn({
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
     // content surface that lets it show reads as a different background than every thread.
     <div className="@container/issue-list flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <WorkspacePageHeader electron={isElectron} reserveNativeControls={!rightPanelOpen}>
+      <WorkspacePageHeader
+        electron={isElectron}
+        reserveNativeControls={!rightPanelOpen}
+        className="relative bg-background"
+      >
+        {titlebarControls}
         {condensed ? (
           <WorkspaceBreadcrumb ariaLabel="Issue scope">
             {/* The page name remains the foreground anchor in both states; the live filters are
@@ -1756,28 +1903,29 @@ export function IssuesColumn({
 
       <div
         ref={scrollRef}
-        className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto [--topbar-scroll-fade-height:1.5rem] sm:[--topbar-scroll-fade-height:1.5rem]"
+        className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
       >
-        {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
+        {/* The top padding is the shared fade band's height, the same pairing the
             settings page makes: at rest the controls sit fully below the mask, and only
             content actually passing under the chrome fades. */}
-        <WorkspacePageContainer width="expanded" className="gap-4">
+        <WorkspacePageContainer width="expanded" className="min-h-full gap-4">
           <div className="flex flex-col gap-3">
             <div ref={inFlowSearchRef} className="flex flex-wrap items-center gap-2">
               <div className="min-w-0 basis-full @lg/issue-list:basis-0 @lg/issue-list:flex-1">
                 {searchInput}
               </div>
               {filtersMenu}
-              {hostMenuOptions.length > 2 ? (
-                <CompactFilterMenu
-                  label="Filter by provider"
-                  outlined
-                  value={host ?? ""}
-                  options={hostMenuOptions}
-                  onChange={(next) => onHost(next === "" ? undefined : next)}
-                  action={hostMenuAction}
-                />
-              ) : null}
+              <CompactFilterMenu
+                label="Filter by provider"
+                outlined
+                iconOnly={host !== undefined}
+                triggerIcon={<Plug2Icon aria-hidden className="size-4" />}
+                triggerLabel="All"
+                value={host ?? ""}
+                options={hostMenuOptions}
+                onChange={(next) => onHost(next === "" ? undefined : next)}
+                action={hostMenuAction}
+              />
               {!condensed ? (
                 <ListRefreshControl
                   label="Refresh issues"

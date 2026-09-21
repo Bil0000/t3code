@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import type { IssueInvolvement, IssueListSort, IssueListState } from "@t3tools/contracts";
 
-import { normalizeLogin } from "../sourceControl/listHelpers";
+import { normalizeLogin } from "../pullRequest/pullRequestList.logic";
 import {
   readListSnapshot,
   writeListSnapshot,
@@ -272,8 +272,6 @@ export function writeIssueListSnapshot(
 ): void {
   writeListSnapshot(storage, SNAPSHOT_KEY_PREFIX, environmentId, snapshot);
 }
-
-export { resolveProjectScope } from "../sourceControl/projectScope";
 
 /**
  * How well a row answers the text that was searched for, as a number to order by.

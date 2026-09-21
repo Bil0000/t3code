@@ -7,17 +7,16 @@
  */
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, IssueAssigneeCandidate, IssueRef } from "@t3tools/contracts";
-import { UserPlusIcon } from "lucide-react";
+import { CheckIcon, UserPlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { issueEnvironment } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { SourceControlActorLabel } from "../sourceControl/actorPresentation";
-import { EntityPicker, EntityPickerOption } from "../sourceControl/EntityPicker";
+import { PullRequestActorLabel } from "../pullRequest/pullRequestPresentation";
+import { PullRequestCandidatePicker } from "../pullRequest/PullRequestCandidatePicker";
 import { readableFailure } from "../sourceControl/handoff";
-import { PeopleGhost } from "../sourceControl/ListGhosts";
 import { toastManager } from "../ui/toast";
 
 /** Long lists are common — an organisation repository lists everyone — so what arrived can be
@@ -104,45 +103,38 @@ export function IssueAssigneePicker({
   };
 
   return (
-    <EntityPicker
+    <PullRequestCandidatePicker
       icon={<UserPlusIcon className="size-3.5" />}
       label="Change who is assigned"
       allowed={allowed}
-      disallowedReason="Assigning an issue needs write access on this repository"
+      disabledReason="Assigning an issue needs write access on this repository"
       open={open}
       onOpenChange={onOpenChange}
-      searchLabel="Search people with access"
       query={query}
       onQueryChange={setQuery}
-      loading={candidatesQuery.isPending ? <PeopleGhost rows={4} /> : null}
-      message={
-        candidatesQuery.error !== null
-          ? `The people with access could not be read. ${candidatesQuery.error}`
-          : candidates.length === 0
-            ? query.length > 0
-              ? "Nobody with access matches that."
-              : "Nobody else has access to this repository."
-            : null
-      }
-      note={
-        // Typing filters what arrived; it does not ask the host again, so this says what the list
-        // is rather than offering a search that would find nothing further.
-        truncated
-          ? "This repository has more people with access than are listed here. Everybody already assigned is, so choosing from here keeps them — somebody else who is missing has to be assigned on the host."
-          : null
-      }
+      searchLabel="Search people with access"
+      isPending={candidatesQuery.isPending && candidatesQuery.data === null}
+      error={candidatesQuery.data === null ? candidatesQuery.error : null}
+      candidates={candidates}
+      emptyLabel="Nobody else has access to this repository."
+      noMatchLabel="Nobody with access matches that."
+      errorLabel="The people with access could not be read."
+      truncated={truncated}
+      // Typing filters what arrived; it does not ask the host again, so this says what the list
+      // is rather than offering a search that would find nothing further.
+      truncatedLabel="This repository has more people with access than are listed here. Everybody already assigned is, so choosing from here keeps them — somebody else who is missing has to be assigned on the host."
+      candidateKey={(candidate) => candidate.id}
+      disabled={pending !== null}
+      onSelect={(candidate) => void toggle(candidate)}
     >
-      {candidates.map((candidate) => (
-        <EntityPickerOption
-          key={candidate.id}
-          checked={candidate.isAssigned}
-          checkedLabel="Already assigned"
-          disabled={pending !== null}
-          onSelect={() => void toggle(candidate)}
-        >
-          <SourceControlActorLabel actor={candidate} className="min-w-0 flex-1 truncate" />
-        </EntityPickerOption>
-      ))}
-    </EntityPicker>
+      {(candidate) => (
+        <>
+          <PullRequestActorLabel actor={candidate} className="flex-1" />
+          {candidate.isAssigned ? (
+            <CheckIcon aria-label="Already assigned" className="size-3.5 shrink-0" />
+          ) : null}
+        </>
+      )}
+    </PullRequestCandidatePicker>
   );
 }

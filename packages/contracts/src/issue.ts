@@ -917,3 +917,23 @@ export class IssueOperationError extends Schema.TaggedError<IssueOperationError>
     return `Issue operation ${this.operation} failed: ${this.detail}`;
   }
 }
+
+export const ThreadIssueKey = Schema.Struct({
+  provider: IssueProviderKind,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  url: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ThreadIssueKey = typeof ThreadIssueKey.Type;
+
+export const ThreadIssueLink = Schema.Struct({
+  ...ThreadIssueKey.fields,
+  url: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+});
+export type ThreadIssueLink = typeof ThreadIssueLink.Type;
+
+export const MAX_THREAD_ISSUES = 100;
+export const ThreadIssueLinks = Schema.Array(ThreadIssueLink).check(
+  Schema.isMaxLength(MAX_THREAD_ISSUES),
+);

@@ -24,8 +24,6 @@ const makeStubTextGeneration = (
     generatePrContent: () => Effect.die("generatePrContent stub not configured for this test"),
     generateBranchName: () => Effect.die("generateBranchName stub not configured for this test"),
     generateThreadTitle: () => Effect.die("generateThreadTitle stub not configured for this test"),
-    generateWorkItemTask: () =>
-      Effect.die("generateWorkItemTask stub not configured for this test"),
     findWorkItemMatches: () => Effect.die("findWorkItemMatches stub not configured for this test"),
     ...overrides,
   });
@@ -44,7 +42,7 @@ const makeStubInstance = (
     displayName: undefined,
     enabled: true,
     snapshot: {} as ProviderInstance["snapshot"],
-    adapter: {} as ProviderInstance["adapter"],
+    orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
     textGeneration,
   }) satisfies ProviderInstance;
 
@@ -219,53 +217,6 @@ describe("TextGeneration.make", () => {
       });
 
       expect(matches.matches[0]?.candidate).toBe(1);
-    }),
-  );
-
-  it.effect("preserves the complete selected model for work item task generation", () =>
-    Effect.gen(function* () {
-      const instanceId = ProviderInstanceId.make("codex_work");
-      const selection = createModelSelection(instanceId, "gpt-5.4", [
-        { id: "reasoningEffort", value: "xhigh" },
-        { id: "serviceTier", value: "priority" },
-      ]);
-      let received: typeof selection | undefined;
-      const textGeneration = makeStubTextGeneration({
-        generateWorkItemTask: (input) => {
-          received = input.modelSelection;
-          return Effect.succeed({ prompt: "Draft" });
-        },
-      });
-      const tg = yield* TextGeneration.make.pipe(
-        Effect.provideService(
-          ProviderInstanceRegistry.ProviderInstanceRegistry,
-          makeStubRegistry([makeStubInstance(instanceId, textGeneration)]),
-        ),
-        Effect.provide(
-          Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
-            resolveLink: () => Effect.die("No link lookup expected"),
-          }),
-        ),
-      );
-
-      yield* tg.generateWorkItemTask({
-        cwd: process.cwd(),
-        mode: "compound",
-        items: [
-          {
-            kind: "issue",
-            provider: "github",
-            repository: "acme/app",
-            number: 12,
-            title: "Fix sessions",
-            url: "https://github.com/acme/app/issues/12",
-            body: "Sessions expire early.",
-          },
-        ],
-        modelSelection: selection,
-      });
-
-      expect(received).toEqual(selection);
     }),
   );
 });

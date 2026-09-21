@@ -1,13 +1,7 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  WorkItemMatchError,
-  WorkItemMatchInput,
-  WorkItemMatchResult,
-  WorkItemTaskError,
-  WorkItemTaskInput,
-} from "./workItem.ts";
+import { WorkItemMatchError, WorkItemMatchInput, WorkItemMatchResult } from "./workItem.ts";
 
 const match = {
   kind: "issue" as const,
@@ -22,13 +16,13 @@ const match = {
 
 describe("work item matches", () => {
   it("keeps a source provider when equal references need disambiguation", () => {
-    const decoded = Schema.decodeUnknownSync(WorkItemTaskInput)({
+    const decoded = Schema.decodeUnknownSync(WorkItemMatchInput)({
       projectId: "project-1",
-      mode: "compound",
-      items: [{ kind: "issue", provider: "linear", repository: "ENG", number: 12 }],
+      relationship: "related",
+      source: { kind: "issue", provider: "linear", repository: "ENG", number: 12 },
     });
 
-    expect(decoded.items[0]?.provider).toBe("linear");
+    expect(decoded.source.provider).toBe("linear");
   });
 
   it("decodes a related-item request", () => {
@@ -55,13 +49,6 @@ describe("work item matches", () => {
       number: 12,
     };
 
-    expect(
-      new WorkItemTaskError({
-        operation: "read-source",
-        source,
-        detail: "Could not read a selected work item.",
-      }),
-    ).toMatchObject({ operation: "read-source", source });
     expect(
       new WorkItemMatchError({
         operation: "list-candidates",

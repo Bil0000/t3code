@@ -27,8 +27,6 @@ import {
   MessageSquareIcon,
   MoreHorizontalIcon,
   PaperclipIcon,
-  PencilLineIcon,
-  RefreshCwIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -43,11 +41,13 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
+import { CommentComposer } from "../sourceControl/CommentComposer";
+import { PULL_REQUEST_STATE_PRESENTATION } from "../pullRequest/pullRequestIcons";
 import { PullRequestMarkdownContext } from "../pullRequest/PullRequestMarkdown";
-import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
+import { PullRequestActorLabel, PullRequestMetaLine } from "../pullRequest/pullRequestPresentation";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { handoffPrompt, readableFailure } from "../sourceControl/handoff";
-import { useMountedTabs } from "../sourceControl/useMountedTabs";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -60,6 +60,7 @@ import {
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { RefreshIcon } from "../ui/refresh-icon";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
@@ -205,7 +206,14 @@ export function IssueDetailPanel({
   const [timelineOrder, setTimelineOrder] = useState<"oldest" | "newest">("newest");
   const [editing, setEditing] = useState<"title" | "description" | null>(null);
   const [openPicker, setOpenPicker] = useState<"labels" | "assignees" | null>(null);
-  const mountedTabs = useMountedTabs(tab);
+  const [mountedTabs, setMountedTabs] = useState<ReadonlySet<DetailTab>>(
+    () => new Set<DetailTab>([tab]),
+  );
+  useEffect(() => {
+    setMountedTabs((previous) =>
+      previous.has(tab) ? previous : new Set<DetailTab>(previous).add(tab),
+    );
+  }, [tab]);
   const [chromeCondensed, setChromeCondensed] = useState(false);
   // Each tab remembers whether its chrome was condensed. Only the active tab can emit scroll
   // events, so the capture handler always writes the active tab's entry — and a tab switch
@@ -355,9 +363,16 @@ export function IssueDetailPanel({
   // invalidation goes first so the re-reads miss that cache; if it fails, the reads still run
   // and at worst answer from it.
   const invalidate = useAtomCommand(issueEnvironment.invalidate, { reportFailure: false });
+  const [isInvalidating, setIsInvalidating] = useState(false);
+  const refreshing = isInvalidating || detailQuery.isPending;
   const refreshFromHost = useCallback(async () => {
-    await invalidate({ environmentId, input: { reference } });
-    refreshDetail();
+    setIsInvalidating(true);
+    try {
+      await invalidate({ environmentId, input: { reference } });
+      refreshDetail();
+    } finally {
+      setIsInvalidating(false);
+    }
   }, [environmentId, invalidate, reference, refreshDetail]);
   // A refresh asked for by the page, rather than by the menu item below.
   const appliedForcedToken = useRef(forcedRefreshToken);
@@ -529,7 +544,7 @@ export function IssueDetailPanel({
   );
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-background">
+    <div className="relative flex h-full min-h-0 w-full flex-col bg-background">
       {/* The top row's geometry never changes: both of its states occupy the same stacked
           cell and crossfade, so the actions on the right have one home whatever the chrome
           is doing below. The fold and this fade share one 200ms clock. */}
@@ -634,21 +649,33 @@ export function IssueDetailPanel({
           {detail ? (
             <>
               <Menu>
-                <MenuTrigger
-                  render={
-                    <Button
-                      aria-label="More issue actions"
-                      className="size-6"
-                      size="icon-xs"
-                      variant="ghost-muted"
-                    />
-                  }
-                >
-                  <MoreHorizontalIcon className="size-4" />
-                </MenuTrigger>
-                <MenuPopup align="end" side="bottom" className="min-w-72">
-                  <MenuItem disabled={detailQuery.isPending} onClick={() => void refreshFromHost()}>
-                    <RefreshCwIcon className="size-3.5" />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <MenuTrigger
+                        render={
+                          <Button
+                            aria-label={refreshing ? "Refreshing issue" : "More issue actions"}
+                            size="icon-xs"
+                            variant="ghost-muted"
+                          />
+                        }
+                      >
+                        {refreshing ? (
+                          <RefreshIcon refreshing size="md" />
+                        ) : (
+                          <MoreHorizontalIcon className="size-4" />
+                        )}
+                      </MenuTrigger>
+                    }
+                  />
+                  <TooltipPopup>
+                    {refreshing ? "Refreshing issue" : "More issue actions"}
+                  </TooltipPopup>
+                </Tooltip>
+                <MenuPopup align="end" side="bottom">
+                  <MenuItem disabled={refreshing} onClick={() => void refreshFromHost()}>
+                    <RefreshIcon size="sm" refreshing={refreshing} />
                     Refresh
                   </MenuItem>
                   <MenuItem
@@ -725,9 +752,19 @@ export function IssueDetailPanel({
                             onClick={() => setConfirmClose({ reference, reason })}
                           >
                             {reason === "completed" ? (
-                              <CircleCheckIcon className="size-3.5 text-violet-600 dark:text-violet-300/90" />
+                              <CircleCheckIcon
+                                className={cn(
+                                  "size-3.5",
+                                  PULL_REQUEST_STATE_PRESENTATION.merged.toneClassName,
+                                )}
+                              />
                             ) : (
-                              <CircleSlashIcon className="size-3.5 text-zinc-500 dark:text-zinc-400/80" />
+                              <CircleSlashIcon
+                                className={cn(
+                                  "size-3.5",
+                                  PULL_REQUEST_STATE_PRESENTATION.draft.toneClassName,
+                                )}
+                              />
                             )}
                             {CLOSE_REASON_LABELS[reason]}
                           </MenuItem>
@@ -807,8 +844,8 @@ export function IssueDetailPanel({
           >
             {detail && statePresentation ? (
               <div className="col-span-2 min-w-0 px-4 pb-2 pt-1">
-                <SourceControlMetaLine className="min-w-0 text-xs text-muted-foreground">
-                  <SourceControlActorLabel actor={detail.author} className="font-medium" />
+                <PullRequestMetaLine className="min-w-0 text-xs text-muted-foreground">
+                  <PullRequestActorLabel actor={detail.author} className="font-medium" />
                   {detail.assignees.length > 0 ? (
                     <span className="truncate">
                       Assigned to {detail.assignees.map((assignee) => assignee.login).join(", ")}
@@ -817,7 +854,7 @@ export function IssueDetailPanel({
                   <span className="shrink-0">
                     updated {formatRelativeTimeLabel(detail.updatedAt)}
                   </span>
-                </SourceControlMetaLine>
+                </PullRequestMetaLine>
               </div>
             ) : null}
           </div>
@@ -862,30 +899,24 @@ export function IssueDetailPanel({
                     </h1>
                   )}
                   {canEdit && editing !== "title" ? (
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
+                    <PullRequestEditButton
                       aria-label="Edit issue title"
-                      className="shrink-0 text-muted-foreground"
-                      onClick={() => {
-                        setEditing("title");
-                      }}
-                    >
-                      <PencilLineIcon className="size-3" />
-                    </Button>
+                      onClick={() => setEditing("title")}
+                    />
                   ) : null}
                 </div>
-                <SourceControlMetaLine className="mt-2 text-xs text-muted-foreground">
-                  <Badge
-                    variant="outline"
-                    className={cn("h-5 gap-1 rounded px-1.5", statePresentation.toneClassName)}
-                  >
-                    <statePresentation.Icon aria-hidden className="size-3" />
-                    {statePresentation.label}
+                <PullRequestMetaLine className="mt-2 text-xs text-muted-foreground">
+                  <Badge size="control" variant="outline">
+                    <span
+                      className={cn("flex items-center gap-1", statePresentation.toneClassName)}
+                    >
+                      <statePresentation.Icon aria-hidden className="size-3" />
+                      {statePresentation.label}
+                    </span>
                   </Badge>
-                  <SourceControlActorLabel actor={detail.author} className="font-medium" />
+                  <PullRequestActorLabel actor={detail.author} className="font-medium" />
                   <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>
-                </SourceControlMetaLine>
+                </PullRequestMetaLine>
               </div>
             ) : null}
           </div>
@@ -896,7 +927,7 @@ export function IssueDetailPanel({
               <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
                 <span
                   className={cn(
-                    "inline-flex items-center gap-1 whitespace-nowrap text-[11px] transition-opacity",
+                    "inline-flex items-center gap-1 whitespace-nowrap text-2xs transition-opacity",
                     (activityPending || activityError) && "opacity-35",
                   )}
                   aria-label={
@@ -916,8 +947,7 @@ export function IssueDetailPanel({
                 </span>
                 <Button
                   size="xs"
-                  variant="ghost"
-                  className="h-7 px-2 text-[10px] text-muted-foreground"
+                  variant="ghost-muted"
                   aria-label={
                     timelineOrder === "oldest"
                       ? "Show newest activity first"
@@ -1020,8 +1050,6 @@ export function IssueDetailPanel({
                   }
                   onOpenAiMatch={(match) => openLinkInBrowser(match.url)}
                   onRefresh={refreshDetail}
-                  actionPending={actionPending}
-                  onCommentAction={(body, action) => perform(action, reference, undefined, body)}
                 />
               </div>
             ) : null}
@@ -1054,6 +1082,28 @@ export function IssueDetailPanel({
           </PullRequestMarkdownContext>
         ) : null}
       </div>
+
+      {detail && detail.capabilities.comment && detail.viewerPermissions.comment ? (
+        <div className="absolute right-4 bottom-3 z-20">
+          <CommentComposer
+            key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
+            environmentId={environmentId}
+            detail={detail}
+            label="Comment on this issue"
+            command={issueEnvironment.comment}
+            actionPending={actionPending}
+            followUpAction={
+              detail.state === "open" && can("close")
+                ? "close"
+                : detail.state === "closed" && can("reopen")
+                  ? "reopen"
+                  : null
+            }
+            onCommentAction={(body, action) => perform(action, reference, undefined, body)}
+            onCommented={refreshDetail}
+          />
+        </div>
+      ) : null}
 
       <AlertDialog
         open={confirmClose !== null}

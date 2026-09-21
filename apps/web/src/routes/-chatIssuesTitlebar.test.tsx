@@ -7,7 +7,7 @@ import { visitElements } from "../test/reactElementTree";
 import { LinearIcon } from "../components/Icons";
 import { ListRefreshControl } from "../components/sourceControl/ListTitlebarControls";
 import { Button } from "../components/ui/button";
-import { MenuItem, MenuRadioItem } from "../components/ui/menu";
+import { MenuItem } from "../components/ui/menu";
 import {
   CompactFilterMenu,
   hasLinearManagementState,
@@ -88,9 +88,34 @@ describe("IssuesColumn", () => {
       disabled: true,
     });
     expect(header).toContain("h-[var(--workspace-topbar-height)]");
-    expect(header).toContain("pl-[calc(env(safe-area-inset-left)+0.75rem)]");
+    expect(header).toContain("pl-(--workspace-gutter-start)");
     expect(markup).toContain("max-w-6xl");
     expect(markup).toContain("gap-4");
+  });
+
+  it("keeps the provider control in the flow for a single provider", () => {
+    const markup = renderToStaticMarkup(
+      <IssuesColumn
+        refreshing={false}
+        onRefresh={() => undefined}
+        searchValue=""
+        involvement="all"
+        state="open"
+        host={undefined}
+        hostMenuOptions={[{ value: "", label: "All", Icon: SettingsIcon }]}
+        hostMenuAction={{ connected: false, onClick: () => undefined }}
+        onInvolvement={() => undefined}
+        onState={() => undefined}
+        onHost={() => undefined}
+        searchInput={null}
+        filtersMenu={null}
+        rightPanelControl={null}
+        rightPanelOpen={false}
+        listBody={null}
+      />,
+    );
+
+    expect(markup.match(/aria-label="Filter by provider: All"/g)).toHaveLength(1);
   });
 
   it.each([false, true])("keeps provider management available when connected=%s", (connected) => {
@@ -110,34 +135,6 @@ describe("IssuesColumn", () => {
     expect(action?.props.children).toContain(connected ? "Linear settings…" : "Connect Linear…");
     expect(visitElements(action, (element) => element.type === LinearIcon)).not.toBeNull();
     (action?.props.onClick as (() => void) | undefined)?.();
-    expect(onClick).toHaveBeenCalledOnce();
-  });
-
-  it("puts a keyboard-navigable Linear settings menu action beside the compact radio item", () => {
-    const onClick = vi.fn();
-    const menu = CompactFilterMenu({
-      label: "Filter by provider",
-      value: "",
-      options: [
-        { value: "", label: "All providers", Icon: SettingsIcon },
-        { value: "linear.app", label: "Linear", Icon: LinearIcon },
-      ],
-      onChange: vi.fn(),
-      action: { connected: true, onClick },
-    });
-    const gear = visitElements(
-      menu,
-      (element) => element.type === MenuItem && element.props["aria-label"] === "Linear settings",
-    );
-    const linearRadio = visitElements(
-      menu,
-      (element) => element.type === MenuRadioItem && element.props.value === "linear.app",
-    );
-
-    expect(gear).not.toBeNull();
-    expect(visitElements(menu, (element) => element.type === SettingsIcon)).not.toBeNull();
-    expect(visitElements(linearRadio, (element) => element.type === MenuItem)).toBeNull();
-    (gear?.props.onClick as (() => void) | undefined)?.();
     expect(onClick).toHaveBeenCalledOnce();
   });
 

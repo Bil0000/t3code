@@ -9,7 +9,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
-import { sectionCollapseAnchorScrollTop } from "./summarySectionScroll.logic";
+import { sectionCollapseAnchorScrollTop } from "../pullRequest/pullRequestSummaryScroll.logic";
 
 export function SummaryMetaRow({
   icon,

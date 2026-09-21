@@ -24,13 +24,31 @@ vi.mock("~/state/query", () => ({
     refresh,
   }),
 }));
-vi.mock("../sourceControl/EntityPicker", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sourceControl/EntityPicker")>()),
-  EntityPicker: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+vi.mock("../pullRequest/PullRequestCandidatePicker", () => ({
+  PullRequestCandidatePicker: <T,>(props: {
+    candidates: ReadonlyArray<T>;
+    disabled: boolean;
+    candidateKey: (candidate: T) => string;
+    onSelect: (candidate: T) => void;
+    children: (candidate: T) => ReactNode;
+  }) => (
+    <div>
+      {props.candidates.map((candidate) => (
+        <button
+          key={props.candidateKey(candidate)}
+          type="button"
+          disabled={props.disabled}
+          onClick={() => props.onSelect(candidate)}
+        >
+          {props.children(candidate)}
+        </button>
+      ))}
+    </div>
+  ),
 }));
-vi.mock("../sourceControl/actorPresentation", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sourceControl/actorPresentation")>()),
-  SourceControlActorLabel: () => null,
+vi.mock("../pullRequest/pullRequestPresentation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pullRequest/pullRequestPresentation")>()),
+  PullRequestActorLabel: () => null,
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 

@@ -16,15 +16,12 @@ import {
   LayersIcon,
   MessageSquareIcon,
   SearchIcon,
-  SettingsIcon,
   TagIcon,
   TagsIcon,
   ThumbsUpIcon,
 } from "lucide-react";
 
 import type { ElementType, ReactNode } from "react";
-
-import { cn } from "~/lib/utils";
 
 import {
   ListFilterMenu,
@@ -36,7 +33,6 @@ import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroupLabel,
-  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -47,85 +43,10 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { issueListOrderLabels } from "./issueList.logic";
 
 /** A label name is never empty, so the same trick the hosts use names "every label". */
 const ALL_LABELS_VALUE = "";
-
-export function renderIssueProviderMenuRadioGroup({
-  label,
-  value,
-  options,
-  onChange,
-  onManageLinear,
-}: {
-  label?: string;
-  value: string;
-  options: ReadonlyArray<ListFilterOption<string>>;
-  onChange: (value: string) => void;
-  onManageLinear?: () => void;
-}) {
-  return (
-    <MenuRadioGroup
-      value={value}
-      onValueChange={(next) => {
-        if (next !== value) onChange(next);
-      }}
-    >
-      {label ? <MenuGroupLabel>{label}</MenuGroupLabel> : null}
-      {options.map((option) => {
-        const item = (
-          <MenuRadioItem
-            key={option.value}
-            value={option.value}
-            className={cn(
-              option.value === "linear.app" && onManageLinear && "min-w-0 flex-1",
-              option.unavailable && "data-disabled:pointer-events-auto",
-            )}
-            disabled={option.unavailable !== undefined}
-          >
-            <span className="flex min-w-0 items-center gap-2">
-              <option.Icon aria-hidden className="size-3.5" />
-              <span className="min-w-0 flex-1 truncate">{option.label}</span>
-              <MenuRadioItemIndicator />
-            </span>
-          </MenuRadioItem>
-        );
-        const radioItem = option.unavailable ? (
-          <Tooltip key={option.value}>
-            <TooltipTrigger render={item} />
-            <TooltipPopup side="top" className="max-w-80">
-              {option.unavailable}
-            </TooltipPopup>
-          </Tooltip>
-        ) : (
-          item
-        );
-        if (option.value !== "linear.app" || !onManageLinear) return radioItem;
-        return (
-          <div key={option.value} className="flex items-center gap-1">
-            {radioItem}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <MenuItem
-                    aria-label="Linear settings"
-                    className="size-7 shrink-0 justify-center p-0"
-                    onClick={onManageLinear}
-                  />
-                }
-              >
-                <SettingsIcon aria-hidden />
-              </TooltipTrigger>
-              <TooltipPopup side="top">Linear settings</TooltipPopup>
-            </Tooltip>
-          </div>
-        );
-      })}
-    </MenuRadioGroup>
-  );
-}
 
 const SORT_OPTIONS = [
   { value: "created", label: "Created on", Icon: CalendarArrowUpIcon },
@@ -169,7 +90,7 @@ export function IssueSortMenu({
         <ArrowDownUpIcon className="size-4" />
         <span>Sort</span>
       </MenuTrigger>
-      <MenuPopup align="end" side="bottom" className="min-w-48">
+      <MenuPopup align="end" side="bottom">
         <MenuRadioGroup value={sort} onValueChange={chooseSort}>
           <MenuGroupLabel>Sort by</MenuGroupLabel>
           {SORT_OPTIONS.map(({ value, label, Icon }) => (
@@ -188,7 +109,7 @@ export function IssueSortMenu({
               <ThumbsUpIcon aria-hidden className="size-3.5" />
               Reactions
             </MenuSubTrigger>
-            <MenuSubPopup className="min-w-48">
+            <MenuSubPopup>
               <MenuRadioGroup value={sort} onValueChange={chooseSort}>
                 {REACTION_SORTS.filter(([value]) => sorts.includes(value)).map(
                   ([value, label, emoji]) => (
@@ -255,7 +176,7 @@ function IssueFilterSubmenu({
         <span className="flex-1">{label}</span>
         <span className="min-w-0 max-w-32 truncate text-xs text-muted-foreground">{current}</span>
       </MenuSubTrigger>
-      <MenuSubPopup className="min-w-56">{children}</MenuSubPopup>
+      <MenuSubPopup>{children}</MenuSubPopup>
     </MenuSub>
   );
 }

@@ -1,19 +1,19 @@
 import {
+  CommandId,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   type IssueDetail,
   type PullRequestDetail,
-  type OrchestrationCommand,
-  type OrchestrationThreadShell,
+  type OrchestrationV2ServerCommand,
+  type OrchestrationV2ThreadShell,
   type ThreadIssueLink,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import type { Tool } from "effect/unstable/ai";
@@ -21,11 +21,8 @@ import type { Tool } from "effect/unstable/ai";
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as WorkItemLinks from "../../../workItems/WorkItemLinks.ts";
-import {
-  OrchestrationEngineService,
-  type OrchestrationEngineShape,
-} from "../../../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import { v2PullRequestThread } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { IssuesToolkitHandlersLive } from "./handlers.ts";
 import { IssuesToolkit } from "./tools.ts";
@@ -48,28 +45,25 @@ const pullRequest = {
 };
 const savedLink = { issue, pullRequest };
 
-const thread = (issues: ReadonlyArray<ThreadIssueLink> = []): OrchestrationThreadShell => ({
-  id: threadId,
-  projectId,
-  title: "Thread",
-  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  branch: null,
-  worktreePath: null,
-  pullRequests: [],
+const thread = (issues: ReadonlyArray<ThreadIssueLink> = []): OrchestrationV2ThreadShell => ({
+  ...v2PullRequestThread({
+    id: threadId,
+    projectId,
+    title: "Thread",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    pullRequests: [],
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    latestUserMessageAt: null,
+  }),
   issues,
-  latestTurn: null,
-  createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z",
-  archivedAt: null,
-  settledOverride: null,
-  settledAt: null,
-  session: null,
-  latestUserMessageAt: null,
-  hasPendingApprovals: false,
-  hasPendingUserInput: false,
-  hasActionableProposedPlan: false,
 });
 
 const invocation = (capabilities: ReadonlyArray<McpInvocationContext.McpCapability>) => ({
@@ -82,24 +76,25 @@ const invocation = (capabilities: ReadonlyArray<McpInvocationContext.McpCapabili
 });
 
 const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
-  current: OrchestrationThreadShell | null = thread(),
+  current: OrchestrationV2ThreadShell | null = thread(),
+  dispatchError?: Orchestrator.OrchestratorDispatchError,
 ) {
-  const commands = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+  const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
   const detailRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const pullRequestDetailRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+  const routingRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const savedLinkRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
-  const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
-    Ref.update(commands, (recorded) => [...recorded, command]).pipe(Effect.as({ sequence: 1 }));
   const dependencies = Layer.mergeAll(
-    Layer.mock(ProjectionSnapshotQuery)({
-      getThreadShellById: (id) =>
-        Effect.succeed(id === threadId ? Option.fromNullishOr(current) : Option.none()),
-    }),
-    Layer.mock(OrchestrationEngineService)({
-      readEvents: () => Stream.empty,
-      dispatch,
-      streamDomainEvents: Stream.empty,
-      latestSequence: Effect.succeed(0),
+    Layer.mock(Orchestrator.OrchestratorV2)({
+      getThreadShell: (id) => Effect.succeed(id === threadId ? current : null),
+      dispatch: (command) =>
+        Ref.update(commands, (recorded) => [...recorded, command]).pipe(
+          Effect.andThen(
+            dispatchError
+              ? Effect.fail(dispatchError)
+              : Effect.succeed({ sequence: 1, events: [], storedEvents: [] }),
+          ),
+        ),
     }),
     Layer.mock(IssueService.IssueService)({
       detail: (ref) =>
@@ -120,7 +115,10 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
         Ref.update(savedLinkRequests, (requests) => [...requests, { unlink: input }]),
     }),
     Layer.mock(PullRequestService.PullRequestService)({
-      withRoutingCredential: (_ref, operation) => operation,
+      withRoutingCredential: (ref, operation) =>
+        Ref.update(routingRequests, (recorded) => [...recorded, ref]).pipe(
+          Effect.andThen(operation),
+        ),
       detail: (ref) =>
         Ref.update(pullRequestDetailRequests, (recorded) => [...recorded, ref]).pipe(
           Effect.as(pullRequest as PullRequestDetail),
@@ -151,7 +149,14 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(dependencies),
     );
-  return { commands, detailRequests, pullRequestDetailRequests, savedLinkRequests, call };
+  return {
+    commands,
+    detailRequests,
+    pullRequestDetailRequests,
+    routingRequests,
+    savedLinkRequests,
+    call,
+  };
 });
 
 describe("issue toolkit handlers", () => {
@@ -172,7 +177,7 @@ describe("issue toolkit handlers", () => {
       ]);
       expect(yield* Ref.get(harness.commands)).toMatchObject([
         {
-          type: "thread.meta.update",
+          type: "thread.metadata.update",
           threadId,
           issueLink: issue,
         },
@@ -195,6 +200,73 @@ describe("issue toolkit handlers", () => {
           issueUnlink: { provider: "github", repository: "t3tools/t3code", number: 7 },
         },
       ]);
+    }),
+  );
+
+  it.effect("returns an existing link without dispatching a second command", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(thread([issue]));
+      expect(
+        yield* harness.call("link_issue", { repository: "T3TOOLS/T3CODE", number: 7 }),
+      ).toEqual({ issue, alreadyLinked: true });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+
+  it.effect("links the authorized issue when the same repository and number use another host", () =>
+    Effect.gen(function* () {
+      const enterpriseIssue = { ...issue, url: "https://github.acme.test/t3tools/t3code/issues/7" };
+      const harness = yield* makeHarness(thread([enterpriseIssue]));
+      expect(
+        yield* harness.call("link_issue", { repository: issue.repository, number: 7 }),
+      ).toEqual({ issue, alreadyLinked: false });
+      expect(yield* Ref.get(harness.commands)).toMatchObject([{ issueLink: issue }]);
+    }),
+  );
+
+  it.effect("requires a URL for ambiguous hosts and unlinks only that saved URL", () =>
+    Effect.gen(function* () {
+      const enterpriseIssue = { ...issue, url: "https://github.acme.test/t3tools/t3code/issues/7" };
+      const harness = yield* makeHarness(thread([issue, enterpriseIssue]));
+      const input = { repository: issue.repository, number: 7, provider: "github" };
+      expect(yield* harness.call("unlink_issue", input).pipe(Effect.flip)).toMatchObject({
+        _tag: "IssueOperationError",
+        detail: expect.stringContaining("Pass url"),
+      });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+      expect(yield* harness.call("unlink_issue", { ...input, url: enterpriseIssue.url })).toEqual({
+        wasLinked: true,
+      });
+      expect(yield* Ref.get(harness.commands)).toMatchObject([
+        {
+          issueUnlink: { ...input, url: enterpriseIssue.url },
+        },
+      ]);
+    }),
+  );
+
+  it.effect("keeps links idempotent when another caller changes them before dispatch", () =>
+    Effect.gen(function* () {
+      const failure = (cause: string) =>
+        new Orchestrator.OrchestratorDispatchError({
+          commandId: CommandId.make("racing-command"),
+          commandType: "thread.metadata.update",
+          cause,
+        });
+      const linking = yield* makeHarness(thread(), failure("Issue is already linked"));
+      expect(
+        yield* linking.call("link_issue", { repository: issue.repository, number: 7 }),
+      ).toEqual({ issue, alreadyLinked: true });
+      const unlinking = yield* makeHarness(thread([issue]), failure("Issue is not linked"));
+      expect(
+        yield* unlinking.call("unlink_issue", { repository: issue.repository, number: 7 }),
+      ).toEqual({ wasLinked: false });
+      const rejected = yield* makeHarness(thread(), failure("Thread already has 20 linked issues"));
+      expect(
+        yield* rejected
+          .call("link_issue", { repository: issue.repository, number: 7 })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "IssueThreadLinkFailedError" });
     }),
   );
 
@@ -227,11 +299,21 @@ describe("issue toolkit handlers", () => {
         }),
       ).toEqual({ links: [savedLink], truncated: false });
       yield* harness.call("unlink_issue_from_pull_request", refs);
+      expect(
+        yield* harness.call("list_issue_pull_request_links", {
+          source: { kind: "pull-request", ...refs.pullRequest },
+        }),
+      ).toEqual({ links: [savedLink], truncated: false });
       expect(yield* Ref.get(harness.detailRequests)).toEqual([
         { projectId, ...refs.issue },
         { projectId, ...refs.issue },
       ]);
       expect(yield* Ref.get(harness.pullRequestDetailRequests)).toEqual([
+        { projectId, ...refs.pullRequest },
+        { projectId, ...refs.pullRequest },
+      ]);
+      expect(yield* Ref.get(harness.routingRequests)).toEqual([
+        { projectId, ...refs.pullRequest },
         { projectId, ...refs.pullRequest },
       ]);
       expect(yield* Ref.get(harness.savedLinkRequests)).toEqual([
@@ -248,6 +330,7 @@ describe("issue toolkit handlers", () => {
             pullRequest: { provider: "github", url: pullRequest.url },
           },
         },
+        { list: { source: { provider: "github", url: pullRequest.url } } },
       ]);
     }),
   );

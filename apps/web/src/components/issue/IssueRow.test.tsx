@@ -27,7 +27,7 @@ const entry = {
 } as IssueListEntry;
 
 describe("IssueRow", () => {
-  it("keeps narrow metadata inside its grid column", () => {
+  it("keeps the author inside the shared row metadata", () => {
     const markup = renderToStaticMarkup(
       <IssueRow
         entry={entry}
@@ -40,8 +40,8 @@ describe("IssueRow", () => {
       />,
     );
 
-    expect(markup).toContain("mt-0.5 overflow-hidden text-xs");
-    expect(markup).toContain('class="flex min-w-0 items-center gap-1.5 max-w-40"');
+    expect(markup).toContain("long-author-name");
+    expect(markup).toContain("@container/pr-row-meta");
     expect(markup).not.toContain(" title=");
   });
 
@@ -58,8 +58,6 @@ describe("IssueRow", () => {
     const markup = renderToStaticMarkup(<IssueRow {...props} />);
 
     expect(markup).toContain('aria-label="Select pingdotgg/t3code issue #6368"');
-    expect(markup).toContain("group-hover/row:opacity-100");
-    expect(markup).not.toContain("[&amp;&gt;button]:pl-10");
     expect(markup.indexOf('aria-label="Select pingdotgg/t3code issue #6368"')).toBeGreaterThan(
       markup.indexOf("</button>"),
     );

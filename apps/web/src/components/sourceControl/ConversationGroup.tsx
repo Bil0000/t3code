@@ -72,7 +72,7 @@ export function ConversationGroup<Entry extends ConversationEntry>({
               <span className="block text-xs font-semibold">
                 {entries.length.toLocaleString()} {entries.length === 1 ? "comment" : "comments"}
               </span>
-              <span className="block truncate text-[10px] text-muted-foreground">
+              <span className="block truncate text-3xs text-muted-foreground">
                 {actors.length.toLocaleString()} {actors.length === 1 ? "author" : "authors"} ·{" "}
                 {formatRelativeTimeLabel(first.at)}
               </span>

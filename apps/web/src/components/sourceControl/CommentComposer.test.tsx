@@ -10,6 +10,13 @@ import { CommentComposer } from "./CommentComposer";
 const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => post }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("../ui/popover", () => ({
+  Popover: "div",
+  PopoverClose: "button",
+  PopoverPopup: "section",
+  PopoverTitle: "h3",
+  PopoverTrigger: "button",
+}));
 
 let renderer: ReactTestRenderer;
 afterEach(async () => {

@@ -1,15 +1,17 @@
 import type { IssueListEntry, IssueListSort, IssueReactionContent } from "@t3tools/contracts";
-import { MessageSquareIcon } from "lucide-react";
+import { MessageSquareIcon, SearchIcon } from "lucide-react";
 
 import { memo } from "react";
 
 import { cn } from "~/lib/utils";
 
 import {
-  SourceControlActorAvatar,
-  SourceControlActorLabel,
-} from "../sourceControl/actorPresentation";
-import { ListRow } from "../sourceControl/ListRow";
+  PULL_REQUEST_ROW_CLASS,
+  PULL_REQUEST_ROW_NUMBER_CLASS,
+  PullRequestRowAuthor,
+  PullRequestRowLines,
+} from "../pullRequest/PullRequestListRow";
+import { PullRequestActorAvatar } from "../pullRequest/pullRequestPresentation";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { getIssueProviderPresentation, IssueRowLabels, IssueStateGlyph } from "./issuePresentation";
 import { Checkbox } from "../ui/checkbox";
@@ -30,6 +32,8 @@ const REACTION_SORT: Partial<
 
 /** Faces, not names: past a few of them the meta line becomes a list nobody reads. */
 const ASSIGNEE_FACES = 3;
+
+const PAGE_ROW_CLASS = "px-3 py-2.5 [contain-intrinsic-block-size:36.5px]";
 
 function IssueRowImpl({
   entry,
@@ -69,105 +73,142 @@ function IssueRowImpl({
         )
       : 0;
   const { Icon, providerName } = getIssueProviderPresentation(entry.provider);
+  const assignees = entry.assignees.map((assignee) => assignee.login).join(", ");
   return (
     <div className="group/row relative">
-      <ListRow
-        glyph={
-          <span
-            className={cn(
-              "flex items-center",
-              onToggleSelection && "group-hover/row:opacity-0",
-              selectionChecked && "opacity-0",
-            )}
-          >
-            <IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />
-          </span>
-        }
-        title={entry.title}
-        providerName={providerName}
-        ProviderIcon={Icon}
-        showProvider={showProvider}
-        number={entry.number}
-        repository={showProjectTitle ? entry.repository : null}
-        meta={[
-          <SourceControlActorLabel key="author" actor={entry.author} className="max-w-40" />,
-          entry.assignees.length > 0 ? (
-            <Tooltip key="assignees">
-              <TooltipTrigger
-                render={
-                  <span
-                    className="flex shrink-0 items-center -space-x-1"
-                    aria-label={`Assigned to ${entry.assignees.map((assignee) => assignee.login).join(", ")}`}
-                  />
-                }
-              >
-                {entry.assignees.slice(0, ASSIGNEE_FACES).map((assignee) => (
-                  <SourceControlActorAvatar
-                    key={assignee.login}
-                    actor={assignee}
-                    className="ring-1 ring-background"
-                  />
-                ))}
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                Assigned to {entry.assignees.map((assignee) => assignee.login).join(", ")}
-              </TooltipPopup>
-            </Tooltip>
-          ) : null,
-          // Guarded here rather than left to the chips: a component that renders nothing is still a
-          // child, and the meta line would draw a separator in front of it.
-          entry.labels.length > 0 ? <IssueRowLabels key="labels" labels={entry.labels} /> : null,
-        ]}
-        matchedElsewhere={matchedElsewhere === true}
-        updatedAt={entry.updatedAt}
-        trailing={
-          reactionSort?.startsWith("reactions") && reactionCount > 0 ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    className="flex items-center gap-1"
-                    aria-label={`${reactionCount.toLocaleString()} reactions`}
-                  />
-                }
-              >
-                <span aria-hidden>{reactionKind?.emoji ?? "👍"}</span>
-                {reactionCount.toLocaleString()}
-              </TooltipTrigger>
-              <TooltipPopup side="top">{reactionCount.toLocaleString()} reactions</TooltipPopup>
-            </Tooltip>
-          ) : entry.commentCount > 0 ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    className="flex items-center gap-1"
-                    aria-label={`${entry.commentCount.toLocaleString()} comments`}
-                  />
-                }
-              >
-                <MessageSquareIcon aria-hidden className="size-3" />
-                {entry.commentCount.toLocaleString()}
-              </TooltipTrigger>
-              <TooltipPopup side="top">{entry.commentCount.toLocaleString()} comments</TooltipPopup>
-            </Tooltip>
-          ) : null
-        }
-        selected={selected}
-        onSelect={() => onSelect(entry)}
-      />
-      {onToggleSelection ? (
-        <Checkbox
-          checked={selectionChecked}
-          aria-label={`${selectionChecked ? "Deselect" : "Select"} ${entry.repository} issue #${entry.number}`}
+      <button
+        type="button"
+        aria-current={selected ? "true" : undefined}
+        onClick={() => onSelect(entry)}
+        className={cn(
+          PULL_REQUEST_ROW_CLASS,
+          PAGE_ROW_CLASS,
+          "cursor-pointer transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          "[content-visibility:auto]",
+        )}
+      >
+        <span
           className={cn(
-            "absolute top-1/2 left-3 z-10 -translate-y-1/2 transition-opacity",
+            "mt-0.75 flex w-4 shrink-0 justify-center self-start",
+            onToggleSelection && "group-hover/row:opacity-0",
+            selectionChecked && "opacity-0",
+          )}
+        >
+          <IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />
+        </span>
+        <PullRequestRowLines
+          number={<span className={PULL_REQUEST_ROW_NUMBER_CLASS}>#{entry.number}</span>}
+          title={entry.title}
+          status={
+            reactionSort?.startsWith("reactions") && reactionCount > 0 ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className="flex items-center gap-1 tabular-nums text-muted-foreground"
+                      aria-label={`${reactionCount.toLocaleString()} reactions`}
+                    />
+                  }
+                >
+                  <span aria-hidden>{reactionKind?.emoji ?? "👍"}</span>
+                  {reactionCount.toLocaleString()}
+                </TooltipTrigger>
+                <TooltipPopup side="top">{reactionCount.toLocaleString()} reactions</TooltipPopup>
+              </Tooltip>
+            ) : entry.commentCount > 0 ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className="flex items-center gap-1 tabular-nums text-muted-foreground"
+                      aria-label={`${entry.commentCount.toLocaleString()} comments`}
+                    />
+                  }
+                >
+                  <MessageSquareIcon aria-hidden className="size-3" />
+                  {entry.commentCount.toLocaleString()}
+                </TooltipTrigger>
+                <TooltipPopup side="top">
+                  {entry.commentCount.toLocaleString()} comments
+                </TooltipPopup>
+              </Tooltip>
+            ) : null
+          }
+          metaClassName="@container/pr-row-meta"
+          meta={
+            <>
+              {matchedElsewhere ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="flex min-w-6 items-center gap-1 overflow-hidden rounded-full border border-border/60 px-1 text-3xs" />
+                    }
+                  >
+                    <span className="sr-only">matched in the description</span>
+                    <SearchIcon aria-hidden className="size-3 shrink-0" />
+                    <span aria-hidden className="hidden truncate @xs/pr-row-meta:block">
+                      matched in the description
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">Matched in the description</TooltipPopup>
+                </Tooltip>
+              ) : null}
+              {showProvider ? (
+                <Tooltip>
+                  <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+                    <Icon aria-label={providerName} className="size-3" />
+                  </TooltipTrigger>
+                  <TooltipPopup>{providerName}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+              <PullRequestRowAuthor
+                actor={entry.author}
+                className="min-w-3.5 max-w-40"
+                labelClassName="sr-only @xs/pr-row-meta:not-sr-only @xs/pr-row-meta:truncate"
+              />
+              {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
+              {entry.assignees.length > 0 ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        className="flex shrink-0 items-center -space-x-1"
+                        aria-label={`Assigned to ${assignees}`}
+                      />
+                    }
+                  >
+                    {entry.assignees.slice(0, ASSIGNEE_FACES).map((assignee) => (
+                      <PullRequestActorAvatar
+                        key={assignee.login}
+                        actor={assignee}
+                        className="size-3.5 ring-1 ring-background"
+                      />
+                    ))}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">Assigned to {assignees}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+              <IssueRowLabels labels={entry.labels} />
+            </>
+          }
+          updatedAt={entry.updatedAt}
+        />
+      </button>
+      {onToggleSelection ? (
+        <span
+          className={cn(
+            "absolute top-3 left-3 z-10 inline-flex transition-opacity",
             selectionChecked
               ? "opacity-100"
-              : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100",
+              : "opacity-0 group-hover/row:opacity-100 has-focus-visible:opacity-100",
           )}
-          onCheckedChange={() => onToggleSelection(entry)}
-        />
+        >
+          <Checkbox
+            checked={selectionChecked}
+            aria-label={`${selectionChecked ? "Deselect" : "Select"} ${entry.repository} issue #${entry.number}`}
+            onCheckedChange={() => onToggleSelection(entry)}
+          />
+        </span>
       ) : null}
     </div>
   );

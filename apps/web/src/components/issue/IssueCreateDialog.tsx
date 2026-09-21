@@ -30,7 +30,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { readableFailure } from "../sourceControl/handoff";
-import { HostMarkdown } from "../sourceControl/HostMarkdown";
+import { PullRequestMarkdown } from "../pullRequest/PullRequestMarkdown";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -141,7 +141,7 @@ function AnswerTextarea({
       {previewing ? (
         <div className="min-h-24 rounded-lg border border-border/60 px-3 py-2 text-sm">
           {value.trim().length > 0 ? (
-            <HostMarkdown text={value} cwd={cwd} environmentId={environmentId} />
+            <PullRequestMarkdown text={value} cwd={cwd} environmentId={environmentId} />
           ) : (
             <span className="text-muted-foreground">Nothing to preview yet.</span>
           )}
@@ -179,7 +179,7 @@ function TemplateField({
   if (field.kind === "markdown") {
     // Prose the form shows and never files, rendered as the markdown it is.
     return (
-      <HostMarkdown
+      <PullRequestMarkdown
         className="text-sm"
         text={field.value}
         cwd={cwd}
@@ -520,30 +520,34 @@ export function IssueCreateDialog({
         >
           {expanded ? <Minimize2Icon /> : <Maximize2Icon />}
         </Button>
-        <DialogHeader className={choice === null ? undefined : "flex-row items-center gap-2"}>
-          {choice !== null && hasChoice ? (
-            <Button
-              aria-label="Back to the starting points"
-              size="icon"
-              variant="ghost"
-              disabled={filing}
-              onClick={() => setChosen(null)}
-            >
-              <ArrowLeftIcon />
-            </Button>
-          ) : null}
-          <DialogTitle className="min-w-0 flex-1 truncate pe-20 text-lg">
-            {composing && selected !== undefined
-              ? `Create new issue in ${selected.repository}${template ? `: ${template.name}` : ""}`
-              : "Create new issue"}
-          </DialogTitle>
+        <DialogHeader>
+          <div className="flex min-w-0 items-center gap-2 pe-20">
+            {choice !== null && hasChoice ? (
+              <Button
+                aria-label="Back to the starting points"
+                size="icon"
+                variant="ghost"
+                disabled={filing}
+                onClick={() => setChosen(null)}
+              >
+                <ArrowLeftIcon />
+              </Button>
+            ) : null}
+            <DialogTitle className="min-w-0 flex-1">
+              <span className="block truncate">
+                {composing && selected !== undefined
+                  ? `Create new issue in ${selected.repository}${template ? `: ${template.name}` : ""}`
+                  : "Create new issue"}
+              </span>
+            </DialogTitle>
+          </div>
           {choice === null ? (
             <DialogDescription>
               Filed on the host this project is checked out from, as you.
             </DialogDescription>
           ) : null}
         </DialogHeader>
-        <DialogPanel className="space-y-4">
+        <DialogPanel>
           {selected === undefined ? (
             <p className="text-sm text-muted-foreground">
               None of these projects is checked out from a host that takes issues. Add a project

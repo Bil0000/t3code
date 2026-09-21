@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { SourceControlMetaLine } from "./actorPresentation";
+import { PullRequestMetaLine } from "../pullRequest/pullRequestPresentation";
 import { Button } from "../ui/button";
 
 export function TimelineComment({
@@ -48,17 +48,17 @@ export function TimelineComment({
               <span className="text-muted-foreground">{title}</span>
               {badge}
             </div>
-            <SourceControlMetaLine className="mt-1 flex-wrap text-[11px] text-muted-foreground">
+            <PullRequestMetaLine className="mt-1 flex-wrap text-2xs text-muted-foreground">
               <span>{formatRelativeTimeLabel(at)}</span>
               {meta}
-            </SourceControlMetaLine>
+            </PullRequestMetaLine>
           </div>
           {actions}
           {url === null ? null : (
             <Button
               size="icon-xs"
-              variant="ghost"
-              className="-mr-1 -mt-1 shrink-0 text-muted-foreground"
+              variant="ghost-muted"
+              className="-mr-1 -mt-1 shrink-0"
               aria-label="Open activity on host"
               onClick={() => onOpen(url)}
             >

@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
-import { SourceControlActorAvatar } from "./actorPresentation";
+import { PullRequestActorAvatar } from "../pullRequest/pullRequestPresentation";
 
 function TimelineMarker({
   children,
@@ -65,10 +65,10 @@ export function ActorTimelineMarker({
     <IconMarker className={className} icon={fallback} />
   ) : (
     <TimelineMarker className={className}>
-      <SourceControlActorAvatar
+      <PullRequestActorAvatar
         actor={actor}
         className={cn(
-          "size-7 bg-muted text-[9px] transition-opacity",
+          "size-7 bg-muted text-3xs transition-opacity",
           muted && "opacity-45 grayscale",
         )}
       />

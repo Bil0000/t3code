@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { type IssueListEntry, ProviderDriverKind } from "@t3tools/contracts";
+import { formatIssueReference, type IssueListEntry, ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildComposerPathMenuItems,
   ComposerCommandMenu,
-  composerIssueReference,
+  composerSuggestionOptionId,
+  isComposerPathMenuLoading,
   serializeComposerIssueMention,
 } from "./ComposerCommandMenu";
 
@@ -31,10 +32,35 @@ const issue = {
   commentCount: 0,
 } satisfies IssueListEntry;
 
+describe("composerSuggestionOptionId", () => {
+  it("keeps whitespace, escape-like paths, and malformed UTF-16 distinct", () => {
+    const paths = [
+      "docs/my file.md",
+      "docs/my_file.md",
+      "docs/my%20file.md",
+      "docs/my\tfile.md",
+      "docs/\ud800.md",
+      "docs/\ud801.md",
+      "docs/\udc00.md",
+      "docs/\ufffd.md",
+      "docs/\\ud800.md",
+      "docs/\ud83d\ude80.md",
+    ];
+    const ids = paths.map((path) => composerSuggestionOptionId("suggestions", `path:file:${path}`));
+
+    expect(new Set(ids).size).toBe(paths.length);
+    for (const id of ids) expect(id).not.toMatch(/\s|[\ud800-\udfff]/u);
+    expect(composerSuggestionOptionId("other-composer", paths[0]!)).not.toBe(
+      composerSuggestionOptionId("suggestions", paths[0]!),
+    );
+  });
+});
+
 describe("ComposerCommandMenu", () => {
   it("renders slash commands with their descriptions", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu
+        listId="test-suggestions"
         items={[
           {
             id: "slash:model",
@@ -60,6 +86,7 @@ describe("ComposerCommandMenu", () => {
   it("shows the app source for an app skill", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu
+        listId="test-suggestions"
         items={[
           {
             id: "skill:codex:browser",
@@ -94,6 +121,7 @@ describe("ComposerCommandMenu", () => {
   it("shows the repo source for a slash skill", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu
+        listId="test-suggestions"
         items={[
           {
             id: "skill:codex:ask-matt",
@@ -142,7 +170,7 @@ describe("ComposerCommandMenu", () => {
       expected: "APP-12",
     },
   ] as const)("formats host-native issue reference $expected", ({ entry, expected }) => {
-    expect(composerIssueReference(entry)).toBe(expected);
+    expect(formatIssueReference(entry)).toBe(expected);
   });
 
   it("serializes an issue mention with its exact URL", () => {
@@ -154,6 +182,7 @@ describe("ComposerCommandMenu", () => {
   it("renders issue results with their state and reference", () => {
     const markup = renderToStaticMarkup(
       <ComposerCommandMenu
+        listId="test-suggestions"
         items={[
           {
             id: "issue:github:acme/app:12",
@@ -177,6 +206,18 @@ describe("ComposerCommandMenu", () => {
     expect(markup).toContain('aria-label="Open"');
     expect(markup).toContain("min-w-0 flex-1 truncate");
     expect(markup).toContain("text-right text-secondary-label text-xs shrink-0");
+  });
+
+  it("waits on issues and files only once the path query has text", () => {
+    expect(isComposerPathMenuLoading({ query: "", issuesPending: true, filesPending: true })).toBe(
+      false,
+    );
+    expect(
+      isComposerPathMenuLoading({ query: "src", issuesPending: true, filesPending: false }),
+    ).toBe(true);
+    expect(
+      isComposerPathMenuLoading({ query: "src", issuesPending: false, filesPending: true }),
+    ).toBe(true);
   });
 
   it("keeps file results first while a new issue query is settling", () => {

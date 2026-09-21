@@ -5,14 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 import { useWorkItemSelection, type SelectedWorkItem } from "~/workItemSelection";
 
-const { newThread, setPrompt, generateTask } = vi.hoisted(() => ({
+const { newThread, setPrompt } = vi.hoisted(() => ({
   newThread: vi.fn(),
   setPrompt: vi.fn(),
-  generateTask: vi.fn(),
 }));
 vi.mock("~/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => newThread }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => generateTask }));
-vi.mock("~/state/workItems", () => ({ generateWorkItemTask: "generateWorkItemTask" }));
 vi.mock("~/composerDraftStore", () => ({
   useComposerDraftStore: { getState: () => ({ setPrompt }) },
 }));
@@ -51,7 +48,6 @@ beforeEach(() => {
   useWorkItemSelection.setState({ items: [], mode: "compound", selecting: false });
   newThread.mockReset();
   setPrompt.mockReset();
-  generateTask.mockReset();
 });
 afterEach(async () => {
   await act(() => renderer?.unmount());
@@ -70,7 +66,7 @@ it("shows task shape only for multiple selected items", async () => {
   expect(renderer.root.findAllByProps({ "aria-label": "Task shape" })).toHaveLength(1);
 });
 
-it("creates a worktree thread and inserts the complete source prompt without generation", async () => {
+it("creates a worktree thread and inserts the complete source prompt", async () => {
   newThread.mockResolvedValue({ draftId: "draft-1" });
   await act(() => {
     renderer = create(<WorkItemSelectionBarHost />);
@@ -88,7 +84,6 @@ it("creates a worktree thread and inserts the complete source prompt without gen
     { envMode: "worktree", branch: null, worktreePath: null },
   );
   expect(setPrompt).toHaveBeenCalledOnce();
-  expect(generateTask).not.toHaveBeenCalled();
   const [draftId, prompt] = setPrompt.mock.calls[0]!;
   expect(draftId).toBe("draft-1");
   expect(prompt).toContain("subtasks under one parent task");

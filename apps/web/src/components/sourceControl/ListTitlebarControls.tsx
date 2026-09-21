@@ -35,7 +35,7 @@ export function ListRefreshControl({
       onClick={onRefresh}
       disabled={refreshing}
     >
-      <RefreshIcon className="size-4" refreshing={refreshing} />
+      <RefreshIcon size="md" refreshing={refreshing} />
     </Button>
   );
 }
@@ -72,16 +72,13 @@ export function CompactFilterMenu<Value extends string>({
         aria-label={triggerLabel || iconOnly ? `${label}: ${current.label}` : label}
         title={iconOnly ? `${label}: ${current.label}` : undefined}
         render={
-          outlined ? <Button variant="outline" size={iconOnly ? "icon" : "default"} /> : undefined
+          outlined ? (
+            <Button variant="outline" size={iconOnly ? "icon" : "default"} />
+          ) : (
+            <Button variant="ghost-muted" size="sm" />
+          )
         }
-        className={
-          outlined
-            ? className
-            : cn(
-                "inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
-                className,
-              )
-        }
+        className={cn("min-w-0", className)}
       >
         {iconOnly ? (
           <current.Icon aria-hidden className="size-4" />
@@ -92,13 +89,12 @@ export function CompactFilterMenu<Value extends string>({
           </>
         ) : (
           <>
-            {outlined ? <current.Icon aria-hidden className="size-4 shrink-0" /> : null}
             <span className="truncate">{current.label}</span>
             <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/70" />
           </>
         )}
       </MenuTrigger>
-      <MenuPopup align="start" side="bottom" className="min-w-40">
+      <MenuPopup align="start" side="bottom">
         {children ?? (
           <MenuRadioGroup
             value={value}
@@ -125,9 +121,7 @@ export function CompactFilterMenu<Value extends string>({
               ) : (
                 <Tooltip key={option.value}>
                   <TooltipTrigger render={item} />
-                  <TooltipPopup side="right" className="max-w-64 break-words">
-                    {option.unavailable}
-                  </TooltipPopup>
+                  <TooltipPopup side="right">{option.unavailable}</TooltipPopup>
                 </Tooltip>
               );
             })}

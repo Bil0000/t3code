@@ -8,7 +8,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { ConversationGroup } from "../sourceControl/ConversationGroup";
-import { HostMarkdown } from "../sourceControl/HostMarkdown";
+import { PullRequestMarkdown } from "../pullRequest/PullRequestMarkdown";
 import { ActorName, IconMarker } from "../sourceControl/TimelineRail";
 import { PullRequestMarkdownEditor as SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import { Button } from "../ui/button";
@@ -38,7 +38,7 @@ function TimelineEvent({ entry }: { entry: IssueTimelineEntry }) {
           <ActorName actor={entry.actor} />
           <span className="min-w-0 text-muted-foreground">{entry.title}</span>
         </div>
-        <div className="mt-0.5 text-[11px] text-muted-foreground">
+        <div className="mt-0.5 text-2xs text-muted-foreground">
           {formatRelativeTimeLabel(entry.at)}
         </div>
       </div>
@@ -120,8 +120,8 @@ export function IssueTimelineTab({
                   return comment === null || editingId === entry.id ? null : (
                     <Button
                       size="icon-xs"
-                      variant="ghost"
-                      className="-mt-1 shrink-0 text-muted-foreground"
+                      variant="ghost-muted"
+                      className="-mt-1 shrink-0"
                       aria-label="Edit comment"
                       onClick={() => setEditingScope({ issue: detail.url, id: entry.id })}
                     >
@@ -143,7 +143,7 @@ export function IssueTimelineTab({
                     />
                   ) : entry.body === null ? null : (
                     <div className="group">
-                      <HostMarkdown
+                      <PullRequestMarkdown
                         text={entry.body}
                         cwd={detail.workspaceRoot}
                         environmentId={environmentId}

@@ -9,13 +9,11 @@ import {
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as WorkItemLinks from "../../../workItems/WorkItemLinks.ts";
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
   IssueTargetInput,
@@ -32,8 +30,7 @@ const issueRef = (projectId: ProjectId, ref: typeof IssueTargetInput.Type): Issu
 });
 
 const make = Effect.gen(function* () {
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-  const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const engine = yield* Orchestrator.OrchestratorV2;
   const issues = yield* IssueService.IssueService;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const workItemLinks = yield* WorkItemLinks.WorkItemLinks;
@@ -41,13 +38,13 @@ const make = Effect.gen(function* () {
 
   const requireThread = Effect.fn("IssuesToolkit.requireThread")(function* () {
     const scope = yield* McpInvocationContext.requireMcpCapability("issues");
-    const thread = yield* snapshots
-      .getThreadShellById(scope.threadId)
-      .pipe(Effect.mapError((cause) => new IssueThreadLinkFailedError({ cause })));
-    if (Option.isNone(thread)) {
+    const thread = yield* engine.getThreadShell(scope.threadId).pipe(
+      Effect.mapError((cause) => new IssueThreadLinkFailedError({ cause })),
+    );
+    if (thread === null) {
       return yield* new IssueThreadNotFoundError({ threadId: scope.threadId });
     }
-    return thread.value;
+    return thread;
   });
 
   const commandId = (threadId: string) =>
@@ -78,19 +75,30 @@ const make = Effect.gen(function* () {
           url: detail.url,
           title: detail.title,
         };
+        if (
+          (thread.issues ?? []).some(
+            (link) =>
+              link.provider === issue.provider &&
+              link.repository.toLowerCase() === issue.repository.toLowerCase() &&
+              link.number === issue.number &&
+              normalizeWorkItemLinkKey(link).url === normalizeWorkItemLinkKey(issue).url,
+          )
+        )
+          return { issue, alreadyLinked: true };
         const alreadyLinked = yield* engine
           .dispatch({
-            type: "thread.meta.update",
+            type: "thread.metadata.update",
             commandId: yield* commandId(thread.id),
             threadId: thread.id,
             issueLink: issue,
           })
           .pipe(
             Effect.as(false),
-            Effect.catchTags({
-              OrchestrationCommandInvariantError: (error) =>
-                error.detail.includes("already linked") ? Effect.succeed(true) : Effect.fail(error),
-            }),
+            Effect.catchTag("OrchestratorDispatchError", (error) =>
+              typeof error.cause === "string" && error.cause.includes("already linked")
+                ? Effect.succeed(true)
+                : Effect.fail(error),
+            ),
             Effect.catchCause(dispatchFailure),
           );
         return { issue, alreadyLinked };
@@ -102,33 +110,38 @@ const make = Effect.gen(function* () {
           (issue) =>
             issue.repository.toLowerCase() === input.repository.toLowerCase() &&
             issue.number === input.number &&
-            (input.provider === undefined || issue.provider === input.provider),
+            (input.provider === undefined || issue.provider === input.provider) &&
+            (input.url === undefined ||
+              normalizeWorkItemLinkKey(issue).url ===
+                normalizeWorkItemLinkKey({ provider: issue.provider, url: input.url }).url),
         );
         if (matches.length > 1) {
           return yield* new IssueOperationError({
             operation: "unlink",
-            detail: "More than one provider matches this issue. Pass provider.",
+            detail: "More than one issue matches this repository and number. Pass url.",
           });
         }
         const issue = matches[0];
         if (!issue) return { wasLinked: false };
         const wasLinked = yield* engine
           .dispatch({
-            type: "thread.meta.update",
+            type: "thread.metadata.update",
             commandId: yield* commandId(thread.id),
             threadId: thread.id,
             issueUnlink: {
               provider: issue.provider,
               repository: issue.repository,
               number: issue.number,
+              url: issue.url,
             },
           })
           .pipe(
             Effect.as(true),
-            Effect.catchTags({
-              OrchestrationCommandInvariantError: (error) =>
-                error.detail.includes("not linked") ? Effect.succeed(false) : Effect.fail(error),
-            }),
+            Effect.catchTag("OrchestratorDispatchError", (error) =>
+              typeof error.cause === "string" && error.cause.includes("not linked")
+                ? Effect.succeed(false)
+                : Effect.fail(error),
+            ),
             Effect.catchCause(dispatchFailure),
           );
         return { wasLinked };
@@ -147,9 +160,10 @@ const make = Effect.gen(function* () {
     unlink_issue_from_pull_request: (input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread();
+        const pullRequestRef = { projectId: thread.projectId, ...input.pullRequest };
         const [issue, pullRequest] = yield* Effect.all([
           issues.detail(issueRef(thread.projectId, input.issue)),
-          pullRequests.detail({ projectId: thread.projectId, ...input.pullRequest }),
+          pullRequests.withRoutingCredential(pullRequestRef, pullRequests.detail(pullRequestRef)),
         ]);
         yield* workItemLinks.unlink({
           issue: normalizeWorkItemLinkKey({ provider: issue.provider, url: issue.url }),
@@ -163,10 +177,14 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const thread = yield* requireThread();
         const { kind, ...reference } = input.source;
+        const pullRequestRef = { projectId: thread.projectId, ...reference };
         const detail =
           kind === "issue"
             ? yield* issues.detail(issueRef(thread.projectId, reference))
-            : yield* pullRequests.detail({ projectId: thread.projectId, ...reference });
+            : yield* pullRequests.withRoutingCredential(
+                pullRequestRef,
+                pullRequests.detail(pullRequestRef),
+              );
         return yield* workItemLinks.list({
           source: normalizeWorkItemLinkKey({ provider: detail.provider, url: detail.url }),
         });
