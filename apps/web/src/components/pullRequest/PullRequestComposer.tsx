@@ -41,7 +41,8 @@ export function PullRequestComposer({
 }) {
   const [open, setOpen] = useState(false);
   const [requestedMode, setRequestedMode] = useState<"comment" | "review">("comment");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
+  const reviewRef = useRef<HTMLTextAreaElement>(null);
   const pendingComments = usePendingReviewComments(reference);
 
   // What is offered is the intersection of two different questions: what this host can do at
@@ -79,7 +80,7 @@ export function PullRequestComposer({
         align="end"
         sideOffset={8}
         className="w-96 max-w-[calc(100vw-2rem)]"
-        initialFocus={textareaRef}
+        initialFocus={mode === "review" ? reviewRef : commentRef}
         aria-label="Pull request composer"
       >
         <div className="mb-3 flex items-center justify-between gap-2">
@@ -110,30 +111,38 @@ export function PullRequestComposer({
             <XIcon className="size-3.5" />
           </PopoverClose>
         </div>
-        {mode === "review" ? (
-          <PullRequestReviewForm
-            environmentId={environmentId}
-            reference={reference}
-            verdicts={verdicts}
-            requestChangesSummaryRequired={detail.provider === "forgejo"}
-            textareaRef={textareaRef}
-            onSubmitted={() => {
-              setOpen(false);
-              onReviewSubmitted();
-            }}
-          />
-        ) : (
-          <PullRequestCommentForm
-            environmentId={environmentId}
-            reference={reference}
-            detail={detail}
-            actionPending={actionPending}
-            textareaRef={textareaRef}
-            onCommentAction={onCommentAction}
-            onCommented={onCommented}
-            onClose={() => setOpen(false)}
-          />
-        )}
+        {/* Both panes stay mounted and the inactive one is only hidden. Unmounting would drop
+            the comment draft on every toggle, and reset the submit guard of a form whose request
+            is still in flight — enough to send the same review twice. */}
+        {verdicts.length > 0 ? (
+          <div hidden={mode !== "review"}>
+            <PullRequestReviewForm
+              environmentId={environmentId}
+              reference={reference}
+              verdicts={verdicts}
+              requestChangesSummaryRequired={detail.provider === "forgejo"}
+              textareaRef={reviewRef}
+              onSubmitted={() => {
+                setOpen(false);
+                onReviewSubmitted();
+              }}
+            />
+          </div>
+        ) : null}
+        {canComment ? (
+          <div hidden={mode !== "comment"}>
+            <PullRequestCommentForm
+              environmentId={environmentId}
+              reference={reference}
+              detail={detail}
+              actionPending={actionPending}
+              textareaRef={commentRef}
+              onCommentAction={onCommentAction}
+              onCommented={onCommented}
+              onClose={() => setOpen(false)}
+            />
+          </div>
+        ) : null}
       </PopoverPopup>
     </Popover>
   );
