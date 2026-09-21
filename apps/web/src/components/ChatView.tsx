@@ -1,3 +1,4 @@
+import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
@@ -2122,6 +2123,14 @@ export default function ChatView(props: ChatViewProps) {
     widthStorageKey: `t3code:preview-panel-width:${activeThreadKey}`,
   });
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  const timelineThreadError =
+    serverRuntime?.status === "failed" &&
+    serverRuntime.lastErrorClass === "usage_limit" &&
+    activeThreadShell?.latestRun &&
+    visibleThreadError === serverRuntime.lastError
+      ? null
+      : visibleThreadError;
+
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -3974,7 +3983,7 @@ export default function ChatView(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
+  const hasTimelineTopBanner = Boolean(timelineThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -6964,7 +6973,26 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [feedbackSubmissions, routeThreadKey],
   );
+  const limitRecoveryBanner =
+    serverRuntime?.status === "failed" &&
+    serverRuntime.lastErrorClass === "usage_limit" &&
+    activeThreadShell?.latestRun
+      ? usageLimitRecoveryBannerItem({
+          runId: activeThreadShell.latestRun.runId,
+          resetAt: serverRuntime.usageLimitResetAt ?? null,
+          stoppedAt: activeThreadShell.latestRun.completedAt ?? activeThreadShell.updatedAt,
+          recovery: activeThreadShell.limitRecovery ?? null,
+          onChange: async (limitRecovery) => {
+            const result = await updateThreadMetadata({
+              environmentId,
+              input: { threadId: activeThreadShell.id, limitRecovery },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+        })
+      : null;
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
+    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const backgroundWorkItems = backgroundWorkBannerItem === null ? [] : [backgroundWorkBannerItem];
     const resumeCompactionItems =
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
@@ -6976,6 +7004,7 @@ export default function ChatView(props: ChatViewProps) {
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
         ...feedbackBannerItems,
+        ...limitRecoveryItems,
         ...usageLimitsItems,
         ...projectCloneItems,
         ...systemComposerBannerItems,
@@ -6987,6 +7016,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     return [
       ...feedbackBannerItems,
+      ...limitRecoveryItems,
       ...usageLimitsItems,
       ...projectCloneItems,
       ...systemComposerBannerItems,
@@ -7036,6 +7066,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeBranchMismatchKey,
     feedbackBannerItems,
+    limitRecoveryBanner,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     backgroundWorkBannerItem,
@@ -10365,7 +10396,7 @@ export default function ChatView(props: ChatViewProps) {
                 onOpenProviderSetup={openProviderSetup}
               />
               <ThreadErrorBanner
-                error={visibleThreadError}
+                error={timelineThreadError}
                 errorClass={
                   localServerError === null && visibleThreadError === serverRuntime?.lastError
                     ? (serverRuntime?.lastErrorClass ?? null)
