@@ -1,12 +1,11 @@
 /**
- * The review form floated over the Code tab: how many comments the review is holding, its
- * summary, and the verdict that sends the lot. Hidden entirely on a host that cannot take a
- * review. The glass card frame belongs to the caller (PullRequestCodeTab), which is why this
- * only contributes its own padding.
+ * The review half of the floating composer: how many line comments the review is holding, its
+ * summary, and the verdict that sends the lot. The popover around it belongs to
+ * PullRequestComposer.
  */
 import type { EnvironmentId, PullRequestRef, PullRequestReviewVerdict } from "@t3tools/contracts";
 import { CheckIcon, MessageSquareIcon, XCircleIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type RefObject } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -46,17 +45,19 @@ const VERDICTS: ReadonlyArray<{
   },
 ];
 
-export function PullRequestReviewBar({
+export function PullRequestReviewForm({
   environmentId,
   reference,
   verdicts,
   requestChangesSummaryRequired,
+  textareaRef,
   onSubmitted,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   verdicts: ReadonlyArray<PullRequestReviewVerdict>;
   requestChangesSummaryRequired: boolean;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
   onSubmitted: () => void;
 }) {
   const [pending, setPending] = useState(false);
@@ -75,7 +76,6 @@ export function PullRequestReviewBar({
   });
 
   const offered = VERDICTS.filter((verdict) => verdicts.includes(verdict.value));
-  if (offered.length === 0) return null;
 
   const submit = async (verdict: (typeof VERDICTS)[number]) => {
     if (pending) return;
@@ -115,7 +115,7 @@ export function PullRequestReviewBar({
       : verdict === "approve" || body.trim().length > 0 || comments.length > 0;
 
   return (
-    <div className="px-4 py-3">
+    <>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>
           {comments.length === 0
@@ -129,8 +129,9 @@ export function PullRequestReviewBar({
         ) : null}
       </div>
       <Textarea
+        ref={textareaRef}
         size="sm"
-        className="mt-2"
+        className="mt-2 [&_textarea]:max-h-64"
         value={body}
         placeholder={
           requestChangesSummaryRequired && verdicts.includes("request-changes")
@@ -156,6 +157,6 @@ export function PullRequestReviewBar({
           </Button>
         ))}
       </div>
-    </div>
+    </>
   );
 }
