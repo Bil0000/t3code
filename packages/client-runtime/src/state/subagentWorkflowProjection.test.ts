@@ -102,6 +102,30 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
     expect(settled?.usage).toEqual({ totalTokens: 71_141, toolUses: 3, durationMs: 1500 });
   });
 
+  it.each(["completed", "cancelled", "failed"] as const)(
+    "settles unfinished members when the coordinator is %s",
+    (status) => {
+      const model = panelOf([
+        subagent({
+          status,
+          completedAt: at("2026-08-01T10:00:09.000Z"),
+          workflow: {
+            phases: [],
+            agents: [
+              member(),
+              member({ index: 2, state: "queued" }),
+              member({ index: 3, state: "completed" }),
+            ],
+          },
+        }),
+      ]);
+      const members = model.workflows[0]?.phases.flatMap((phase) => phase.members);
+      expect(members?.map((agent) => agent.status)).toEqual([status, status, "completed"]);
+      expect(members?.[0]?.completedAt).toBe("2026-08-01T10:00:09.000Z");
+      expect(model.runningCount + model.waitingCount).toBe(0);
+    },
+  );
+
   it("surfaces a retried member through the row's activation count", () => {
     const [, retried] = projectedSubagentsToRuntime([
       subagent({ workflow: { phases: [], agents: [member({ attempt: 3 })] } }),

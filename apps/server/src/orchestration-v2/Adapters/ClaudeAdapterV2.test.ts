@@ -1905,6 +1905,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const sdkMessages = yield* Queue.unbounded<SDKMessage>();
       const offeredMessages: Array<SDKUserMessage> = [];
       const continuationRequests: Array<ProviderContinuationRequest> = [];
+      const continuationReceipts = yield* Queue.unbounded<ProviderContinuationRequest>();
       const terminalReceipts =
         yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>>();
       const systemNoticeReceipts =
@@ -1922,7 +1923,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           offer: (request) =>
             Effect.sync(() => {
               continuationRequests.push(request);
-            }),
+            }).pipe(Effect.andThen(Queue.offer(continuationReceipts, request))),
         },
         queryRunner: {
           allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),
@@ -1987,6 +1988,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         sdkMessages,
         offeredMessages,
         continuationRequests,
+        continuationReceipts,
         events,
         terminalReceipts,
         systemNoticeReceipts,
@@ -6895,6 +6897,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const first = workflowMemberEvents(harness.events, 1).at(-1)?.subagent;
         const second = workflowMemberEvents(harness.events, 2).at(-1)?.subagent;
         assert.equal(first?.status, "running");
+        const coordinatorThread = harness.events.find(
+          (event) =>
+            event.type === "app_thread.created" &&
+            event.appThread.id === coordinator?.childThreadId,
+        );
+        assert.equal(
+          coordinatorThread?.type === "app_thread.created"
+            ? coordinatorThread.appThread.title
+            : null,
+          "Workflow · probe-wf",
+        );
         assert.equal(first?.title, "alpha:one");
         assert.equal(first?.prompt, "Reply with exactly: A1");
         assert.equal(first?.model, "claude-opus-5[1m]");
@@ -6952,6 +6965,101 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         yield* Queue.take(harness.terminalReceipts);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
+  );
+
+  it.effect.each([
+    ["stopped", false],
+    ["failed", false],
+    ["completed", false],
+    ["stopped", true],
+    ["failed", true],
+    ["completed", true],
+  ] as const)(
+    "settles workflow members when the coordinator reports %s, between turns=%s",
+    ([status, betweenTurns]) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarness;
+          const now = yield* DateTime.now;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-workflow-terminal"),
+              text: "Run the workflow.",
+              attachments: [],
+            }),
+          );
+          yield* Queue.offer(harness.sdkMessages, workflowToolUse);
+          yield* Queue.offer(harness.sdkMessages, workflowTaskStarted);
+          yield* Queue.offer(harness.sdkMessages, workflowLaunchAck);
+          yield* Queue.offer(
+            harness.sdkMessages,
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001010", state: "start" }),
+          );
+          if (betweenTurns) {
+            yield* Queue.offer(
+              harness.sdkMessages,
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000001013",
+                result: "Launched.",
+              }),
+            );
+            yield* Queue.take(harness.terminalReceipts);
+          }
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_notification",
+              task_id: WORKFLOW_TASK_ID,
+              tool_use_id: WORKFLOW_TOOL_USE_ID,
+              status,
+              output_file: "/tmp/workflow.output",
+              summary: "Workflow finished.",
+              uuid: "00000000-0000-4000-8000-000000001011",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          if (betweenTurns) {
+            yield* Queue.take(harness.continuationReceipts);
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now,
+                attemptId: RunAttemptId.make("attempt-workflow-terminal-wake"),
+                text: "Workflow finished.",
+                attachments: [],
+                providerTurnOrdinal: 2,
+                messageCreatedBy: "agent",
+                messageCreationSource: "provider",
+              }),
+            );
+          }
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000001012",
+              result: "Finished.",
+            }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          const expected = status === "stopped" ? "cancelled" : status;
+          for (const index of [1, 2]) {
+            const updates = workflowMemberEvents(harness.events, index);
+            const member = updates.at(-1)?.subagent;
+            assert.equal(member?.status, expected);
+            assert.deepEqual(member?.startedAt, updates[0]?.subagent.startedAt);
+            const root = harness.events.findLast(
+              (event) =>
+                event.type === "node.updated" && event.node.threadId === member?.childThreadId,
+            );
+            assert.equal(root?.type === "node.updated" ? root.node.status : null, expected);
+          }
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
   );
 
   it.effect("answers settled workflow members from a transcript, or the snapshot excerpt", () =>

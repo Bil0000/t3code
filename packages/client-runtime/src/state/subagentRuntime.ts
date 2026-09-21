@@ -755,6 +755,8 @@ function isoFromEpochMillis(value: number | undefined): string | null {
  */
 function workflowMembersToRuntime(input: {
   readonly coordinatorId: string;
+  readonly coordinatorStatus: RuntimeSubagent["status"];
+  readonly coordinatorCompletedAt: string | null;
   readonly workflow: OrchestrationV2SubagentWorkflow;
   readonly runHandles: SubagentRunHandles | null;
   readonly fallbackSeenAt: string;
@@ -762,14 +764,21 @@ function workflowMembersToRuntime(input: {
   const workflowName = input.workflow.name ?? null;
   return input.workflow.agents.map((agent) => {
     // Every member state but queued is already a runtime status.
-    const status = agent.state === "queued" ? "pending" : agent.state;
+    const status =
+      (agent.state === "queued" || agent.state === "running") &&
+      isTerminalSubagentStatus(input.coordinatorStatus)
+        ? input.coordinatorStatus
+        : agent.state === "queued"
+          ? "pending"
+          : agent.state;
     const failed = status === "failed";
     const startedAt = isoFromEpochMillis(agent.startedAt);
     // The provider reports a settled member's duration, not its end instant.
-    const completedAt =
-      isTerminalSubagentStatus(status) && agent.startedAt !== undefined
-        ? isoFromEpochMillis(agent.startedAt + (agent.durationMs ?? 0))
-        : null;
+    const completedAt = isTerminalSubagentStatus(status)
+      ? agent.startedAt !== undefined && agent.durationMs !== undefined
+        ? isoFromEpochMillis(agent.startedAt + agent.durationMs)
+        : input.coordinatorCompletedAt
+      : null;
     return {
       id: `${input.coordinatorId}:agent:${agent.index}`,
       kind: "workflow_agent" as const,
@@ -877,6 +886,8 @@ export function projectedSubagentsToRuntime(
           coordinator,
           ...workflowMembersToRuntime({
             coordinatorId: subagent.id,
+            coordinatorStatus: coordinator.status,
+            coordinatorCompletedAt: coordinator.completedAt,
             workflow,
             runHandles,
             fallbackSeenAt: firstSeenAt,

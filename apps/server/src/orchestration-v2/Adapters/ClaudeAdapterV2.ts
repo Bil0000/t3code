@@ -3512,7 +3512,10 @@ export function makeClaudeAdapterV2(
             const previous = seen.get(memberKey);
             // Every member state but queued is already a subagent status, and a
             // queued member is work in flight as far as the projection cares.
-            const status = member.state === "queued" ? "running" : member.state;
+            const status =
+              member.state === "queued" || member.state === "running"
+                ? input.coordinator.task.status
+                : member.state;
             const settled = status !== "running";
             const awaitingTranscript = settled && previous?.answeredFromTranscript !== true;
             if (previous?.status === status && !awaitingTranscript) continue;
@@ -3905,7 +3908,10 @@ export function makeClaudeAdapterV2(
               title: subagentThreadTitle({
                 parentTitle: input.context.input.appThread.title,
                 prompt: task.prompt,
-                title: task.title,
+                title:
+                  workflowWithThreads === undefined
+                    ? task.title
+                    : `Workflow · ${workflowWithThreads.name ?? task.title ?? "Untitled"}`,
                 ordinal: input.context.subagentsByTaskId.size,
               }),
               now,
@@ -4828,7 +4834,12 @@ export function makeClaudeAdapterV2(
           if (message.type !== "system" || message.subtype !== "task_progress") return;
           const taskId = message.task_id;
           const registered = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
-          if (registered === undefined || registered.task.workflow === undefined) return;
+          if (
+            registered === undefined ||
+            registered.task.workflow === undefined ||
+            registered.task.status !== "running"
+          )
+            return;
           const workflow = mergeClaudeWorkflowProgress({
             previous: registered.task.workflow,
             message,
