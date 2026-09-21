@@ -164,17 +164,23 @@ it.effect("does not retain failed or incomplete reads, and supports hosts withou
     yield* poll();
     yield* poll();
     expect(reads).toBe(4);
-    unavailable = true;
-    yield* poll();
-    expect(reads).toBe(5);
-    unavailable = false;
+    yield* TestClock.adjust("5 minutes");
+    complete = false;
     yield* poll();
     yield* poll();
     expect(reads).toBe(6);
-    etags = false;
+    complete = true;
+    unavailable = true;
+    yield* poll();
+    expect(reads).toBe(7);
+    unavailable = false;
     yield* poll();
     yield* poll();
     expect(reads).toBe(8);
+    etags = false;
+    yield* poll();
+    yield* poll();
+    expect(reads).toBe(10);
   }),
 );
 

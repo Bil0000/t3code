@@ -140,8 +140,10 @@ export const makeChecksRevalidator = Effect.gen(function* () {
             state: fresh.state,
             checks: fresh.checks,
           };
-          if (fresh.workflowApprovalsRequired !== undefined && fresh.headSha === head.head.sha)
-            entry.value = value;
+          entry.value =
+            fresh.workflowApprovalsRequired !== undefined && fresh.headSha === head.head.sha
+              ? value
+              : null;
           entry.readAt = now;
           return value;
         }),
