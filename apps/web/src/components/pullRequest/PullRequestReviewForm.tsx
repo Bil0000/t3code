@@ -12,6 +12,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { Button } from "../ui/button";
+import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import {
@@ -62,6 +63,7 @@ export function PullRequestReviewForm({
   onSubmitted: () => void;
 }) {
   const [pending, setPending] = useState(false);
+  const [requestedVerdict, setRequestedVerdict] = useState<PullRequestReviewVerdict>("comment");
   const comments = usePendingReviewComments(reference);
   const reviewKey = pullRequestReviewKey(reference);
   // The panel stays mounted while the selected pull request changes. Keeping summaries beside
@@ -76,6 +78,8 @@ export function PullRequestReviewForm({
   });
 
   const offered = VERDICTS.filter((verdict) => verdicts.includes(verdict.value));
+  const selectedVerdict =
+    offered.find((verdict) => verdict.value === requestedVerdict) ?? offered[0];
 
   const submit = async (verdict: (typeof VERDICTS)[number]) => {
     if (pending) return;
@@ -118,7 +122,7 @@ export function PullRequestReviewForm({
     <>
       <Textarea
         ref={textareaRef}
-        size="sm"
+        rows={3}
         className="[&_textarea]:max-h-64"
         value={body}
         placeholder={
@@ -129,21 +133,40 @@ export function PullRequestReviewForm({
         aria-label="Review summary"
         onChange={(event) => setSummary(reviewKey, event.target.value)}
       />
-      <div className="mt-2 flex flex-wrap justify-end gap-2">
-        {offered.map((verdict) => (
-          <Button
-            key={verdict.value}
-            size="xs"
-            variant={verdict.value === "comment" ? "outline" : "default"}
-            disabled={pending || !canSubmit(verdict.value)}
-            onClick={() => void submit(verdict)}
-          >
+      <div className="mt-2 flex justify-between gap-2">
+        <Select
+          value={selectedVerdict?.value ?? null}
+          disabled={pending}
+          onValueChange={(value) => {
+            if (value !== null) setRequestedVerdict(value);
+          }}
+        >
+          <SelectTrigger size="xs" className="w-auto min-w-0" aria-label="Review verdict">
             <span className="flex items-center gap-1.5">
-              {verdict.icon}
-              {verdict.label}
+              {selectedVerdict?.icon}
+              {selectedVerdict?.label}
             </span>
-          </Button>
-        ))}
+          </SelectTrigger>
+          <SelectPopup side="top" alignItemWithTrigger={false}>
+            {offered.map((verdict) => (
+              <SelectItem key={verdict.value} value={verdict.value}>
+                <span className="flex items-center gap-1.5">
+                  {verdict.icon}
+                  {verdict.label}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <Button
+          size="xs"
+          disabled={pending || selectedVerdict === undefined || !canSubmit(selectedVerdict.value)}
+          onClick={() => {
+            if (selectedVerdict !== undefined) void submit(selectedVerdict);
+          }}
+        >
+          {pending ? "Submitting..." : "Submit review"}
+        </Button>
       </div>
     </>
   );
