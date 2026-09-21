@@ -187,7 +187,7 @@ import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/Atta
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
-import { readContainedWorkflowFile } from "./orchestration/workflowFileRead.ts";
+import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
@@ -1774,11 +1774,7 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
-            readContainedWorkflowFile({
-              path: input.scriptPath,
-              extension: ".js",
-              byteCap: 256 * 1024,
-            }).pipe(Effect.map(({ path, ...rest }) => ({ scriptPath: path, ...rest }))),
+            readWorkflowScript({ scriptPath: input.scriptPath }),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: (input) =>

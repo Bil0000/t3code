@@ -6,10 +6,7 @@ import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { afterAll, assert, describe } from "vite-plus/test";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
-import { readContainedWorkflowFile } from "./workflowFileRead.ts";
-
-const readWorkflowScript = (input: { readonly scriptPath: string }) =>
-  readContainedWorkflowFile({ path: input.scriptPath, extension: ".js", byteCap: 256 * 1024 });
+import { readWorkflowScript } from "./workflowScriptQuery.ts";
 
 const root = NodePath.join(NodeOS.homedir(), ".claude", "projects", "__wf_script_test__");
 NodeFS.mkdirSync(root, { recursive: true });
@@ -50,6 +47,11 @@ describe("workflow script containment", () => {
         readWorkflowScript({ scriptPath: scriptPath.replace(".js", ".ts") }),
       );
       assert.equal(nonJs._tag, "Failure");
+      const error = yield* Effect.flip(readWorkflowScript({ scriptPath: "run.js" }));
+      assert.equal(error._tag, "OrchestrationGetWorkflowScriptError");
+      assert.equal(error.scriptPath, "run.js");
+      assert.equal(error.reason, "invalid-path");
+      assert.equal(error.message, "Workflow scripts must be absolute .js paths.");
     }),
   );
 
