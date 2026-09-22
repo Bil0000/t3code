@@ -3,6 +3,7 @@ import type {
   OrchestrationProjectShell,
   ServerProvider,
   ProviderDriverKind,
+  ProviderInstanceId,
 } from "@t3tools/contracts";
 import { fileBasename } from "@t3tools/client-runtime/markdown-links";
 import {
@@ -30,6 +31,7 @@ import { cn } from "~/lib/utils";
 export function SubagentTooltipContent(props: {
   title: string;
   model: string | null;
+  providerInstanceId: ProviderInstanceId;
   provider?: ServerProvider | undefined;
   driver?: ProviderDriverKind | undefined;
   elapsed?: ReactNode;
@@ -57,8 +59,7 @@ export function SubagentTooltipContent(props: {
       ) ?? childSelection?.model.trim())
     : childSelection?.model.trim();
   const effort =
-    childModel === (modelSlug ?? model) &&
-    (!props.provider || childSelection?.instanceId === props.provider.instanceId)
+    childModel === (modelSlug ?? model) && childSelection?.instanceId === props.providerInstanceId
       ? ["reasoningEffort", "effort", "reasoning", "variant"]
           .map((id) => getModelSelectionStringOptionValue(childSelection, id))
           .find(Boolean)
