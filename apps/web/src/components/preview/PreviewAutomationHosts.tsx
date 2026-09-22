@@ -844,7 +844,11 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
       const reportKey = JSON.stringify(input);
       if (lastFocusReportRef.current === reportKey) return;
       lastFocusReportRef.current = reportKey;
-      void focusAutomationHost({ environmentId, input });
+      void focusAutomationHost({ environmentId, input }).then((result) => {
+        if (result._tag === "Failure" && lastFocusReportRef.current === reportKey) {
+          lastFocusReportRef.current = null;
+        }
+      });
     };
     report();
     window.addEventListener("focus", report);

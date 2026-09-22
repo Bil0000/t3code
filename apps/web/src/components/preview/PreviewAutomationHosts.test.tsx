@@ -8,6 +8,8 @@ import {
   type PreviewOpenInput,
   type PreviewSessionSnapshot,
 } from "@t3tools/contracts";
+import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
@@ -38,7 +40,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<
       (target: { environmentId: EnvironmentId; input: PreviewAutomationResponse }) => Promise<void>
     >(),
-  focus: vi.fn(async () => undefined),
+  focus: vi.fn<() => Promise<AtomCommandResult<void, Error>>>(),
 }));
 
 vi.mock("~/localApi", () => ({
@@ -117,6 +119,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocks.getClientSettings.mockReset().mockResolvedValue(savedSettings);
   mocks.respond.mockReset();
+  mocks.focus.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   __resetClientSettingsPersistenceForTests();
   resetPreviewStateForTests();
   useBrowserSurfaceStore.setState({ byTabId: {} });
@@ -296,6 +299,42 @@ describe("PreviewAutomationHosts ownership", () => {
       expect.objectContaining({ input: expect.objectContaining({ liveTabs: [] }) }),
     );
   });
+
+  it.each([false, true])(
+    "retries failed reports without clearing newer connection reports (reconnect: %s)",
+    async (reconnect) => {
+      const report = deferred<Awaited<ReturnType<typeof mocks.focus>>>();
+      mocks.focus.mockReturnValueOnce(report.promise);
+      await act(() => {
+        appAtomRegistry.set(
+          requestsAtom,
+          AsyncResult.success({ type: "connected", connectionId: "first" }),
+        );
+      });
+      if (reconnect) {
+        await act(() => {
+          appAtomRegistry.set(
+            requestsAtom,
+            AsyncResult.success({ type: "connected", connectionId: "second" }),
+          );
+        });
+      }
+      await act(async () => {
+        report.resolve(AsyncResult.failure(Cause.fail(new Error("Focus report failed"))));
+        await report.promise;
+      });
+      expect(mocks.focus).toHaveBeenCalledTimes(reconnect ? 2 : 1);
+      await act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(mocks.focus).toHaveBeenCalledTimes(2);
+      expect(mocks.focus).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          input: expect.objectContaining({ connectionId: reconnect ? "second" : "first" }),
+        }),
+      );
+    },
+  );
 
   it("does not claim an available runtime from a server snapshot alone", async () => {
     const response = deferred<PreviewAutomationResponse>();
