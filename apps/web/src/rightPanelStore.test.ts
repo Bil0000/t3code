@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
@@ -21,6 +21,76 @@ beforeEach(() => {
 });
 
 describe("rightPanelStore", () => {
+  it("restores closed file, diff, and pull request tabs in each thread after persistence", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "files");
+    store.open(refA, "diff");
+    const pr = pullRequestSurface({
+      projectId: "project-a",
+      repository: "pingdotgg/t3code",
+      number: 42,
+    });
+    store.openPullRequest(refA, pr);
+    store.closeSurface(refA, "files");
+    store.closeSurface(refA, "diff");
+    store.closeSurface(refA, pr.id);
+    store.open(refB, "agents");
+    expect(store.reopenClosed(refB)).toBeNull();
+
+    const persisted = JSON.parse(
+      JSON.stringify({ byThreadKey: useRightPanelStore.getState().byThreadKey }),
+    );
+    useRightPanelStore.setState(migratePersistedRightPanelState(persisted));
+    expect(store.reopenClosed(refA)).toMatchObject({ kind: "pull-request", number: 42 });
+    expect(store.reopenClosed(refA)).toMatchObject({ id: "diff" });
+    expect(store.reopenClosed(refA)).toMatchObject({ id: "files" });
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.kind)).toEqual([
+      "pull-request",
+      "diff",
+      "files",
+    ]);
+    expect(state.activeSurfaceId).toBe("files");
+    expect(store.reopenClosed(refA)).toBeNull();
+  });
+
+  it("skips tabs that were opened again before the restore shortcut", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "files");
+    store.open(refA, "diff");
+    store.closeSurface(refA, "files");
+    store.closeSurface(refA, "diff");
+    store.open(refA, "diff");
+    expect(store.reopenClosed(refA)).toMatchObject({ id: "files" });
+    expect(store.reopenClosed(refA)).toBeNull();
+  });
+
+  it("does not restore closed sessions", () => {
+    const store = useRightPanelStore.getState();
+    store.openBrowser(refA, "tab-1");
+    store.closeSurface(refA, "browser:tab-1");
+    expect(store.reopenClosed(refA)).toBeNull();
+  });
+
+  it("restores a file path and rejects invalid saved file tabs", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "src/app.ts");
+    store.closeSurface(refA, "file:src/app.ts");
+    expect(store.reopenClosed(refA)).toMatchObject({ relativePath: "src/app.ts" });
+
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: {
+        [scopedThreadKey(refA)]: {
+          isOpen: false,
+          activeSurfaceId: null,
+          surfaces: [],
+          closedSurfaces: [{ id: "file:bad", kind: "file" }],
+        },
+      },
+    });
+    expect(selectThreadRightPanelState(migrated.byThreadKey, refA).closedSurfaces).toEqual([]);
+  });
+
   it("gives each host/device its own tab and preserves renamed tabs", () => {
     const store = useRightPanelStore.getState();
     const android = {

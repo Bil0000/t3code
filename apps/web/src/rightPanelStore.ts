@@ -93,6 +93,7 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
 // v12 adds the device surface.
 const RIGHT_PANEL_STORAGE_VERSION = 13;
+const CLOSED_SURFACE_HISTORY_LIMIT = 20;
 
 /** A fixed workspace-level ref: each PR surface carries its own real environment. */
 export const PULL_REQUESTS_PANEL_REF = scopeThreadRef(
@@ -110,6 +111,7 @@ export interface ThreadRightPanelState {
   isOpen: boolean;
   activeSurfaceId: string | null;
   surfaces: RightPanelSurface[];
+  closedSurfaces?: RightPanelSurface[];
   dismissedDeviceSurfaceIds?: string[];
 }
 
@@ -158,6 +160,7 @@ interface RightPanelStoreState {
   closeTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   activateSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeSurface: (ref: ScopedThreadRef, surfaceId: string) => void;
+  reopenClosed: (ref: ScopedThreadRef) => RightPanelSurface | null;
   closeOtherSurfaces: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeSurfacesToRight: (ref: ScopedThreadRef, surfaceId: string) => void;
   closeAllSurfaces: (ref: ScopedThreadRef) => void;
@@ -272,6 +275,7 @@ const upsertSurface = (
   surface: RightPanelSurface,
   activate = true,
 ): ThreadRightPanelState => ({
+  ...(current.closedSurfaces ? { closedSurfaces: current.closedSurfaces } : {}),
   isOpen: true,
   surfaces: current.surfaces.some((entry) => entry.id === surface.id)
     ? current.surfaces
@@ -290,7 +294,8 @@ const updateThread = (
     !next.isOpen &&
     next.activeSurfaceId === null &&
     next.surfaces.length === 0 &&
-    !next.dismissedDeviceSurfaceIds?.length
+    !next.dismissedDeviceSurfaceIds?.length &&
+    !next.closedSurfaces?.length
   ) {
     if (!(threadKey in byThreadKey)) return byThreadKey;
     const { [threadKey]: _removed, ...rest } = byThreadKey;
@@ -460,6 +465,30 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                   isOpen,
                   surfaces,
                   activeSurfaceId,
+                  ...(Array.isArray(validThreadState?.closedSurfaces)
+                    ? {
+                        closedSurfaces: validThreadState.closedSurfaces
+                          .filter(
+                            (surface) =>
+                              surface &&
+                              typeof surface.id === "string" &&
+                              (surface.kind === "file"
+                                ? typeof surface.relativePath === "string" &&
+                                  (surface.id.startsWith("file:") ||
+                                    surface.id.startsWith("attachment:")) &&
+                                  typeof surface.revealRequestId === "number"
+                                : surface.kind === "pull-request"
+                                  ? typeof surface.projectId === "string" &&
+                                    typeof surface.repository === "string" &&
+                                    Number.isSafeInteger(surface.number) &&
+                                    surface.number > 0 &&
+                                    surface.id.startsWith("pull-request:")
+                                  : surface.id === surface.kind &&
+                                    ["files", "diff", "pull-requests"].includes(surface.kind)),
+                          )
+                          .slice(-CLOSED_SURFACE_HISTORY_LIMIT),
+                      }
+                    : {}),
                   ...(Array.isArray(validThreadState?.dismissedDeviceSurfaceIds)
                     ? {
                         dismissedDeviceSurfaceIds:
@@ -596,6 +625,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               (existing?.revealRequestId ?? 0) + 1,
             );
             return {
+              ...(current.closedSurfaces ? { closedSurfaces: current.closedSurfaces } : {}),
               isOpen: true,
               activeSurfaceId: surface.id,
               surfaces: existing
@@ -711,18 +741,47 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
             if (index < 0) return current;
             const surfaces = current.surfaces.filter((surface) => surface.id !== surfaceId);
-            if (current.activeSurfaceId !== surfaceId) {
-              return { ...current, isOpen: surfaces.length > 0 && current.isOpen, surfaces };
-            }
-            const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
-            return {
+            const closed = current.surfaces[index]!;
+            const next = {
               ...current,
               isOpen: surfaces.length > 0 && current.isOpen,
               surfaces,
+              ...(["file", "files", "diff", "pull-request", "pull-requests"].includes(closed.kind)
+                ? {
+                    closedSurfaces: [...(current.closedSurfaces ?? []), closed].slice(
+                      -CLOSED_SURFACE_HISTORY_LIMIT,
+                    ),
+                  }
+                : {}),
+            };
+            if (current.activeSurfaceId !== surfaceId) {
+              return next;
+            }
+            const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
+            return {
+              ...next,
               activeSurfaceId: fallback?.id ?? null,
             };
           }),
         ),
+      reopenClosed: (ref) => {
+        const current = selectThreadRightPanelState(get().byThreadKey, ref);
+        const index =
+          current.closedSurfaces?.findLastIndex(
+            (entry) => !current.surfaces.some((surface) => surface.id === entry.id),
+          ) ?? -1;
+        const closed = current.closedSurfaces?.[index];
+        if (!closed) return null;
+        set((state) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
+            upsertSurface(
+              { ...current, closedSurfaces: current.closedSurfaces?.slice(0, index) ?? [] },
+              closed,
+            ),
+          ),
+        );
+        return closed;
+      },
       closeOtherSurfaces: (ref, surfaceId) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => {

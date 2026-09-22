@@ -6782,6 +6782,23 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "rightPanel.reopenClosed") {
+        if (!activeThreadRef) return;
+        const store = useRightPanelStore.getState();
+        const panel = selectThreadRightPanelState(store.byThreadKey, activeThreadRef);
+        if (
+          !panel.closedSurfaces?.some(
+            (entry) => !panel.surfaces.some((surface) => surface.id === entry.id),
+          )
+        )
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        if (store.reopenClosed(activeThreadRef)?.kind === "diff") onDiffPanelOpen?.();
+        return;
+      }
+
       if (command === "terminal.split") {
         event.preventDefault();
         event.stopPropagation();
@@ -6932,6 +6949,7 @@ export default function ChatView(props: ChatViewProps) {
     handleUnsettleActiveThread,
     isServerThread,
     onInterrupt,
+    onDiffPanelOpen,
     onToggleDiff,
     pinThread,
     settleThread,
