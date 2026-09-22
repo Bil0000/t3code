@@ -12,7 +12,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { nextTerminalId } from "@t3tools/shared/terminalLabels";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { ClosedView } from "./closedViewStore";
+import { useClosedViewStore, type ClosedView } from "./closedViewStore";
 import { __setClientSettingsForTests } from "./hooks/useSettings";
 import { readThreadPreviewState, resetPreviewStateForTests } from "./previewStateStore";
 import { reopenClosedView } from "./reopenClosedView";
@@ -37,6 +37,7 @@ const snapshot: PreviewSessionSnapshot = {
 beforeEach(() => {
   __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
   resetPreviewStateForTests();
+  useClosedViewStore.setState({ entries: [] });
   useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
   useTerminalUiStateStore.setState({
     terminalUiStateByThreadKey: {},
