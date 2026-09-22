@@ -836,7 +836,10 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
         environmentId,
         connectionId: automationConnectionId,
         focused: document.hasFocus() && document.visibilityState === "visible",
-        liveTabs,
+        liveTabs: liveTabs.map((tab) => ({
+          ...tab,
+          visible: tab.visible && document.visibilityState === "visible",
+        })),
       };
       const reportKey = JSON.stringify(input);
       if (lastFocusReportRef.current === reportKey) return;

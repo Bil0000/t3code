@@ -123,13 +123,14 @@ beforeEach(async () => {
   appAtomRegistry.set(requestsAtom, AsyncResult.initial(false));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
-  vi.stubGlobal("document", {
-    hasFocus: () => false,
-    visibilityState: "visible",
-    querySelectorAll: () => [],
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  });
+  vi.stubGlobal(
+    "document",
+    Object.assign(new EventTarget(), {
+      hasFocus: () => false,
+      visibilityState: "visible",
+      querySelectorAll: () => [],
+    }),
+  );
   await act(() => {
     renderer = create(
       <AppAtomRegistryProvider>
@@ -260,6 +261,20 @@ describe("PreviewAutomationHosts ownership", () => {
         }),
       }),
     );
+    for (const visibilityState of ["hidden", "visible"]) {
+      await act(() => {
+        Object.assign(document, { visibilityState });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(mocks.focus).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          input: expect.objectContaining({
+            focused: false,
+            liveTabs: [{ threadId, tabId: snapshot.tabId, visible: visibilityState === "visible" }],
+          }),
+        }),
+      );
+    }
     await act(() => {
       appAtomRegistry.set(
         requestsAtom,
