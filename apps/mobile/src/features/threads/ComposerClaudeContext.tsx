@@ -46,9 +46,14 @@ function SectionRow(props: { readonly section: ClaudeContextSection }) {
           {section.rows.map((row) => (
             <View key={row.join("|")} className="flex-row items-center gap-3">
               <Text selectable className="flex-1 text-xs text-foreground-secondary">
-                {row.slice(0, -1).join(" · ")}
+                {row
+                  .slice(0, -1)
+                  .map((cell, index) => `${section.columns[index]}: ${cell}`)
+                  .join(" · ")}
               </Text>
-              <Text className="text-xs tabular-nums text-foreground-muted">{row.at(-1)}</Text>
+              <Text className="text-xs tabular-nums text-foreground-muted">
+                {section.columns.at(-1)}: {row.at(-1)}
+              </Text>
             </View>
           ))}
         </View>
