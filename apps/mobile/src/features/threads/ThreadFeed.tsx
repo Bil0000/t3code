@@ -793,6 +793,7 @@ function ThreadContextReportRow(props: {
   const [expanded, setExpanded] = useState(false);
   return (
     <ThreadReasoningRow
+      accessibilityHint={`Double tap to ${expanded ? "hide" : "show"} the context report.`}
       rowSizing={props.rowSizing}
       iconSubtleColor={props.iconSubtleColor}
       expanded={expanded}
