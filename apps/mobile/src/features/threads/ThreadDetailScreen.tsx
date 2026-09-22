@@ -499,9 +499,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       ),
     [selectedThreadFeed],
   );
-  const [dismissedContextReportId, setDismissedContextReportId] = useState<string | null>(null);
+  const [dismissedContextReportIds, setDismissedContextReportIds] = useState<
+    Record<string, string>
+  >({});
   const contextReport =
-    latestContextReport !== null && latestContextReport.id !== dismissedContextReportId
+    latestContextReport !== null &&
+    latestContextReport.id !== dismissedContextReportIds[selectedThreadKey]
       ? latestContextReport
       : null;
   // A send may resolve after navigating away, so only the originating
@@ -1008,7 +1011,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   >
                     <ComposerClaudeContext
                       report={contextReport.report}
-                      onClose={() => setDismissedContextReportId(contextReport.id)}
+                      onClose={() =>
+                        setDismissedContextReportIds((current) => ({
+                          ...current,
+                          [selectedThreadKey]: contextReport.id,
+                        }))
+                      }
                     />
                   </Animated.View>
                 ) : null}

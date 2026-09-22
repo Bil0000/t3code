@@ -6517,17 +6517,24 @@ export default function ChatView(props: ChatViewProps) {
     () => latestClaudeContextReport(activeThread?.messages ?? []),
     [activeThread?.messages],
   );
-  const [dismissedContextReportId, setDismissedContextReportId] = useState<string | null>(null);
+  const [dismissedContextReportIds, setDismissedContextReportIds] = useState<
+    Record<string, string>
+  >({});
   const claudeContextBanner = useMemo(
     () =>
-      latestContextReport !== null && latestContextReport.id !== dismissedContextReportId
+      latestContextReport !== null &&
+      latestContextReport.id !== dismissedContextReportIds[routeThreadKey]
         ? claudeContextBannerItem(
             `claude-context:${latestContextReport.id}`,
             latestContextReport.report,
-            () => setDismissedContextReportId(latestContextReport.id),
+            () =>
+              setDismissedContextReportIds((current) => ({
+                ...current,
+                [routeThreadKey]: latestContextReport.id,
+              })),
           )
         : null,
-    [dismissedContextReportId, latestContextReport],
+    [dismissedContextReportIds, latestContextReport, routeThreadKey],
   );
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const claudeContextItems = claudeContextBanner === null ? [] : [claudeContextBanner];
