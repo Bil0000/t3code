@@ -2,7 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   claudeContextUsedCategories,
+  formatClaudeContextHeadline,
   formatClaudeContextTokens,
+  latestClaudeContextReport,
   parseClaudeContextReport,
   parseClaudeContextTokens,
 } from "./claudeContextReport.ts";
@@ -143,6 +145,31 @@ describe("parseClaudeContextReport", () => {
     ],
   ])("returns null for %s", (_label, text) => {
     expect(parseClaudeContextReport(text)).toBeNull();
+  });
+});
+
+describe("latestClaudeContextReport", () => {
+  const message = (id: string, text: string, role = "assistant", streaming = false) => ({
+    id,
+    role,
+    text,
+    streaming,
+  });
+
+  it("returns the newest settled assistant report and skips the rest", () => {
+    const latest = latestClaudeContextReport([
+      message("m1", REPORT),
+      message("m2", "plain answer"),
+      message("m3", REPORT.replace("79.5k", "90k")),
+      message("m4", REPORT, "user"),
+      message("m5", REPORT, "assistant", true),
+    ]);
+    expect(latest?.id).toBe("m3");
+    expect(formatClaudeContextHeadline(latest!.report)).toBe("90k / 200k (40%)");
+  });
+
+  it("returns null without a parseable report", () => {
+    expect(latestClaudeContextReport([message("m1", "## Context Usage\nbroken")])).toBeNull();
   });
 });
 

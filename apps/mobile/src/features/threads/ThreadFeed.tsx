@@ -42,11 +42,13 @@ import {
   splitCodexArtifactTemplateMarkdown,
 } from "@t3tools/client-runtime/codex-markdown-directives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
-import { parseClaudeContextReport } from "@t3tools/shared/claudeContextReport";
+import {
+  formatClaudeContextHeadline,
+  parseClaudeContextReport,
+} from "@t3tools/shared/claudeContextReport";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
-import { ClaudeContextCard } from "./ClaudeContextCard";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
@@ -1699,7 +1701,10 @@ function renderFeedEntry(
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
         {contextReport ? (
-          <ClaudeContextCard report={contextReport} chevronColor={iconSubtleColor} />
+          <Text className="text-sm text-foreground-secondary">
+            Context window: {formatClaudeContextHeadline(contextReport)}. Details are above the
+            composer.
+          </Text>
         ) : renderedText.trim().length > 0 ? (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent

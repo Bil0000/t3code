@@ -1,0 +1,165 @@
+import {
+  claudeContextSegmentColor,
+  claudeContextUsedCategories,
+  formatClaudeContextHeadline,
+  formatClaudeContextPercent,
+  formatClaudeContextTokens,
+  type ClaudeContextReport,
+  type ClaudeContextSection,
+} from "@t3tools/shared/claudeContextReport";
+import { useState } from "react";
+import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
+
+import { SymbolView } from "../../components/AppSymbol";
+import { AppText as Text } from "../../components/AppText";
+
+function SectionRow(props: { readonly section: ClaudeContextSection }) {
+  const [open, setOpen] = useState(false);
+  const { section } = props;
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={section.title}
+        onPress={() => setOpen((value) => !value)}
+        className="min-h-11 flex-row items-center gap-2"
+      >
+        <SymbolView
+          name={open ? "chevron.down" : "chevron.right"}
+          size={13}
+          tintColorClassName="accent-icon-subtle"
+          type="monochrome"
+        />
+        <Text className="flex-1 text-sm text-foreground" numberOfLines={1}>
+          {section.title}
+        </Text>
+        <Text className="text-xs tabular-nums text-foreground-muted">
+          {section.totalTokens !== null
+            ? `${formatClaudeContextTokens(section.totalTokens)} · `
+            : ""}
+          {section.rows.length}
+        </Text>
+      </Pressable>
+      {open ? (
+        <View className="mb-2 ml-5 gap-1">
+          {section.rows.map((row) => (
+            <View key={row.join("|")} className="flex-row items-center gap-3">
+              <Text selectable className="flex-1 text-xs text-foreground-secondary">
+                {row.slice(0, -1).join(" · ")}
+              </Text>
+              <Text className="text-xs tabular-nums text-foreground-muted">{row.at(-1)}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+export function ComposerClaudeContext(props: {
+  readonly report: ClaudeContextReport;
+  readonly onClose: () => void;
+}) {
+  const { report } = props;
+  const { height } = useWindowDimensions();
+  const used = claudeContextUsedCategories(report);
+
+  return (
+    <View className="overflow-hidden rounded-[20px] border-continuous bg-card">
+      <ScrollView
+        bounces={false}
+        showsVerticalScrollIndicator={false}
+        style={{ maxHeight: Math.round(height * 0.4) }}
+        contentContainerClassName="gap-2.5 px-4 py-3"
+      >
+        <View className="flex-row items-center gap-3">
+          <View className="min-w-0 flex-1 gap-0.5">
+            <Text className="text-base text-foreground" numberOfLines={1}>
+              Context window
+            </Text>
+            <Text className="text-xs tabular-nums text-foreground-muted" numberOfLines={1}>
+              {report.model ? `${report.model} · ` : ""}
+              {formatClaudeContextHeadline(report)}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityLabel="Dismiss context window"
+            accessibilityRole="button"
+            hitSlop={12}
+            onPress={props.onClose}
+            className="-me-1 p-1 active:opacity-60"
+          >
+            <SymbolView
+              name="xmark"
+              size={14}
+              tintColorClassName="accent-icon-muted"
+              type="monochrome"
+            />
+          </Pressable>
+        </View>
+        <View className="h-2 flex-row overflow-hidden rounded-full bg-subtle">
+          {used.length > 0 ? (
+            used.map((category, index) => (
+              <View
+                key={category.name}
+                className="h-full"
+                style={{
+                  width: `${Math.min(100, category.percent)}%`,
+                  backgroundColor: claudeContextSegmentColor(index, used.length),
+                }}
+              />
+            ))
+          ) : (
+            <View
+              className="h-full bg-foreground"
+              style={{ width: `${Math.min(100, report.usedPercent)}%` }}
+            />
+          )}
+        </View>
+        {report.overLimit ? (
+          <Text className="text-xs text-danger-foreground">Over limit: {report.overLimit}</Text>
+        ) : null}
+        {report.categories.length > 0 ? (
+          <View className="gap-1">
+            {report.categories.map((category) => {
+              const usedIndex = used.indexOf(category);
+              return (
+                <View key={category.name} className="flex-row items-center gap-2">
+                  <View
+                    className={
+                      usedIndex === -1
+                        ? "size-2 rounded-full bg-subtle-strong"
+                        : "size-2 rounded-full"
+                    }
+                    style={
+                      usedIndex === -1
+                        ? undefined
+                        : { backgroundColor: claudeContextSegmentColor(usedIndex, used.length) }
+                    }
+                  />
+                  <Text className="flex-1 text-xs text-foreground" numberOfLines={1}>
+                    {category.name}
+                  </Text>
+                  <Text className="text-xs tabular-nums text-foreground-muted">
+                    {category.tokens}
+                  </Text>
+                  <Text className="min-w-10 text-right text-xs tabular-nums text-foreground-secondary">
+                    {formatClaudeContextPercent(category.percent)}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+        {report.sections.length > 0 ? (
+          <View className="border-t border-border-subtle pt-1">
+            {report.sections.map((section) => (
+              <SectionRow key={section.title} section={section} />
+            ))}
+          </View>
+        ) : null}
+      </ScrollView>
+    </View>
+  );
+}

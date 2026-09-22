@@ -10,7 +10,6 @@ import { ChevronRightIcon } from "lucide-react";
 import { memo, useState } from "react";
 
 import { cn } from "~/lib/utils";
-import { Badge } from "../ui/badge";
 
 function SectionRow({ section }: { section: ClaudeContextSection }) {
   const [open, setOpen] = useState(false);
@@ -19,7 +18,6 @@ function SectionRow({ section }: { section: ClaudeContextSection }) {
       <button
         type="button"
         aria-expanded={open}
-        data-scroll-anchor-ignore
         onClick={() => setOpen((value) => !value)}
         className="flex w-full cursor-pointer select-none items-center gap-1.5 rounded-md px-1 py-1 text-sm leading-relaxed hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
@@ -39,33 +37,31 @@ function SectionRow({ section }: { section: ClaudeContextSection }) {
         </span>
       </button>
       {open ? (
-        <div className="ms-5 mb-1 max-h-96 overflow-auto">
-          <table className="w-full text-xs">
-            <thead className="text-secondary-label">
-              <tr>
-                {section.columns.map((column) => (
-                  <th key={column} className="px-1 py-0.5 text-start font-medium last:text-end">
-                    {column}
-                  </th>
+        <table className="ms-5 mb-1 w-[calc(100%-1.25rem)] text-xs">
+          <thead className="text-secondary-label">
+            <tr>
+              {section.columns.map((column) => (
+                <th key={column} className="px-1 py-0.5 text-start font-medium last:text-end">
+                  {column}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="text-muted-foreground">
+            {section.rows.map((row) => (
+              <tr key={row.join("|")}>
+                {row.map((cell, cellIndex) => (
+                  <td
+                    key={section.columns[cellIndex]}
+                    className="px-1 py-0.5 tabular-nums [overflow-wrap:anywhere] last:text-end"
+                  >
+                    {cell}
+                  </td>
                 ))}
               </tr>
-            </thead>
-            <tbody className="text-muted-foreground">
-              {section.rows.map((row) => (
-                <tr key={row.join("|")}>
-                  {row.map((cell, cellIndex) => (
-                    <td
-                      key={section.columns[cellIndex]}
-                      className="px-1 py-0.5 tabular-nums [overflow-wrap:anywhere] last:text-end"
-                    >
-                      {cell}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       ) : null}
     </div>
   );
@@ -76,36 +72,12 @@ export const ClaudeContextCard = memo(function ClaudeContextCard({
 }: {
   report: ClaudeContextReport;
 }) {
-  const [open, setOpen] = useState(false);
   const used = claudeContextUsedCategories(report);
-  const overLimit = report.overLimit !== null || report.usedPercent > 100;
 
   return (
-    <div className="rounded-[20px] border border-border/80 bg-card/70 p-3 sm:p-4">
-      <button
-        type="button"
-        aria-expanded={open}
-        data-scroll-anchor-ignore
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full cursor-pointer select-none items-center gap-2 rounded-md text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
-      >
-        <Badge variant={overLimit ? "error" : "secondary"}>Context</Badge>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-          {report.model ?? "Context window"}
-        </span>
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {`${report.usedTokens} / ${report.maxTokens} (${formatClaudeContextPercent(report.usedPercent)})`}
-        </span>
-        <ChevronRightIcon
-          aria-hidden="true"
-          className={cn(
-            "size-4 shrink-0 text-icon-muted transition-transform",
-            open && "rotate-90",
-          )}
-        />
-      </button>
+    <div className="flex flex-col gap-2">
       <div
-        className="mt-3 flex h-2 w-full overflow-hidden rounded-full bg-muted/60"
+        className="flex h-2 w-full overflow-hidden rounded-full bg-muted/60"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
@@ -131,44 +103,38 @@ export const ClaudeContextCard = memo(function ClaudeContextCard({
         )}
       </div>
       {report.overLimit ? (
-        <div className="mt-2 text-xs text-destructive-foreground">
-          Over limit: {report.overLimit}
-        </div>
+        <div className="text-xs text-destructive-foreground">Over limit: {report.overLimit}</div>
       ) : null}
-      {open ? (
-        <div className="mt-3 flex flex-col gap-2">
-          {report.categories.length > 0 ? (
-            <ul className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-x-3 gap-y-1 text-xs">
-              {report.categories.map((category) => {
-                const usedIndex = used.indexOf(category);
-                return (
-                  <li key={category.name} className="contents">
-                    <span
-                      aria-hidden="true"
-                      className={cn("size-2 rounded-full", usedIndex === -1 && "bg-muted")}
-                      style={
-                        usedIndex === -1
-                          ? undefined
-                          : { backgroundColor: claudeContextSegmentColor(usedIndex, used.length) }
-                      }
-                    />
-                    <span className="truncate text-foreground">{category.name}</span>
-                    <span className="text-muted-foreground tabular-nums">{category.tokens}</span>
-                    <span className="min-w-10 text-end text-secondary-label tabular-nums">
-                      {formatClaudeContextPercent(category.percent)}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : null}
-          {report.sections.length > 0 ? (
-            <div className="-mx-1 border-t border-border/60 pt-2">
-              {report.sections.map((section) => (
-                <SectionRow key={section.title} section={section} />
-              ))}
-            </div>
-          ) : null}
+      {report.categories.length > 0 ? (
+        <ul className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-x-3 gap-y-1 text-xs">
+          {report.categories.map((category) => {
+            const usedIndex = used.indexOf(category);
+            return (
+              <li key={category.name} className="contents">
+                <span
+                  aria-hidden="true"
+                  className={cn("size-2 rounded-full", usedIndex === -1 && "bg-muted")}
+                  style={
+                    usedIndex === -1
+                      ? undefined
+                      : { backgroundColor: claudeContextSegmentColor(usedIndex, used.length) }
+                  }
+                />
+                <span className="truncate text-foreground">{category.name}</span>
+                <span className="text-muted-foreground tabular-nums">{category.tokens}</span>
+                <span className="min-w-10 text-end text-secondary-label tabular-nums">
+                  {formatClaudeContextPercent(category.percent)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {report.sections.length > 0 ? (
+        <div className="-mx-1 border-t border-border/60 pt-1">
+          {report.sections.map((section) => (
+            <SectionRow key={section.title} section={section} />
+          ))}
         </div>
       ) : null}
     </div>

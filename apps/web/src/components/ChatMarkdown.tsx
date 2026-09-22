@@ -34,7 +34,10 @@ import type {
   ServerProviderSkill,
   ThreadPullRequestKey,
 } from "@t3tools/contracts";
-import { parseClaudeContextReport } from "@t3tools/shared/claudeContextReport";
+import {
+  formatClaudeContextHeadline,
+  parseClaudeContextReport,
+} from "@t3tools/shared/claudeContextReport";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
 import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
 import {
@@ -198,7 +201,6 @@ import {
 } from "../browser/openFileInPreview";
 import { resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
-import { ClaudeContextCard } from "./chat/ClaudeContextCard";
 
 interface ChatMarkdownProps {
   text: string;
@@ -3387,7 +3389,13 @@ function ChatMarkdownOrContextReport({ contextReportCard, ...props }: ChatMarkdo
     () => (contextReportCard && !props.isStreaming ? parseClaudeContextReport(props.text) : null),
     [contextReportCard, props.isStreaming, props.text],
   );
-  return report ? <ClaudeContextCard report={report} /> : <ChatMarkdown {...props} />;
+  return report ? (
+    <p className="text-sm leading-relaxed text-muted-foreground">
+      Context window: {formatClaudeContextHeadline(report)}. Details are above the composer.
+    </p>
+  ) : (
+    <ChatMarkdown {...props} />
+  );
 }
 
 export default memo(ChatMarkdownOrContextReport);
