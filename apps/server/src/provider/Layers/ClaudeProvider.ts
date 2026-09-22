@@ -572,7 +572,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         })
       : claudeUsageResponseToLimits({ response: capabilities.usage, checkedAt }).limits;
   const resetCredits =
-    resolveResetCredits && !usageLimits.unavailable && parsedVersion
+    resolveResetCredits &&
+    capabilities.subscriptionType &&
+    !usageLimits.unavailable &&
+    parsedVersion
       ? yield* resolveResetCredits(parsedVersion)
       : undefined;
   return buildServerProvider({

@@ -63,7 +63,7 @@ const ClaimResponse = Schema.Struct({
   ]),
 });
 
-export class ClaudeResetCreditError extends Data.TaggedError("ClaudeResetCreditError")<{
+class ClaudeResetCreditError extends Data.TaggedError("ClaudeResetCreditError")<{
   readonly detail: string;
   readonly cause?: unknown;
 }> {}
@@ -77,7 +77,7 @@ export function claudeResetCreditsToContract(
   if (Option.isNone(parsed) || !parsed.value.eligible) return undefined;
   const live = (parsed.value.grants ?? [])
     .flatMap((raw) => Option.toArray(decodeGrant(raw)))
-    .filter((grant) => !grant.paused && !(grant.ends_at && Date.parse(grant.ends_at) <= nowMs));
+    .filter((grant) => !grant.paused && !(grant.ends_at && !(Date.parse(grant.ends_at) > nowMs)));
   const next = live.find((grant) => grant.id === parsed.value.next_grant_id && grant.usable_now);
   const nextExpiresAt = next?.ends_at ? DateTime.make(next.ends_at) : Option.none();
   return {
