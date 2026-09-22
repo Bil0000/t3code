@@ -160,17 +160,23 @@ function LinkRow({
                   labelClassName="max-w-28"
                 />
               ) : null}
-              <Tooltip>
-                <TooltipTrigger
-                  render={<span className="max-w-[45%] shrink-0 truncate font-mono" />}
-                >
-                  {link.repository}
-                </TooltipTrigger>
-                <TooltipPopup>{link.repository}</TooltipPopup>
-              </Tooltip>
               {snapshot !== null ? (
-                <PullRequestRowBranches head={snapshot.headBranch} base={snapshot.baseBranch} />
-              ) : null}
+                <>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={<span className="min-w-0 max-w-32 truncate font-mono" />}
+                    >
+                      {link.repository}
+                    </TooltipTrigger>
+                    <TooltipPopup>{link.repository}</TooltipPopup>
+                  </Tooltip>
+                  <PullRequestRowBranches head={snapshot.headBranch} base={snapshot.baseBranch} />
+                </>
+              ) : (
+                <span className="truncate font-mono">
+                  {link.host}/{link.repository}
+                </span>
+              )}
             </>
           }
           updatedAt={snapshot?.updatedAt}
