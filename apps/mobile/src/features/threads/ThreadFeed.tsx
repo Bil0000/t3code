@@ -784,28 +784,6 @@ interface MarkdownLinkHandlers {
   readonly onFileContextMenuAction: (href: string, actionId: string) => void;
 }
 
-function ThreadContextReportRow(props: {
-  readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
-  readonly iconSubtleColor: ColorValue;
-  readonly label: string;
-  readonly children: ReactNode;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <ThreadReasoningRow
-      accessibilityHint={`Double tap to ${expanded ? "hide" : "show"} the context report.`}
-      rowSizing={props.rowSizing}
-      iconSubtleColor={props.iconSubtleColor}
-      expanded={expanded}
-      label={props.label}
-      streaming={false}
-      onToggle={() => setExpanded((value) => !value)}
-    >
-      {props.children}
-    </ThreadReasoningRow>
-  );
-}
-
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly markdown: string;
   readonly markdownStyles: MarkdownStyleSet;
@@ -1724,13 +1702,17 @@ function renderFeedEntry(
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
         {contextReport ? (
-          <ThreadContextReportRow
+          <ThreadReasoningRow
+            expanded={props.expandedReasoningMessageIds.has(entry.id)}
+            onToggle={() => props.onToggleReasoning(entry.id)}
+            accessibilityHint={`Double tap to ${props.expandedReasoningMessageIds.has(entry.id) ? "hide" : "show"} the context report.`}
+            streaming={false}
             rowSizing={props.workRowSizing}
             iconSubtleColor={iconSubtleColor}
             label={`Context window · ${contextReport.model ?? "Claude"} · ${formatClaudeContextHeadline(contextReport)}`}
           >
             <ClaudeContextCardBody report={contextReport} />
-          </ThreadContextReportRow>
+          </ThreadReasoningRow>
         ) : renderedText.trim().length > 0 ? (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent

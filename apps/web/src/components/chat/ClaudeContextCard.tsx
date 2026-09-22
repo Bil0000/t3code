@@ -142,14 +142,21 @@ export const ClaudeContextCard = memo(function ClaudeContextCard({
   );
 });
 
-export function ClaudeContextDisclosure({ report }: { report: ClaudeContextReport }) {
-  const [expanded, setExpanded] = useState(false);
+export function ClaudeContextDisclosure({
+  report,
+  expanded,
+  onToggle,
+}: {
+  report: ClaudeContextReport;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   return (
     <div className="flex flex-col">
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={onToggle}
         className="flex min-h-6 cursor-pointer select-none items-center gap-1.5 rounded-md px-0.5 text-start text-sm leading-relaxed transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <span className="flex size-6 shrink-0 items-center justify-center text-icon-muted">

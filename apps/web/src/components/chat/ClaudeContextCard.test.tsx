@@ -1,5 +1,5 @@
 import { parseClaudeContextReport } from "@t3tools/shared/claudeContextReport";
-import { act } from "react";
+import { act, useState } from "react";
 import { create, type ReactTestRendererNode } from "react-test-renderer";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -59,9 +59,19 @@ describe("ClaudeContextCard", () => {
 
   it("keeps the full report reachable from a collapsed timeline row", () => {
     const report = parseClaudeContextReport(REPORT)!;
+    function Report() {
+      const [expanded, setExpanded] = useState(false);
+      return (
+        <ClaudeContextDisclosure
+          report={report}
+          expanded={expanded}
+          onToggle={() => setExpanded(!expanded)}
+        />
+      );
+    }
     let renderer!: ReturnType<typeof create>;
     act(() => {
-      renderer = create(<ClaudeContextDisclosure report={report} />);
+      renderer = create(<Report />);
     });
 
     expect(textOf(renderer)).toContain("claude-sonnet-5 · 79.5k / 200k (40%)");

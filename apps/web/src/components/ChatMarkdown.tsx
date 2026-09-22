@@ -34,7 +34,6 @@ import type {
   ServerProviderSkill,
   ThreadPullRequestKey,
 } from "@t3tools/contracts";
-import { parseClaudeContextReport } from "@t3tools/shared/claudeContextReport";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
 import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
 import {
@@ -198,11 +197,9 @@ import {
 } from "../browser/openFileInPreview";
 import { resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
-import { ClaudeContextDisclosure } from "./chat/ClaudeContextCard";
 
 interface ChatMarkdownProps {
   text: string;
-  contextReportCard?: boolean | undefined;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
   /** Panel that receives pull request links, including the standalone PR view. */
@@ -3382,12 +3379,4 @@ function ChatMarkdown({
   );
 }
 
-function ChatMarkdownOrContextReport({ contextReportCard, ...props }: ChatMarkdownProps) {
-  const report = useMemo(
-    () => (contextReportCard && !props.isStreaming ? parseClaudeContextReport(props.text) : null),
-    [contextReportCard, props.isStreaming, props.text],
-  );
-  return report ? <ClaudeContextDisclosure report={report} /> : <ChatMarkdown {...props} />;
-}
-
-export default memo(ChatMarkdownOrContextReport);
+export default memo(ChatMarkdown);
