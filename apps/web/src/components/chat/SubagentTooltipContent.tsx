@@ -5,7 +5,11 @@ import type {
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import { fileBasename } from "@t3tools/client-runtime/markdown-links";
-import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
+import {
+  formatModelSlugName,
+  getModelSelectionStringOptionValue,
+  resolveSelectableModel,
+} from "@t3tools/shared/model";
 import { getTriggerDisplayModelName } from "./providerIconUtils";
 import type { ReactNode } from "react";
 import {
@@ -44,6 +48,21 @@ export function SubagentTooltipContent(props: {
     ? resolveSelectableModel(props.provider.driver, model, props.provider.models)
     : model;
   const providerModel = props.provider?.models.find((candidate) => candidate.slug === modelSlug);
+  const childSelection = props.childThread?.modelSelection;
+  const childModel = props.provider
+    ? (resolveSelectableModel(
+        props.provider.driver,
+        childSelection?.model,
+        props.provider.models,
+      ) ?? childSelection?.model.trim())
+    : childSelection?.model.trim();
+  const effort =
+    childModel === (modelSlug ?? model) &&
+    (!props.provider || childSelection?.instanceId === props.provider.instanceId)
+      ? ["reasoningEffort", "effort", "reasoning", "variant"]
+          .map((id) => getModelSelectionStringOptionValue(childSelection, id))
+          .find(Boolean)
+      : undefined;
   const modelLabel = providerModel
     ? getTriggerDisplayModelName(providerModel)
     : model
@@ -100,7 +119,10 @@ export function SubagentTooltipContent(props: {
         ) : (
           <BotIcon className="size-3 shrink-0" />
         )}
-        <span className="min-w-0 truncate text-foreground/75">{modelLabel}</span>
+        <span className="min-w-0 truncate text-foreground/75">
+          {modelLabel}
+          {effort ? ` · ${effort}` : null}
+        </span>
       </div>
       <div className="flex min-w-0 items-center justify-between gap-4">
         <span
