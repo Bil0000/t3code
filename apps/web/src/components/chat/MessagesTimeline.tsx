@@ -24,7 +24,7 @@ import {
   type ServerProvider,
   type ServerProviderSkill,
   type RunId,
-  type ThreadId,
+  ThreadId,
   type ToolActivityIcon,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -34,6 +34,7 @@ import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-mes
 import { Link } from "@tanstack/react-router";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { resolveT3McpToolSummaryAction } from "@t3tools/shared/t3McpToolPresentation";
 import {
   resolveWorkEntryToolPresentation,
   resolveViewedImageAsset,
@@ -3517,16 +3518,41 @@ function LiveActivityContent({
   );
 }
 
+function useThreadReadTarget(entry: TimelineWorkEntry, environmentId: EnvironmentId) {
+  const item = entry.structuredPayload;
+  const rawThreadId =
+    item?.type === "dynamic_tool" &&
+    resolveT3McpToolSummaryAction(item.toolName) === "thread-read" &&
+    item.input !== null &&
+    typeof item.input === "object" &&
+    "threadId" in item.input
+      ? item.input.threadId
+      : null;
+  const threadId =
+    typeof rawThreadId === "string" && rawThreadId.length > 0 ? ThreadId.make(rawThreadId) : null;
+  const title = useThreadShell(
+    threadId ? scopeThreadRef(environmentId, threadId) : null,
+  )?.title.trim();
+  return threadId === null
+    ? null
+    : { threadId, title, label: [title, threadId].filter(Boolean).join(" · ") };
+}
+
 function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "work-live" }> }) {
   const ctx = use(TimelineRowCtx);
   const label = liveWorkEntryLabel(row.entry, ctx.workspaceRoot, row.active);
+  const threadTarget = useThreadReadTarget(row.entry, ctx.activeThreadEnvironmentId);
   const failed = workEntryDisplayIndicatesToolFailure(row.entry);
 
   return (
     <button
       type="button"
       className="group/live-work flex min-h-6 w-full max-w-full cursor-pointer items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-      aria-label={failed ? `${label}, tool call failed` : undefined}
+      aria-label={
+        failed
+          ? `${label}${threadTarget ? `, ${threadTarget.label}` : ""}, tool call failed`
+          : undefined
+      }
       aria-expanded={row.expanded}
       onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
     >
@@ -3555,6 +3581,8 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
             >
               {row.entry.detail ?? label}
             </ReactMarkdown>
+          ) : threadTarget ? (
+            `${label} · ${threadTarget.label}`
           ) : (
             label
           )
@@ -4983,6 +5011,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const { workEntry, workspaceRoot, displayLabel } = props;
   const ctx = use(TimelineRowCtx);
   const { threadRef, onImageExpand, timestampFormat } = ctx;
+  const threadTarget = useThreadReadTarget(workEntry, ctx.activeThreadEnvironmentId);
   const createdThread =
     workEntry.projectedItem?.item.type === "thread_created"
       ? workEntry.projectedItem.item
@@ -5114,7 +5143,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       : workLogEntryIsToolLike(workEntry)
         ? "text-secondary-label"
         : "text-foreground/80";
-  const accessiblePreview = [previewText, answerPreview].filter(Boolean).join(": ");
+  const accessiblePreview = [previewText, threadTarget?.label, answerPreview]
+    .filter(Boolean)
+    .join(": ");
   const accessibleDisplayText = showFailedIndicator
     ? `${accessiblePreview}, tool call failed`
     : accessiblePreview;
@@ -5194,6 +5225,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               </span>
             ) : null}
           </p>
+          {threadTarget ? (
+            <span className="block truncate text-xs text-muted-foreground">
+              {threadTarget.title ? `${threadTarget.title} · ` : null}
+              <span className="font-mono">{threadTarget.threadId}</span>
+            </span>
+          ) : null}
         </div>
       }
       trailing={

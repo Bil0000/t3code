@@ -18,7 +18,23 @@ const activityTestState = vi.hoisted(() => ({
   expanded: false,
   expandedRuns: false,
   subagentTooltips: false,
+  threadTitle: null as string | null,
 }));
+
+vi.mock("../../state/entities", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../state/entities")>();
+  const { makeThreadFixture } = await import("../../test-fixtures");
+  return {
+    ...original,
+    useThreadShell: (ref: Parameters<typeof original.useThreadShell>[0]) =>
+      ref?.threadId === "thread-child" && activityTestState.threadTitle
+        ? makeThreadFixture({
+            id: ThreadId.make("thread-child"),
+            title: activityTestState.threadTitle,
+          })
+        : original.useThreadShell(ref),
+  };
+});
 
 // Expose tooltip contents in the renderer without requiring a browser portal.
 vi.mock("../ui/tooltip", async (importOriginal) => {
@@ -74,6 +90,7 @@ beforeEach(() => {
   activityTestState.subagentTooltips = false;
   activityTestState.expanded = false;
   activityTestState.expandedRuns = false;
+  activityTestState.threadTitle = null;
 });
 
 vi.mock("@legendapp/list/react", async () => {
@@ -2117,49 +2134,56 @@ describe("MessagesTimeline", () => {
       sourceItemId: item.id,
       item,
     } as const;
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={
-          [
-            {
-              id: "context-info-entry",
-              kind: "work",
-              createdAt: MESSAGE_CREATED_AT,
-              entry: {
-                id: "context-info",
+    const render = () =>
+      renderToStaticMarkup(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={
+            [
+              {
+                id: "context-info-entry",
+                kind: "work",
                 createdAt: MESSAGE_CREATED_AT,
-                label: "Session started",
-                tone: "info",
+                entry: {
+                  id: "context-info",
+                  createdAt: MESSAGE_CREATED_AT,
+                  label: "Session started",
+                  tone: "info",
+                },
               },
-            },
-            {
-              id: item.id,
-              kind: "work",
-              createdAt: MESSAGE_CREATED_AT,
-              entry: {
+              {
                 id: item.id,
+                kind: "work",
                 createdAt: MESSAGE_CREATED_AT,
-                runId: null,
-                label: item.toolName,
-                tone: "tool",
-                itemType: item.type,
-                toolTitle: item.toolName,
-                toolLifecycleStatus: "completed",
-                toolData: { input: item.input, output: item.output },
-                structuredPayload: item,
-                projectedItem,
+                entry: {
+                  id: item.id,
+                  createdAt: MESSAGE_CREATED_AT,
+                  runId: null,
+                  label: item.toolName,
+                  tone: "tool",
+                  itemType: item.type,
+                  toolTitle: item.toolName,
+                  toolLifecycleStatus: "completed",
+                  toolData: { input: item.input, output: item.output },
+                  structuredPayload: item,
+                  projectedItem,
+                },
               },
-            },
-          ] as never
-        }
-      />,
-    );
+            ] as never
+          }
+        />,
+      );
 
+    const markup = render();
     // The T3 wordmark replaces the generic tool icon for T3 MCP calls.
     expect(markup).toContain('viewBox="15.5309 37 94.3941 56.96"');
     expect(markup).toContain("Read a T3 thread");
+    expect(markup).toContain("thread-child");
     expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
+    activityTestState.threadTitle = "First title";
+    expect(render()).toContain('First title · <span class="font-mono">thread-child</span>');
+    activityTestState.threadTitle = "Renamed title";
+    expect(render()).toContain('Renamed title · <span class="font-mono">thread-child</span>');
   });
 
   it("formats changed file paths from the workspace root", async () => {
