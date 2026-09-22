@@ -1025,7 +1025,6 @@ function MarkdownCodeBlock({
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    data-run-shell-command=""
                     onClick={() => onRunShellCommand(command)}
                     aria-label="Run in terminal"
                   />
