@@ -275,7 +275,7 @@ const upsertSurface = (
   surface: RightPanelSurface,
   activate = true,
 ): ThreadRightPanelState => ({
-  ...(current.closedSurfaces ? { closedSurfaces: current.closedSurfaces } : {}),
+  ...current,
   isOpen: true,
   surfaces: current.surfaces.some((entry) => entry.id === surface.id)
     ? current.surfaces
@@ -625,7 +625,7 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               (existing?.revealRequestId ?? 0) + 1,
             );
             return {
-              ...(current.closedSurfaces ? { closedSurfaces: current.closedSurfaces } : {}),
+              ...current,
               isOpen: true,
               activeSurfaceId: surface.id,
               surfaces: existing

@@ -91,6 +91,31 @@ describe("rightPanelStore", () => {
     expect(selectThreadRightPanelState(migrated.byThreadKey, refA).closedSurfaces).toEqual([]);
   });
 
+  it.each(["reopenClosed", "openFile"] as const)(
+    "keeps a dismissed device hidden when %s opens a file tab",
+    (action) => {
+      const store = useRightPanelStore.getState();
+      const device = {
+        hostId: "nucbox",
+        deviceId: "emulator-5580",
+        name: "Pixel",
+        platform: "android",
+      } as const;
+      store.openFile(refA, "src/app.ts");
+      store.closeSurface(refA, "file:src/app.ts");
+      store.openDevice(refA, device);
+      store.closeSurface(refA, "device:nucbox:emulator-5580");
+
+      if (action === "reopenClosed") store.reopenClosed(refA);
+      else store.openFile(refA, "src/app.ts");
+      store.openDevice(refA, device, true);
+
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+      ).toEqual([expect.objectContaining({ id: "file:src/app.ts" })]);
+    },
+  );
+
   it("gives each host/device its own tab and preserves renamed tabs", () => {
     const store = useRightPanelStore.getState();
     const android = {

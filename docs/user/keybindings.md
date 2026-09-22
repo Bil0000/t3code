@@ -128,6 +128,10 @@ tab. When nothing remains to close, it closes the window. In a browser, `mod+w`
 closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
 shortcut such as `alt+w`.
 
+`mod+shift+t` reopens the last closed file, diff, or pull request tab in the current
+thread. Browsers also use this shortcut to reopen browser tabs; choose another
+binding in Settings if the browser takes it first.
+
 Many defaults include `!terminalFocus` so they do not intercept terminal input.
 Keep that condition when remapping them if you want the same behavior.
 
