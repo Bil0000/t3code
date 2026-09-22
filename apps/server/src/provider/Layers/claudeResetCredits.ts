@@ -13,7 +13,6 @@ import type {
   ServerProviderResetCredits,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -63,10 +62,37 @@ const ClaimResponse = Schema.Struct({
   ]),
 });
 
-class ClaudeResetCreditError extends Data.TaggedError("ClaudeResetCreditError")<{
-  readonly detail: string;
-  readonly cause?: unknown;
-}> {}
+const RESET_CREDIT_FAILURES = {
+  malformedCredit: "Claude returned a malformed reset credit.",
+  loginUnreadable: "Claude could not read its login.",
+  accountUnreadable: "Claude could not read its account.",
+  signedOut: "Sign in to Claude again to redeem resets.",
+  rateLimited: "Claude is rate limiting resets. Try again soon.",
+  coolingDown: "Claude resets are cooling down. Try again later.",
+  requestFailed: "Claude could not redeem the reset.",
+} as const;
+
+class ClaudeResetCreditError extends Schema.TaggedError<ClaudeResetCreditError>()(
+  "ClaudeResetCreditError",
+  {
+    reason: Schema.Literals(
+      Object.keys(RESET_CREDIT_FAILURES) as Array<keyof typeof RESET_CREDIT_FAILURES>,
+    ),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return RESET_CREDIT_FAILURES[this.reason];
+  }
+}
+
+/** Rejects unparseable and calendar-invalid timestamps such as February 30. */
+const isFutureTimestamp = (value: string, nowMs: number) => {
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  return (
+    Date.parse(value) > nowMs && Date.UTC(year!, month! - 1, day!) <= Date.UTC(year!, month!, 0)
+  );
+};
 
 /** Grants that are paused or past `ends_at` cannot be claimed and do not count. */
 export function claudeResetCreditsToContract(
@@ -77,7 +103,9 @@ export function claudeResetCreditsToContract(
   if (Option.isNone(parsed) || !parsed.value.eligible) return undefined;
   const live = (parsed.value.grants ?? [])
     .flatMap((raw) => Option.toArray(decodeGrant(raw)))
-    .filter((grant) => !grant.paused && !(grant.ends_at && !(Date.parse(grant.ends_at) > nowMs)));
+    .filter(
+      (grant) => !grant.paused && (!grant.ends_at || isFutureTimestamp(grant.ends_at, nowMs)),
+    );
   const next = live.find((grant) => grant.id === parsed.value.next_grant_id && grant.usable_now);
   const nextExpiresAt = next?.ends_at ? DateTime.make(next.ends_at) : Option.none();
   return {
@@ -168,23 +196,17 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   readonly requestId: string;
 }) {
   if (!GRANT_ID.test(input.grantId) || !REQUEST_ID.test(input.requestId)) {
-    return yield* new ClaudeResetCreditError({
-      detail: "Claude returned a malformed reset credit.",
-    });
+    return yield* new ClaudeResetCreditError({ reason: "malformedCredit" });
   }
-  const fail = (detail: string) => (cause: unknown) =>
-    new ClaudeResetCreditError({ detail, cause });
   const token = yield* readAccessToken(input.configDir).pipe(
-    Effect.mapError(fail("Claude could not read its login.")),
+    Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "loginUnreadable", cause })),
   );
   const config = yield* readJson(Config, input.accountConfigPath).pipe(
-    Effect.mapError(fail("Claude could not read its account.")),
+    Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "accountUnreadable", cause })),
   );
   const organization = config.oauthAccount?.organizationUuid?.trim();
   if (!token || !organization) {
-    return yield* new ClaudeResetCreditError({
-      detail: "Sign in to Claude again to redeem resets.",
-    });
+    return yield* new ClaudeResetCreditError({ reason: "signedOut" });
   }
   const client = yield* HttpClient.HttpClient;
   const response = yield* client
@@ -202,25 +224,21 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
     )
     .pipe(
       Effect.timeout("25 seconds"),
-      Effect.mapError(fail("Claude could not redeem the reset.")),
+      Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "requestFailed", cause })),
     );
   if (response.status === 429) {
-    return yield* new ClaudeResetCreditError({
-      detail: "Claude is rate limiting resets. Try again soon.",
-    });
+    return yield* new ClaudeResetCreditError({ reason: "rateLimited" });
   }
   if (response.status === 401 || response.status === 403) {
-    return yield* new ClaudeResetCreditError({
-      detail: "Sign in to Claude again to redeem resets.",
-    });
+    return yield* new ClaudeResetCreditError({ reason: "signedOut" });
   }
   const body = yield* HttpClientResponse.schemaBodyJson(ClaimResponse)(
     yield* HttpClientResponse.filterStatusOk(response),
-  ).pipe(Effect.mapError(fail("Claude could not redeem the reset.")));
+  ).pipe(
+    Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "requestFailed", cause })),
+  );
   if (body.result === "cooldown") {
-    return yield* new ClaudeResetCreditError({
-      detail: "Claude resets are cooling down. Try again later.",
-    });
+    return yield* new ClaudeResetCreditError({ reason: "coolingDown" });
   }
   return CLAIM_OUTCOMES[body.result];
 });
