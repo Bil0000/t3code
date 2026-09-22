@@ -337,6 +337,15 @@ it("shows readable models and only differing workspace details in agent tooltips
   ];
   await act(async () => renderer.update(cloneElement(panel)));
   expect(text()).not.toContain("My GPT ·");
+  const config = state.configs.get("test");
+  state.configs.clear();
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).toContain("GPT-5.4");
+  expect(text()).not.toContain("GPT-5.4 ·");
+  state.shells = [{ environmentId: "test", source: { ...child } }];
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).toContain("GPT-5.4 · high");
+  state.configs.set("test", config);
   for (const model of ["custom/model-v1", "custom/model-v2"]) {
     state.projection = {
       ...projection,

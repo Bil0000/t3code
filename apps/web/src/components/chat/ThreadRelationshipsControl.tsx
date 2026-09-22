@@ -348,6 +348,7 @@ export function ThreadRelationshipsPanel(props: {
                 <SubagentTooltipContent
                   title={threadTitle}
                   model={agent.model}
+                  providerInstanceId={agent.providerInstanceId}
                   provider={provider}
                   driver={providerDriver}
                   elapsed={<AgentElapsed agent={agent} />}
