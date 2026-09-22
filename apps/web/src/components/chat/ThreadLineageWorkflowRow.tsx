@@ -27,13 +27,18 @@ import {
  */
 function phaseElapsed(phase: AgentPanelWorkflowGroup["phases"][number]) {
   const instants = (key: "startedAt" | "completedAt") =>
-    phase.members.map((member) => member[key]).filter((value) => value !== null);
-  const started = instants("startedAt").sort();
-  const completed = instants("completedAt").sort();
+    phase.members
+      .map((member) => member[key])
+      .filter((value) => value !== null)
+      .sort();
+  const running = phase.state === "running";
+  const startedAt = instants("startedAt")[0] ?? null;
+  const completedAt = running ? null : (instants("completedAt").at(-1) ?? null);
   return {
-    status: phase.state === "running" ? ("running" as const) : ("completed" as const),
-    startedAt: started[0] ?? null,
-    completedAt: phase.state === "done" ? (completed.at(-1) ?? null) : null,
+    status: running ? ("running" as const) : ("completed" as const),
+    // A settled phase whose members never reported an end has no span to show.
+    startedAt: running || completedAt !== null ? startedAt : null,
+    completedAt,
   };
 }
 
@@ -153,7 +158,7 @@ export function ThreadLineageWorkflowRow({
             const open = openPhases.has(phase.index);
             const status = phaseStatus(phase);
             return (
-              <li key={phase.index} className="mt-2 first:mt-0">
+              <li key={phase.index} className="mt-1 first:mt-0">
                 {/* Chevron sits in the member glyph's box, so titles share a column. */}
                 <button
                   type="button"
@@ -166,7 +171,7 @@ export function ThreadLineageWorkflowRow({
                     })
                   }
                   className={cn(
-                    "flex h-7 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]",
+                    "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]",
                     phase.state === "running"
                       ? "bg-info/8 text-info"
                       : "text-muted-foreground/65 hover:text-foreground/80",
@@ -187,7 +192,7 @@ export function ThreadLineageWorkflowRow({
                   <span className="sr-only">{status.label}</span>
                 </button>
                 {open ? (
-                  <ul className="m-0 list-none p-0">
+                  <ul className="m-0 mt-0.5 list-none p-0">
                     {phase.members.map((member) => (
                       <WorkflowMemberRow
                         key={member.id}
