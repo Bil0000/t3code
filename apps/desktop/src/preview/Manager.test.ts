@@ -265,24 +265,26 @@ const fileSystemLayer = FileSystem.layerNoop({
     }),
 });
 
-const layer = PreviewManager.layer.pipe(
-  Layer.provideMerge(browserSessionLayer),
-  Layer.provideMerge(environmentLayer),
-  Layer.provideMerge(fileSystemLayer),
-  Layer.provideMerge(Path.layer),
-  Layer.provideMerge(Layer.succeed(HostProcessPlatform, "darwin")),
-);
+const managerLayer = (platform: NodeJS.Platform = "darwin") =>
+  PreviewManager.layer.pipe(
+    Layer.provideMerge(browserSessionLayer),
+    Layer.provideMerge(environmentLayer),
+    Layer.provideMerge(fileSystemLayer),
+    Layer.provideMerge(Path.layer),
+    Layer.provideMerge(Layer.succeed(HostProcessPlatform, platform)),
+  );
 const encodePreviewManagerError = Schema.encodeSync(PreviewManager.PreviewManagerError);
 
 const withManager = <A>(
   use: (
     manager: PreviewManager.PreviewManager["Service"],
   ) => Effect.Effect<A, PreviewManager.PreviewManagerError, Scope.Scope>,
+  platform: NodeJS.Platform = "darwin",
 ) =>
   Effect.gen(function* () {
     const manager = yield* PreviewManager.PreviewManager;
     return yield* use(manager);
-  }).pipe(Effect.provide(layer), Effect.scoped);
+  }).pipe(Effect.provide(managerLayer(platform)), Effect.scoped);
 
 interface TestCapturedPreviewImage {
   readonly toJPEG: () => Buffer;
@@ -669,36 +671,47 @@ describe("PreviewManager", () => {
       ),
   );
 
-  effectIt.effect("does not intercept ambiguous AltGraph input in the focused guest", () =>
-    withManager((manager) =>
-      Effect.gen(function* () {
-        const preview = makeFaviconWebContents();
-        const send = vi.fn();
-        Object.assign(preview.webContents, {
-          hostWebContents: { isDestroyed: () => false, send },
-        });
-        fromId.mockReturnValue(preview.webContents);
-        getFocusedWebContents.mockReturnValue(preview.webContents as never);
-        yield* manager.createTab("tab_alt_graph");
-        yield* manager.registerWebview("tab_alt_graph", 42);
-        yield* manager.setReopenClosedShortcuts([parseKeybindingShortcut("ctrl+alt+[")!]);
-        const preventDefault = vi.fn();
-        preview.listeners.get("before-input-event")!(
-          { preventDefault } as never,
-          {
-            type: "keyDown",
-            key: "[",
-            code: "BracketLeft",
-            meta: false,
-            control: true,
-            shift: false,
-            alt: true,
-          } as never,
-        );
-        expect(preventDefault).not.toHaveBeenCalled();
-        expect(send).not.toHaveBeenCalled();
-      }),
-    ),
+  effectIt.effect.each([
+    ["linux", "ctrl+alt+[", "[", "BracketLeft", false],
+    ["win32", "ctrl+alt+8", "[", "Digit8", false],
+    ["win32", "ctrl+alt+k", "K", "KeyK", false],
+    ["linux", "ctrl+alt+`", "Dead", "Backquote", false],
+    ["darwin", "ctrl+alt+[", "[", "BracketLeft", true],
+    ["linux", "ctrl+alt+f7", "F7", "F7", true],
+  ] as const)(
+    "handles ambiguous preview chords on %s: %s",
+    ([platform, chord, key, code, expected]) =>
+      withManager(
+        (manager) =>
+          Effect.gen(function* () {
+            const preview = makeFaviconWebContents();
+            const send = vi.fn();
+            Object.assign(preview.webContents, {
+              hostWebContents: { isDestroyed: () => false, send },
+            });
+            fromId.mockReturnValue(preview.webContents);
+            getFocusedWebContents.mockReturnValue(preview.webContents as never);
+            yield* manager.createTab("tab_alt_graph");
+            yield* manager.registerWebview("tab_alt_graph", 42);
+            yield* manager.setReopenClosedShortcuts([parseKeybindingShortcut(chord)!]);
+            const preventDefault = vi.fn();
+            preview.listeners.get("before-input-event")!(
+              { preventDefault } as never,
+              {
+                type: "keyDown",
+                key,
+                code,
+                meta: false,
+                control: true,
+                shift: false,
+                alt: true,
+              } as never,
+            );
+            expect(preventDefault).toHaveBeenCalledTimes(expected ? 1 : 0);
+            expect(send).toHaveBeenCalledTimes(expected ? 1 : 0);
+          }),
+        platform,
+      ),
   );
 
   effectIt.effect("preserves focused browser editing in tabs and sign-in popups", () =>
