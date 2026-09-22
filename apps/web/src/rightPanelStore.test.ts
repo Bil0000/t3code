@@ -1,7 +1,8 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
+import { useClosedViewStore } from "./closedViewStore";
 import {
   migratePersistedRightPanelState,
   pullRequestSurface,
@@ -17,11 +18,16 @@ const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"))
 const refB = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-B"));
 
 beforeEach(() => {
-  useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
+  useClosedViewStore.setState({ entries: [] });
+  useRightPanelStore.setState({
+    byThreadKey: {},
+    userActionRevisionByThreadKey: {},
+    closeRevisionByThreadKey: {},
+  });
 });
 
 describe("rightPanelStore", () => {
-  it("restores closed file, diff, and pull request tabs in each thread after persistence", () => {
+  it("records closed file, diff, and pull request tabs in a shared newest-first history", () => {
     const store = useRightPanelStore.getState();
     store.open(refA, "files");
     store.open(refA, "diff");
@@ -35,86 +41,111 @@ describe("rightPanelStore", () => {
     store.closeSurface(refA, "diff");
     store.closeSurface(refA, pr.id);
     store.open(refB, "agents");
-    expect(store.reopenClosed(refB)).toBeNull();
 
-    const persisted = JSON.parse(
-      JSON.stringify({ byThreadKey: useRightPanelStore.getState().byThreadKey }),
-    );
-    useRightPanelStore.setState(migratePersistedRightPanelState(persisted));
-    expect(store.reopenClosed(refA)).toMatchObject({ kind: "pull-request", number: 42 });
-    expect(store.reopenClosed(refA)).toMatchObject({ id: "diff" });
-    expect(store.reopenClosed(refA)).toMatchObject({ id: "files" });
-    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
-    expect(state.surfaces.map((surface) => surface.kind)).toEqual([
-      "pull-request",
-      "diff",
-      "files",
+    expect(useClosedViewStore.getState().entries).toMatchObject([
+      { kind: "panel-tab", threadRef: refA, surface: { kind: "pull-request", number: 42 } },
+      { kind: "panel-tab", threadRef: refA, surface: { id: "diff" } },
+      { kind: "panel-tab", threadRef: refA, surface: { id: "files" } },
     ]);
-    expect(state.activeSurfaceId).toBe("files");
-    expect(store.reopenClosed(refA)).toBeNull();
   });
 
-  it("skips tabs that were opened again before the restore shortcut", () => {
+  it("records bulk close commands and does not record incidental tab replacements", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "files");
+    store.openFile(refA, "src/app.ts");
+    expect(useClosedViewStore.getState().entries).toEqual([]);
+    store.open(refA, "diff");
+    store.open(refA, "agents");
+    store.closeSurfacesToRight(refA, "file:src/app.ts");
+    expect(
+      useClosedViewStore
+        .getState()
+        .entries.map((entry) => (entry.kind === "panel-tab" ? entry.surface.id : null)),
+    ).toEqual(["agents", "diff"]);
+    store.open(refA, "agents");
+    store.closeOtherSurfaces(refA, "agents");
+    expect(useClosedViewStore.getState().entries[0]).toMatchObject({
+      kind: "panel-tab",
+      surface: { id: "file:src/app.ts" },
+    });
+    store.closeAllSurfaces(refA);
+    expect(useClosedViewStore.getState().entries[0]).toMatchObject({
+      kind: "panel-tab",
+      surface: { id: "agents" },
+    });
+  });
+
+  it("reopens the active tab first after a bulk close", () => {
     const store = useRightPanelStore.getState();
     store.open(refA, "files");
     store.open(refA, "diff");
-    store.closeSurface(refA, "files");
-    store.closeSurface(refA, "diff");
-    store.open(refA, "diff");
-    expect(store.reopenClosed(refA)).toMatchObject({ id: "files" });
-    expect(store.reopenClosed(refA)).toBeNull();
+    store.open(refA, "agents");
+    store.activateSurface(refA, "diff");
+    store.closeAllSurfaces(refA);
+
+    expect(
+      useClosedViewStore
+        .getState()
+        .entries.map((entry) => entry.kind === "panel-tab" && entry.surface.id),
+    ).toEqual(["diff", "agents", "files"]);
   });
 
-  it("does not restore closed sessions", () => {
+  it("does not save an incidental Files replacement when opening an existing file", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "src/app.ts");
+    store.open(refA, "files");
+    store.openFile(refA, "src/app.ts");
+
+    expect(useClosedViewStore.getState().entries).toEqual([]);
+  });
+
+  it("ignores session tabs without browser snapshots and records the empty browser tab", () => {
     const store = useRightPanelStore.getState();
     store.openBrowser(refA, "tab-1");
     store.closeSurface(refA, "browser:tab-1");
-    expect(store.reopenClosed(refA)).toBeNull();
+    expect(useClosedViewStore.getState().entries).toEqual([]);
+    store.openBrowser(refA, null);
+    store.closeSurface(refA, "browser:new");
+    expect(useClosedViewStore.getState().entries).toMatchObject([
+      { kind: "panel-tab", surface: { id: "browser:new", resourceId: null } },
+    ]);
   });
 
-  it("restores a file path and rejects invalid saved file tabs", () => {
+  it("keeps a dismissed device hidden after another file opens", () => {
     const store = useRightPanelStore.getState();
+    const device = {
+      hostId: "nucbox",
+      deviceId: "emulator-5580",
+      name: "Pixel",
+      platform: "android",
+    } as const;
     store.openFile(refA, "src/app.ts");
     store.closeSurface(refA, "file:src/app.ts");
-    expect(store.reopenClosed(refA)).toMatchObject({ relativePath: "src/app.ts" });
+    store.openDevice(refA, device);
+    store.closeSurface(refA, "device:nucbox:emulator-5580");
 
-    const migrated = migratePersistedRightPanelState({
-      byThreadKey: {
-        [scopedThreadKey(refA)]: {
-          isOpen: false,
-          activeSurfaceId: null,
-          surfaces: [],
-          closedSurfaces: [{ id: "file:bad", kind: "file" }],
-        },
-      },
-    });
-    expect(selectThreadRightPanelState(migrated.byThreadKey, refA).closedSurfaces).toEqual([]);
+    store.openFile(refA, "src/app.ts");
+    store.openDevice(refA, device, true);
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([expect.objectContaining({ id: "file:src/app.ts" })]);
   });
 
-  it.each(["reopenClosed", "openFile"] as const)(
-    "keeps a dismissed device hidden when %s opens a file tab",
-    (action) => {
-      const store = useRightPanelStore.getState();
-      const device = {
-        hostId: "nucbox",
-        deviceId: "emulator-5580",
-        name: "Pixel",
-        platform: "android",
-      } as const;
-      store.openFile(refA, "src/app.ts");
-      store.closeSurface(refA, "file:src/app.ts");
-      store.openDevice(refA, device);
-      store.closeSurface(refA, "device:nucbox:emulator-5580");
-
-      if (action === "reopenClosed") store.reopenClosed(refA);
-      else store.openFile(refA, "src/app.ts");
-      store.openDevice(refA, device, true);
-
-      expect(
-        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
-      ).toEqual([expect.objectContaining({ id: "file:src/app.ts" })]);
-    },
-  );
+  it("records a hidden panel once and does not double-record its last closed tab", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.close(refA);
+    expect(useClosedViewStore.getState().entries).toMatchObject([
+      { kind: "panel", threadRef: refA },
+    ]);
+    store.show(refA);
+    store.closeSurface(refA, "diff");
+    expect(useClosedViewStore.getState().entries).toMatchObject([
+      { kind: "panel-tab", threadRef: refA, surface: { id: "diff" } },
+      { kind: "panel", threadRef: refA },
+    ]);
+  });
 
   it("gives each host/device its own tab and preserves renamed tabs", () => {
     const store = useRightPanelStore.getState();

@@ -6,6 +6,7 @@ import type {
   DesktopPreviewRecordingInputEvent,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -560,7 +561,7 @@ describe("PreviewManager", () => {
       Effect.gen(function* () {
         const preview = makeFaviconWebContents();
         const sendInputEvent = vi.fn();
-        const hostWebContents = { sendInputEvent };
+        const hostWebContents = { sendInputEvent, isDestroyed: () => false };
         Object.assign(preview.webContents, { hostWebContents });
         fromId.mockReturnValue(preview.webContents);
         getFocusedWebContents.mockReturnValue(preview.webContents as never);
@@ -612,6 +613,60 @@ describe("PreviewManager", () => {
         expect(sendInputEvent).not.toHaveBeenCalled();
       }),
     ),
+  );
+
+  effectIt.effect.each(["mod+shift+t", "ctrl+alt+u"])(
+    "forwards only the configured reopen chord from the focused guest: %s",
+    (chord) =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const preview = makeFaviconWebContents();
+          const send = vi.fn();
+          Object.assign(preview.webContents, {
+            hostWebContents: { isDestroyed: () => false, send },
+          });
+          fromId.mockReturnValue(preview.webContents);
+          getFocusedWebContents.mockReturnValue(preview.webContents as never);
+          yield* manager.createTab("tab_reopen");
+          yield* manager.registerWebview("tab_reopen", 42);
+          const shortcut = parseKeybindingShortcut(chord)!;
+          yield* manager.setReopenClosedShortcuts([shortcut]);
+          const beforeInput = preview.listeners.get("before-input-event")!;
+          const input = {
+            type: "keyDown",
+            key: shortcut.key.toUpperCase(),
+            meta: shortcut.metaKey || shortcut.modKey,
+            control: shortcut.ctrlKey,
+            shift: shortcut.shiftKey,
+            alt: shortcut.altKey,
+          };
+          const preventDefault = vi.fn();
+          beforeInput({ preventDefault } as never, input as never);
+          expect(preventDefault).toHaveBeenCalledOnce();
+          expect(send).toHaveBeenCalledExactlyOnceWith("desktop:menu-action", "reopen-closed");
+          for (const overrides of [
+            { isAutoRepeat: true },
+            { type: "keyUp" },
+            { shift: !input.shift },
+            { key: "x" },
+          ]) {
+            preventDefault.mockClear();
+            beforeInput({ preventDefault } as never, { ...input, ...overrides } as never);
+            expect(preventDefault).toHaveBeenCalledTimes("isAutoRepeat" in overrides ? 1 : 0);
+            expect(send).toHaveBeenCalledOnce();
+          }
+          getFocusedWebContents.mockReturnValue(null);
+          preventDefault.mockClear();
+          beforeInput({ preventDefault } as never, input as never);
+          expect(preventDefault).not.toHaveBeenCalled();
+          expect(send).toHaveBeenCalledOnce();
+          getFocusedWebContents.mockReturnValue(preview.webContents as never);
+          yield* manager.setReopenClosedShortcuts([]);
+          beforeInput({ preventDefault } as never, input as never);
+          expect(preventDefault).not.toHaveBeenCalled();
+          expect(send).toHaveBeenCalledOnce();
+        }),
+      ),
   );
 
   effectIt.effect("preserves focused browser editing in tabs and sign-in popups", () =>
@@ -4122,6 +4177,9 @@ describe("PreviewManager", () => {
   effectIt.effect("types in background webviews and enables native key input", () =>
     withManager((manager) =>
       Effect.gen(function* () {
+        let beforeInput: ((event: Electron.Event, input: Electron.Input) => void) | undefined;
+        const preventReopen = vi.fn();
+        const sendToHost = vi.fn();
         let failKeyDown = false;
         let routeToIframe = false;
         let interruptFrameKeyDown = false;
@@ -4207,6 +4265,18 @@ describe("PreviewManager", () => {
             }
           }
           if (input.type !== "keyDown") return;
+          beforeInput?.(
+            { preventDefault: preventReopen } as unknown as Electron.Event,
+            {
+              type: "keyDown",
+              key: signal.key,
+              code: signal.code,
+              meta: false,
+              control: false,
+              shift: false,
+              alt: false,
+            } as Electron.Input,
+          );
           if (failKeyDown) throw new Error("key dispatch failed");
           humanInput?.({}, signal);
         });
@@ -4232,7 +4302,10 @@ describe("PreviewManager", () => {
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
           isCurrentlyAudible: () => false,
-          on: vi.fn(),
+          hostWebContents: { isDestroyed: () => false, send: sendToHost },
+          on: vi.fn((name: string, listener: typeof beforeInput) => {
+            if (name === "before-input-event") beforeInput = listener;
+          }),
           off: vi.fn(),
           ipc: {
             on: vi.fn((channel: string, listener: typeof humanInput) => {
@@ -4389,6 +4462,34 @@ describe("PreviewManager", () => {
         }
         expect(focus).not.toHaveBeenCalled();
         expect(restoreFocus).not.toHaveBeenCalled();
+        routeToIframe = false;
+        getFocusedWebContents.mockReturnValue(fromId(42) as never);
+        yield* manager.setReopenClosedShortcuts([parseKeybindingShortcut("x")!]);
+        for (const fails of [false, true]) {
+          failKeyDown = fails;
+          sendToHost.mockClear();
+          preventReopen.mockClear();
+          const result = yield* Effect.exit(manager.automationPress("tab_input", { key: "x" }));
+          expect(Exit.isFailure(result)).toBe(fails);
+          expect(sendToHost).not.toHaveBeenCalled();
+          expect(preventReopen).not.toHaveBeenCalled();
+          beforeInput?.(
+            { preventDefault: preventReopen } as unknown as Electron.Event,
+            {
+              type: "keyDown",
+              key: "x",
+              meta: false,
+              control: false,
+              shift: false,
+              alt: false,
+            } as Electron.Input,
+          );
+          expect(preventReopen).toHaveBeenCalledOnce();
+          expect(sendToHost).toHaveBeenCalledExactlyOnceWith(
+            "desktop:menu-action",
+            "reopen-closed",
+          );
+        }
       }),
     ),
   );

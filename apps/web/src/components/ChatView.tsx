@@ -155,6 +155,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { useUiStateStore } from "../uiStateStore";
+import { useClosedViewStore } from "../closedViewStore";
 import {
   latestWorkspaceMutationId,
   useWorkspaceMutationRefresh,
@@ -1167,6 +1168,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
 
   const closeTerminal = useCallback(
     (terminalId: string) => {
+      useClosedViewStore.getState().remember({ kind: "terminal", threadRef, terminalId });
       const fallbackExitWrite = () =>
         writeTerminal({
           environmentId: threadRef.environmentId,
@@ -4030,6 +4032,18 @@ export default function ChatView(props: ChatViewProps) {
   const setTerminalOpen = useCallback(
     (open: boolean) => {
       if (!activeThreadRef) return;
+      if (
+        !open &&
+        selectThreadTerminalUiState(
+          useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+          activeThreadRef,
+        ).terminalOpen
+      ) {
+        useClosedViewStore.getState().remember({
+          kind: "terminal-drawer",
+          threadRef: activeThreadRef,
+        });
+      }
       storeSetTerminalOpen(activeThreadRef, open);
     },
     [activeThreadRef, storeSetTerminalOpen],
@@ -4159,6 +4173,11 @@ export default function ChatView(props: ChatViewProps) {
   const closeTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadId || !activeThreadRef) return;
+      useClosedViewStore.getState().remember({
+        kind: "terminal",
+        threadRef: activeThreadRef,
+        terminalId,
+      });
       const fallbackExitWrite = () =>
         writeTerminal({
           environmentId,
@@ -4967,6 +4986,17 @@ export default function ChatView(props: ChatViewProps) {
   const closePanelTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadRef || activeRightPanelSurface?.kind !== "terminal") return;
+      if (activeRightPanelSurface.terminalIds.length > 1) {
+        useClosedViewStore.getState().remember({
+          kind: "terminal",
+          threadRef: activeThreadRef,
+          terminalId,
+          panelSurfaceId: activeRightPanelSurface.id,
+          ...(activeRightPanelSurface.splitDirection === undefined
+            ? {}
+            : { splitDirection: activeRightPanelSurface.splitDirection }),
+        });
+      }
       void closeTerminalMutation({
         environmentId: activeThreadRef.environmentId,
         input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
@@ -5092,9 +5122,16 @@ export default function ChatView(props: ChatViewProps) {
   const finishRightPanelSurfaceClose = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
-      cleanupRightPanelSurfaces(surfaces);
       const store = useRightPanelStore.getState();
-      for (const surface of surfaces) {
+      const activeId = selectThreadRightPanelState(
+        store.byThreadKey,
+        activeThreadRef,
+      ).activeSurfaceId;
+      const ordered = surfaces.toSorted(
+        (left, right) => Number(left.id === activeId) - Number(right.id === activeId),
+      );
+      for (const surface of ordered) {
+        cleanupRightPanelSurfaces([surface]);
         store.closeSurface(activeThreadRef, surface.id);
       }
       syncActivePreviewSurface();
@@ -6782,23 +6819,6 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
-      if (command === "rightPanel.reopenClosed") {
-        if (!activeThreadRef) return;
-        const store = useRightPanelStore.getState();
-        const panel = selectThreadRightPanelState(store.byThreadKey, activeThreadRef);
-        if (
-          !panel.closedSurfaces?.some(
-            (entry) => !panel.surfaces.some((surface) => surface.id === entry.id),
-          )
-        )
-          return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.repeat) return;
-        if (store.reopenClosed(activeThreadRef)?.kind === "diff") onDiffPanelOpen?.();
-        return;
-      }
-
       if (command === "terminal.split") {
         event.preventDefault();
         event.stopPropagation();
@@ -6949,7 +6969,6 @@ export default function ChatView(props: ChatViewProps) {
     handleUnsettleActiveThread,
     isServerThread,
     onInterrupt,
-    onDiffPanelOpen,
     onToggleDiff,
     pinThread,
     settleThread,

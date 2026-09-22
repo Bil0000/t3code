@@ -277,6 +277,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     },
   },
   preview: {
+    setReopenClosedShortcuts: (shortcuts) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_REOPEN_CLOSED_SHORTCUTS_CHANNEL, shortcuts),
     createTab: (tabId, defaults) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {
         tabId,
