@@ -42,9 +42,11 @@ import {
   splitCodexArtifactTemplateMarkdown,
 } from "@t3tools/client-runtime/codex-markdown-directives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { parseClaudeContextReport } from "@t3tools/shared/claudeContextReport";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
+import { ClaudeContextCard } from "./ClaudeContextCard";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
@@ -1690,12 +1692,15 @@ function renderFeedEntry(
     // intrinsic width before the container is clamped, overlapping the
     // timestamp/copy button row. Pinning the width removes that pass.
     const enterAnimated = isFreshTimestamp(message.createdAt);
+    const contextReport = message.streaming ? null : parseClaudeContextReport(message.text);
     return (
       <Animated.View
         className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-1 px-1", hasWideBlock && "w-full")}
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
-        {renderedText.trim().length > 0 ? (
+        {contextReport ? (
+          <ClaudeContextCard report={contextReport} chevronColor={iconSubtleColor} />
+        ) : renderedText.trim().length > 0 ? (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
               markdown={renderedText}
