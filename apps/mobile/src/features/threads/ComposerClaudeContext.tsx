@@ -57,14 +57,82 @@ function SectionRow(props: { readonly section: ClaudeContextSection }) {
   );
 }
 
+export function ClaudeContextCardBody(props: { readonly report: ClaudeContextReport }) {
+  const { report } = props;
+  const used = claudeContextUsedCategories(report);
+  return (
+    <View className="gap-2.5">
+      <View className="h-2 flex-row overflow-hidden rounded-full bg-subtle">
+        {used.length > 0 ? (
+          used.map((category, index) => (
+            <View
+              key={category.name}
+              className="h-full"
+              style={{
+                width: `${Math.min(100, category.percent)}%`,
+                backgroundColor: claudeContextSegmentColor(index, used.length),
+              }}
+            />
+          ))
+        ) : (
+          <View
+            className="h-full bg-foreground"
+            style={{ width: `${Math.min(100, report.usedPercent)}%` }}
+          />
+        )}
+      </View>
+      {report.overLimit ? (
+        <Text className="text-xs text-danger-foreground">Over limit: {report.overLimit}</Text>
+      ) : null}
+      {report.categories.length > 0 ? (
+        <View className="gap-1">
+          {report.categories.map((category) => {
+            const usedIndex = used.indexOf(category);
+            return (
+              <View key={category.name} className="flex-row items-center gap-2">
+                <View
+                  className={
+                    usedIndex === -1
+                      ? "size-2 rounded-full bg-subtle-strong"
+                      : "size-2 rounded-full"
+                  }
+                  style={
+                    usedIndex === -1
+                      ? undefined
+                      : { backgroundColor: claudeContextSegmentColor(usedIndex, used.length) }
+                  }
+                />
+                <Text className="flex-1 text-xs text-foreground" numberOfLines={1}>
+                  {category.name}
+                </Text>
+                <Text className="text-xs tabular-nums text-foreground-muted">
+                  {category.tokens}
+                </Text>
+                <Text className="min-w-10 text-right text-xs tabular-nums text-foreground-secondary">
+                  {formatClaudeContextPercent(category.percent)}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+      {report.sections.length > 0 ? (
+        <View className="border-t border-border-subtle pt-1">
+          {report.sections.map((section) => (
+            <SectionRow key={section.title} section={section} />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 export function ComposerClaudeContext(props: {
   readonly report: ClaudeContextReport;
   readonly onClose: () => void;
 }) {
   const { report } = props;
   const { height } = useWindowDimensions();
-  const used = claudeContextUsedCategories(report);
-
   return (
     <View className="overflow-hidden rounded-[20px] border-continuous bg-card">
       <ScrollView
@@ -98,67 +166,7 @@ export function ComposerClaudeContext(props: {
             />
           </Pressable>
         </View>
-        <View className="h-2 flex-row overflow-hidden rounded-full bg-subtle">
-          {used.length > 0 ? (
-            used.map((category, index) => (
-              <View
-                key={category.name}
-                className="h-full"
-                style={{
-                  width: `${Math.min(100, category.percent)}%`,
-                  backgroundColor: claudeContextSegmentColor(index, used.length),
-                }}
-              />
-            ))
-          ) : (
-            <View
-              className="h-full bg-foreground"
-              style={{ width: `${Math.min(100, report.usedPercent)}%` }}
-            />
-          )}
-        </View>
-        {report.overLimit ? (
-          <Text className="text-xs text-danger-foreground">Over limit: {report.overLimit}</Text>
-        ) : null}
-        {report.categories.length > 0 ? (
-          <View className="gap-1">
-            {report.categories.map((category) => {
-              const usedIndex = used.indexOf(category);
-              return (
-                <View key={category.name} className="flex-row items-center gap-2">
-                  <View
-                    className={
-                      usedIndex === -1
-                        ? "size-2 rounded-full bg-subtle-strong"
-                        : "size-2 rounded-full"
-                    }
-                    style={
-                      usedIndex === -1
-                        ? undefined
-                        : { backgroundColor: claudeContextSegmentColor(usedIndex, used.length) }
-                    }
-                  />
-                  <Text className="flex-1 text-xs text-foreground" numberOfLines={1}>
-                    {category.name}
-                  </Text>
-                  <Text className="text-xs tabular-nums text-foreground-muted">
-                    {category.tokens}
-                  </Text>
-                  <Text className="min-w-10 text-right text-xs tabular-nums text-foreground-secondary">
-                    {formatClaudeContextPercent(category.percent)}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        ) : null}
-        {report.sections.length > 0 ? (
-          <View className="border-t border-border-subtle pt-1">
-            {report.sections.map((section) => (
-              <SectionRow key={section.title} section={section} />
-            ))}
-          </View>
-        ) : null}
+        <ClaudeContextCardBody report={report} />
       </ScrollView>
     </View>
   );

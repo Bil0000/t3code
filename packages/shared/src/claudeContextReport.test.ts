@@ -112,6 +112,10 @@ describe("parseClaudeContextReport", () => {
     });
   });
 
+  it("accepts leading whitespace before the heading", () => {
+    expect(parseClaudeContextReport(`\n  ${REPORT}`)).not.toBeNull();
+  });
+
   it("reads the over-limit line", () => {
     const report = parseClaudeContextReport(
       "## Context Usage\n\n**Model:** opus  \n**Tokens:** 210k / 200k (105%)\n**Over limit:** 10k tokens over!\n",

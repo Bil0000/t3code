@@ -3,7 +3,7 @@ import { act } from "react";
 import { create, type ReactTestRendererNode } from "react-test-renderer";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ClaudeContextCard } from "./ClaudeContextCard";
+import { ClaudeContextCard, ClaudeContextDisclosure } from "./ClaudeContextCard";
 
 const REPORT = `## Context Usage
 
@@ -55,5 +55,21 @@ describe("ClaudeContextCard", () => {
     const section = renderer.root.findByProps({ "aria-expanded": false });
     act(() => section.props.onClick());
     expect(textOf(renderer)).toContain("mcp__github__add_issue_comment");
+  });
+
+  it("keeps the full report reachable from a collapsed timeline row", () => {
+    const report = parseClaudeContextReport(REPORT)!;
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(<ClaudeContextDisclosure report={report} />);
+    });
+
+    expect(textOf(renderer)).toContain("claude-sonnet-5 · 79.5k / 200k (40%)");
+    expect(textOf(renderer)).not.toContain("System prompt");
+
+    const toggle = renderer.root.findByProps({ "aria-expanded": false });
+    act(() => toggle.props.onClick());
+    expect(textOf(renderer)).toContain("System prompt");
+    expect(textOf(renderer)).toContain("MCP Tools");
   });
 });

@@ -1,12 +1,13 @@
 import {
   claudeContextSegmentColor,
   claudeContextUsedCategories,
+  formatClaudeContextHeadline,
   formatClaudeContextPercent,
   formatClaudeContextTokens,
   type ClaudeContextReport,
   type ClaudeContextSection,
 } from "@t3tools/shared/claudeContextReport";
-import { ChevronRightIcon } from "lucide-react";
+import { ChartPieIcon, ChevronRightIcon } from "lucide-react";
 import { memo, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -140,3 +141,37 @@ export const ClaudeContextCard = memo(function ClaudeContextCard({
     </div>
   );
 });
+
+export function ClaudeContextDisclosure({ report }: { report: ClaudeContextReport }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="flex min-h-6 cursor-pointer select-none items-center gap-1.5 rounded-md px-0.5 text-start text-sm leading-relaxed transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+      >
+        <span className="flex size-6 shrink-0 items-center justify-center text-icon-muted">
+          <ChartPieIcon aria-hidden className="block size-4 shrink-0 stroke-[1.8] opacity-70" />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-secondary-label">
+          Context window · {report.model ?? "Claude"} · {formatClaudeContextHeadline(report)}
+        </span>
+        <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
+          <ChevronRightIcon
+            className={cn(
+              "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
+              expanded && "rotate-90",
+            )}
+          />
+        </span>
+      </button>
+      {expanded ? (
+        <div className="ms-7 px-0.5 py-1 select-text">
+          <ClaudeContextCard report={report} />
+        </div>
+      ) : null}
+    </div>
+  );
+}

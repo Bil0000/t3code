@@ -89,7 +89,7 @@ function sectionTotalTokens(table: Pick<ClaudeContextSection, "columns" | "rows"
 }
 
 export function parseClaudeContextReport(text: string): ClaudeContextReport | null {
-  if (!text.startsWith("## Context Usage")) return null;
+  if (!text.trimStart().startsWith("## Context Usage")) return null;
   const lines = text
     .split("\n")
     .map((line) => line.trim())
