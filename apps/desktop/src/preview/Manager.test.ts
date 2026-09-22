@@ -669,6 +669,38 @@ describe("PreviewManager", () => {
       ),
   );
 
+  effectIt.effect("does not intercept ambiguous AltGraph input in the focused guest", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        const send = vi.fn();
+        Object.assign(preview.webContents, {
+          hostWebContents: { isDestroyed: () => false, send },
+        });
+        fromId.mockReturnValue(preview.webContents);
+        getFocusedWebContents.mockReturnValue(preview.webContents as never);
+        yield* manager.createTab("tab_alt_graph");
+        yield* manager.registerWebview("tab_alt_graph", 42);
+        yield* manager.setReopenClosedShortcuts([parseKeybindingShortcut("ctrl+alt+[")!]);
+        const preventDefault = vi.fn();
+        preview.listeners.get("before-input-event")!(
+          { preventDefault } as never,
+          {
+            type: "keyDown",
+            key: "[",
+            code: "BracketLeft",
+            meta: false,
+            control: true,
+            shift: false,
+            alt: true,
+          } as never,
+        );
+        expect(preventDefault).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
   effectIt.effect("preserves focused browser editing in tabs and sign-in popups", () =>
     withManager((manager) =>
       Effect.gen(function* () {

@@ -2013,6 +2013,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         !host.isDestroyed() &&
         webContents.getFocusedWebContents() === wc &&
         !automationKeyboardTargets.has(wc.id) &&
+        !(input.control && input.alt && !/^[a-z0-9]$/i.test(input.key)) &&
         reopenClosedShortcuts.some((shortcut) =>
           matchesKeybindingShortcut(
             {
