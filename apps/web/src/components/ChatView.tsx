@@ -4309,6 +4309,22 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
+  const runShellCommand = useCallback(
+    (command: string) => {
+      void runProjectScript(
+        {
+          id: "chat-code-block",
+          name: "Chat code block",
+          command,
+          icon: "play",
+          runOnWorktreeCreate: false,
+        },
+        { rememberAsLastInvoked: false },
+      );
+    },
+    [runProjectScript],
+  );
+
   const supportsProjectSettingsOverrides =
     environmentById.get(environmentId)?.serverConfig?.environment.capabilities
       .projectSettingsOverrides === true;
@@ -9886,6 +9902,7 @@ export default function ChatView(props: ChatViewProps) {
                       agentPanelModel,
                       onOpenAgents: addAgentsSurface,
                       onUseArtifactTemplate: useArtifactTemplate,
+                      onRunShellCommand: runShellCommand,
                     }
                   : {})}
                 isWorking={!paintOnlyDisplayedTimeline && isWorking}

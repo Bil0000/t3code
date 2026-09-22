@@ -20,6 +20,7 @@ import {
   MessageSquareWarningIcon,
   Minimize2Icon,
   OctagonAlertIcon,
+  PlayIcon,
   PresentationIcon,
   SparklesIcon,
   TriangleAlertIcon,
@@ -214,6 +215,7 @@ interface ChatMarkdownProps {
   parseRawHtml?: boolean;
   /** Append a prompt that invokes a newly created artifact-template skill. */
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
+  onRunShellCommand?: ((command: string) => void) | undefined;
   /** Directory that anchors relative links and images; defaults to `cwd`. Set
       to the file's own directory when rendering a markdown file. */
   imageBaseDir?: string | undefined;
@@ -919,12 +921,16 @@ function MarkdownCodeBlock({
   language,
   fenceTitle,
   theme,
+  onRunShellCommand,
+  isStreaming,
   children,
 }: {
   code: string;
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
+  onRunShellCommand?: ((command: string) => void) | undefined;
+  isStreaming: boolean;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -932,6 +938,13 @@ function MarkdownCodeBlock({
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wrapLabel = wrapped ? "Disable line wrap" : "Wrap lines";
   const copyLabel = copied ? "Copied" : "Copy code";
+  const command = code.trim();
+  const canRun =
+    onRunShellCommand !== undefined &&
+    !isStreaming &&
+    /^(?:sh|bash|zsh|fish|shell|powershell|pwsh)$/.test(language) &&
+    command.length > 0 &&
+    !/\p{Cc}/u.test(command);
 
   const handleCopy = useCallback(() => {
     if (typeof navigator === "undefined" || navigator.clipboard == null) {
@@ -1004,6 +1017,25 @@ function MarkdownCodeBlock({
             </TooltipTrigger>
             <TooltipPopup side="top">{wrapLabel}</TooltipPopup>
           </Tooltip>
+          {canRun ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    data-run-shell-command=""
+                    onClick={() => onRunShellCommand(command)}
+                    aria-label="Run in terminal"
+                  />
+                }
+              >
+                <PlayIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Run in terminal</TooltipPopup>
+            </Tooltip>
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -2259,6 +2291,7 @@ function useChatMarkdownState({
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
   onUseArtifactTemplate,
+  onRunShellCommand,
   imageBaseDir,
   onImageExpand,
   renderContextReference,
@@ -2671,6 +2704,7 @@ function useChatMarkdownState({
       markdownFileLinkMetaByHref,
       onTaskListChange,
       onUseArtifactTemplate,
+      onRunShellCommand,
       openChangeRequestLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
@@ -2701,6 +2735,7 @@ function useChatMarkdownState({
       markdownFileLinkMetaByHref,
       onTaskListChange,
       onUseArtifactTemplate,
+      onRunShellCommand,
       openChangeRequestLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
@@ -3239,7 +3274,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, isStreaming } = use(ChatMarkdownRendererContext);
+    const { resolvedTheme, diffThemeName, isStreaming, onRunShellCommand } = use(
+      ChatMarkdownRendererContext,
+    );
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -3253,6 +3290,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
         language={language}
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
+        onRunShellCommand={onRunShellCommand}
+        isStreaming={isStreaming}
       >
         <RenderErrorBoundary
           resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}

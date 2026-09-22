@@ -1347,7 +1347,7 @@ html[data-theme-id] .chat-markdown .chat-markdown-codeblock pre {
 }
 
 html[data-theme-id] .chat-markdown .chat-markdown-codeblock-header,
-html[data-theme-id] .chat-markdown .chat-markdown-chrome-action {
+html[data-theme-id] .chat-markdown :is(.chat-markdown-chrome-action, [data-run-shell-command]) {
   color: color-mix(in srgb, var(--code-foreground) 72%, transparent);
 }
 
@@ -1373,7 +1373,9 @@ html[data-theme-id="t3-chat"] {
   }
 }
 
-html[data-theme-id] .chat-markdown .chat-markdown-chrome-action:hover,
+html[data-theme-id]
+  .chat-markdown
+  :is(.chat-markdown-chrome-action, [data-run-shell-command]):hover,
 html[data-theme-id] .chat-markdown .chat-markdown-chrome-action[aria-pressed="true"] {
   color: var(--code-foreground);
 }
@@ -1862,11 +1864,11 @@ code {
 }
 
 .chat-markdown .chat-markdown-codeblock-header,
-.chat-markdown .chat-markdown-chrome-action {
+.chat-markdown :is(.chat-markdown-chrome-action, [data-run-shell-command]) {
   color: color-mix(in srgb, var(--contrast-foreground) 72%, transparent);
 }
 
-.chat-markdown .chat-markdown-chrome-action:hover {
+.chat-markdown :is(.chat-markdown-chrome-action, [data-run-shell-command]):hover {
   color: var(--contrast-foreground);
 }
 
