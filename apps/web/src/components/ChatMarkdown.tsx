@@ -585,6 +585,21 @@ function extractPreCodeMeta(node: unknown): string | undefined {
   return typeof meta === "string" && meta.trim().length > 0 ? meta.trim() : undefined;
 }
 
+function isClosedCodeFence(node: ReactMarkdownExtraProps["node"], text: string): boolean {
+  const start = node?.position?.start.offset;
+  const end = node?.position?.end.offset;
+  if (start === undefined || end === undefined) return false;
+  const source = text.slice(start, end);
+  const opening = /^(?:`{3,}|~{3,})/.exec(source)?.[0];
+  const closing = /(?:^|\n)(?:[ \t]*>[ \t]*)*[ \t]*(`{3,}|~{3,})[ \t\r]*$/.exec(source)?.[1];
+  return (
+    opening !== undefined &&
+    closing !== undefined &&
+    opening[0] === closing[0] &&
+    closing.length >= opening.length
+  );
+}
+
 type MarkdownAstNode = {
   type?: string;
   meta?: unknown;
@@ -3273,7 +3288,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, isStreaming, onRunShellCommand } = use(
+    const { resolvedTheme, diffThemeName, isStreaming, onRunShellCommand, text } = use(
       ChatMarkdownRendererContext,
     );
     const codeBlock = extractCodeBlock(children);
@@ -3289,7 +3304,11 @@ const CHAT_MARKDOWN_COMPONENTS = {
         language={language}
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
-        onRunShellCommand={onRunShellCommand}
+        onRunShellCommand={
+          onRunShellCommand && !isStreaming && isClosedCodeFence(node, text)
+            ? onRunShellCommand
+            : undefined
+        }
         isStreaming={isStreaming}
       >
         <RenderErrorBoundary

@@ -211,9 +211,24 @@ describe("ChatMarkdown streaming", () => {
       expect(onRunShellCommand).toHaveBeenCalledExactlyOnceWith("echo hello");
 
       for (const text of [
+        "~~~bash\necho tilde\n~~~",
+        "> ```bash\n> echo quote\n> ```",
+        "````bash\necho four\n````",
+      ]) {
+        await act(async () => {
+          mounted.update(message(text));
+        });
+        expect(codeButton(mounted, "Run in terminal")).toBeDefined();
+      }
+
+      for (const text of [
         "```bash\necho one\necho two\n```",
         "```typescript\necho hello\n```",
         "```bash\n\n```",
+        "```bash\necho incomplete",
+        "~~~bash\necho incomplete",
+        "````bash\necho incomplete\n```",
+        '<pre><code class="language-bash">echo html</code></pre>',
       ]) {
         await act(async () => {
           mounted.update(message(text));

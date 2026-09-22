@@ -4309,21 +4309,22 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
-  const runShellCommand = useCallback(
-    (command: string) => {
-      void runProjectScript(
-        {
-          id: "chat-code-block",
-          name: "Chat code block",
-          command,
-          icon: "play",
-          runOnWorktreeCreate: false,
-        },
-        { rememberAsLastInvoked: false },
-      );
-    },
-    [runProjectScript],
-  );
+  const runProjectScriptRef = useRef(runProjectScript);
+  useLayoutEffect(() => {
+    runProjectScriptRef.current = runProjectScript;
+  }, [runProjectScript]);
+  const runShellCommand = useCallback((command: string) => {
+    void runProjectScriptRef.current(
+      {
+        id: "chat-code-block",
+        name: "Chat code block",
+        command,
+        icon: "play",
+        runOnWorktreeCreate: false,
+      },
+      { rememberAsLastInvoked: false },
+    );
+  }, []);
 
   const supportsProjectSettingsOverrides =
     environmentById.get(environmentId)?.serverConfig?.environment.capabilities
