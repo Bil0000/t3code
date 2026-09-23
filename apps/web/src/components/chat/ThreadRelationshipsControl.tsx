@@ -55,8 +55,6 @@ import { ThreadRelationshipIcon } from "./ThreadRelationshipIcon";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
-  THREAD_DETAILS_PANEL_ICON_ACTION_CLASS,
-  THREAD_DETAILS_PANEL_LINK_ROW_CLASS,
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
@@ -425,16 +423,12 @@ export function ThreadRelationshipsPanel(props: {
                   <TooltipTrigger
                     delay={200}
                     render={
-                      <Button
+                      <ThreadDetailsControl
                         size="sm"
                         variant="ghost"
+                        part={workflowGroup ? "link-primary" : "row"}
                         disabled={node?.missing === true}
                         onClick={() => openThread(threadId)}
-                        className={
-                          workflowGroup
-                            ? THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS
-                            : THREAD_DETAILS_PANEL_LINK_ROW_CLASS
-                        }
                       />
                     }
                   >

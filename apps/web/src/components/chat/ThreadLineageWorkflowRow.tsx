@@ -12,11 +12,11 @@ import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadRelationshipIcon } from "./ThreadRelationshipIcon";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import {
   THREAD_DETAILS_PANEL_LINK_ROW_CLASS,
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
-  THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
 
@@ -135,13 +135,13 @@ export function ThreadLineageWorkflowRow({
       <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
         {header}
         <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-        <Button
+        <ThreadDetailsControl
           size="sm"
           variant="ghost"
+          part="secondary"
           aria-expanded={expanded}
           aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
           onClick={() => setExpanded((value) => !value)}
-          className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
         >
           <ChevronDownIcon
             aria-hidden
@@ -150,7 +150,7 @@ export function ThreadLineageWorkflowRow({
               !expanded && "-rotate-90",
             )}
           />
-        </Button>
+        </ThreadDetailsControl>
       </div>
       {expanded ? (
         <ul className="m-0 list-none p-0 pe-8 ps-5">
