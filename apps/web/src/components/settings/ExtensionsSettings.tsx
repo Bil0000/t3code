@@ -547,6 +547,7 @@ function AddExtensionDialog({
   const showInvalid = reference.trim() !== "" && source === null;
   const [checking, setChecking] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const checkVersion = useRef(0);
 
   useEffect(() => {
     if (!open) return;
@@ -556,12 +557,15 @@ function AddExtensionDialog({
 
   const submitReference = async () => {
     if (!source) return;
+    const version = ++checkVersion.current;
     setChecking(true);
     let found = false;
     try {
       found = await openVsxExtensionExists(source.namespace, source.name);
+      if (version !== checkVersion.current) return;
       if (!found) setNotFound(true);
     } catch (cause) {
+      if (version !== checkVersion.current) return;
       toastManager.add({
         type: "error",
         title: "Could not check Open VSX",
@@ -579,7 +583,14 @@ function AddExtensionDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        checkVersion.current++;
+        setChecking(false);
+        onOpenChange(nextOpen);
+      }}
+    >
       <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>Add an extension</DialogTitle>
@@ -606,6 +617,7 @@ function AddExtensionDialog({
                 disabled={checking}
                 aria-invalid={showInvalid || notFound || undefined}
                 onChange={(event) => {
+                  checkVersion.current++;
                   setReference(event.target.value);
                   setNotFound(false);
                 }}
