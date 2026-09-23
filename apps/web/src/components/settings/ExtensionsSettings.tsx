@@ -174,16 +174,28 @@ function ExtensionsSettingsContent({ environmentId }: { environmentId: Environme
     );
     let message: string | null = null;
     let extension: InstalledExtension | null = null;
+    let uploadId: string | null = null;
     try {
-      const source: ExtensionInstallSource =
-        request.type === "vsix"
-          ? { type: "vsix", uploadId: await uploadVsix(environmentId, request.file) }
-          : request.source;
+      let source: ExtensionInstallSource;
+      if (request.type === "vsix") {
+        uploadId = await uploadVsix(environmentId, request.file);
+        source = { type: "vsix", uploadId };
+      } else {
+        source = request.source;
+      }
       const result = await install({ environmentId, input: { source } });
       if (result._tag === "Success") extension = result.value;
       else message = commandError(result, "The extension could not be installed.");
     } catch (cause) {
       message = cause instanceof Error ? cause.message : "The extension could not be installed.";
+    }
+    if (uploadId) {
+      deletePendingAttachmentUpload({
+        registry: appAtomRegistry,
+        remove: attachmentEnvironment.remove,
+        environmentId,
+        attachmentId: uploadId,
+      });
     }
     setInstalling(null);
     if (extension) {

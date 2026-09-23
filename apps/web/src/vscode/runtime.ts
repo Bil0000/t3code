@@ -8,6 +8,7 @@ import {
   initialize,
 } from "@codingame/monaco-vscode-api";
 import getConfigurationServiceOverride, {
+  getUserConfiguration,
   updateUserConfiguration,
 } from "@codingame/monaco-vscode-configuration-service-override";
 import getDialogsServiceOverride from "@codingame/monaco-vscode-dialogs-service-override";
@@ -37,6 +38,7 @@ import { ITextModelService } from "@codingame/monaco-vscode-api/vscode/vs/editor
 import { ITextFileService } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/textfile/common/textfiles.service";
 import * as monaco from "monaco-editor";
 import { formatHex } from "culori";
+import { applyEdits, modify } from "jsonc-parser";
 
 import { toastManager } from "~/components/ui/toast";
 import type { ExtensionHostConnection } from "@t3tools/contracts";
@@ -54,6 +56,10 @@ let runtime: Promise<Awaited<ReturnType<typeof startRuntime>>> | null = null;
 let runtimeKey: string | null = null;
 let editorRoot: HTMLElement | null = null;
 let editorAttachment: ReturnType<typeof attachPart> | null = null;
+let workbenchRoot: HTMLElement | null = null;
+let initialized = false;
+let modelReferencePatched = false;
+let disposeWebviewPositioning: (() => void) | null = null;
 
 function attachEditor(container: HTMLElement) {
   editorAttachment?.dispose();
@@ -102,6 +108,12 @@ function positionWebviews(root: HTMLElement) {
   window.addEventListener("resize", update);
   document.addEventListener("scroll", update, true);
   update();
+  return () => {
+    mutations.disconnect();
+    observer.disconnect();
+    window.removeEventListener("resize", update);
+    document.removeEventListener("scroll", update, true);
+  };
 }
 
 async function startRuntime(
@@ -111,57 +123,66 @@ async function startRuntime(
 ) {
   const url = new URL(httpBaseUrl);
   const remoteAuthority = url.host;
-  const root = document.createElement("div");
-  root.className = "t3-vscode-root";
-  document.body.append(root);
-  positionWebviews(root);
+  if (!workbenchRoot) {
+    workbenchRoot = document.createElement("div");
+    workbenchRoot.className = "t3-vscode-root";
+    document.body.append(workbenchRoot);
+    disposeWebviewPositioning = positionWebviews(workbenchRoot);
+  }
+  const root = workbenchRoot;
   try {
-    await initialize(
-      {
-        ...getConfigurationServiceOverride(),
-        ...getStorageServiceOverride(),
-        ...getSearchServiceOverride(),
-        ...getNotificationServiceOverride(),
-        ...getDialogsServiceOverride(),
-        ...getThemeServiceOverride(),
-        ...getQuickAccessServiceOverride(),
-        ...getRemoteAgentServiceOverride({ scanRemoteExtensions: true }),
-        ...getViewsServiceOverride(),
-      },
-      root,
-      {
-        remoteAuthority,
-        serverBasePath: connection.basePath,
-        connectionToken: connection.connectionToken,
-        workspaceProvider: {
-          trusted: true,
-          workspace: workspaceRoot
-            ? {
-                folderUri: monaco.Uri.from({
-                  scheme: "vscode-remote",
-                  authority: remoteAuthority,
-                  path: workspaceRoot,
-                }),
-              }
-            : undefined,
-          async open() {
-            return false;
-          },
+    if (!initialized) {
+      await initialize(
+        {
+          ...getConfigurationServiceOverride(),
+          ...getStorageServiceOverride(),
+          ...getSearchServiceOverride(),
+          ...getNotificationServiceOverride(),
+          ...getDialogsServiceOverride(),
+          ...getThemeServiceOverride(),
+          ...getQuickAccessServiceOverride(),
+          ...getRemoteAgentServiceOverride({ scanRemoteExtensions: true }),
+          ...getViewsServiceOverride(),
         },
-        productConfiguration: { quality: connection.quality, commit: connection.commit },
-      },
-    );
+        root,
+        {
+          remoteAuthority,
+          serverBasePath: connection.basePath,
+          connectionToken: connection.connectionToken,
+          workspaceProvider: {
+            trusted: true,
+            workspace: workspaceRoot
+              ? {
+                  folderUri: monaco.Uri.from({
+                    scheme: "vscode-remote",
+                    authority: remoteAuthority,
+                    path: workspaceRoot,
+                  }),
+                }
+              : undefined,
+            async open() {
+              return false;
+            },
+          },
+          productConfiguration: { quality: connection.quality, commit: connection.commit },
+        },
+      );
+      initialized = true;
+    }
     editorRoot = root;
     parkEditor();
     const models = await getService(ITextModelService);
     const files = await getService(ITextFileService);
-    const createModelReference = models.createModelReference.bind(models);
-    models.createModelReference = async (resource) => {
-      if (resource.scheme === "vscode-remote" && !monaco.editor.getModel(resource)) {
-        await files.files.resolve(resource);
-      }
-      return createModelReference(resource);
-    };
+    if (!modelReferencePatched) {
+      const createModelReference = models.createModelReference.bind(models);
+      models.createModelReference = async (resource) => {
+        if (resource.scheme === "vscode-remote" && !monaco.editor.getModel(resource)) {
+          await files.files.resolve(resource);
+        }
+        return createModelReference(resource);
+      };
+      modelReferencePatched = true;
+    }
     const views = await getService(IViewsService);
     await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
     const commands = await getService(ICommandService);
@@ -203,7 +224,12 @@ async function startRuntime(
     for (const item of notification.model.notifications) showNotification(item);
     return { views, commands, editors, remoteAuthority };
   } catch (error) {
-    root.remove();
+    if (!initialized) {
+      disposeWebviewPositioning?.();
+      disposeWebviewPositioning = null;
+      root.remove();
+      workbenchRoot = null;
+    }
     throw error;
   }
 }
@@ -214,6 +240,10 @@ export async function getRuntime(
   workspaceRoot?: string,
 ) {
   const key = `${httpBaseUrl}|${connection.commit}|${workspaceRoot ?? ""}`;
+  if (initialized && runtimeKey !== key)
+    throw new Error(
+      "Extensions are running for another project. Reload the page to use them here.",
+    );
   if (!runtime) {
     runtimeKey = key;
     runtime = startRuntime(connection, httpBaseUrl, workspaceRoot).catch((error: unknown) => {
@@ -272,23 +302,36 @@ export async function syncTheme(element: HTMLElement) {
   const foreground = formatHex(styles.getPropertyValue("--foreground").trim());
   const border = formatHex(styles.getPropertyValue("--border").trim());
   const muted = formatHex(styles.getPropertyValue("--muted").trim());
-  if (!background || !foreground) return;
-  await updateUserConfiguration(
-    JSON.stringify({
-      "workbench.editor.enablePreview": false,
-      "workbench.colorTheme": document.documentElement.classList.contains("dark")
+  if (!background || !foreground || !border || !muted) return;
+  const colors = {
+    "sideBar.background": background,
+    "editor.background": background,
+    "panel.background": background,
+    "sideBar.foreground": foreground,
+    "editor.foreground": foreground,
+    "input.background": muted,
+    "sideBar.border": border,
+    "editorGroup.border": border,
+  };
+  let configuration = await getUserConfiguration();
+  const settings: Array<[string[], string | boolean]> = [
+    [["workbench.editor.enablePreview"], false],
+    [
+      ["workbench.colorTheme"],
+      document.documentElement.classList.contains("dark")
         ? "Default Dark Modern"
         : "Default Light Modern",
-      "workbench.colorCustomizations": {
-        "sideBar.background": background,
-        "editor.background": background,
-        "panel.background": background,
-        "sideBar.foreground": foreground,
-        "editor.foreground": foreground,
-        "input.background": muted,
-        "sideBar.border": border,
-        "editorGroup.border": border,
-      },
-    }),
-  );
+    ],
+    ...Object.entries(colors).map(([key, value]): [string[], string] => [
+      ["workbench.colorCustomizations", key],
+      value,
+    ]),
+  ];
+  for (const [path, value] of settings) {
+    configuration = applyEdits(
+      configuration,
+      modify(configuration, path, value, { formattingOptions: { insertSpaces: true, tabSize: 2 } }),
+    );
+  }
+  await updateUserConfiguration(configuration);
 }
