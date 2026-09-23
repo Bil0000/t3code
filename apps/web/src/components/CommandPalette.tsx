@@ -523,6 +523,12 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest("[data-keybinding-capture]")
+      ) {
+        return;
+      }
       // Resolve with the complete shortcut context so customized bindings
       // using any documented `when` condition (e.g. previewFocus) work.
       const command = resolveShortcutCommand(event, keybindings, {
@@ -1868,7 +1874,7 @@ function OpenCommandPaletteDialog(props: {
               await runtime.getRuntime(
                 result.value,
                 prepared.httpBaseUrl,
-                currentProjectCwd ?? undefined,
+                activeThread.worktreePath ?? currentProjectCwd ?? undefined,
               );
               await runtime.runExtensionCommand(command.command);
               const target = await runtime.activeWebview(extension.id);

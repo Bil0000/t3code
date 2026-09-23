@@ -340,7 +340,10 @@ function RightPanelEmptyState(props: {
   agentsAvailable: boolean;
   deviceAvailable: boolean;
   liveAgentCount: number;
+  extensionTargets: ReadonlyArray<{ label: string; target: ExtensionSurfaceTarget }>;
+  onAddExtension: ((target: ExtensionSurfaceTarget) => void) | undefined;
 }) {
+  const onAddExtension = props.onAddExtension;
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
 
@@ -418,6 +421,18 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddDevice,
       badgeCount: 0,
     },
+    ...(onAddExtension
+      ? props.extensionTargets.map(({ label, target }) => ({
+          key: JSON.stringify(target),
+          label,
+          icon: PuzzleIcon,
+          shortcut: "",
+          available: true,
+          disabledReason: "",
+          onClick: () => onAddExtension(target),
+          badgeCount: 0,
+        }))
+      : []),
   ] as const;
 
   type SurfaceAction = (typeof actions)[number];
@@ -526,7 +541,7 @@ function RightPanelEmptyState(props: {
               // wrapper: the chooser overlays the row, and a pointer moving
               // onto it must not read as leaving the row.
               <div
-                key={action.label}
+                key={"key" in action ? action.key : action.label}
                 className="group relative"
                 onMouseEnter={() => setHighlight(availableActions.indexOf(action))}
                 onMouseLeave={() =>
@@ -552,7 +567,7 @@ function RightPanelEmptyState(props: {
                   >
                     {action.label}
                   </span>
-                  <Kbd>{action.shortcut}</Kbd>
+                  {action.shortcut ? <Kbd>{action.shortcut}</Kbd> : null}
                 </button>
                 {/*
                   Same choice the tab bar's "+" menu offers: the row opens the
@@ -1469,6 +1484,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             agentsAvailable={props.agentsAvailable}
             deviceAvailable={props.deviceAvailable}
             liveAgentCount={props.liveAgentCount}
+            extensionTargets={extensionTargets}
+            onAddExtension={props.onAddExtension}
           />
         ) : (
           props.children

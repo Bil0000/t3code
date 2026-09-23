@@ -537,7 +537,9 @@ function AddExtensionDialog({
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    if (open) setReference("");
+    if (!open) return;
+    setReference("");
+    setNotFound(false);
   }, [open]);
 
   const submitReference = async () => {
@@ -589,6 +591,7 @@ function AddExtensionDialog({
                 autoFocus
                 placeholder="https://open-vsx.org/extension/publisher/name"
                 value={reference}
+                disabled={checking}
                 aria-invalid={showInvalid || notFound || undefined}
                 onChange={(event) => {
                   setReference(event.target.value);
