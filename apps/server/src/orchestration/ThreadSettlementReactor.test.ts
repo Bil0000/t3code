@@ -1455,6 +1455,17 @@ describe("storage cleanup", () => {
     "terminal-cwd",
     "terminal-worktree",
     "recent",
+    "settled-immediate",
+    "settled-wait",
+    "settled-expired",
+    "settled-active",
+    "settled-dirty",
+    "settled-session",
+    "settled-project-off",
+    "settled-project-custom",
+    "settled-archived",
+    "settled-woke",
+    "settled-event",
     "merged",
     "unmerged",
     "unchanged",
@@ -1519,12 +1530,20 @@ describe("storage cleanup", () => {
           yield* fs.writeFileString(recentImage, "recent");
           const recent = DateTime.toDateUtc(DateTime.makeUnsafe(NOW));
           yield* fs.utimes(recentImage, recent, recent);
-          const thread = makeThread("storage-thread", {
+          let thread = makeThread("storage-thread", {
             branch: "feature",
             worktreePath,
             latestUserMessageAt:
               protection === "recent" ? "2026-08-26T00:00:00.000Z" : "2026-08-01T00:00:00.000Z",
-            ...(protection === "session"
+            ...(protection.startsWith("settled-") &&
+            protection !== "settled-active" &&
+            protection !== "settled-event"
+              ? {
+                  settledOverride: "settled" as const,
+                  settledAt: protection === "settled-expired" ? "2026-08-01T00:00:00.000Z" : NOW,
+                }
+              : {}),
+            ...(protection === "session" || protection === "settled-session"
               ? {
                   session: {
                     threadId: ThreadId.make("storage-thread"),
@@ -1539,6 +1558,7 @@ describe("storage cleanup", () => {
               : {}),
           });
           const snapshotRead = yield* Deferred.make<void>();
+          const settledSnapshotRead = yield* Deferred.make<void>();
           const deletionStarted = yield* Deferred.make<void>();
           const deletionStopped = yield* Deferred.make<void>();
           if (protection !== "deleted-event") yield* Deferred.succeed(deletionStopped, undefined);
@@ -1561,14 +1581,20 @@ describe("storage cleanup", () => {
               ServerSettingsService.layerTest({
                 projectSettingsOverrides: {
                   [PROJECT_ID]:
-                    protection === "project-off" || protection === "deleted-project-off"
+                    protection === "project-off" ||
+                    protection === "deleted-project-off" ||
+                    protection === "settled-project-off"
                       ? { worktreeCleanup: { mode: "off" as const } }
-                      : protection === "project-custom" || protection === "deleted-project-custom"
+                      : protection === "project-custom" ||
+                          protection === "deleted-project-custom" ||
+                          protection === "settled-project-custom"
                         ? {
                             worktreeCleanup: {
                               mode: "custom" as const,
                               rules: {
                                 worktreeAfterDays: protection === "project-custom" ? 8 : null,
+                                worktreeSettledAfterDays:
+                                  protection === "settled-project-custom" ? 0 : null,
                                 worktreeOnDelete: deleteRule,
                                 worktreeOnMerge: false,
                                 worktreeUnchanged: false,
@@ -1579,9 +1605,21 @@ describe("storage cleanup", () => {
                 },
                 storageCleanup: {
                   worktreeAfterDays:
-                    deleteRule || mergeRule || unchangedRule || protection === "project-custom"
+                    deleteRule ||
+                    mergeRule ||
+                    unchangedRule ||
+                    protection === "project-custom" ||
+                    protection.startsWith("settled-")
                       ? null
                       : 8,
+                  worktreeSettledAfterDays:
+                    protection === "settled-project-custom"
+                      ? null
+                      : protection.startsWith("settled-")
+                        ? protection === "settled-wait" || protection === "settled-expired"
+                          ? 8
+                          : 0
+                        : null,
                   worktreeOnDelete: deleteRule && protection !== "deleted-project-custom",
                   worktreeOnMerge: mergeRule,
                   worktreeUnchanged: unchangedRule,
@@ -1640,6 +1678,11 @@ describe("storage cleanup", () => {
                   getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 2 }),
                   getShellSnapshot: () =>
                     Deferred.succeed(snapshotRead, undefined).pipe(
+                      Effect.tap(() =>
+                        thread.settledOverride === "settled"
+                          ? Deferred.succeed(settledSnapshotRead, undefined)
+                          : Effect.void,
+                      ),
                       Effect.andThen(
                         Effect.sync(() => {
                           snapshotReads++;
@@ -1649,7 +1692,8 @@ describe("storage cleanup", () => {
                             protection === "deleted-project-custom"
                               ? []
                               : [makeProject(PROJECT_ID, config.baseDir)];
-                          const threads = tombstoned ? [] : [thread];
+                          const threads =
+                            tombstoned || protection === "settled-archived" ? [] : [thread];
                           if (protection === "deleted-shared")
                             threads.push({ ...thread, id: ThreadId.make("surviving-thread") });
                           if (protection === "deleted-project")
@@ -1686,15 +1730,17 @@ describe("storage cleanup", () => {
                   getArchivedShellSnapshot: () =>
                     Effect.succeed(
                       makeSnapshot(
-                        protection === "shared"
-                          ? [
-                              {
-                                ...thread,
-                                id: ThreadId.make("archived-sharing-thread"),
-                                archivedAt: NOW,
-                              },
-                            ]
-                          : [],
+                        protection === "settled-archived"
+                          ? [{ ...thread, archivedAt: NOW }]
+                          : protection === "shared"
+                            ? [
+                                {
+                                  ...thread,
+                                  id: ThreadId.make("archived-sharing-thread"),
+                                  archivedAt: NOW,
+                                },
+                              ]
+                            : [],
                       ),
                     ),
                 }),
@@ -1771,7 +1817,9 @@ describe("storage cleanup", () => {
                       branch: cwd === secondWorktreePath ? "feature-two" : "feature",
                       upstreamRef: null,
                       hasWorkingTreeChanges:
-                        protection === "dirty" || protection === "deleted-dirty",
+                        protection === "dirty" ||
+                        protection === "deleted-dirty" ||
+                        protection === "settled-dirty",
                       workingTree: { files: [], insertions: 0, deletions: 0 },
                       hasUpstream: false,
                       aheadCount: 0,
@@ -1821,6 +1869,13 @@ describe("storage cleanup", () => {
                               .pipe(Effect.orDie)
                           : Effect.void,
                       ),
+                      Effect.tap(() =>
+                        protection === "settled-woke" && headReads === 1
+                          ? Effect.sync(() => {
+                              thread = { ...thread, settledOverride: "active", settledAt: null };
+                            })
+                          : Effect.void,
+                      ),
                     ),
                   removeWorktree: (input) => {
                     assert.strictEqual(input.force, false);
@@ -1864,6 +1919,25 @@ describe("storage cleanup", () => {
           yield* cleanup.start();
           yield* Deferred.await(snapshotRead);
           yield* cleanup.drain;
+          if (protection === "settled-event") {
+            assert.strictEqual(yield* fs.exists(worktreePath), true);
+            thread = { ...thread, settledOverride: "settled", settledAt: NOW };
+            yield* PubSub.publish(domainEvents, {
+              type: "thread.settled",
+              sequence: 2,
+              eventId: EventId.make("storage-thread-settled"),
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt: NOW,
+              commandId: null,
+              causationEventId: null,
+              correlationId: null,
+              metadata: {},
+              payload: { threadId: thread.id, settledAt: NOW, updatedAt: NOW },
+            });
+            yield* Deferred.await(settledSnapshotRead);
+            yield* cleanup.drain;
+          }
           if (protection === "deleted-event") {
             assert.strictEqual(yield* fs.exists(worktreePath), true);
             tombstoned = true;
@@ -1889,6 +1963,11 @@ describe("storage cleanup", () => {
             protection === "project-custom" ||
             protection === "deleted-project-custom" ||
             protection === "none" ||
+            protection === "settled-immediate" ||
+            protection === "settled-expired" ||
+            protection === "settled-project-custom" ||
+            protection === "settled-archived" ||
+            protection === "settled-event" ||
             protection === "deleted" ||
             protection === "deleted-event" ||
             protection === "deleted-owner" ||

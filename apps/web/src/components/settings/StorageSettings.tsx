@@ -25,10 +25,12 @@ function RetentionControl({
   label,
   value,
   onChange,
+  minimum = 1,
 }: {
   label: string;
   value: number | null;
   onChange: (value: number | null) => void;
+  minimum?: number;
 }) {
   const [draft, setDraft] = useState(value);
   const [savedValue, setSavedValue] = useState(value);
@@ -42,7 +44,7 @@ function RetentionControl({
       {value !== null ? (
         <NumberField
           value={draft}
-          min={1}
+          min={minimum}
           max={3650}
           step={1}
           size="sm"
@@ -51,7 +53,7 @@ function RetentionControl({
           onValueCommitted={(next) => {
             if (next === null) setDraft(value);
             else {
-              const days = Math.min(3650, Math.max(1, Math.round(next)));
+              const days = Math.min(3650, Math.max(minimum, Math.round(next)));
               setDraft(days);
               onChange(days);
             }
@@ -220,6 +222,22 @@ export function StorageSettingsPanel() {
                   label="Delete inactive worktrees"
                   value={settings.worktreeAfterDays}
                   onChange={(worktreeAfterDays) => updateWorktree({ worktreeAfterDays })}
+                />
+              }
+            />
+            <SettingsRow
+              title="Delete settled worktrees"
+              status={ruleStatus("worktreeSettledAfterDays")}
+              description="Remove worktrees this many days after their thread settles. Set 0 days to remove them as soon as they are safe to remove. Branches and thread history are kept."
+              serverScoped={!isProjectScope}
+              control={
+                <RetentionControl
+                  label="Delete settled worktrees"
+                  value={settings.worktreeSettledAfterDays}
+                  minimum={0}
+                  onChange={(worktreeSettledAfterDays) =>
+                    updateWorktree({ worktreeSettledAfterDays })
+                  }
                 />
               }
             />
