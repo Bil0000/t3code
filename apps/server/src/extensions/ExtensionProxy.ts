@@ -1,4 +1,8 @@
-import { AuthOrchestrationReadScope, ExtensionError } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  ExtensionError,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import {
@@ -19,25 +23,27 @@ import {
 import { assetResponseHeaders } from "../http.ts";
 import { ExtensionHost } from "./ExtensionHost.ts";
 
-const authenticate = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const auth = yield* EnvironmentAuth.EnvironmentAuth;
-  const session = yield* auth.authenticateWebSocketUpgrade(request).pipe(
-    Effect.catch((cause) =>
-      Effect.gen(function* () {
-        if (EnvironmentAuth.isServerAuthCredentialError(cause)) {
-          return yield* failEnvironmentAuthInvalid(
-            EnvironmentAuth.serverAuthCredentialReason(cause),
-            EnvironmentAuth.serverAuthDpopFailureReason(cause),
-          );
-        }
-        return yield* failEnvironmentInternal("internal_error", cause);
-      }),
-    ),
-  );
-  if (!session.scopes.includes(AuthOrchestrationReadScope))
-    return yield* failEnvironmentScopeRequired(AuthOrchestrationReadScope);
-});
+const authenticate = (
+  scope: typeof AuthOrchestrationReadScope | typeof AuthOrchestrationOperateScope,
+) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const auth = yield* EnvironmentAuth.EnvironmentAuth;
+    const session = yield* auth.authenticateWebSocketUpgrade(request).pipe(
+      Effect.catch((cause) =>
+        Effect.gen(function* () {
+          if (EnvironmentAuth.isServerAuthCredentialError(cause)) {
+            return yield* failEnvironmentAuthInvalid(
+              EnvironmentAuth.serverAuthCredentialReason(cause),
+              EnvironmentAuth.serverAuthDpopFailureReason(cause),
+            );
+          }
+          return yield* failEnvironmentInternal("internal_error", cause);
+        }),
+      ),
+    );
+    if (!session.scopes.includes(scope)) return yield* failEnvironmentScopeRequired(scope);
+  });
 
 const pump = (source: Socket.Socket, sink: Socket.Writer) =>
   Effect.gen(function* () {
@@ -46,7 +52,7 @@ const pump = (source: Socket.Socket, sink: Socket.Writer) =>
   });
 
 const proxyHandler = Effect.gen(function* () {
-  yield* authenticate;
+  yield* authenticate(AuthOrchestrationOperateScope);
   const request = yield* HttpServerRequest.HttpServerRequest;
   const url = HttpServerRequest.toURL(request);
   if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
@@ -110,7 +116,7 @@ const proxyHandler = Effect.gen(function* () {
 });
 
 const iconHandler = Effect.gen(function* () {
-  yield* authenticate;
+  yield* authenticate(AuthOrchestrationReadScope);
   const request = yield* HttpServerRequest.HttpServerRequest;
   const url = HttpServerRequest.toURL(request);
   if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });

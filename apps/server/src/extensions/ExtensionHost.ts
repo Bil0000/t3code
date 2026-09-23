@@ -40,6 +40,12 @@ const error = (operation: ExtensionError["operation"], detail: string, cause?: u
   new ExtensionError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
 const isExtensionError = Schema.is(ExtensionError);
 
+export const parseProduct = (text: string) =>
+  Effect.try({
+    try: () => JSON.parse(text) as { commit: string; quality: string },
+    catch: (cause) => error("host", "Could not parse VSCodium product.json.", cause),
+  });
+
 const readVsixId = (file: string) =>
   Effect.tryPromise({
     try: () =>
@@ -226,20 +232,29 @@ const makeExtensionHost = Effect.gen(function* () {
     yield* setHost("downloading");
     const staging = yield* fs.makeTempDirectoryScoped({ directory: base, prefix: ".reh-" });
     const archive = NodePath.join(staging, "reh.tar.gz");
+    const checksumResponse = yield* http
+      .execute(HttpClientRequest.get(`${asset}.sha256`))
+      .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
+    const checksum = /^[a-f\d]{64}(?=\s|$)/i.exec((yield* checksumResponse.text).trim())?.[0];
+    if (!checksum) return yield* error("host", "VSCodium returned an invalid REH SHA-256 digest.");
     const response = yield* http
       .execute(HttpClientRequest.get(asset))
       .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
     let bytes = 0;
+    const digest = NodeCrypto.createHash("sha256");
     yield* response.stream.pipe(
       Stream.tap((chunk) =>
         Effect.sync(() => {
           bytes += chunk.byteLength;
+          digest.update(chunk);
         }),
       ),
       Stream.takeWhile(() => bytes <= 256 * 1024 * 1024),
       Stream.run(fs.sink(archive, { flag: "wx", mode: 0o600 })),
     );
     if (bytes > 256 * 1024 * 1024) return yield* error("host", "The REH archive is too large.");
+    if (digest.digest("hex") !== checksum.toLowerCase())
+      return yield* error("host", "The REH archive SHA-256 did not match VSCodium.");
     const extracted = NodePath.join(staging, "extract");
     yield* fs.makeDirectory(extracted);
     const unpack = yield* runner.run({
@@ -249,9 +264,9 @@ const makeExtensionHost = Effect.gen(function* () {
     });
     if (unpack.code !== 0)
       return yield* error("host", unpack.stderr || "Could not unpack VSCodium REH.");
-    const product = JSON.parse(
+    const product = yield* parseProduct(
       yield* fs.readFileString(NodePath.join(extracted, "product.json")),
-    ) as { commit?: string; quality?: string };
+    );
     if (
       product.commit !== "1a46a584725d5dd330e0bcd7f5510f24990efcf2" ||
       product.quality !== "stable"
@@ -267,9 +282,9 @@ const makeExtensionHost = Effect.gen(function* () {
     const token = NodeCrypto.randomBytes(32).toString("hex");
     const tokenPath = NodePath.join(base, "connection-token");
     yield* fs.writeFileString(tokenPath, token, { mode: 0o600 });
-    const product = JSON.parse(
+    const product = yield* parseProduct(
       yield* fs.readFileString(NodePath.join(serverDir, "product.json")),
-    ) as { commit: string; quality: string };
+    );
     if (
       product.commit !== "1a46a584725d5dd330e0bcd7f5510f24990efcf2" ||
       product.quality !== "stable"
@@ -547,7 +562,7 @@ const makeExtensionHost = Effect.gen(function* () {
   yield* fs.makeDirectory(extensionsDir, { recursive: true });
   yield* refresh;
   return ExtensionHost.of({
-    subscribe: Stream.unwrap(start.pipe(Effect.as(SubscriptionRef.changes(state)))),
+    subscribe: SubscriptionRef.changes(state),
     connect,
     port,
     install,
