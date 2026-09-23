@@ -1458,7 +1458,9 @@ describe("storage cleanup", () => {
     "settled-immediate",
     "settled-wait",
     "settled-expired",
+    "settled-legacy",
     "settled-active",
+    "settled-pinned-active",
     "settled-dirty",
     "settled-session",
     "settled-project-off",
@@ -1543,6 +1545,11 @@ describe("storage cleanup", () => {
                   settledAt: protection === "settled-expired" ? "2026-08-01T00:00:00.000Z" : NOW,
                 }
               : {}),
+            ...(protection === "settled-legacy"
+              ? { settledOverride: null, settledAt: NOW }
+              : protection === "settled-pinned-active"
+                ? { settledOverride: "active" as const, settledAt: NOW }
+                : {}),
             ...(protection === "session" || protection === "settled-session"
               ? {
                   session: {
@@ -1965,6 +1972,7 @@ describe("storage cleanup", () => {
             protection === "none" ||
             protection === "settled-immediate" ||
             protection === "settled-expired" ||
+            protection === "settled-legacy" ||
             protection === "settled-project-custom" ||
             protection === "settled-archived" ||
             protection === "settled-event" ||

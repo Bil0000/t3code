@@ -225,22 +225,27 @@ export function StorageSettingsPanel() {
                 />
               }
             />
-            <SettingsRow
-              title="Delete settled worktrees"
-              status={ruleStatus("worktreeSettledAfterDays")}
-              description="Remove worktrees this many days after their thread settles. Set 0 days to remove them as soon as they are safe to remove. Branches and thread history are kept."
-              serverScoped={!isProjectScope}
-              control={
-                <RetentionControl
-                  label="Delete settled worktrees"
-                  value={settings.worktreeSettledAfterDays}
-                  minimum={0}
-                  onChange={(worktreeSettledAfterDays) =>
-                    updateWorktree({ worktreeSettledAfterDays })
-                  }
-                />
-              }
-            />
+            {connectedEnvironments.every(
+              (environment) =>
+                environment.serverConfig?.environment.capabilities.settledWorktreeCleanup === true,
+            ) && (
+              <SettingsRow
+                title="Delete settled worktrees"
+                status={ruleStatus("worktreeSettledAfterDays")}
+                description="Remove worktrees this many days after their thread settles. Set 0 days to remove them as soon as they are safe to remove. Branches and thread history are kept."
+                serverScoped={!isProjectScope}
+                control={
+                  <RetentionControl
+                    label="Delete settled worktrees"
+                    value={settings.worktreeSettledAfterDays}
+                    minimum={0}
+                    onChange={(worktreeSettledAfterDays) =>
+                      updateWorktree({ worktreeSettledAfterDays })
+                    }
+                  />
+                }
+              />
+            )}
             <SettingsRow
               title="Delete merged worktrees"
               status={ruleStatus("worktreeOnMerge")}

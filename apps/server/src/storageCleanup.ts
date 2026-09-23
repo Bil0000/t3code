@@ -246,7 +246,7 @@ export const make = Effect.gen(function* () {
         const settled =
           !deleted &&
           settings.worktreeSettledAfterDays !== null &&
-          thread.settledOverride === "settled" &&
+          thread.settledOverride !== "active" &&
           thread.settledAt !== null &&
           Date.parse(thread.settledAt) <= now - settings.worktreeSettledAfterDays * DAY_MS;
         let eligible = deleted || old || settled;
