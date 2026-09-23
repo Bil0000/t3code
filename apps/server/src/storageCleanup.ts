@@ -48,6 +48,7 @@ const DAY_MS = 86_400_000;
 
 const worktreeCleanupEnabled = (rules: WorktreeCleanupRules) =>
   rules.worktreeAfterDays !== null ||
+  rules.worktreeSettledAfterDays !== null ||
   rules.worktreeOnMerge ||
   rules.worktreeOnDelete ||
   rules.worktreeUnchanged;
@@ -242,7 +243,13 @@ export const make = Effect.gen(function* () {
           !deleted &&
           settings.worktreeAfterDays !== null &&
           storageCleanupActivityAt(thread) < now - settings.worktreeAfterDays * DAY_MS;
-        let eligible = deleted || old;
+        const settled =
+          !deleted &&
+          settings.worktreeSettledAfterDays !== null &&
+          thread.settledOverride === "settled" &&
+          thread.settledAt !== null &&
+          Date.parse(thread.settledAt) <= now - settings.worktreeSettledAfterDays * DAY_MS;
+        let eligible = deleted || old || settled;
         if (!eligible && (settings.worktreeUnchanged || settings.worktreeOnMerge)) {
           const repositoryCwd = path.resolve(project.workspaceRoot);
           const remote = yield* git.resolvePrimaryRemoteName(repositoryCwd);
@@ -313,7 +320,9 @@ export const make = Effect.gen(function* () {
           latest.length !== 1 ||
           latest[0]!.id !== thread.id ||
           !storageCleanupThreadIdle(latest[0]!, now) ||
-          storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread)
+          storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread) ||
+          latest[0]!.settledOverride !== thread.settledOverride ||
+          latest[0]!.settledAt !== thread.settledAt
         )
           return;
         const finalStatus = yield* git.statusDetailsLocal(worktreePath);
@@ -467,12 +476,17 @@ export const make = Effect.gen(function* () {
       }),
     );
     yield* forkParked(
-      Stream.runForEach(events, (event) =>
-        event.type === "thread.deleted" &&
-        anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)
-          ? worker.enqueue(undefined)
-          : Effect.void,
-      ),
+      Stream.runForEach(events, (event) => {
+        if (
+          (event.type === "thread.deleted" &&
+            anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)) ||
+          ((event.type === "thread.settled" ||
+            (event.type === "thread.session-set" && event.payload.session.status === "stopped")) &&
+            anyWorktreePolicy(lastSettings, (rules) => rules.worktreeSettledAfterDays === 0))
+        )
+          return worker.enqueue(undefined);
+        return Effect.void;
+      }),
     );
   });
   return { start, drain: worker.drain } satisfies StorageCleanup["Service"];
