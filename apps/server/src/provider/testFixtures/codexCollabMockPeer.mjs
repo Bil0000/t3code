@@ -166,6 +166,14 @@ rl.on("line", (line) => {
         `${JSON.stringify({ method, params: message.params })}\n`,
       );
     }
+    if (script.hangTurnStartResponse) {
+      write({
+        jsonrpc: "2.0",
+        method: "serverRequest/resolved",
+        params: { threadId: script.rootThreadId, requestId: "turn-start-observed" },
+      });
+      return;
+    }
     const turnId = script.turnIds?.[turnStartCount];
     const turn = turnId
       ? { ...fixture.responses.turnStart.turn, id: turnId }

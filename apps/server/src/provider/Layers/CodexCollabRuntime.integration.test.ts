@@ -222,6 +222,78 @@ describe("CodexSessionRuntime collab integration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("resets the expanded window when switching to an unsupported model", () =>
+    Effect.gen(function* () {
+      NodeFS.writeFileSync(
+        scriptPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({ rootThreadId: ROOT, recordRequests: true, notifications: [] }),
+        "utf8",
+      );
+      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        }),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-unsupported-context"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        model: "gpt-6-astra",
+        contextWindow: "1m",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "continue", model: "custom-model" });
+      const [fork] = readRecordedRequests();
+      assert.isDefined(fork);
+      assert.equal(fork.method, "thread/fork");
+      assert.equal(fork.params.model, "custom-model");
+      assert.notProperty(fork.params, "config");
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not block Stop on a stalled turn start", () =>
+    Effect.gen(function* () {
+      NodeFS.writeFileSync(
+        scriptPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({ rootThreadId: ROOT, hangTurnStartResponse: true, notifications: [] }),
+        "utf8",
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-stalled-turn-start"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const observed = yield* runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.method === "serverRequest/resolved" &&
+            (event.payload as { requestId?: string }).requestId === "turn-start-observed",
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* runtime.start();
+      const sending = yield* runtime.sendTurn({ input: "continue" }).pipe(Effect.forkScoped);
+      yield* Fiber.join(observed);
+      yield* runtime.interruptTurn();
+      yield* runtime.close;
+      yield* Fiber.interrupt(sending);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("looks up child model metadata once after activity registration", () =>
     Effect.gen(function* () {
       const script = {

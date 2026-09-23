@@ -2532,10 +2532,10 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
-          const selectedContextWindow =
-            input.contextWindow === undefined
-              ? activeContextWindow
-              : codexContextWindowChoice(normalizedModel, input.contextWindow);
+          const selectedContextWindow = codexContextWindowChoice(
+            normalizedModel,
+            input.contextWindow ?? activeContextWindow ?? undefined,
+          );
           if (selectedContextWindow !== activeContextWindow) {
             if ((yield* Ref.get(sessionRef)).activeTurnId) {
               return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
@@ -2636,16 +2636,20 @@ export const makeCodexSessionRuntime = (
                 .pipe(Effect.timeoutOption("3 seconds"), Effect.ignore),
             { concurrency: 8, discard: true },
           ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
-          yield* Effect.gen(function* () {
-            const providerThreadId = yield* readProviderThreadId;
-            const session = yield* Ref.get(sessionRef);
-            const effectiveTurnId = session.activeTurnId ?? turnId;
-            if (!effectiveTurnId) return;
-            yield* client.request("turn/interrupt", {
-              threadId: providerThreadId,
-              turnId: effectiveTurnId,
+          const session = yield* Ref.get(sessionRef);
+          const providerThreadId = currentProviderThreadId(session);
+          if (!providerThreadId) {
+            return yield* new CodexSessionRuntimeThreadIdMissingError({
+              threadId: options.threadId,
             });
-          }).pipe(sendTurnSemaphore.withPermits(1));
+          }
+          const effectiveTurnId =
+            session.activeTurnId ?? (session.status === "running" ? turnId : undefined);
+          if (!effectiveTurnId) return;
+          yield* client.request("turn/interrupt", {
+            threadId: providerThreadId,
+            turnId: effectiveTurnId,
+          });
         }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
