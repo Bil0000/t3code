@@ -42,6 +42,9 @@ import {
   NotificationViewItemContentChangeKind,
   type INotificationViewItem,
 } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/notifications";
+import { EditorsOrder } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/editor";
+import { ViewContainerLocation } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/views";
+import { IViewDescriptorService } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/views.service";
 import { WebviewInput } from "@codingame/monaco-vscode-api/vscode/vs/workbench/contrib/webviewPanel/browser/webviewEditorInput";
 import { ITextModelService } from "@codingame/monaco-vscode-api/vscode/vs/editor/common/services/resolverService.service";
 import { ITextFileService } from "@codingame/monaco-vscode-api/vscode/vs/workbench/services/textfile/common/textfiles.service";
@@ -71,6 +74,7 @@ let modelReferencePatched = false;
 let disposeWebviewPositioning: (() => void) | null = null;
 let connectionToken = "";
 let wsTicket = "";
+let restartToastShown = false;
 let refreshTicket: (() => Promise<ExtensionHostConnection>) | null = null;
 const defaultSocketFactory = (
   new BrowserSocketFactory(null) as unknown as { _webSocketFactory: IWebSocketFactory }
@@ -220,6 +224,7 @@ async function startRuntime(
       modelReferencePatched = true;
     }
     const views = await getService(IViewsService);
+    const viewDescriptors = await getService(IViewDescriptorService);
     await (await getService(IExtensionService)).whenInstalledExtensionsRegistered();
     const commands = await getService(ICommandService);
     const editors = await getService(IEditorService);
@@ -264,7 +269,7 @@ async function startRuntime(
         showNotification(event.item);
     });
     for (const item of notification.model.notifications.slice()) showNotification(item);
-    return { views, commands, editors, remoteAuthority };
+    return { views, viewDescriptors, commands, editors, remoteAuthority };
   } catch (error) {
     if (!initialized) {
       disposeWebviewPositioning?.();
@@ -287,14 +292,25 @@ export async function getRuntime(
     throw new Error(
       "Extensions are running for another project. Reload the page to use them here.",
     );
+  if (initialized && connectionToken !== connection.connectionToken)
+    throw new Error("Extensions restarted. Reload the page to use them.");
   connectionToken = connection.connectionToken;
   wsTicket = connection.wsTicket;
   if (!refreshTicket)
     setInterval(() => {
       void refreshTicket?.()
-        .then((next) => (wsTicket = next.wsTicket))
+        .then((next) => {
+          wsTicket = next.wsTicket;
+          if (next.connectionToken === connectionToken || restartToastShown) return;
+          restartToastShown = true;
+          toastManager.add({
+            type: "info",
+            title: "Extensions restarted. Reload the page to use them.",
+            actionProps: { children: "Reload", onClick: () => window.location.reload() },
+          });
+        })
         .catch(() => {});
-    }, 240_000);
+    }, 60_000);
   refreshTicket = connect;
   if (!runtime) {
     runtimeKey = key;
@@ -333,19 +349,43 @@ export async function activeWebview(extensionId: string) {
   };
 }
 
-export async function showWebview(extensionId: string, viewType: string, resource?: string) {
-  if (!runtime) return false;
+async function findWebviews(extensionId: string, viewType: string, resource?: string) {
+  if (!runtime) return null;
   const editors = (await runtime).editors;
-  const input = editors.editors.find(
-    (editor) =>
-      editor instanceof WebviewInput &&
-      editor.viewType === viewType &&
-      (resource === undefined || editor.resource.toString() === resource) &&
-      editor.extension?.id.value.toLowerCase() === extensionId.toLowerCase(),
-  );
-  if (!input) return false;
-  await editors.openEditor(input);
+  const matches = editors
+    .getEditors(EditorsOrder.SEQUENTIAL)
+    .filter(
+      ({ editor }) =>
+        editor instanceof WebviewInput &&
+        editor.viewType === viewType &&
+        (resource === undefined || editor.resource.toString() === resource) &&
+        editor.extension?.id.value.toLowerCase() === extensionId.toLowerCase(),
+    );
+  return { editors, matches };
+}
+
+export async function showWebview(extensionId: string, viewType: string, resource?: string) {
+  const found = await findWebviews(extensionId, viewType, resource);
+  if (!found?.matches[0]) return false;
+  await found.editors.openEditor(found.matches[0].editor);
   return true;
+}
+
+export async function closeWebview(extensionId: string, viewType: string, resource?: string) {
+  const found = await findWebviews(extensionId, viewType, resource);
+  if (found?.matches.length) await found.editors.closeEditors(found.matches);
+}
+
+export async function openViewContainer(id: string) {
+  if (!runtime) return false;
+  const { views, viewDescriptors } = await runtime;
+  const container = viewDescriptors.getViewContainerById(id);
+  if (
+    container &&
+    viewDescriptors.getViewContainerLocation(container) !== ViewContainerLocation.Sidebar
+  )
+    viewDescriptors.moveViewContainerToLocation(container, ViewContainerLocation.Sidebar);
+  return Boolean(await views.openViewContainer(id, true));
 }
 
 export async function syncTheme(element: HTMLElement) {
