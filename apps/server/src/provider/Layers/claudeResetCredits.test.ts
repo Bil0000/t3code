@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -194,9 +195,14 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
   it.effect("times out a stalled claim body", () =>
     Effect.gen(function* () {
       const login = yield* writeLogin;
-      const client = HttpClient.make((request) =>
-        Effect.succeed(HttpClientResponse.fromWeb(request, new Response(new ReadableStream()))),
-      );
+      const readingBody = yield* Deferred.make<void>();
+      const client = HttpClient.make((request) => {
+        const response = HttpClientResponse.fromWeb(request, Response.json({ result: "reset" }));
+        Object.defineProperty(response, "json", {
+          value: Deferred.succeed(readingBody, undefined).pipe(Effect.andThen(Effect.never)),
+        });
+        return Effect.succeed(response);
+      });
       const claim = yield* consumeClaudeResetCredit({
         ...login,
         version: "2.1.0",
@@ -208,7 +214,7 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
         Effect.result,
         Effect.forkChild,
       );
-      yield* Effect.yieldNow;
+      yield* Deferred.await(readingBody);
       yield* TestClock.adjust("26 seconds");
       expect(yield* Fiber.join(claim)).toMatchObject({
         _tag: "Failure",
