@@ -171,7 +171,7 @@ export function ThreadLineageWorkflowRow({
                     })
                   }
                   className={cn(
-                    "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]",
+                    "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-medium hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]",
                     phase.state === "running"
                       ? "bg-info/8 text-info"
                       : "text-muted-foreground/65 hover:text-foreground/80",
@@ -182,7 +182,7 @@ export function ThreadLineageWorkflowRow({
                     className={cn("size-3 shrink-0 transition-transform", !open && "-rotate-90")}
                   />
                   <span className="min-w-0 flex-1 truncate">{phase.title}</span>
-                  <span className="shrink-0 font-normal normal-case tracking-normal opacity-70">
+                  <span className="shrink-0 font-normal opacity-70">
                     <AgentElapsed agent={phaseElapsed(phase)} />
                   </span>
                   <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", status.dot)} />
