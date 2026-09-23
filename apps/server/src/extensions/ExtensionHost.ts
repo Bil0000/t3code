@@ -54,6 +54,33 @@ export const parseProduct = (text: string) =>
     catch: (cause) => error("host", "Could not parse VSCodium product.json.", cause),
   });
 
+export const downloadRehArchive = (
+  asset: NonNullable<ReturnType<typeof rehAsset>>,
+  archive: string,
+) =>
+  Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient;
+    const fs = yield* FileSystem.FileSystem;
+    const response = yield* http
+      .execute(HttpClientRequest.get(asset.url))
+      .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
+    let bytes = 0;
+    const digest = NodeCrypto.createHash("sha256");
+    yield* response.stream.pipe(
+      Stream.tap((chunk) =>
+        Effect.sync(() => {
+          bytes += chunk.byteLength;
+          digest.update(chunk);
+        }),
+      ),
+      Stream.takeWhile(() => bytes <= 256 * 1024 * 1024),
+      Stream.run(fs.sink(archive, { flag: "wx", mode: 0o600 })),
+    );
+    if (bytes > 256 * 1024 * 1024) return yield* error("host", "The REH archive is too large.");
+    if (digest.digest("hex") !== asset.sha256)
+      return yield* error("host", "The REH archive did not match its pinned SHA-256.");
+  });
+
 const readVsixId = (file: string) =>
   Effect.tryPromise({
     try: () =>
@@ -237,24 +264,10 @@ const makeExtensionHost = Effect.gen(function* () {
     yield* setHost("downloading");
     const staging = yield* fs.makeTempDirectoryScoped({ directory: base, prefix: ".reh-" });
     const archive = NodePath.join(staging, "reh.tar.gz");
-    const response = yield* http
-      .execute(HttpClientRequest.get(asset.url))
-      .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
-    let bytes = 0;
-    const digest = NodeCrypto.createHash("sha256");
-    yield* response.stream.pipe(
-      Stream.tap((chunk) =>
-        Effect.sync(() => {
-          bytes += chunk.byteLength;
-          digest.update(chunk);
-        }),
-      ),
-      Stream.takeWhile(() => bytes <= 256 * 1024 * 1024),
-      Stream.run(fs.sink(archive, { flag: "wx", mode: 0o600 })),
+    yield* downloadRehArchive(asset, archive).pipe(
+      Effect.provideService(HttpClient.HttpClient, http),
+      Effect.provideService(FileSystem.FileSystem, fs),
     );
-    if (bytes > 256 * 1024 * 1024) return yield* error("host", "The REH archive is too large.");
-    if (digest.digest("hex") !== asset.sha256)
-      return yield* error("host", "The REH archive did not match its pinned SHA-256.");
     const extracted = NodePath.join(staging, "extract");
     yield* fs.makeDirectory(extracted);
     const unpack = yield* runner.run({
