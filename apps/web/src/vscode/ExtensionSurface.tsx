@@ -53,7 +53,7 @@ export function ExtensionSurface(props: ExtensionRuntimeProps) {
         showEditor(host);
         editorListener = runtime.editors.onDidActiveEditorChange(() => {
           void activeWebview(extensionId).then((webview) => {
-            if (!cancelled && webview?.resource !== target.resource)
+            if (!cancelled && webview && webview.resource !== target.resource)
               void showWebview(extensionId, target.viewType, target.resource);
           });
         });
