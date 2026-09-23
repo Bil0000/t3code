@@ -610,6 +610,9 @@ importers:
       '@codingame/monaco-vscode-storage-service-override':
         specifier: 37.1.0
         version: 37.1.0
+      '@codingame/monaco-vscode-theme-defaults-default-extension':
+        specifier: 37.1.0
+        version: 37.1.0
       '@codingame/monaco-vscode-theme-service-override':
         specifier: 37.1.0
         version: 37.1.0
@@ -2061,6 +2064,9 @@ packages:
 
   '@codingame/monaco-vscode-storage-service-override@37.1.0':
     resolution: {integrity: sha512-6cC2YGcOYjVuc4LZmgqgFuZb2N1AqlR93OzJApiMWnA8TSe4htuG3kfY+F9tQm0Xrhf9NfKIcH3+OjC4UVBVDw==}
+
+  '@codingame/monaco-vscode-theme-defaults-default-extension@37.1.0':
+    resolution: {integrity: sha512-P16cjIB1zVnF0Nw8V+mffPKRM+tfUpMMBWrD3GPeJcaH8cYvhIogFRQvutZhn2b8YwF7xIbKUQDgrjfyWeEeqg==}
 
   '@codingame/monaco-vscode-theme-service-override@37.1.0':
     resolution: {integrity: sha512-GgewvhrWUoQ2hQg9fTej8Abfk9TiVDZRe/PTizxvTl7hY9bijxJDjD5DBKjl+pTenmNh+joiO+NyvrX+dIudTA==}
@@ -12384,6 +12390,10 @@ snapshots:
       '@codingame/monaco-vscode-api': 37.1.0
 
   '@codingame/monaco-vscode-storage-service-override@37.1.0':
+    dependencies:
+      '@codingame/monaco-vscode-api': 37.1.0
+
+  '@codingame/monaco-vscode-theme-defaults-default-extension@37.1.0':
     dependencies:
       '@codingame/monaco-vscode-api': 37.1.0
 

@@ -23,6 +23,7 @@
     "@codingame/monaco-vscode-remote-agent-service-override": "37.1.0",
     "@codingame/monaco-vscode-search-service-override": "37.1.0",
     "@codingame/monaco-vscode-storage-service-override": "37.1.0",
+    "@codingame/monaco-vscode-theme-defaults-default-extension": "37.1.0",
     "@codingame/monaco-vscode-theme-service-override": "37.1.0",
     "@codingame/monaco-vscode-view-common-service-override": "37.1.0",
     "@codingame/monaco-vscode-views-service-override": "37.1.0",

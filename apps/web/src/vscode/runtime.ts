@@ -17,6 +17,7 @@ import getRemoteAgentServiceOverride from "@codingame/monaco-vscode-remote-agent
 import getSearchServiceOverride from "@codingame/monaco-vscode-search-service-override";
 import getStorageServiceOverride from "@codingame/monaco-vscode-storage-service-override";
 import getThemeServiceOverride from "@codingame/monaco-vscode-theme-service-override";
+import "@codingame/monaco-vscode-theme-defaults-default-extension";
 import { ISplashStorageService } from "@codingame/monaco-vscode-view-common-service-override/vscode/vs/workbench/contrib/splash/browser/splash.service";
 import getViewsServiceOverride, {
   attachPart,
@@ -268,6 +269,9 @@ export async function syncTheme(element: HTMLElement) {
   await updateUserConfiguration(
     JSON.stringify({
       "workbench.editor.enablePreview": false,
+      "workbench.colorTheme": document.documentElement.classList.contains("dark")
+        ? "Default Dark Modern"
+        : "Default Light Modern",
       "workbench.colorCustomizations": {
         "sideBar.background": background,
         "editor.background": background,
