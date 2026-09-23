@@ -1,6 +1,8 @@
+// Provider status probes have no filesystem service; read Codex model cache directly.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
+// Provider status probes have no path service; resolve the active Codex home directly.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import * as NodePath from "node:path";
 
