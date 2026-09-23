@@ -31,6 +31,7 @@ import {
 } from "@codingame/monaco-vscode-api/vscode/vs/platform/instantiation/common/extensions";
 import {
   NotificationChangeType,
+  NotificationViewItemContentChangeKind,
   type INotificationViewItem,
 } from "@codingame/monaco-vscode-api/vscode/vs/workbench/common/notifications";
 import { WebviewInput } from "@codingame/monaco-vscode-api/vscode/vs/workbench/contrib/webviewPanel/browser/webviewEditorInput";
@@ -191,7 +192,7 @@ async function startRuntime(
       model: import("@codingame/monaco-vscode-api/vscode/vs/workbench/common/notifications").NotificationsModel;
     };
     const showNotification = (item: INotificationViewItem) => {
-      if (item.hasProgress) return;
+      if (item.hasProgress && !item.progress.state.done) return;
       const type = item.severity === 3 ? "error" : item.severity === 2 ? "warning" : "info";
       const actions = [...(item.actions?.primary ?? []), ...(item.actions?.secondary ?? [])];
       let toastId: ReturnType<typeof toastManager.add>;
@@ -219,7 +220,13 @@ async function startRuntime(
       item.close();
     };
     notification.model.onDidChangeNotification((event) => {
-      if (event.kind === NotificationChangeType.ADD) showNotification(event.item);
+      if (
+        event.kind === NotificationChangeType.ADD ||
+        (event.kind === NotificationChangeType.CHANGE &&
+          event.detail === NotificationViewItemContentChangeKind.PROGRESS &&
+          event.item.progress.state.done)
+      )
+        showNotification(event.item);
     });
     for (const item of notification.model.notifications) showNotification(item);
     return { views, commands, editors, remoteAuthority };
