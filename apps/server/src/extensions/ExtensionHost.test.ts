@@ -157,3 +157,55 @@ it.effect("restarts the extension host after installing an extension", () =>
     ),
   ),
 );
+
+it.effect("uninstalls an extension without a ready host", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* ServerConfig.ServerConfig;
+    const serverDir = path.join(config.vscodeDir, "server");
+    yield* fs.makeDirectory(path.join(serverDir, "out"), { recursive: true });
+    yield* fs.writeFileString(path.join(serverDir, "node"), "");
+    yield* fs.writeFileString(path.join(serverDir, "out", "server-main.js"), "");
+
+    let cliCalls = 0;
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.sync(() => {
+        if (command._tag === "StandardCommand" && command.args.includes("--uninstall-extension"))
+          cliCalls++;
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          stdin: Sink.drain,
+          stdout: Stream.empty,
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        });
+      }),
+    );
+
+    yield* ExtensionHost.pipe(
+      Effect.flatMap((host) => host.uninstall("example.demo")),
+      Effect.provide(ExtensionHost.layer),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.die("Unexpected download")),
+      ),
+    );
+    expect(cliCalls).toBe(1);
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-reh-uninstall-test-" }),
+        NodeServices.layer,
+      ),
+    ),
+  ),
+);

@@ -503,7 +503,7 @@ const makeExtensionHost = Effect.gen(function* () {
       ),
     );
   const uninstall = (id: string) =>
-    ready.pipe(
+    Effect.scoped(ensureRuntime).pipe(
       Effect.flatMap(() =>
         lock.withPermits(1)(
           Effect.gen(function* () {
