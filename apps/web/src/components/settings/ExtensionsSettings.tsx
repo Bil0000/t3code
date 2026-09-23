@@ -643,7 +643,10 @@ function AddExtensionDialog({
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
                 event.currentTarget.value = "";
-                if (file) onSubmit({ type: "vsix", file, label: file.name, publisher: null });
+                if (!file) return;
+                checkVersion.current++;
+                setChecking(false);
+                onSubmit({ type: "vsix", file, label: file.name, publisher: null });
               }}
             />
           </form>
