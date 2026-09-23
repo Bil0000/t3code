@@ -1,0 +1,90 @@
+import type { ExtensionRuntimeProps } from "~/components/extensions/ExtensionSurfaceFrame";
+import { usePreparedConnection } from "~/state/session";
+import { serverEnvironment } from "~/state/server";
+import { useAtomCommand } from "~/state/use-atom-command";
+import * as Option from "effect/Option";
+import { useEffect, useRef, useState } from "react";
+
+import {
+  activeWebview,
+  attachPart,
+  getRuntime,
+  parkEditor,
+  Parts,
+  showEditor,
+  showWebview,
+  syncTheme,
+} from "./runtime";
+import "./extensionSurface.css";
+
+export function ExtensionSurface(props: ExtensionRuntimeProps) {
+  const { environmentId, target, extension, workspaceRoot, onOpenWebview } = props;
+  const element = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const httpBaseUrl = Option.getOrNull(usePreparedConnection(environmentId))?.httpBaseUrl;
+  const connect = useAtomCommand(serverEnvironment.connectExtensionHost, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+
+  useEffect(() => {
+    const host = element.current;
+    if (!host || !httpBaseUrl) return;
+    let cancelled = false;
+    let attached: ReturnType<typeof attachPart> | undefined;
+    let editorListener: { dispose(): void } | undefined;
+    let themeObserver: MutationObserver | undefined;
+    void (async () => {
+      const result = await connect({ environmentId, input: {} });
+      if (result._tag !== "Success") throw new Error("Could not connect to the extension host.");
+      if (cancelled) return;
+      const runtime = await getRuntime(result.value, httpBaseUrl, workspaceRoot);
+      if (cancelled) return;
+      if (
+        target.kind === "extension-webview" &&
+        !(await showWebview(extension.id, target.viewType))
+      ) {
+        throw new Error("This extension panel closed. Run its command again to reopen it.");
+      }
+      if (target.kind === "extension-webview") showEditor(host);
+      else attached = attachPart(Parts.SIDEBAR_PART, host);
+      if (target.kind === "extension") {
+        const viewId = target.viewContainerId ?? extension.viewContainers[0]?.id;
+        if (
+          viewId &&
+          !(await runtime.views.openViewContainer(`workbench.view.extension.${viewId}`, true))
+        ) {
+          throw new Error("This extension's view is not available.");
+        }
+        editorListener = runtime.editors.onDidActiveEditorChange(() => {
+          void activeWebview(extension.id).then((webview) => {
+            if (!cancelled && webview) onOpenWebview?.(webview);
+          });
+        });
+      }
+      const updateTheme = () => void syncTheme(host);
+      updateTheme();
+      themeObserver = new MutationObserver(updateTheme);
+      themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["class", "style", "data-theme"],
+      });
+      themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["class", "style", "data-theme"],
+      });
+    })().catch((cause: unknown) => {
+      if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+    });
+    return () => {
+      cancelled = true;
+      editorListener?.dispose();
+      attached?.dispose();
+      if (target.kind === "extension-webview") parkEditor();
+      themeObserver?.disconnect();
+    };
+  }, [connect, httpBaseUrl, environmentId, extension, onOpenWebview, target, workspaceRoot]);
+
+  if (error) return <div className="p-5 text-sm text-muted-foreground">{error}</div>;
+  return <div ref={element} className="t3-vscode-part h-full min-h-0 w-full overflow-hidden" />;
+}

@@ -185,9 +185,11 @@ import {
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
+  type ExtensionSurfaceTarget,
   type RightPanelSurface,
   useRightPanelStore,
 } from "../rightPanelStore";
+import { ExtensionSurfaceFrame } from "./extensions/ExtensionSurfaceFrame";
 import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
@@ -621,6 +623,9 @@ const DevicePanel = lazy(() =>
   import("./device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
+const ExtensionRuntime = lazy(() =>
+  import("../vscode/ExtensionSurface").then((module) => ({ default: module.ExtensionSurface })),
+);
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
@@ -4590,6 +4595,55 @@ export default function ChatView(props: ChatViewProps) {
     }
     useRightPanelStore.getState().open(activeThreadRef, "device");
   }, [activeThreadRef, deviceState.onboardingCompleted, deviceState.hostStatus]);
+  const addExtensionSurface = useCallback(
+    (target: ExtensionSurfaceTarget) => {
+      if (activeThreadRef) useRightPanelStore.getState().openExtension(activeThreadRef, target);
+    },
+    [activeThreadRef],
+  );
+  const connectExtensionHost = useAtomCommand(serverEnvironment.connectExtensionHost, {
+    reportFailure: false,
+    reportDefect: false,
+  });
+  const runPanelExtensionCommand = useCallback(
+    (command: string) => {
+      if (!activeThreadRef) return;
+      void (async () => {
+        const prepared = readPreparedConnection(activeThreadRef.environmentId);
+        if (!prepared) throw new Error("The environment is not connected.");
+        const result = await connectExtensionHost({
+          environmentId: activeThreadRef.environmentId,
+          input: {},
+        });
+        if (result._tag !== "Success") throw new Error("Could not connect to the extension host.");
+        const runtime = await import("../vscode/runtime");
+        await runtime.getRuntime(result.value, prepared.httpBaseUrl, activeWorkspaceRoot);
+        await runtime.runExtensionCommand(command);
+        if (
+          renderedRightPanelSurface?.kind === "extension" ||
+          renderedRightPanelSurface?.kind === "extension-webview"
+        ) {
+          const target = await runtime.activeWebview(renderedRightPanelSurface.extensionId);
+          if (target) addExtensionSurface(target);
+        }
+      })().catch((cause: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+    },
+    [
+      activeThreadRef,
+      activeWorkspaceRoot,
+      addExtensionSurface,
+      connectExtensionHost,
+      renderedRightPanelSurface,
+    ],
+  );
+  const openExtensionsSettings = useCallback(() => {
+    void navigate({ to: "/settings/extensions" });
+  }, [navigate]);
   // A device the agent opens floats over chat like an agent-driven browser,
   // or becomes a panel tab when floating previews are off. Sessions opened by
   // another client arrive the same way; sheet layouts get neither. The first
@@ -9718,6 +9772,23 @@ export default function ChatView(props: ChatViewProps) {
           }}
         />
       </Suspense>
+    ) : renderedRightPanelSurface?.kind === "extension" ||
+      renderedRightPanelSurface?.kind === "extension-webview" ? (
+      <ExtensionSurfaceFrame
+        key={renderedRightPanelSurface.id}
+        environmentId={activeThreadRef.environmentId}
+        target={renderedRightPanelSurface}
+        workspaceRoot={activeWorkspaceRoot}
+        onOpenWebview={addExtensionSurface}
+        onManage={openExtensionsSettings}
+        onRunCommand={runPanelExtensionCommand}
+      >
+        {(runtimeProps) => (
+          <Suspense fallback={null}>
+            <ExtensionRuntime {...runtimeProps} />
+          </Suspense>
+        )}
+      </ExtensionSurfaceFrame>
     ) : (renderedRightPanelSurface?.kind === "files" ||
         renderedRightPanelSurface?.kind === "file") &&
       ((activeProject && activeWorkspaceRoot) ||
@@ -10361,6 +10432,8 @@ export default function ChatView(props: ChatViewProps) {
           onAddPullRequests={addPullRequestsSurface}
           onAddAgents={addAgentsSurface}
           onAddDevice={addDeviceSurface}
+          onAddExtension={addExtensionSurface}
+          onManageExtensions={openExtensionsSettings}
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
@@ -10418,6 +10491,8 @@ export default function ChatView(props: ChatViewProps) {
             onAddPullRequests={addPullRequestsSurface}
             onAddAgents={addAgentsSurface}
             onAddDevice={addDeviceSurface}
+            onAddExtension={addExtensionSurface}
+            onManageExtensions={openExtensionsSettings}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}

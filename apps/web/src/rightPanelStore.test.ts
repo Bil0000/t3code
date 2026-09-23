@@ -407,6 +407,57 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("keeps valid extension surfaces and drops malformed ones", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "extension-webview:bad",
+            surfaces: [
+              {
+                id: "extension:a",
+                kind: "extension",
+                extensionId: "pub.tree",
+                viewContainerId: "files",
+              },
+              {
+                id: "x",
+                kind: "extension-webview",
+                extensionId: "pub.editor",
+                viewType: "pub.view",
+              },
+              { id: "extension:bad", kind: "extension" },
+              { id: "extension-webview:bad", kind: "extension-webview", extensionId: "pub.editor" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "extension:pub.tree:files",
+          surfaces: [
+            {
+              id: "extension:pub.tree:files",
+              kind: "extension",
+              extensionId: "pub.tree",
+              viewContainerId: "files",
+            },
+            {
+              id: "extension-webview:pub.editor:pub.view",
+              kind: "extension-webview",
+              extensionId: "pub.editor",
+              viewType: "pub.view",
+              title: "pub.view",
+            },
+          ],
+        },
+      },
+    });
+  });
+
   it("open sets the active panel for a thread", () => {
     useRightPanelStore.getState().open(refA, "preview");
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("preview");
