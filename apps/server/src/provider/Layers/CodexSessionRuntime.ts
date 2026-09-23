@@ -2609,9 +2609,19 @@ export const makeCodexSessionRuntime = (
             outstandingTurnIds.add(response.turn.id);
           }
           if (sendEpoch !== stopEpoch) {
-            yield* client
+            const interrupted = yield* client
               .request("turn/interrupt", { threadId: providerThreadId, turnId })
-              .pipe(Effect.timeoutOption("3 seconds"), Effect.ignore);
+              .pipe(
+                Effect.as(true),
+                Effect.catch(() => Effect.succeed(false)),
+                Effect.timeoutOption("3 seconds"),
+              );
+            if (interrupted._tag === "None" || !interrupted.value) {
+              yield* close;
+              return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
+                "Could not confirm the turn stopped; the session was closed.",
+              );
+            }
             return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
               "Turn was stopped before it started.",
             );

@@ -419,14 +419,12 @@ describe("CodexSessionRuntime collab integration", () => {
       yield* Fiber.join(observed);
       yield* runtime.interruptTurn();
       yield* runtime.readThread.pipe(Effect.ignore);
-      const result = yield* Fiber.join(sending).pipe(
-        Effect.exit,
-        Effect.timeoutOption("8 seconds"),
-      );
-      assert.equal(result._tag, "Some");
-      if (result._tag === "Some") {
-        assert.equal(result.value._tag, "Failure");
+      const error = yield* Fiber.join(sending).pipe(Effect.flip, Effect.timeoutOption("8 seconds"));
+      assert.equal(error._tag, "Some");
+      if (error._tag === "Some") {
+        assert.match(error.value.message, /Could not confirm the turn stopped/);
       }
+      assert.equal((yield* runtime.getSession).status, "closed");
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
