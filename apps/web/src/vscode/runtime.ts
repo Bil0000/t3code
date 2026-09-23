@@ -24,6 +24,10 @@ import getViewsServiceOverride, {
   attachPart,
   Parts,
 } from "@codingame/monaco-vscode-views-service-override";
+import {
+  FileOperationResult,
+  toFileOperationResult,
+} from "@codingame/monaco-vscode-api/vscode/vs/platform/files/common/files";
 import { IRemoteAuthorityResolverService } from "@codingame/monaco-vscode-api/vscode/vs/platform/remote/common/remoteAuthorityResolver.service";
 import {
   InstantiationType,
@@ -322,7 +326,9 @@ export async function syncTheme(element: HTMLElement) {
     "sideBar.border": border,
     "editorGroup.border": border,
   };
-  let configuration = await getUserConfiguration().catch(() => null);
+  let configuration = await getUserConfiguration().catch((error: unknown) =>
+    toFileOperationResult(error as Error) === FileOperationResult.FILE_NOT_FOUND ? "{}" : null,
+  );
   if (configuration === null) return;
   const settings: Array<[string[], string | boolean]> = [
     [["workbench.editor.enablePreview"], false],
