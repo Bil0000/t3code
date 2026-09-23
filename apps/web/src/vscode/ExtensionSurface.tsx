@@ -53,8 +53,8 @@ export function ExtensionSurface(props: ExtensionRuntimeProps) {
         showEditor(host);
         editorListener = runtime.editors.onDidActiveEditorChange(() => {
           void activeWebview(extensionId).then((webview) => {
-            if (!cancelled && webview && webview.resource !== target.resource)
-              void showWebview(extensionId, target.viewType, target.resource);
+            if (cancelled || !webview || webview.resource === target.resource) return;
+            onOpenWebview?.(webview);
           });
         });
       } else attached = attachPart(Parts.SIDEBAR_PART, host);
