@@ -42,10 +42,15 @@ const error = (operation: ExtensionError["operation"], detail: string, cause?: u
   return failure;
 };
 const isExtensionError = Schema.is(ExtensionError);
+const isProduct = Schema.is(Schema.Struct({ commit: Schema.String, quality: Schema.String }));
 
 export const parseProduct = (text: string) =>
   Effect.try({
-    try: () => JSON.parse(text) as { commit: string; quality: string },
+    try: () => {
+      const product: unknown = JSON.parse(text);
+      if (!isProduct(product)) throw new Error("Invalid VSCodium product.json.");
+      return product;
+    },
     catch: (cause) => error("host", "Could not parse VSCodium product.json.", cause),
   });
 

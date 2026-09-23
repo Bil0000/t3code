@@ -15,3 +15,10 @@ it.effect("returns a typed host error for malformed product.json", () =>
     expect(yield* encodeExtensionError(failure)).not.toHaveProperty("cause");
   }),
 );
+
+it.effect("returns a typed host error for null product.json", () =>
+  Effect.gen(function* () {
+    const failure = yield* Effect.flip(parseProduct("null"));
+    expect(failure).toMatchObject({ _tag: "ExtensionError", operation: "host" });
+  }),
+);
