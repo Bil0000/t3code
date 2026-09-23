@@ -163,7 +163,7 @@ function ExtensionsSettingsContent({ environmentId }: { environmentId: Environme
   const [addOpen, setAddOpen] = useState(false);
   const [pending, setPending] = useState<PendingInstall | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const installed = state?.extensions ?? [];
   const unsupported = state?.host === "unsupported";
 
@@ -229,9 +229,13 @@ function ExtensionsSettingsContent({ environmentId }: { environmentId: Environme
     title: string,
     command: () => Promise<AtomCommandResult<unknown, unknown>>,
   ) => {
-    setBusyId(extension.id);
+    setBusyIds((current) => new Set(current).add(extension.id));
     const message = commandError(await command(), "The extension could not be updated.");
-    setBusyId(null);
+    setBusyIds((current) => {
+      const next = new Set(current);
+      next.delete(extension.id);
+      return next;
+    });
     if (message) {
       toastManager.add({
         type: "error",
@@ -326,11 +330,11 @@ function ExtensionsSettingsContent({ environmentId }: { environmentId: Environme
                       {extension.publisher} · v{extension.version}
                     </p>
                   </div>
-                  {busyId === extension.id ? <Spinner size="xs" /> : null}
+                  {busyIds.has(extension.id) ? <Spinner size="xs" /> : null}
                   <Switch
                     aria-label={`${extension.enabled ? "Disable" : "Enable"} ${extension.displayName}`}
                     checked={extension.enabled}
-                    disabled={busyId === extension.id}
+                    disabled={busyIds.has(extension.id)}
                     onCheckedChange={(enabled) =>
                       void runRowCommand(
                         extension,
@@ -343,7 +347,7 @@ function ExtensionsSettingsContent({ environmentId }: { environmentId: Environme
                     aria-label={`Uninstall ${extension.displayName}`}
                     size="icon-xs"
                     variant="ghost-destructive"
-                    disabled={busyId === extension.id}
+                    disabled={busyIds.has(extension.id)}
                     onClick={() =>
                       void runRowCommand(extension, "Could not uninstall", () =>
                         uninstall({ environmentId, input: { id: extension.id } }),
