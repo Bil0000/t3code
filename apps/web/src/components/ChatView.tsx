@@ -5104,6 +5104,12 @@ export default function ChatView(props: ChatViewProps) {
             threadRef: activeThreadRef,
           });
         }
+        if (surface.kind === "extension-webview") {
+          const { extensionId, viewType, resource } = surface;
+          void import("../vscode/runtime").then((runtime) =>
+            runtime.closeWebview(extensionId, viewType, resource),
+          );
+        }
         if (surface.kind === "terminal") {
           for (const terminalId of surface.terminalIds) {
             storeCloseTerminal(activeThreadRef, terminalId);

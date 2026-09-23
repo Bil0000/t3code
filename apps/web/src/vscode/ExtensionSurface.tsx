@@ -9,6 +9,7 @@ import {
   activeWebview,
   attachPart,
   getRuntime,
+  openViewContainer,
   parkEditor,
   Parts,
   showEditor,
@@ -66,10 +67,7 @@ export function ExtensionSurface(props: ExtensionRuntimeProps) {
       } else attached = attachPart(Parts.SIDEBAR_PART, host);
       if (target.kind === "extension") {
         const viewId = target.viewContainerId ?? firstViewContainerId;
-        if (
-          viewId &&
-          !(await runtime.views.openViewContainer(`workbench.view.extension.${viewId}`, true))
-        ) {
+        if (viewId && !(await openViewContainer(`workbench.view.extension.${viewId}`))) {
           throw new Error("This extension's view is not available.");
         }
         if (cancelled) return;
