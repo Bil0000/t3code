@@ -230,31 +230,6 @@ export function codexModelFamily(slug: string): string {
   return slug.startsWith("openai.gpt-") ? slug.slice("openai.".length) : slug;
 }
 
-export function supportsCodexExpandedContext(slug: string): boolean {
-  return /^(?:gpt-6-(?:astra|sol|luna)|gpt-5\.(?:4|5|6(?:-(?:sol|terra|luna))?))$/.test(
-    codexModelFamily(slug),
-  );
-}
-
-export function resolveCodexContextWindowChoice(
-  model: string | undefined,
-  choice: string | undefined,
-): string | null {
-  if (!model) return null;
-  if (choice === "default") return choice;
-  if (choice === "1m") return supportsCodexExpandedContext(model) ? choice : null;
-  const prefix = `expanded:${model}:`;
-  if (!choice?.startsWith(prefix)) return null;
-  const tokens = Number(choice.slice(prefix.length));
-  return Number.isSafeInteger(tokens) && tokens > 0 ? choice : null;
-}
-
-export function codexContextWindowTokens(choice: string | null): number | undefined {
-  if (choice === "1m") return 1_050_000;
-  if (!choice?.startsWith("expanded:")) return undefined;
-  return Number(choice.slice(choice.lastIndexOf(":") + 1));
-}
-
 export function normalizeModelSlug(
   model: string | null | undefined,
   provider: ProviderDriverKind = DEFAULT_PROVIDER_DRIVER_KIND,

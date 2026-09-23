@@ -7,26 +7,14 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   createModelCapabilities,
   createModelSelection,
-  codexContextWindowTokens,
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
   getProviderOptionDescriptors,
   readCustomModelEntries,
-  resolveCodexContextWindowChoice,
   toCustomModelSetting,
   getProviderOptionBooleanSelectionValue,
   getProviderOptionStringSelectionValue,
 } from "./model.ts";
-
-it("keeps Codex expanded choices tied to their model and exact provider limit", () => {
-  const choice = "expanded:gpt-7:872000";
-  expect(resolveCodexContextWindowChoice("gpt-7", choice)).toBe(choice);
-  expect(codexContextWindowTokens(choice)).toBe(872_000);
-  expect(resolveCodexContextWindowChoice("gpt-8", choice)).toBeNull();
-  expect(resolveCodexContextWindowChoice("gpt-7", "expanded:gpt-7:NaN")).toBeNull();
-  expect(resolveCodexContextWindowChoice("gpt-7", "default")).toBe("default");
-  expect(codexContextWindowTokens("default")).toBeUndefined();
-});
 
 const codexCaps: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [

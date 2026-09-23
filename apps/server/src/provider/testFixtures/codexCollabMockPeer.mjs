@@ -18,9 +18,6 @@ const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let turnStartCount = 0;
 let activeTurn;
-let firstTurn;
-let pendingForkResponse;
-let pendingTurnStartResponse;
 // Server->client requests the runtime must answer (approval prompts), keyed
 // by the numeric JSON-RPC id this peer allocated for them.
 const openServerRequests = new Map();
@@ -98,39 +95,6 @@ rl.on("line", (line) => {
     write({ id, result: fixture.responses.threadStart });
     return;
   }
-  if (method === "thread/fork") {
-    if (script.recordRequests) {
-      NodeFS.appendFileSync(
-        `${process.env.T3_CODEX_COLLAB_SCRIPT}.requests`,
-        `${JSON.stringify({ method, params: message.params })}\n`,
-      );
-    }
-    const response = {
-      id,
-      result: {
-        ...fixture.responses.threadStart,
-        thread: { ...fixture.responses.threadStart.thread, id: "expanded-thread" },
-      },
-    };
-    if (script.deferForkResponseUntilRead) {
-      pendingForkResponse = response;
-      write({
-        jsonrpc: "2.0",
-        method: "serverRequest/resolved",
-        params: { threadId: script.rootThreadId, requestId: "fork-observed" },
-      });
-      return;
-    }
-    write(response);
-    return;
-  }
-  if (method === "thread/read" && (pendingForkResponse || pendingTurnStartResponse)) {
-    write(pendingForkResponse ?? pendingTurnStartResponse);
-    pendingForkResponse = undefined;
-    pendingTurnStartResponse = undefined;
-    write({ id, result: { thread: fixture.responses.threadStart.thread } });
-    return;
-  }
   if (method === "thread/resume") {
     if (script.recordRequests) {
       NodeFS.appendFileSync(
@@ -180,45 +144,14 @@ rl.on("line", (line) => {
     return;
   }
   if (method === "turn/start") {
-    if (script.recordTurnStarts) {
-      NodeFS.appendFileSync(
-        `${process.env.T3_CODEX_COLLAB_SCRIPT}.requests`,
-        `${JSON.stringify({ method, params: message.params })}\n`,
-      );
-    }
-    if (script.hangTurnStartResponse) {
-      write({
-        jsonrpc: "2.0",
-        method: "serverRequest/resolved",
-        params: { threadId: script.rootThreadId, requestId: "turn-start-observed" },
-      });
-      return;
-    }
     const turnId = script.turnIds?.[turnStartCount];
     const turn = turnId
       ? { ...fixture.responses.turnStart.turn, id: turnId }
       : fixture.responses.turnStart.turn;
     activeTurn = turn;
     turnStartCount += 1;
-    if (turnStartCount === 1) firstTurn = turn;
-    if (script.deferTurnStartResponseUntilRead) {
-      pendingTurnStartResponse = { id, result: { ...fixture.responses.turnStart, turn } };
-      write({
-        jsonrpc: "2.0",
-        method: "serverRequest/resolved",
-        params: { threadId: script.rootThreadId, requestId: "turn-start-observed" },
-      });
-      return;
-    }
     write({ id, result: { ...fixture.responses.turnStart, turn } });
     const rootThreadId = script.rootThreadId;
-    if (script.completeFirstTurnOnSecondStart && turnStartCount === 2) {
-      write({
-        jsonrpc: "2.0",
-        method: "turn/completed",
-        params: { threadId: rootThreadId, turn: { ...firstTurn, status: "completed" } },
-      });
-    }
     if (script.onlyFirstTurnStarts !== true || turnStartCount === 1) {
       write({
         jsonrpc: "2.0",

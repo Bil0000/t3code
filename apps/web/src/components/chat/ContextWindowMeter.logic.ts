@@ -1,5 +1,4 @@
 import type { ModelSelection, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   isClaudeResumeCompactionQuestion,
@@ -12,18 +11,6 @@ import { getTriggerDisplayModelName, type ModelEsque } from "./providerIconUtils
 
 const CLAUDE_RESUME_COMPACTION_MINUTES = 70;
 const CLAUDE_RESUME_COMPACTION_TOKENS = 100_000;
-
-export function sameContextWindowSelection(
-  active: ModelSelection | null | undefined,
-  selected: ModelSelection,
-): boolean {
-  return (
-    active?.instanceId === selected.instanceId &&
-    active.model === selected.model &&
-    (getModelSelectionStringOptionValue(active, "contextWindow") ?? "default") ===
-      (getModelSelectionStringOptionValue(selected, "contextWindow") ?? "default")
-  );
-}
 
 export function providerSupportsManualCompaction(
   provider: ProviderInstanceEntry | null | undefined,

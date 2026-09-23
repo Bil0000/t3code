@@ -277,17 +277,15 @@ describe("buildTurnStartParams", () => {
         mode: "default",
         settings: {
           model: "gpt-5.3-codex",
-          reasoning_effort: "medium",
           developer_instructions: buildCodexDeveloperInstructions("default", {
             model: "gpt-5.3-codex",
-            reasoningEffort: "medium",
           }),
         },
       },
     });
   });
 
-  it("reports the same fallback model and effort in settings and instructions", () => {
+  it("leaves effort to Codex config when no override is given", () => {
     const params = Effect.runSync(
       buildTurnStartParams({
         threadId: "provider-thread-1",
@@ -299,8 +297,9 @@ describe("buildTurnStartParams", () => {
 
     const settings = params.collaborationMode?.settings;
     NodeAssert.equal(settings?.model, DEFAULT_MODEL);
-    NodeAssert.equal(settings?.reasoning_effort, "medium");
-    NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL} with medium`));
+    NodeAssert.equal(settings?.reasoning_effort, undefined);
+    NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL}`));
+    NodeAssert.ok(!settings?.developer_instructions?.includes("reasoning effort"));
   });
 
   it.effect("routes approvals to the auto reviewer in auto mode", () =>
@@ -889,38 +888,6 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
-  for (const [choice, tokens, model] of [
-    ["default", undefined, "gpt-6-astra"],
-    ["1m", 1_050_000, "gpt-6-astra"],
-    ["expanded:gpt-7:872000", 872_000, "gpt-7"],
-  ] as const) {
-    it.effect(`starts supported GPT models with the ${choice} window`, () =>
-      Effect.gen(function* () {
-        let params: unknown;
-        yield* openCodexThread({
-          client: {
-            request: (_method, payload) => {
-              params = payload;
-              return Effect.succeed(makeThreadOpenResponse("expanded-thread"));
-            },
-            raw: { request: () => Effect.die("A new thread must not resume") },
-          },
-          threadId: ThreadId.make("thread-1"),
-          runtimeMode: "full-access",
-          cwd: "/tmp/project",
-          requestedModel: model,
-          contextWindow: choice,
-          serviceTier: undefined,
-          resumeThreadId: undefined,
-        });
-        NodeAssert.deepEqual(
-          (params as { config?: unknown }).config,
-          tokens === undefined ? undefined : { model_context_window: tokens },
-        );
-      }),
-    );
-  }
-
   it.effect("resumes metadata when historical turns contain unknown error values", () =>
     Effect.gen(function* () {
       const response = makeThreadOpenResponse("saved-thread");

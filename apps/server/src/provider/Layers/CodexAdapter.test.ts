@@ -415,7 +415,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
-  it.effect("maps codex model options before sending a turn", () =>
+  it.effect("keeps Codex effort in config while mapping service tier", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       yield* adapter.startSession({
@@ -442,56 +442,8 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
         input: "hello",
         model: "gpt-5.3-codex",
-        effort: "high",
         serviceTier: "priority",
       });
-    }),
-  );
-
-  it.effect("passes expanded and default context choices to the runtime", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const threadId = asThreadId("thread-context-choice");
-      yield* adapter.startSession({
-        provider: ProviderDriverKind.make("codex"),
-        threadId,
-        runtimeMode: "full-access",
-        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6-astra", [
-          { id: "contextWindow", value: "1m" },
-        ]),
-      });
-      const runtime = sessionRuntimeFactory.lastRuntime;
-      NodeAssert.ok(runtime);
-      NodeAssert.equal(runtime.options.contextWindow, "1m");
-
-      yield* adapter.sendTurn({
-        threadId,
-        input: "continue",
-        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6-astra"),
-        attachments: [],
-      });
-      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].contextWindow, "default");
-
-      const expanded = "expanded:gpt-7:872000";
-      yield* adapter.sendTurn({
-        threadId,
-        input: "future model",
-        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-7", [
-          { id: "contextWindow", value: expanded },
-        ]),
-        attachments: [],
-      });
-      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].contextWindow, expanded);
-
-      yield* adapter.sendTurn({
-        threadId,
-        input: "another model",
-        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-8", [
-          { id: "contextWindow", value: expanded },
-        ]),
-        attachments: [],
-      });
-      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].contextWindow, undefined);
     }),
   );
 
@@ -655,7 +607,6 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
         input: "hello",
         model: "gpt-5.3-codex",
-        effort: "high",
         serviceTier: "flex",
       });
     }).pipe(Effect.provide(customLayer));

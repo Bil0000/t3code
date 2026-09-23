@@ -1,12 +1,8 @@
 import { assert, it } from "@effect/vitest";
 
-import {
-  applyPreferredCodexDefaultModel,
-  mapCodexModelCapabilities,
-  parseCodexModelContextLimits,
-} from "./CodexProvider.ts";
+import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
 
-it("maps current Codex model capability fields", () => {
+it("exposes service tiers while leaving reasoning effort to Codex config", () => {
   const capabilities = mapCodexModelCapabilities({
     additionalSpeedTiers: [],
     defaultReasoningEffort: "super-high",
@@ -39,13 +35,6 @@ it("maps current Codex model capability fields", () => {
 
   assert.deepStrictEqual(capabilities.optionDescriptors, [
     {
-      id: "reasoningEffort",
-      label: "Reasoning",
-      type: "select",
-      options: [{ id: "super-high", label: "super-high", isDefault: true }],
-      currentValue: "super-high",
-    },
-    {
       id: "serviceTier",
       label: "Service Tier",
       type: "select",
@@ -66,66 +55,6 @@ it("maps current Codex model capability fields", () => {
       currentValue: "flex",
     },
   ]);
-});
-
-it("offers Default and 1M context on supported GPT models", () => {
-  const model = {
-    additionalSpeedTiers: [],
-    defaultReasoningEffort: "medium" as const,
-    description: "Test model",
-    displayName: "GPT-6 Astra",
-    hidden: false,
-    id: "gpt-6-astra",
-    isDefault: true,
-    model: "gpt-6-astra",
-    supportedReasoningEfforts: [],
-  };
-  assert.deepEqual(mapCodexModelCapabilities(model).optionDescriptors, [
-    {
-      id: "contextWindow",
-      label: "Context Window",
-      type: "select",
-      options: [
-        { id: "default", label: "Default", isDefault: true },
-        { id: "1m", label: "1M" },
-      ],
-    },
-  ]);
-  assert.deepEqual(
-    mapCodexModelCapabilities({ ...model, id: "gpt-test", model: "gpt-test" }).optionDescriptors,
-    [],
-  );
-
-  const limits = parseCodexModelContextLimits(`{
-    "models": [
-      { "slug": "gpt-test", "context_window": 272000, "max_context_window": 872000 },
-      { "slug": "gpt-6-astra", "context_window": 272000, "max_context_window": 272000 }
-    ]
-  }`);
-  assert.deepEqual(
-    mapCodexModelCapabilities({ ...model, model: "gpt-test" }, limits.get("gpt-test"))
-      .optionDescriptors,
-    [
-      {
-        id: "contextWindow",
-        label: "Context Window",
-        type: "select",
-        options: [
-          {
-            id: "default",
-            label: "Default",
-            isDefault: true,
-            description: "272K tokens from Codex.",
-          },
-          { id: "expanded:gpt-test:872000", label: "Expanded · 872K" },
-        ],
-      },
-    ],
-  );
-  assert.deepEqual(
-    mapCodexModelCapabilities(model, limits.get("gpt-6-astra")).optionDescriptors,
-    [],
-  );
 });
 
 it("uses standard routing when the catalog has no default service tier", () => {
