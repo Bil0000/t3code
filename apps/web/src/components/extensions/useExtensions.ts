@@ -5,6 +5,7 @@ import { useCallback } from "react";
 
 import type { ExtensionSurfaceTarget } from "~/rightPanelStore";
 
+import { useDeviceHubAccess } from "~/state/device";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { usePreparedConnection } from "~/state/session";
@@ -31,10 +32,15 @@ export function useExtensions(environmentId: EnvironmentId | null) {
     environmentId === null ? null : serverEnvironment.extensionsState({ environmentId, input: {} }),
   );
   const httpBaseUrl = Option.getOrNull(usePreparedConnection(environmentId))?.httpBaseUrl ?? null;
+  const access = useDeviceHubAccess(environmentId);
   const resolveIconUrl = useCallback(
-    (extension: InstalledExtension) =>
-      extension.iconUrl && httpBaseUrl ? resolveAssetUrl(httpBaseUrl, extension.iconUrl) : null,
-    [httpBaseUrl],
+    (extension: InstalledExtension) => {
+      if (!extension.iconUrl || !httpBaseUrl || !access) return null;
+      const url = resolveAssetUrl(httpBaseUrl, extension.iconUrl);
+      const ticket = access.query.wsTicket;
+      return url && ticket ? `${url}?wsTicket=${encodeURIComponent(ticket)}` : url;
+    },
+    [access, httpBaseUrl],
   );
   return { state: query.data, error: query.error, resolveIconUrl };
 }
