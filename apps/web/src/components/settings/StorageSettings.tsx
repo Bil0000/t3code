@@ -85,7 +85,7 @@ function RetentionControl({
 }
 
 export function StorageSettingsPanel() {
-  const { scope, connectedEnvironments, targets, target } = useSettingsScope();
+  const { scope, environments, connectedEnvironments, targets, target } = useSettingsScope();
   const scopedSettings = useScopedSettings();
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
   const settings = {
@@ -225,27 +225,30 @@ export function StorageSettingsPanel() {
                 />
               }
             />
-            {connectedEnvironments.every(
-              (environment) =>
-                environment.serverConfig?.environment.capabilities.settledWorktreeCleanup === true,
-            ) && (
-              <SettingsRow
-                title="Delete settled worktrees"
-                status={ruleStatus("worktreeSettledAfterDays")}
-                description="Remove worktrees this many days after their thread settles. Set 0 days to remove them as soon as they are safe to remove. Branches and thread history are kept."
-                serverScoped={!isProjectScope}
-                control={
-                  <RetentionControl
-                    label="Delete settled worktrees"
-                    value={settings.worktreeSettledAfterDays}
-                    minimum={0}
-                    onChange={(worktreeSettledAfterDays) =>
-                      updateWorktree({ worktreeSettledAfterDays })
-                    }
-                  />
-                }
-              />
-            )}
+            {environments.length > 0 &&
+              environments.every(
+                (environment) =>
+                  environment.connection.phase === "connected" &&
+                  environment.serverConfig?.environment.capabilities.settledWorktreeCleanup ===
+                    true,
+              ) && (
+                <SettingsRow
+                  title="Delete settled worktrees"
+                  status={ruleStatus("worktreeSettledAfterDays")}
+                  description="Remove worktrees this many days after their thread settles. Set 0 days to remove them as soon as they are safe to remove. Branches and thread history are kept."
+                  serverScoped={!isProjectScope}
+                  control={
+                    <RetentionControl
+                      label="Delete settled worktrees"
+                      value={settings.worktreeSettledAfterDays}
+                      minimum={0}
+                      onChange={(worktreeSettledAfterDays) =>
+                        updateWorktree({ worktreeSettledAfterDays })
+                      }
+                    />
+                  }
+                />
+              )}
             <SettingsRow
               title="Delete merged worktrees"
               status={ruleStatus("worktreeOnMerge")}
