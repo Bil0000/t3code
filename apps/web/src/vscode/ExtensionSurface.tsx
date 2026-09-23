@@ -49,8 +49,15 @@ export function ExtensionSurface(props: ExtensionRuntimeProps) {
         throw new Error("This extension panel closed. Run its command again to reopen it.");
       }
       if (cancelled) return;
-      if (target.kind === "extension-webview") showEditor(host);
-      else attached = attachPart(Parts.SIDEBAR_PART, host);
+      if (target.kind === "extension-webview") {
+        showEditor(host);
+        editorListener = runtime.editors.onDidActiveEditorChange(() => {
+          void activeWebview(extensionId).then((webview) => {
+            if (!cancelled && webview?.resource !== target.resource)
+              void showWebview(extensionId, target.viewType, target.resource);
+          });
+        });
+      } else attached = attachPart(Parts.SIDEBAR_PART, host);
       if (target.kind === "extension") {
         const viewId = target.viewContainerId ?? firstViewContainerId;
         if (

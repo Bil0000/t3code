@@ -43,7 +43,7 @@
   height: 100%;
 }
 
-.t3-vscode-part .title,
+.t3-vscode-part .part > .title,
 .t3-vscode-part .titlebar,
 .t3-vscode-part .tabs,
 .t3-vscode-part .composite.title,
