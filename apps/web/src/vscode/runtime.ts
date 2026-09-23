@@ -213,13 +213,18 @@ export async function getRuntime(
   httpBaseUrl: string,
   workspaceRoot?: string,
 ) {
-  const key = `${httpBaseUrl}|${connection.commit}`;
+  const key = `${httpBaseUrl}|${connection.commit}|${workspaceRoot ?? ""}`;
   if (!runtime) {
     runtimeKey = key;
-    runtime = startRuntime(connection, httpBaseUrl, workspaceRoot);
+    runtime = startRuntime(connection, httpBaseUrl, workspaceRoot).catch((error: unknown) => {
+      runtime = null;
+      throw error;
+    });
   }
   if (runtimeKey !== key)
-    throw new Error("Open this environment in a new page to run its extensions.");
+    throw new Error(
+      "Extensions are running for another project. Reload the page to use them here.",
+    );
   const current = await runtime;
   const resolver = await getService(IRemoteAuthorityResolverService);
   resolver._setAuthorityConnectionToken(current.remoteAuthority, connection.connectionToken);

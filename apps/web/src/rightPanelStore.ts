@@ -253,7 +253,7 @@ const terminalSurface = (terminalId: string): RightPanelSurface => ({
   activeTerminalId: terminalId,
 });
 
-export function extensionSurface(target: ExtensionSurfaceTarget): RightPanelSurface {
+function extensionSurface(target: ExtensionSurfaceTarget): RightPanelSurface {
   const extensionId = encodeURIComponent(target.extensionId);
   if (target.kind === "extension-webview") {
     return {

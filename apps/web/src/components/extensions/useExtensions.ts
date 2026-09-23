@@ -10,18 +10,13 @@ import { serverEnvironment } from "~/state/server";
 import { usePreparedConnection } from "~/state/session";
 
 export function extensionHasUi(extension: InstalledExtension): boolean {
-  return extension.viewContainers.length > 0 || extension.customEditors.length > 0;
+  return extension.viewContainers.length > 0;
 }
 
 export function extensionLaunchTargets(
   extension: InstalledExtension,
 ): { label: string; target: ExtensionSurfaceTarget }[] {
-  if (!extension.enabled || !extensionHasUi(extension)) return [];
-  if (extension.viewContainers.length === 0) {
-    return [
-      { label: extension.displayName, target: { kind: "extension", extensionId: extension.id } },
-    ];
-  }
+  if (!extension.enabled) return [];
   return extension.viewContainers.map((container) => ({
     label:
       extension.viewContainers.length === 1 || container.title === ""

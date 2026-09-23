@@ -35,7 +35,11 @@ export function parseExtensionReference(input: string): OpenVsxSource | null {
   if (host === "open-vsx.org" || host === "www.open-vsx.org") {
     const [kind, namespace, name, version, ...rest] = url.pathname.split("/").filter(Boolean);
     if (kind !== "extension" || !namespace || !name || rest.length > 0) return null;
-    return source(decodeURIComponent(namespace), decodeURIComponent(name), version);
+    try {
+      return source(decodeURIComponent(namespace), decodeURIComponent(name), version);
+    } catch {
+      return null;
+    }
   }
   if (host === "marketplace.visualstudio.com" && url.pathname.replace(/\/$/, "") === "/items") {
     const itemName = url.searchParams.get("itemName");

@@ -37,6 +37,7 @@ describe("parseExtensionReference", () => {
     "https://marketplace.visualstudio.com/items?itemName=nodot",
     "vscode:extension/",
     "https://open-vsx.org/extension/-bad/name",
+    "https://open-vsx.org/extension/pub/%E0%A4%A",
   ])("rejects %s", (input) => {
     expect(parseExtensionReference(input)).toBeNull();
   });

@@ -1,6 +1,6 @@
 import type { EnvironmentId, InstalledExtension } from "@t3tools/contracts";
 import { PlayIcon, PuzzleIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import type { ExtensionSurfaceTarget } from "~/rightPanelStore";
 import { serverEnvironment } from "~/state/server";
@@ -37,8 +37,6 @@ export interface ExtensionSurfaceFrameProps {
   onRunCommand?: ((command: string) => void) | undefined;
   children?: ((props: ExtensionRuntimeProps) => ReactNode) | undefined;
 }
-
-const COMMAND_OPTIONS = { reportFailure: false, reportDefect: false };
 
 function FrameNotice(props: {
   icon?: ReactNode;
@@ -128,8 +126,12 @@ function ExtensionInfo(props: {
 
 export function ExtensionSurfaceFrame(props: ExtensionSurfaceFrameProps) {
   const { state, error, resolveIconUrl } = useExtensions(props.environmentId);
-  const setEnabled = useAtomCommand(serverEnvironment.setExtensionEnabled, COMMAND_OPTIONS);
-  const connect = useAtomCommand(serverEnvironment.connectExtensionHost, COMMAND_OPTIONS);
+  const setEnabled = useAtomCommand(serverEnvironment.setExtensionEnabled);
+  const connect = useAtomCommand(serverEnvironment.connectExtensionHost);
+  const host = state?.host;
+  useEffect(() => {
+    if (host === "notInstalled") void connect({ environmentId: props.environmentId, input: {} });
+  }, [connect, host, props.environmentId]);
   const manage = (
     <Button size="sm" variant="outline" onClick={props.onManage}>
       Manage extensions
@@ -176,6 +178,7 @@ export function ExtensionSurfaceFrame(props: ExtensionSurfaceFrameProps) {
     );
   }
 
+  const hasUi = props.target.kind === "extension-webview" || extensionHasUi(extension);
   const info = (
     <ExtensionInfo
       extension={extension}
@@ -206,7 +209,7 @@ export function ExtensionSurfaceFrame(props: ExtensionSurfaceFrameProps) {
     case "ready":
       break;
     default:
-      if (!extensionHasUi(extension)) return info;
+      if (!hasUi) return info;
       return (
         <FrameNotice
           icon={<Spinner size="md" />}
@@ -222,7 +225,7 @@ export function ExtensionSurfaceFrame(props: ExtensionSurfaceFrameProps) {
       );
   }
 
-  if (!extensionHasUi(extension) || !props.children) return info;
+  if (!hasUi || !props.children) return info;
   return (
     props.children({
       environmentId: props.environmentId,

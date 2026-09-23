@@ -18,7 +18,9 @@ import {
 import "./extensionSurface.css";
 
 export function ExtensionSurface(props: ExtensionRuntimeProps) {
-  const { environmentId, target, extension, workspaceRoot, onOpenWebview } = props;
+  const { environmentId, target, workspaceRoot, onOpenWebview } = props;
+  const extensionId = props.extension.id;
+  const firstViewContainerId = props.extension.viewContainers[0]?.id;
   const element = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const httpBaseUrl = Option.getOrNull(usePreparedConnection(environmentId))?.httpBaseUrl;
@@ -42,22 +44,24 @@ export function ExtensionSurface(props: ExtensionRuntimeProps) {
       if (cancelled) return;
       if (
         target.kind === "extension-webview" &&
-        !(await showWebview(extension.id, target.viewType))
+        !(await showWebview(extensionId, target.viewType))
       ) {
         throw new Error("This extension panel closed. Run its command again to reopen it.");
       }
+      if (cancelled) return;
       if (target.kind === "extension-webview") showEditor(host);
       else attached = attachPart(Parts.SIDEBAR_PART, host);
       if (target.kind === "extension") {
-        const viewId = target.viewContainerId ?? extension.viewContainers[0]?.id;
+        const viewId = target.viewContainerId ?? firstViewContainerId;
         if (
           viewId &&
           !(await runtime.views.openViewContainer(`workbench.view.extension.${viewId}`, true))
         ) {
           throw new Error("This extension's view is not available.");
         }
+        if (cancelled) return;
         editorListener = runtime.editors.onDidActiveEditorChange(() => {
-          void activeWebview(extension.id).then((webview) => {
+          void activeWebview(extensionId).then((webview) => {
             if (!cancelled && webview) onOpenWebview?.(webview);
           });
         });
@@ -83,7 +87,16 @@ export function ExtensionSurface(props: ExtensionRuntimeProps) {
       if (target.kind === "extension-webview") parkEditor();
       themeObserver?.disconnect();
     };
-  }, [connect, httpBaseUrl, environmentId, extension, onOpenWebview, target, workspaceRoot]);
+  }, [
+    connect,
+    httpBaseUrl,
+    environmentId,
+    extensionId,
+    firstViewContainerId,
+    onOpenWebview,
+    target,
+    workspaceRoot,
+  ]);
 
   if (error) return <div className="p-5 text-sm text-muted-foreground">{error}</div>;
   return <div ref={element} className="t3-vscode-part h-full min-h-0 w-full overflow-hidden" />;
