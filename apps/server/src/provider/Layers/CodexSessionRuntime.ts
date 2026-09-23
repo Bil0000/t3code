@@ -2591,7 +2591,7 @@ export const makeCodexSessionRuntime = (
                 .pipe(Effect.timeoutOption("3 seconds"), Effect.ignore),
             { concurrency: 8, discard: true },
           ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
-          const effectiveTurnId = turnId ?? session.activeTurnId;
+          const effectiveTurnId = session.activeTurnId ?? turnId;
           if (!effectiveTurnId) {
             return;
           }
