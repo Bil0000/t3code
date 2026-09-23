@@ -889,9 +889,10 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
-  for (const [choice, tokens] of [
-    ["default", undefined],
-    ["1m", 1_050_000],
+  for (const [choice, tokens, model] of [
+    ["default", undefined, "gpt-6-astra"],
+    ["1m", 1_050_000, "gpt-6-astra"],
+    ["expanded:gpt-7:872000", 872_000, "gpt-7"],
   ] as const) {
     it.effect(`starts supported GPT models with the ${choice} window`, () =>
       Effect.gen(function* () {
@@ -907,7 +908,7 @@ describe("openCodexThread", () => {
           threadId: ThreadId.make("thread-1"),
           runtimeMode: "full-access",
           cwd: "/tmp/project",
-          requestedModel: "gpt-6-astra",
+          requestedModel: model,
           contextWindow: choice,
           serviceTier: undefined,
           resumeThreadId: undefined,

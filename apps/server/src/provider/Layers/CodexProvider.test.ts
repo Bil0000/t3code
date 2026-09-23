@@ -1,6 +1,10 @@
 import { assert, it } from "@effect/vitest";
 
-import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
+import {
+  applyPreferredCodexDefaultModel,
+  mapCodexModelCapabilities,
+  parseCodexModelContextLimits,
+} from "./CodexProvider.ts";
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
@@ -89,6 +93,37 @@ it("offers Default and 1M context on supported GPT models", () => {
   ]);
   assert.deepEqual(
     mapCodexModelCapabilities({ ...model, id: "gpt-test", model: "gpt-test" }).optionDescriptors,
+    [],
+  );
+
+  const limits = parseCodexModelContextLimits(`{
+    "models": [
+      { "slug": "gpt-test", "context_window": 272000, "max_context_window": 872000 },
+      { "slug": "gpt-6-astra", "context_window": 272000, "max_context_window": 272000 }
+    ]
+  }`);
+  assert.deepEqual(
+    mapCodexModelCapabilities({ ...model, model: "gpt-test" }, limits.get("gpt-test"))
+      .optionDescriptors,
+    [
+      {
+        id: "contextWindow",
+        label: "Context Window",
+        type: "select",
+        options: [
+          {
+            id: "default",
+            label: "Default",
+            isDefault: true,
+            description: "272K tokens from Codex.",
+          },
+          { id: "expanded:gpt-test:872000", label: "Expanded · 872K" },
+        ],
+      },
+    ],
+  );
+  assert.deepEqual(
+    mapCodexModelCapabilities(model, limits.get("gpt-6-astra")).optionDescriptors,
     [],
   );
 });

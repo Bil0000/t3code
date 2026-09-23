@@ -1,3 +1,9 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodePath from "node:path";
+
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -32,6 +38,7 @@ import {
   supportsCodexExpandedContext,
 } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { formatTokens } from "@t3tools/shared/usageFormat";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
@@ -91,6 +98,45 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 
 const DEFAULT_SERVICE_TIER_ID = "default";
 
+const CodexModelCache = Schema.Struct({
+  models: Schema.Array(
+    Schema.Struct({
+      slug: Schema.String,
+      context_window: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+      max_context_window: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+    }),
+  ),
+});
+
+type CodexContextLimits = { readonly defaultTokens: number; readonly maxTokens: number };
+
+const decodeCodexModelCacheJson = Schema.decodeUnknownOption(
+  Schema.fromJsonString(CodexModelCache),
+);
+
+export function parseCodexModelContextLimits(
+  input: string,
+): ReadonlyMap<string, CodexContextLimits> {
+  const cache = decodeCodexModelCacheJson(input);
+  const limits = new Map<string, CodexContextLimits>();
+  if (Option.isNone(cache)) return limits;
+  for (const model of cache.value.models) {
+    const defaultTokens = model.context_window;
+    const maxTokens = model.max_context_window ?? defaultTokens;
+    if (
+      typeof defaultTokens === "number" &&
+      typeof maxTokens === "number" &&
+      Number.isSafeInteger(defaultTokens) &&
+      Number.isSafeInteger(maxTokens) &&
+      defaultTokens > 0 &&
+      maxTokens >= defaultTokens
+    ) {
+      limits.set(model.slug, { defaultTokens, maxTokens });
+    }
+  }
+  return limits;
+}
+
 function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
 }
@@ -145,6 +191,7 @@ function codexAccountEmail(account: CodexSchema.V2GetAccountResponse["account"])
 
 export function mapCodexModelCapabilities(
   model: CodexSchema.V2ModelListResponse__Model,
+  contextLimits?: CodexContextLimits,
 ): ModelCapabilities {
   const reasoningOptions = model.supportedReasoningEfforts.map(({ reasoningEffort }) =>
     reasoningEffort ===
@@ -185,14 +232,38 @@ export function mapCodexModelCapabilities(
       ...(defaultReasoning ? { currentValue: defaultReasoning } : {}),
     });
   }
-  if (supportsCodexExpandedContext(model.model)) {
+  const knownExpanded = supportsCodexExpandedContext(model.model);
+  if (
+    (contextLimits ? contextLimits.maxTokens > contextLimits.defaultTokens : knownExpanded) &&
+    (knownExpanded || codexModelFamily(model.model).startsWith("gpt-"))
+  ) {
     optionDescriptors.push({
       id: "contextWindow",
       label: "Context Window",
       type: "select",
       options: [
-        { id: "default", label: "Default", isDefault: true },
-        { id: "1m", label: "1M" },
+        {
+          id: "default",
+          label: "Default",
+          isDefault: true,
+          ...(contextLimits
+            ? { description: `${formatTokens(contextLimits.defaultTokens)} tokens from Codex.` }
+            : {}),
+        },
+        knownExpanded
+          ? {
+              id: "1m",
+              label: "1M",
+              ...(contextLimits && contextLimits.maxTokens < 1_050_000
+                ? {
+                    description: `Codex caps this at ${formatTokens(contextLimits.maxTokens)} tokens.`,
+                  }
+                : {}),
+            }
+          : {
+              id: `expanded:${model.model}:${contextLimits!.maxTokens}`,
+              label: `Expanded · ${formatTokens(contextLimits!.maxTokens)}`,
+            },
       ],
     });
   }
@@ -231,14 +302,15 @@ const toDisplayName = (model: CodexSchema.V2ModelListResponse__Model): string =>
 };
 
 function parseCodexModelListResponse(
-  response: CodexSchema.V2ModelListResponse,
+  models: ReadonlyArray<CodexSchema.V2ModelListResponse__Model>,
+  contextLimits: ReadonlyMap<string, CodexContextLimits>,
 ): ReadonlyArray<ServerProviderModel> {
-  return response.data.map((model) => ({
+  return models.map((model) => ({
     slug: model.model,
     name: toDisplayName(model),
     isCustom: false,
     ...(model.isDefault ? { isDefault: true } : {}),
-    capabilities: mapCodexModelCapabilities(model),
+    capabilities: mapCodexModelCapabilities(model, contextLimits.get(model.model)),
   }));
 }
 
@@ -337,7 +409,7 @@ function parseCodexSkillsListResponse(
 const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   client: CodexClient.CodexAppServerClient["Service"],
 ) {
-  const models: ServerProviderModel[] = [];
+  const models: CodexSchema.V2ModelListResponse__Model[] = [];
   let cursor: string | null | undefined = undefined;
 
   do {
@@ -345,7 +417,7 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
       "model/list",
       cursor ? { cursor } : {},
     );
-    models.push(...parseCodexModelListResponse(response));
+    models.push(...response.data);
     cursor = response.nextCursor;
   } while (cursor);
 
@@ -474,13 +546,25 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     ],
     { concurrency: "unbounded" },
   );
+  const home =
+    input.homePath?.trim() ||
+    input.environment?.CODEX_HOME?.trim() ||
+    process.env.CODEX_HOME?.trim() ||
+    NodePath.join(NodeOS.homedir(), ".codex");
+  const cachePath = NodePath.join(NodePath.resolve(expandHomePath(home)), "models_cache.json");
+  const contextLimits = yield* Effect.tryPromise(async () =>
+    parseCodexModelContextLimits(await NodeFSP.readFile(cachePath, "utf8")),
+  ).pipe(Effect.orElseSucceed(() => new Map<string, CodexContextLimits>()));
 
   return {
     account: accountResponse,
     rateLimits,
     version,
     models: applyPreferredCodexDefaultModel(
-      appendCustomCodexModels(models, input.customModels ?? []),
+      appendCustomCodexModels(
+        parseCodexModelListResponse(models, contextLimits),
+        input.customModels ?? [],
+      ),
     ),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
   } satisfies CodexAppServerProviderSnapshot;

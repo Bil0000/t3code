@@ -471,6 +471,27 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         attachments: [],
       });
       NodeAssert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].contextWindow, "default");
+
+      const expanded = "expanded:gpt-7:872000";
+      yield* adapter.sendTurn({
+        threadId,
+        input: "future model",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-7", [
+          { id: "contextWindow", value: expanded },
+        ]),
+        attachments: [],
+      });
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].contextWindow, expanded);
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "another model",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-8", [
+          { id: "contextWindow", value: expanded },
+        ]),
+        attachments: [],
+      });
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].contextWindow, undefined);
     }),
   );
 

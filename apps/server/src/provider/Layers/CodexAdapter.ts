@@ -46,6 +46,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import {
   getModelSelectionStringOptionValue,
+  resolveCodexContextWindowChoice,
   supportsCodexExpandedContext,
 } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
@@ -2275,10 +2276,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const contextWindow =
-          input.modelSelection?.instanceId === boundInstanceId &&
-          supportsCodexExpandedContext(input.modelSelection.model)
-            ? (getModelSelectionStringOptionValue(input.modelSelection, "contextWindow") ??
-              "default")
+          input.modelSelection?.instanceId === boundInstanceId
+            ? (resolveCodexContextWindowChoice(
+                input.modelSelection.model,
+                getModelSelectionStringOptionValue(input.modelSelection, "contextWindow") ??
+                  (supportsCodexExpandedContext(input.modelSelection.model)
+                    ? "default"
+                    : undefined),
+              ) ?? undefined)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const runtimeInput: CodexSessionRuntimeOptions = {
@@ -2546,9 +2551,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         ? getCodexServiceTierOptionValue(input.modelSelection)
         : undefined;
     const contextWindow =
-      input.modelSelection?.instanceId === boundInstanceId &&
-      supportsCodexExpandedContext(input.modelSelection.model)
-        ? (getModelSelectionStringOptionValue(input.modelSelection, "contextWindow") ?? "default")
+      input.modelSelection?.instanceId === boundInstanceId
+        ? (resolveCodexContextWindowChoice(
+            input.modelSelection.model,
+            getModelSelectionStringOptionValue(input.modelSelection, "contextWindow") ??
+              (supportsCodexExpandedContext(input.modelSelection.model) ? "default" : undefined),
+          ) ?? undefined)
         : undefined;
     return yield* session.runtime
       .sendTurn({

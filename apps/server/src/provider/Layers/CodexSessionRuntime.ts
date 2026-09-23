@@ -18,7 +18,11 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import { normalizeModelSlug, supportsCodexExpandedContext } from "@t3tools/shared/model";
+import {
+  codexContextWindowTokens,
+  normalizeModelSlug,
+  resolveCodexContextWindowChoice,
+} from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -553,22 +557,17 @@ function buildThreadStartParams(input: {
   readonly serviceTier: CodexServiceTier | undefined;
 }) {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
-  const contextWindow = codexContextWindowChoice(input.model, input.contextWindow);
+  const contextWindow = resolveCodexContextWindowChoice(input.model, input.contextWindow);
+  const contextWindowTokens = codexContextWindowTokens(contextWindow);
   return {
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
     approvalsReviewer: config.approvalsReviewer,
     ...(input.model ? { model: input.model } : {}),
-    ...(contextWindow === "1m" ? { config: { model_context_window: 1_050_000 } } : {}),
+    ...(contextWindowTokens ? { config: { model_context_window: contextWindowTokens } } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
   };
-}
-
-function codexContextWindowChoice(model: string | undefined, choice: string | undefined) {
-  return model && supportsCodexExpandedContext(model) && (choice === "1m" || choice === "default")
-    ? choice
-    : null;
 }
 
 function runtimeModeToTurnSandboxPolicy(
@@ -1396,7 +1395,7 @@ export const makeCodexSessionRuntime = (
     const sendTurnSemaphore = yield* Semaphore.make(1);
     const outstandingTurnIds = new Set<string>();
     const completedBeforeResponse = new Set<string>();
-    let activeContextWindow = codexContextWindowChoice(options.model, options.contextWindow);
+    let activeContextWindow = resolveCodexContextWindowChoice(options.model, options.contextWindow);
     let stopEpoch = 0;
     const offerEvent = (event: ProviderEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
 
@@ -2537,11 +2536,14 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
-          const selectedContextWindow = codexContextWindowChoice(
+          const selectedContextWindow = resolveCodexContextWindowChoice(
             normalizedModel,
             input.contextWindow ?? activeContextWindow ?? undefined,
           );
-          if ((selectedContextWindow === "1m") !== (activeContextWindow === "1m")) {
+          if (
+            codexContextWindowTokens(selectedContextWindow) !==
+            codexContextWindowTokens(activeContextWindow)
+          ) {
             if ((yield* Ref.get(sessionRef)).activeTurnId || outstandingTurnIds.size > 0) {
               return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
                 "Finish the current turn before changing the context window.",

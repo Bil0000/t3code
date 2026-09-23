@@ -242,8 +242,8 @@ describe("CodexSessionRuntime collab integration", () => {
         binaryPath: peerPath,
         cwd: NodeOS.tmpdir(),
         runtimeMode: "full-access",
-        model: "gpt-6-astra",
-        contextWindow: "1m",
+        model: "gpt-7",
+        contextWindow: "expanded:gpt-7:872000",
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
       yield* runtime.start();
@@ -255,7 +255,7 @@ describe("CodexSessionRuntime collab integration", () => {
       assert.notProperty(fork.params, "config");
       yield* runtime.sendTurn({
         input: "back to default",
-        model: "gpt-6-astra",
+        model: "gpt-7",
         contextWindow: "default",
       });
       assert.equal(
