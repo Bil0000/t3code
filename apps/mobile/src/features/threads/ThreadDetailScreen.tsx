@@ -65,6 +65,7 @@ import Animated, {
   ReduceMotion,
   useAnimatedReaction,
   useAnimatedStyle,
+  useDerivedValue,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
@@ -623,6 +624,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     },
     [userInputCoverageApplies],
   );
+  // The floating control is anchored to the bar's top edge, so ride it up
+  // with the expanded card instead of drawing it over the questions.
+  const floatingControlLift = useDerivedValue(
+    () =>
+      userInputCoverageApplies ? userInputCardProgress.value * userInputCardCoverage.value : 0,
+    [userInputCoverageApplies],
+  );
   const { freeze, scrollMessageToEnd } = useKeyboardScrollToEnd({ listRef });
   const endFollowEnabledRef = useRef(true);
   endFollowEnabledRef.current = endFollowEnabled;
@@ -1070,6 +1078,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               <FloatingWorkingControl
                 colorScheme={isDarkMode ? "dark" : "light"}
                 status={floatingStatus}
+                lift={floatingControlLift}
                 devicePreview={
                   devicePreviews.length > 0
                     ? { count: devicePreviews.length, onPress: openDevicePreview }
