@@ -5104,12 +5104,6 @@ export default function ChatView(props: ChatViewProps) {
             threadRef: activeThreadRef,
           });
         }
-        if (surface.kind === "extension-webview") {
-          const { extensionId, viewType, resource } = surface;
-          void import("../vscode/runtime").then((runtime) =>
-            runtime.closeWebview(extensionId, viewType, resource),
-          );
-        }
         if (surface.kind === "terminal") {
           for (const terminalId of surface.terminalIds) {
             storeCloseTerminal(activeThreadRef, terminalId);
@@ -5161,11 +5155,15 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [activeThreadRef]);
   const finishRightPanelSurfaceClose = useCallback(
-    (surfaces: readonly RightPanelSurface[]) => {
+    async (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
-      cleanupRightPanelSurfaces(surfaces);
       const store = useRightPanelStore.getState();
       for (const surface of surfaces) {
+        if (surface.kind === "extension-webview") {
+          const { extensionId, viewType, resource } = surface;
+          const runtime = await import("../vscode/runtime");
+          if (!(await runtime.closeWebview(extensionId, viewType, resource))) continue;
+        } else cleanupRightPanelSurfaces([surface]);
         store.closeSurface(activeThreadRef, surface.id);
       }
       syncActivePreviewSurface();
@@ -5175,7 +5173,7 @@ export default function ChatView(props: ChatViewProps) {
   const closeRightPanelSurface = useCallback(
     (surface: RightPanelSurface) => {
       if (!activeThreadRef) return;
-      const finishClose = () => finishRightPanelSurfaceClose([surface]);
+      const finishClose = () => void finishRightPanelSurfaceClose([surface]);
       if (surface.kind === "preview") {
         closeAfterAgentBrowserConfirmation([surface], finishClose);
         return;
@@ -5207,7 +5205,7 @@ export default function ChatView(props: ChatViewProps) {
     (surface: RightPanelSurface) => {
       if (!activeThreadRef) return;
       const surfaces = rightPanelState.surfaces.filter((entry) => entry.id !== surface.id);
-      const finishClose = () => finishRightPanelSurfaceClose(surfaces);
+      const finishClose = () => void finishRightPanelSurfaceClose(surfaces);
       closeAfterAgentBrowserConfirmation(surfaces, finishClose);
     },
     [
@@ -5223,7 +5221,7 @@ export default function ChatView(props: ChatViewProps) {
       const surfaceIndex = rightPanelState.surfaces.findIndex((entry) => entry.id === surface.id);
       if (surfaceIndex < 0) return;
       const surfaces = rightPanelState.surfaces.slice(surfaceIndex + 1);
-      const finishClose = () => finishRightPanelSurfaceClose(surfaces);
+      const finishClose = () => void finishRightPanelSurfaceClose(surfaces);
       closeAfterAgentBrowserConfirmation(surfaces, finishClose);
     },
     [
@@ -5235,7 +5233,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const closeAllRightPanelSurfaces = useCallback(() => {
     if (!activeThreadRef) return;
-    const finishClose = () => finishRightPanelSurfaceClose(rightPanelState.surfaces);
+    const finishClose = () => void finishRightPanelSurfaceClose(rightPanelState.surfaces);
     closeAfterAgentBrowserConfirmation(rightPanelState.surfaces, finishClose);
   }, [
     activeThreadRef,

@@ -370,6 +370,7 @@ export async function showWebview(extensionId: string, viewType: string, resourc
 export async function closeWebview(extensionId: string, viewType: string, resource?: string) {
   const found = await findWebviews(extensionId, viewType, resource);
   if (found?.matches.length) await found.editors.closeEditors(found.matches);
+  return !(await findWebviews(extensionId, viewType, resource))?.matches.length;
 }
 
 export async function openViewContainer(id: string) {
