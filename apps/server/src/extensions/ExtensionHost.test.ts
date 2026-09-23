@@ -79,10 +79,12 @@ it.effect("restarts the extension host after installing an extension", () =>
     );
 
     let kills = 0;
+    let hostStarts = 0;
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
         const host = command.args.includes("--host");
+        if (host) hostStarts++;
         if (command.args.includes("--install-extension")) {
           const directory = path.join(config.vscodeDir, "extensions", "example.demo-1.0.0");
           yield* fs.makeDirectory(directory, { recursive: true });
@@ -132,9 +134,11 @@ it.effect("restarts the extension host after installing an extension", () =>
     const installed = yield* Effect.gen(function* () {
       const host = yield* ExtensionHost;
       yield* host.connect;
-      return yield* host.install({
+      const installed = yield* host.install({
         source: { type: "openVsx", namespace: "example", name: "demo" },
       });
+      yield* host.connect;
+      return installed;
     }).pipe(
       Effect.provide(ExtensionHost.layer),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -142,6 +146,7 @@ it.effect("restarts the extension host after installing an extension", () =>
     );
     expect(installed.id).toBe("example.demo");
     expect(kills).toBe(1);
+    expect(hostStarts).toBe(2);
   }).pipe(
     Effect.scoped,
     Effect.provide(
