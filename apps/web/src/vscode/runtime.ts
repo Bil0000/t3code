@@ -267,6 +267,7 @@ export async function syncTheme(element: HTMLElement) {
   if (!background || !foreground) return;
   await updateUserConfiguration(
     JSON.stringify({
+      "workbench.editor.enablePreview": false,
       "workbench.colorCustomizations": {
         "sideBar.background": background,
         "editor.background": background,
