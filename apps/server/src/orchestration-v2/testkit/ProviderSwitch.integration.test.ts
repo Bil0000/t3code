@@ -430,6 +430,7 @@ describe("orchestration v2 provider switching", () => {
     "compact-legacy",
     "large-current-input",
     "exhausted-native",
+    "exhausted-manual-uppercase-native",
     "exhausted-missed-input-native",
     "exhausted-fallback",
     "exhausted-downgrade-native",
@@ -637,20 +638,22 @@ describe("orchestration v2 provider switching", () => {
                 creationSource: "web",
                 text,
                 attachments:
-                  exhausted && ordinal === targetOrdinal
-                    ? [screenshot]
-                    : turnUsageScenario && ordinal === 2
-                      ? Array.from({ length: 8 }, (_, index) => ({
-                          ...screenshot,
-                          id: `prior-${index}`,
-                        }))
-                      : turnUsageScenario && ordinal >= targetOrdinal
-                        ? [screenshot, { ...screenshot, id: "current-2" }]
-                        : scenario.startsWith("screenshot") && ordinal >= targetOrdinal
-                          ? screenshots
-                          : priorImages && ordinal === (scenario.startsWith("imported") ? 1 : 2)
-                            ? [screenshot]
-                            : [],
+                  scenario === "exhausted-manual-uppercase-native" && ordinal === targetOrdinal
+                    ? []
+                    : exhausted && ordinal === targetOrdinal
+                      ? [screenshot]
+                      : turnUsageScenario && ordinal === 2
+                        ? Array.from({ length: 8 }, (_, index) => ({
+                            ...screenshot,
+                            id: `prior-${index}`,
+                          }))
+                        : turnUsageScenario && ordinal >= targetOrdinal
+                          ? [screenshot, { ...screenshot, id: "current-2" }]
+                          : scenario.startsWith("screenshot") && ordinal >= targetOrdinal
+                            ? screenshots
+                            : priorImages && ordinal === (scenario.startsWith("imported") ? 1 : 2)
+                              ? [screenshot]
+                              : [],
                 modelSelection: selection,
                 dispatchMode: { type: "start_immediately" },
               });
@@ -703,17 +706,19 @@ describe("orchestration v2 provider switching", () => {
                 : undefined;
             yield* Effect.addFinalizer(() => Effect.sync(() => spy?.mockRestore()));
             const current =
-              scenario === "exhausted-oversized-native"
-                ? "x".repeat(260_000)
-                : scenario === "exhausted-no-usage-native"
-                  ? "x".repeat(110_000)
-                  : scenario.startsWith("compact")
-                    ? "/compact"
-                    : capacityScenario && !turnUsageScenario
-                      ? "x".repeat(70_000)
-                      : scenario === "large-current-input"
-                        ? "x".repeat(9_000)
-                        : "Continue work";
+              scenario === "exhausted-manual-uppercase-native"
+                ? "/COMPACT"
+                : scenario === "exhausted-oversized-native"
+                  ? "x".repeat(260_000)
+                  : scenario === "exhausted-no-usage-native"
+                    ? "x".repeat(110_000)
+                    : scenario.startsWith("compact")
+                      ? "/compact"
+                      : capacityScenario && !turnUsageScenario
+                        ? "x".repeat(70_000)
+                        : scenario === "large-current-input"
+                          ? "x".repeat(9_000)
+                          : "Continue work";
             // First establish the returning native thread: the current request must
             // not be charged as existing context on the subsequent handoff.
             if (returning) {
@@ -947,6 +952,15 @@ describe("orchestration v2 provider switching", () => {
               yield* wait(targetOrdinal + 3);
             }
             const projection = yield* orchestrator.getThreadProjection(threadId);
+            if (scenario === "exhausted-manual-uppercase-native") {
+              assert.equal(projection.runs.at(-1)?.status, "completed");
+              assert.equal(
+                (yield* Ref.get(capturedTurns)).filter((turn) => turn.text === "/compact").length,
+                0,
+              );
+              assert.equal((yield* Ref.get(capturedTurns)).at(-1)?.text, "/COMPACT");
+              return;
+            }
             if (exhausted) {
               const failed =
                 scenario === "exhausted-oversized-native" ||

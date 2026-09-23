@@ -903,7 +903,7 @@ export const layer: Layer.Layer<
               }),
         );
         if (resumed._tag === "Success") {
-          if (message.text.trim() === "/compact" && message.attachments.length === 0)
+          if (message.text.trim().toLowerCase() === "/compact" && message.attachments.length === 0)
             return resumed.success;
           const context = yield* getHandoffContext(resumed.success);
           const prepared = yield* Effect.result(
