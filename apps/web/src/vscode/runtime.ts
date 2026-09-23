@@ -228,7 +228,7 @@ async function startRuntime(
       )
         showNotification(event.item);
     });
-    for (const item of notification.model.notifications) showNotification(item);
+    for (const item of notification.model.notifications.slice()) showNotification(item);
     return { views, commands, editors, remoteAuthority };
   } catch (error) {
     if (!initialized) {
