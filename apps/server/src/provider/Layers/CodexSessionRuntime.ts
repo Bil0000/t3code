@@ -2043,9 +2043,8 @@ export const makeCodexSessionRuntime = (
           if (providerThreadId && payload.threadId !== providerThreadId) {
             return Effect.void;
           }
-          if (!outstandingTurnIds.delete(payload.turn.id)) {
-            completedBeforeResponse.add(payload.turn.id);
-          }
+          outstandingTurnIds.delete(payload.turn.id);
+          completedBeforeResponse.add(payload.turn.id);
           const lastError =
             payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
               ? payload.turn.error.message
@@ -2548,6 +2547,11 @@ export const makeCodexSessionRuntime = (
                 "Finish the current turn before changing the context window.",
               );
             }
+            if (sendEpoch !== stopEpoch) {
+              return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
+                "Turn was stopped before it started.",
+              );
+            }
             const forked = yield* client.request("thread/fork", {
               threadId: providerThreadId,
               ...buildThreadStartParams({
@@ -2587,6 +2591,7 @@ export const makeCodexSessionRuntime = (
               "Turn was stopped before it started.",
             );
           }
+          completedBeforeResponse.clear();
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
             Effect.mapError((error) =>
@@ -2606,13 +2611,13 @@ export const makeCodexSessionRuntime = (
           if (sendEpoch !== stopEpoch) {
             yield* client
               .request("turn/interrupt", { threadId: providerThreadId, turnId })
-              .pipe(Effect.ignore);
+              .pipe(Effect.timeoutOption("3 seconds"), Effect.ignore);
             return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
               "Turn was stopped before it started.",
             );
           }
           yield* updateSession(sessionRef, (session) => ({
-            ...(!completedEarly
+            ...(outstandingTurnIds.has(response.turn.id)
               ? {
                   status: "running",
                   // Codex accepts follow-ups while the current turn is still

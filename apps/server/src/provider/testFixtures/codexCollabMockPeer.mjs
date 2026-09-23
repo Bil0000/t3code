@@ -20,6 +20,7 @@ let turnStartCount = 0;
 let activeTurn;
 let firstTurn;
 let pendingForkResponse;
+let pendingTurnStartResponse;
 // Server->client requests the runtime must answer (approval prompts), keyed
 // by the numeric JSON-RPC id this peer allocated for them.
 const openServerRequests = new Map();
@@ -123,9 +124,10 @@ rl.on("line", (line) => {
     write(response);
     return;
   }
-  if (method === "thread/read" && pendingForkResponse) {
-    write(pendingForkResponse);
+  if (method === "thread/read" && (pendingForkResponse || pendingTurnStartResponse)) {
+    write(pendingForkResponse ?? pendingTurnStartResponse);
     pendingForkResponse = undefined;
+    pendingTurnStartResponse = undefined;
     write({ id, result: { thread: fixture.responses.threadStart.thread } });
     return;
   }
@@ -199,6 +201,15 @@ rl.on("line", (line) => {
     activeTurn = turn;
     turnStartCount += 1;
     if (turnStartCount === 1) firstTurn = turn;
+    if (script.deferTurnStartResponseUntilRead) {
+      pendingTurnStartResponse = { id, result: { ...fixture.responses.turnStart, turn } };
+      write({
+        jsonrpc: "2.0",
+        method: "serverRequest/resolved",
+        params: { threadId: script.rootThreadId, requestId: "turn-start-observed" },
+      });
+      return;
+    }
     write({ id, result: { ...fixture.responses.turnStart, turn } });
     const rootThreadId = script.rootThreadId;
     if (script.completeFirstTurnOnSecondStart && turnStartCount === 2) {

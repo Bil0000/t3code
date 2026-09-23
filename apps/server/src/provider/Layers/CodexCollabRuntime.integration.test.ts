@@ -365,10 +365,15 @@ describe("CodexSessionRuntime collab integration", () => {
         .sendTurn({ input: "switch", model: "gpt-6-astra", contextWindow: "1m" })
         .pipe(Effect.forkScoped);
       yield* Fiber.join(observed);
+      const queued = yield* runtime
+        .sendTurn({ input: "queued switch", model: "gpt-6-astra", contextWindow: "1m" })
+        .pipe(Effect.forkScoped);
       yield* runtime.interruptTurn();
       yield* runtime.readThread.pipe(Effect.ignore);
       const error = yield* Fiber.join(sending).pipe(Effect.flip);
       assert.equal(error._tag, "CodexAppServerRequestError");
+      const queuedError = yield* Fiber.join(queued).pipe(Effect.flip);
+      assert.equal(queuedError._tag, "CodexAppServerRequestError");
       assert.deepEqual(
         readRecordedRequests().map((request) => request.method),
         ["thread/fork"],
@@ -377,12 +382,17 @@ describe("CodexSessionRuntime collab integration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("does not block Stop on a stalled turn start", () =>
+  it.live("does not block Stop on a stalled turn start or interrupt", () =>
     Effect.gen(function* () {
       NodeFS.writeFileSync(
         scriptPath,
         // @effect-diagnostics-next-line preferSchemaOverJson:off
-        JSON.stringify({ rootThreadId: ROOT, hangTurnStartResponse: true, notifications: [] }),
+        JSON.stringify({
+          rootThreadId: ROOT,
+          deferTurnStartResponseUntilRead: true,
+          hangInterruptFor: ROOT,
+          notifications: [],
+        }),
         "utf8",
       );
       yield* Effect.addFinalizer(() =>
@@ -401,16 +411,23 @@ describe("CodexSessionRuntime collab integration", () => {
             event.method === "serverRequest/resolved" &&
             (event.payload as { requestId?: string }).requestId === "turn-start-observed",
         ),
-        Stream.take(1),
-        Stream.runCollect,
+        Stream.runHead,
         Effect.forkScoped,
       );
       yield* runtime.start();
       const sending = yield* runtime.sendTurn({ input: "continue" }).pipe(Effect.forkScoped);
       yield* Fiber.join(observed);
       yield* runtime.interruptTurn();
+      yield* runtime.readThread.pipe(Effect.ignore);
+      const result = yield* Fiber.join(sending).pipe(
+        Effect.exit,
+        Effect.timeoutOption("8 seconds"),
+      );
+      assert.equal(result._tag, "Some");
+      if (result._tag === "Some") {
+        assert.equal(result.value._tag, "Failure");
+      }
       yield* runtime.close;
-      yield* Fiber.interrupt(sending);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
