@@ -490,6 +490,7 @@ const makeExtensionHost = Effect.gen(function* () {
                   "install",
                   "Installed extension was not found in the extension directory.",
                 );
+              yield* restart;
               return installed;
             }),
           )
