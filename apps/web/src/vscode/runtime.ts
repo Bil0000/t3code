@@ -25,6 +25,10 @@ import getViewsServiceOverride, {
   Parts,
 } from "@codingame/monaco-vscode-views-service-override";
 import {
+  BrowserSocketFactory,
+  type IWebSocketFactory,
+} from "@codingame/monaco-vscode-remote-agent-service-override/vscode/vs/platform/remote/browser/browserSocketFactory";
+import {
   FileOperationResult,
   toFileOperationResult,
 } from "@codingame/monaco-vscode-api/vscode/vs/platform/files/common/files";
@@ -65,6 +69,18 @@ let workbenchRoot: HTMLElement | null = null;
 let initialized = false;
 let modelReferencePatched = false;
 let disposeWebviewPositioning: (() => void) | null = null;
+let connectionToken = "";
+let wsTicket = "";
+let refreshTicket: (() => Promise<ExtensionHostConnection>) | null = null;
+const defaultSocketFactory = (
+  new BrowserSocketFactory(null) as unknown as { _webSocketFactory: IWebSocketFactory }
+)._webSocketFactory;
+
+function withTicket(url: string) {
+  const next = new URL(url);
+  next.searchParams.set("wsTicket", wsTicket);
+  return next.toString();
+}
 
 function attachEditor(container: HTMLElement) {
   editorAttachment?.dispose();
@@ -171,6 +187,19 @@ async function startRuntime(
             },
           },
           productConfiguration: { quality: connection.quality, commit: connection.commit },
+          webSocketFactory: {
+            create: (socketUrl, debugLabel) =>
+              defaultSocketFactory.create(withTicket(socketUrl), debugLabel),
+          },
+          resourceUriProvider: (uri) => {
+            const query = new URLSearchParams({ path: uri.path, tkn: connectionToken, wsTicket });
+            return monaco.Uri.from({
+              scheme: url.protocol.slice(0, -1),
+              authority: remoteAuthority,
+              path: `${connection.basePath}/${connection.quality}-${connection.commit}/vscode-remote-resource`,
+              query: query.toString(),
+            });
+          },
         },
       );
       initialized = true;
@@ -248,15 +277,25 @@ async function startRuntime(
 }
 
 export async function getRuntime(
-  connection: ExtensionHostConnection,
+  connect: () => Promise<ExtensionHostConnection>,
   httpBaseUrl: string,
   workspaceRoot?: string,
 ) {
+  const connection = await connect();
   const key = `${httpBaseUrl}|${connection.commit}|${workspaceRoot ?? ""}`;
   if (initialized && runtimeKey !== key)
     throw new Error(
       "Extensions are running for another project. Reload the page to use them here.",
     );
+  connectionToken = connection.connectionToken;
+  wsTicket = connection.wsTicket;
+  if (!refreshTicket)
+    setInterval(() => {
+      void refreshTicket?.()
+        .then((next) => (wsTicket = next.wsTicket))
+        .catch(() => {});
+    }, 240_000);
+  refreshTicket = connect;
   if (!runtime) {
     runtimeKey = key;
     runtime = startRuntime(connection, httpBaseUrl, workspaceRoot).catch((error: unknown) => {

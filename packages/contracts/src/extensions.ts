@@ -87,6 +87,7 @@ export type ExtensionSetEnabledInput = typeof ExtensionSetEnabledInput.Type;
 export const ExtensionHostConnection = Schema.Struct({
   basePath: TrimmedNonEmptyString,
   connectionToken: TrimmedNonEmptyString,
+  wsTicket: TrimmedNonEmptyString,
   commit: TrimmedNonEmptyString,
   quality: TrimmedNonEmptyString,
 });

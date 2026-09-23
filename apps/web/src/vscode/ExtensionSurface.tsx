@@ -37,10 +37,16 @@ export function ExtensionSurface(props: ExtensionRuntimeProps) {
     let editorListener: { dispose(): void } | undefined;
     let themeObserver: MutationObserver | undefined;
     void (async () => {
-      const result = await connect({ environmentId, input: {} });
-      if (result._tag !== "Success") throw new Error("Could not connect to the extension host.");
-      if (cancelled) return;
-      const runtime = await getRuntime(result.value, httpBaseUrl, workspaceRoot);
+      const runtime = await getRuntime(
+        async () => {
+          const result = await connect({ environmentId, input: {} });
+          if (result._tag !== "Success")
+            throw new Error("Could not connect to the extension host.");
+          return result.value;
+        },
+        httpBaseUrl,
+        workspaceRoot,
+      );
       if (cancelled) return;
       if (
         target.kind === "extension-webview" &&

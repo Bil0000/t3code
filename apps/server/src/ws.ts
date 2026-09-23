@@ -31,6 +31,7 @@ import {
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
+  ExtensionError,
   type EditorId,
   type FileManagerRevealKind,
   type OrchestrationClientOrigin,
@@ -2567,9 +2568,24 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "extensions" },
           ),
         [WS_METHODS.extensionsConnect]: () =>
-          observeRpcEffect(WS_METHODS.extensionsConnect, extensionHost.connect, {
-            "rpc.aggregate": "extensions",
-          }),
+          observeRpcEffect(
+            WS_METHODS.extensionsConnect,
+            Effect.all([
+              extensionHost.connect,
+              serverAuth.issueWebSocketTicket(currentSession),
+            ]).pipe(
+              Effect.map(([connection, { ticket }]) => ({ ...connection, wsTicket: ticket })),
+              Effect.mapError((cause) =>
+                cause._tag === "ExtensionError"
+                  ? cause
+                  : new ExtensionError({
+                      operation: "connect",
+                      detail: "Could not authorize extensions.",
+                    }),
+              ),
+            ),
+            { "rpc.aggregate": "extensions" },
+          ),
         [WS_METHODS.serverUpdateServer]: (input) =>
           observeRpcEffect(WS_METHODS.serverUpdateServer, serverUpdate.update(input), {
             "rpc.aggregate": "server",

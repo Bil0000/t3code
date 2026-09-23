@@ -4611,13 +4611,20 @@ export default function ChatView(props: ChatViewProps) {
       void (async () => {
         const prepared = readPreparedConnection(activeThreadRef.environmentId);
         if (!prepared) throw new Error("The environment is not connected.");
-        const result = await connectExtensionHost({
-          environmentId: activeThreadRef.environmentId,
-          input: {},
-        });
-        if (result._tag !== "Success") throw new Error("Could not connect to the extension host.");
         const runtime = await import("../vscode/runtime");
-        await runtime.getRuntime(result.value, prepared.httpBaseUrl, activeWorkspaceRoot);
+        await runtime.getRuntime(
+          async () => {
+            const result = await connectExtensionHost({
+              environmentId: activeThreadRef.environmentId,
+              input: {},
+            });
+            if (result._tag !== "Success")
+              throw new Error("Could not connect to the extension host.");
+            return result.value;
+          },
+          prepared.httpBaseUrl,
+          activeWorkspaceRoot,
+        );
         await runtime.runExtensionCommand(command);
         if (
           renderedRightPanelSurface?.kind === "extension" ||

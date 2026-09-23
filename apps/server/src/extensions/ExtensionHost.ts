@@ -129,7 +129,7 @@ const readVsixId = (file: string) =>
 
 interface ExtensionHostService {
   readonly subscribe: Stream.Stream<ExtensionsState, ExtensionError>;
-  readonly connect: Effect.Effect<ExtensionHostConnection, ExtensionError>;
+  readonly connect: Effect.Effect<Omit<ExtensionHostConnection, "wsTicket">, ExtensionError>;
   readonly port: Effect.Effect<number, ExtensionError>;
   readonly install: (
     input: ExtensionInstallInput,
