@@ -197,18 +197,27 @@ describe("CodexSessionRuntime collab integration", () => {
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
       yield* runtime.start();
-      const turn = yield* runtime.sendTurn({
-        input: "continue",
-        model: "gpt-6-astra",
-        contextWindow: "1m",
-      });
+      const turns = yield* Effect.all(
+        [
+          runtime.sendTurn({ input: "first", model: "gpt-6-astra", contextWindow: "1m" }),
+          runtime.sendTurn({ input: "second", model: "gpt-6-astra", contextWindow: "1m" }),
+        ],
+        { concurrency: 2 },
+      );
       const requests = readRecordedRequests();
       assert.equal(requests[0]?.method, "thread/fork");
       assert.equal(requests[0]?.params.threadId, ROOT);
       assert.equal(requests[0]?.params.model, "gpt-6-astra");
       assert.deepEqual(requests[0]?.params.config, { model_context_window: 1_050_000 });
       assert.equal(requests[1]?.params.threadId, "expanded-thread");
-      assert.equal((turn.resumeCursor as { threadId: string }).threadId, "expanded-thread");
+      assert.equal(requests[2]?.params.threadId, "expanded-thread");
+      assert.equal((turns[0].resumeCursor as { threadId: string }).threadId, "expanded-thread");
+      assert.equal((turns[1].resumeCursor as { threadId: string }).threadId, "expanded-thread");
+      const error = yield* Effect.flip(
+        runtime.sendTurn({ input: "switch back", model: "gpt-6-astra", contextWindow: "default" }),
+      );
+      assert.equal(error._tag, "CodexAppServerRequestError");
+      assert.equal(readRecordedRequests().length, 3);
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

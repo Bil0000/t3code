@@ -29,6 +29,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -1394,6 +1395,7 @@ export const makeCodexSessionRuntime = (
       updatedAt: sessionCreatedAt,
     } satisfies ProviderSession;
     const sessionRef = yield* Ref.make<ProviderSession>(initialSession);
+    const sendTurnSemaphore = yield* Semaphore.make(1);
     let activeContextWindow = codexContextWindowChoice(options.model, options.contextWindow);
     const offerEvent = (event: ProviderEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
 
@@ -2535,6 +2537,11 @@ export const makeCodexSessionRuntime = (
               ? activeContextWindow
               : codexContextWindowChoice(normalizedModel, input.contextWindow);
           if (selectedContextWindow !== activeContextWindow) {
+            if ((yield* Ref.get(sessionRef)).activeTurnId) {
+              return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
+                "Finish the current turn before changing the context window.",
+              );
+            }
             const forked = yield* client.request("thread/fork", {
               threadId: providerThreadId,
               ...buildThreadStartParams({
@@ -2546,7 +2553,10 @@ export const makeCodexSessionRuntime = (
               }),
             });
             providerThreadId = forked.thread.id;
-            yield* updateSession(sessionRef, { resumeCursor: { threadId: providerThreadId } });
+            yield* updateSession(sessionRef, {
+              resumeCursor: { threadId: providerThreadId },
+              activeTurnId: undefined,
+            });
             activeContextWindow = selectedContextWindow;
           }
           const params = yield* buildTurnStartParams({
@@ -2593,11 +2603,9 @@ export const makeCodexSessionRuntime = (
               ? { resumeCursor: { threadId: resumedProviderThreadId } }
               : {}),
           } satisfies ProviderTurnStartResult;
-        }),
+        }).pipe(sendTurnSemaphore.withPermits(1)),
       interruptTurn: (turnId) =>
         Effect.gen(function* () {
-          const providerThreadId = yield* readProviderThreadId;
-          const session = yield* Ref.get(sessionRef);
           // Settle parked approvals FIRST. The transport answers server
           // requests inline on its stdin read loop, so a pending
           // command/file/app-permission prompt blocks every incoming message,
@@ -2628,14 +2636,16 @@ export const makeCodexSessionRuntime = (
                 .pipe(Effect.timeoutOption("3 seconds"), Effect.ignore),
             { concurrency: 8, discard: true },
           ).pipe(Effect.timeoutOption("10 seconds"), Effect.ignore);
-          const effectiveTurnId = turnId ?? session.activeTurnId;
-          if (!effectiveTurnId) {
-            return;
-          }
-          yield* client.request("turn/interrupt", {
-            threadId: providerThreadId,
-            turnId: effectiveTurnId,
-          });
+          yield* Effect.gen(function* () {
+            const providerThreadId = yield* readProviderThreadId;
+            const session = yield* Ref.get(sessionRef);
+            const effectiveTurnId = session.activeTurnId ?? turnId;
+            if (!effectiveTurnId) return;
+            yield* client.request("turn/interrupt", {
+              threadId: providerThreadId,
+              turnId: effectiveTurnId,
+            });
+          }).pipe(sendTurnSemaphore.withPermits(1));
         }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
