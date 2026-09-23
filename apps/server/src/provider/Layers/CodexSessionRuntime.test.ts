@@ -890,7 +890,7 @@ describe("isRecoverableThreadResumeError", () => {
 
 describe("openCodexThread", () => {
   for (const [choice, tokens] of [
-    ["default", 272_000],
+    ["default", undefined],
     ["1m", 1_050_000],
   ] as const) {
     it.effect(`starts supported GPT models with the ${choice} window`, () =>
@@ -912,9 +912,10 @@ describe("openCodexThread", () => {
           serviceTier: undefined,
           resumeThreadId: undefined,
         });
-        NodeAssert.deepEqual((params as { config?: unknown }).config, {
-          model_context_window: tokens,
-        });
+        NodeAssert.deepEqual(
+          (params as { config?: unknown }).config,
+          tokens === undefined ? undefined : { model_context_window: tokens },
+        );
       }),
     );
   }

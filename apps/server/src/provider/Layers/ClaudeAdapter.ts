@@ -5160,7 +5160,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       (resolveClaudeCatalogContextWindow(modelCatalog, context.startInput.modelSelection) ===
         "200k") !==
         (resolveClaudeCatalogContextWindow(modelCatalog, modelSelection) === "200k");
-    if (contextChoiceChanged && context.turnState?.synthetic !== true && context.turnState) {
+    if (
+      contextChoiceChanged &&
+      ((context.turnState && !context.turnState.synthetic) || context.liveTaskIds.size > 0)
+    ) {
       return yield* new ProviderAdapterRequestError({
         provider: PROVIDER,
         method: "turn/setContextWindow",
@@ -5183,9 +5186,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
     if (contextChoiceChanged) {
       const resumeCursor = context.session.resumeCursor;
+      const retainedTurns = context.turns;
       yield* stopSessionInternal(context, { emitExitEvent: false });
       yield* startSession({ ...context.startInput, resumeCursor });
       context = yield* requireSession(input.threadId);
+      context.turns.push(...retainedTurns);
     }
 
     if (modelSelection?.model) {

@@ -20,8 +20,8 @@ export function sameContextWindowSelection(
   return (
     active?.instanceId === selected.instanceId &&
     active.model === selected.model &&
-    getModelSelectionStringOptionValue(active, "contextWindow") ===
-      getModelSelectionStringOptionValue(selected, "contextWindow")
+    (getModelSelectionStringOptionValue(active, "contextWindow") ?? "default") ===
+      (getModelSelectionStringOptionValue(selected, "contextWindow") ?? "default")
   );
 }
 

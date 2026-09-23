@@ -36,6 +36,13 @@ describe("sameContextWindowSelection", () => {
       }),
     ).toBe(true);
   });
+
+  it("treats omitted and explicit default windows as the same choice", () => {
+    const selected = { ...active, model: "gpt-6-astra", options: [] };
+    const explicit = { ...selected, options: [{ id: "contextWindow", value: "default" }] };
+    expect(sameContextWindowSelection(selected, explicit)).toBe(true);
+    expect(sameContextWindowSelection(explicit, selected)).toBe(true);
+  });
 });
 
 function claudeProvider(input: {

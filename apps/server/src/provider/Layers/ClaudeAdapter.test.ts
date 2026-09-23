@@ -7432,12 +7432,33 @@ describe("ClaudeAdapterLive", () => {
           runtimeMode: "full-access",
           modelSelection: selection(from),
         });
+        const firstTurn = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "First",
+          modelSelection: selection(from),
+          attachments: [],
+        });
+        const completed = yield* Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "turn.completed",
+        ).pipe(Stream.runHead, Effect.forkChild);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "550e8400-e29b-41d4-a716-446655440010",
+          uuid: "result-context",
+        } as unknown as SDKMessage);
+        yield* Fiber.join(completed);
         yield* adapter.sendTurn({
           threadId: session.threadId,
           input: "Continue",
           modelSelection: selection(to),
           attachments: [],
         });
+        const thread = yield* adapter.readThread(session.threadId);
+        assert.equal(String(thread.turns[0]?.id), String(firstTurn.turnId));
         assert.equal(harness.query.closeCalls, 1);
         assert.equal(
           harness.getLastCreateQueryInput()?.options.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT,
@@ -7453,6 +7474,60 @@ describe("ClaudeAdapterLive", () => {
       );
     });
   }
+
+  it.effect("keeps live Claude background tasks when a window change is requested", () => {
+    const harness = makeHarness({ modelCatalog: BUNDLED_CLAUDE_MODEL_CATALOG });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const selection = (window: string) =>
+        createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-opus-5-5", [
+          { id: "contextWindow", value: window },
+        ]);
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        modelSelection: selection("1m"),
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "Work", attachments: [] });
+      const completed = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-context",
+        description: "Background work",
+        task_type: "local_agent",
+        tool_use_id: "tool-context",
+        uuid: "task-context-uuid",
+        session_id: "550e8400-e29b-41d4-a716-446655440010",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "550e8400-e29b-41d4-a716-446655440010",
+        uuid: "result-context-task",
+      } as unknown as SDKMessage);
+      yield* Fiber.join(completed);
+      const error = yield* Effect.flip(
+        adapter.sendTurn({
+          threadId: session.threadId,
+          input: "Switch",
+          modelSelection: selection("200k"),
+          attachments: [],
+        }),
+      );
+      assert.match(error.message, /Finish the current turn/);
+      assert.equal(harness.query.closeCalls, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("sets plan permission mode on sendTurn when interactionMode is plan", () => {
     const harness = makeHarness();

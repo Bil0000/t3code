@@ -253,6 +253,15 @@ describe("CodexSessionRuntime collab integration", () => {
       assert.equal(fork.method, "thread/fork");
       assert.equal(fork.params.model, "custom-model");
       assert.notProperty(fork.params, "config");
+      yield* runtime.sendTurn({
+        input: "back to default",
+        model: "gpt-6-astra",
+        contextWindow: "default",
+      });
+      assert.equal(
+        readRecordedRequests().filter((request) => request.method === "thread/fork").length,
+        1,
+      );
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

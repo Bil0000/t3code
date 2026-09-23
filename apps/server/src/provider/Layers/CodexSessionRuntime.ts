@@ -560,9 +560,7 @@ function buildThreadStartParams(input: {
     sandbox: config.sandbox,
     approvalsReviewer: config.approvalsReviewer,
     ...(input.model ? { model: input.model } : {}),
-    ...(contextWindow
-      ? { config: { model_context_window: contextWindow === "1m" ? 1_050_000 : 272_000 } }
-      : {}),
+    ...(contextWindow === "1m" ? { config: { model_context_window: 1_050_000 } } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
   };
 }
@@ -2536,7 +2534,7 @@ export const makeCodexSessionRuntime = (
             normalizedModel,
             input.contextWindow ?? activeContextWindow ?? undefined,
           );
-          if (selectedContextWindow !== activeContextWindow) {
+          if ((selectedContextWindow === "1m") !== (activeContextWindow === "1m")) {
             if ((yield* Ref.get(sessionRef)).activeTurnId) {
               return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
                 "Finish the current turn before changing the context window.",
@@ -2557,8 +2555,8 @@ export const makeCodexSessionRuntime = (
               resumeCursor: { threadId: providerThreadId },
               activeTurnId: undefined,
             });
-            activeContextWindow = selectedContextWindow;
           }
+          activeContextWindow = selectedContextWindow;
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,
