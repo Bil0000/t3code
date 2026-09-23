@@ -266,6 +266,117 @@ describe("CodexSessionRuntime collab integration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("keeps a queued turn on its original thread until it completes", () =>
+    Effect.gen(function* () {
+      NodeFS.writeFileSync(
+        scriptPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          rootThreadId: ROOT,
+          recordRequests: true,
+          recordTurnStarts: true,
+          holdTurnOpen: true,
+          onlyFirstTurnStarts: true,
+          completeFirstTurnOnSecondStart: true,
+          turnIds: ["first-turn", "queued-turn"],
+          notifications: [],
+        }),
+        "utf8",
+      );
+      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        }),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-queued-context"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        model: "gpt-6-astra",
+        contextWindow: "default",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const completed = yield* runtime.events.pipe(
+        Stream.filter((event) => event.method === "turn/completed"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "first", model: "gpt-6-astra" });
+      yield* runtime.sendTurn({ input: "queued", model: "gpt-6-astra" });
+      yield* Fiber.join(completed);
+      assert.isUndefined((yield* runtime.getSession).activeTurnId);
+      const error = yield* Effect.flip(
+        runtime.sendTurn({ input: "switch", model: "gpt-6-astra", contextWindow: "1m" }),
+      );
+      assert.equal(error._tag, "CodexAppServerRequestError");
+      assert.equal(
+        readRecordedRequests().filter((request) => request.method === "thread/fork").length,
+        0,
+      );
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("stops a turn before it starts when Stop arrives during a fork", () =>
+    Effect.gen(function* () {
+      NodeFS.writeFileSync(
+        scriptPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          rootThreadId: ROOT,
+          recordRequests: true,
+          recordTurnStarts: true,
+          deferForkResponseUntilRead: true,
+          notifications: [],
+        }),
+        "utf8",
+      );
+      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        }),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-stopped-fork"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        model: "gpt-6-astra",
+        contextWindow: "default",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const observed = yield* runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.method === "serverRequest/resolved" &&
+            (event.payload as { requestId?: string }).requestId === "fork-observed",
+        ),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* runtime.start();
+      const sending = yield* runtime
+        .sendTurn({ input: "switch", model: "gpt-6-astra", contextWindow: "1m" })
+        .pipe(Effect.forkScoped);
+      yield* Fiber.join(observed);
+      yield* runtime.interruptTurn();
+      yield* runtime.readThread.pipe(Effect.ignore);
+      const error = yield* Fiber.join(sending).pipe(Effect.flip);
+      assert.equal(error._tag, "CodexAppServerRequestError");
+      assert.deepEqual(
+        readRecordedRequests().map((request) => request.method),
+        ["thread/fork"],
+      );
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("does not block Stop on a stalled turn start", () =>
     Effect.gen(function* () {
       NodeFS.writeFileSync(

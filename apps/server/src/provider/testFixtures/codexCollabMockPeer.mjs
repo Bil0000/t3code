@@ -18,6 +18,8 @@ const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let turnStartCount = 0;
 let activeTurn;
+let firstTurn;
+let pendingForkResponse;
 // Server->client requests the runtime must answer (approval prompts), keyed
 // by the numeric JSON-RPC id this peer allocated for them.
 const openServerRequests = new Map();
@@ -102,13 +104,29 @@ rl.on("line", (line) => {
         `${JSON.stringify({ method, params: message.params })}\n`,
       );
     }
-    write({
+    const response = {
       id,
       result: {
         ...fixture.responses.threadStart,
         thread: { ...fixture.responses.threadStart.thread, id: "expanded-thread" },
       },
-    });
+    };
+    if (script.deferForkResponseUntilRead) {
+      pendingForkResponse = response;
+      write({
+        jsonrpc: "2.0",
+        method: "serverRequest/resolved",
+        params: { threadId: script.rootThreadId, requestId: "fork-observed" },
+      });
+      return;
+    }
+    write(response);
+    return;
+  }
+  if (method === "thread/read" && pendingForkResponse) {
+    write(pendingForkResponse);
+    pendingForkResponse = undefined;
+    write({ id, result: { thread: fixture.responses.threadStart.thread } });
     return;
   }
   if (method === "thread/resume") {
@@ -180,8 +198,16 @@ rl.on("line", (line) => {
       : fixture.responses.turnStart.turn;
     activeTurn = turn;
     turnStartCount += 1;
+    if (turnStartCount === 1) firstTurn = turn;
     write({ id, result: { ...fixture.responses.turnStart, turn } });
     const rootThreadId = script.rootThreadId;
+    if (script.completeFirstTurnOnSecondStart && turnStartCount === 2) {
+      write({
+        jsonrpc: "2.0",
+        method: "turn/completed",
+        params: { threadId: rootThreadId, turn: { ...firstTurn, status: "completed" } },
+      });
+    }
     if (script.onlyFirstTurnStarts !== true || turnStartCount === 1) {
       write({
         jsonrpc: "2.0",

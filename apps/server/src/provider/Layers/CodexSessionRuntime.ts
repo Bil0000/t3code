@@ -1394,7 +1394,10 @@ export const makeCodexSessionRuntime = (
     } satisfies ProviderSession;
     const sessionRef = yield* Ref.make<ProviderSession>(initialSession);
     const sendTurnSemaphore = yield* Semaphore.make(1);
+    const outstandingTurnIds = new Set<string>();
+    const completedBeforeResponse = new Set<string>();
     let activeContextWindow = codexContextWindowChoice(options.model, options.contextWindow);
+    let stopEpoch = 0;
     const offerEvent = (event: ProviderEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
 
     const emitEvent = (event: Omit<ProviderEvent, "id" | "provider" | "createdAt">) =>
@@ -2025,6 +2028,7 @@ export const makeCodexSessionRuntime = (
           if (providerThreadId && payload.threadId !== providerThreadId) {
             return Effect.void;
           }
+          outstandingTurnIds.add(payload.turn.id);
           return updateSession(sessionRef, {
             status: "running",
             activeTurnId: TurnId.make(payload.turn.id),
@@ -2038,6 +2042,9 @@ export const makeCodexSessionRuntime = (
         Effect.flatMap((providerThreadId) => {
           if (providerThreadId && payload.threadId !== providerThreadId) {
             return Effect.void;
+          }
+          if (!outstandingTurnIds.delete(payload.turn.id)) {
+            completedBeforeResponse.add(payload.turn.id);
           }
           const lastError =
             payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
@@ -2515,8 +2522,9 @@ export const makeCodexSessionRuntime = (
         const providerThreadId = yield* readProviderThreadId;
         yield* client.request("thread/compact/start", { threadId: providerThreadId });
       }),
-      sendTurn: (input) =>
-        Effect.gen(function* () {
+      sendTurn: (input) => {
+        const sendEpoch = stopEpoch;
+        return Effect.gen(function* () {
           let providerThreadId = yield* readProviderThreadId;
           if (hasConfiguredMcpServer(options.appServerArgs)) {
             yield* client.request("config/mcpServer/reload", undefined).pipe(
@@ -2535,7 +2543,7 @@ export const makeCodexSessionRuntime = (
             input.contextWindow ?? activeContextWindow ?? undefined,
           );
           if ((selectedContextWindow === "1m") !== (activeContextWindow === "1m")) {
-            if ((yield* Ref.get(sessionRef)).activeTurnId) {
+            if ((yield* Ref.get(sessionRef)).activeTurnId || outstandingTurnIds.size > 0) {
               return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
                 "Finish the current turn before changing the context window.",
               );
@@ -2574,6 +2582,11 @@ export const makeCodexSessionRuntime = (
               options.mcpCapabilities,
             ),
           });
+          if (sendEpoch !== stopEpoch) {
+            return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
+              "Turn was stopped before it started.",
+            );
+          }
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
             Effect.mapError((error) =>
@@ -2585,12 +2598,29 @@ export const makeCodexSessionRuntime = (
             ),
           );
           const turnId = TurnId.make(response.turn.id);
+          const completedEarly = completedBeforeResponse.delete(response.turn.id);
+          completedBeforeResponse.clear();
+          if (!completedEarly) {
+            outstandingTurnIds.add(response.turn.id);
+          }
+          if (sendEpoch !== stopEpoch) {
+            yield* client
+              .request("turn/interrupt", { threadId: providerThreadId, turnId })
+              .pipe(Effect.ignore);
+            return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
+              "Turn was stopped before it started.",
+            );
+          }
           yield* updateSession(sessionRef, (session) => ({
-            status: "running",
-            // Codex accepts follow-ups while the current turn is still
-            // running. The response contains the queued turn id, but
-            // turn/interrupt only accepts the id that is active now.
-            activeTurnId: session.activeTurnId ?? turnId,
+            ...(!completedEarly
+              ? {
+                  status: "running",
+                  // Codex accepts follow-ups while the current turn is still
+                  // running. The response contains the queued turn id, but
+                  // turn/interrupt only accepts the id that is active now.
+                  activeTurnId: session.activeTurnId ?? turnId,
+                }
+              : {}),
             ...(normalizedModel ? { model: normalizedModel } : {}),
           }));
           const resumedProviderThreadId = currentProviderThreadId(yield* Ref.get(sessionRef));
@@ -2601,9 +2631,11 @@ export const makeCodexSessionRuntime = (
               ? { resumeCursor: { threadId: resumedProviderThreadId } }
               : {}),
           } satisfies ProviderTurnStartResult;
-        }).pipe(sendTurnSemaphore.withPermits(1)),
+        }).pipe(sendTurnSemaphore.withPermits(1));
+      },
       interruptTurn: (turnId) =>
         Effect.gen(function* () {
+          stopEpoch += 1;
           // Settle parked approvals FIRST. The transport answers server
           // requests inline on its stdin read loop, so a pending
           // command/file/app-permission prompt blocks every incoming message,
