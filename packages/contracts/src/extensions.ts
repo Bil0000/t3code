@@ -96,7 +96,6 @@ export class ExtensionError extends Schema.TaggedError<ExtensionError>()("Extens
   operation: Schema.Literals(["host", "install", "uninstall", "setEnabled", "list", "connect"]),
   detail: Schema.String,
   extensionId: Schema.optionalKey(Schema.String),
-  cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
     return this.extensionId

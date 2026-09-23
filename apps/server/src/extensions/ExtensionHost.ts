@@ -36,8 +36,11 @@ import {
 
 const BASE_PATH = "/api/vscode";
 const MAX_VSIX_BYTES = 512 * 1024 * 1024;
-const error = (operation: ExtensionError["operation"], detail: string, cause?: unknown) =>
-  new ExtensionError({ operation, detail, ...(cause === undefined ? {} : { cause }) });
+const error = (operation: ExtensionError["operation"], detail: string, cause?: unknown) => {
+  const failure = new ExtensionError({ operation, detail });
+  if (cause !== undefined) Object.defineProperty(failure, "cause", { value: cause });
+  return failure;
+};
 const isExtensionError = Schema.is(ExtensionError);
 
 export const parseProduct = (text: string) =>
@@ -59,8 +62,10 @@ const readVsixId = (file: string) =>
             zip.on("end", () => reject(new Error("VSIX has no extension/package.json.")));
             zip.on("entry", (entry) => {
               if (entry.fileName !== "extension/package.json") return zip.readEntry();
-              if (entry.uncompressedSize > 1024 * 1024)
+              if (entry.uncompressedSize > 1024 * 1024) {
+                zip.close();
                 return reject(new Error("VSIX manifest is too large."));
+              }
               zip.openReadStream(entry, (streamError, stream) => {
                 if (streamError || !stream)
                   return reject(streamError ?? new Error("Could not read VSIX manifest."));
@@ -213,12 +218,7 @@ const makeExtensionHost = Effect.gen(function* () {
         Effect.flatMap((result) =>
           result.code === 0
             ? Effect.void
-            : Effect.fail(
-                error(
-                  operation,
-                  result.stderr || result.stdout || "VSCodium extension command failed.",
-                ),
-              ),
+            : Effect.fail(error(operation, "VSCodium extension command failed.")),
         ),
       );
 
@@ -262,8 +262,7 @@ const makeExtensionHost = Effect.gen(function* () {
       args: ["-xzf", archive, "-C", extracted, "--no-same-owner"],
       timeout: "5 minutes",
     });
-    if (unpack.code !== 0)
-      return yield* error("host", unpack.stderr || "Could not unpack VSCodium REH.");
+    if (unpack.code !== 0) return yield* error("host", "Could not unpack VSCodium REH.");
     const product = yield* parseProduct(
       yield* fs.readFileString(NodePath.join(extracted, "product.json")),
     );
@@ -347,8 +346,8 @@ const makeExtensionHost = Effect.gen(function* () {
     let delay = 1000;
     while (true) {
       yield* Effect.scoped(runHost).pipe(
-        Effect.catch((cause) =>
-          restarting ? setHost("starting") : setHost("failed", String(cause)),
+        Effect.catch(() =>
+          restarting ? setHost("starting") : setHost("failed", "The extension host stopped."),
         ),
       );
       if (restarting) {
@@ -495,8 +494,10 @@ const makeExtensionHost = Effect.gen(function* () {
         lock.withPermits(1)(
           Effect.gen(function* () {
             yield* runCli(["--uninstall-extension", id], "uninstall");
-            disabled.delete(id.toLowerCase());
-            yield* fs.writeFileString(disabledPath, JSON.stringify([...disabled]));
+            const nextDisabled = new Set(disabled);
+            nextDisabled.delete(id.toLowerCase());
+            yield* fs.writeFileString(disabledPath, JSON.stringify([...nextDisabled]));
+            disabled = nextDisabled;
             yield* refresh;
             yield* restart;
           }),
@@ -515,9 +516,11 @@ const makeExtensionHost = Effect.gen(function* () {
           const installed = yield* refresh;
           if (!installed.some((extension) => extension.id.toLowerCase() === id.toLowerCase()))
             return yield* error("setEnabled", "Extension is not installed.");
-          if (enabled) disabled.delete(id.toLowerCase());
-          else disabled.add(id.toLowerCase());
-          yield* fs.writeFileString(disabledPath, JSON.stringify([...disabled]));
+          const nextDisabled = new Set(disabled);
+          if (enabled) nextDisabled.delete(id.toLowerCase());
+          else nextDisabled.add(id.toLowerCase());
+          yield* fs.writeFileString(disabledPath, JSON.stringify([...nextDisabled]));
+          disabled = nextDisabled;
           yield* refresh;
           yield* restart;
         }),
