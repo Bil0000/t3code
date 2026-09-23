@@ -166,6 +166,52 @@ const peerPath = NodePath.join(
 );
 
 describe("CodexSessionRuntime collab integration", () => {
+  it.effect("forks an existing thread when its context window changes", () =>
+    Effect.gen(function* () {
+      NodeFS.writeFileSync(
+        scriptPath,
+        JSON.stringify({
+          rootThreadId: ROOT,
+          recordRequests: true,
+          recordTurnStarts: true,
+          notifications: [],
+        }),
+        "utf8",
+      );
+      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-context-choice"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        model: "gpt-6-astra",
+        contextWindow: "default",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      yield* runtime.start();
+      const turn = yield* runtime.sendTurn({
+        input: "continue",
+        model: "gpt-6-astra",
+        contextWindow: "1m",
+      });
+      const requests = readRecordedRequests();
+      assert.equal(requests[0]?.method, "thread/fork");
+      assert.equal(requests[0]?.params.threadId, ROOT);
+      assert.equal(requests[0]?.params.model, "gpt-6-astra");
+      assert.deepEqual(requests[0]?.params.config, { model_context_window: 1_050_000 });
+      assert.equal(requests[1]?.params.threadId, "expanded-thread");
+      assert.equal((turn.resumeCursor as { threadId: string }).threadId, "expanded-thread");
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("looks up child model metadata once after activity registration", () =>
     Effect.gen(function* () {
       const script = {

@@ -6,9 +6,37 @@ import {
   hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
   resolveContextWindowModelDisplayName,
+  sameContextWindowSelection,
   shouldOfferResumeCompaction,
   shouldReserveContextWindowMeter,
 } from "./ContextWindowMeter.logic";
+
+describe("sameContextWindowSelection", () => {
+  const active = {
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    model: "claude-opus-5-5",
+    options: [{ id: "contextWindow", value: "200k" }],
+  };
+
+  it("hides old usage when the model or context window changes", () => {
+    expect(
+      sameContextWindowSelection(active, {
+        ...active,
+        options: [{ id: "contextWindow", value: "1m" }],
+      }),
+    ).toBe(false);
+    expect(sameContextWindowSelection(active, { ...active, model: "claude-opus-5" })).toBe(false);
+  });
+
+  it("keeps usage for a reasoning-only change", () => {
+    expect(
+      sameContextWindowSelection(active, {
+        ...active,
+        options: [...active.options, { id: "effort", value: "high" }],
+      }),
+    ).toBe(true);
+  });
+});
 
 function claudeProvider(input: {
   instanceId: string;

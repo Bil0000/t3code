@@ -279,6 +279,7 @@ import { ContextWindowMeter, ContextWindowMeterPlaceholder } from "./ContextWind
 import {
   providerSupportsManualCompaction,
   resolveContextWindowModelDisplayName,
+  sameContextWindowSelection,
   shouldReserveContextWindowMeter,
 } from "./ContextWindowMeter.logic";
 import {
@@ -2079,6 +2080,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
     [activeThreadModelSelection, modelOptionsByInstance],
   );
+  const displayedContextWindow = sameContextWindowSelection(
+    activeThreadModelSelection,
+    selectedModelSelection,
+  )
+    ? activeContextWindow
+    : null;
   const reserveContextWindowMeter = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
     detailLoading: props.threadSyncPhase === "loading",
@@ -6796,7 +6803,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   "relative",
                   isComposerResting && "flex min-w-0 items-center gap-1",
                   isComposerResting &&
-                    ((settings.contextWindowMeterEnabled && activeContextWindow) ||
+                    ((settings.contextWindowMeterEnabled && displayedContextWindow) ||
                     reserveContextWindowMeter
                       ? "pr-28"
                       : showComposerAttachAction
@@ -7013,7 +7020,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <ComposerFooterPrimaryActions
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     activeContextWindow={
-                      settings.contextWindowMeterEnabled ? activeContextWindow : null
+                      settings.contextWindowMeterEnabled ? displayedContextWindow : null
                     }
                     reserveContextWindowMeter={reserveContextWindowMeter}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}

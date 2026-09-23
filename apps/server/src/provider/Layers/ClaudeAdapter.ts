@@ -101,6 +101,7 @@ import {
   isClaudeCatalogUltracodeEffort,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
+  resolveClaudeCatalogContextWindow,
   resolveClaudeCatalogContextWindowTokens,
   resolveClaudeCatalogEffort,
   resolveClaudeModelSlug,
@@ -4849,6 +4850,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const apiModelId = modelSelection
         ? resolveClaudeCatalogApiModelId(modelCatalog, modelSelection)
         : undefined;
+      const contextWindowChoice = resolveClaudeCatalogContextWindow(modelCatalog, modelSelection);
       const initialContextWindow = selectedClaudeContextWindow(modelCatalog, modelSelection);
       const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
       const effort =
@@ -4947,7 +4949,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
-        env: McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
+        env: {
+          ...McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
+          ...(contextWindowChoice === "200k"
+            ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" }
+            : contextWindowChoice === "1m"
+              ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: undefined }
+              : {}),
+        },
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession
@@ -5137,7 +5146,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   );
 
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-    const context = yield* requireSession(input.threadId);
+    let context = yield* requireSession(input.threadId);
     const modelCatalog = yield* modelCatalogEffect;
     const selectedModel =
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
@@ -5146,6 +5155,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const modelSelection = selectedModel
       ? { ...selectedModel, model: resolveClaudeModelSlug(modelCatalog, selectedModel.model) }
       : undefined;
+    const contextChoiceChanged =
+      modelSelection !== undefined &&
+      (resolveClaudeCatalogContextWindow(modelCatalog, context.startInput.modelSelection) ===
+        "200k") !==
+        (resolveClaudeCatalogContextWindow(modelCatalog, modelSelection) === "200k");
+    if (contextChoiceChanged && context.turnState?.synthetic !== true && context.turnState) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "turn/setContextWindow",
+        detail: "Finish the current turn before changing the context window.",
+      });
+    }
     if (modelSelection) {
       context.startInput = { ...context.startInput, modelSelection };
     }
@@ -5159,6 +5180,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       context.turnState && context.turnState.synthetic !== true ? context.turnState : null;
     if (context.turnState && steeringTurnState === null) {
       yield* completeTurn(context, "completed");
+    }
+    if (contextChoiceChanged) {
+      const resumeCursor = context.session.resumeCursor;
+      yield* stopSessionInternal(context, { emitExitEvent: false });
+      yield* startSession({ ...context.startInput, resumeCursor });
+      context = yield* requireSession(input.threadId);
     }
 
     if (modelSelection?.model) {

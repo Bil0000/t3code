@@ -44,7 +44,10 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import {
+  getModelSelectionStringOptionValue,
+  supportsCodexExpandedContext,
+} from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 
@@ -2271,6 +2274,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
+        const contextWindow =
+          input.modelSelection?.instanceId === boundInstanceId &&
+          supportsCodexExpandedContext(input.modelSelection.model)
+            ? (getModelSelectionStringOptionValue(input.modelSelection, "contextWindow") ??
+              "default")
+            : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
@@ -2287,6 +2296,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(input.modelSelection?.instanceId === boundInstanceId
             ? { model: input.modelSelection.model }
             : {}),
+          ...(contextWindow ? { contextWindow } : {}),
           ...(serviceTier ? { serviceTier } : {}),
           ...(mcpSession
             ? {
@@ -2535,12 +2545,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       input.modelSelection?.instanceId === boundInstanceId
         ? getCodexServiceTierOptionValue(input.modelSelection)
         : undefined;
+    const contextWindow =
+      input.modelSelection?.instanceId === boundInstanceId &&
+      supportsCodexExpandedContext(input.modelSelection.model)
+        ? (getModelSelectionStringOptionValue(input.modelSelection, "contextWindow") ?? "default")
+        : undefined;
     return yield* session.runtime
       .sendTurn({
         ...(input.input !== undefined ? { input: input.input } : {}),
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
           : {}),
+        ...(contextWindow ? { contextWindow } : {}),
         ...(reasoningEffort
           ? {
               effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,

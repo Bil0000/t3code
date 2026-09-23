@@ -889,6 +889,36 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  for (const [choice, tokens] of [
+    ["default", 272_000],
+    ["1m", 1_050_000],
+  ] as const) {
+    it.effect(`starts supported GPT models with the ${choice} window`, () =>
+      Effect.gen(function* () {
+        let params: unknown;
+        yield* openCodexThread({
+          client: {
+            request: (_method, payload) => {
+              params = payload;
+              return Effect.succeed(makeThreadOpenResponse("expanded-thread"));
+            },
+            raw: { request: () => Effect.die("A new thread must not resume") },
+          },
+          threadId: ThreadId.make("thread-1"),
+          runtimeMode: "full-access",
+          cwd: "/tmp/project",
+          requestedModel: "gpt-6-astra",
+          contextWindow: choice,
+          serviceTier: undefined,
+          resumeThreadId: undefined,
+        });
+        NodeAssert.deepEqual((params as { config?: unknown }).config, {
+          model_context_window: tokens,
+        });
+      }),
+    );
+  }
+
   it.effect("resumes metadata when historical turns contain unknown error values", () =>
     Effect.gen(function* () {
       const response = makeThreadOpenResponse("saved-thread");

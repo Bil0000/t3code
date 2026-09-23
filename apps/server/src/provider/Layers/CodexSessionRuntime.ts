@@ -18,7 +18,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import { normalizeModelSlug } from "@t3tools/shared/model";
+import { normalizeModelSlug, supportsCodexExpandedContext } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -176,6 +176,7 @@ export interface CodexSessionRuntimeOptions {
   readonly cwd: string;
   readonly runtimeMode: RuntimeMode;
   readonly model?: string;
+  readonly contextWindow?: string | undefined;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
@@ -190,6 +191,7 @@ export interface CodexSessionRuntimeSendTurnInput {
     readonly path: string;
   }>;
   readonly model?: string;
+  readonly contextWindow?: string | undefined;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly interactionMode?: ProviderInteractionMode;
@@ -546,17 +548,28 @@ function buildThreadStartParams(input: {
   readonly cwd: string;
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
+  readonly contextWindow?: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
-}): EffectCodexSchema.V2ThreadStartParams {
+}) {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
+  const contextWindow = codexContextWindowChoice(input.model, input.contextWindow);
   return {
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
     approvalsReviewer: config.approvalsReviewer,
     ...(input.model ? { model: input.model } : {}),
+    ...(contextWindow
+      ? { config: { model_context_window: contextWindow === "1m" ? 1_050_000 : 272_000 } }
+      : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
   };
+}
+
+function codexContextWindowChoice(model: string | undefined, choice: string | undefined) {
+  return model && supportsCodexExpandedContext(model) && (choice === "1m" || choice === "default")
+    ? choice
+    : null;
 }
 
 function runtimeModeToTurnSandboxPolicy(
@@ -726,6 +739,7 @@ export const openCodexThread = (input: {
   readonly runtimeMode: RuntimeMode;
   readonly cwd: string;
   readonly requestedModel: string | undefined;
+  readonly contextWindow?: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
 }): Effect.Effect<typeof CodexThreadResumeMetadata.Type, CodexErrors.CodexAppServerError> => {
@@ -734,6 +748,7 @@ export const openCodexThread = (input: {
     cwd: input.cwd,
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
+    contextWindow: input.contextWindow,
     serviceTier: input.serviceTier,
   });
 
@@ -1379,6 +1394,7 @@ export const makeCodexSessionRuntime = (
       updatedAt: sessionCreatedAt,
     } satisfies ProviderSession;
     const sessionRef = yield* Ref.make<ProviderSession>(initialSession);
+    let activeContextWindow = codexContextWindowChoice(options.model, options.contextWindow);
     const offerEvent = (event: ProviderEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
 
     const emitEvent = (event: Omit<ProviderEvent, "id" | "provider" | "createdAt">) =>
@@ -2442,6 +2458,7 @@ export const makeCodexSessionRuntime = (
         runtimeMode: options.runtimeMode,
         cwd: options.cwd,
         requestedModel,
+        contextWindow: options.contextWindow,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
       });
@@ -2500,7 +2517,7 @@ export const makeCodexSessionRuntime = (
       }),
       sendTurn: (input) =>
         Effect.gen(function* () {
-          const providerThreadId = yield* readProviderThreadId;
+          let providerThreadId = yield* readProviderThreadId;
           if (hasConfiguredMcpServer(options.appServerArgs)) {
             yield* client.request("config/mcpServer/reload", undefined).pipe(
               Effect.catch((cause) =>
@@ -2513,6 +2530,25 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
+          const selectedContextWindow =
+            input.contextWindow === undefined
+              ? activeContextWindow
+              : codexContextWindowChoice(normalizedModel, input.contextWindow);
+          if (selectedContextWindow !== activeContextWindow) {
+            const forked = yield* client.request("thread/fork", {
+              threadId: providerThreadId,
+              ...buildThreadStartParams({
+                cwd: options.cwd,
+                runtimeMode: options.runtimeMode,
+                model: normalizedModel,
+                contextWindow: selectedContextWindow ?? undefined,
+                serviceTier: input.serviceTier ?? options.serviceTier,
+              }),
+            });
+            providerThreadId = forked.thread.id;
+            yield* updateSession(sessionRef, { resumeCursor: { threadId: providerThreadId } });
+            activeContextWindow = selectedContextWindow;
+          }
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
             runtimeMode: options.runtimeMode,

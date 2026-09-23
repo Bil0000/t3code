@@ -230,6 +230,12 @@ export function codexModelFamily(slug: string): string {
   return slug.startsWith("openai.gpt-") ? slug.slice("openai.".length) : slug;
 }
 
+export function supportsCodexExpandedContext(slug: string): boolean {
+  return /^(?:gpt-6-(?:astra|sol|luna)|gpt-5\.(?:4|5|6(?:-(?:sol|terra|luna))?))$/.test(
+    codexModelFamily(slug),
+  );
+}
+
 export function normalizeModelSlug(
   model: string | null | undefined,
   provider: ProviderDriverKind = DEFAULT_PROVIDER_DRIVER_KIND,

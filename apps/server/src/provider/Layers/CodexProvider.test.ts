@@ -64,6 +64,35 @@ it("maps current Codex model capability fields", () => {
   ]);
 });
 
+it("offers Default and 1M context on supported GPT models", () => {
+  const model = {
+    additionalSpeedTiers: [],
+    defaultReasoningEffort: "medium" as const,
+    description: "Test model",
+    displayName: "GPT-6 Astra",
+    hidden: false,
+    id: "gpt-6-astra",
+    isDefault: true,
+    model: "gpt-6-astra",
+    supportedReasoningEfforts: [],
+  };
+  assert.deepEqual(mapCodexModelCapabilities(model).optionDescriptors, [
+    {
+      id: "contextWindow",
+      label: "Context Window",
+      type: "select",
+      options: [
+        { id: "default", label: "Default", isDefault: true },
+        { id: "1m", label: "1M" },
+      ],
+    },
+  ]);
+  assert.deepEqual(
+    mapCodexModelCapabilities({ ...model, id: "gpt-test", model: "gpt-test" }).optionDescriptors,
+    [],
+  );
+});
+
 it("uses standard routing when the catalog has no default service tier", () => {
   const capabilities = mapCodexModelCapabilities({
     additionalSpeedTiers: ["fast"],

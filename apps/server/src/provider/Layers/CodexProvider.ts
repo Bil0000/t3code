@@ -29,6 +29,7 @@ import {
   codexModelFamily,
   createModelCapabilities,
   readCustomModelEntries,
+  supportsCodexExpandedContext,
 } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
@@ -182,6 +183,17 @@ export function mapCodexModelCapabilities(
       type: "select",
       options: reasoningOptions,
       ...(defaultReasoning ? { currentValue: defaultReasoning } : {}),
+    });
+  }
+  if (supportsCodexExpandedContext(model.model)) {
+    optionDescriptors.push({
+      id: "contextWindow",
+      label: "Context Window",
+      type: "select",
+      options: [
+        { id: "default", label: "Default", isDefault: true },
+        { id: "1m", label: "1M" },
+      ],
     });
   }
   if (serviceTiers.length > 0) {

@@ -46,6 +46,7 @@ import {
   SYNTHETIC_CLAUDE_STANDARD_MODEL,
   SYNTHETIC_CLAUDE_THINKING_MODEL,
 } from "../ClaudeModelCatalog.testFixtures.ts";
+import { BUNDLED_CLAUDE_MODEL_CATALOG } from "../ClaudeModelCatalog.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import type { ClaudeScopedLimitNames } from "./claudeUsageLimits.ts";
@@ -172,6 +173,7 @@ function makeHarness(config?: {
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
   readonly getSessionMessages?: ClaudeAdapterLiveOptions["getSessionMessages"];
   readonly forkSession?: ClaudeAdapterLiveOptions["forkSession"];
+  readonly modelCatalog?: typeof BUNDLED_CLAUDE_MODEL_CATALOG;
 }) {
   const query = new FakeClaudeQuery();
   const queries = [query];
@@ -186,11 +188,12 @@ function makeHarness(config?: {
     ...(config?.environment ? { environment: config.environment } : {}),
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
     ...(config?.scopedLimitNames ? { scopedLimitNames: config.scopedLimitNames } : {}),
-    modelCatalog: Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
+    modelCatalog: Effect.succeed(config?.modelCatalog ?? SYNTHETIC_CLAUDE_MODEL_CATALOG),
     ...(config?.getSessionMessages ? { getSessionMessages: config.getSessionMessages } : {}),
     ...(config?.forkSession ? { forkSession: config.forkSession } : {}),
     createQuery: (input) => {
-      if (createInput && config?.getSessionMessages) queries.push(new FakeClaudeQuery());
+      if (createInput && (config?.getSessionMessages || config?.modelCatalog))
+        queries.push(new FakeClaudeQuery());
       createInput = input;
       return queries.at(-1)!;
     },
@@ -7410,6 +7413,46 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  for (const [from, to] of [
+    ["1m", "200k"],
+    ["200k", "1m"],
+  ] as const) {
+    it.effect(`restarts Claude when the context changes from ${from} to ${to}`, () => {
+      const harness = makeHarness({ modelCatalog: BUNDLED_CLAUDE_MODEL_CATALOG });
+      const selection = (window: string) =>
+        createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-opus-5-5", [
+          { id: "contextWindow", value: window },
+        ]);
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+          modelSelection: selection(from),
+        });
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "Continue",
+          modelSelection: selection(to),
+          attachments: [],
+        });
+        assert.equal(harness.query.closeCalls, 1);
+        assert.equal(
+          harness.getLastCreateQueryInput()?.options.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT,
+          to === "200k" ? "1" : undefined,
+        );
+        assert.equal(
+          harness.getLastCreateQueryInput()?.options.model,
+          to === "1m" ? "claude-opus-5-5[1m]" : "claude-opus-5-5",
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
 
   it.effect("sets plan permission mode on sendTurn when interactionMode is plan", () => {
     const harness = makeHarness();

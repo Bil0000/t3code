@@ -448,6 +448,32 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
+  it.effect("passes expanded and default context choices to the runtime", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-context-choice");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6-astra", [
+          { id: "contextWindow", value: "1m" },
+        ]),
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.equal(runtime.options.contextWindow, "1m");
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "continue",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6-astra"),
+        attachments: [],
+      });
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].contextWindow, "default");
+    }),
+  );
+
   it.effect("passes image attachments to Codex by path instead of base64", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
