@@ -395,7 +395,7 @@ function makeCompletingHandoffAdapter(startCount: Ref.Ref<number>): ProviderAdap
   };
 }
 
-it.live("reports a failed selection restart and recovers on the next user message", () =>
+it.live("retries a failed selection restart session open before completing", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const cwd = yield* checkpointWorkspace("selection-restart-lifecycle");
@@ -412,15 +412,6 @@ it.live("reports a failed selection restart and recovers on the next user messag
       const result = yield* Effect.gen(function* () {
         const orchestrator = yield* OrchestratorV2;
         const worker = yield* OrchestrationEffectWorkerV2;
-        const nextRunStatus = (status: "failed" | "completed") =>
-          orchestrator.streamDomainEvents.pipe(
-            Stream.filter(
-              (event) => event.type === "run.updated" && event.payload.status === status,
-            ),
-            Stream.take(1),
-            Stream.runDrain,
-            Effect.forkScoped,
-          );
         yield* orchestrator.dispatch({
           type: "thread.create",
           createdBy: "user",
@@ -464,7 +455,14 @@ it.live("reports a failed selection restart and recovers on the next user messag
           return yield* Effect.die("active restart test run is missing");
         }
 
-        const failed = yield* nextRunStatus("failed");
+        const completed = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "run.updated" && event.payload.status === "completed",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
         yield* orchestrator.dispatch({
           type: "message.dispatch",
           createdBy: "user",
@@ -476,38 +474,6 @@ it.live("reports a failed selection restart and recovers on the next user messag
           attachments: [],
           modelSelection: replacementSelection,
           dispatchMode: { type: "restart_active", targetRunId: activeRunId },
-        });
-        yield* Fiber.join(failed);
-        yield* worker.drain();
-        const failedProjection = yield* orchestrator.getThreadProjection(threadId);
-        assert.lengthOf(failedProjection.runs, 1);
-        assert.equal(failedProjection.runs[0]?.status, "failed");
-        assert.deepEqual(
-          failedProjection.attempts.map((attempt) => attempt.status),
-          ["superseded", "failed"],
-        );
-        assert.isTrue(
-          failedProjection.turnItems.some(
-            (item) =>
-              item.type === "error" &&
-              item.title === "Provider session failed to open" &&
-              item.failure?.class === "provider_error",
-          ),
-        );
-        assert.lengthOf((yield* Ref.get(state)).opened, 2);
-
-        const completed = yield* nextRunStatus("completed");
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          createdBy: "user",
-          creationSource: "web",
-          commandId: CommandId.make("command:selection-restart:retry"),
-          threadId,
-          messageId: MessageId.make("message:selection-restart:retry"),
-          text: "Try again",
-          attachments: [],
-          modelSelection: replacementSelection,
-          dispatchMode: { type: "start_immediately" },
         });
         yield* Fiber.join(completed);
         yield* worker.drain();
@@ -525,11 +491,11 @@ it.live("reports a failed selection restart and recovers on the next user messag
       );
       const { projection, captured } = result;
 
-      assert.lengthOf(projection.runs, 2);
-      assert.lengthOf(projection.attempts, 3);
+      assert.lengthOf(projection.runs, 1);
+      assert.lengthOf(projection.attempts, 2);
       assert.deepEqual(
         projection.attempts.map((attempt) => attempt.status),
-        ["superseded", "failed", "completed"],
+        ["superseded", "completed"],
       );
       assert.deepEqual(
         projection.providerTurns.map((turn) => turn.status),
