@@ -288,11 +288,11 @@ export async function getRuntime(
 ) {
   const connection = await connect();
   const key = `${httpBaseUrl}|${connection.commit}|${workspaceRoot ?? ""}`;
-  if (initialized && runtimeKey !== key)
+  if ((initialized || runtime) && runtimeKey !== key)
     throw new Error(
       "Extensions are running for another project. Reload the page to use them here.",
     );
-  if (initialized && connectionToken !== connection.connectionToken)
+  if ((initialized || runtime) && connectionToken !== connection.connectionToken)
     throw new Error("Extensions restarted. Reload the page to use them.");
   connectionToken = connection.connectionToken;
   wsTicket = connection.wsTicket;
@@ -319,10 +319,6 @@ export async function getRuntime(
       throw error;
     });
   }
-  if (runtimeKey !== key)
-    throw new Error(
-      "Extensions are running for another project. Reload the page to use them here.",
-    );
   const current = await runtime;
   const resolver = await getService(IRemoteAuthorityResolverService);
   resolver._setAuthorityConnectionToken(current.remoteAuthority, connection.connectionToken);
