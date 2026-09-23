@@ -247,16 +247,18 @@ export async function activeWebview(extensionId: string) {
     extensionId,
     viewType: editor.viewType,
     title: editor.getName(),
+    resource: editor.resource.toString(),
   };
 }
 
-export async function showWebview(extensionId: string, viewType: string) {
+export async function showWebview(extensionId: string, viewType: string, resource?: string) {
   if (!runtime) return false;
   const editors = (await runtime).editors;
   const input = editors.editors.find(
     (editor) =>
       editor instanceof WebviewInput &&
       editor.viewType === viewType &&
+      (resource === undefined || editor.resource.toString() === resource) &&
       editor.extension?.id.value.toLowerCase() === extensionId.toLowerCase(),
   );
   if (!input) return false;

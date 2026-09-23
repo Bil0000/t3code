@@ -100,11 +100,18 @@ export type RightPanelSurface =
       extensionId: string;
       viewType: string;
       title: string;
+      resource?: string;
     };
 
 export type ExtensionSurfaceTarget =
   | { kind: "extension"; extensionId: string; viewContainerId?: string }
-  | { kind: "extension-webview"; extensionId: string; viewType: string; title: string };
+  | {
+      kind: "extension-webview";
+      extensionId: string;
+      viewType: string;
+      title: string;
+      resource?: string;
+    };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
@@ -257,11 +264,12 @@ function extensionSurface(target: ExtensionSurfaceTarget): RightPanelSurface {
   const extensionId = encodeURIComponent(target.extensionId);
   if (target.kind === "extension-webview") {
     return {
-      id: `extension-webview:${extensionId}:${encodeURIComponent(target.viewType)}`,
+      id: `extension-webview:${extensionId}:${encodeURIComponent(target.viewType)}${target.resource === undefined ? "" : `:${encodeURIComponent(target.resource)}`}`,
       kind: "extension-webview",
       extensionId: target.extensionId,
       viewType: target.viewType,
       title: target.title,
+      ...(target.resource === undefined ? {} : { resource: target.resource }),
     };
   }
   return {
@@ -466,6 +474,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                           viewType: surface.viewType,
                           title:
                             typeof surface.title === "string" ? surface.title : surface.viewType,
+                          ...(typeof surface.resource === "string"
+                            ? { resource: surface.resource }
+                            : {}),
                         }),
                       ];
                     }

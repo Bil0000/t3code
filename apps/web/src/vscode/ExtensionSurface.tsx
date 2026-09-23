@@ -44,7 +44,7 @@ export function ExtensionSurface(props: ExtensionRuntimeProps) {
       if (cancelled) return;
       if (
         target.kind === "extension-webview" &&
-        !(await showWebview(extensionId, target.viewType))
+        !(await showWebview(extensionId, target.viewType, target.resource))
       ) {
         throw new Error("This extension panel closed. Run its command again to reopen it.");
       }
