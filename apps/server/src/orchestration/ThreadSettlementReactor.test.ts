@@ -1458,6 +1458,7 @@ describe("storage cleanup", () => {
     "settled-immediate",
     "settled-wait",
     "settled-expired",
+    "settled-auto-recent",
     "settled-legacy",
     "settled-active",
     "settled-pinned-active",
@@ -1537,12 +1538,16 @@ describe("storage cleanup", () => {
             worktreePath,
             latestUserMessageAt:
               protection === "recent" ? "2026-08-26T00:00:00.000Z" : "2026-08-01T00:00:00.000Z",
+            ...(protection === "settled-auto-recent" ? { updatedAt: NOW } : {}),
             ...(protection.startsWith("settled-") &&
             protection !== "settled-active" &&
             protection !== "settled-event"
               ? {
                   settledOverride: "settled" as const,
-                  settledAt: protection === "settled-expired" ? "2026-08-01T00:00:00.000Z" : NOW,
+                  settledAt:
+                    protection === "settled-expired" || protection === "settled-auto-recent"
+                      ? "2026-08-01T00:00:00.000Z"
+                      : NOW,
                 }
               : {}),
             ...(protection === "settled-legacy"
@@ -1623,7 +1628,9 @@ describe("storage cleanup", () => {
                     protection === "settled-project-custom"
                       ? null
                       : protection.startsWith("settled-")
-                        ? protection === "settled-wait" || protection === "settled-expired"
+                        ? protection === "settled-wait" ||
+                          protection === "settled-expired" ||
+                          protection === "settled-auto-recent"
                           ? 8
                           : 0
                         : null,

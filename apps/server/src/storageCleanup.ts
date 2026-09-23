@@ -248,7 +248,8 @@ export const make = Effect.gen(function* () {
           settings.worktreeSettledAfterDays !== null &&
           thread.settledOverride !== "active" &&
           thread.settledAt !== null &&
-          Date.parse(thread.settledAt) <= now - settings.worktreeSettledAfterDays * DAY_MS;
+          Math.max(Date.parse(thread.settledAt), Date.parse(thread.updatedAt)) <=
+            now - settings.worktreeSettledAfterDays * DAY_MS;
         let eligible = deleted || old || settled;
         if (!eligible && (settings.worktreeUnchanged || settings.worktreeOnMerge)) {
           const repositoryCwd = path.resolve(project.workspaceRoot);
@@ -322,7 +323,8 @@ export const make = Effect.gen(function* () {
           !storageCleanupThreadIdle(latest[0]!, now) ||
           storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread) ||
           latest[0]!.settledOverride !== thread.settledOverride ||
-          latest[0]!.settledAt !== thread.settledAt
+          latest[0]!.settledAt !== thread.settledAt ||
+          latest[0]!.updatedAt !== thread.updatedAt
         )
           return;
         const finalStatus = yield* git.statusDetailsLocal(worktreePath);
