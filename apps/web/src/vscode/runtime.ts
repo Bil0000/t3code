@@ -322,7 +322,8 @@ export async function syncTheme(element: HTMLElement) {
     "sideBar.border": border,
     "editorGroup.border": border,
   };
-  let configuration = await getUserConfiguration().catch(() => "{}");
+  let configuration = await getUserConfiguration().catch(() => null);
+  if (configuration === null) return;
   const settings: Array<[string[], string | boolean]> = [
     [["workbench.editor.enablePreview"], false],
     [
