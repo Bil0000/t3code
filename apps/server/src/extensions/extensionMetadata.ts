@@ -2,12 +2,21 @@ import type { InstalledExtension } from "@t3tools/contracts";
 
 const microsoftPublishers = new Set(["ms-vscode", "ms-python", "ms-toolsai", "ms-dotnettools"]);
 const microsoftIds = new Set(["github.copilot", "github.copilot-chat"]);
+const rehSha256: Record<string, string> = {
+  "darwin-arm64": "f645669f423f88fd2626d88f80d3f931b6c21fda93df4177d19a91c46815be1c",
+  "darwin-x64": "dc80d0c01f870c0c2c4d26469ce3c1ce80dd449b227cd8aee88af4fceb0e7453",
+  "linux-arm64": "697d2cf622152b3b3affbbd18d48e5ff51e1e2fbf5833ad66262bda413c599c5",
+  "linux-x64": "bd23015a35b915bac3c6fca962ca5db427f5c8f049702e48ddeb72757ab32745",
+  "win32-x64": "3f7d84ba5b4440e4e328dad4fe182f14bba7333db170485e989ac2c1c49b6a0c",
+};
 
-export function rehAsset(platform: NodeJS.Platform, arch: string): string | null {
-  if (!(["linux", "darwin", "win32"] as string[]).includes(platform)) return null;
-  if (arch !== "x64" && arch !== "arm64") return null;
-  if (platform === "win32" && arch === "arm64") return null;
-  return `https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-${platform}-${arch}-1.135.06055.tar.gz`;
+export function rehAsset(platform: NodeJS.Platform, arch: string) {
+  const sha256 = rehSha256[`${platform}-${arch}`];
+  if (!sha256) return null;
+  return {
+    url: `https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-${platform}-${arch}-1.135.06055.tar.gz`,
+    sha256,
+  };
 }
 
 export function openVsxUrl(namespace: string, name: string, version?: string): string {

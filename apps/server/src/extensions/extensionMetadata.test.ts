@@ -10,11 +10,22 @@ import {
 
 describe("extension metadata", () => {
   it("uses the supported REH assets and rejects Windows arm64", () => {
-    expect(rehAsset("linux", "x64")).toBe(
-      "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-linux-x64-1.135.06055.tar.gz",
+    expect(rehAsset("linux", "x64")).toEqual({
+      url: "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-linux-x64-1.135.06055.tar.gz",
+      sha256: "bd23015a35b915bac3c6fca962ca5db427f5c8f049702e48ddeb72757ab32745",
+    });
+    expect(rehAsset("darwin", "arm64")?.sha256).toBe(
+      "f645669f423f88fd2626d88f80d3f931b6c21fda93df4177d19a91c46815be1c",
     );
-    expect(rehAsset("darwin", "arm64")).toContain("vscodium-reh-darwin-arm64-");
-    expect(rehAsset("win32", "x64")).toContain("vscodium-reh-win32-x64-");
+    expect(rehAsset("darwin", "x64")?.sha256).toBe(
+      "dc80d0c01f870c0c2c4d26469ce3c1ce80dd449b227cd8aee88af4fceb0e7453",
+    );
+    expect(rehAsset("linux", "arm64")?.sha256).toBe(
+      "697d2cf622152b3b3affbbd18d48e5ff51e1e2fbf5833ad66262bda413c599c5",
+    );
+    expect(rehAsset("win32", "x64")?.sha256).toBe(
+      "3f7d84ba5b4440e4e328dad4fe182f14bba7333db170485e989ac2c1c49b6a0c",
+    );
     expect(rehAsset("win32", "arm64")).toBeNull();
     expect(rehAsset("freebsd", "x64")).toBeNull();
   });

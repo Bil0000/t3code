@@ -237,13 +237,8 @@ const makeExtensionHost = Effect.gen(function* () {
     yield* setHost("downloading");
     const staging = yield* fs.makeTempDirectoryScoped({ directory: base, prefix: ".reh-" });
     const archive = NodePath.join(staging, "reh.tar.gz");
-    const checksumResponse = yield* http
-      .execute(HttpClientRequest.get(`${asset}.sha256`))
-      .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
-    const checksum = /^[a-f\d]{64}(?=\s|$)/i.exec((yield* checksumResponse.text).trim())?.[0];
-    if (!checksum) return yield* error("host", "VSCodium returned an invalid REH SHA-256 digest.");
     const response = yield* http
-      .execute(HttpClientRequest.get(asset))
+      .execute(HttpClientRequest.get(asset.url))
       .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
     let bytes = 0;
     const digest = NodeCrypto.createHash("sha256");
@@ -258,8 +253,8 @@ const makeExtensionHost = Effect.gen(function* () {
       Stream.run(fs.sink(archive, { flag: "wx", mode: 0o600 })),
     );
     if (bytes > 256 * 1024 * 1024) return yield* error("host", "The REH archive is too large.");
-    if (digest.digest("hex") !== checksum.toLowerCase())
-      return yield* error("host", "The REH archive SHA-256 did not match VSCodium.");
+    if (digest.digest("hex") !== asset.sha256)
+      return yield* error("host", "The REH archive did not match its pinned SHA-256.");
     const extracted = NodePath.join(staging, "extract");
     yield* fs.makeDirectory(extracted);
     const unpack = yield* runner.run({
