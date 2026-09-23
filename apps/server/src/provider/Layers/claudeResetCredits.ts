@@ -240,6 +240,7 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   const body = yield* HttpClientResponse.schemaBodyJson(ClaimResponse)(
     yield* HttpClientResponse.filterStatusOk(response),
   ).pipe(
+    Effect.timeout("25 seconds"),
     Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "requestFailed", cause })),
   );
   if (body.result === "cooldown") {
