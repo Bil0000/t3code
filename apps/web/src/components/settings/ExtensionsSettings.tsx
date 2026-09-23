@@ -26,7 +26,11 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { parseExtensionReference } from "../../extensionReference";
-import { searchOpenVsxExtensions, type OpenVsxExtensionSummary } from "../../openVsx";
+import {
+  openVsxExtensionExists,
+  searchOpenVsxExtensions,
+  type OpenVsxExtensionSummary,
+} from "../../openVsx";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { attachmentEnvironment } from "../../state/attachments";
 import { useDebouncedValue } from "../../state/queries";
@@ -529,13 +533,29 @@ function AddExtensionDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const source = parseExtensionReference(reference);
   const showInvalid = reference.trim() !== "" && source === null;
+  const [checking, setChecking] = useState(false);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     if (open) setReference("");
   }, [open]);
 
-  const submitReference = () => {
+  const submitReference = async () => {
     if (!source) return;
+    setChecking(true);
+    let found = false;
+    try {
+      found = await openVsxExtensionExists(source.namespace, source.name);
+      if (!found) setNotFound(true);
+    } catch (cause) {
+      toastManager.add({
+        type: "error",
+        title: "Could not check Open VSX",
+        description: cause instanceof Error ? cause.message : undefined,
+      });
+    }
+    setChecking(false);
+    if (!found) return;
     onSubmit({
       type: "openVsx",
       source,
@@ -559,7 +579,7 @@ function AddExtensionDialog({
             className="grid gap-4"
             onSubmit={(event) => {
               event.preventDefault();
-              submitReference();
+              void submitReference();
             }}
           >
             <div className="grid gap-1.5">
@@ -569,11 +589,19 @@ function AddExtensionDialog({
                 autoFocus
                 placeholder="https://open-vsx.org/extension/publisher/name"
                 value={reference}
-                aria-invalid={showInvalid || undefined}
-                onChange={(event) => setReference(event.target.value)}
+                aria-invalid={showInvalid || notFound || undefined}
+                onChange={(event) => {
+                  setReference(event.target.value);
+                  setNotFound(false);
+                }}
               />
               {showInvalid ? (
                 <p className="text-destructive text-xs">That is not an extension link or ID.</p>
+              ) : notFound ? (
+                <p className="text-destructive text-xs">
+                  This extension is not on Open VSX. Some Microsoft extensions are only on the
+                  Visual Studio Marketplace, and T3 Code cannot install them.
+                </p>
               ) : null}
             </div>
             <input
@@ -593,7 +621,7 @@ function AddExtensionDialog({
           <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
             <FileUpIcon /> Choose .vsix file
           </Button>
-          <Button disabled={!source} onClick={submitReference}>
+          <Button disabled={!source || checking || notFound} onClick={() => void submitReference()}>
             Add extension
           </Button>
         </DialogFooter>

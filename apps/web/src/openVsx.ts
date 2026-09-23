@@ -182,3 +182,11 @@ export async function searchOpenVsxExtensions(
     ];
   });
 }
+
+export async function openVsxExtensionExists(namespace: string, name: string): Promise<boolean> {
+  const url = `https://open-vsx.org/api/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`;
+  const response = await withSearchTimeout((signal) => fetch(url, { method: "HEAD", signal }));
+  if (response.status === 404) return false;
+  if (!response.ok) throw new Error("Open VSX is unavailable right now.");
+  return true;
+}
