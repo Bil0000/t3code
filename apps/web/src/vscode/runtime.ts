@@ -309,7 +309,7 @@ export async function syncTheme(element: HTMLElement) {
   const foreground = formatHex(styles.getPropertyValue("--foreground").trim());
   const border = formatHex(styles.getPropertyValue("--border").trim());
   const muted = formatHex(styles.getPropertyValue("--muted").trim());
-  if (!background || !foreground || !border || !muted) return;
+  if (!background || !foreground) return;
   const colors = {
     "sideBar.background": background,
     "editor.background": background,
@@ -320,19 +320,16 @@ export async function syncTheme(element: HTMLElement) {
     "sideBar.border": border,
     "editorGroup.border": border,
   };
-  let configuration = await getUserConfiguration();
+  let configuration = await getUserConfiguration().catch(() => "{}");
   const settings: Array<[string[], string | boolean]> = [
     [["workbench.editor.enablePreview"], false],
     [
       ["workbench.colorTheme"],
-      document.documentElement.classList.contains("dark")
-        ? "Default Dark Modern"
-        : "Default Light Modern",
+      document.documentElement.classList.contains("dark") ? "Dark Modern" : "Light Modern",
     ],
-    ...Object.entries(colors).map(([key, value]): [string[], string] => [
-      ["workbench.colorCustomizations", key],
-      value,
-    ]),
+    ...Object.entries(colors).flatMap(([key, value]): Array<[string[], string]> =>
+      value ? [[["workbench.colorCustomizations", key], value]] : [],
+    ),
   ];
   for (const [path, value] of settings) {
     configuration = applyEdits(
