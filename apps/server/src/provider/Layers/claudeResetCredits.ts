@@ -106,12 +106,15 @@ export function claudeResetCreditsToContract(
   const live = (parsed.value.grants ?? [])
     .flatMap((raw) => Option.toArray(decodeGrant(raw)))
     .filter(
-      (grant) => !grant.paused && (!grant.ends_at || isFutureTimestamp(grant.ends_at, nowMs)),
+      (grant) =>
+        !grant.paused &&
+        grant.usable_now &&
+        (!grant.ends_at || isFutureTimestamp(grant.ends_at, nowMs)),
     );
-  const next = live.find((grant) => grant.id === parsed.value.next_grant_id && grant.usable_now);
+  const next = live.find((grant) => grant.id === parsed.value.next_grant_id);
   const nextExpiresAt = next?.ends_at ? DateTime.make(next.ends_at) : Option.none();
   return {
-    availableCount: live.reduce((sum, grant) => sum + grant.resets_left, 0),
+    availableCount: next ? live.reduce((sum, grant) => sum + grant.resets_left, 0) : 0,
     ...(Option.isSome(nextExpiresAt)
       ? { nextExpiresAt: DateTime.formatIso(nextExpiresAt.value) }
       : {}),

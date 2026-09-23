@@ -62,19 +62,22 @@ describe("claudeResetCreditsToContract", () => {
         NOW,
       ),
     ).toEqual({
-      availableCount: 5,
+      availableCount: 2,
       nextCreditId: "grant_a",
       nextExpiresAt: "2026-10-01T00:00:00.000Z",
     });
   });
 
-  it("offers nothing to redeem when the next grant is not usable or the account is ineligible", () => {
+  it("offers nothing to redeem without a usable next grant or an eligible account", () => {
     expect(
       claudeResetCreditsToContract(
         { eligible: true, next_grant_id: "grant_a", grants: [grant({ usable_now: false })] },
         NOW,
       ),
-    ).toEqual({ availableCount: 1 });
+    ).toEqual({ availableCount: 0 });
+    expect(claudeResetCreditsToContract({ eligible: true, grants: [grant({})] }, NOW)).toEqual({
+      availableCount: 0,
+    });
     expect(
       claudeResetCreditsToContract({ eligible: false, grants: [grant({})] }, NOW),
     ).toBeUndefined();
