@@ -225,16 +225,22 @@ export function StorageSettingsPanel() {
                 />
               }
             />
-            {environments.length > 0 &&
-              environments.every(
+            {connectedEnvironments.length > 0 &&
+              connectedEnvironments.every(
                 (environment) =>
-                  environment.connection.phase === "connected" &&
                   environment.serverConfig?.environment.capabilities.settledWorktreeCleanup ===
-                    true,
+                  true,
               ) && (
                 <SettingsRow
                   title="Delete settled worktrees"
-                  status={ruleStatus("worktreeSettledAfterDays")}
+                  status={[
+                    ruleStatus("worktreeSettledAfterDays"),
+                    environments.length > connectedEnvironments.length
+                      ? "Offline machines will not get this setting"
+                      : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join(". ")}
                   description="Remove worktrees this many days after their thread settles. Set 0 days to remove them as soon as they are safe to remove. Branches and thread history are kept."
                   serverScoped={!isProjectScope}
                   control={
