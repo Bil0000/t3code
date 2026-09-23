@@ -5155,11 +5155,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const modelSelection = selectedModel
       ? { ...selectedModel, model: resolveClaudeModelSlug(modelCatalog, selectedModel.model) }
       : undefined;
+    const currentContextChoice = resolveClaudeCatalogContextWindow(
+      modelCatalog,
+      context.startInput.modelSelection,
+    );
+    const nextContextChoice = resolveClaudeCatalogContextWindow(modelCatalog, modelSelection);
     const contextChoiceChanged =
       modelSelection !== undefined &&
-      (resolveClaudeCatalogContextWindow(modelCatalog, context.startInput.modelSelection) ===
-        "200k") !==
-        (resolveClaudeCatalogContextWindow(modelCatalog, modelSelection) === "200k");
+      (currentContextChoice === "200k" ||
+        currentContextChoice === "1m" ||
+        nextContextChoice === "200k" ||
+        nextContextChoice === "1m") &&
+      currentContextChoice !== nextContextChoice;
     if (
       contextChoiceChanged &&
       ((context.turnState && !context.turnState.synthetic) || context.liveTaskIds.size > 0)

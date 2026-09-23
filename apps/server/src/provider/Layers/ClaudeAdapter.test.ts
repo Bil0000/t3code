@@ -7417,6 +7417,7 @@ describe("ClaudeAdapterLive", () => {
   for (const [from, to] of [
     ["1m", "200k"],
     ["200k", "1m"],
+    ["unset", "1m"],
   ] as const) {
     it.effect(`restarts Claude when the context changes from ${from} to ${to}`, () => {
       const harness = makeHarness({ modelCatalog: BUNDLED_CLAUDE_MODEL_CATALOG });
@@ -7430,12 +7431,12 @@ describe("ClaudeAdapterLive", () => {
           threadId: THREAD_ID,
           provider: ProviderDriverKind.make("claudeAgent"),
           runtimeMode: "full-access",
-          modelSelection: selection(from),
+          ...(from === "unset" ? {} : { modelSelection: selection(from) }),
         });
         const firstTurn = yield* adapter.sendTurn({
           threadId: session.threadId,
           input: "First",
-          modelSelection: selection(from),
+          ...(from === "unset" ? {} : { modelSelection: selection(from) }),
           attachments: [],
         });
         const completed = yield* Stream.filter(
