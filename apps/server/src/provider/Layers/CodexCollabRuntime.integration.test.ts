@@ -170,6 +170,7 @@ describe("CodexSessionRuntime collab integration", () => {
     Effect.gen(function* () {
       NodeFS.writeFileSync(
         scriptPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify({
           rootThreadId: ROOT,
           recordRequests: true,
