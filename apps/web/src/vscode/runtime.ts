@@ -106,6 +106,8 @@ function positionWebviews(root: HTMLElement) {
     update();
   });
   mutations.observe(root, { childList: true, subtree: true });
+  const editorPart = root.querySelector(".part.editor");
+  if (editorPart) mutations.observe(editorPart, { childList: true, subtree: true });
   window.addEventListener("resize", update);
   document.addEventListener("scroll", update, true);
   update();
@@ -128,7 +130,6 @@ async function startRuntime(
     workbenchRoot = document.createElement("div");
     workbenchRoot.className = "t3-vscode-root";
     document.body.append(workbenchRoot);
-    disposeWebviewPositioning = positionWebviews(workbenchRoot);
   }
   const root = workbenchRoot;
   try {
@@ -172,6 +173,7 @@ async function startRuntime(
     }
     editorRoot = root;
     parkEditor();
+    disposeWebviewPositioning ??= positionWebviews(root);
     const models = await getService(ITextModelService);
     const files = await getService(ITextFileService);
     if (!modelReferencePatched) {
