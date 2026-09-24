@@ -81,3 +81,13 @@ export function shouldCheckoutNewTaskBranch(input: {
 }): boolean {
   return input.workspaceMode === "local" && !input.branchIsCurrent && !input.branchWorktreePath;
 }
+
+export function filterNewTaskBranches<T extends { readonly name: string }>(
+  branches: ReadonlyArray<T>,
+  sanitizedQuery: string,
+): ReadonlyArray<T> {
+  const query = sanitizedQuery.toLowerCase();
+  return query.length === 0
+    ? branches
+    : branches.filter((branch) => branch.name.toLowerCase().includes(query));
+}
