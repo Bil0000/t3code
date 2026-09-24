@@ -4,12 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 
-import { CodexResetCreditCoordinator, layerTest } from "./codexResetCredit.ts";
+import { ResetCreditCoordinator, layerTest } from "./resetCreditCoordinator.ts";
 
-describe("CodexResetCreditCoordinator", () => {
+describe("ResetCreditCoordinator", () => {
   it.effect("re-sends the same idempotency key after a failed attempt, then clears it", () =>
     Effect.gen(function* () {
-      const { redeem } = yield* CodexResetCreditCoordinator;
+      const { redeem } = yield* ResetCreditCoordinator;
       const keys = yield* Ref.make<ReadonlyArray<string>>([]);
       const attempts = yield* Ref.make(0);
       const consume = (key: string) =>
@@ -36,7 +36,7 @@ describe("CodexResetCreditCoordinator", () => {
 
   it.effect("serialises concurrent redemptions on the same account, not per caller", () =>
     Effect.gen(function* () {
-      const { redeem } = yield* CodexResetCreditCoordinator;
+      const { redeem } = yield* ResetCreditCoordinator;
       const release = yield* Deferred.make<void>();
       const inFlight = yield* Ref.make(0);
       const peak = yield* Ref.make(0);
@@ -63,7 +63,7 @@ describe("CodexResetCreditCoordinator", () => {
 
   it.effect("keeps different accounts independent", () =>
     Effect.gen(function* () {
-      const { redeem } = yield* CodexResetCreditCoordinator;
+      const { redeem } = yield* ResetCreditCoordinator;
       const release = yield* Deferred.make<void>();
       const peak = yield* Ref.make(0);
       const inFlight = yield* Ref.make(0);

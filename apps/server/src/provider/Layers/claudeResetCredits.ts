@@ -159,9 +159,9 @@ export const readClaudeResetCredits = Effect.fn("readClaudeResetCredits")(
     if (!token) return undefined;
     const client = yield* HttpClient.HttpClient;
     const response = yield* client.execute(
-      HttpClientRequest.get(`${API_BASE}/api/oauth/usage?cedar_ember=1&skip_spend=1`).pipe(
-        withClaudeHeaders(token, version),
-      ),
+      HttpClientRequest.get(`${API_BASE}/api/oauth/usage`, {
+        urlParams: { cedar_ember: "1", skip_spend: "1" },
+      }).pipe(withClaudeHeaders(token, version)),
     );
     const body = yield* HttpClientResponse.schemaBodyJson(UsageResponse)(
       yield* HttpClientResponse.filterStatusOk(response),

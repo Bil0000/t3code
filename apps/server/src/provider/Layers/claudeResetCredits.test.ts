@@ -8,7 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse, UrlParams } from "effect/unstable/http";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -94,9 +94,8 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
       const { configDir } = yield* writeLogin;
       const client = HttpClient.make((request) => {
         expect(request.method).toBe("GET");
-        expect(request.url).toBe(
-          "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
-        );
+        expect(request.url).toBe("https://api.anthropic.com/api/oauth/usage");
+        expect(UrlParams.toString(request.urlParams)).toBe("cedar_ember=1&skip_spend=1");
         expect(request.headers.authorization).toBe("Bearer oauth-token");
         expect(request.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
         expect(request.headers["user-agent"]).toBe("claude-cli/2.1.0 (external, cli)");
