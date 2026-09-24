@@ -6,11 +6,11 @@ vi.mock("react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react")>()),
   useState: () => [true, () => {}],
 }));
-vi.mock("react-native", () => ({ View: "div", Pressable: "button", ScrollView: "div" }));
+vi.mock("react-native", () => ({ View: "div", Pressable: "button" }));
 vi.mock("../../components/AppText", () => ({ AppText: "span" }));
 vi.mock("../../components/AppSymbol", () => ({ SymbolView: () => null }));
 
-import { ClaudeContextCardBody } from "./ComposerClaudeContext";
+import { ClaudeContextCardBody } from "./ClaudeContextCard";
 
 it("keeps each expanded section value with its column label and order", () => {
   const report = parseClaudeContextReport(`## Context Usage

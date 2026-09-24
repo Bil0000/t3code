@@ -66,7 +66,6 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { latestClaudeContextReport } from "@t3tools/shared/claudeContextReport";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
@@ -88,7 +87,6 @@ import type {
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
-import { ComposerClaudeContext } from "./ComposerClaudeContext";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
@@ -492,21 +490,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     [selectedThreadKey, usageLimitsKey],
   );
   const dismissUsageLimits = useCallback(() => setUsageLimitsPanel(null), []);
-  const latestContextReport = useMemo(
-    () =>
-      latestClaudeContextReport(
-        selectedThreadFeed.flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
-      ),
-    [selectedThreadFeed],
-  );
-  const [dismissedContextReportIds, setDismissedContextReportIds] = useState<
-    Record<string, string>
-  >({});
-  const contextReport =
-    latestContextReport !== null &&
-    latestContextReport.id !== dismissedContextReportIds[selectedThreadKey]
-      ? latestContextReport
-      : null;
   // A send may resolve after navigating away, so only the originating
   // thread's panel is cleared; a panel opened elsewhere in the meantime stays.
   const clearUsageLimitsFor = useCallback(
@@ -1002,24 +985,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     onDismiss={() => props.onDismissFeedback(submission.id)}
                   />
                 ))}
-                {contextReport && activeUserInputRequestId === null ? (
-                  <Animated.View
-                    key={contextReport.id}
-                    className="shrink-0 px-4 pb-3"
-                    entering={FadeInDown.duration(220)}
-                    exiting={FadeOut.duration(140)}
-                  >
-                    <ComposerClaudeContext
-                      report={contextReport.report}
-                      onClose={() =>
-                        setDismissedContextReportIds((current) => ({
-                          ...current,
-                          [selectedThreadKey]: contextReport.id,
-                        }))
-                      }
-                    />
-                  </Animated.View>
-                ) : null}
                 {usageLimitsReport && activeUserInputRequestId === null ? (
                   <Animated.View
                     className="shrink-0 px-4 pb-3"

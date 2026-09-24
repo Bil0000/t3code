@@ -49,7 +49,7 @@ import {
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
-import { ClaudeContextCardBody } from "./ComposerClaudeContext";
+import { ClaudeContextCardBody } from "./ClaudeContextCard";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {

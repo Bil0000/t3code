@@ -6,9 +6,7 @@ import {
   hasProviderUsageLimits,
   isUsageLimitsCommand,
 } from "@t3tools/shared/usageLimits";
-import { latestClaudeContextReport } from "@t3tools/shared/claudeContextReport";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
-import { claudeContextBannerItem } from "./chat/ComposerClaudeContext";
 import { usageLimitsBannerItem } from "./chat/ComposerUsageLimits";
 import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
 import {
@@ -6513,31 +6511,7 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [feedbackSubmissions, routeThreadKey],
   );
-  const latestContextReport = useMemo(
-    () => latestClaudeContextReport(activeThread?.messages ?? []),
-    [activeThread?.messages],
-  );
-  const [dismissedContextReportIds, setDismissedContextReportIds] = useState<
-    Record<string, string>
-  >({});
-  const claudeContextBanner = useMemo(
-    () =>
-      latestContextReport !== null &&
-      latestContextReport.id !== dismissedContextReportIds[routeThreadKey]
-        ? claudeContextBannerItem(
-            `claude-context:${latestContextReport.id}`,
-            latestContextReport.report,
-            () =>
-              setDismissedContextReportIds((current) => ({
-                ...current,
-                [routeThreadKey]: latestContextReport.id,
-              })),
-          )
-        : null,
-    [dismissedContextReportIds, latestContextReport, routeThreadKey],
-  );
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
-    const claudeContextItems = claudeContextBanner === null ? [] : [claudeContextBanner];
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const resumeCompactionItems =
@@ -6551,7 +6525,6 @@ export default function ChatView(props: ChatViewProps) {
       return [
         ...feedbackBannerItems,
         ...usageLimitsItems,
-        ...claudeContextItems,
         ...projectCloneItems,
         ...systemComposerBannerItems,
         ...backgroundLivenessItems,
@@ -6563,7 +6536,6 @@ export default function ChatView(props: ChatViewProps) {
     return [
       ...feedbackBannerItems,
       ...usageLimitsItems,
-      ...claudeContextItems,
       ...projectCloneItems,
       ...systemComposerBannerItems,
       ...backgroundLivenessItems,
@@ -6612,7 +6584,6 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeBranchMismatchKey,
     backgroundLivenessBannerItem,
-    claudeContextBanner,
     feedbackBannerItems,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
