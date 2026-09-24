@@ -7164,14 +7164,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.lengthOf(threadMessages(harness.events, secondThreadId), 2);
         NodeFS.writeFileSync(
           NodePath.join(workflowTranscriptDir, "agent-a2.jsonl"),
-          `${JSON.stringify({
-            type: "assistant",
-            message: {
-              role: "assistant",
-              id: "msg_a2",
-              content: [{ type: "text", text: "A2 from the transcript" }],
-            },
-          })}\n`,
+          '{"type":"assistant","message":{"role":"assistant","id":"msg_a2","content":[{"type":"text","text":"A2 from the transcript"}]}}\n',
         );
         yield* Queue.offer(
           harness.sdkMessages,

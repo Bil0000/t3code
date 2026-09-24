@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { OrchestrationWorkflowFileError } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { afterAll, assert, describe } from "vite-plus/test";
@@ -52,6 +53,7 @@ describe("workflow script containment", () => {
       assert.equal(error.scriptPath, "run.js");
       assert.equal(error.reason, "invalid-path");
       assert.equal(error.message, "Workflow scripts must be absolute .js paths.");
+      assert.instanceOf(error.cause, OrchestrationWorkflowFileError);
     }),
   );
 

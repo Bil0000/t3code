@@ -15,7 +15,7 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
         new OrchestrationGetWorkflowScriptError({
           reason: error.reason === "wrong-extension" ? "not-js" : error.reason,
           scriptPath: error.path,
-          ...(error.cause === undefined ? {} : { cause: error.cause }),
+          cause: error,
         }),
     ),
   );
