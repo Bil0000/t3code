@@ -188,7 +188,8 @@ export function ReopenClosedViewShortcut() {
       if (
         event.defaultPrevented ||
         isCommandPaletteOpen() ||
-        useClosedViewStore.getState().entries.length === 0
+        useClosedViewStore.getState().entries.length === 0 ||
+        (event.target instanceof HTMLElement && event.target.closest("[data-keybinding-capture]"))
       )
         return;
       const command = resolveShortcutCommand(event, keybindings, {

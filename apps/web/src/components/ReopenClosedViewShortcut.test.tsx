@@ -83,6 +83,11 @@ import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { ReopenClosedViewShortcut } from "./ReopenClosedViewShortcut";
 
 const ref = { environmentId: "remote", threadId: "thread-1" } as ScopedThreadRef;
+class TestElement extends EventTarget {
+  closest(selector: string) {
+    return selector === "[data-keybinding-capture]" ? this : null;
+  }
+}
 let renderer: ReactTestRenderer | undefined;
 let menuAction: ((action: string) => void) | undefined;
 
@@ -128,6 +133,7 @@ beforeEach(() => {
     suppressedTerminalIdsByThreadKey: {},
   });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("HTMLElement", TestElement);
   vi.stubGlobal("navigator", { platform: "Linux" });
   vi.stubGlobal(
     "window",
@@ -176,6 +182,26 @@ describe("root reopen shortcut", () => {
     state.paletteOpen = true;
     expect(press().defaultPrevented).toBe(false);
     expect(state.navigate).not.toHaveBeenCalled();
+    expect(useClosedViewStore.getState().entries).toHaveLength(1);
+  });
+
+  it("lets the keybinding recorder capture the chord", async () => {
+    useClosedViewStore
+      .getState()
+      .remember({ kind: "panel-tab", threadRef: ref, surface: { kind: "diff", id: "diff" } });
+    await render();
+    const recorder = new TestElement();
+    const event = Object.assign(new Event("keydown", { bubbles: true, cancelable: true }), {
+      key: "T",
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: true,
+      altKey: false,
+      repeat: false,
+    });
+    Object.defineProperty(event, "target", { value: recorder });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
     expect(useClosedViewStore.getState().entries).toHaveLength(1);
   });
 
