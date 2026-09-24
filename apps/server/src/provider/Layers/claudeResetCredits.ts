@@ -92,7 +92,7 @@ class ClaudeResetCreditError extends Schema.TaggedError<ClaudeResetCreditError>(
  * nothing was sent. An unanswered claim retries with the same request id.
  */
 export const isSettledClaudeResetCreditFailure = (error: unknown) =>
-  error instanceof ClaudeResetCreditError && error.reason !== "requestFailed";
+  Schema.is(ClaudeResetCreditError)(error) && error.reason !== "requestFailed";
 
 /** Rejects unparseable and calendar-invalid timestamps such as February 30. */
 const isFutureTimestamp = (value: string, nowMs: number) => {
