@@ -217,7 +217,10 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   const response = yield* client
     .execute(
       HttpClientRequest.post(
-        `${API_BASE}/api/organizations/${encodeURIComponent(organization)}/reset_rate_limits`,
+        new URL(
+          `/api/organizations/${encodeURIComponent(organization)}/reset_rate_limits`,
+          API_BASE,
+        ),
       ).pipe(
         withClaudeHeaders(token, input.version),
         HttpClientRequest.bodyJsonUnsafe({

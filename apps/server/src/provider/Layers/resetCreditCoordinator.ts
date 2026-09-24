@@ -27,7 +27,7 @@ export class ResetCreditCoordinator extends Context.Service<
   {
     /**
      * Run `consume` under the account's lock with a stable idempotency key.
-     * The key is cleared only when Codex reports an outcome; a failure
+     * The key is cleared only when the provider reports an outcome; a failure
      * (timeout included) keeps it so the next attempt is the same attempt.
      */
     readonly redeem: <E, R>(

@@ -2599,7 +2599,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ),
               Layer.provideMerge(ModelManifest.layerTest),
               Layer.provideMerge(ResetCreditCoordinator.layerTest),
-              Layer.provideMerge(ResetCreditCoordinator.layerTest),
               Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
               Layer.provideMerge(
