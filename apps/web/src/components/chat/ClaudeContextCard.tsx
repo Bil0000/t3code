@@ -160,7 +160,7 @@ export function ClaudeContextDisclosure({
         className="flex min-h-6 cursor-pointer select-none items-center gap-1.5 rounded-md px-0.5 text-start text-sm leading-relaxed transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <span className="flex size-6 shrink-0 items-center justify-center text-icon-muted">
-          <ChartPieIcon aria-hidden className="block size-4 shrink-0 stroke-[1.8] opacity-70" />
+          <ChartPieIcon aria-hidden className="block size-4 shrink-0 stroke-2 opacity-70" />
         </span>
         <span className="min-w-0 flex-1 truncate text-secondary-label">
           Context window · {report.model ?? "Claude"} · {formatClaudeContextHeadline(report)}
