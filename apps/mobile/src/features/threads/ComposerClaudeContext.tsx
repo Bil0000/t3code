@@ -144,6 +144,7 @@ export function ComposerClaudeContext(props: {
     <View className="overflow-hidden rounded-[20px] border-continuous bg-card">
       <ScrollView
         bounces={false}
+        keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         style={{ maxHeight: Math.round(height * 0.4) }}
         contentContainerClassName="gap-2.5 px-4 py-3"
