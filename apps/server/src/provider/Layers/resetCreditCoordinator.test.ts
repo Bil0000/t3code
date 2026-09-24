@@ -34,6 +34,25 @@ describe("ResetCreditCoordinator", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("starts a fresh attempt after a settled failure", () =>
+    Effect.gen(function* () {
+      const { redeem } = yield* ResetCreditCoordinator;
+      const keys = yield* Ref.make<ReadonlyArray<string>>([]);
+      const consume = (key: string) =>
+        Ref.update(keys, (seen) => [...seen, key]).pipe(
+          Effect.andThen(Effect.fail("cooldown" as const)),
+        );
+      const isSettled = (error: "cooldown") => error === "cooldown";
+
+      yield* redeem("acct", consume, isSettled).pipe(Effect.result);
+      yield* redeem("acct", consume, isSettled).pipe(Effect.result);
+
+      const seen = yield* Ref.get(keys);
+      assert.strictEqual(seen.length, 2);
+      assert.notStrictEqual(seen[0], seen[1]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("serialises concurrent redemptions on the same account, not per caller", () =>
     Effect.gen(function* () {
       const { redeem } = yield* ResetCreditCoordinator;

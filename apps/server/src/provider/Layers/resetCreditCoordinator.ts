@@ -27,12 +27,15 @@ export class ResetCreditCoordinator extends Context.Service<
   {
     /**
      * Run `consume` under the account's lock with a stable idempotency key.
-     * The key is cleared only when the provider reports an outcome; a failure
-     * (timeout included) keeps it so the next attempt is the same attempt.
+     * The key is cleared when the provider reports an outcome, or when
+     * `isSettled` says a failure was a final answer (such as a cooldown).
+     * Any other failure (timeout included) keeps it so the next attempt is
+     * the same attempt.
      */
     readonly redeem: <E, R>(
       accountKey: string,
       consume: (idempotencyKey: string) => Effect.Effect<ProviderConsumeResetCreditOutcome, E, R>,
+      isSettled?: (error: E) => boolean,
     ) => Effect.Effect<ProviderConsumeResetCreditOutcome, E | PlatformError.PlatformError, R>;
   }
 >()("t3/provider/Layers/resetCreditCoordinator") {}
@@ -60,7 +63,7 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const redeem: ResetCreditCoordinator["Service"]["redeem"] = (accountKey, consume) =>
+  const redeem: ResetCreditCoordinator["Service"]["redeem"] = (accountKey, consume, isSettled) =>
     Effect.gen(function* () {
       const state = yield* stateFor(accountKey);
       return yield* state.lock.withPermits(1)(
@@ -68,7 +71,11 @@ export const make = Effect.gen(function* () {
           const existing = yield* Ref.get(state.pendingKey);
           const idempotencyKey = existing ?? (yield* crypto.randomUUIDv4);
           yield* Ref.set(state.pendingKey, idempotencyKey);
-          const outcome = yield* consume(idempotencyKey);
+          const outcome = yield* consume(idempotencyKey).pipe(
+            Effect.tapError((error) =>
+              isSettled?.(error) ? Ref.set(state.pendingKey, null) : Effect.void,
+            ),
+          );
           yield* Ref.set(state.pendingKey, null);
           return outcome;
         }),

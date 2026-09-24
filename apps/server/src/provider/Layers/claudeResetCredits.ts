@@ -87,6 +87,13 @@ class ClaudeResetCreditError extends Schema.TaggedError<ClaudeResetCreditError>(
   }
 }
 
+/**
+ * Every reset failure except `requestFailed` is final: Claude answered, or
+ * nothing was sent. An unanswered claim retries with the same request id.
+ */
+export const isSettledClaudeResetCreditFailure = (error: unknown) =>
+  error instanceof ClaudeResetCreditError && error.reason !== "requestFailed";
+
 /** Rejects unparseable and calendar-invalid timestamps such as February 30. */
 const isFutureTimestamp = (value: string, nowMs: number) => {
   if (!COMPLETE_TIMESTAMP.test(value)) return false;
@@ -240,9 +247,8 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   if (response.status === 401 || response.status === 403) {
     return yield* new ClaudeResetCreditError({ reason: "signedOut" });
   }
-  const body = yield* HttpClientResponse.schemaBodyJson(ClaimResponse)(
-    yield* HttpClientResponse.filterStatusOk(response),
-  ).pipe(
+  const body = yield* HttpClientResponse.filterStatusOk(response).pipe(
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(ClaimResponse)),
     Effect.timeout("25 seconds"),
     Effect.mapError((cause) => new ClaudeResetCreditError({ reason: "requestFailed", cause })),
   );

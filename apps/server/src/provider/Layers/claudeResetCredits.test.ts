@@ -14,6 +14,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   claudeResetCreditsToContract,
   consumeClaudeResetCredit,
+  isSettledClaudeResetCreditFailure,
   readClaudeResetCredits,
 } from "./claudeResetCredits.ts";
 
@@ -187,7 +188,17 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
         respond(429, {}),
         respond(401, {}),
       ]) {
-        expect(yield* consume(client)).toMatchObject({ _tag: "Failure" });
+        const result = yield* consume(client);
+        expect(result).toMatchObject({ _tag: "Failure" });
+        // Claude answered, so a retry must be a new claim.
+        if (result._tag === "Failure") {
+          expect(isSettledClaudeResetCreditFailure(result.failure)).toBe(true);
+        }
+      }
+      const unanswered = yield* consume(respond(500, {}));
+      expect(unanswered).toMatchObject({ _tag: "Failure" });
+      if (unanswered._tag === "Failure") {
+        expect(isSettledClaudeResetCreditFailure(unanswered.failure)).toBe(false);
       }
     }),
   );

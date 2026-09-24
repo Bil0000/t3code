@@ -34,6 +34,7 @@ import { makeClaudeScopedLimitNames } from "../Layers/claudeUsageLimits.ts";
 import {
   claudeAccountConfigPath,
   consumeClaudeResetCredit,
+  isSettledClaudeResetCreditFailure,
   readClaudeResetCredits,
 } from "../Layers/claudeResetCredits.ts";
 import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
@@ -275,21 +276,25 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
             );
 
       // Same rules as Codex: serialised on the config directory that holds the
-      // login, one request id kept until Claude answers, then a re-probe.
+      // login, one request id kept until Claude answers (a cooldown or rate
+      // limit is an answer), then a re-probe.
       const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
         Effect.gen(function* () {
           const current = yield* snapshot.getSnapshot;
           const grantId = current.usageLimits?.resetCredits?.nextCreditId;
           if (!grantId || !current.version) return "noCredit" as const;
           const version = current.version;
-          return yield* resetCreditCoordinator.redeem(configDir, (requestId) =>
-            consumeClaudeResetCredit({
-              configDir,
-              accountConfigPath,
-              version,
-              grantId,
-              requestId,
-            }),
+          return yield* resetCreditCoordinator.redeem(
+            configDir,
+            (requestId) =>
+              consumeClaudeResetCredit({
+                configDir,
+                accountConfigPath,
+                version,
+                grantId,
+                requestId,
+              }),
+            isSettledClaudeResetCreditFailure,
           );
         }).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),
