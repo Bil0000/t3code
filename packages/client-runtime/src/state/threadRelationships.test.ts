@@ -5,9 +5,12 @@ import * as DateTime from "effect/DateTime";
 import {
   deriveThreadRelationshipGraph,
   immediateThreadRelationships,
+  indexSubagentChildren,
   orderWebThreadLineageRows,
   relatedThreadIds,
   resolveMergeBackTargetThreadId,
+  subagentAncestors,
+  subagentThreadStatus,
   walkThreadRelationships,
 } from "./threadRelationships.ts";
 
@@ -417,5 +420,54 @@ describe("web thread lineage ordering", () => {
         ],
       }),
     ).toEqual([first, second, third]);
+  });
+});
+
+describe("nested subagents", () => {
+  const shell = (
+    id: string,
+    parent: string | null,
+    relationshipToParent: "fork" | "subagent" | null,
+    createdAtMs: number,
+  ) => ({
+    id: ThreadId.make(id),
+    createdAt: DateTime.makeUnsafe(createdAtMs),
+    lineage: {
+      rootThreadId: ThreadId.make("root"),
+      parentThreadId: parent === null ? null : ThreadId.make(parent),
+      relationshipToParent,
+    },
+  });
+  const root = shell("root", null, null, 0);
+  const lead = shell("lead", "root", "subagent", 2);
+  const scout = shell("scout", "root", "subagent", 1);
+  const worker = shell("worker", "lead", "subagent", 3);
+  const fork = shell("fork", "worker", "fork", 4);
+
+  it("groups subagents under their spawner, oldest first, ignoring forks", () => {
+    const children = indexSubagentChildren([root, lead, scout, worker, fork]);
+    expect(children.get(root.id)).toEqual([scout, lead]);
+    expect(children.get(lead.id)).toEqual([worker]);
+    expect(children.has(worker.id)).toBe(false);
+  });
+
+  it("walks the subagent chain root first and stops at forks and cycles", () => {
+    const byId = new Map([root, lead, worker, fork].map((thread) => [thread.id, thread]));
+    expect(subagentAncestors(byId, worker.id)).toEqual([root, lead]);
+    expect(subagentAncestors(byId, fork.id)).toEqual([]);
+    const loopA = shell("a", "b", "subagent", 0);
+    const loopB = shell("b", "a", "subagent", 0);
+    const loop = new Map([loopA, loopB].map((thread) => [thread.id, thread]));
+    expect(subagentAncestors(loop, loopA.id)).toEqual([loopB]);
+  });
+
+  it("maps a child run to the subagent status vocabulary", () => {
+    expect(subagentThreadStatus({ status: "completed", activityRunStatus: "running" })).toBe(
+      "running",
+    );
+    expect(subagentThreadStatus({ status: "queued", activityRunStatus: null })).toBe("pending");
+    expect(subagentThreadStatus({ status: "rolled_back", activityRunStatus: null })).toBe(
+      "cancelled",
+    );
   });
 });

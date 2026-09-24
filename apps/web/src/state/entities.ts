@@ -10,7 +10,11 @@ import {
   type ThreadHistoryMeta,
 } from "@t3tools/client-runtime/state/threads";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ThreadShell,
+} from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
@@ -33,6 +37,9 @@ const EMPTY_THREAD_REFS_ATOM = Atom.make(EMPTY_THREAD_REFS).pipe(
 );
 const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).pipe(
   Atom.withLabel("web-thread-shell:empty"),
+);
+const EMPTY_THREAD_SHELLS_ATOM = Atom.make<ReadonlyArray<OrchestrationV2ThreadShell>>([]).pipe(
+  Atom.withLabel("web-thread-shells:empty"),
 );
 const EMPTY_THREAD_PROJECTION_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
   Atom.withLabel("web-thread-projection:empty"),
@@ -107,6 +114,20 @@ export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | n
 export function useThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadShell | null {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_SHELL_ATOM : environmentThreadShells.threadShellAtom(ref),
+  );
+}
+
+export function useSubagentChildThreads(
+  ref: ScopedThreadRef,
+): ReadonlyArray<OrchestrationV2ThreadShell> {
+  return useAtomValue(environmentThreadShells.subagentChildrenAtom(ref));
+}
+
+export function useSubagentAncestorThreads(
+  ref: ScopedThreadRef | null,
+): ReadonlyArray<OrchestrationV2ThreadShell> {
+  return useAtomValue(
+    ref === null ? EMPTY_THREAD_SHELLS_ATOM : environmentThreadShells.subagentAncestorsAtom(ref),
   );
 }
 

@@ -13,6 +13,7 @@ import {
   isParentThreadRelationship,
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
+  subagentThreadStatus,
   type ThreadRelationshipEdge,
   type ThreadRelationshipWalkRow,
 } from "@t3tools/client-runtime/state/thread-relationships";
@@ -20,12 +21,19 @@ import {
   canDetachThreadProviderSession,
   resolveLatestMergeBackRun,
 } from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ThreadShell,
+  ServerProvider,
+  ThreadId,
+} from "@t3tools/contracts";
 import { groupBy } from "effect/Array";
+import * as DateTime from "effect/DateTime";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
   BotIcon,
+  ChevronRightIcon,
   CornerLeftUpIcon,
   GitForkIcon,
   LoaderCircleIcon,
@@ -40,12 +48,14 @@ import { buildThreadRouteParams } from "../../threadRoutes";
 import {
   useProjects,
   useServerConfigs,
+  useSubagentChildThreads,
   useThreadProjection,
   useThreadShells,
 } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AgentElapsed } from "./AgentElapsed";
+import { cn } from "../../lib/utils";
 import { ThreadRelationshipIcon } from "./ThreadRelationshipIcon";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -143,6 +153,94 @@ function ThreadLineageGroup(props: {
         </ThreadLineageRowList>
       ) : null}
     </div>
+  );
+}
+
+function isoOrNull(value: DateTime.Utc | null | undefined): string | null {
+  return value ? DateTime.formatIso(value) : null;
+}
+
+/** A lineage row plus the subagents its thread spawned, collapsed behind a chevron. */
+function LineageTreeItem(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly nested: boolean;
+  readonly className?: string;
+  readonly providers: ReadonlyArray<ServerProvider> | undefined;
+  readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly children: ReactNode;
+}) {
+  const children = useSubagentChildThreads(scopeThreadRef(props.environmentId, props.threadId));
+  const [expanded, setExpanded] = useState(false);
+  const count = props.nested ? children.length : 0;
+  return (
+    <li className={props.className}>
+      <div className="group flex h-9 items-center rounded-lg [&>:first-child]:shrink">
+        {props.children}
+        {count > 0 ? (
+          <ThreadDetailsControl
+            size="icon-xs"
+            variant="ghost"
+            part="icon"
+            aria-expanded={expanded}
+            aria-label={`${expanded ? "Hide" : "Show"} ${count} nested ${count === 1 ? "subagent" : "subagents"}`}
+            onClick={() => setExpanded(!expanded)}
+          >
+            <ChevronRightIcon
+              className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+            />
+          </ThreadDetailsControl>
+        ) : null}
+      </div>
+      {expanded ? (
+        <ul className="m-0 ms-[18px] list-none p-0">
+          {children.map((child) => {
+            const provider = props.providers?.find(
+              (entry) => entry.instanceId === child.providerInstanceId,
+            );
+            const status = subagentThreadStatus(child);
+            const agent = {
+              status,
+              startedAt: isoOrNull(child.activityRunStartedAt ?? child.latestRunStartedAt),
+              completedAt: isoOrNull(child.latestRunCompletedAt),
+            };
+            return (
+              <LineageTreeItem
+                key={child.id}
+                environmentId={props.environmentId}
+                threadId={child.id}
+                nested
+                className="relative ps-3 before:absolute before:start-0 before:top-0 before:h-full before:w-px before:bg-border last:before:h-[18px] after:absolute after:start-0 after:top-[18px] after:h-px after:w-2.5 after:bg-border"
+                providers={props.providers}
+                onOpenThread={props.onOpenThread}
+              >
+                <ThreadDetailsControl
+                  size="sm"
+                  variant="ghost"
+                  part="row"
+                  onClick={() => props.onOpenThread(child.id)}
+                >
+                  <ThreadRelationshipIcon
+                    driver={provider?.driver}
+                    provider={provider}
+                    status={status}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-4 text-foreground/85">
+                    {formatSubagentDisplayTitle(child.title)}
+                  </span>
+                  <span className="sr-only">{status}</span>
+                  {agent.startedAt ? (
+                    <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground">
+                      <AgentElapsed agent={agent} />
+                    </span>
+                  ) : null}
+                </ThreadDetailsControl>
+              </LineageTreeItem>
+            );
+          })}
+        </ul>
+      ) : null}
+    </li>
   );
 }
 
@@ -389,7 +487,14 @@ export function ThreadRelationshipsPanel(props: {
                 </>
               );
               return (
-                <li key={threadId} className="group flex h-9 items-center rounded-lg">
+                <LineageTreeItem
+                  key={threadId}
+                  environmentId={props.environmentId}
+                  threadId={threadId}
+                  nested={isSubagent && !isParent}
+                  providers={providers}
+                  onOpenThread={openThread}
+                >
                   {isMergeTarget ? (
                     <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
                       <Tooltip>
@@ -464,7 +569,7 @@ export function ThreadRelationshipsPanel(props: {
                       <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
                     </Tooltip>
                   )}
-                </li>
+                </LineageTreeItem>
               );
             })
           }

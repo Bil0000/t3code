@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
+  OrchestrationV2TurnItemStatus,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -233,4 +234,64 @@ export function orderWebThreadLineageRows(input: {
     }
     return left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0;
   });
+}
+
+type SubagentShell = Pick<OrchestrationV2ThreadShell, "id" | "lineage" | "createdAt">;
+
+/** Groups subagent threads under the thread that spawned them, oldest first. */
+export function indexSubagentChildren<Shell extends SubagentShell>(
+  threads: ReadonlyArray<Shell>,
+): ReadonlyMap<ThreadId, ReadonlyArray<Shell>> {
+  const children = new Map<ThreadId, Shell[]>();
+  for (const thread of threads) {
+    const parentThreadId = thread.lineage.parentThreadId;
+    if (thread.lineage.relationshipToParent !== "subagent" || parentThreadId === null) continue;
+    const siblings = children.get(parentThreadId);
+    if (siblings === undefined) children.set(parentThreadId, [thread]);
+    else siblings.push(thread);
+  }
+  for (const siblings of children.values()) {
+    siblings.sort(
+      (left, right) =>
+        DateTime.toEpochMillis(left.createdAt) - DateTime.toEpochMillis(right.createdAt),
+    );
+  }
+  return children;
+}
+
+/** The subagent chain above `threadId`, root first. Stops at a missing thread or a cycle. */
+export function subagentAncestors<Shell extends SubagentShell>(
+  threadsById: ReadonlyMap<ThreadId, Shell>,
+  threadId: ThreadId,
+): ReadonlyArray<Shell> {
+  const ancestors: Shell[] = [];
+  const visited = new Set<ThreadId>([threadId]);
+  let current = threadsById.get(threadId);
+  while (current?.lineage.relationshipToParent === "subagent") {
+    const parentThreadId = current.lineage.parentThreadId;
+    if (parentThreadId === null || visited.has(parentThreadId)) break;
+    visited.add(parentThreadId);
+    const parent = threadsById.get(parentThreadId);
+    if (parent === undefined) break;
+    ancestors.unshift(parent);
+    current = parent;
+  }
+  return ancestors;
+}
+
+/** A child thread's own run state in the subagent status vocabulary. */
+export function subagentThreadStatus(
+  thread: Pick<OrchestrationV2ThreadShell, "status" | "activityRunStatus">,
+): OrchestrationV2TurnItemStatus {
+  const status = thread.activityRunStatus ?? thread.status;
+  switch (status) {
+    case "preparing":
+    case "queued":
+    case "starting":
+      return "pending";
+    case "rolled_back":
+      return "cancelled";
+    default:
+      return status;
+  }
 }

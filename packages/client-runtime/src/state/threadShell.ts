@@ -20,6 +20,7 @@ import {
   threadKey,
   threadRefsEqual,
 } from "./entities.ts";
+import { indexSubagentChildren, subagentAncestors } from "./threadRelationships.ts";
 
 const EMPTY_THREADS: ReadonlyArray<OrchestrationV2ThreadShell> = Object.freeze([]);
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
@@ -138,6 +139,39 @@ export function createEnvironmentThreadShellAtoms(input: {
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
   });
 
+  const environmentSubagentChildrenAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => indexSubagentChildren(get(environmentThreadsAtom(environmentId)))).pipe(
+      Atom.withLabel(`environment-subagent-children:${environmentId}`),
+    ),
+  );
+
+  // Kept referentially stable so a row re-renders only when its own children change.
+  const subagentChildrenAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    let previous: ReadonlyArray<OrchestrationV2ThreadShell> = EMPTY_THREADS;
+    return Atom.make((get) => {
+      const next =
+        get(environmentSubagentChildrenAtom(ref.environmentId)).get(ref.threadId) ?? EMPTY_THREADS;
+      if (arrayElementsEqual(previous, next)) return previous;
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel(`environment-subagent-children:${key}`));
+  });
+
+  const subagentAncestorsAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    let previous: ReadonlyArray<OrchestrationV2ThreadShell> = EMPTY_THREADS;
+    return Atom.make((get) => {
+      const next = subagentAncestors(
+        get(environmentThreadIndexAtom(ref.environmentId)),
+        ref.threadId,
+      );
+      if (arrayElementsEqual(previous, next)) return previous;
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel(`environment-subagent-ancestors:${key}`));
+  });
+
   const threadShellsForProjectRefsAtomFamily = Atom.family((key: string) => {
     const projectRefs = parseProjectRefCollectionKey(key);
     let previous: ReadonlyArray<EnvironmentThreadShell> = [];
@@ -225,5 +259,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),
+    subagentChildrenAtom: (ref: ScopedThreadRef) => subagentChildrenAtomFamily(threadKey(ref)),
+    subagentAncestorsAtom: (ref: ScopedThreadRef) => subagentAncestorsAtomFamily(threadKey(ref)),
   };
 }
