@@ -8,17 +8,12 @@ import { randomUUID } from "./lib/utils";
 import { type RightPanelSurface } from "./rightPanelStore";
 
 export type ClosedView =
-  | { kind: "panel-tab"; threadRef: ScopedThreadRef; surface: RightPanelSurface }
-  | { kind: "panel"; threadRef: ScopedThreadRef }
-  | { kind: "browser"; threadRef: ScopedThreadRef; snapshot: PreviewSessionSnapshot }
   | {
-      kind: "terminal";
+      kind: "panel-tab";
       threadRef: ScopedThreadRef;
-      terminalId: string;
-      panelSurfaceId?: string;
-      splitDirection?: "horizontal" | "vertical";
+      surface: Exclude<RightPanelSurface, { kind: "terminal" }>;
     }
-  | { kind: "terminal-drawer"; threadRef: ScopedThreadRef };
+  | { kind: "browser"; threadRef: ScopedThreadRef; snapshot: PreviewSessionSnapshot };
 
 export type ClosedViewEntry = ClosedView & { id: string };
 
@@ -40,11 +35,6 @@ const sameTarget = (entry: ClosedViewEntry, view: ClosedView): boolean => {
       return view.kind === "panel-tab" && entry.surface.id === view.surface.id;
     case "browser":
       return view.kind === "browser" && entry.snapshot.tabId === view.snapshot.tabId;
-    case "terminal":
-      return view.kind === "terminal" && entry.terminalId === view.terminalId;
-    case "panel":
-    case "terminal-drawer":
-      return true;
   }
 };
 
@@ -66,7 +56,7 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
         set((state) => ({ entries: state.entries.filter((entry) => entry.id !== id) })),
     }),
     {
-      name: "t3code:closed-views:v1",
+      name: "t3code:closed-views:v2",
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),

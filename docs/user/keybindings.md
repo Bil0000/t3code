@@ -128,10 +128,10 @@ tab. When nothing remains to close, it closes the window. In a browser, `mod+w`
 closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
 shortcut such as `alt+w`.
 
-`mod+shift+t` reopens the last closed tab or panel across the app, including files,
-diffs, pull requests, browsers, terminals, and devices, in the order you closed
-them. A browser or terminal opens with a fresh session; it does not restore the
-old page history or shell process. This shortcut does not undo deleted work.
+`mod+shift+t` reopens the last closed tab across the app, including files,
+diffs, pull requests, browsers, and devices, in the order you closed them.
+A browser opens in a fresh session without its old page history. This shortcut
+does not undo deleted work.
 Browsers also use it to reopen browser tabs; choose another binding in Settings
 if the browser takes it first.
 

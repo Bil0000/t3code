@@ -186,10 +186,10 @@ describe("effectiveShortcutsForCommand", () => {
     const reopen = modShortcut("t", { shiftKey: true });
     const second = modShortcut("y", { shiftKey: true });
     const keybindings = compile([
-      { shortcut: reopen, command: "rightPanel.reopenClosed" },
+      { shortcut: reopen, command: "view.reopenClosed" },
       {
         shortcut: second,
-        command: "rightPanel.reopenClosed",
+        command: "view.reopenClosed",
         whenAst: whenIdentifier("previewFocus"),
       },
       {
@@ -199,14 +199,14 @@ describe("effectiveShortcutsForCommand", () => {
       },
     ]);
     assert.deepEqual(
-      effectiveShortcutsForCommand(keybindings, "rightPanel.reopenClosed", {
+      effectiveShortcutsForCommand(keybindings, "view.reopenClosed", {
         platform: "MacIntel",
         context: { previewFocus: true, previewOpen: true },
       }),
       [second],
     );
     assert.deepEqual(
-      effectiveShortcutsForCommand(keybindings, "rightPanel.reopenClosed", {
+      effectiveShortcutsForCommand(keybindings, "view.reopenClosed", {
         platform: "MacIntel",
         context: { previewFocus: false },
       }),

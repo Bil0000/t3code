@@ -617,9 +617,12 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect.each(["mod+shift+t", "ctrl+alt+u"])(
-    "forwards only the configured reopen chord from the focused guest: %s",
-    (chord) =>
+  effectIt.effect.each([
+    ["mod+shift+t", "view.reopenClosed"],
+    ["ctrl+alt+u", "sidebar.toggle"],
+  ] as const)(
+    "forwards only the configured command from the focused guest: %s",
+    ([chord, command]) =>
       withManager((manager) =>
         Effect.gen(function* () {
           const preview = makeFaviconWebContents();
@@ -632,7 +635,7 @@ describe("PreviewManager", () => {
           yield* manager.createTab("tab_reopen");
           yield* manager.registerWebview("tab_reopen", 42);
           const shortcut = parseKeybindingShortcut(chord)!;
-          yield* manager.setReopenClosedShortcuts([shortcut]);
+          yield* manager.setForwardedShortcuts([{ command, shortcut }]);
           const beforeInput = preview.listeners.get("before-input-event")!;
           const input = {
             type: "keyDown",
@@ -645,7 +648,7 @@ describe("PreviewManager", () => {
           const preventDefault = vi.fn();
           beforeInput({ preventDefault } as never, input as never);
           expect(preventDefault).toHaveBeenCalledOnce();
-          expect(send).toHaveBeenCalledExactlyOnceWith("desktop:menu-action", "reopen-closed");
+          expect(send).toHaveBeenCalledExactlyOnceWith("desktop:menu-action", command);
           for (const overrides of [
             { isAutoRepeat: true },
             { type: "keyUp" },
@@ -663,7 +666,7 @@ describe("PreviewManager", () => {
           expect(preventDefault).not.toHaveBeenCalled();
           expect(send).toHaveBeenCalledOnce();
           getFocusedWebContents.mockReturnValue(preview.webContents as never);
-          yield* manager.setReopenClosedShortcuts([]);
+          yield* manager.setForwardedShortcuts([]);
           beforeInput({ preventDefault } as never, input as never);
           expect(preventDefault).not.toHaveBeenCalled();
           expect(send).toHaveBeenCalledOnce();
@@ -693,7 +696,9 @@ describe("PreviewManager", () => {
             getFocusedWebContents.mockReturnValue(preview.webContents as never);
             yield* manager.createTab("tab_alt_graph");
             yield* manager.registerWebview("tab_alt_graph", 42);
-            yield* manager.setReopenClosedShortcuts([parseKeybindingShortcut(chord)!]);
+            yield* manager.setForwardedShortcuts([
+              { command: "view.reopenClosed", shortcut: parseKeybindingShortcut(chord)! },
+            ]);
             const preventDefault = vi.fn();
             preview.listeners.get("before-input-event")!(
               { preventDefault } as never,
@@ -4509,7 +4514,9 @@ describe("PreviewManager", () => {
         expect(restoreFocus).not.toHaveBeenCalled();
         routeToIframe = false;
         getFocusedWebContents.mockReturnValue(fromId(42) as never);
-        yield* manager.setReopenClosedShortcuts([parseKeybindingShortcut("x")!]);
+        yield* manager.setForwardedShortcuts([
+          { command: "view.reopenClosed", shortcut: parseKeybindingShortcut("x")! },
+        ]);
         for (const fails of [false, true]) {
           failKeyDown = fails;
           sendToHost.mockClear();
@@ -4532,7 +4539,7 @@ describe("PreviewManager", () => {
           expect(preventReopen).toHaveBeenCalledOnce();
           expect(sendToHost).toHaveBeenCalledExactlyOnceWith(
             "desktop:menu-action",
-            "reopen-closed",
+            "view.reopenClosed",
           );
         }
       }),

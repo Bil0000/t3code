@@ -132,19 +132,23 @@ describe("rightPanelStore", () => {
     ).toEqual([expect.objectContaining({ id: "file:src/app.ts" })]);
   });
 
-  it("records a hidden panel once and does not double-record its last closed tab", () => {
+  it("records only closed tabs when a panel is hidden or a terminal tab closes", () => {
     const store = useRightPanelStore.getState();
     store.open(refA, "diff");
+    store.openFile(refA, "src/app.ts");
+    store.closeSurface(refA, "file:src/app.ts");
     store.close(refA);
     expect(useClosedViewStore.getState().entries).toMatchObject([
-      { kind: "panel", threadRef: refA },
+      { kind: "panel-tab", threadRef: refA, surface: { id: "file:src/app.ts" } },
     ]);
-    store.show(refA);
-    store.closeSurface(refA, "diff");
+    store.toggleVisibility(refA);
+    store.toggle(refA, "diff");
+    store.openTerminal(refA, "term-1");
+    store.closeSurface(refA, "terminal:term-1");
     expect(useClosedViewStore.getState().entries).toMatchObject([
-      { kind: "panel-tab", threadRef: refA, surface: { id: "diff" } },
-      { kind: "panel", threadRef: refA },
+      { kind: "panel-tab", threadRef: refA, surface: { id: "file:src/app.ts" } },
     ]);
+    expect(useClosedViewStore.getState().entries).toHaveLength(1);
   });
 
   it("gives each host/device its own tab and preserves renamed tabs", () => {

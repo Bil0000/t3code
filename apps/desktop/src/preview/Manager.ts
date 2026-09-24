@@ -34,7 +34,7 @@ import type {
   PreviewAutomationSnapshot,
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
-  KeybindingShortcut,
+  PreviewForwardedShortcut,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { matchesKeybindingShortcut } from "@t3tools/shared/keybindings";
@@ -647,7 +647,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     playwrightInjectedRuntimeInstallExpression(),
   );
 
-  let reopenClosedShortcuts: ReadonlyArray<KeybindingShortcut> = [];
+  let forwardedShortcuts: ReadonlyArray<PreviewForwardedShortcut> = [];
   const automationKeyboardTargets = new Set<number>();
   const annotationThemeRef = yield* Ref.make(DEFAULT_ANNOTATION_THEME);
   const mainWindowRef = yield* Ref.make<Option.Option<BrowserWindow>>(Option.none());
@@ -2006,7 +2006,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       syncMenuShortcuts(wc, input);
       const host = wc.hostWebContents;
-      if (
+      const forwarded =
         input.type === "keyDown" &&
         !input.isComposing &&
         host &&
@@ -2019,7 +2019,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           input.alt &&
           /^(?:[^a-zA-Z0-9]|Dead)$/u.test(input.key)
         ) &&
-        reopenClosedShortcuts.some((shortcut) =>
+        forwardedShortcuts.find(({ shortcut }) =>
           matchesKeybindingShortcut(
             {
               key: input.key,
@@ -2032,10 +2032,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             shortcut,
             hostPlatform === "darwin" ? "MacIntel" : hostPlatform,
           ),
-        )
-      ) {
+        );
+      if (forwarded && host) {
         event.preventDefault();
-        if (!input.isAutoRepeat) host.send(MENU_ACTION_CHANNEL, "reopen-closed");
+        if (!input.isAutoRepeat) host.send(MENU_ACTION_CHANNEL, forwarded.command);
         return;
       }
       if (isPreviewRefreshShortcut(input)) {
@@ -4682,9 +4682,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAudioMuted,
     setColorScheme,
     setMainWindow,
-    setReopenClosedShortcuts: (shortcuts: ReadonlyArray<KeybindingShortcut>) =>
+    setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) =>
       Effect.sync(() => {
-        reopenClosedShortcuts = shortcuts;
+        forwardedShortcuts = shortcuts;
       }),
     startRecording,
     closePictureInPicture,
@@ -4997,8 +4997,8 @@ export class PreviewManager extends Context.Service<
   PreviewManager,
   {
     readonly setMainWindow: (window: BrowserWindow) => Effect.Effect<void, PreviewManagerError>;
-    readonly setReopenClosedShortcuts: (
-      shortcuts: ReadonlyArray<KeybindingShortcut>,
+    readonly setForwardedShortcuts: (
+      shortcuts: ReadonlyArray<PreviewForwardedShortcut>,
     ) => Effect.Effect<void>;
     readonly getBrowserSession: (
       scope?: string,
@@ -5124,7 +5124,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   return PreviewManager.of({
     setMainWindow: operations.setMainWindow,
-    setReopenClosedShortcuts: operations.setReopenClosedShortcuts,
+    setForwardedShortcuts: operations.setForwardedShortcuts,
     getBrowserSession: Effect.fn("PreviewManager.getBrowserSession")(
       function* (scope, persistent, namespace) {
         return yield* browserSession

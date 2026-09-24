@@ -14,12 +14,16 @@ beforeEach(() => {
 describe("closedViewStore", () => {
   it("keeps a newest-first history across environments and removes only the restored entry", () => {
     const store = useClosedViewStore.getState();
-    const id = store.remember({ kind: "panel", threadRef: refA });
+    const id = store.remember({
+      kind: "panel-tab",
+      threadRef: refA,
+      surface: { kind: "diff", id: "diff" },
+    });
     store.remember({ kind: "panel-tab", threadRef: refB, surface: { kind: "diff", id: "diff" } });
 
     const [latest, earlier] = useClosedViewStore.getState().entries;
     expect(latest).toMatchObject({ kind: "panel-tab", threadRef: refB, surface: { id: "diff" } });
-    expect(earlier).toMatchObject({ kind: "panel", threadRef: refA });
+    expect(earlier).toMatchObject({ kind: "panel-tab", threadRef: refA });
     expect(latest?.id).not.toBe(earlier?.id);
     expect(earlier?.id).toBe(id);
 
@@ -40,12 +44,12 @@ describe("closedViewStore", () => {
       },
     } as const;
     store.remember(device);
-    store.remember({ kind: "panel", threadRef: refB });
+    store.remember({ kind: "panel-tab", threadRef: refB, surface: { kind: "diff", id: "diff" } });
     store.remember(device);
 
     expect(useClosedViewStore.getState().entries).toMatchObject([
       { ...device },
-      { kind: "panel", threadRef: refB },
+      { kind: "panel-tab", threadRef: refB, surface: { id: "diff" } },
     ]);
     expect(useClosedViewStore.getState().entries).toHaveLength(2);
   });
@@ -53,31 +57,24 @@ describe("closedViewStore", () => {
   it("caps the shared history at 20", () => {
     const store = useClosedViewStore.getState();
     for (let index = 0; index < 24; index++) {
-      store.remember({ kind: "terminal", threadRef: refA, terminalId: `terminal-${index}` });
+      store.remember({
+        kind: "panel-tab",
+        threadRef: refA,
+        surface: {
+          kind: "file",
+          id: `file:src/${index}.ts`,
+          relativePath: `src/${index}.ts`,
+          revealLine: null,
+          revealRequestId: 0,
+        },
+      });
     }
     expect(useClosedViewStore.getState().entries).toHaveLength(20);
-    expect(useClosedViewStore.getState().entries[0]).toMatchObject({ terminalId: "terminal-23" });
+    expect(useClosedViewStore.getState().entries[0]).toMatchObject({
+      surface: { id: "file:src/23.ts" },
+    });
     expect(useClosedViewStore.getState().entries.at(-1)).toMatchObject({
-      terminalId: "terminal-4",
+      surface: { id: "file:src/4.ts" },
     });
-  });
-
-  it("retains a split pane's destination and direction for restoring a fresh shell", () => {
-    const store = useClosedViewStore.getState();
-    const id = store.remember({
-      kind: "terminal",
-      threadRef: refA,
-      terminalId: "session-2",
-      panelSurfaceId: "terminal:session-1",
-      splitDirection: "vertical",
-    });
-    expect(useClosedViewStore.getState().entries).toMatchObject([
-      {
-        id,
-        terminalId: "session-2",
-        panelSurfaceId: "terminal:session-1",
-        splitDirection: "vertical",
-      },
-    ]);
   });
 });

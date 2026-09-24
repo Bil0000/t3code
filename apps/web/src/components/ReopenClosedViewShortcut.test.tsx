@@ -22,8 +22,6 @@ const state = vi.hoisted(() => ({
   } | null,
   navigate: vi.fn(),
   openPreview: vi.fn(),
-  openTerminal: vi.fn(),
-  closeTerminal: vi.fn(),
   setShortcuts: vi.fn(async () => undefined),
   toast: vi.fn(),
 }));
@@ -36,9 +34,6 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("../state/server", () => ({ primaryServerKeybindingsAtom: {} }));
 vi.mock("../state/preview", () => ({ previewEnvironment: { open: state.openPreview } }));
-vi.mock("../state/terminal", () => ({
-  terminalEnvironment: { open: state.openTerminal, close: state.closeTerminal },
-}));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
 vi.mock("../state/shell", () => ({ environmentShell: { stateValueAtom: () => ({}) } }));
 vi.mock("../connection/catalog", () => ({ environmentCatalog: { catalogValueAtom: "catalog" } }));
@@ -83,6 +78,14 @@ import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { ReopenClosedViewShortcut } from "./ReopenClosedViewShortcut";
 
 const ref = { environmentId: "remote", threadId: "thread-1" } as ScopedThreadRef;
+const snapshot = {
+  threadId: ref.threadId,
+  tabId: "closed-tab",
+  navStatus: { _tag: "Success", url: "https://example.com", title: "Example" },
+  canGoBack: false,
+  canGoForward: false,
+  updatedAt: "2026-09-22T12:00:00.000Z",
+} as const;
 class TestElement extends EventTarget {
   closest(selector: string) {
     return selector === "[data-keybinding-capture]" ? this : null;
@@ -124,8 +127,7 @@ beforeEach(() => {
     draft: null,
   });
   state.navigate.mockResolvedValue(undefined);
-  state.openTerminal.mockResolvedValue(AsyncResult.success({}));
-  state.closeTerminal.mockResolvedValue(AsyncResult.success({}));
+  state.openPreview.mockReset();
   useClosedViewStore.setState({ entries: [] });
   useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
   useTerminalUiStateStore.setState({
@@ -139,7 +141,7 @@ beforeEach(() => {
     "window",
     Object.assign(new EventTarget(), {
       desktopBridge: {
-        preview: { setReopenClosedShortcuts: state.setShortcuts },
+        preview: { setForwardedShortcuts: state.setShortcuts },
         onMenuAction: (listener: typeof menuAction) => {
           menuAction = listener;
           return () => {
@@ -177,7 +179,9 @@ describe("root reopen shortcut", () => {
     await render();
     expect(press().defaultPrevented).toBe(false);
     await act(() => {
-      useClosedViewStore.getState().remember({ kind: "terminal-drawer", threadRef: ref });
+      useClosedViewStore
+        .getState()
+        .remember({ kind: "panel-tab", threadRef: ref, surface: { kind: "diff", id: "diff" } });
     });
     state.paletteOpen = true;
     expect(press().defaultPrevented).toBe(false);
@@ -208,7 +212,7 @@ describe("root reopen shortcut", () => {
   it("honors custom chords and when conditions, and consumes repeats without restoring", async () => {
     state.keybindings = [
       {
-        command: "rightPanel.reopenClosed",
+        command: "view.reopenClosed",
         shortcut: {
           key: "r",
           modKey: true,
@@ -238,15 +242,13 @@ describe("root reopen shortcut", () => {
     expect(useClosedViewStore.getState().entries).toEqual([]);
   });
 
-  it("serializes deliberate presses while a terminal restore waits for RPC", async () => {
+  it("serializes deliberate presses while a browser restore waits for RPC", async () => {
     useClosedViewStore
       .getState()
       .remember({ kind: "panel-tab", threadRef: ref, surface: { kind: "files", id: "files" } });
-    useClosedViewStore
-      .getState()
-      .remember({ kind: "terminal", threadRef: ref, terminalId: "closed-1" });
+    useClosedViewStore.getState().remember({ kind: "browser", threadRef: ref, snapshot });
     let finish!: (value: ReturnType<typeof AsyncResult.success>) => void;
-    state.openTerminal.mockReturnValue(
+    state.openPreview.mockReturnValue(
       new Promise((resolve) => {
         finish = resolve;
       }),
@@ -256,38 +258,27 @@ describe("root reopen shortcut", () => {
       press();
       press();
     });
-    expect(state.openTerminal).toHaveBeenCalledTimes(1);
+    expect(state.openPreview).toHaveBeenCalledTimes(1);
     expect(state.navigate).not.toHaveBeenCalled();
-    expect(useClosedViewStore.getState().entries).toHaveLength(2);
     await act(() => {
-      finish(AsyncResult.success({}));
+      finish(AsyncResult.success({ tabId: "new-tab" }));
     });
-    expect(state.openTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        environmentId: "remote",
-        input: expect.objectContaining({
-          cwd: "/work/tree",
-          worktreePath: "/work/tree",
-          env: expect.any(Object),
-        }),
-      }),
-    );
     expect(state.navigate).toHaveBeenCalledTimes(2);
     expect(useClosedViewStore.getState().entries).toEqual([]);
   });
 
-  it("keeps failed restores available for retry", async () => {
+  it("keeps failed browser restores available for retry", async () => {
     const id = useClosedViewStore
       .getState()
-      .remember({ kind: "terminal", threadRef: ref, terminalId: "closed-1" });
-    state.openTerminal.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("offline"))));
+      .remember({ kind: "browser", threadRef: ref, snapshot });
+    state.openPreview.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("offline"))));
     await render();
     await act(() => {
       press();
     });
     expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([id]);
     expect(state.navigate).not.toHaveBeenCalled();
-    state.openTerminal.mockResolvedValue(AsyncResult.success({}));
+    state.openPreview.mockResolvedValue(AsyncResult.success({ tabId: "new-tab" }));
     await act(() => {
       press();
     });
@@ -307,7 +298,7 @@ describe("root reopen shortcut", () => {
     state.missing.add(missing.threadId);
     const missingId = useClosedViewStore
       .getState()
-      .remember({ kind: "terminal-drawer", threadRef: missing });
+      .remember({ kind: "panel-tab", threadRef: missing, surface: { kind: "diff", id: "diff" } });
     await render();
     await act(() => {
       press();
@@ -395,10 +386,15 @@ describe("root reopen shortcut", () => {
     });
     await render();
     expect(state.setShortcuts).toHaveBeenLastCalledWith(
-      expect.arrayContaining([expect.objectContaining({ key: "t", shiftKey: true })]),
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "view.reopenClosed",
+          shortcut: expect.objectContaining({ key: "t", shiftKey: true }),
+        }),
+      ]),
     );
     await act(() => {
-      menuAction?.("reopen-closed");
+      menuAction?.("view.reopenClosed");
     });
     const navigation = state.navigate.mock.calls[0]![0];
     expect(navigation.to).toBe("/pull-requests");

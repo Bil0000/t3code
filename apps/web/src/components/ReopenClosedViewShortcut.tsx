@@ -5,7 +5,6 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 
@@ -31,7 +30,6 @@ import { readProject, readThreadShell } from "../state/entities";
 import { previewEnvironment } from "../state/preview";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentShell } from "../state/shell";
-import { terminalEnvironment } from "../state/terminal";
 import { useAtomCommand } from "../state/use-atom-command";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import {
@@ -64,8 +62,6 @@ export function ReopenClosedViewShortcut() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const hasHistory = useClosedViewStore((state) => state.entries.length > 0);
   const openPreview = useAtomCommand(previewEnvironment.open);
-  const openTerminal = useAtomCommand(terminalEnvironment.open);
-  const closeTerminal = useAtomCommand(terminalEnvironment.close);
   const pending = useRef(Promise.resolve());
 
   const reopenNext = useEffectEvent(async () => {
@@ -92,21 +88,14 @@ export function ReopenClosedViewShortcut() {
       }
       const panels = useRightPanelStore.getState();
       const panel = selectThreadRightPanelState(panels.byThreadKey, ref);
-      const terminals = selectThreadTerminalUiState(
-        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
-        ref,
-      );
       const alreadyOpen =
-        (entry.kind === "panel" && (panel.isOpen || panel.surfaces.length === 0)) ||
         (entry.kind === "panel-tab" &&
           panel.isOpen &&
           panel.surfaces.some((surface) => surface.id === entry.surface.id)) ||
         (entry.kind === "browser" &&
           panel.surfaces.some(
             (surface) => surface.kind === "preview" && surface.resourceId === entry.snapshot.tabId,
-          )) ||
-        (entry.kind === "terminal-drawer" && terminals.terminalOpen) ||
-        (entry.kind === "terminal" && terminals.terminalIds.includes(entry.terminalId));
+          ));
       if (alreadyOpen) {
         useClosedViewStore.getState().remove(entry.id);
         continue;
@@ -115,15 +104,7 @@ export function ReopenClosedViewShortcut() {
       const project = owner
         ? readProject(scopeProjectRef(ref.environmentId, owner.projectId))
         : null;
-      const worktreePath = owner?.worktreePath ?? null;
-      const workspace = project
-        ? {
-            cwd: projectScriptCwd({ project: { cwd: project.workspaceRoot }, worktreePath }),
-            ...(worktreePath === null ? {} : { worktreePath }),
-            env: projectScriptRuntimeEnv({ project: { cwd: project.workspaceRoot }, worktreePath }),
-          }
-        : null;
-      if (!(await reopenClosedView(entry, { openPreview, openTerminal, closeTerminal, workspace })))
+      if (!(await reopenClosedView(entry, { openPreview, workspaceAvailable: project !== null })))
         return;
       if (globalPullRequests) {
         const surface = selectSelectedRightPanelSurface(
@@ -202,14 +183,14 @@ export function ReopenClosedViewShortcut() {
           modelPickerOpen: isModelPickerOpen(),
         },
       });
-      if (command !== "rightPanel.reopenClosed") return;
+      if (command !== "view.reopenClosed") return;
       event.preventDefault();
       event.stopPropagation();
       if (!event.repeat) enqueueReopen();
     };
     window.addEventListener("keydown", onKeyDown, true);
     const unsubscribe = window.desktopBridge?.onMenuAction((action) => {
-      if (action === "reopen-closed" && !isCommandPaletteOpen()) enqueueReopen();
+      if (action === "view.reopenClosed" && !isCommandPaletteOpen()) enqueueReopen();
     });
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
@@ -219,11 +200,11 @@ export function ReopenClosedViewShortcut() {
 
   useEffect(() => {
     const preview = window.desktopBridge?.preview;
-    if (!preview?.setReopenClosedShortcuts) return;
+    if (!preview?.setForwardedShortcuts) return;
     void preview
-      .setReopenClosedShortcuts(
+      .setForwardedShortcuts(
         hasHistory
-          ? effectiveShortcutsForCommand(keybindings, "rightPanel.reopenClosed", {
+          ? effectiveShortcutsForCommand(keybindings, "view.reopenClosed", {
               context: {
                 previewFocus: true,
                 previewOpen: true,
@@ -234,12 +215,12 @@ export function ReopenClosedViewShortcut() {
                 isDesktop: true,
                 isWeb: false,
               },
-            })
+            }).map((shortcut) => ({ command: "view.reopenClosed", shortcut }))
           : [],
       )
       .catch(() => undefined);
     return () => {
-      void preview.setReopenClosedShortcuts?.([]).catch(() => undefined);
+      void preview.setForwardedShortcuts?.([]).catch(() => undefined);
     };
   }, [hasHistory, keybindings, terminalOpen]);
 

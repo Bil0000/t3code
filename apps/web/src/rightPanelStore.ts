@@ -847,20 +847,20 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         ),
       close: (ref) =>
         set((state) =>
-          closeAction(state, scopedThreadKey(ref), (current) =>
+          userAction(state, scopedThreadKey(ref), (current) =>
             current.isOpen ? { ...current, isOpen: false } : current,
           ),
         ),
       toggleVisibility: (ref) =>
         set((state) =>
-          closeAction(state, scopedThreadKey(ref), (current) => ({
+          userAction(state, scopedThreadKey(ref), (current) => ({
             ...current,
             isOpen: !current.isOpen,
           })),
         ),
       toggle: (ref, kind) =>
         set((state) =>
-          closeAction(state, scopedThreadKey(ref), (current) => {
+          userAction(state, scopedThreadKey(ref), (current) => {
             const active = current.surfaces.find(
               (surface) => surface.id === current.activeSurfaceId,
             );
@@ -926,11 +926,12 @@ useRightPanelStore.subscribe((next, previous) => {
       ...removed.filter((surface) => surface.id === before.activeSurfaceId),
     ];
     for (const surface of closedInOrder) {
-      if (surface.kind === "preview" && surface.resourceId !== null) continue;
+      if (
+        surface.kind === "terminal" ||
+        (surface.kind === "preview" && surface.resourceId !== null)
+      )
+        continue;
       useClosedViewStore.getState().remember({ kind: "panel-tab", threadRef, surface });
-    }
-    if (removed.length === 0 && before.isOpen && !after.isOpen) {
-      useClosedViewStore.getState().remember({ kind: "panel", threadRef });
     }
   }
 });

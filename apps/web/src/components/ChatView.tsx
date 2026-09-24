@@ -155,7 +155,6 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { useUiStateStore } from "../uiStateStore";
-import { useClosedViewStore } from "../closedViewStore";
 import {
   latestWorkspaceMutationId,
   useWorkspaceMutationRefresh,
@@ -1168,7 +1167,6 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
 
   const closeTerminal = useCallback(
     (terminalId: string) => {
-      useClosedViewStore.getState().remember({ kind: "terminal", threadRef, terminalId });
       const fallbackExitWrite = () =>
         writeTerminal({
           environmentId: threadRef.environmentId,
@@ -4032,18 +4030,6 @@ export default function ChatView(props: ChatViewProps) {
   const setTerminalOpen = useCallback(
     (open: boolean) => {
       if (!activeThreadRef) return;
-      if (
-        !open &&
-        selectThreadTerminalUiState(
-          useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
-          activeThreadRef,
-        ).terminalOpen
-      ) {
-        useClosedViewStore.getState().remember({
-          kind: "terminal-drawer",
-          threadRef: activeThreadRef,
-        });
-      }
       storeSetTerminalOpen(activeThreadRef, open);
     },
     [activeThreadRef, storeSetTerminalOpen],
@@ -4173,11 +4159,6 @@ export default function ChatView(props: ChatViewProps) {
   const closeTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadId || !activeThreadRef) return;
-      useClosedViewStore.getState().remember({
-        kind: "terminal",
-        threadRef: activeThreadRef,
-        terminalId,
-      });
       const fallbackExitWrite = () =>
         writeTerminal({
           environmentId,
@@ -4986,17 +4967,6 @@ export default function ChatView(props: ChatViewProps) {
   const closePanelTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadRef || activeRightPanelSurface?.kind !== "terminal") return;
-      if (activeRightPanelSurface.terminalIds.length > 1) {
-        useClosedViewStore.getState().remember({
-          kind: "terminal",
-          threadRef: activeThreadRef,
-          terminalId,
-          panelSurfaceId: activeRightPanelSurface.id,
-          ...(activeRightPanelSurface.splitDirection === undefined
-            ? {}
-            : { splitDirection: activeRightPanelSurface.splitDirection }),
-        });
-      }
       void closeTerminalMutation({
         environmentId: activeThreadRef.environmentId,
         input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
