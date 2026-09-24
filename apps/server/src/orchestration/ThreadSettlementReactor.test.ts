@@ -2001,6 +2001,15 @@ describe("storage cleanup", () => {
                 : [],
           );
           assert.strictEqual(fetches, mergeRule || unchangedRule ? 1 : 0);
+          // Time rules decide without Git, so ineligible worktrees are never inspected.
+          if (
+            protection === "recent" ||
+            protection === "settled-wait" ||
+            protection === "settled-auto-recent" ||
+            protection === "settled-active" ||
+            protection === "settled-pinned-active"
+          )
+            assert.strictEqual(headReads, 0);
           assert.strictEqual(thread.worktreePath, worktreePath);
           assert.strictEqual(thread.branch, "feature");
           assert.strictEqual(yield* fs.exists(oldImage), protection.startsWith("files-"));
