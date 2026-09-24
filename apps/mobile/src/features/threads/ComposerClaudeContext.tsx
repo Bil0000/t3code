@@ -21,7 +21,9 @@ function SectionRow(props: { readonly section: ClaudeContextSection }) {
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
-        accessibilityLabel={section.title}
+        accessibilityLabel={`${section.title}, ${
+          section.totalTokens !== null ? `${formatClaudeContextTokens(section.totalTokens)}, ` : ""
+        }${section.rows.length} ${section.rows.length === 1 ? "item" : "items"}`}
         onPress={() => setOpen((value) => !value)}
         className="min-h-11 flex-row items-center gap-2"
       >
