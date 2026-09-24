@@ -748,7 +748,16 @@ export const layer: Layer.Layer<
             modelSelectionsEqual(priorContext.modelSelection, run.modelSelection)
               ? priorContext.usage.maxTokens
               : undefined);
-          const checkModelChange = !sameSelection && selectedModelContextWindow !== undefined;
+          const previousModelContextWindow =
+            previousSelection === undefined
+              ? undefined
+              : (session.getModelContextWindow?.(previousSelection) ?? previousUsage?.maxTokens);
+          // Only a smaller window can overflow the existing native context. Option
+          // changes such as reasoning effort keep capacity and must not compact.
+          const checkModelChange =
+            !sameSelection &&
+            selectedModelContextWindow !== undefined &&
+            selectedModelContextWindow < (previousModelContextWindow ?? Infinity);
           // Replacing a native thread clears its usage, not the selected model's capacity.
           // Model/options changes invalidate old window and compaction telemetry.
           const budgetProviderThread = {

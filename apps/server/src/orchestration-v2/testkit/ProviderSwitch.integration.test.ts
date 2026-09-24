@@ -430,6 +430,7 @@ describe("orchestration v2 provider switching", () => {
     "compact-legacy",
     "large-current-input",
     "exhausted-native",
+    "exhausted-effort-change-native",
     "exhausted-manual-uppercase-native",
     "exhausted-missed-input-native",
     "exhausted-fallback",
@@ -504,16 +505,18 @@ describe("orchestration v2 provider switching", () => {
           const targetSelection: ModelSelection =
             scenario.includes("downgrade") || scenario === "exhausted-unknown-capacity-native"
               ? { ...CLAUDE_MODEL_SELECTION, model: "small-model" }
-              : !modelScenario
-                ? CLAUDE_MODEL_SELECTION
-                : {
-                    ...CLAUDE_MODEL_SELECTION,
-                    ...(reasoningScenario
-                      ? { options: [{ id: "reasoningEffort", value: "low" }] }
-                      : scenario.includes("option-change")
-                        ? { options: [{ id: "contextWindow", value: "1m" }] }
-                        : { model: `${CLAUDE_MODEL_SELECTION.model}-large` }),
-                  };
+              : scenario === "exhausted-effort-change-native"
+                ? { ...CLAUDE_MODEL_SELECTION, options: [{ id: "reasoningEffort", value: "low" }] }
+                : !modelScenario
+                  ? CLAUDE_MODEL_SELECTION
+                  : {
+                      ...CLAUDE_MODEL_SELECTION,
+                      ...(reasoningScenario
+                        ? { options: [{ id: "reasoningEffort", value: "low" }] }
+                        : scenario.includes("option-change")
+                          ? { options: [{ id: "contextWindow", value: "1m" }] }
+                          : { model: `${CLAUDE_MODEL_SELECTION.model}-large` }),
+                    };
           const registry = makeProviderAdapterRegistryLayer([
             makeTestAdapter({
               instanceId: CODEX_MODEL_SELECTION.instanceId,
@@ -799,6 +802,7 @@ describe("orchestration v2 provider switching", () => {
                   ? "New source constraint " + "q".repeat(9_000)
                   : "New source constraint",
                 scenario.includes("downgrade") ||
+                  scenario === "exhausted-effort-change-native" ||
                   scenario === "exhausted-unknown-capacity-native" ||
                   scenario === "exhausted-missed-input-native"
                   ? CLAUDE_MODEL_SELECTION
@@ -981,6 +985,7 @@ describe("orchestration v2 provider switching", () => {
               assert.equal(
                 compactTurns.length,
                 scenario === "exhausted-oversized-native" ||
+                  scenario === "exhausted-effort-change-native" ||
                   scenario === "exhausted-unknown-capacity-native" ||
                   scenario === "exhausted-unsupported-native"
                   ? 0
@@ -1005,7 +1010,11 @@ describe("orchestration v2 provider switching", () => {
                 );
                 return;
               }
-              if (scenario === "exhausted-unknown-capacity-native") return;
+              if (
+                scenario === "exhausted-unknown-capacity-native" ||
+                scenario === "exhausted-effort-change-native"
+              )
+                return;
               const latestAttempt = projection.attempts.find(
                 (attempt) => attempt.id === projection.runs.at(-1)!.activeAttemptId,
               )!;
