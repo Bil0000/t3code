@@ -280,7 +280,9 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
       (mimeType.startsWith("text/") ||
         TEXT_MIME_TYPES.has(mimeType) ||
         TEXT_FILE_EXTENSIONS.has(path.extname(attachment.name).toLowerCase()));
-    if (!image && !audio && !pdf && !textFile) {
+    const isPathOnly =
+      attachment.type === "file" && (isPastedText || (!audio && !pdf && !textFile));
+    if (attachment.type === "image" && !image) {
       return yield* EffectAcpErrors.AcpRequestError.invalidParams(
         `Antigravity does not support '${attachment.name}' (${attachment.mimeType}). Attach a BMP, JPEG, PNG, WebP, PDF, audio, or text file.`,
       );
@@ -303,24 +305,28 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
           ),
         ),
       );
-    if (isPastedText) {
-      if (info.type !== "File") {
-        return yield* EffectAcpErrors.AcpRequestError.invalidParams(
-          `Could not read attachment '${attachment.name}'.`,
-        );
-      }
-      continue;
+    if (info.type !== "File") {
+      return yield* EffectAcpErrors.AcpRequestError.invalidParams(
+        `Could not read attachment '${attachment.name}'.`,
+      );
     }
+    if (isPathOnly) continue;
     const size = Number(info.size);
     const limit = image
       ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
       : audio
         ? ANTIGRAVITY_MAX_AUDIO_ATTACHMENT_BYTES
         : pdf
-          ? PROVIDER_SEND_TURN_MAX_FILE_BYTES
+          ? MAX_TOTAL_ATTACHMENT_BYTES
           : ANTIGRAVITY_MAX_TEXT_ATTACHMENT_BYTES;
+    if (
+      attachment.type === "file" &&
+      (size > limit || totalBytes + size > MAX_TOTAL_ATTACHMENT_BYTES)
+    ) {
+      continue;
+    }
     totalBytes += size;
-    if (info.type !== "File" || size > limit || totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+    if (size > limit || totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
       return yield* EffectAcpErrors.AcpRequestError.invalidParams(
         `Attachment '${attachment.name}' is too large. Antigravity accepts text files up to 1 MiB, images up to 10 MiB, audio up to 20 MiB, and 50 MiB total attachments.`,
       );
