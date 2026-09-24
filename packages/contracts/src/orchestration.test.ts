@@ -380,6 +380,9 @@ it.effect("rejects malformed known attachment types instead of tolerating them",
         updatedAt: "2026-01-01T00:00:00.000Z",
       });
 
+    const maxFile = yield* decode({ ...base, type: "file", sizeBytes: 100_000_000 });
+    assert.strictEqual(maxFile.attachments?.[0]?.sizeBytes, 100_000_000);
+
     const oversizedFile = yield* Effect.exit(
       decode({ ...base, type: "file", sizeBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES + 1 }),
     );
