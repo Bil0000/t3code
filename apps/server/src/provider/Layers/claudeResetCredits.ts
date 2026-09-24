@@ -109,7 +109,7 @@ export function claudeResetCreditsToContract(
       (grant) =>
         !grant.paused &&
         grant.usable_now &&
-        (!grant.ends_at || isFutureTimestamp(grant.ends_at, nowMs)),
+        (grant.ends_at == null || isFutureTimestamp(grant.ends_at, nowMs)),
     );
   const next = live.find((grant) => grant.id === parsed.value.next_grant_id);
   const nextExpiresAt = next?.ends_at ? DateTime.make(next.ends_at) : Option.none();

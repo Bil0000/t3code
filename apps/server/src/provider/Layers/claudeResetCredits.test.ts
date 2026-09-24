@@ -58,6 +58,7 @@ describe("claudeResetCreditsToContract", () => {
             grant({ id: "garbled", ends_at: "not a date" }),
             grant({ id: "date_only", ends_at: "2026-10-01" }),
             grant({ id: "impossible", ends_at: "2027-02-30T00:00:00Z" }),
+            grant({ id: "empty", ends_at: "" }),
             grant({ id: "Not Valid" }),
             grant({ id: "grant_b", resets_left: 3, usable_now: false }),
           ],
