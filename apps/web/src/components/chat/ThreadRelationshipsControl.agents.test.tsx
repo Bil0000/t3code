@@ -283,7 +283,7 @@ it("shows readable models and only differing workspace details in agent tooltips
     };
     await act(async () => renderer.update(cloneElement(panel)));
     expect(text()).toContain(expected);
-    if (model === "gpt-5.5" || model === "custom/model-v1") {
+    if (!model?.trim() || model === "gpt-5.5" || model === "custom/model-v1") {
       expect(text()).not.toContain(" · high");
     } else {
       expect(text()).toContain(`${expected} · high`);
