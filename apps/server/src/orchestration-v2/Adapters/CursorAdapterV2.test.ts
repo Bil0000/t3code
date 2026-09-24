@@ -162,7 +162,11 @@ describe("CursorAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, idAllocatorLayer))),
   );
 
-  for (const status of ["finished", "cancelled", "error"] as const) {
+  for (const { status, model } of [
+    { status: "finished", model: undefined },
+    { status: "cancelled", model: "claude-opus-4-6" },
+    { status: "error", model: "custom-fable" },
+  ] as const) {
     it.effect(`settles missing task completions when the Cursor run is ${status}`, () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -209,6 +213,7 @@ describe("CursorAdapterV2", () => {
                           description: "Review",
                           prompt: "Review the code.",
                           subagentType: { kind: "generalPurpose" },
+                          ...(model === undefined ? {} : { model }),
                         },
                       },
                     }).pipe(Effect.orDie);
@@ -287,6 +292,7 @@ describe("CursorAdapterV2", () => {
         );
         const rows = events.filter((event) => event.type === "subagent.updated");
         assert.equal(rows[0]?.subagent.status, "running");
+        assert.equal(rows[0]?.subagent.model, model ?? null);
         assert.equal(
           rows.at(-1)?.subagent.status,
           status === "finished" ? "idle" : status === "cancelled" ? "cancelled" : "failed",
