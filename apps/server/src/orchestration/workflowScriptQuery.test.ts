@@ -2,7 +2,9 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 import { OrchestrationWorkflowFileError } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { afterAll, assert, describe } from "vite-plus/test";
@@ -32,6 +34,17 @@ afterAll(() => {
 });
 
 describe("workflow script containment", () => {
+  effectIt.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+    "rejects a FIFO without waiting for a writer",
+    () =>
+      Effect.gen(function* () {
+        const fifo = NodePath.join(root, "pipe.js");
+        NodeChildProcess.execFileSync("mkfifo", [fifo]);
+        const error = yield* Effect.flip(readWorkflowScript({ scriptPath: fifo }));
+        assert.equal(error.reason, "not-regular-file");
+      }),
+  );
+
   effectIt.effect("serves a real script under the projects root", () =>
     Effect.gen(function* () {
       const result = yield* readWorkflowScript({ scriptPath });

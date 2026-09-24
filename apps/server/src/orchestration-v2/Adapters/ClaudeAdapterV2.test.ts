@@ -6792,7 +6792,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       transcriptDir: workflowTranscriptDir,
     },
   });
-  const workflowSnapshot = (input: { readonly uuid: string; readonly state: "start" | "done" }) =>
+  const workflowSnapshot = (input: {
+    readonly uuid: string;
+    readonly state: "start" | "done";
+    readonly label?: string;
+    readonly prompt?: string;
+    readonly model?: string;
+  }) =>
     claudeSdkFrame({
       type: "system",
       subtype: "task_progress",
@@ -6804,13 +6810,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         {
           type: "workflow_agent",
           index: 1,
-          label: "alpha:one",
+          label: input.label ?? "alpha:one",
           agentId: "a1",
           state: input.state,
           phaseIndex: 1,
           phaseTitle: "Alpha",
-          model: "claude-opus-5[1m]",
-          promptPreview: "Reply with exactly: A1",
+          model: input.model ?? "claude-opus-5[1m]",
+          promptPreview: input.prompt ?? "Reply with exactly: A1",
           ...(input.state === "done" ? { resultPreview: "A1 excerpt" } : {}),
         },
         {
@@ -6954,6 +6960,53 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.lengthOf(workflowMemberEvents(harness.events, 1), 1);
         assert.lengthOf(workflowMemberEvents(harness.events, 2), 1);
+
+        const firstThreadId = first?.childThreadId;
+        const firstThreadEvents = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "app_thread.created" }> =>
+              event.type === "app_thread.created" && event.appThread.id === firstThreadId,
+          );
+        const turnItemsBeforeMetadata = coordinatorTurnItems().length;
+        yield* Queue.offer(
+          harness.sdkMessages,
+          workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000001017",
+            state: "start",
+            label: "alpha:review",
+            prompt: "Review the change",
+            model: "claude-sonnet-4-6",
+          }),
+        );
+        yield* awaitUntil(
+          () => coordinatorTurnItems().length > turnItemsBeforeMetadata,
+          "updated workflow member metadata",
+        );
+        assert.equal(
+          workflowMemberEvents(harness.events, 1).at(-1)?.subagent.title,
+          "alpha:review",
+        );
+        assert.equal(
+          workflowMemberEvents(harness.events, 1).at(-1)?.subagent.prompt,
+          "Review the change",
+        );
+        assert.equal(
+          workflowMemberEvents(harness.events, 1).at(-1)?.subagent.model,
+          "claude-sonnet-4-6",
+        );
+        assert.equal(firstThreadEvents().at(-1)?.appThread.title, "alpha:review");
+        assert.equal(
+          firstThreadEvents().at(-1)?.appThread.modelSelection.model,
+          "claude-sonnet-4-6",
+        );
+        assert.deepEqual(
+          firstThreadEvents().at(-1)?.appThread.createdAt,
+          firstThreadEvents()[0]?.appThread.createdAt,
+        );
+        assert.equal(
+          threadMessages(harness.events, firstThreadId).at(-1)?.message.text,
+          "Review the change",
+        );
 
         yield* Queue.offer(
           harness.sdkMessages,
@@ -7152,6 +7205,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         const coordinatorEventsBeforeRepeat = workflowCoordinatorEvents(harness.events).length;
         const memberEventsBeforeRepeat = workflowMemberEvents(harness.events, 2).length;
+        NodeFS.appendFileSync(
+          NodePath.join(workflowTranscriptDir, "agent-a1.jsonl"),
+          '{"type":"assistant","message":{"role":"assistant","id":"msg_a1","content":[{"type":"text","text":"A1 continued"}]}}\n',
+        );
         yield* Queue.offer(
           harness.sdkMessages,
           workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001015", state: "done" }),
@@ -7160,8 +7217,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           () => workflowCoordinatorEvents(harness.events).length > coordinatorEventsBeforeRepeat,
           "repeated settled workflow snapshot",
         );
+        yield* awaitUntil(
+          () =>
+            threadMessages(harness.events, firstThreadId).at(-1)?.message.text ===
+            "A1 from the transcript\n\nA1 continued",
+          "continued workflow transcript answer",
+        );
         assert.lengthOf(workflowMemberEvents(harness.events, 2), memberEventsBeforeRepeat);
         assert.lengthOf(threadMessages(harness.events, secondThreadId), 2);
+        assert.equal(
+          threadMessages(harness.events, firstThreadId).at(-1)?.message.text,
+          "A1 from the transcript\n\nA1 continued",
+        );
         NodeFS.writeFileSync(
           NodePath.join(workflowTranscriptDir, "agent-a2.jsonl"),
           '{"type":"assistant","message":{"role":"assistant","id":"msg_a2","content":[{"type":"text","text":"A2 from the transcript"}]}}\n',

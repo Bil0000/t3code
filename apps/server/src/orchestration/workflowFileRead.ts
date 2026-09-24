@@ -13,6 +13,7 @@
  * The client-supplied path is a hint from the workflow's runHandles; it is
  * never trusted beyond these checks.
  */
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -76,7 +77,10 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
     // is reserved for genuine platform failures with the real cause attached.
     const read = yield* Effect.tryPromise({
       try: async () => {
-        const handle = await NodeFSP.open(resolved, "r");
+        const handle = await NodeFSP.open(
+          resolved,
+          NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NONBLOCK ?? 0),
+        );
         try {
           const stat = await handle.stat();
           if (!stat.isFile()) {
