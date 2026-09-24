@@ -225,6 +225,7 @@ describe("ChatMarkdown streaming", () => {
         "```bash\necho one\necho two\n```",
         "```typescript\necho hello\n```",
         "```bash\n\n```",
+        "```bash\necho safe \u202e#\n```",
         "```bash\necho incomplete",
         "~~~bash\necho incomplete",
         "````bash\necho incomplete\n```",

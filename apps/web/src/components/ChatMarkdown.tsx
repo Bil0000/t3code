@@ -591,7 +591,9 @@ function isClosedCodeFence(node: ReactMarkdownExtraProps["node"], text: string):
   if (start === undefined || end === undefined) return false;
   const source = text.slice(start, end);
   const opening = /^(?:`{3,}|~{3,})/.exec(source)?.[0];
-  const closing = /(?:^|\n)(?:[ \t]*>[ \t]*)*[ \t]*(`{3,}|~{3,})[ \t\r]*$/.exec(source)?.[1];
+  // One class for the blockquote prefix: nested quantifiers here backtrack
+  // exponentially on code lines that start with many `> ` markers.
+  const closing = /(?:^|\n)[ \t>]*(`{3,}|~{3,})[ \t\r]*$/.exec(source)?.[1];
   return (
     opening !== undefined &&
     closing !== undefined &&
@@ -959,7 +961,9 @@ function MarkdownCodeBlock({
     !isStreaming &&
     /^(?:sh|bash|zsh|fish|shell|powershell|pwsh)$/.test(language) &&
     command.length > 0 &&
-    !/\p{Cc}/u.test(command);
+    // Control and invisible format characters (bidi overrides, zero-width) can
+    // make the rendered command differ from what the terminal would receive.
+    !/[\p{Cc}\p{Cf}]/u.test(command);
 
   const handleCopy = useCallback(() => {
     if (typeof navigator === "undefined" || navigator.clipboard == null) {
@@ -1038,7 +1042,7 @@ function MarkdownCodeBlock({
                 render={
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="ghost-muted"
                     size="icon-xs"
                     onClick={() => onRunShellCommand(command)}
                     aria-label="Run in terminal"
