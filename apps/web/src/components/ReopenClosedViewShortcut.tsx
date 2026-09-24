@@ -4,7 +4,7 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 
@@ -17,7 +17,11 @@ import { isEditableFocused } from "../lib/editableFocus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
-import { reopenClosedView } from "../reopenClosedView";
+import {
+  planNextReopen,
+  pullRequestsSearchForRestore,
+  reopenClosedView,
+} from "../reopenClosedView";
 import {
   PULL_REQUESTS_PANEL_REF,
   selectActiveRightPanel,
@@ -38,6 +42,9 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import { toastManager } from "./ui/toast";
+
+const isGlobalPullRequests = (ref: ScopedThreadRef) =>
+  scopedThreadKey(ref) === scopedThreadKey(PULL_REQUESTS_PANEL_REF);
 
 export function ReopenClosedViewShortcut() {
   const navigate = useNavigate();
@@ -65,91 +72,56 @@ export function ReopenClosedViewShortcut() {
   const pending = useRef(Promise.resolve());
 
   const reopenNext = useEffectEvent(async () => {
-    for (const entry of useClosedViewStore.getState().entries) {
+    const catalog = appAtomRegistry.get(environmentCatalog.catalogValueAtom);
+    const drafts = useComposerDraftStore.getState();
+    const panelsByThread = useRightPanelStore.getState().byThreadKey;
+    const { drop, restore } = planNextReopen(useClosedViewStore.getState().entries, (entry) => {
       const ref = entry.threadRef;
-      const globalPullRequests = scopedThreadKey(ref) === scopedThreadKey(PULL_REQUESTS_PANEL_REF);
-      if (!globalPullRequests) {
-        const catalog = appAtomRegistry.get(environmentCatalog.catalogValueAtom);
-        if (!catalog.entries.has(ref.environmentId)) {
-          if (!catalog.isReady) return;
-          useClosedViewStore.getState().remove(entry.id);
-          continue;
-        }
+      const panel = selectThreadRightPanelState(panelsByThread, ref);
+      if (isGlobalPullRequests(ref)) {
+        return {
+          environmentKnown: true,
+          catalogReady: true,
+          ownerExists: true,
+          shellLive: true,
+          panel,
+        };
       }
-      const drafts = useComposerDraftStore.getState();
-      const draftThread = drafts.getDraftThreadByRef(ref);
-      const thread = globalPullRequests ? null : readThreadShell(ref);
-      if (!globalPullRequests && thread === null && draftThread === null) {
-        if (
-          appAtomRegistry.get(environmentShell.stateValueAtom(ref.environmentId)).status === "live"
-        )
-          continue;
-        return;
-      }
-      const panels = useRightPanelStore.getState();
-      const panel = selectThreadRightPanelState(panels.byThreadKey, ref);
-      const alreadyOpen =
-        (entry.kind === "panel-tab" &&
-          panel.isOpen &&
-          panel.surfaces.some((surface) => surface.id === entry.surface.id)) ||
-        (entry.kind === "browser" &&
-          panel.surfaces.some(
-            (surface) => surface.kind === "preview" && surface.resourceId === entry.snapshot.tabId,
-          ));
-      if (alreadyOpen) {
-        useClosedViewStore.getState().remove(entry.id);
-        continue;
-      }
-      const owner = thread ?? draftThread;
-      const project = owner
-        ? readProject(scopeProjectRef(ref.environmentId, owner.projectId))
-        : null;
-      if (!(await reopenClosedView(entry, { openPreview, workspaceAvailable: project !== null })))
-        return;
-      if (globalPullRequests) {
-        const surface = selectSelectedRightPanelSurface(
-          useRightPanelStore.getState().byThreadKey,
-          ref,
-        );
-        await navigate({
-          to: "/pull-requests",
-          search: (previous) => {
-            const next = {
-              ...previous,
-              involvement: previous.involvement ?? "all",
-              state: previous.state ?? "open",
-            };
-            delete next.repository;
-            delete next.number;
-            delete next.selectedProjectId;
-            delete next.selectedHost;
-            delete next.selectedEnvironmentId;
-            return {
-              ...next,
-              ...(surface?.kind === "pull-request"
-                ? {
-                    repository: surface.repository,
-                    number: surface.number,
-                    selectedProjectId: surface.projectId as ProjectId,
-                    ...(surface.host === undefined ? {} : { selectedHost: surface.host }),
-                    ...(surface.environmentId === undefined
-                      ? {}
-                      : { selectedEnvironmentId: surface.environmentId as EnvironmentId }),
-                  }
-                : {}),
-            };
-          },
-        });
-      } else {
-        const draftId = thread === null ? drafts.getDraftIdByRef(ref) : null;
-        if (draftId !== null)
-          await navigate({ to: "/draft/$draftId", params: buildDraftThreadRouteParams(draftId) });
-        else
-          await navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
-      }
-      useClosedViewStore.getState().remove(entry.id);
+      return {
+        environmentKnown: catalog.entries.has(ref.environmentId),
+        catalogReady: catalog.isReady,
+        ownerExists: readThreadShell(ref) !== null || drafts.getDraftThreadByRef(ref) !== null,
+        shellLive:
+          appAtomRegistry.get(environmentShell.stateValueAtom(ref.environmentId)).status === "live",
+        panel,
+      };
+    });
+    for (const entry of drop) useClosedViewStore.getState().remove(entry.id);
+    if (!restore) return;
+
+    const ref = restore.threadRef;
+    const globalPullRequests = isGlobalPullRequests(ref);
+    const thread = globalPullRequests ? null : readThreadShell(ref);
+    const owner = thread ?? drafts.getDraftThreadByRef(ref);
+    const project = owner ? readProject(scopeProjectRef(ref.environmentId, owner.projectId)) : null;
+    if (!(await reopenClosedView(restore, { openPreview, workspaceAvailable: project !== null })))
       return;
+    if (globalPullRequests) {
+      const selected = selectSelectedRightPanelSurface(
+        useRightPanelStore.getState().byThreadKey,
+        ref,
+      );
+      await navigate({
+        to: "/pull-requests",
+        search: (previous) => pullRequestsSearchForRestore(previous, selected),
+      });
+    } else {
+      const draftId = thread === null ? drafts.getDraftIdByRef(ref) : null;
+      if (draftId !== null)
+        await navigate({ to: "/draft/$draftId", params: buildDraftThreadRouteParams(draftId) });
+      else await navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
     }
+    useClosedViewStore.getState().remove(restore.id);
   });
 
   const enqueueReopen = useEffectEvent(() => {

@@ -1,7 +1,100 @@
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+
 import type { OpenPreviewMutation } from "./browser/openFileInPreview";
-import type { ClosedView } from "./closedViewStore";
+import type { ClosedView, ClosedViewEntry } from "./closedViewStore";
+import type { PullRequestListPreferences } from "./components/pullRequest/pullRequestListPreferences";
 import { openPreviewSession } from "./components/preview/openPreviewSession";
-import { useRightPanelStore } from "./rightPanelStore";
+import {
+  type RightPanelSurface,
+  type ThreadRightPanelState,
+  useRightPanelStore,
+} from "./rightPanelStore";
+
+export interface ReopenOwnerState {
+  /** False when the entry's environment is not in the catalog. */
+  environmentKnown: boolean;
+  catalogReady: boolean;
+  /** Whether the owning thread or draft still exists locally. */
+  ownerExists: boolean;
+  /** A live shell that lacks the thread means it was deleted; a cached one may just be stale. */
+  shellLive: boolean;
+  panel: ThreadRightPanelState;
+}
+
+/**
+ * Picks the history entry the next reopen press restores, newest first. Entries whose
+ * environment is gone or whose tab is already open are dropped. A thread missing from a
+ * live shell is skipped but kept; anything not yet knowable stops the scan with no restore.
+ */
+export function planNextReopen(
+  entries: readonly ClosedViewEntry[],
+  ownerState: (entry: ClosedViewEntry) => ReopenOwnerState,
+): { drop: ClosedViewEntry[]; restore: ClosedViewEntry | null } {
+  const drop: ClosedViewEntry[] = [];
+  for (const entry of entries) {
+    const owner = ownerState(entry);
+    if (!owner.environmentKnown) {
+      if (!owner.catalogReady) break;
+      drop.push(entry);
+      continue;
+    }
+    if (!owner.ownerExists) {
+      if (owner.shellLive) continue;
+      break;
+    }
+    const alreadyOpen =
+      entry.kind === "panel-tab"
+        ? owner.panel.isOpen && owner.panel.surfaces.some((s) => s.id === entry.surface.id)
+        : owner.panel.surfaces.some(
+            (s) => s.kind === "preview" && s.resourceId === entry.snapshot.tabId,
+          );
+    if (alreadyOpen) {
+      drop.push(entry);
+      continue;
+    }
+    return { drop, restore: entry };
+  }
+  return { drop, restore: null };
+}
+
+type PullRequestsSearchLike = Partial<PullRequestListPreferences> & {
+  repository?: string;
+  number?: number;
+  selectedProjectId?: ProjectId;
+  selectedHost?: string;
+  selectedEnvironmentId?: EnvironmentId;
+};
+
+/** Selects the restored pull request on the Pull Requests page, keeping the list filters. */
+export function pullRequestsSearchForRestore<S extends PullRequestsSearchLike>(
+  previous: S,
+  selected: RightPanelSurface | null,
+): S & PullRequestListPreferences {
+  const {
+    repository: _repository,
+    number: _number,
+    selectedProjectId: _projectId,
+    selectedHost: _host,
+    selectedEnvironmentId: _environmentId,
+    ...filters
+  } = previous;
+  return {
+    ...filters,
+    involvement: previous.involvement ?? "all",
+    state: previous.state ?? "open",
+    ...(selected?.kind === "pull-request"
+      ? {
+          repository: selected.repository,
+          number: selected.number,
+          selectedProjectId: selected.projectId as ProjectId,
+          ...(selected.host === undefined ? {} : { selectedHost: selected.host }),
+          ...(selected.environmentId === undefined
+            ? {}
+            : { selectedEnvironmentId: selected.environmentId as EnvironmentId }),
+        }
+      : {}),
+  } as S & PullRequestListPreferences;
+}
 
 export async function reopenClosedView(
   view: ClosedView,

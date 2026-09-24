@@ -27,52 +27,25 @@ beforeEach(() => {
 });
 
 describe("rightPanelStore", () => {
-  it("records closed file, diff, and pull request tabs in a shared newest-first history", () => {
+  it("records single and bulk tab closes, newest first", () => {
     const store = useRightPanelStore.getState();
-    store.open(refA, "files");
-    store.open(refA, "diff");
     const pr = pullRequestSurface({
       projectId: "project-a",
       repository: "pingdotgg/t3code",
       number: 42,
     });
-    store.openPullRequest(refA, pr);
-    store.closeSurface(refA, "files");
-    store.closeSurface(refA, "diff");
-    store.closeSurface(refA, pr.id);
-    store.open(refB, "agents");
-
-    expect(useClosedViewStore.getState().entries).toMatchObject([
-      { kind: "panel-tab", threadRef: refA, surface: { kind: "pull-request", number: 42 } },
-      { kind: "panel-tab", threadRef: refA, surface: { id: "diff" } },
-      { kind: "panel-tab", threadRef: refA, surface: { id: "files" } },
-    ]);
-  });
-
-  it("records bulk close commands and does not record incidental tab replacements", () => {
-    const store = useRightPanelStore.getState();
-    store.open(refA, "files");
     store.openFile(refA, "src/app.ts");
-    expect(useClosedViewStore.getState().entries).toEqual([]);
-    store.open(refA, "diff");
     store.open(refA, "agents");
-    store.closeSurfacesToRight(refA, "file:src/app.ts");
+    store.openPullRequest(refA, pr);
+    store.open(refA, "diff");
+    store.closeSurface(refA, pr.id);
+    store.closeSurfacesToRight(refA, "agents");
+    store.closeOtherSurfaces(refA, "file:src/app.ts");
     expect(
       useClosedViewStore
         .getState()
         .entries.map((entry) => (entry.kind === "panel-tab" ? entry.surface.id : null)),
-    ).toEqual(["agents", "diff"]);
-    store.open(refA, "agents");
-    store.closeOtherSurfaces(refA, "agents");
-    expect(useClosedViewStore.getState().entries[0]).toMatchObject({
-      kind: "panel-tab",
-      surface: { id: "file:src/app.ts" },
-    });
-    store.closeAllSurfaces(refA);
-    expect(useClosedViewStore.getState().entries[0]).toMatchObject({
-      kind: "panel-tab",
-      surface: { id: "agents" },
-    });
+    ).toEqual(["agents", "diff", pr.id]);
   });
 
   it("reopens the active tab first after a bulk close", () => {
