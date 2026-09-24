@@ -210,7 +210,7 @@ export function ThreadDetailsPrRow({
   const icon = statePresentation ? (
     <statePresentation.Icon
       aria-hidden
-      className={cn("-mx-0.5 size-4 shrink-0", statePresentation.toneClassName)}
+      className={cn("size-4 shrink-0", statePresentation.toneClassName)}
     />
   ) : pr && status ? (
     <ChangeRequestStatusIcon

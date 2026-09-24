@@ -53,6 +53,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_MENU_POPUP_CLASS,
+  THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
 
@@ -96,9 +97,9 @@ export function ThreadLineageRowList(props: {
         <button
           type="button"
           onClick={props.onShowMore}
-          className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-medium text-muted-foreground/70 hover:bg-black/[0.055] hover:text-foreground/80 dark:hover:bg-white/[0.075]"
+          className={`flex h-9 w-full cursor-pointer items-center rounded-lg ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-[13px] font-medium text-muted-foreground/70 hover:bg-black/[0.055] hover:text-foreground/80 dark:hover:bg-white/[0.075]`}
         >
-          <PlusIcon aria-hidden className="-mx-0.5 size-4 shrink-0" />
+          <PlusIcon aria-hidden className="size-4 shrink-0" />
           Show {Math.min(props.hiddenCount, THREAD_LINEAGE_PAGE_COUNT)} more
         </button>
       ) : null}
@@ -371,7 +372,7 @@ export function ThreadRelationshipsPanel(props: {
                     status={edge.status}
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium leading-4 text-foreground/85">
+                    <span className="block truncate text-left text-[13px] font-medium leading-4 text-foreground/85">
                       {threadTitle}
                     </span>
                     {agent ? <span className="sr-only">{agent.status}</span> : null}
