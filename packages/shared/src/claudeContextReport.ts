@@ -144,6 +144,7 @@ export function parseClaudeContextReport(text: string): ClaudeContextReport | nu
   };
 }
 
+/** The report answering the user's latest message; older ones stay in the timeline only. */
 export function latestClaudeContextReport(
   messages: ReadonlyArray<{
     readonly id: string;
@@ -154,6 +155,7 @@ export function latestClaudeContextReport(
 ): { readonly id: string; readonly report: ClaudeContextReport } | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
+    if (message.role === "user") return null;
     if (message.role !== "assistant" || message.streaming) continue;
     const report = parseClaudeContextReport(message.text);
     if (report) return { id: message.id, report };

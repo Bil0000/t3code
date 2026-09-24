@@ -165,11 +165,17 @@ describe("latestClaudeContextReport", () => {
       message("m1", REPORT),
       message("m2", "plain answer"),
       message("m3", REPORT.replace("79.5k", "90k")),
-      message("m4", REPORT, "user"),
+      message("m4", REPORT, "reasoning"),
       message("m5", REPORT, "assistant", true),
     ]);
     expect(latest?.id).toBe("m3");
     expect(formatClaudeContextHeadline(latest!.report)).toBe("90k / 200k (40%)");
+  });
+
+  it("drops the report once the user sends another message", () => {
+    expect(
+      latestClaudeContextReport([message("m1", REPORT), message("m2", "next task", "user")]),
+    ).toBeNull();
   });
 
   it("returns null without a parseable report", () => {
