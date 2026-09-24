@@ -7022,6 +7022,70 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("does not republish a workflow roster on progress-only frames", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-workflow-progress-only"),
+            text: "Run the alpha workflow.",
+            attachments: [],
+          }),
+        );
+        yield* launchWorkflow({ harness, snapshotUuid: "00000000-0000-4000-8000-000000001120" });
+        const coordinatorCount = () => workflowCoordinatorEvents(harness.events).length;
+        const offerProgressOnly = (index: number) =>
+          Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_progress",
+              task_id: WORKFLOW_TASK_ID,
+              tool_use_id: WORKFLOW_TOOL_USE_ID,
+              description: "Member is working",
+              uuid: `00000000-0000-4000-8000-${String(1200 + index).padStart(12, "0")}`,
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+
+        const inTurnCount = coordinatorCount();
+        for (let index = 0; index < 5; index++) yield* offerProgressOnly(index);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001121", state: "start" }),
+        );
+        yield* awaitUntil(() => coordinatorCount() > inTurnCount, "in-turn workflow snapshot");
+        assert.equal(coordinatorCount(), inTurnCount + 1);
+
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000001122",
+            result: "Launched the workflow.",
+          }),
+        );
+        yield* Queue.take(harness.terminalReceipts);
+
+        const betweenTurnCount = coordinatorCount();
+        for (let index = 5; index < 10; index++) yield* offerProgressOnly(index);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001123", state: "done" }),
+        );
+        yield* awaitUntil(
+          () => coordinatorCount() > betweenTurnCount,
+          "between-turn workflow snapshot",
+        );
+        assert.equal(coordinatorCount(), betweenTurnCount + 1);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect.each([
     ["stopped", false],
     ["failed", false],

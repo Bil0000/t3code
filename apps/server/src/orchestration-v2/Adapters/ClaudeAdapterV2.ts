@@ -4907,6 +4907,8 @@ export function makeClaudeAdapterV2(
          */
         const applyWorkflowProgressWithoutTurn = Effect.fnUntraced(function* (message: SDKMessage) {
           if (message.type !== "system" || message.subtype !== "task_progress") return;
+          const roster = field(message, "workflow_progress");
+          if (!Array.isArray(roster) || roster.length === 0) return;
           const taskId = message.task_id;
           const registered = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
           if (
@@ -5708,8 +5710,12 @@ export function makeClaudeAdapterV2(
             const workflowProgress = field(message, "workflow_progress");
             const carriesWorkflowTelemetry =
               Array.isArray(workflowProgress) && workflowProgress.length > 0;
+            const isWorkflowCoordinator =
+              (yield* Ref.get(sessionSubagentsByTaskId)).get(message.task_id)?.task.workflow !==
+              undefined;
             if (
               (progress.length > 0 || carriesWorkflowTelemetry) &&
+              (!isWorkflowCoordinator || carriesWorkflowTelemetry) &&
               !context.ignoredTaskIds.has(message.task_id) &&
               !isBackgroundTask
             ) {
