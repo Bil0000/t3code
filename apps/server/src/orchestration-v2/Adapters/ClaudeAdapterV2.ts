@@ -2431,12 +2431,15 @@ function rememberClaudeSubagentRequestedModel(
   const model = firstStringInputField(input, ["model"]);
   if (
     model === undefined ||
-    model === "inherit" ||
     context.subagentsByToolUseId.has(toolUseId) ||
     context.pendingSubagentModelsByToolUseId.has(toolUseId)
   )
     return;
-  rememberPendingClaudeSubagentModel(context.pendingSubagentModelsByToolUseId, toolUseId, model);
+  rememberPendingClaudeSubagentModel(
+    context.pendingSubagentModelsByToolUseId,
+    toolUseId,
+    model === "inherit" ? context.input.modelSelection.model : model,
+  );
 }
 
 type PendingClaudeRuntimeRequest =
@@ -3386,7 +3389,7 @@ export function makeClaudeAdapterV2(
               },
               prompt: input.prompt ?? "",
               title: input.title ?? null,
-              model: input.model ?? input.context.input.modelSelection.model,
+              model: input.model ?? null,
               result: null,
               startedAt: now,
             }),

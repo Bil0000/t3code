@@ -30,16 +30,14 @@ export function SubagentTooltipContent(props: {
   driver?: ProviderDriverKind | undefined;
   elapsed?: ReactNode;
   parentThread?: Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath"> | undefined;
-  childThread?:
-    | Pick<OrchestrationV2ThreadShell, "branch" | "worktreePath" | "modelSelection">
-    | undefined;
+  childThread?: Pick<OrchestrationV2ThreadShell, "branch" | "worktreePath"> | undefined;
   parentProject?: Pick<OrchestrationProjectShell, "workspaceRoot"> | undefined;
   childProject?: Pick<OrchestrationProjectShell, "id" | "title" | "workspaceRoot"> | undefined;
   status: string;
   result?: string | null | undefined;
   progress?: string | null | undefined;
 }) {
-  const model = props.model?.trim() || props.childThread?.modelSelection.model.trim();
+  const model = props.model?.trim();
   const modelSlug = props.provider
     ? resolveSelectableModel(props.provider.driver, model, props.provider.models)
     : model;

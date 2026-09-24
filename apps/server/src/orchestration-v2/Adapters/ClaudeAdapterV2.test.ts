@@ -4480,7 +4480,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect.each(["requested", "observed-before", "observed-after", "inherit"] as const)(
+  it.effect.each(["requested", "observed-before", "observed-after", "inherit", "unknown"] as const)(
     "records the subagent model from %s without inheriting the parent override",
     (source) =>
       Effect.scoped(
@@ -4524,7 +4524,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                     input: {
                       description: "Haiku puzzle",
                       subagent_type: "general-purpose",
-                      model: source === "inherit" ? "inherit" : "haiku",
+                      ...(source === "unknown"
+                        ? {}
+                        : { model: source === "inherit" ? "inherit" : "haiku" }),
                       prompt: "Solve the puzzle.",
                     },
                   },
@@ -4562,14 +4564,16 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               ? observedModel
               : source === "inherit"
                 ? parentModel
-                : "haiku";
+                : source === "unknown"
+                  ? null
+                  : "haiku";
           assert.equal(subagents[0]?.subagent.model, initialModel);
           assert.equal(
             subagents.at(-1)?.subagent.model,
             source.startsWith("observed") ? observedModel : initialModel,
           );
           const child = harness.events.find((event) => event.type === "app_thread.created");
-          assert.equal(child?.appThread.modelSelection?.model, initialModel);
+          assert.equal(child?.appThread.modelSelection?.model, initialModel ?? parentModel);
         }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
       ),
   );
