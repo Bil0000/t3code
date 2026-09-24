@@ -260,7 +260,7 @@ import {
   V2LifecycleRow,
   type HandoffTimelineRun,
 } from "./V2LifecycleRow";
-import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { SubagentAncestryDivider, TimelineSystemDivider } from "./TimelineSystemDivider";
 
 import { SkillChipIcon, SkillInlineText } from "./SkillInlineText";
 import * as DateTime from "effect/DateTime";
@@ -418,10 +418,11 @@ interface MessagesTimelineProps {
   displayThreadKey?: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
-  parentThreadLink?: {
+  /** The subagent chain above this thread, root first. */
+  parentThreadLinks?: ReadonlyArray<{
     readonly threadId: ThreadId;
     readonly title: string;
-  } | null;
+  }> | null;
   onForkFromRun: (input: {
     readonly sourceThreadId: ThreadId;
     readonly runId: RunId;
@@ -498,7 +499,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   displayThreadKey,
   onOpenTurnDiff,
   onOpenThread,
-  parentThreadLink = null,
+  parentThreadLinks = null,
   onForkFromRun,
   onRollbackCheckpoint,
   supportsConversationRollback,
@@ -1204,7 +1205,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const listHeader = useMemo(() => {
     const leadingContent =
-      parentThreadLink === null ? (
+      parentThreadLinks === null ? (
         topFadeEnabled ? (
           TIMELINE_LIST_FADE_HEADER
         ) : (
@@ -1213,24 +1214,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       ) : (
         <div className="messages-timeline-row-frame">
           <div className="chat-content-lane pt-1 sm:pt-2">
-            <TimelineSystemDivider
-              label="Subagent of"
-              detail={parentThreadLink.title}
-              icon={BotIcon}
-              actionLabel="Open parent thread"
-              onAction={() => onOpenThread(parentThreadLink.threadId)}
-            />
+            <SubagentAncestryDivider links={parentThreadLinks} onOpenThread={onOpenThread} />
           </div>
         </div>
       );
     return (
       <>
-        {parentThreadLink === null ? leadingContent : null}
+        {parentThreadLinks === null ? leadingContent : null}
         {historyControls ? <TimelineHistoryControl {...historyControls} /> : null}
-        {parentThreadLink !== null ? leadingContent : null}
+        {parentThreadLinks !== null ? leadingContent : null}
       </>
     );
-  }, [historyControls, onOpenThread, parentThreadLink, topFadeEnabled]);
+  }, [historyControls, onOpenThread, parentThreadLinks, topFadeEnabled]);
 
   const canvas = useChatCanvas();
   const registerTimeline = canvas?.registerTimeline;
@@ -1258,7 +1253,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   if (
     rows.length === 0 &&
     !isWorking &&
-    parentThreadLink === null &&
+    parentThreadLinks === null &&
     historyControls === undefined
   ) {
     if (hideEmptyPlaceholder) {

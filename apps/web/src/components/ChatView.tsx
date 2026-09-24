@@ -86,6 +86,7 @@ import {
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
+import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
@@ -380,6 +381,7 @@ import {
   useThreadProjection,
   useThreadStatus,
   useThreadHistory,
+  useSubagentAncestorThreads,
   useThreadShell,
   useThreadRefs,
   useThreadVisibleTurnItems,
@@ -2019,16 +2021,25 @@ export default function ChatView(props: ChatViewProps) {
     }
     return scopeThreadRef(parentSubagentEnvironmentId, parentSubagentThreadId);
   }, [parentSubagentEnvironmentId, parentSubagentThreadId]);
-  const parentSubagentThread = useThreadShell(parentSubagentThreadRef);
-  const parentThreadLink = useMemo(
+  const subagentAncestorThreads = useSubagentAncestorThreads(
+    parentSubagentThreadRef === null || activeThread === undefined
+      ? null
+      : scopeThreadRef(activeThread.environmentId, activeThread.id),
+  );
+  const parentThreadLinks = useMemo(
     () =>
       parentSubagentThreadRef === null
         ? null
-        : {
-            threadId: parentSubagentThreadRef.threadId,
-            title: parentSubagentThread?.title ?? "Parent thread",
-          },
-    [parentSubagentThread?.title, parentSubagentThreadRef],
+        : subagentAncestorThreads.length === 0
+          ? [{ threadId: parentSubagentThreadRef.threadId, title: "Parent thread" }]
+          : subagentAncestorThreads.map((thread) => ({
+              threadId: thread.id,
+              title:
+                thread.lineage.relationshipToParent === "subagent"
+                  ? formatSubagentDisplayTitle(thread.title)
+                  : thread.title,
+            })),
+    [parentSubagentThreadRef, subagentAncestorThreads],
   );
   const threadError = isServerThread
     ? (localServerError ?? serverRuntime?.lastError ?? null)
@@ -10451,7 +10462,7 @@ export default function ChatView(props: ChatViewProps) {
                 displayThreadKey={displayedTimelineKey}
                 onOpenTurnDiff={paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiff}
                 onOpenThread={onOpenRelatedThread}
-                parentThreadLink={paintOnlyDisplayedTimeline ? null : parentThreadLink}
+                parentThreadLinks={paintOnlyDisplayedTimeline ? null : parentThreadLinks}
                 onForkFromRun={paintOnlyDisplayedTimeline ? async () => {} : onForkFromRun}
                 onRollbackCheckpoint={(input) => {
                   if (!paintOnlyDisplayedTimeline) void onRollbackCheckpoint(input);

@@ -1190,10 +1190,12 @@ describe("MessagesTimeline", () => {
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[]}
-        parentThreadLink={{
-          threadId: ThreadId.make("thread-parent"),
-          title: "Architecture audit",
-        }}
+        parentThreadLinks={[
+          {
+            threadId: ThreadId.make("thread-parent"),
+            title: "Architecture audit",
+          },
+        ]}
       />,
     );
 
