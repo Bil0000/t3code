@@ -2739,6 +2739,7 @@ export function makeClaudeAdapterV2(
             string,
             {
               readonly status: OrchestrationV2Subagent["status"];
+              readonly attempt: number;
               readonly transcriptAnswers: ReadonlyArray<string>;
               readonly transcriptReadAttempts: number;
               readonly finalTranscriptRead: boolean;
@@ -3524,7 +3525,10 @@ export function makeClaudeAdapterV2(
             const settled = status !== "running";
             const prompt = member.prompt ?? member.label;
             const model = member.model ?? parentThread.modelSelection.model;
+            const attempt = member.attempt ?? previous?.attempt ?? 1;
+            const restarted = previous !== undefined && attempt > previous.attempt;
             const changed =
+              restarted ||
               previous?.status !== status ||
               previous?.result !== member.result ||
               previous?.label !== member.label ||
@@ -3537,8 +3541,8 @@ export function makeClaudeAdapterV2(
               settled &&
               canReadTranscript &&
               (input.coordinator.task.status === "running"
-                ? (previous?.transcriptReadAttempts ?? 0) < 3
-                : previous?.finalTranscriptRead !== true);
+                ? (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) < 3
+                : restarted || previous?.finalTranscriptRead !== true);
             if (!changed && !readTranscript) continue;
             const startedAt = previous?.startedAt ?? now;
 
@@ -3657,7 +3661,7 @@ export function makeClaudeAdapterV2(
             // until the harness has flushed it. Message ids are derived from the
             // turn index, so a later transcript read overwrites the excerpt in
             // place rather than appending a second answer.
-            let transcriptAnswers = previous?.transcriptAnswers ?? [];
+            let transcriptAnswers = restarted ? [] : (previous?.transcriptAnswers ?? []);
             if (settled && (changed || readTranscript)) {
               // The member's own transcript, when the run left one: a missing or
               // unreadable file is expected (a run predating run-handle capture,
@@ -3686,7 +3690,11 @@ export function makeClaudeAdapterV2(
                     ? []
                     : [`Partial answer from workflow progress:\n\n${member.result}`];
               for (const [index, answer] of turns.entries()) {
-                if (transcript.length > 0 && answer === previous?.transcriptAnswers[index])
+                if (
+                  transcript.length > 0 &&
+                  !restarted &&
+                  answer === previous?.transcriptAnswers[index]
+                )
                   continue;
                 const ordinal = 200 + index;
                 yield* emitWorkflowMemberMessage({
@@ -3704,15 +3712,17 @@ export function makeClaudeAdapterV2(
             yield* Ref.update(workflowMemberStates, (current) =>
               new Map(current).set(memberKey, {
                 status,
+                attempt,
                 result: member.result,
                 label: member.label,
                 prompt,
                 model,
                 transcriptAnswers,
                 transcriptReadAttempts:
-                  (previous?.transcriptReadAttempts ?? 0) + (readTranscript ? 1 : 0),
+                  (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
+                  (readTranscript ? 1 : 0),
                 finalTranscriptRead:
-                  previous?.finalTranscriptRead === true ||
+                  (!restarted && previous?.finalTranscriptRead === true) ||
                   (readTranscript && input.coordinator.task.status !== "running"),
                 startedAt,
               }),

@@ -6798,6 +6798,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly label?: string;
     readonly prompt?: string;
     readonly model?: string;
+    readonly attempt?: number;
   }) =>
     claudeSdkFrame({
       type: "system",
@@ -6817,6 +6818,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           phaseTitle: "Alpha",
           model: input.model ?? "claude-opus-5[1m]",
           promptPreview: input.prompt ?? "Reply with exactly: A1",
+          ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
           ...(input.state === "done" ? { resultPreview: "A1 excerpt" } : {}),
         },
         {
@@ -7245,6 +7247,24 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(
           threadMessages(harness.events, secondThreadId).at(-1)?.message.text,
           "A2 from the transcript",
+        );
+        NodeFS.writeFileSync(
+          NodePath.join(workflowTranscriptDir, "agent-a1.jsonl"),
+          '{"type":"assistant","message":{"role":"assistant","id":"msg_retry","content":[{"type":"text","text":"A1 retry answer"}]}}\n',
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000001018",
+            state: "done",
+            attempt: 2,
+          }),
+        );
+        yield* awaitUntil(
+          () =>
+            threadMessages(harness.events, firstThreadId).at(-1)?.message.text ===
+            "A1 retry answer",
+          "retried workflow member answer",
         );
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
