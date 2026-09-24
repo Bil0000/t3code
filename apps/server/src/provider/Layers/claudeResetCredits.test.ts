@@ -11,12 +11,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse, UrlParams } from "effect/unstable/http";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  claudeResetCreditsToContract,
-  consumeClaudeResetCredit,
-  isSettledClaudeResetCreditFailure,
-  readClaudeResetCredits,
-} from "./claudeResetCredits.ts";
+import * as ClaudeResetCredits from "./claudeResetCredits.ts";
 
 const NOW = Date.parse("2026-09-22T12:00:00.000Z");
 const grant = (overrides: Record<string, unknown>) => ({
@@ -48,7 +43,7 @@ const refuseRequests = HttpClient.make(() => Effect.die("must not send a request
 describe("claudeResetCreditsToContract", () => {
   it("counts live grants and pins the next usable one", () => {
     expect(
-      claudeResetCreditsToContract(
+      ClaudeResetCredits.claudeResetCreditsToContract(
         {
           eligible: true,
           next_grant_id: "grant_a",
@@ -75,18 +70,23 @@ describe("claudeResetCreditsToContract", () => {
 
   it("offers nothing to redeem without a usable next grant or an eligible account", () => {
     expect(
-      claudeResetCreditsToContract(
+      ClaudeResetCredits.claudeResetCreditsToContract(
         { eligible: true, next_grant_id: "grant_a", grants: [grant({ usable_now: false })] },
         NOW,
       ),
     ).toEqual({ availableCount: 0 });
-    expect(claudeResetCreditsToContract({ eligible: true, grants: [grant({})] }, NOW)).toEqual({
+    expect(
+      ClaudeResetCredits.claudeResetCreditsToContract({ eligible: true, grants: [grant({})] }, NOW),
+    ).toEqual({
       availableCount: 0,
     });
     expect(
-      claudeResetCreditsToContract({ eligible: false, grants: [grant({})] }, NOW),
+      ClaudeResetCredits.claudeResetCreditsToContract(
+        { eligible: false, grants: [grant({})] },
+        NOW,
+      ),
     ).toBeUndefined();
-    expect(claudeResetCreditsToContract(undefined, NOW)).toBeUndefined();
+    expect(ClaudeResetCredits.claudeResetCreditsToContract(undefined, NOW)).toBeUndefined();
   });
 });
 
@@ -110,7 +110,7 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
           ),
         );
       });
-      const credits = yield* readClaudeResetCredits(configDir, "2.1.0").pipe(
+      const credits = yield* ClaudeResetCredits.readClaudeResetCredits(configDir, "2.1.0").pipe(
         Effect.provideService(HostProcessPlatform, "linux"),
         Effect.provideService(HttpClient.HttpClient, client),
       );
@@ -121,11 +121,11 @@ effectIt.layer(NodeServices.layer)("readClaudeResetCredits", (it) => {
   it.effect("reads nothing from keychain logins or failed requests", () =>
     Effect.gen(function* () {
       const { configDir } = yield* writeLogin;
-      const darwin = yield* readClaudeResetCredits(configDir, "2.1.0").pipe(
+      const darwin = yield* ClaudeResetCredits.readClaudeResetCredits(configDir, "2.1.0").pipe(
         Effect.provideService(HostProcessPlatform, "darwin"),
         Effect.provideService(HttpClient.HttpClient, refuseRequests),
       );
-      const limited = yield* readClaudeResetCredits(configDir, "2.1.0").pipe(
+      const limited = yield* ClaudeResetCredits.readClaudeResetCredits(configDir, "2.1.0").pipe(
         Effect.provideService(HostProcessPlatform, "linux"),
         Effect.provideService(HttpClient.HttpClient, respond(429, {})),
       );
@@ -142,7 +142,11 @@ const decodeClaimBody = Schema.decodeEffect(ClaimBody);
 const consume = (client: HttpClient.HttpClient, ids = { grantId: "grant_a", requestId: "r-1" }) =>
   Effect.gen(function* () {
     const login = yield* writeLogin;
-    return yield* consumeClaudeResetCredit({ ...login, version: "2.1.0", ...ids }).pipe(
+    return yield* ClaudeResetCredits.consumeClaudeResetCredit({
+      ...login,
+      version: "2.1.0",
+      ...ids,
+    }).pipe(
       Effect.provideService(HostProcessPlatform, "linux"),
       Effect.provideService(HttpClient.HttpClient, client),
       Effect.result,
@@ -192,13 +196,15 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
         expect(result).toMatchObject({ _tag: "Failure" });
         // Claude answered, so a retry must be a new claim.
         if (result._tag === "Failure") {
-          expect(isSettledClaudeResetCreditFailure(result.failure)).toBe(true);
+          expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(result.failure)).toBe(true);
         }
       }
       const unanswered = yield* consume(respond(500, {}));
       expect(unanswered).toMatchObject({ _tag: "Failure" });
       if (unanswered._tag === "Failure") {
-        expect(isSettledClaudeResetCreditFailure(unanswered.failure)).toBe(false);
+        expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(unanswered.failure)).toBe(
+          false,
+        );
       }
     }),
   );
@@ -214,7 +220,7 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
         });
         return Effect.succeed(response);
       });
-      const claim = yield* consumeClaudeResetCredit({
+      const claim = yield* ClaudeResetCredits.consumeClaudeResetCredit({
         ...login,
         version: "2.1.0",
         grantId: "grant_a",

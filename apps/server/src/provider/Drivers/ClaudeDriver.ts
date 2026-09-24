@@ -31,12 +31,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
 import { makeClaudeScopedLimitNames } from "../Layers/claudeUsageLimits.ts";
-import {
-  claudeAccountConfigPath,
-  consumeClaudeResetCredit,
-  isSettledClaudeResetCreditFailure,
-  readClaudeResetCredits,
-} from "../Layers/claudeResetCredits.ts";
+import * as ClaudeResetCredits from "../Layers/claudeResetCredits.ts";
 import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import {
   checkClaudeProviderStatus,
@@ -153,7 +148,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         processEnv,
       );
       const configDir = yield* resolveClaudeHomePath(effectiveConfig, processEnv);
-      const accountConfigPath = yield* claudeAccountConfigPath(
+      const accountConfigPath = yield* ClaudeResetCredits.claudeAccountConfigPath(
         effectiveConfig.homePath.trim() || processEnv.CLAUDE_CONFIG_DIR?.trim()
           ? configDir
           : undefined,
@@ -213,7 +208,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
                 resolveClaudeModelCatalog(manifest),
                 scopedLimitNames,
                 (version) =>
-                  readClaudeResetCredits(configDir, version).pipe(
+                  ClaudeResetCredits.readClaudeResetCredits(configDir, version).pipe(
                     Effect.provideService(HttpClient.HttpClient, httpClient),
                     Effect.provideService(FileSystem.FileSystem, fileSystem),
                     Effect.provideService(Path.Path, path),
@@ -287,14 +282,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           return yield* resetCreditCoordinator.redeem(
             configDir,
             (requestId) =>
-              consumeClaudeResetCredit({
+              ClaudeResetCredits.consumeClaudeResetCredit({
                 configDir,
                 accountConfigPath,
                 version,
                 grantId,
                 requestId,
               }),
-            isSettledClaudeResetCreditFailure,
+            ClaudeResetCredits.isSettledClaudeResetCreditFailure,
           );
         }).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),
