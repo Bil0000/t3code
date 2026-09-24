@@ -6285,16 +6285,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     completedAt: input.now,
   });
 
-  it.effect("fails honestly when rolling back a paginated Codex thread", () =>
+  it.effect("fails honestly when rolling back a legacy Codex thread", () =>
     Effect.gen(function* () {
-      const nativeThreadId = "paginated-rollback-thread";
+      const nativeThreadId = "legacy-rollback-thread";
       const preamble = codexReplayPreamble({
         nativeThreadId,
-        nativeTurnId: "paginated-rollback-turn",
+        nativeTurnId: "legacy-rollback-turn",
         prompt: "unused",
       });
       const transcript = makeCodexReplayTranscript({
-        scenario: "codex-paginated-rollback",
+        scenario: "codex-legacy-rollback",
         entries: [
           ...preamble.slice(0, 5),
           {
@@ -6311,7 +6311,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             label: "thread/read",
             frame: {
               id: 3,
-              result: { thread: { id: nativeThreadId, historyMode: "paginated" } },
+              result: { thread: { id: nativeThreadId, historyMode: "legacy" } },
             },
           },
         ],
@@ -6346,7 +6346,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           providerThread: harness.providerThread,
           target: {
             type: "provider_turn",
-            checkpointId: CheckpointId.make("checkpoint-paginated-rollback"),
+            checkpointId: CheckpointId.make("checkpoint-legacy-rollback"),
             appRunOrdinal: 1,
             providerTurn: firstTurn,
           },
@@ -6357,19 +6357,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       assert.instanceOf(error, ProviderAdapterRollbackThreadError);
       assert.include(
         errorCauseChainText(error),
-        "paginated",
-        "paginated rollback must surface an honest unsupported-history failure",
+        "legacy",
+        "legacy rollback must surface an honest unsupported-history failure",
       );
       assert.notInclude(
         outbound,
         "thread/rollback",
-        "thread/rollback must not be sent to a paginated Codex thread",
+        "thread/rollback must not be sent to a legacy Codex thread",
       );
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );
 
   it.effect(
-    "falls back to fork-local thread/rollback on legacy history when the source turn lacks a native reference",
+    "falls back to fork-local thread/revert on paginated history when the source turn lacks a native reference",
     () =>
       Effect.gen(function* () {
         const nativeThreadId = "fallback-source-thread";
@@ -6377,115 +6377,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const preamble = codexReplayPreamble({
           nativeThreadId,
           nativeTurnId: "fallback-source-turn",
-          prompt: "unused",
-        });
-        const transcript = makeCodexReplayTranscript({
-          scenario: "codex-fork-legacy-fallback",
-          entries: [
-            ...preamble.slice(0, 5),
-            {
-              type: "expect_outbound",
-              label: "thread/fork",
-              frame: { id: 3, method: "thread/fork", params: { threadId: nativeThreadId } },
-            },
-            {
-              type: "emit_inbound",
-              label: "thread/fork",
-              frame: {
-                id: 3,
-                result: codexReplayThreadResult({
-                  nativeThreadId: forkThreadId,
-                  forkedFromId: nativeThreadId,
-                }),
-              },
-            },
-            {
-              type: "expect_outbound",
-              label: "thread/read",
-              frame: {
-                id: 4,
-                method: "thread/read",
-                params: { threadId: forkThreadId, includeTurns: false },
-              },
-            },
-            {
-              type: "emit_inbound",
-              label: "thread/read",
-              frame: {
-                id: 4,
-                result: { thread: { id: forkThreadId, historyMode: "legacy" } },
-              },
-            },
-            {
-              type: "expect_outbound",
-              label: "thread/rollback",
-              frame: {
-                id: 5,
-                method: "thread/rollback",
-                params: { threadId: forkThreadId, numTurns: 1 },
-              },
-            },
-            {
-              type: "emit_inbound",
-              label: "thread/rollback",
-              frame: {
-                id: 5,
-                result: codexReplayThreadResult({
-                  nativeThreadId: forkThreadId,
-                  forkedFromId: null,
-                }),
-              },
-            },
-          ],
-        });
-        const outbound: Array<string> = [];
-        const harness = yield* makeCodexReplayHarness(
-          transcript,
-          () => Effect.void,
-          (method) =>
-            Effect.sync(() => {
-              outbound.push(method);
-            }),
-        );
-        const now = yield* DateTime.now;
-        const firstTurn = codexReplaySourceTurn({
-          id: "provider-turn-first",
-          ordinal: 1,
-          nativeId: null,
-          providerThreadId: harness.providerThread.id,
-          now,
-        });
-        const secondTurn = codexReplaySourceTurn({
-          id: "provider-turn-second",
-          ordinal: 2,
-          nativeId: "native-turn-second",
-          providerThreadId: harness.providerThread.id,
-          now,
-        });
-
-        const forkedProviderThread = yield* harness.runtime.forkThread({
-          sourceProviderThread: harness.providerThread,
-          sourceProviderTurns: [firstTurn, secondTurn],
-          providerTurnId: firstTurn.id,
-          targetThreadId: ThreadId.make("thread-fork-legacy-fallback-target"),
-        });
-
-        assert.equal(forkedProviderThread.nativeThreadRef?.nativeId, forkThreadId);
-        assert.notEqual(forkedProviderThread.id, harness.providerThread.id);
-        assert.equal(forkedProviderThread.forkedFrom?.providerTurnId, firstTurn.id);
-        assert.deepEqual(outbound.slice(-2), ["thread/fork", "thread/rollback"]);
-      }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
-  );
-
-  it.effect(
-    "fails honestly when a paginated fork cannot honor a source turn without a native reference",
-    () =>
-      Effect.gen(function* () {
-        const nativeThreadId = "paginated-fallback-source-thread";
-        const forkThreadId = "paginated-fallback-fork-thread";
-        const preamble = codexReplayPreamble({
-          nativeThreadId,
-          nativeTurnId: "paginated-fallback-source-turn",
           prompt: "unused",
         });
         const transcript = makeCodexReplayTranscript({
@@ -6525,6 +6416,141 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 result: { thread: { id: forkThreadId, historyMode: "paginated" } },
               },
             },
+            {
+              type: "expect_outbound",
+              label: "thread/turns/list",
+              frame: {
+                id: 5,
+                method: "thread/turns/list",
+                params: {
+                  threadId: forkThreadId,
+                  cursor: null,
+                  limit: 1,
+                  sortDirection: "desc",
+                  itemsView: "summary",
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "thread/turns/list",
+              frame: {
+                id: 5,
+                result: {
+                  data: [{ id: "native-turn-second", items: [], status: "completed", error: null }],
+                  nextCursor: null,
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "thread/revert",
+              frame: {
+                id: 6,
+                method: "thread/revert",
+                params: { threadId: forkThreadId, beforeTurnId: "native-turn-second" },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "thread/revert",
+              frame: {
+                id: 6,
+                result: codexReplayThreadResult({
+                  nativeThreadId: forkThreadId,
+                  forkedFromId: null,
+                }),
+              },
+            },
+          ],
+        });
+        const outbound: Array<string> = [];
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          () => Effect.void,
+          (method) =>
+            Effect.sync(() => {
+              outbound.push(method);
+            }),
+        );
+        const now = yield* DateTime.now;
+        const firstTurn = codexReplaySourceTurn({
+          id: "provider-turn-first",
+          ordinal: 1,
+          nativeId: null,
+          providerThreadId: harness.providerThread.id,
+          now,
+        });
+        const secondTurn = codexReplaySourceTurn({
+          id: "provider-turn-second",
+          ordinal: 2,
+          nativeId: "native-turn-second",
+          providerThreadId: harness.providerThread.id,
+          now,
+        });
+
+        const forkedProviderThread = yield* harness.runtime.forkThread({
+          sourceProviderThread: harness.providerThread,
+          sourceProviderTurns: [firstTurn, secondTurn],
+          providerTurnId: firstTurn.id,
+          targetThreadId: ThreadId.make("thread-fork-paginated-fallback-target"),
+        });
+
+        assert.equal(forkedProviderThread.nativeThreadRef?.nativeId, forkThreadId);
+        assert.notEqual(forkedProviderThread.id, harness.providerThread.id);
+        assert.equal(forkedProviderThread.forkedFrom?.providerTurnId, firstTurn.id);
+        assert.deepEqual(outbound.slice(-2), ["thread/turns/list", "thread/revert"]);
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+  );
+
+  it.effect(
+    "fails honestly when a legacy fork cannot honor a source turn without a native reference",
+    () =>
+      Effect.gen(function* () {
+        const nativeThreadId = "legacy-fallback-source-thread";
+        const forkThreadId = "legacy-fallback-fork-thread";
+        const preamble = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId: "legacy-fallback-source-turn",
+          prompt: "unused",
+        });
+        const transcript = makeCodexReplayTranscript({
+          scenario: "codex-fork-legacy-fallback",
+          entries: [
+            ...preamble.slice(0, 5),
+            {
+              type: "expect_outbound",
+              label: "thread/fork",
+              frame: { id: 3, method: "thread/fork", params: { threadId: nativeThreadId } },
+            },
+            {
+              type: "emit_inbound",
+              label: "thread/fork",
+              frame: {
+                id: 3,
+                result: codexReplayThreadResult({
+                  nativeThreadId: forkThreadId,
+                  forkedFromId: nativeThreadId,
+                }),
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "thread/read",
+              frame: {
+                id: 4,
+                method: "thread/read",
+                params: { threadId: forkThreadId, includeTurns: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "thread/read",
+              frame: {
+                id: 4,
+                result: { thread: { id: forkThreadId, historyMode: "legacy" } },
+              },
+            },
           ],
         });
         const outbound: Array<string> = [];
@@ -6557,20 +6583,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             sourceProviderThread: harness.providerThread,
             sourceProviderTurns: [firstTurn, secondTurn],
             providerTurnId: firstTurn.id,
-            targetThreadId: ThreadId.make("thread-fork-paginated-fallback-target"),
+            targetThreadId: ThreadId.make("thread-fork-legacy-fallback-target"),
           }),
         );
 
         assert.instanceOf(error, ProviderAdapterForkThreadError);
         assert.include(
           errorCauseChainText(error),
-          "paginated",
-          "the missing-native-reference fallback must name the paginated limitation",
+          "legacy",
+          "the missing-native-reference fallback must name the legacy limitation",
         );
         assert.notInclude(
           outbound,
           "thread/rollback",
-          "thread/rollback must not be sent to a paginated Codex fork",
+          "thread/rollback must not be sent to a legacy Codex fork",
         );
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
   );

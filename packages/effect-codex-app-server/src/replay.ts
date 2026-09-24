@@ -281,11 +281,11 @@ function normalizeLegacyInboundFrame(value: unknown): unknown {
   );
   if (
     typeof normalized.id === "string" &&
-    normalized.sessionId === undefined &&
     "modelProvider" in normalized &&
     "status" in normalized
   ) {
-    normalized.sessionId = normalized.id;
+    if (normalized.sessionId === undefined) normalized.sessionId = normalized.id;
+    if (normalized.projectId === undefined) normalized.projectId = null;
   }
   if (
     (normalized.method === "item/started" || normalized.method === "item/completed") &&

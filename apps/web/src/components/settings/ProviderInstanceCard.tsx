@@ -904,7 +904,7 @@ export function ProviderInstanceCard({
             <PopoverPopup side="bottom" align="end" width="md">
               <div className="grid min-w-0 gap-3">
                 <div className="grid gap-0.5">
-                  <p className="text-[13px] font-semibold leading-tight text-foreground">
+                  <p className="text-sm font-semibold leading-tight text-foreground">
                     {versionAdvisory.title}
                   </p>
                   <p
@@ -936,7 +936,7 @@ export function ProviderInstanceCard({
                   </Button>
                 ) : null}
                 {onRunVersionAction && updateCommand ? (
-                  <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <div className="flex items-center gap-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
                     <span aria-hidden className="h-px flex-1 bg-border" />
                     or, update manually using
                     <span aria-hidden className="h-px flex-1 bg-border" />
@@ -944,7 +944,7 @@ export function ProviderInstanceCard({
                 ) : null}
                 {updateCommand ? (
                   <div className="flex min-w-0 items-center gap-1 rounded-md border border-border/70 bg-muted/40 py-0.5 pr-0.5 pl-2">
-                    <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
+                    <code className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground">
                       {updateCommand}
                     </code>
                     <Tooltip>
@@ -1007,7 +1007,7 @@ export function ProviderInstanceCard({
               {urlAuthAction && onAcceptUrlAuth ? (
                 <div className="grid max-w-xl gap-1.5 pt-1 text-xs">
                   <p>{urlAuthAction.message}</p>
-                  <code className="break-all text-[11px]">{urlAuthAction.url}</code>
+                  <code className="break-all text-2xs">{urlAuthAction.url}</code>
                   <Button
                     render={
                       <a

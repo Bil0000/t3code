@@ -118,6 +118,17 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --workspace-titlebar-scroll-fade-height: 1.5rem;
   --chat-content-max-width: 46rem;
   --thread-details-panel-width: 19.5rem;
+  /* The prompt on phones: iOS zooms into any input under 16px on focus. */
+  --font-size-prompt-touch: max(var(--font-size-prompt, 1rem), 16px);
+  /* Horizontal gutter shared by the page header and the chat column, clear of
+     the device's safe area. */
+  --workspace-gutter: 0.75rem;
+  --workspace-gutter-start: calc(env(safe-area-inset-left) + var(--workspace-gutter));
+  --workspace-gutter-end: calc(env(safe-area-inset-right) + var(--workspace-gutter));
+
+  @variant sm {
+    --workspace-gutter: 1.25rem;
+  }
 
   @variant dark {
     --appearance-contrast-target: white;
@@ -160,6 +171,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --text-3xs--line-height: calc(0.875 / 0.625);
   /* Motion. drawer is the decelerating curve for surfaces that slide or pop in
      (composer context, pills). */
+  --inset-shadow-control-highlight: 0 1px rgb(255 255 255 / 16%);
+  --inset-shadow-control-pressed: 0 1px rgb(0 0 0 / 8%);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   /* The composer's elevation: a soft drop pulled in under the surface, shared
      by the composer, its context strip and attached banners. */
@@ -229,6 +242,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-popover: var(--popover);
   --color-card-foreground: var(--contrast-card-foreground);
   --color-card: var(--card);
+  --color-code: var(--code-background);
+  --color-code-foreground: var(--code-foreground);
   --color-foreground: var(--contrast-foreground);
   --color-background: var(--background);
   --color-surface-raised: var(--surface-raised);
@@ -1992,40 +2007,6 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* Prompt-stash save acknowledgement: the new count fades up from just below
-   its resting position, once, then stops. One-shot and event-driven (React
-   remounts the element by key on each stash) — no continuous animation. */
-@keyframes prompt-stash-count-enter {
-  from {
-    opacity: 0;
-    transform: translateY(2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Expanded capture preview swaps between the screenshot and its extracted text.
-   One-shot fade on whichever panel mounts, so nothing repaints continuously. */
-@keyframes snap-shot-contents-enter {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes provider-update-pill-countdown {
-  from {
-    transform: scaleX(1);
-  }
-  to {
-    transform: scaleX(0);
-  }
-}
-
 :root {
   --diff-addition: var(--success);
   --diff-deletion: var(--destructive);
@@ -2301,4 +2282,9 @@ code {
       );
     }
   }
+}
+
+/* Instance labels must fit inside the sidebar’s 12px provider badge. */
+.provider-stack-badge-text {
+  font-size: 7px;
 }

@@ -368,7 +368,7 @@ export function ThreadPullRequestsMiniList({
             onOpenPullRequest={onOpenPullRequest}
           >
             {line.stack ? (
-              <span className="ml-auto shrink-0 pl-1 text-[10px]">
+              <span className="ml-auto shrink-0 pl-1 text-3xs">
                 {line.stack.kind === "native" ? "stack" : "chain"} · {line.stack.size}
               </span>
             ) : null}

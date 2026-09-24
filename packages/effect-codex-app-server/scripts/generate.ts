@@ -17,7 +17,7 @@ import {
 } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-const UPSTREAM_REF = "678157acaa819d5510adfe359abb5d0392cfe461";
+const UPSTREAM_REF = "fe74a774532af67b5a4a3dec03ce9469e17f89af";
 const USER_AGENT = "effect-codex-app-server-generator";
 const GITHUB_API_BASE =
   "https://api.github.com/repos/openai/codex/contents/codex-rs/app-server-protocol";
@@ -163,8 +163,13 @@ const ensureGeneratedDir = Effect.fn("ensureGeneratedDir")(function* () {
 });
 
 const fetchText = Effect.fn("fetchText")(function* (url: string) {
+  // Unauthenticated GitHub API calls are capped at 60/hour; set GITHUB_TOKEN to lift that.
+  const token = process.env.GITHUB_TOKEN;
   return yield* HttpClientRequest.get(url).pipe(
     HttpClientRequest.setHeader("user-agent", USER_AGENT),
+    token && url.startsWith("https://api.github.com/")
+      ? HttpClientRequest.bearerToken(token)
+      : (request) => request,
     HttpClient.execute,
     Effect.flatMap(HttpClientResponse.filterStatusOk),
     Effect.flatMap((okResponse) => okResponse.text),

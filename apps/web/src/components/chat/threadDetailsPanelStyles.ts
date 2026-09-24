@@ -45,7 +45,3 @@ export const THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS = `h-9 min-w-0 flex-1 just
 export const THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS = `h-9 w-8 rounded-s-none border-transparent bg-transparent px-0 sm:h-9 sm:w-8 ${THREAD_DETAILS_PANEL_SPLIT_BUTTON_SURFACE_CLASS}`;
 
 export const THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS = "h-4 w-px shrink-0 bg-border/65";
-
-export const THREAD_DETAILS_PANEL_ROW_POPUP_CLASS = "w-(--anchor-width)";
-
-export const THREAD_DETAILS_PANEL_MENU_POPUP_CLASS = "min-w-60 max-w-(--available-width)";
