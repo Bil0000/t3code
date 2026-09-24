@@ -235,6 +235,7 @@ it("shows readable models and only differing workspace details in agent tooltips
       {
         id: "agent",
         childThreadId: "child",
+        origin: "app_owned",
         driver: "codex",
         providerInstanceId: "codex",
         title: "Worker",
@@ -263,6 +264,15 @@ it("shows readable models and only differing workspace details in agent tooltips
       .flatMap((node) => node.children.filter((child) => typeof child === "string"))
       .join("");
   expect(text()).toContain("My GPT · high");
+  state.projection = {
+    ...projection,
+    subagents: [{ ...projection.subagents[0], origin: "provider_native" }],
+  };
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).toContain("My GPT");
+  expect(text()).not.toContain("My GPT · high");
+  state.projection = projection;
+  await act(async () => renderer.update(cloneElement(panel)));
   expect(text()).not.toContain("Tokens");
   expect(text()).not.toContain("Open subagent");
   expect(text()).not.toContain("Project");

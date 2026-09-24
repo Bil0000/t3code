@@ -16,6 +16,7 @@ import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subage
 import {
   ProviderDriverKind,
   type OrchestrationV2TurnItem,
+  type OrchestrationV2Subagent,
   type ProviderInstanceId,
   type ServerProvider,
   type ThreadId,
@@ -212,6 +213,7 @@ export function V2LifecycleRow(props: {
         parentRef={scopeThreadRef(props.environmentId, item.threadId)}
         subagentId={item.subagentId}
         providerInstanceId={item.providerInstanceId}
+        origin={item.origin}
         status={item.status}
         driver={item.driver}
         provider={props.providerStatuses.find(
@@ -331,6 +333,7 @@ function SubagentTimelineLink(props: {
   readonly parentRef: ScopedThreadRef;
   readonly subagentId: NodeId;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly origin: OrchestrationV2Subagent["origin"];
   readonly driver: ProviderDriverKind;
   readonly provider: ServerProvider | undefined;
   readonly title: string;
@@ -465,6 +468,7 @@ function SubagentTimelineTooltip(
       title={formatSubagentDisplayTitle(child?.title ?? props.title)}
       model={props.model}
       providerInstanceId={props.providerInstanceId}
+      origin={props.origin}
       provider={props.provider}
       driver={props.driver}
       elapsed={props.elapsed}
