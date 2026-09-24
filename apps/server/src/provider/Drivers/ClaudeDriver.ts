@@ -310,6 +310,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           Effect.tap(() =>
             Effect.gen(function* () {
               const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
+              yield* Cache.invalidateAll(capabilitiesProbeCache);
               const refreshed = yield* snapshot.refresh;
               const after = refreshed.usageLimits?.checkedAt;
               if (

@@ -178,6 +178,7 @@ const makeTildeProviderFixtures = Effect.fn(
     claudePath,
     [
       "#!/usr/bin/env node",
+      'import { existsSync } from "node:fs";',
       'import * as NodeReadline from "node:readline";',
       'if (process.argv.includes("--version")) {',
       '  process.stdout.write("claude 2.1.219\\n");',
@@ -186,7 +187,19 @@ const makeTildeProviderFixtures = Effect.fn(
       "const lines = NodeReadline.createInterface({ input: process.stdin });",
       'lines.on("line", (line) => {',
       "  const message = JSON.parse(line);",
-      '  if (message.type !== "control_request" || message.request?.subtype !== "initialize") return;',
+      '  if (message.type !== "control_request") return;',
+      '  if (message.request?.subtype === "get_usage") {',
+      "    const marker = process.env.T3_CLAUDE_RESET_MARKER;",
+      "    process.stdout.write(JSON.stringify({",
+      '      type: "control_response",',
+      '      response: { subtype: "success", request_id: message.request_id, response: {',
+      '        session: {}, subscription_type: "pro", rate_limits_available: true,',
+      "        rate_limits: { five_hour: { utilization: marker && existsSync(marker) ? 0 : 100, resets_at: null } },",
+      "      } },",
+      '    }) + "\\n");',
+      "    return;",
+      "  }",
+      '  if (message.request?.subtype !== "initialize") return;',
       "  process.stdout.write(JSON.stringify({",
       '    type: "control_response",',
       "    response: {",
@@ -427,6 +440,67 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
         installed: true,
         version: "2.1.219",
       });
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("refreshes Claude usage after redeeming a reset", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const fixtures = yield* makeTildeProviderFixtures();
+      const marker = path.join(fixtures.claudeHomePath, "redeemed");
+      yield* fs.writeFileString(
+        path.join(fixtures.claudeHomePath, ".credentials.json"),
+        '{"claudeAiOauth":{"accessToken":"fake-token"}}',
+      );
+      yield* fs.writeFileString(
+        path.join(fixtures.claudeHomePath, ".claude.json"),
+        '{"oauthAccount":{"organizationUuid":"fake-org"}}',
+      );
+      const client = HttpClient.make((request) =>
+        Effect.gen(function* () {
+          if (request.url.endsWith("/api/oauth/usage")) {
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                cedar_ember: {
+                  eligible: true,
+                  next_grant_id: "grant_a",
+                  grants: [{ id: "grant_a", resets_left: 1, usable_now: true }],
+                },
+              }),
+            );
+          }
+          if (request.url.endsWith("/reset_rate_limits")) {
+            yield* fs.writeFileString(marker, "redeemed").pipe(Effect.orDie);
+            return HttpClientResponse.fromWeb(request, Response.json({ result: "reset" }));
+          }
+          return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
+        }),
+      );
+      const instanceId = ProviderInstanceId.make("claude_reset");
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [ClaudeDriver],
+        configMap: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            environment: [{ name: "T3_CLAUDE_RESET_MARKER", value: marker, sensitive: false }],
+            config: makeClaudeConfig({
+              enabled: true,
+              binaryPath: fixtures.claudeBinaryPath,
+              homePath: fixtures.claudeHomePath,
+            }),
+          },
+        },
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+      const instance = yield* registry.getInstance(instanceId);
+      expect(instance).toBeDefined();
+      const before = yield* instance!.snapshot.refresh;
+      expect(before.usageLimits?.windows[0]?.usedPercent).toBe(100);
+      expect(before.usageLimits?.resetCredits?.nextCreditId).toBe("grant_a");
+      expect(yield* instance!.consumeResetCredit!()).toBe("reset");
+      expect((yield* instance!.snapshot.getSnapshot).usageLimits?.windows[0]?.usedPercent).toBe(0);
     }).pipe(Effect.provide(testLayer)),
   );
 
