@@ -2741,6 +2741,9 @@ export function makeClaudeAdapterV2(
               readonly status: OrchestrationV2Subagent["status"];
               /** True only once the member's own transcript supplied the answer. */
               readonly answeredFromTranscript: boolean;
+              readonly transcriptReadAttempts: number;
+              readonly finalTranscriptRead: boolean;
+              readonly result: string | undefined;
               /** First instant this member was seen, so settling cannot restamp it. */
               readonly startedAt: DateTime.Utc;
             }
@@ -3517,8 +3520,18 @@ export function makeClaudeAdapterV2(
                 ? input.coordinator.task.status
                 : member.state;
             const settled = status !== "running";
-            const awaitingTranscript = settled && previous?.answeredFromTranscript !== true;
-            if (previous?.status === status && !awaitingTranscript) continue;
+            const changed = previous?.status !== status || previous?.result !== member.result;
+            const canReadTranscript =
+              input.workflow.runHandles?.transcriptDir !== undefined &&
+              member.agentId !== undefined;
+            const readTranscript =
+              settled &&
+              canReadTranscript &&
+              previous?.answeredFromTranscript !== true &&
+              (input.coordinator.task.status === "running"
+                ? (previous?.transcriptReadAttempts ?? 0) < 3
+                : previous?.finalTranscriptRead !== true);
+            if (!changed && !readTranscript) continue;
             const startedAt = previous?.startedAt ?? now;
 
             const nodeId = idAllocator.derive.nodeFromProviderItem({
@@ -3600,54 +3613,63 @@ export function makeClaudeAdapterV2(
               startedAt,
               completedAt: settled ? now : null,
             };
-            for (const node of [
-              {
-                ...nodeBase,
-                id: nodeId,
-                threadId: parentThread.id,
-                parentNodeId: input.coordinator.childRootNodeId,
-                rootNodeId: input.coordinator.childRootNodeId,
-                kind: "subagent" as const,
-              },
-              {
-                ...nodeBase,
-                id: childRootNodeId,
-                threadId: childThreadId,
-                parentNodeId: null,
-                rootNodeId: childRootNodeId,
-                kind: "root_turn" as const,
-              },
-            ]) {
-              yield* emitProviderEvent({ type: "node.updated", driver: CLAUDE_PROVIDER, node });
+            if (changed) {
+              for (const node of [
+                {
+                  ...nodeBase,
+                  id: nodeId,
+                  threadId: parentThread.id,
+                  parentNodeId: input.coordinator.childRootNodeId,
+                  rootNodeId: input.coordinator.childRootNodeId,
+                  kind: "subagent" as const,
+                },
+                {
+                  ...nodeBase,
+                  id: childRootNodeId,
+                  threadId: childThreadId,
+                  parentNodeId: null,
+                  rootNodeId: childRootNodeId,
+                  kind: "root_turn" as const,
+                },
+              ]) {
+                yield* emitProviderEvent({ type: "node.updated", driver: CLAUDE_PROVIDER, node });
+              }
+              yield* emitProviderEvent({
+                type: "subagent.updated",
+                driver: CLAUDE_PROVIDER,
+                subagent: task,
+              });
             }
-
-            yield* emitProviderEvent({
-              type: "subagent.updated",
-              driver: CLAUDE_PROVIDER,
-              subagent: task,
-            });
 
             // The transcript is the real answer; the capped excerpt stands in
             // until the harness has flushed it. Message ids are derived from the
             // turn index, so a later transcript read overwrites the excerpt in
             // place rather than appending a second answer.
             let answeredFromTranscript = previous?.answeredFromTranscript === true;
-            if (settled && !answeredFromTranscript) {
+            if (settled && !answeredFromTranscript && (changed || readTranscript)) {
               // The member's own transcript, when the run left one: a missing or
               // unreadable file is expected (a run predating run-handle capture,
               // a member that never started) and falls back to the excerpt.
               const transcriptDir = input.workflow.runHandles?.transcriptDir;
               const transcript =
-                transcriptDir === undefined || member.agentId === undefined
+                !readTranscript || transcriptDir === undefined || member.agentId === undefined
                   ? []
                   : yield* readWorkflowAgentAnswers({
                       transcriptDir,
                       agentId: member.agentId,
+                      ...(adapterOptions.environment.CLAUDE_CONFIG_DIR === undefined
+                        ? {}
+                        : {
+                            configDir: path.resolve(
+                              session.cwd,
+                              adapterOptions.environment.CLAUDE_CONFIG_DIR,
+                            ),
+                          }),
                     }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
               answeredFromTranscript = transcript.length > 0;
               const turns = answeredFromTranscript
                 ? transcript
-                : member.result === undefined
+                : member.result === undefined || !changed
                   ? []
                   : [`Partial answer from workflow progress:\n\n${member.result}`];
               for (const [index, answer] of turns.entries()) {
@@ -3665,7 +3687,17 @@ export function makeClaudeAdapterV2(
             }
 
             yield* Ref.update(workflowMemberStates, (current) =>
-              new Map(current).set(memberKey, { status, answeredFromTranscript, startedAt }),
+              new Map(current).set(memberKey, {
+                status,
+                result: member.result,
+                answeredFromTranscript,
+                transcriptReadAttempts:
+                  (previous?.transcriptReadAttempts ?? 0) + (readTranscript ? 1 : 0),
+                finalTranscriptRead:
+                  previous?.finalTranscriptRead === true ||
+                  (readTranscript && input.coordinator.task.status !== "running"),
+                startedAt,
+              }),
             );
           }
         });

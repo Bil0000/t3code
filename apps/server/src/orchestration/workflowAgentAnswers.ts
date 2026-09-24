@@ -72,7 +72,11 @@ export function parseWorkflowAgentAnswers(contents: string): ReadonlyArray<strin
 }
 
 export const readWorkflowAgentAnswers = Effect.fn("orchestration.readWorkflowAgentAnswers")(
-  function* (input: { readonly transcriptDir: string; readonly agentId: string }) {
+  function* (input: {
+    readonly transcriptDir: string;
+    readonly agentId: string;
+    readonly configDir?: string;
+  }) {
     if (!AGENT_ID_PATTERN.test(input.agentId)) {
       return yield* Effect.fail(
         new OrchestrationWorkflowFileError({ reason: "invalid-path", path: input.agentId }),
@@ -83,6 +87,7 @@ export const readWorkflowAgentAnswers = Effect.fn("orchestration.readWorkflowAge
       extension: ".jsonl",
       byteCap: TRANSCRIPT_BYTE_CAP,
       tail: true,
+      ...(input.configDir === undefined ? {} : { configDir: input.configDir }),
     });
     return parseWorkflowAgentAnswers(
       file.truncated ? file.contents.slice(file.contents.indexOf("\n") + 1) : file.contents,

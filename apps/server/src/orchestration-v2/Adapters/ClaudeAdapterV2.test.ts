@@ -7150,6 +7150,42 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           threadMessages(harness.events, secondThreadId).map((event) => event.message.text),
           ["Reply with exactly: A2", "Partial answer from workflow progress:\n\nA2 excerpt"],
         );
+        const coordinatorEventsBeforeRepeat = workflowCoordinatorEvents(harness.events).length;
+        const memberEventsBeforeRepeat = workflowMemberEvents(harness.events, 2).length;
+        yield* Queue.offer(
+          harness.sdkMessages,
+          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001015", state: "done" }),
+        );
+        yield* awaitUntil(
+          () => workflowCoordinatorEvents(harness.events).length > coordinatorEventsBeforeRepeat,
+          "repeated settled workflow snapshot",
+        );
+        assert.lengthOf(workflowMemberEvents(harness.events, 2), memberEventsBeforeRepeat);
+        assert.lengthOf(threadMessages(harness.events, secondThreadId), 2);
+        NodeFS.writeFileSync(
+          NodePath.join(workflowTranscriptDir, "agent-a2.jsonl"),
+          `${JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              id: "msg_a2",
+              content: [{ type: "text", text: "A2 from the transcript" }],
+            },
+          })}\n`,
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001016", state: "done" }),
+        );
+        yield* awaitUntil(
+          () => threadMessages(harness.events, secondThreadId).length === 3,
+          "late workflow transcript answer",
+        );
+        assert.lengthOf(workflowMemberEvents(harness.events, 2), memberEventsBeforeRepeat);
+        assert.equal(
+          threadMessages(harness.events, secondThreadId).at(-1)?.message.text,
+          "A2 from the transcript",
+        );
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );

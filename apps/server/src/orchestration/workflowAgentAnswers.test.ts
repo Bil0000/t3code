@@ -84,6 +84,25 @@ afterAll(() => {
 });
 
 describe("readWorkflowAgentAnswers", () => {
+  effectIt.effect("reads transcripts from a configured Claude directory", () =>
+    Effect.gen(function* () {
+      const configDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "wf-config-"));
+      try {
+        const transcriptDir = NodePath.join(configDir, "projects", "test");
+        NodeFS.mkdirSync(transcriptDir, { recursive: true });
+        NodeFS.writeFileSync(
+          NodePath.join(transcriptDir, "agent-custom.jsonl"),
+          assistant("custom", [{ type: "text", text: "custom answer" }]),
+        );
+        expect(
+          yield* readWorkflowAgentAnswers({ transcriptDir, agentId: "custom", configDir }),
+        ).toEqual(["custom answer"]);
+      } finally {
+        NodeFS.rmSync(configDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
   // The under-cap case is the control: without it a read stuck on [] would pass.
   effectIt.effect("reads final answers from both small and capped transcripts", () =>
     Effect.gen(function* () {
