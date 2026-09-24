@@ -8,12 +8,12 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
-layer("054_OrchestrationV2", (it) => {
+layer("055_OrchestrationV2", (it) => {
   it.effect("keeps released migrations contiguous", () =>
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 55 }, (_, index) => index + 1),
+        Array.from({ length: 56 }, (_, index) => index + 1),
       );
     }),
   );
@@ -25,8 +25,9 @@ layer("054_OrchestrationV2", (it) => {
 
       const executed = yield* runMigrations();
       assert.deepStrictEqual(executed, [
-        [54, "OrchestrationV2"],
-        [55, "RemoveRedundantProjectionIndexes"],
+        [54, "ProjectionThreadsAutoSettleDisabledAt"],
+        [55, "OrchestrationV2"],
+        [56, "RemoveRedundantProjectionIndexes"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -46,8 +47,9 @@ layer("054_OrchestrationV2", (it) => {
         { migration_id: 51, name: "ProjectionThreadMessageContext" },
         { migration_id: 52, name: "ProjectionThreadTitleState" },
         { migration_id: 53, name: "PullRequestFilesViewed" },
-        { migration_id: 54, name: "OrchestrationV2" },
-        { migration_id: 55, name: "RemoveRedundantProjectionIndexes" },
+        { migration_id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
+        { migration_id: 55, name: "OrchestrationV2" },
+        { migration_id: 56, name: "RemoveRedundantProjectionIndexes" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

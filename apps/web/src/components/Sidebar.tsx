@@ -1483,6 +1483,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           : shouldRecede
             ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+    // Background work fades as a whole row, status label included, so it
+    // takes less attention than rows that need a human (input, approval).
+    shouldRecede &&
+      status === "working" &&
+      "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
     isFileDragOver && "ring-1 ring-inset ring-primary/70",
     isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
     // The lifted row is an opaque card so the rows beneath it never show
@@ -2224,6 +2229,7 @@ export default function Sidebar() {
     pinThread,
     unpinThread,
     confirmAndUnpinThread,
+    setThreadAutoSettle,
     reorderPinnedThread,
     reorderActiveThread,
     markThreadUnread,
@@ -4373,6 +4379,7 @@ export default function Sidebar() {
       projectByKey,
       serverConfigs,
       setProjectScopeKey,
+      setThreadAutoSettle,
       startThreadRename,
       updateThreadMetadata,
       timestampFormat,

@@ -92,6 +92,10 @@ interface HomeScreenProps {
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onPinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly onSetThreadAutoSettle: (
+    thread: EnvironmentThreadShell,
+    enabled: boolean,
+  ) => Promise<boolean>;
   readonly onMoveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
@@ -437,6 +441,7 @@ export function HomeScreen(props: HomeScreenProps) {
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     pinningEnvironmentIds,
+    autoSettleOptOutEnvironmentIds,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
@@ -667,6 +672,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onSettleThread={handleSettleThread}
           snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
           pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
+          autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
           reorderSupported={
             item.item.pinned
               ? pinReorderEnvironmentIds.has(thread.environmentId)
@@ -679,6 +685,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onUnsettleThread={handleUnsettleThread}
           onPinThread={handlePinThread}
           onUnpinThread={handleUnpinThread}
+          onSetThreadAutoSettle={handleSetThreadAutoSettle}
           onMoveThread={handleMoveThread}
           onSwipeableClose={handleSwipeableClose}
           onSwipeableWillOpen={handleSwipeableWillOpen}
@@ -702,6 +709,7 @@ export function HomeScreen(props: HomeScreenProps) {
       handleSetThreadAutoSettle,
       autoSettleOptOutEnvironmentIds,
       pinningEnvironmentIds,
+      autoSettleOptOutEnvironmentIds,
       machineByEnvironmentId,
       pinReorderEnvironmentIds,
       projectByKey,

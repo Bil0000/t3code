@@ -109,6 +109,18 @@ function topOfPinnedRunOrderKey(): string | undefined {
   return pinOrderKeyBetween(null, firstKey) ?? undefined;
 }
 
+export class ThreadAutoSettleOptOutUnsupportedError extends Schema.TaggedError<ThreadAutoSettleOptOutUnsupportedError>()(
+  "ThreadAutoSettleOptOutUnsupportedError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.";
+  }
+}
+
 export class ThreadPinningUnsupportedError extends Schema.TaggedError<ThreadPinningUnsupportedError>()(
   "ThreadPinningUnsupportedError",
   {
@@ -930,6 +942,7 @@ export function useThreadActions() {
       reorderPinnedThread,
       reorderActiveThread,
       markThreadUnread,
+      setThreadAutoSettle,
     }),
     [
       archiveThread,
@@ -940,6 +953,7 @@ export function useThreadActions() {
       pinThread,
       reorderPinnedThread,
       reorderActiveThread,
+      setThreadAutoSettle,
       settleThread,
       snoozeThread,
       unarchiveThread,

@@ -854,6 +854,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.auto-settle.set": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Idempotent by re-emission (see thread.unpin): setting the current
+      // state again keeps the existing timestamps so duplicates do not churn
+      // ordering. The flag is independent of the settled lifecycle: it only
+      // gates the automatic paths, so it never blocks a manual settle.
+      const currentlyDisabledAt = thread.autoSettleDisabledAt ?? null;
+      const unchanged = command.enabled
+        ? currentlyDisabledAt === null
+        : currentlyDisabledAt !== null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.auto-settle-set",
+        payload: {
+          threadId: command.threadId,
+          autoSettleDisabledAt: command.enabled ? null : (currentlyDisabledAt ?? occurredAt),
+          updatedAt: unchanged ? thread.updatedAt : occurredAt,
+        },
+      };
+    }
+
     case "thread.active.reorder": {
       const thread = yield* requireThreadNotArchived({
         readModel,
