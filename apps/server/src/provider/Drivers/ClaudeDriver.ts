@@ -307,16 +307,19 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
                 cause,
               }),
           ),
-          Effect.tap(() =>
+          // Re-probe after any answer, but only a reset claims the limits
+          // changed, so only a reset reports an unconfirmed refresh.
+          Effect.tap((outcome) =>
             Effect.gen(function* () {
               const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
               yield* Cache.invalidateAll(capabilitiesProbeCache);
               const refreshed = yield* snapshot.refresh;
               const after = refreshed.usageLimits?.checkedAt;
               if (
-                after === undefined ||
-                after === before ||
-                refreshed.usageLimits?.unavailable?.reason === "probeFailed"
+                outcome === "reset" &&
+                (after === undefined ||
+                  after === before ||
+                  refreshed.usageLimits?.unavailable?.reason === "probeFailed")
               ) {
                 return yield* new ProviderDriverError({
                   driver: DRIVER_KIND,

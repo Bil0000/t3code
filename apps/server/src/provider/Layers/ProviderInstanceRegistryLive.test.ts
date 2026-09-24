@@ -190,6 +190,13 @@ const makeTildeProviderFixtures = Effect.fn(
       '  if (message.type !== "control_request") return;',
       '  if (message.request?.subtype === "get_usage") {',
       "    const marker = process.env.T3_CLAUDE_RESET_MARKER;",
+      "    if (process.env.T3_CLAUDE_USAGE_FAILS_AFTER_CLAIM && marker && existsSync(marker)) {",
+      "      process.stdout.write(JSON.stringify({",
+      '        type: "control_response",',
+      '        response: { subtype: "error", request_id: message.request_id, error: "usage failed" },',
+      '      }) + "\\n");',
+      "      return;",
+      "    }",
       "    process.stdout.write(JSON.stringify({",
       '      type: "control_response",',
       '      response: { subtype: "success", request_id: message.request_id, response: {',
@@ -443,7 +450,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it.live("refreshes Claude usage after redeeming a reset", () =>
+  const redeemClaudeReset = (claim: { result: string; usageFailsAfterClaim: boolean }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -473,7 +480,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
           }
           if (request.url.endsWith("/reset_rate_limits")) {
             yield* fs.writeFileString(marker, "redeemed").pipe(Effect.orDie);
-            return HttpClientResponse.fromWeb(request, Response.json({ result: "reset" }));
+            return HttpClientResponse.fromWeb(request, Response.json({ result: claim.result }));
           }
           return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
         }),
@@ -485,7 +492,12 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
           [instanceId]: {
             driver: ProviderDriverKind.make("claudeAgent"),
             enabled: true,
-            environment: [{ name: "T3_CLAUDE_RESET_MARKER", value: marker, sensitive: false }],
+            environment: [
+              { name: "T3_CLAUDE_RESET_MARKER", value: marker, sensitive: false },
+              ...(claim.usageFailsAfterClaim
+                ? [{ name: "T3_CLAUDE_USAGE_FAILS_AFTER_CLAIM", value: "1", sensitive: false }]
+                : []),
+            ],
             config: makeClaudeConfig({
               enabled: true,
               binaryPath: fixtures.claudeBinaryPath,
@@ -499,9 +511,29 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
       const before = yield* instance!.snapshot.refresh;
       expect(before.usageLimits?.windows[0]?.usedPercent).toBe(100);
       expect(before.usageLimits?.resetCredits?.nextCreditId).toBe("grant_a");
-      expect(yield* instance!.consumeResetCredit!()).toBe("reset");
-      expect((yield* instance!.snapshot.getSnapshot).usageLimits?.windows[0]?.usedPercent).toBe(0);
-    }).pipe(Effect.provide(testLayer)),
+      const outcome = yield* instance!.consumeResetCredit!().pipe(Effect.result);
+      return { outcome, after: yield* instance!.snapshot.getSnapshot };
+    }).pipe(Effect.provide(testLayer));
+
+  it.live("refreshes Claude usage after redeeming a reset", () =>
+    Effect.gen(function* () {
+      const { outcome, after } = yield* redeemClaudeReset({
+        result: "reset",
+        usageFailsAfterClaim: false,
+      });
+      expect(outcome).toMatchObject({ _tag: "Success", success: "reset" });
+      expect(after.usageLimits?.windows[0]?.usedPercent).toBe(0);
+    }),
+  );
+
+  it.live("reports Claude's answer when a claim changed nothing and the re-probe fails", () =>
+    Effect.gen(function* () {
+      const { outcome } = yield* redeemClaudeReset({
+        result: "already_used",
+        usageFailsAfterClaim: true,
+      });
+      expect(outcome).toMatchObject({ _tag: "Success", success: "alreadyRedeemed" });
+    }),
   );
 
   it.live(
