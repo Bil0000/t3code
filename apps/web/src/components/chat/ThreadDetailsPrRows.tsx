@@ -97,9 +97,9 @@ export function ThreadDetailsPrRows({
         className="w-full active:scale-100"
       >
         {expanded ? (
-          <MinusIcon aria-hidden className="-mx-0.5 size-4 shrink-0" />
+          <MinusIcon aria-hidden className="size-4 shrink-0" />
         ) : (
-          <PlusIcon aria-hidden className="-mx-0.5 size-4 shrink-0" />
+          <PlusIcon aria-hidden className="size-4 shrink-0" />
         )}
         {expanded ? "Show less" : `Show ${rest.length} more`}
       </ThreadDetailsControl>
