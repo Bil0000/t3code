@@ -76,7 +76,7 @@ export const prepareContextHandoffs = Effect.fn("orchestrationV2.prepareContextH
 
 /** Persist before/after injection: an ambiguous pending delivery requires a fresh native thread. */
 export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextHandoffs")(
-  function* <InjectError, PersistError, BudgetError = never>(
+  function* <InjectError = never, PersistError = never, BudgetError = never>(
     input: ContextHandoffInput<BudgetError> & {
       readonly inject?: (
         history: ProviderAdapterV2HistoricalContext,
