@@ -9903,7 +9903,7 @@ export default function ChatView(props: ChatViewProps) {
                       agentPanelModel,
                       onOpenAgents: addAgentsSurface,
                       onUseArtifactTemplate: useArtifactTemplate,
-                      onRunShellCommand: runShellCommand,
+                      ...(activeProject ? { onRunShellCommand: runShellCommand } : {}),
                     }
                   : {})}
                 isWorking={!paintOnlyDisplayedTimeline && isWorking}

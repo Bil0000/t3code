@@ -960,10 +960,12 @@ function MarkdownCodeBlock({
     onRunShellCommand !== undefined &&
     !isStreaming &&
     /^(?:sh|bash|zsh|fish|shell|powershell|pwsh)$/.test(language) &&
+    code.endsWith("\n") &&
     command.length > 0 &&
+    !command.endsWith("\\") &&
     // Control and invisible format characters (bidi overrides, zero-width) can
     // make the rendered command differ from what the terminal would receive.
-    !/[\p{Cc}\p{Cf}]/u.test(command);
+    !/[\p{Cc}\p{Cf}]/u.test(code.slice(0, -1));
 
   const handleCopy = useCallback(() => {
     if (typeof navigator === "undefined" || navigator.clipboard == null) {
