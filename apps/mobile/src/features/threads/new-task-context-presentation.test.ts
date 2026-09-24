@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { sanitizeNewRefName } from "@t3tools/shared/git";
-
 import {
   filterNewTaskBranches,
   resolveNewTaskBranchWorktreePath,
@@ -137,7 +135,7 @@ describe("filterNewTaskBranches", () => {
     { name: "origin/fix/remote-only", isRemote: true },
   ];
   const search = (query: string) =>
-    filterNewTaskBranches(branches, sanitizeNewRefName(query)).map((branch) => branch.name);
+    filterNewTaskBranches(branches, query).map((branch) => branch.name);
 
   it("ignores case in both the query and the branch name", () => {
     expect(search("feature/login")).toEqual(["Feature/Login-Page"]);

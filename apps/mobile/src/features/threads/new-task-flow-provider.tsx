@@ -676,8 +676,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const currentCheckoutBranchName = projectGitStatus.data?.refName ?? null;
 
   const filteredBranches = useMemo(
-    () => filterNewTaskBranches(allBranchRefs, branchSearchQuery),
-    [allBranchRefs, branchSearchQuery],
+    () => filterNewTaskBranches(allBranchRefs, branchQuery),
+    [allBranchRefs, branchQuery],
   );
 
   // The composer's draft follows the project it will be sent to: switching
