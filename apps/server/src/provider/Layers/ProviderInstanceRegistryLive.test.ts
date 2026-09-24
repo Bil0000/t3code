@@ -34,7 +34,7 @@ import {
   type ProviderInstanceConfigMap,
   ProviderInstanceId,
 } from "@t3tools/contracts";
-import { isHostWindows } from "@t3tools/shared/hostProcess";
+import { HostProcessPlatform, isHostWindows } from "@t3tools/shared/hostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -513,7 +513,11 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
       expect(before.usageLimits?.resetCredits?.nextCreditId).toBe("grant_a");
       const outcome = yield* instance!.consumeResetCredit!().pipe(Effect.result);
       return { outcome, after: yield* instance!.snapshot.getSnapshot };
-    }).pipe(Effect.provide(testLayer));
+    }).pipe(
+      // macOS logins live in the Keychain, where resets are never read.
+      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provide(testLayer),
+    );
 
   it.live("refreshes Claude usage after redeeming a reset", () =>
     Effect.gen(function* () {

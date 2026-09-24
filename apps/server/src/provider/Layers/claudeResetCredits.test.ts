@@ -183,7 +183,6 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
         ["not_limited", "nothingToReset"],
         ["already_used", "alreadyRedeemed"],
         ["ineligible", "noCredit"],
-        ["unavailable", "noCredit"],
       ] as const) {
         expect(yield* consume(respond(200, { result }))).toMatchObject({ success: outcome });
       }
@@ -199,12 +198,15 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
           expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(result.failure)).toBe(true);
         }
       }
-      const unanswered = yield* consume(respond(500, {}));
-      expect(unanswered).toMatchObject({ _tag: "Failure" });
-      if (unanswered._tag === "Failure") {
-        expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(unanswered.failure)).toBe(
-          false,
-        );
+      // No answer, or Claude could not confirm the claim: a retry is the same claim.
+      for (const client of [respond(500, {}), respond(200, { result: "unavailable" })]) {
+        const unanswered = yield* consume(client);
+        expect(unanswered).toMatchObject({ _tag: "Failure" });
+        if (unanswered._tag === "Failure") {
+          expect(ClaudeResetCredits.isSettledClaudeResetCreditFailure(unanswered.failure)).toBe(
+            false,
+          );
+        }
       }
     }),
   );

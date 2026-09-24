@@ -70,6 +70,8 @@ const RESET_CREDIT_FAILURES = {
   signedOut: "Sign in to Claude again to redeem resets.",
   rateLimited: "Claude is rate limiting resets. Try again soon.",
   coolingDown: "Claude resets are cooling down. Try again later.",
+  unconfirmed:
+    "Claude could not confirm the reset. If you are still limited in a moment, try again.",
   requestFailed: "Claude could not redeem the reset.",
 } as const;
 
@@ -87,12 +89,17 @@ class ClaudeResetCreditError extends Schema.TaggedError<ClaudeResetCreditError>(
   }
 }
 
+const isClaudeResetCreditError = Schema.is(ClaudeResetCreditError);
+
 /**
- * Every reset failure except `requestFailed` is final: Claude answered, or
- * nothing was sent. An unanswered claim retries with the same request id.
+ * Every reset failure except `requestFailed` and `unconfirmed` is final:
+ * Claude answered, or nothing was sent. An unanswered or unconfirmed claim
+ * retries with the same request id.
  */
 export const isSettledClaudeResetCreditFailure = (error: unknown) =>
-  Schema.is(ClaudeResetCreditError)(error) && error.reason !== "requestFailed";
+  isClaudeResetCreditError(error) &&
+  error.reason !== "requestFailed" &&
+  error.reason !== "unconfirmed";
 
 /** Rejects unparseable and calendar-invalid timestamps such as February 30. */
 const isFutureTimestamp = (value: string, nowMs: number) => {
@@ -193,7 +200,6 @@ const CLAIM_OUTCOMES = {
   not_limited: "nothingToReset",
   already_used: "alreadyRedeemed",
   ineligible: "noCredit",
-  unavailable: "noCredit",
 } as const satisfies Record<string, ProviderConsumeResetCreditOutcome>;
 
 /**
@@ -254,6 +260,11 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   );
   if (body.result === "cooldown") {
     return yield* new ClaudeResetCreditError({ reason: "coolingDown" });
+  }
+  // Claude could not say whether the claim landed, so, like the CLI, keep the
+  // request id and let the retry ask about the same claim.
+  if (body.result === "unavailable") {
+    return yield* new ClaudeResetCreditError({ reason: "unconfirmed" });
   }
   return CLAIM_OUTCOMES[body.result];
 });
