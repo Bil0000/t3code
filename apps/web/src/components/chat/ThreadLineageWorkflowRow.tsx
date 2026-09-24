@@ -50,6 +50,11 @@ function phaseStatus(phase: AgentPanelWorkflowGroup["phases"][number]) {
   if (phase.members.some((member) => member.status === "failed")) {
     return { dot: "bg-destructive", label: "failed" } as const;
   }
+  if (
+    phase.members.some((member) => member.status === "cancelled" || member.status === "interrupted")
+  ) {
+    return { dot: "bg-muted-foreground/50", label: "stopped" } as const;
+  }
   if (phase.state === "done") return { dot: "bg-success", label: "done" } as const;
   return { dot: "bg-muted-foreground/50", label: "not started" } as const;
 }

@@ -51,7 +51,8 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   const agents = Array.from({ length: 7 }, (_, index) => ({
     index,
     label: `Member ${index}`,
-    state: index === 4 ? "failed" : index === 5 ? "running" : "completed",
+    state:
+      index === 2 ? "cancelled" : index === 4 ? "failed" : index === 5 ? "running" : "completed",
     ...(index < 6 ? { phaseIndex: Math.floor(index / 2) } : {}),
     childThreadId: `member-chat-${index}`,
     model: "claude-sonnet-4-6",
@@ -127,6 +128,7 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   // The phase holding the running member reports itself as the active one.
   expect(rendered).toContain("running");
   expect(rendered).toContain("done");
+  expect(rendered).toContain("stopped");
   // Members 0 and 1 start a second apart and run 5s each, so Inspect took 6s.
   expect(rendered).toContain('"6s"');
   for (const phase of phaseButtons()) {
