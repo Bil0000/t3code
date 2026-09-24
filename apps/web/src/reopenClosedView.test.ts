@@ -66,7 +66,12 @@ describe("reopenClosedView", () => {
   it("restores saved file and pull request tabs without creating resources", async () => {
     const openPreview = vi.fn();
     const openTerminal = vi.fn();
-    const options = { openPreview, openTerminal, closeTerminal: vi.fn(), workspace: null };
+    const options = {
+      openPreview,
+      openTerminal,
+      closeTerminal: vi.fn(),
+      workspace: { cwd: "/repo" },
+    };
     expect(
       await reopenClosedView(
         {
@@ -104,6 +109,32 @@ describe("reopenClosedView", () => {
     expect(state.isOpen).toBe(true);
     expect(openPreview).not.toHaveBeenCalled();
     expect(openTerminal).not.toHaveBeenCalled();
+  });
+
+  it("does not reopen workspace tabs without an available project", async () => {
+    const options = {
+      openPreview: vi.fn(),
+      openTerminal: vi.fn(),
+      closeTerminal: vi.fn(),
+      workspace: null,
+    };
+    for (const surface of [
+      { kind: "files", id: "files" },
+      {
+        kind: "file",
+        id: "file:src/app.ts",
+        relativePath: "src/app.ts",
+        revealLine: null,
+        revealRequestId: 0,
+      },
+    ] as const) {
+      expect(await reopenClosedView({ kind: "panel-tab", threadRef, surface }, options)).toBe(
+        false,
+      );
+    }
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces,
+    ).toEqual([]);
   });
 
   it("recreates a browser tab with saved URL, viewport and profile, then selects its new ID", async () => {

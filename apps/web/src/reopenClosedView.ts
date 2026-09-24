@@ -157,6 +157,11 @@ export async function reopenClosedView(
     return true;
   }
   const surface = view.surface;
+  if (
+    !options.workspace &&
+    (surface.kind === "files" || (surface.kind === "file" && !surface.attachment))
+  )
+    return false;
   switch (surface.kind) {
     case "preview":
       if (surface.resourceId !== null) return false;
