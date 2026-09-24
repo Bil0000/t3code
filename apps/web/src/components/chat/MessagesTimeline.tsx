@@ -36,7 +36,6 @@ import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-mes
 import { Link } from "@tanstack/react-router";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
-import { resolveT3McpToolSummaryAction } from "@t3tools/shared/t3McpToolPresentation";
 import {
   resolveWorkEntryToolPresentation,
   resolveViewedImageAsset,
@@ -123,7 +122,6 @@ import {
   GlobeIcon,
   type LucideIcon,
   MessageCircleIcon,
-  MessagesSquareIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
@@ -196,6 +194,8 @@ import {
   resolveWorkGroupScrollIndex,
   shouldFollowWorkGroupAppend,
   shouldPreserveAssistantLineBreaks,
+  threadReadLabelPrefix,
+  threadReadTargetId,
   toolGroupAction,
   workEntryDisplayLabel,
   workEntryIsVisibleInGroup,
@@ -3533,117 +3533,108 @@ function LiveActivityContent({
   );
 }
 
+/** The thread a `t3_thread_read` call targets, titled from live shell state so renames show. */
 function useThreadReadTarget(entry: TimelineWorkEntry, environmentId: EnvironmentId) {
-  const item = entry.structuredPayload;
-  const rawThreadId =
-    item?.type === "dynamic_tool" &&
-    resolveT3McpToolSummaryAction(item.toolName) === "thread-read" &&
-    item.input !== null &&
-    typeof item.input === "object" &&
-    "threadId" in item.input
-      ? item.input.threadId
-      : null;
-  const threadId =
-    typeof rawThreadId === "string" && rawThreadId.length > 0 ? ThreadId.make(rawThreadId) : null;
+  const rawThreadId = threadReadTargetId(entry);
+  const threadId = rawThreadId === null ? null : ThreadId.make(rawThreadId);
   const title = useThreadShell(
     threadId ? scopeThreadRef(environmentId, threadId) : null,
   )?.title.trim();
-  return threadId === null
-    ? null
-    : { threadId, title, label: [title, threadId].filter(Boolean).join(" · ") };
+  return threadId && title ? { threadId, title } : null;
 }
 
-function ThreadReadTargetChip({
-  target,
+function threadReadLabel(label: string, target: ReturnType<typeof useThreadReadTarget>) {
+  const prefix = target && threadReadLabelPrefix(label);
+  return prefix ? { ...target, prefix, text: `${prefix} “${target.title}”` } : null;
+}
+
+/** Only settled rows link the title; the live row is itself a button. */
+function ThreadReadLabel({
+  label,
   environmentId,
+  linked,
 }: {
-  target: NonNullable<ReturnType<typeof useThreadReadTarget>>;
+  label: NonNullable<ReturnType<typeof threadReadLabel>>;
   environmentId: EnvironmentId;
+  linked: boolean;
 }) {
   return (
-    <ContextChip
-      kind="thread"
-      render={
+    <span className="flex min-w-0">
+      <span className="shrink-0">{label.prefix} “</span>
+      {linked ? (
         <Link
           to="/$environmentId/$threadId"
-          params={{ environmentId, threadId: target.threadId }}
-        />
-      }
-      aria-label={`Open thread ${target.label}`}
-      onClick={stopRowToggle}
-      onKeyDown={stopRowToggle}
-      className="min-w-0 no-underline"
-    >
-      <MessagesSquareIcon />
-      {target.title ? <ContextChipLabel>{target.title}</ContextChipLabel> : null}
-      <span className="truncate font-mono opacity-70">{target.threadId}</span>
-    </ContextChip>
+          params={{ environmentId, threadId: label.threadId }}
+          className="min-w-0 truncate rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+          onClick={stopRowToggle}
+          onKeyDown={stopRowToggle}
+        >
+          {label.title}
+        </Link>
+      ) : (
+        <span className="min-w-0 truncate">{label.title}</span>
+      )}
+      <span className="shrink-0">”</span>
+    </span>
   );
 }
 
 function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "work-live" }> }) {
   const ctx = use(TimelineRowCtx);
-  const label = liveWorkEntryLabel(row.entry, ctx.workspaceRoot, row.active);
   const threadTarget = useThreadReadTarget(row.entry, ctx.activeThreadEnvironmentId);
+  const label = liveWorkEntryLabel(row.entry, ctx.workspaceRoot, row.active);
+  const threadLabel = threadReadLabel(label, threadTarget);
   const failed = workEntryDisplayIndicatesToolFailure(row.entry);
 
   return (
-    <div>
-      <button
-        type="button"
-        className="group/live-work flex min-h-6 w-full max-w-full cursor-pointer items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-        aria-label={
-          failed
-            ? `${label}${threadTarget ? `, ${threadTarget.label}` : ""}, tool call failed`
-            : undefined
-        }
-        aria-expanded={row.expanded}
-        onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
-      >
-        <LiveActivityRow
-          label={
-            row.entry.questionAnswer ? (
-              <span className="flex min-w-0 gap-1.5">
-                <span className="shrink-0">{label}</span>
-                <span
-                  className={cn(
-                    "truncate",
-                    !row.expanded && hasQuestionAnswer(row.entry.questionAnswer)
-                      ? "text-foreground"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {getQuestionAnswerPreview(row.entry.questionAnswer)}
-                </span>
-              </span>
-            ) : row.entry.itemType === "reasoning" ? (
-              <ReactMarkdown
-                remarkPlugins={[
-                  remarkGfm,
-                  [remarkThoughtPreview, row.active ? "Thinking" : "Thought"],
-                ]}
+    <button
+      type="button"
+      className="group/live-work flex min-h-6 w-full max-w-full cursor-pointer items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+      aria-label={failed ? `${threadLabel?.text ?? label}, tool call failed` : undefined}
+      aria-expanded={row.expanded}
+      onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
+    >
+      <LiveActivityRow
+        label={
+          row.entry.questionAnswer ? (
+            <span className="flex min-w-0 gap-1.5">
+              <span className="shrink-0">{label}</span>
+              <span
+                className={cn(
+                  "truncate",
+                  !row.expanded && hasQuestionAnswer(row.entry.questionAnswer)
+                    ? "text-foreground"
+                    : "text-muted-foreground",
+                )}
               >
-                {row.entry.detail ?? label}
-              </ReactMarkdown>
-            ) : (
-              label
-            )
-          }
-          iconName={workEntryIconName(row.entry)}
-          toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
-          failed={failed}
-          active={row.active}
-        />
-      </button>
-      {threadTarget ? (
-        <div className="ms-7">
-          <ThreadReadTargetChip
-            target={threadTarget}
-            environmentId={ctx.activeThreadEnvironmentId}
-          />
-        </div>
-      ) : null}
-    </div>
+                {getQuestionAnswerPreview(row.entry.questionAnswer)}
+              </span>
+            </span>
+          ) : row.entry.itemType === "reasoning" ? (
+            <ReactMarkdown
+              remarkPlugins={[
+                remarkGfm,
+                [remarkThoughtPreview, row.active ? "Thinking" : "Thought"],
+              ]}
+            >
+              {row.entry.detail ?? label}
+            </ReactMarkdown>
+          ) : threadLabel ? (
+            <ThreadReadLabel
+              label={threadLabel}
+              environmentId={ctx.activeThreadEnvironmentId}
+              linked={false}
+            />
+          ) : (
+            label
+          )
+        }
+        iconName={workEntryIconName(row.entry)}
+        toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
+        failed={failed}
+        active={row.active}
+      />
+    </button>
   );
 }
 
@@ -5082,7 +5073,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       : workLogEntryIsToolLike(workEntry)
         ? "text-secondary-label"
         : "text-foreground/80";
-  const accessiblePreview = [previewText, threadTarget?.label, answerPreview]
+  const threadLabel = isReasoning ? null : threadReadLabel(previewText, threadTarget);
+  const accessiblePreview = [threadLabel?.text ?? previewText, answerPreview]
     .filter(Boolean)
     .join(": ");
   const accessibleDisplayText = showFailedIndicator
@@ -5145,6 +5137,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 >
                   {workEntry.detail ?? previewText}
                 </ReactMarkdown>
+              ) : threadLabel ? (
+                <ThreadReadLabel
+                  label={threadLabel}
+                  environmentId={ctx.activeThreadEnvironmentId}
+                  linked
+                />
               ) : (
                 previewText
               )}
@@ -5164,12 +5162,6 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               </span>
             ) : null}
           </p>
-          {threadTarget ? (
-            <ThreadReadTargetChip
-              target={threadTarget}
-              environmentId={ctx.activeThreadEnvironmentId}
-            />
-          ) : null}
         </div>
       }
       trailing={

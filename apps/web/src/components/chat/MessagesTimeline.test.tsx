@@ -20,11 +20,6 @@ const activityTestState = vi.hoisted(() => ({
   subagentTooltips: false,
 }));
 
-vi.mock("@tanstack/react-router", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
-}));
-
 // Expose tooltip contents in the renderer without requiring a browser portal.
 vi.mock("../ui/tooltip", async (importOriginal) => {
   const original = await importOriginal<typeof import("../ui/tooltip")>();
