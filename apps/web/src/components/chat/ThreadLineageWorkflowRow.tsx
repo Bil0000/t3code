@@ -1,6 +1,7 @@
-import type {
-  AgentPanelWorkflowGroup,
-  RuntimeSubagent,
+import {
+  isTerminalSubagentStatus,
+  type AgentPanelWorkflowGroup,
+  type RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
 import { ChevronDownIcon } from "lucide-react";
@@ -11,11 +12,9 @@ import { SubagentTooltipContent } from "./SubagentTooltipContent";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadRelationshipIcon } from "./ThreadRelationshipIcon";
 import { cn } from "../../lib/utils";
-import { Button } from "../ui/button";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import {
-  THREAD_DETAILS_PANEL_LINK_ROW_CLASS,
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
@@ -74,13 +73,12 @@ function WorkflowMemberRow({
         <TooltipTrigger
           delay={200}
           render={
-            <Button
-              size="sm"
-              variant="ghost"
+            <ThreadDetailsControl
+              part="row"
               aria-label={`Open ${member.title} chat`}
               disabled={threadId === null}
               onClick={() => threadId !== null && onOpen(threadId)}
-              className={cn(THREAD_DETAILS_PANEL_LINK_ROW_CLASS, "w-full")}
+              className="min-w-0"
             />
           }
         >
@@ -227,9 +225,7 @@ export function ThreadLineageWorkflowRow({
 
 export function ThreadLineageWorkflowCount({ group }: { group: AgentPanelWorkflowGroup }) {
   const members = [...group.phases.flatMap((phase) => phase.members), ...group.unphasedMembers];
-  const settled = members.filter((member) =>
-    ["completed", "failed", "cancelled", "interrupted"].includes(member.status),
-  ).length;
+  const settled = members.filter((member) => isTerminalSubagentStatus(member.status)).length;
   return (
     <>
       {settled}/{members.length}
