@@ -326,6 +326,7 @@ it.layer(NodeServices.layer)("buildAntigravityPrompt", (it) => {
     { name: "archive.zip", mimeType: "application/zip" },
     { name: "clip.mp4", mimeType: "video/mp4" },
     { name: "recording.aiff", mimeType: "audio/aiff" },
+    { name: "large.pdf", mimeType: "application/pdf", sizeBytes: 75_000_000 },
     { name: "large.txt", mimeType: "text/plain", sizeBytes: 1024 * 1024 + 1 },
     { name: "large.wav", mimeType: "audio/wav", sizeBytes: 20 * 1024 * 1024 + 1 },
   ])("keeps $name as a file path without reading or spending the native media budget", (file) =>
