@@ -311,7 +311,10 @@ export function resolveAgentAwarenessRelayPublishSnapshot(input: {
 }
 
 function terminalWorkSinceStart(thread: OrchestrationV2ThreadShell, startedAt: number): boolean {
-  return thread.latestRunCompletedAt != null && DateTime.toEpochMillis(thread.latestRunCompletedAt) > startedAt;
+  return (
+    thread.latestRunCompletedAt != null &&
+    DateTime.toEpochMillis(thread.latestRunCompletedAt) > startedAt
+  );
 }
 
 export function resolveAgentAwarenessRelayActiveThreadIds(input: {
