@@ -7763,14 +7763,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const providerSessionId = providerThread.providerSessionId;
       const emitEvent = emit(events, command);
       yield* emitEvent({
-        type: "subagent.updated",
+        type: "subagent.interrupt-requested",
         threadId: command.threadId,
         ...(subagent.runId === null ? {} : { runId: subagent.runId }),
         nodeId: subagent.id,
         driver: subagent.driver,
         providerInstanceId: subagent.providerInstanceId,
         occurredAt: yield* DateTime.now,
-        payload: subagent,
+        payload: subagent.id,
       });
       yield* Ref.update(effects, (existing) => [
         ...existing,

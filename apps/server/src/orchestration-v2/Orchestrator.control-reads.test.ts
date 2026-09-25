@@ -145,12 +145,20 @@ it.effect("interrupts only the selected running native Codex subagent", () =>
       },
     });
     const commandId = CommandId.make("interrupt:stop-subagent");
-    yield* orchestrator.dispatch({
+    const accepted = yield* orchestrator.dispatch({
       type: "subagent.interrupt",
       commandId,
       threadId: parentThreadId,
       subagentId,
     });
+    assert.deepEqual(
+      accepted.storedEvents.map((event) => event.event.type),
+      ["subagent.interrupt-requested"],
+    );
+    assert.equal(
+      (yield* projections.getThreadProjection(parentThreadId)).subagents[0]?.status,
+      "running",
+    );
     assert.deepEqual(
       (yield* outbox.listByCommandId(commandId)).map(({ threadId, request }) => ({
         threadId,
