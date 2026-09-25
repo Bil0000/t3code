@@ -88,12 +88,12 @@ function WorkflowMemberRow({
           }
         >
           <ThreadRelationshipIcon driver={driver} provider={provider} status={member.status} />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-4 text-foreground/85">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium leading-4 text-foreground/85">
             {member.title}
           </span>
           <span className="sr-only">{member.status}</span>
           {member.startedAt ? (
-            <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground">
+            <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
               <AgentElapsed agent={member} />
             </span>
           ) : null}
@@ -174,7 +174,7 @@ export function ThreadLineageWorkflowRow({
                     })
                   }
                   className={cn(
-                    "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-medium hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]",
+                    "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-sm font-medium hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]",
                     phase.state === "running"
                       ? "bg-info/8 text-info"
                       : "text-muted-foreground/65 hover:text-foreground/80",
@@ -220,7 +220,7 @@ export function ThreadLineageWorkflowRow({
             />
           ))}
           {phases.length === 0 && group.unphasedMembers.length === 0 ? (
-            <li className="px-2.5 py-1.5 text-[11px] text-muted-foreground/70">No agents yet</li>
+            <li className="px-2.5 py-1.5 text-2xs text-muted-foreground/70">No agents yet</li>
           ) : null}
         </ul>
       ) : null}

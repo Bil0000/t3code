@@ -406,11 +406,15 @@ export function ThreadRelationshipsPanel(props: {
                     {agent ? <span className="sr-only">{agent.status}</span> : null}
                   </span>
                   {agent ? (
-                    <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
-                      {workflowGroup ? <ThreadLineageWorkflowCount group={workflowGroup} /> : null}
-                      {workflowGroup && elapsed ? " · " : null}
-                      {elapsed}
-                    </span>
+                    workflowGroup || agent.startedAt ? (
+                      <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
+                        {workflowGroup ? (
+                          <ThreadLineageWorkflowCount group={workflowGroup} />
+                        ) : null}
+                        {workflowGroup && elapsed ? " · " : null}
+                        {elapsed}
+                      </span>
+                    ) : null
                   ) : (
                     <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                   )}
