@@ -7744,7 +7744,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const childThreadId = subagent.childThreadId;
       const child = yield* projectionStore
         .getThreadRecords(childThreadId, ["providerThreads", "providerTurns"])
-        .pipe(Effect.mapError(() => new OrchestratorProjectionError({ threadId: childThreadId })));
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: childThreadId, cause }),
+          ),
+        );
       const turn = child.providerTurns.findLast((entry) => entry.status === "running");
       const providerThread = child.providerThreads.find(
         (entry) => entry.id === turn?.providerThreadId,
