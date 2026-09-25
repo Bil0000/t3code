@@ -7738,7 +7738,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
-          cause: `Subagent ${command.subagentId} is not interruptible.`,
         });
       }
       const childThreadId = subagent.childThreadId;
@@ -7757,7 +7756,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
-          cause: `Subagent ${command.subagentId} has no active provider turn.`,
         });
       }
       const providerSessionId = providerThread.providerSessionId;

@@ -193,6 +193,7 @@ it.effect("interrupts only the selected running native Codex subagent", () =>
       })
       .pipe(Effect.flip);
     assert.instanceOf(rejected, OrchestratorDispatchError);
+    assert.equal(rejected.cause, undefined);
     assert.deepEqual(yield* outbox.listByCommandId(settledCommandId), []);
   }).pipe(Effect.provide(testLayer)),
 );
