@@ -652,12 +652,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // defeats the request. (A running session IS snoozable — snooze only
       // affects visibility, never the agent.)
       if (openRequests(thread).size > 0) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be snoozed`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be snoozed`,
+        });
       }
       // A queued turn start — a user message no turn has adopted yet — is
       // invisible pending work: no session, no pending flags. Snoozing in
@@ -944,12 +942,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (command.linkedPullRequest != null) {
         const { linkedPullRequest: linked, ...metadata } = command;
         const project = readModel.projects.find((project) => project.id === thread.projectId);
-        let host = project?.repositoryIdentity?.canonicalKey.split("/")[0] ?? "unknown";
-        try {
-          host = new URL(linked.url).hostname;
-        } catch {
-          // Historical clients can send links without a parseable URL.
-        }
+        // Historical clients can send links without a parseable URL.
+        const host = URL.canParse(linked.url)
+          ? new URL(linked.url).hostname
+          : (project?.repositoryIdentity?.canonicalKey.split("/")[0] ?? "unknown");
         const hasMetadata = Object.entries(metadata).some(
           ([key, value]) => !["type", "commandId", "threadId"].includes(key) && value !== undefined,
         );
