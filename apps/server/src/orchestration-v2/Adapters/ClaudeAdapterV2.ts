@@ -3590,6 +3590,17 @@ export function makeClaudeAdapterV2(
                 now,
               });
             }
+            if (restarted && !settled) {
+              yield* emitWorkflowMemberMessage({
+                nativeItemId: `${memberKey}:answer:200`,
+                threadId: childThreadId,
+                rootNodeId: childRootNodeId,
+                role: "assistant",
+                text: "Retry in progress.",
+                ordinal: 200,
+                now,
+              });
+            }
 
             const task = {
               id: nodeId,
@@ -3657,17 +3668,14 @@ export function makeClaudeAdapterV2(
               });
             }
 
-            // The transcript is the real answer; the capped excerpt stands in
-            // until the harness has flushed it. Message ids are derived from the
-            // turn index, so a later transcript read overwrites the excerpt in
-            // place rather than appending a second answer.
             let transcriptAnswers = restarted ? [] : (previous?.transcriptAnswers ?? []);
+            let transcript: ReadonlyArray<string> = [];
             if (settled && (changed || readTranscript)) {
               // The member's own transcript, when the run left one: a missing or
               // unreadable file is expected (a run predating run-handle capture,
               // a member that never started) and falls back to the excerpt.
               const transcriptDir = input.workflow.runHandles?.transcriptDir;
-              const transcript =
+              transcript =
                 !readTranscript || transcriptDir === undefined || member.agentId === undefined
                   ? []
                   : yield* readWorkflowAgentAnswers({
@@ -3682,28 +3690,26 @@ export function makeClaudeAdapterV2(
                             ),
                           }),
                     }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-              if (transcript.length > 0) transcriptAnswers = transcript;
-              const turns =
+              if (transcript.length > 0) transcriptAnswers = [transcript.join("\n\n")];
+              const answer =
                 transcript.length > 0
-                  ? transcript
-                  : member.result === undefined || !changed || transcriptAnswers.length > 0
-                    ? []
-                    : [`Partial answer from workflow progress:\n\n${member.result}`];
-              for (const [index, answer] of turns.entries()) {
-                if (
-                  transcript.length > 0 &&
-                  !restarted &&
-                  answer === previous?.transcriptAnswers[index]
-                )
-                  continue;
-                const ordinal = 200 + index;
+                  ? transcriptAnswers[0]
+                  : member.result !== undefined && changed && transcriptAnswers.length === 0
+                    ? `Partial answer from workflow progress:\n\n${member.result}`
+                    : attempt > 1 && changed && transcriptAnswers.length === 0
+                      ? "No answer from this workflow attempt."
+                      : undefined;
+              if (
+                answer !== undefined &&
+                (transcript.length === 0 || restarted || answer !== previous?.transcriptAnswers[0])
+              ) {
                 yield* emitWorkflowMemberMessage({
-                  nativeItemId: `${memberKey}:answer:${ordinal}`,
+                  nativeItemId: `${memberKey}:answer:200`,
                   threadId: childThreadId,
                   rootNodeId: childRootNodeId,
                   role: "assistant",
                   text: answer,
-                  ordinal,
+                  ordinal: 200,
                   now,
                 });
               }
@@ -3723,7 +3729,9 @@ export function makeClaudeAdapterV2(
                   (readTranscript ? 1 : 0),
                 finalTranscriptRead:
                   (!restarted && previous?.finalTranscriptRead === true) ||
-                  (readTranscript && input.coordinator.task.status !== "running"),
+                  (readTranscript &&
+                    transcript.length > 0 &&
+                    input.coordinator.task.status !== "running"),
                 startedAt,
               }),
             );
