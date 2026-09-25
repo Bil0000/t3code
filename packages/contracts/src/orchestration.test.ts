@@ -35,6 +35,7 @@ import {
   ThreadTurnStartRequestedPayload,
   SnapShotAccessibility,
   isProviderSendTurnSupportedImageMimeType,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -376,8 +377,10 @@ it.effect("rejects malformed known attachment types instead of tolerating them",
         updatedAt: "2026-01-01T00:00:00.000Z",
       });
 
-    const largeFile = yield* decode({ ...base, type: "file", sizeBytes: 75_000_000 });
-    assert.strictEqual(largeFile.attachments?.[0]?.sizeBytes, 75_000_000);
+    // A newer build may raise the upload cap; this build must still read those files.
+    const aboveUploadCap = PROVIDER_SEND_TURN_MAX_FILE_BYTES + 1;
+    const largeFile = yield* decode({ ...base, type: "file", sizeBytes: aboveUploadCap });
+    assert.strictEqual(largeFile.attachments?.[0]?.sizeBytes, aboveUploadCap);
 
     const emptyFile = yield* Effect.exit(decode({ ...base, type: "file", sizeBytes: 0 }));
     assert.strictEqual(Exit.isFailure(emptyFile), true);
