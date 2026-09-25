@@ -1626,6 +1626,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ? `[Pasted text "${attachment.name}" is saved at: ${attachmentPath}. Inspect it as needed.]`
             : `[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`,
       );
+      // Most adapters see generic files only through this path line, so a file
+      // without one would be silently dropped. Images still go natively.
       if (!appended && attachment.type === "file") {
         return yield* toValidationError(
           "ProviderService.sendTurn",

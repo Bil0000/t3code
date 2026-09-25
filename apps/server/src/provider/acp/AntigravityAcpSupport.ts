@@ -246,7 +246,11 @@ const TEXT_FILE_EXTENSIONS = new Set([
 const ANTIGRAVITY_MAX_TEXT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = PROVIDER_SEND_TURN_MAX_FILE_BYTES;
 
-/** Sends uploads as native ACP content instead of workspace path hints. */
+/**
+ * Sends supported uploads as native ACP content. Other files, and native
+ * candidates over their limits, reach the agent through the saved path
+ * ProviderService puts in the text block.
+ */
 export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(function* (input: {
   readonly input: ProviderSendTurnInput["input"];
   readonly attachments: ProviderSendTurnInput["attachments"];
@@ -328,7 +332,7 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
     totalBytes += size;
     if (size > limit || totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
       return yield* EffectAcpErrors.AcpRequestError.invalidParams(
-        `Attachment '${attachment.name}' is too large. Antigravity accepts text files up to 1 MiB, images up to 10 MiB, audio up to 20 MiB, and 50 MiB total attachments.`,
+        `Image '${attachment.name}' is too large. Antigravity accepts images up to 10 MiB and 50 MiB of native attachments per message.`,
       );
     }
     const uri = yield* path.toFileUrl(attachmentPath).pipe(
