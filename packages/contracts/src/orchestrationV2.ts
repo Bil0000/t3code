@@ -2524,6 +2524,12 @@ export const OrchestrationV2Command = Schema.Union([
     reason: Schema.optional(Schema.String),
   }),
   Schema.Struct({
+    type: Schema.Literal("subagent.interrupt"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    subagentId: NodeId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("queued-message.promote-to-steer"),
     commandId: CommandId,
     threadId: ThreadId,

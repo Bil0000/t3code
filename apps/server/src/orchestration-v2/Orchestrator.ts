@@ -323,6 +323,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "prepared-run.progress":
     case "prepared-run.fail":
     case "run.interrupt":
+    case "subagent.interrupt":
     case "queued-message.promote-to-steer":
     case "queue.resume":
     case "queued-run.reorder":
@@ -7720,6 +7721,69 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return undefined;
     });
 
+  const dispatchSubagentInterrupt = (
+    command: Extract<OrchestrationV2Command, { readonly type: "subagent.interrupt" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) =>
+    Effect.gen(function* () {
+      const parent = yield* loadProjectionForCommand(command, ["subagents"]);
+      const subagent = parent.subagents.find((entry) => entry.id === command.subagentId);
+      if (
+        subagent?.origin !== "provider_native" ||
+        subagent.driver !== "codex" ||
+        subagent.status !== "running" ||
+        subagent.childThreadId === null
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Subagent ${command.subagentId} is not interruptible.`,
+        });
+      }
+      const childThreadId = subagent.childThreadId;
+      const child = yield* projectionStore
+        .getThreadRecords(childThreadId, ["providerThreads", "providerTurns"])
+        .pipe(Effect.mapError(() => new OrchestratorProjectionError({ threadId: childThreadId })));
+      const turn = child.providerTurns.findLast((entry) => entry.status === "running");
+      const providerThread = child.providerThreads.find(
+        (entry) => entry.id === turn?.providerThreadId,
+      );
+      if (turn === undefined || providerThread?.providerSessionId == null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Subagent ${command.subagentId} has no active provider turn.`,
+        });
+      }
+      const providerSessionId = providerThread.providerSessionId;
+      const emitEvent = emit(events, command);
+      yield* emitEvent({
+        type: "subagent.updated",
+        threadId: command.threadId,
+        ...(subagent.runId === null ? {} : { runId: subagent.runId }),
+        nodeId: subagent.id,
+        driver: subagent.driver,
+        providerInstanceId: subagent.providerInstanceId,
+        occurredAt: yield* DateTime.now,
+        payload: subagent,
+      });
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:provider-turn.interrupt:${turn.id}`,
+          commandId: command.commandId,
+          threadId: childThreadId,
+          request: {
+            type: "provider-turn.interrupt",
+            providerSessionId,
+            providerThreadId: providerThread.id,
+            providerTurnId: turn.id,
+          },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
+    });
+
   const dispatchCheckpointRollback = (
     command: Extract<OrchestrationV2Command, { readonly type: "checkpoint.rollback" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -8790,6 +8854,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "run.interrupt":
         cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);
+        break;
+      case "subagent.interrupt":
+        yield* dispatchSubagentInterrupt(command, events, effects);
         break;
       case "queued-message.promote-to-steer":
         yield* dispatchQueuedMessagePromoteToSteer(command, events, effects);
