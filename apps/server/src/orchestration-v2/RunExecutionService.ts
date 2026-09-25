@@ -601,7 +601,12 @@ export const layer: Layer.Layer<
           }
           return;
         }
-        if (input.attempt.contextCompaction && input.terminal.status === "completed") {
+        if (
+          input.attempt.contextCompaction &&
+          input.terminal.status === "completed" &&
+          // A provider may finish compacting after Stop; Stop still ends the run.
+          !(yield* input.hasUnpairedRunInterruptRequest?.() ?? Effect.succeed(false))
+        ) {
           const attemptOrdinal = input.attempt.attemptOrdinal + 1;
           const nextAttempt: OrchestrationV2RunAttempt = {
             ...input.attempt,

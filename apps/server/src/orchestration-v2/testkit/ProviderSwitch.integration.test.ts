@@ -136,6 +136,7 @@ function makeTestAdapter(input: {
   readonly holdRunOrdinal?: number;
   readonly holdFirstTurn?: Deferred.Deferred<void>;
   readonly releaseFirstTurn?: Deferred.Deferred<void>;
+  readonly runningWhileHeld?: boolean;
 }): ProviderAdapterV2Shape {
   return {
     instanceId: input.instanceId,
@@ -268,18 +269,37 @@ function makeTestAdapter(input: {
                   attachments: turnInput.message.attachments,
                 },
               ]);
-              if (
-                turnInput.runOrdinal === (input.holdRunOrdinal ?? 1) &&
-                input.holdFirstTurn !== undefined
-              ) {
-                yield* Deferred.succeed(input.holdFirstTurn, undefined);
-                if (input.releaseFirstTurn === undefined) return;
-                yield* Deferred.await(input.releaseFirstTurn);
-              }
               const eventTime = yield* DateTime.now;
               const providerTurnId = ProviderTurnId.make(
                 `provider-turn:${input.driver}:${turnInput.threadId}:${turnInput.attemptId}`,
               );
+              const providerTurn = {
+                id: providerTurnId,
+                providerThreadId: turnInput.providerThread.id,
+                nodeId: turnInput.rootNodeId,
+                runAttemptId: turnInput.attemptId,
+                nativeTurnRef: {
+                  driver: input.driver,
+                  nativeId: `native-turn:${turnInput.threadId}:${turnInput.attemptId}`,
+                  strength: "strong" as const,
+                },
+                ordinal: turnInput.providerTurnOrdinal,
+                startedAt: eventTime,
+              };
+              if (
+                turnInput.runOrdinal === (input.holdRunOrdinal ?? 1) &&
+                input.holdFirstTurn !== undefined
+              ) {
+                if (input.runningWhileHeld === true)
+                  yield* PubSub.publish(events, {
+                    type: "provider_turn.updated",
+                    driver: input.driver,
+                    providerTurn: { ...providerTurn, status: "running", completedAt: null },
+                  });
+                yield* Deferred.succeed(input.holdFirstTurn, undefined);
+                if (input.releaseFirstTurn === undefined) return;
+                yield* Deferred.await(input.releaseFirstTurn);
+              }
               const compacting =
                 input.compaction !== undefined && turnInput.message.text === "/compact";
               const terminalStatus =
@@ -300,21 +320,7 @@ function makeTestAdapter(input: {
                 {
                   type: "provider_turn.updated",
                   driver: input.driver,
-                  providerTurn: {
-                    id: providerTurnId,
-                    providerThreadId: turnInput.providerThread.id,
-                    nodeId: turnInput.rootNodeId,
-                    runAttemptId: turnInput.attemptId,
-                    nativeTurnRef: {
-                      driver: input.driver,
-                      nativeId: `native-turn:${turnInput.threadId}:${turnInput.attemptId}`,
-                      strength: "strong",
-                    },
-                    ordinal: turnInput.providerTurnOrdinal,
-                    status: terminalStatus,
-                    startedAt: eventTime,
-                    completedAt: eventTime,
-                  },
+                  providerTurn: { ...providerTurn, status: terminalStatus, completedAt: eventTime },
                 },
                 {
                   type: "turn_item.updated",
@@ -442,6 +448,7 @@ describe("orchestration v2 provider switching", () => {
     "exhausted-no-shrink-native",
     "exhausted-no-usage-native",
     "exhausted-stop-native",
+    "exhausted-stop-running-native",
     "exhausted-steer-native",
     "exhausted-unsupported-native",
     "exhausted-unknown-capacity-native",
@@ -534,11 +541,14 @@ describe("orchestration v2 provider switching", () => {
               responseByRunOrdinal: {},
               capturedTurns,
               failEnsureOnce,
-              ...(scenario === "exhausted-stop-native" || scenario === "exhausted-steer-native"
+              ...(scenario === "exhausted-stop-native" ||
+              scenario === "exhausted-stop-running-native" ||
+              scenario === "exhausted-steer-native"
                 ? {
                     holdRunOrdinal: 4,
                     holdFirstTurn: compactionStarted,
                     releaseFirstTurn: finishCompaction,
+                    runningWhileHeld: scenario === "exhausted-stop-running-native",
                   }
                 : {}),
               ...(scenario.includes("retry") ||
@@ -828,10 +838,25 @@ describe("orchestration v2 provider switching", () => {
             if (scenario.includes("retry")) yield* Ref.set(failStartOnce, true);
             if (scenario === "first-bind-retry-native") yield* Ref.set(failEnsureOnce, true);
             yield* dispatch(targetOrdinal, current, targetSelection);
-            if (scenario === "exhausted-stop-native" || scenario === "exhausted-steer-native") {
+            if (
+              scenario === "exhausted-stop-native" ||
+              scenario === "exhausted-stop-running-native" ||
+              scenario === "exhausted-steer-native"
+            ) {
               yield* Deferred.await(compactionStarted);
               const active = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
-              if (scenario === "exhausted-stop-native") {
+              // Stop while the provider is compacting, not before its turn starts.
+              if (scenario === "exhausted-stop-running-native")
+                yield* orchestrator.streamStoredEvents.pipe(
+                  Stream.filter(
+                    ({ event }) =>
+                      event.type === "provider-turn.updated" &&
+                      event.payload.runAttemptId === active.activeAttemptId &&
+                      event.payload.status === "running",
+                  ),
+                  Stream.runHead,
+                );
+              if (scenario !== "exhausted-steer-native") {
                 yield* orchestrator.dispatch({
                   type: "run.interrupt",
                   commandId: CommandId.make("stop-compaction"),
@@ -974,6 +999,8 @@ describe("orchestration v2 provider switching", () => {
               const interrupted =
                 scenario === "exhausted-compaction-interrupted-native" ||
                 scenario === "exhausted-stop-native";
+              // The provider finished compacting after Stop, so the run completes unsent.
+              const stoppedAfterCompaction = scenario === "exhausted-stop-running-native";
               assert.equal(
                 projection.runs.at(-1)?.status,
                 interrupted ? "interrupted" : failed ? "failed" : "completed",
@@ -1002,7 +1029,7 @@ describe("orchestration v2 provider switching", () => {
                         : "x".repeat(70_000)),
                 ),
               );
-              if (failed || interrupted) {
+              if (failed || interrupted || stoppedAfterCompaction) {
                 assert.equal(
                   (yield* Ref.get(capturedTurns)).filter((turn) => turn.text.endsWith(current))
                     .length,
