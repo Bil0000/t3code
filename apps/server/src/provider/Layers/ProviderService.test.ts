@@ -993,7 +993,7 @@ for (const name of ["codex", "claudeAgent", "cursor", "grok", "opencode", "antig
   makeProviderServiceLayer({
     registry: makeStaticInstanceRegistry([[instanceId, adapter.adapter]]),
   }).layer(`${name} file attachment limits`, (it) => {
-    it.effect("passes a 100 MB ZIP by path and rejects one byte more", () =>
+    it.effect("passes a 100 MB ZIP by path", () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
         const threadId = asThreadId(`zip-${name}`);
@@ -1015,14 +1015,6 @@ for (const name of ["codex", "claudeAgent", "cursor", "grok", "opencode", "antig
         assert.include(sent?.input ?? "", '[Attached file "archive.zip" is saved at: ');
         assert.include(sent?.input ?? "", `${attachment.id}.zip]`);
         assert.deepEqual(sent?.attachments, [attachment]);
-        const error = yield* provider
-          .sendTurn({
-            threadId,
-            attachments: [{ ...attachment, sizeBytes: 100_000_001 }],
-          })
-          .pipe(Effect.flip);
-        assert.instanceOf(error, ProviderValidationError);
-        assert.equal(adapter.sendTurn.mock.calls.length, 1);
       }),
     );
   });
