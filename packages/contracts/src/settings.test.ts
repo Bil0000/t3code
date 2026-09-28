@@ -330,6 +330,18 @@ describe("ClientSettings diff colors", () => {
 });
 
 describe("ClientSettings chat width", () => {
+  it("keeps thread details pinning opt-in and persists either choice", () => {
+    expect(decodeClientSettings({}).keepThreadDetailsVisible).toBe(false);
+    for (const keepThreadDetailsVisible of [true, false]) {
+      expect(
+        encodeClientSettings(decodeClientSettings({ keepThreadDetailsVisible }))
+          .keepThreadDetailsVisible,
+      ).toBe(keepThreadDetailsVisible);
+      expect(decodeClientSettingsPatch({ keepThreadDetailsVisible }).keepThreadDetailsVisible).toBe(
+        keepThreadDetailsVisible,
+      );
+    }
+  });
   it("keeps the comfortable width for existing settings without a saved width", () => {
     expect(decodeClientSettings({}).chatWidth).toBe("comfortable");
   });

@@ -529,6 +529,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Diff colors"]
         : []),
       ...(settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? ["Chat width"] : []),
+      ...(settings.keepThreadDetailsVisible ? ["Keep thread details visible"] : []),
       ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
         ? ["Panel animations"]
         : []),
@@ -649,6 +650,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.appearanceContrast,
       settings.diffColorScheme,
       settings.chatWidth,
+      settings.keepThreadDetailsVisible,
       settings.enableAgentBrowserAccess,
       settings.confirmQuit,
       settings.confirmThreadArchive,
@@ -764,6 +766,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
+      keepThreadDetailsVisible: DEFAULT_UNIFIED_SETTINGS.keepThreadDetailsVisible,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
@@ -1420,6 +1423,27 @@ export function AppearanceSettingsPanel() {
                 </SelectPopup>
               </Select>
             </div>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("keep-thread-details-visible")}
+          description="Keep the open workspace and lineage panel beside chat. Uses a popover when the window is too narrow."
+          resetAction={
+            settings.keepThreadDetailsVisible ? (
+              <SettingResetButton
+                label="thread details visibility"
+                onClick={() => updateSettings({ keepThreadDetailsVisible: false })}
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.keepThreadDetailsVisible}
+              onCheckedChange={(checked) =>
+                updateSettings({ keepThreadDetailsVisible: Boolean(checked) })
+              }
+              aria-label="Keep thread details visible"
+            />
           }
         />
       </SettingsSection>

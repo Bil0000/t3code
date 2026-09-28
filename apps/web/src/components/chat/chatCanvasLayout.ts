@@ -4,6 +4,7 @@ import {
   type PreviewMiniPlayerFrame,
   type PreviewMiniPlayerObstacles,
 } from "../preview/previewMiniPlayerLayout";
+import { resolveThreadDetailsCardLayout } from "./threadDetailsCardLayout";
 import type {
   PreviewMiniPlayerPosition,
   PreviewMiniPlayerSize,
@@ -29,6 +30,8 @@ export function resolveChatCanvasLayout({
   minChatWidth = 640,
   composerHeight = 0,
   detailsCard = null,
+  keepThreadDetailsVisible = false,
+  threadDetailsOpen = true,
 }: {
   container: PreviewMiniPlayerSize;
   preview: ChatCanvasPreview | null;
@@ -37,6 +40,8 @@ export function resolveChatCanvasLayout({
   minChatWidth?: number;
   composerHeight?: number;
   detailsCard?: PreviewMiniPlayerObstacles["detailsCard"];
+  keepThreadDetailsVisible?: boolean;
+  threadDetailsOpen?: boolean;
 }) {
   const normalWidth = Math.max(0, Math.min(maxChatWidth, container.width - padding * 2));
   const normalLeft = (container.width - normalWidth) / 2;
@@ -162,5 +167,30 @@ export function resolveChatCanvasLayout({
     frame.x + frame.width > detailsCard.left &&
     frame.y < detailsCard.bottom,
   );
-  return { chat, frame, overlapsChat, overlapsDetailsCard };
+  let threadDetailsChat = chat;
+  const reservedCard = keepThreadDetailsVisible
+    ? resolveThreadDetailsCardLayout({
+        container,
+        chat: { left: padding, width: Math.min(normalWidth, minChatWidth) },
+        frame: null,
+      })
+    : null;
+  if (reservedCard) {
+    const right = Math.min(chat.left + chat.width, reservedCard.x - GAP);
+    const width = Math.min(chat.width, right - padding);
+    const left = Math.min(chat.left, right - width);
+    threadDetailsChat = {
+      left,
+      width,
+      insetStart: 0,
+      insetEnd: Math.max(0, container.width - left * 2 - width),
+    };
+  }
+  return {
+    chat: threadDetailsOpen ? threadDetailsChat : chat,
+    threadDetailsChat,
+    frame,
+    overlapsChat,
+    overlapsDetailsCard,
+  };
 }

@@ -23,6 +23,60 @@ const expectClear = (result: ReturnType<typeof resolve>) => {
 };
 
 describe("chat canvas layout", () => {
+  it.each([768, 1024, 1600])(
+    "reserves a readable lane for pinned details at chat width %s",
+    (maxChatWidth) => {
+      for (const width of [924, 1000, 1280, 1600]) {
+        const container = { width, height: 900 };
+        const result = resolveChatCanvasLayout({
+          container,
+          preview: null,
+          maxChatWidth,
+          keepThreadDetailsVisible: true,
+        });
+        const card = resolveThreadDetailsCardLayout({ container, ...result });
+        expect(card).not.toBeNull();
+        expect(result.chat.width).toBeGreaterThanOrEqual(640);
+        expect(result.chat.left + result.chat.width + 12).toBeLessThanOrEqual(card!.x);
+      }
+    },
+  );
+  it("reclaims chat space when details close while keeping their inline placement available", () => {
+    const container = { width: 1200, height: 900 };
+    const result = resolveChatCanvasLayout({
+      container,
+      preview: null,
+      keepThreadDetailsVisible: true,
+      threadDetailsOpen: false,
+    });
+    expect(result.chat).toEqual(resolve(1200, null).chat);
+    expect(
+      resolveThreadDetailsCardLayout({ container, chat: result.threadDetailsChat, frame: null }),
+    ).not.toBeNull();
+  });
+  it("keeps a floating preview clear of the pinned chat lane", () => {
+    const container = { width: 1200, height: 900 };
+    const result = resolveChatCanvasLayout({
+      container,
+      preview,
+      keepThreadDetailsVisible: true,
+    });
+    expectClear(result);
+    expect(resolveThreadDetailsCardLayout({ container, ...result })).not.toBeNull();
+    expect(result.chat.width).toBeGreaterThanOrEqual(640);
+  });
+  it.each([
+    { width: 923, height: 900 },
+    { width: 1280, height: 183 },
+  ])("keeps the popover when a readable inline layout cannot fit: %j", (container) => {
+    const result = resolveChatCanvasLayout({
+      container,
+      preview: null,
+      keepThreadDetailsVisible: true,
+    });
+    expect(result.chat).toEqual(resolveChatCanvasLayout({ container, preview: null }).chat);
+    expect(resolveThreadDetailsCardLayout({ container, ...result })).toBeNull();
+  });
   it("lifts a growing preview above the composer without snapping at the chat boundary", () => {
     let previous: ReturnType<typeof resolve> | undefined;
     for (let width = 480; width <= 1100; width++) {
