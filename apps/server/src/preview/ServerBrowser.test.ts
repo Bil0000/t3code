@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   PreviewAutomationSnapshot,
+  PreviewServerBrowserError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,17 +25,29 @@ import * as ProcessRunner from "../processRunner.ts";
 
 const decodeSnapshot = Schema.decodeUnknownEffect(PreviewAutomationSnapshot);
 const home = process.env.T3_SERVER_BROWSER_TEST_HOME;
+const unsafeBrowserError = new Error("private page text".repeat(5000));
 it.effect("removes the server tab even when page and context teardown fail", () =>
   Effect.gen(function* () {
     const browser = yield* ServerBrowser.ServerBrowser;
     const manager = yield* PreviewManager.PreviewManager;
     const threadId = ThreadId.make("failed-close");
-    yield* browser.open({ threadId });
+    const tab = yield* browser.open({ threadId });
+    const error = yield* Effect.flip(
+      browser.control({
+        threadId,
+        tabId: tab.tabId,
+        action: { _tag: "press", key: "Enter" },
+      }),
+    );
+    expect(error).toBeInstanceOf(PreviewServerBrowserError);
+    expect(error.message).toBe("The server browser action failed.");
+    expect(error.cause).toBe(unsafeBrowserError);
+    expect(error.message).not.toContain("private page text");
     yield* browser.close({ threadId });
     expect((yield* manager.list({ threadId })).sessions).toHaveLength(0);
   }).pipe(
     Effect.provide(
-      ServerBrowser.layer.pipe(
+      Layer.effect(ServerBrowser.ServerBrowser, ServerBrowser.make).pipe(
         Layer.provideMerge(PreviewManager.layer),
         Layer.provide(
           Layer.succeed(BrowserEngine.BrowserEngine, {
@@ -47,6 +60,8 @@ it.effect("removes the server tab even when page and context teardown fail", () 
                   newPage: () =>
                     Promise.resolve({
                       on: () => undefined,
+                      isClosed: () => false,
+                      keyboard: { press: () => Promise.reject(unsafeBrowserError) },
                       setViewportSize: () => Promise.resolve(),
                       close: () => Promise.reject(new Error("Page closed")),
                     }),

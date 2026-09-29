@@ -357,8 +357,23 @@ export class PreviewInvalidUrlError extends Schema.TaggedError<PreviewInvalidUrl
 
 export class PreviewServerBrowserError extends Schema.TaggedError<PreviewServerBrowserError>()(
   "PreviewServerBrowserError",
-  { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
-) {}
+  {
+    stage: Schema.Literals(["install", "launch", "action"]),
+    reason: Schema.Literals(["failed", "checksum", "lock-lost", "closed", "unopened"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message() {
+    if (this.reason === "checksum") return "The browser archive checksum did not match.";
+    if (this.reason === "lock-lost") return "The browser installation lock was lost.";
+    if (this.reason === "closed") return "The server browser tab was closed.";
+    if (this.reason === "unopened") return "Open a server browser tab with preview_open first.";
+    if (this.stage === "install") return "Could not prepare the server browser.";
+    if (this.stage === "launch")
+      return "Could not start the server browser. Check this environment's network access and browser system libraries, then retry.";
+    return "The server browser action failed.";
+  }
+}
 
 export const PreviewServerBrowserInput = Schema.Struct({
   threadId: ThreadId,

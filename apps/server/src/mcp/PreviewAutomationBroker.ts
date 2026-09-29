@@ -38,8 +38,8 @@ import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import { ServerConfig } from "../config.ts";
-import { PreviewManager } from "../preview/Manager.ts";
-import { ServerBrowser } from "../preview/ServerBrowser.ts";
+import * as PreviewManager from "../preview/Manager.ts";
+import * as ServerBrowser from "../preview/ServerBrowser.ts";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -667,9 +667,9 @@ export const serverLayer = Layer.effect(
   PreviewAutomationBroker,
   Effect.gen(function* () {
     const desktop = yield* make;
-    const server = yield* ServerBrowser;
+    const server = yield* ServerBrowser.ServerBrowser;
     const config = yield* ServerConfig;
-    const manager = yield* PreviewManager;
+    const manager = yield* PreviewManager.PreviewManager;
     const runtimes = new WeakMap<McpInvocationContext.McpInvocationScope, "server" | "desktop">();
     return PreviewAutomationBroker.of({
       ...desktop,

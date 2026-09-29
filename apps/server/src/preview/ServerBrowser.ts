@@ -39,8 +39,8 @@ import type { Browser, BrowserContext, Page } from "playwright-core";
 
 import type { PreviewAutomationInvokeInput } from "../mcp/PreviewAutomationBroker.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import { BrowserEngine } from "./BrowserEngine.ts";
-import { PreviewManager } from "./Manager.ts";
+import * as BrowserEngine from "./BrowserEngine.ts";
+import * as PreviewManager from "./Manager.ts";
 
 const isServerBrowserError = Schema.is(PreviewServerBrowserError);
 const decodeOpen = Schema.decodeUnknownEffect(PreviewAutomationOpenInput);
@@ -58,7 +58,8 @@ const failure = (cause: unknown) =>
   isServerBrowserError(cause)
     ? cause
     : new PreviewServerBrowserError({
-        message: cause instanceof Error ? cause.message : "The server browser action failed.",
+        stage: "action",
+        reason: "failed",
         cause,
       });
 const promise = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: failure });
@@ -96,9 +97,9 @@ export class ServerBrowser extends Context.Service<
   }
 >()("t3/preview/ServerBrowser") {}
 
-const make = Effect.gen(function* () {
-  const engine = yield* BrowserEngine;
-  const manager = yield* PreviewManager;
+export const make = Effect.gen(function* () {
+  const engine = yield* BrowserEngine.BrowserEngine;
+  const manager = yield* PreviewManager.PreviewManager;
   const serverScope = yield* Scope.Scope;
   const services = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(services);
@@ -182,9 +183,7 @@ const make = Effect.gen(function* () {
         const tab = result.sessions.find((session) => session.tabId === tabId);
         return tab
           ? Effect.succeed(tab)
-          : Effect.fail(
-              new PreviewServerBrowserError({ message: "The server browser tab was closed." }),
-            );
+          : Effect.fail(new PreviewServerBrowserError({ stage: "action", reason: "closed" }));
       }),
     );
   const status = (threadId: ThreadId, tabId?: string) =>
@@ -456,7 +455,8 @@ const make = Effect.gen(function* () {
     }
     if (!tabId)
       return yield* new PreviewServerBrowserError({
-        message: "Open a server browser tab with preview_open first.",
+        stage: "action",
+        reason: "unopened",
       });
     const target = { threadId, tabId };
     const tab = yield* find(target);

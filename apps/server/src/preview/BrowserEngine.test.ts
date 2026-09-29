@@ -53,7 +53,7 @@ it.effect("tries the next mirror and rejects a corrupt browser archive before ex
       return yield* Effect.flip((yield* BrowserEngine.BrowserEngine).launch);
     }).pipe(
       Effect.provide(
-        BrowserEngine.layer.pipe(
+        Layer.effect(BrowserEngine.BrowserEngine, BrowserEngine.make).pipe(
           Layer.provide(
             Layer.succeed(
               HttpClient.HttpClient,
