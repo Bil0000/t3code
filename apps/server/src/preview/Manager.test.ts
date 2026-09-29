@@ -63,7 +63,7 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
       const threadId = freshThreadId();
       const manager = yield* PreviewManager.PreviewManager;
 
-      const opened = yield* manager.open({ threadId, profileId: "work" });
+      const opened = yield* manager.open({ threadId, profileId: "work", runtime: "server" });
       expect(opened.profileId).toBe("work");
 
       // `navigate` and `reportStatus` rebuild the snapshot field by field
@@ -76,6 +76,7 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
         url: "localhost:5173",
       });
       expect(navigated.profileId).toBe("work");
+      expect(navigated.runtime).toBe("server");
 
       yield* manager.reportStatus({
         threadId,
@@ -86,6 +87,7 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
       });
       const listed = yield* manager.list({ threadId });
       expect(listed.sessions.find((s) => s.tabId === opened.tabId)?.profileId).toBe("work");
+      expect(listed.sessions.find((s) => s.tabId === opened.tabId)?.runtime).toBe("server");
     }),
   );
 

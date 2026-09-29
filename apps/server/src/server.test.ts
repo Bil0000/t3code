@@ -156,6 +156,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import { ServerBrowser } from "./preview/ServerBrowser.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
@@ -971,6 +972,7 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(ServerBrowser)({}),
           Layer.mock(PreviewManager.PreviewManager)({
             open: () => Effect.die("PreviewManager not stubbed in this test"),
             navigate: () => Effect.die("PreviewManager not stubbed in this test"),
@@ -1723,6 +1725,7 @@ const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
         (NodeHttp) =>
           NodeHttpServer.layer(NodeHttp.createServer, {
             port: 0,
+            host: "127.0.0.1",
             websocket: { perMessageDeflate: true },
           }),
       ),
@@ -5329,6 +5332,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.auth.policy, "desktop-managed-local");
       assert.equal(response.shellResumeCompletionMarker, true);
       assert.isUndefined(response.shellRevealInFileManager);
+      assert.equal(response.serverBrowser, true);
       assert.isUndefined(response.shellRevealInFileManagerKind);
       assert.equal(response.threadResumeCompletionMarker, true);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),

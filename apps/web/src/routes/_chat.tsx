@@ -128,12 +128,13 @@ function ChatRouteGlobalShortcuts() {
         event.preventDefault();
         event.stopPropagation();
         if (!routeThreadRef) return;
-        if (!isPreviewSupportedInRuntime()) {
+        if (!isPreviewSupportedInRuntime(routeThreadRef?.environmentId)) {
           toastManager.add(
             stackedThreadToast({
               type: "info",
-              title: "Preview is desktop-only",
-              description: "Open T3 Code in the desktop app to use the in-app preview.",
+              title: "Browser preview is unavailable",
+              description:
+                "Update this T3 server, or use the desktop app to open a browser preview.",
             }),
           );
           return;

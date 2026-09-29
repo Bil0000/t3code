@@ -1022,7 +1022,7 @@ export default function FilePreviewPanel({
     previewPath !== null &&
     attachment === undefined &&
     !isVideo &&
-    isPreviewSupportedInRuntime() &&
+    isPreviewSupportedInRuntime(threadRef.environmentId) &&
     isBrowserPreviewFile(previewPath);
   const absolutePath =
     relativePath && attachment === undefined ? resolvePathLinkTarget(relativePath, cwd) : null;

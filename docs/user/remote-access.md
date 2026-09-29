@@ -3,6 +3,18 @@
 Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
+## Browser on the remote machine
+
+On web and desktop, open the **Browser** panel for a thread. Remote command-line
+environments run the browser on the host. A localhost URL reaches the dev server
+there. Agents can use it while your laptop is asleep; reopening the panel
+reconnects to the same page.
+
+T3 Code downloads the browser on first use. No separate browser tool or dev-server
+tunnel is needed. The host needs internet access for setup and the system libraries
+that Chromium requires. Browser tabs close when the T3 server stops. Imported
+desktop browser profiles and video recording remain desktop features.
+
 ## T3 Connect
 
 T3 Connect makes an environment available to your other devices without setting

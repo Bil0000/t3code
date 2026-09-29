@@ -162,7 +162,11 @@ export const PreviewNavStatus = Schema.Union([
 ]);
 export type PreviewNavStatus = typeof PreviewNavStatus.Type;
 
+export const PreviewRuntime = Schema.Literals(["desktop", "server"]);
+export type PreviewRuntime = typeof PreviewRuntime.Type;
+
 export const PreviewSessionSnapshot = Schema.Struct({
+  runtime: Schema.optional(PreviewRuntime),
   threadId: TrimmedNonEmptyString,
   tabId: PreviewTabId,
   navStatus: PreviewNavStatus,
@@ -181,6 +185,7 @@ export const PreviewSessionSnapshot = Schema.Struct({
 export type PreviewSessionSnapshot = typeof PreviewSessionSnapshot.Type;
 
 export const PreviewOpenInput = Schema.Struct({
+  runtime: Schema.optional(PreviewRuntime),
   threadId: ThreadId,
   /** Omit to create an empty (Idle) tab the user can type into. */
   url: Schema.optional(Url),
@@ -350,5 +355,35 @@ export class PreviewInvalidUrlError extends Schema.TaggedError<PreviewInvalidUrl
   }
 }
 
-export const PreviewError = Schema.Union([PreviewSessionLookupError, PreviewInvalidUrlError]);
+export class PreviewServerBrowserError extends Schema.TaggedError<PreviewServerBrowserError>()(
+  "PreviewServerBrowserError",
+  { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {}
+
+export const PreviewServerBrowserInput = Schema.Struct({
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+  action: Schema.Union([
+    Schema.TaggedStruct("back", {}),
+    Schema.TaggedStruct("forward", {}),
+    Schema.TaggedStruct("click", { x: Schema.Finite, y: Schema.Finite }),
+    Schema.TaggedStruct("press", { key: Schema.String.check(Schema.isMaxLength(128)) }),
+    Schema.TaggedStruct("type", { text: Schema.String.check(Schema.isMaxLength(64000)) }),
+    Schema.TaggedStruct("scroll", { deltaX: Schema.Finite, deltaY: Schema.Finite }),
+  ]),
+});
+export type PreviewServerBrowserInput = typeof PreviewServerBrowserInput.Type;
+
+export const PreviewServerBrowserFrame = Schema.Struct({
+  data: Schema.String.check(Schema.isMaxLength(4000000)),
+  width: PositiveInt,
+  height: PositiveInt,
+});
+export type PreviewServerBrowserFrame = typeof PreviewServerBrowserFrame.Type;
+
+export const PreviewError = Schema.Union([
+  PreviewServerBrowserError,
+  PreviewSessionLookupError,
+  PreviewInvalidUrlError,
+]);
 export type PreviewError = typeof PreviewError.Type;

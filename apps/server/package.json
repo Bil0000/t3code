@@ -51,6 +51,7 @@
     "@types/yauzl": "^3.4.0",
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
+    "playwright-core": "1.60.0",
     "vite-plus": "catalog:"
   },
   "engines": {

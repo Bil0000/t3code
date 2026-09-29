@@ -27,6 +27,11 @@ import * as TestClock from "effect/testing/TestClock";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import * as RpcTest from "effect/unstable/rpc/RpcTest";
 
+import * as Layer from "effect/Layer";
+import { ServerConfig, layerTest } from "../config.ts";
+import { ServerBrowser } from "../preview/ServerBrowser.ts";
+import * as PreviewManager from "../preview/Manager.ts";
+
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
 const makeBroker = PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
@@ -1483,5 +1488,54 @@ it.effect("keeps a host that responds with an operation timeout", () =>
       ).toMatchObject({ _tag: "PreviewAutomationTimeoutError" });
       expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("responsive");
     }),
+  ),
+);
+
+it.effect("routes headless environments to the server and retains explicit desktop routing", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    const calls: string[] = [];
+    const program = Effect.gen(function* () {
+      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const manager = yield* PreviewManager.PreviewManager;
+      expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("server");
+      yield* manager.open({ threadId: scope.threadId, runtime: "server" });
+      expect(
+        (yield* Effect.flip(
+          broker.invoke<void>({ scope, operation: "open", input: { runtime: "desktop" } }),
+        ))._tag,
+      ).toBe("PreviewAutomationNoAvailableHostError");
+      expect(
+        (yield* Effect.flip(broker.invoke<void>({ scope, operation: "status", input: {} })))._tag,
+      ).toBe("PreviewAutomationNoAvailableHostError");
+      expect(yield* broker.invoke({ scope, operation: "open", input: { runtime: "server" } })).toBe(
+        "server",
+      );
+      expect(yield* broker.invoke({ scope, operation: "snapshot", input: {} })).toBe("server");
+      expect(calls).toEqual(["status", "open", "snapshot"]);
+    });
+    yield* program.pipe(
+      Effect.provide(
+        PreviewAutomationBroker.serverLayer.pipe(
+          Layer.provide(
+            Layer.mock(ServerBrowser)({
+              invoke: (input) =>
+                Effect.sync(() => {
+                  calls.push(input.operation);
+                  return "server";
+                }),
+            }).pipe(Layer.orDie),
+          ),
+          Layer.provideMerge(PreviewManager.layer),
+          Layer.provide(Layer.succeed(ServerConfig, config)),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.provide(
+      layerTest(process.cwd(), { prefix: "t3-browser-routing-" }).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
   ),
 );

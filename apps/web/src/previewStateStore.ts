@@ -9,6 +9,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   type DesktopPreviewColorScheme,
+  type EnvironmentId,
   type DesktopPreviewFavicon,
   type PreviewEvent,
   type PreviewListResult,
@@ -19,6 +20,8 @@ import { Atom } from "effect/unstable/reactivity";
 
 import { PREVIEW_RECENT_URL_LIMIT } from "./components/preview/previewConstants";
 import { appAtomRegistry } from "./rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "./state/server";
+import { primaryEnvironmentIdAtom } from "./state/primaryEnvironment";
 
 export interface DesktopPreviewOverlay {
   hasWebContents: boolean;
@@ -459,9 +462,14 @@ export function rememberPreviewUrl(ref: ScopedThreadRef, url: string): void {
   }));
 }
 
-export function isPreviewSupportedInRuntime(): boolean {
+export function isPreviewSupportedInRuntime(environmentId?: EnvironmentId | null): boolean {
   if (typeof window === "undefined") return false;
-  return Boolean(window.desktopBridge?.preview);
+  const target = environmentId ?? appAtomRegistry.get(primaryEnvironmentIdAtom);
+  return (
+    Boolean(window.desktopBridge?.preview) ||
+    (target !== null &&
+      appAtomRegistry.get(environmentServerConfigsAtom).get(target)?.serverBrowser === true)
+  );
 }
 
 export function resetPreviewStateForTests(): void {

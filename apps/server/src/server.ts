@@ -78,6 +78,8 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as BrowserEngine from "./preview/BrowserEngine.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -421,7 +423,8 @@ const TerminalLayerLive = TerminalManager.layer.pipe(
   Layer.provide(NativeTelemetryLayerLive),
 );
 
-const PreviewLayerLive = Layer.empty.pipe(
+const PreviewLayerLive = ServerBrowser.layer.pipe(
+  Layer.provide(BrowserEngine.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provideMerge(PreviewManager.layer),
   Layer.provideMerge(PortScannerLayerLive),
 );
@@ -618,7 +621,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(PreviewAutomationBroker.serverLayer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),

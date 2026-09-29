@@ -8,7 +8,7 @@
  *
  * @module browserLinkTarget
  */
-import type { BrowserLinkTarget } from "@t3tools/contracts";
+import type { BrowserLinkTarget, EnvironmentId } from "@t3tools/contracts";
 
 import { ensureClientSettingsHydrated, getClientSettings } from "~/hooks/useSettings";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
@@ -63,6 +63,6 @@ export async function resolveBrowserLinkTargetPreference(): Promise<BrowserLinkT
 }
 
 /** Whether the in-app target is available at all in this client. */
-export function canOpenLinksInApp(hasThread: boolean): boolean {
-  return hasThread && isPreviewSupportedInRuntime();
+export function canOpenLinksInApp(hasThread: boolean, environmentId?: EnvironmentId): boolean {
+  return hasThread && isPreviewSupportedInRuntime(environmentId);
 }

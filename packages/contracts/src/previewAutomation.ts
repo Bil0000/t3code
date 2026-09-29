@@ -8,6 +8,8 @@ import {
   PreviewViewportPresetId,
   PreviewViewportSetting,
   PreviewViewportSize,
+  PreviewRuntime,
+  PreviewServerBrowserError,
 } from "./preview.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -78,6 +80,10 @@ export const PreviewAutomationStatus = Schema.Struct({
 export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;
 
 export const PreviewAutomationOpenInput = Schema.Struct({
+  runtime: Schema.optional(PreviewRuntime).annotate({
+    description:
+      "Use server to keep the browser running when clients disconnect. Desktop uses a connected desktop app. Defaults to server on headless environments.",
+  }),
   ...PreviewAutomationTabTargetFields,
   url: Schema.optional(BoundedUrl).annotate({
     description: `Optional initial page URL. ${URL_GUIDANCE} Omit to open a blank tab.`,
@@ -923,6 +929,7 @@ export class PreviewAutomationRecordingDeadlineExpiredError extends Schema.Tagge
 }
 
 export const PreviewAutomationError = Schema.Union([
+  PreviewServerBrowserError,
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
   PreviewAutomationRecordingTooLargeError,

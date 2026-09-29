@@ -48,7 +48,7 @@ export async function openTerminalLinkInPreview<E>(
   const supportsPreview =
     !input.forceBrowser &&
     isWebUrl(input.url) &&
-    isPreviewSupportedInRuntime() &&
+    isPreviewSupportedInRuntime(input.threadRef.environmentId) &&
     input.threadRef.threadId.length > 0 &&
     (await resolveBrowserLinkTargetPreference()) === "app";
 

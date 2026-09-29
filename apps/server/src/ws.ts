@@ -129,6 +129,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import { ServerBrowser } from "./preview/ServerBrowser.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -560,6 +561,15 @@ const makeWsRpcLayer = (
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
+      const serverBrowser = yield* ServerBrowser;
+      const usesServerBrowser = (input: { threadId: ThreadId; tabId: string }) =>
+        previewManager
+          .list(input)
+          .pipe(
+            Effect.map(({ sessions }) =>
+              sessions.some((tab) => tab.tabId === input.tabId && tab.runtime === "server"),
+            ),
+          );
       const deviceService = yield* DeviceService.DeviceService;
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
@@ -1856,6 +1866,7 @@ const makeWsRpcLayer = (
               otlpLogsEnabled: config.otlpLogsUrl !== undefined,
             },
             settings,
+            serverBrowser: true,
             shellResumeCompletionMarker: true,
             ...(fileManagerRevealKind === undefined
               ? {}
@@ -3486,24 +3497,62 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "terminal" },
           ),
+        [WS_METHODS.previewServerBrowserControl]: (input) =>
+          observeRpcEffect(WS_METHODS.previewServerBrowserControl, serverBrowser.control(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewServerBrowserFrames]: (input) =>
+          observeRpcStream(WS_METHODS.previewServerBrowserFrames, serverBrowser.watch(input), {
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewOpen]: (input) =>
-          observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {
-            "rpc.aggregate": "preview",
-          }),
+          observeRpcEffect(
+            WS_METHODS.previewOpen,
+            (input.runtime ?? (config.mode === "web" ? "server" : "desktop")) === "server"
+              ? serverBrowser.open(input)
+              : previewManager.open(input),
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
         [WS_METHODS.previewNavigate]: (input) =>
-          observeRpcEffect(WS_METHODS.previewNavigate, previewManager.navigate(input), {
-            "rpc.aggregate": "preview",
-          }),
+          observeRpcEffect(
+            WS_METHODS.previewNavigate,
+            usesServerBrowser(input).pipe(
+              Effect.flatMap((server) =>
+                server ? serverBrowser.navigate(input) : previewManager.navigate(input),
+              ),
+            ),
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
         [WS_METHODS.previewResize]: (input) =>
-          observeRpcEffect(WS_METHODS.previewResize, previewManager.resize(input), {
-            "rpc.aggregate": "preview",
-          }),
+          observeRpcEffect(
+            WS_METHODS.previewResize,
+            usesServerBrowser(input).pipe(
+              Effect.flatMap((server) =>
+                server ? serverBrowser.resize(input) : previewManager.resize(input),
+              ),
+            ),
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
         [WS_METHODS.previewRefresh]: (input) =>
-          observeRpcEffect(WS_METHODS.previewRefresh, previewManager.refresh(input), {
-            "rpc.aggregate": "preview",
-          }),
+          observeRpcEffect(
+            WS_METHODS.previewRefresh,
+            usesServerBrowser(input).pipe(
+              Effect.flatMap((server) =>
+                server ? serverBrowser.refresh(input) : previewManager.refresh(input),
+              ),
+            ),
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
         [WS_METHODS.previewClose]: (input) =>
-          observeRpcEffect(WS_METHODS.previewClose, previewManager.close(input), {
+          observeRpcEffect(WS_METHODS.previewClose, serverBrowser.close(input), {
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewList]: (input) =>
@@ -3511,9 +3560,17 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewReportStatus]: (input) =>
-          observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
-            "rpc.aggregate": "preview",
-          }),
+          observeRpcEffect(
+            WS_METHODS.previewReportStatus,
+            usesServerBrowser(input).pipe(
+              Effect.flatMap((server) =>
+                server ? Effect.void : previewManager.reportStatus(input),
+              ),
+            ),
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
         [WS_METHODS.previewAutomationConnect]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.previewAutomationConnect,

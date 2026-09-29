@@ -192,6 +192,8 @@ import {
 import {
   DiscoveredLocalServerList,
   ConfiguredLocalServerUrls,
+  PreviewServerBrowserFrame,
+  PreviewServerBrowserInput,
   PreviewCloseInput,
   PreviewError,
   PreviewEvent,
@@ -352,6 +354,8 @@ export const WS_METHODS = {
   terminalClose: "terminal.close",
 
   // Preview methods
+  previewServerBrowserControl: "preview.serverBrowserControl",
+  previewServerBrowserFrames: "preview.serverBrowserFrames",
   previewOpen: "preview.open",
   previewNavigate: "preview.navigate",
   previewResize: "preview.resize",
@@ -1183,6 +1187,18 @@ const WsTerminalCloseRpc = Rpc.make(WS_METHODS.terminalClose, {
   error: Schema.Union([TerminalError, EnvironmentAuthorizationError]),
 });
 
+const WsPreviewServerBrowserControlRpc = Rpc.make(WS_METHODS.previewServerBrowserControl, {
+  payload: PreviewServerBrowserInput,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+const WsPreviewServerBrowserFramesRpc = Rpc.make(WS_METHODS.previewServerBrowserFrames, {
+  payload: PreviewRefreshInput,
+  success: PreviewServerBrowserFrame,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 const WsPreviewOpenRpc = Rpc.make(WS_METHODS.previewOpen, {
   payload: PreviewOpenInput,
   success: PreviewSessionSnapshot,
@@ -1542,6 +1558,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalCloseRpc,
   WsSubscribeTerminalEventsRpc,
   WsSubscribeTerminalMetadataRpc,
+  WsPreviewServerBrowserControlRpc,
+  WsPreviewServerBrowserFramesRpc,
   WsPreviewOpenRpc,
   WsPreviewNavigateRpc,
   WsPreviewResizeRpc,

@@ -37,6 +37,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+import { ServerConfig } from "../config.ts";
+import { PreviewManager } from "../preview/Manager.ts";
+import { ServerBrowser } from "../preview/ServerBrowser.ts";
+
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 export interface PreviewAutomationInvokeInput {
@@ -658,3 +662,42 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
 export const layer = Layer.effect(PreviewAutomationBroker, make);
+
+export const serverLayer = Layer.effect(
+  PreviewAutomationBroker,
+  Effect.gen(function* () {
+    const desktop = yield* make;
+    const server = yield* ServerBrowser;
+    const config = yield* ServerConfig;
+    const manager = yield* PreviewManager;
+    const runtimes = new Map<string, "server" | "desktop">();
+    return PreviewAutomationBroker.of({
+      ...desktop,
+      invoke: <A>(input: PreviewAutomationInvokeInput) =>
+        Effect.gen(function* () {
+          const session = `${input.scope.threadId}\u0000${input.scope.providerSessionId}`;
+          const requested =
+            input.operation === "open" &&
+            typeof input.input === "object" &&
+            input.input !== null &&
+            "runtime" in input.input
+              ? input.input.runtime
+              : undefined;
+          const listed = yield* manager.list({ threadId: input.scope.threadId });
+          const current = listed.sessions.find((tab) =>
+            input.tabId ? tab.tabId === input.tabId : tab.runtime === "server",
+          );
+          const runtime =
+            requested === "server" || requested === "desktop"
+              ? requested
+              : ((input.tabId ? current?.runtime : runtimes.get(session)) ??
+                current?.runtime ??
+                (config.mode === "web" ? "server" : "desktop"));
+          runtimes.set(session, runtime);
+          return yield* runtime === "server"
+            ? (server.invoke(input) as Effect.Effect<A, PreviewAutomationError>)
+            : desktop.invoke<A>(input);
+        }),
+    });
+  }),
+);

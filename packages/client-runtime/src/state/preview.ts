@@ -29,6 +29,17 @@ export function createPreviewEnvironmentAtoms<R, E>(
       JSON.stringify([environmentId, input.threadId]),
   };
   return {
+    serverBrowserFrames: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:preview:server-browser-frames",
+      tag: WS_METHODS.previewServerBrowserFrames,
+      idleTtlMs: 0,
+    }),
+    serverBrowserControl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:server-browser-control",
+      tag: WS_METHODS.previewServerBrowserControl,
+      scheduler: lifecycleScheduler,
+      concurrency: lifecycleConcurrency,
+    }),
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:preview:list",
       tag: WS_METHODS.previewList,

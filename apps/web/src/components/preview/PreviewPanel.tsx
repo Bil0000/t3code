@@ -3,7 +3,11 @@
 import type { PreviewAnnotationPayload, ScopedThreadRef } from "@t3tools/contracts";
 
 import type { ComposerImageAttachment } from "~/composerDraftStore";
-import { isPreviewSupportedInRuntime } from "~/previewStateStore";
+import { useServerConfigs } from "~/state/entities";
+import { usePreviewSession } from "./usePreviewSession";
+import { usePrimaryEnvironmentId } from "~/state/environments";
+import { ServerBrowserPanel } from "./ServerBrowserPanel";
+import { useThreadPreviewState } from "~/previewStateStore";
 
 import { PreviewPanelShell, type PreviewPanelMode } from "./PreviewPanelShell";
 import { PreviewView } from "./PreviewView";
@@ -28,14 +32,26 @@ export function PreviewPanel({
   visible,
   onSendAnnotation,
 }: Props) {
-  if (!isPreviewSupportedInRuntime()) {
+  usePreviewSession(threadRef);
+  const supportsServerBrowser =
+    useServerConfigs().get(threadRef.environmentId)?.serverBrowser === true;
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const state = useThreadPreviewState(threadRef);
+  const snapshot = state.sessions[tabId ?? state.activeTabId ?? ""];
+  if (
+    snapshot?.runtime === "server" ||
+    (supportsServerBrowser &&
+      (!window.desktopBridge?.preview ||
+        (!snapshot && threadRef.environmentId !== primaryEnvironmentId)))
+  ) {
     return (
       <PreviewPanelShell mode={mode}>
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-          <p className="max-w-sm text-sm text-muted-foreground">
-            Preview is only available in the T3 Code desktop app.
-          </p>
-        </div>
+        <ServerBrowserPanel
+          threadRef={threadRef}
+          tabId={tabId}
+          visible={visible}
+          configuredUrls={configuredUrls}
+        />
       </PreviewPanelShell>
     );
   }
