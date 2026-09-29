@@ -1,0 +1,46 @@
+name: Pen assets cloud proof
+on:
+  push:
+    branches: [t3code/pen-app-store-cloud-proof]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+              - --filter=@t3tools/oxlint-plugin-t3code...
+      - run: npm install --global @pen.dev/cli@0.3.9
+      - name: Download proven iOS captures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 36075439990 --repo pingdotgg/t3code --name app-store-connect-screenshots --dir artifacts/app-store/screenshots/apple
+      - name: Focused tests
+        run: vp test run scripts/mobile-showcase-assets.test.ts scripts/mobile-showcase.test.ts
+      - name: Export both appearances
+        env:
+          PEN_CLI_KEY: ${{ secrets.PEN_CLI_KEY }}
+        run: node scripts/mobile-showcase-assets.ts --appearance both --theme t3-code
+      - name: Export unchanged reference design
+        env:
+          PEN_CLI_KEY: ${{ secrets.PEN_CLI_KEY }}
+        run: |
+          cp -R scripts/mobile-showcase-assets "$RUNNER_TEMP/pen-reference"
+          pen interactive --in "$RUNNER_TEMP/pen-reference/app-store.pen" --out "$RUNNER_TEMP/pen-reference/render.pen" <<EOF_PEN
+          execute({input: 'Export(["VzYVc", "HTuJU", "aJlvZ", "xEv0b", "Fv2DI", "cPgee", "Uv0Se", "vLscN", "jvvlj", "E9ELUC", "R4sQ6I", "eYCoY", "E3y7Q", "mivY7"], "png", "${GITHUB_WORKSPACE}/artifacts/reference", {scale: 1})'})
+          exit()
+          EOF_PEN
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pen-cloud-proof
+          path: artifacts/
+          if-no-files-found: error
