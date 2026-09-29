@@ -670,12 +670,11 @@ export const serverLayer = Layer.effect(
     const server = yield* ServerBrowser;
     const config = yield* ServerConfig;
     const manager = yield* PreviewManager;
-    const runtimes = new Map<string, "server" | "desktop">();
+    const runtimes = new WeakMap<McpInvocationContext.McpInvocationScope, "server" | "desktop">();
     return PreviewAutomationBroker.of({
       ...desktop,
       invoke: <A>(input: PreviewAutomationInvokeInput) =>
         Effect.gen(function* () {
-          const session = `${input.scope.threadId}\u0000${input.scope.providerSessionId}`;
           const requested =
             input.operation === "open" &&
             typeof input.input === "object" &&
@@ -690,10 +689,10 @@ export const serverLayer = Layer.effect(
           const runtime =
             requested === "server" || requested === "desktop"
               ? requested
-              : ((input.tabId ? current?.runtime : runtimes.get(session)) ??
+              : ((input.tabId ? current?.runtime : runtimes.get(input.scope)) ??
                 current?.runtime ??
                 (config.mode === "web" ? "server" : "desktop"));
-          runtimes.set(session, runtime);
+          runtimes.set(input.scope, runtime);
           return yield* runtime === "server"
             ? (server.invoke(input) as Effect.Effect<A, PreviewAutomationError>)
             : desktop.invoke<A>(input);

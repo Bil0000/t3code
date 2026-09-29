@@ -38,6 +38,7 @@ import * as Stream from "effect/Stream";
 import type { Browser, BrowserContext, Page } from "playwright-core";
 
 import type { PreviewAutomationInvokeInput } from "../mcp/PreviewAutomationBroker.ts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { BrowserEngine } from "./BrowserEngine.ts";
 import { PreviewManager } from "./Manager.ts";
 
@@ -95,7 +96,7 @@ export class ServerBrowser extends Context.Service<
   }
 >()("t3/preview/ServerBrowser") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const engine = yield* BrowserEngine;
   const manager = yield* PreviewManager;
   const serverScope = yield* Scope.Scope;
@@ -111,7 +112,7 @@ export const make = Effect.gen(function* () {
       frames: Stream.Stream<PreviewServerBrowserFrame, PreviewServerBrowserError>;
     }
   >();
-  const currentTabs = new Map<string, string>();
+  let currentTabs = new WeakMap<McpInvocationScope, string>();
   const diagnostics = new Map<
     string,
     Pick<PreviewAutomationSnapshot, "consoleEntries" | "networkEntries">
@@ -129,7 +130,7 @@ export const make = Effect.gen(function* () {
         }
         contexts.clear();
         pages.clear();
-        currentTabs.clear();
+        currentTabs = new WeakMap();
         diagnostics.clear();
         browser = yield* Effect.acquireRelease(engine.launch, (owned) =>
           promise(() => owned.close()).pipe(Effect.ignore),
@@ -347,15 +348,12 @@ export const make = Effect.gen(function* () {
             continue;
           pages.delete(id);
           diagnostics.delete(id);
-          for (const [session, current] of currentTabs)
-            if (session.startsWith(`${input.threadId}\u0000`) && current === id.split("\u0000")[1])
-              currentTabs.delete(session);
-          yield* promise(() => tab.page.close());
+          yield* promise(() => tab.page.close()).pipe(Effect.ignore);
         }
         if (![...pages.keys()].some((id) => id.startsWith(`${input.threadId}\u0000`))) {
           const context = contexts.get(input.threadId);
           contexts.delete(input.threadId);
-          if (context) yield* promise(() => context.close());
+          if (context) yield* promise(() => context.close()).pipe(Effect.ignore);
         }
         yield* manager.close(input).pipe(Effect.mapError(failure));
       }),
@@ -438,11 +436,11 @@ export const make = Effect.gen(function* () {
     request: PreviewAutomationInvokeInput,
   ) {
     const threadId = request.scope.threadId;
-    const sessionKey = `${threadId}\u0000${request.scope.providerSessionId}`;
     const listed = yield* manager.list({ threadId });
+    const assigned = currentTabs.get(request.scope);
     let tabId =
       request.tabId ??
-      currentTabs.get(sessionKey) ??
+      (assigned && pages.has(key(threadId, assigned)) ? assigned : undefined) ??
       listed.sessions.find((session) => session.runtime === "server")?.tabId;
     if (request.operation === "status") return yield* status(threadId, tabId);
     if (request.operation === "open") {
@@ -452,7 +450,7 @@ export const make = Effect.gen(function* () {
       } else if (input.url) {
         yield* navigate({ threadId, tabId, url: input.url });
       }
-      currentTabs.set(sessionKey, tabId);
+      currentTabs.set(request.scope, tabId);
       request.onTargetTab?.(tabId);
       return yield* status(threadId, tabId);
     }
@@ -463,7 +461,7 @@ export const make = Effect.gen(function* () {
     const target = { threadId, tabId };
     const tab = yield* find(target);
     request.onTargetTab?.(tabId);
-    if (request.updateCurrentTab !== false) currentTabs.set(sessionKey, tabId);
+    if (request.updateCurrentTab !== false) currentTabs.set(request.scope, tabId);
     if (request.operation === "navigate") {
       const input = yield* decodeNavigate(request.input).pipe(Effect.mapError(failure));
       const url =

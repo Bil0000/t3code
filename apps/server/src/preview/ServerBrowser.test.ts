@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/unstable/http";
 import * as NodeHttp from "node:http";
 import { expect, describe } from "vite-plus/test";
+import type { Browser } from "playwright-core";
 
 import * as BrowserEngine from "./BrowserEngine.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
@@ -23,6 +24,41 @@ import * as ProcessRunner from "../processRunner.ts";
 
 const decodeSnapshot = Schema.decodeUnknownEffect(PreviewAutomationSnapshot);
 const home = process.env.T3_SERVER_BROWSER_TEST_HOME;
+it.effect("removes the server tab even when page and context teardown fail", () =>
+  Effect.gen(function* () {
+    const browser = yield* ServerBrowser.ServerBrowser;
+    const manager = yield* PreviewManager.PreviewManager;
+    const threadId = ThreadId.make("failed-close");
+    yield* browser.open({ threadId });
+    yield* browser.close({ threadId });
+    expect((yield* manager.list({ threadId })).sessions).toHaveLength(0);
+  }).pipe(
+    Effect.provide(
+      ServerBrowser.layer.pipe(
+        Layer.provideMerge(PreviewManager.layer),
+        Layer.provide(
+          Layer.succeed(BrowserEngine.BrowserEngine, {
+            launch: Effect.succeed({
+              isConnected: () => true,
+              close: () => Promise.resolve(),
+              newContext: () =>
+                Promise.resolve({
+                  close: () => Promise.reject(new Error("Context closed")),
+                  newPage: () =>
+                    Promise.resolve({
+                      on: () => undefined,
+                      setViewportSize: () => Promise.resolve(),
+                      close: () => Promise.reject(new Error("Page closed")),
+                    }),
+                }),
+            } as unknown as Browser),
+          }),
+        ),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+  ),
+);
 describe.skipIf(!home)("managed server browser", () => {
   it.live(
     "works without a viewer, keeps state after reconnect, and isolates threads",
@@ -88,6 +124,16 @@ describe.skipIf(!home)("managed server browser", () => {
         expect(diagnostics.networkEntries.some((entry) => entry.status === 200)).toBe(true);
         expect(yield* invoke("evaluate", { expression: "document.cookie" })).toContain("saved=yes");
         expect(yield* invoke("evaluate", { expression: "null" })).toBeNull();
+        yield* invoke("evaluate", {
+          expression:
+            "const button = document.createElement('button'); button.setAttribute('data-testid', 'control\\n\"value'); button.textContent = 'Special'; button.onclick = () => button.textContent = 'Clicked'; document.body.append(button)",
+        });
+        const special = (yield* decodeSnapshot(yield* invoke("snapshot"))).interactiveElements.find(
+          (element) => element.name === "Special",
+        );
+        expect(special).toBeDefined();
+        yield* invoke("click", { selector: special!.selector });
+        yield* invoke("waitFor", { text: "Clicked" });
         const reconnected = yield* browser
           .watch({ threadId: scope.threadId, tabId: opened.tabId })
           .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("10 seconds"));

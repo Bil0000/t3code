@@ -3,7 +3,7 @@ export const PREVIEW_PAGE_SNAPSHOT_SCRIPT = `(() => {
             if (element.id) return "#" + CSS.escape(element.id);
             for (const attribute of ["data-testid", "name"]) {
               const value = element.getAttribute(attribute);
-              if (value) return element.tagName.toLowerCase() + "[" + attribute + "=" + JSON.stringify(value) + "]";
+              if (value) return element.tagName.toLowerCase() + "[" + attribute + "=" + CSS.escape(value) + "]";
             }
             const buildParts = (current, parts = []) => {
               if (!current || current.nodeType !== Node.ELEMENT_NODE || parts.length >= 8) {

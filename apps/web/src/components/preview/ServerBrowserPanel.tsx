@@ -123,7 +123,12 @@ export function ServerBrowserPanel({
         </p>
       ) : null}
       {snapshot && visible ? (
-        <ServerBrowserFrame threadRef={threadRef} tabId={snapshot.tabId} onAction={run} />
+        <ServerBrowserFrame
+          threadRef={threadRef}
+          tabId={snapshot.tabId}
+          onAction={run}
+          onExit={() => setFocusUrlNonce((value) => value + 1)}
+        />
       ) : !snapshot ? (
         <PreviewEmptyState
           threadRef={threadRef}
@@ -142,10 +147,12 @@ function ServerBrowserFrame({
   threadRef,
   tabId,
   onAction,
+  onExit,
 }: {
   threadRef: ScopedThreadRef;
   tabId: string;
   onAction: (action: PreviewServerBrowserInput["action"]) => Promise<void>;
+  onExit: () => void;
 }) {
   const frame = useAtomValue(
     previewEnvironment.serverBrowserFrames({
@@ -165,7 +172,7 @@ function ServerBrowserFrame({
     <div className="flex min-h-0 flex-1 items-start justify-center overflow-auto bg-white">
       <img
         src={`data:image/jpeg;base64,${frame.value.data}`}
-        alt="Server browser. Click to interact, then type."
+        alt="Server browser. Click to interact. Press Shift+Escape to return to the URL."
         role="button"
         draggable={false}
         tabIndex={0}
@@ -182,9 +189,15 @@ function ServerBrowserFrame({
         }}
         onKeyDown={(event) => {
           event.stopPropagation();
+          if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;
+          if (event.shiftKey && event.key === "Escape") {
+            event.preventDefault();
+            onExit();
+            return;
+          }
           if (
-            ["Control", "Meta", "Alt", "Shift"].includes(event.key) ||
-            (event.key === "Tab" && !event.ctrlKey && !event.metaKey)
+            ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") ||
+            (event.shiftKey && event.key === "Insert")
           )
             return;
           event.preventDefault();
@@ -205,6 +218,7 @@ function ServerBrowserFrame({
             });
         }}
         onPaste={(event) => {
+          event.stopPropagation();
           event.preventDefault();
           void onAction({ _tag: "type", text: event.clipboardData.getData("text") });
         }}
