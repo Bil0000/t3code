@@ -810,11 +810,43 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
       result: { content: [] },
     };
     assert.equal(projectCodexDynamicToolItem(call).title, "Inspect Saga music screen");
-    assert.equal(
-      projectCodexDynamicToolItem({ ...call, arguments: { title: "  " } }).title,
-      undefined,
-    );
-    assert.equal(projectCodexDynamicToolItem({ ...call, server: "github" }).title, undefined);
+    assert.equal(projectCodexDynamicToolItem({ ...call, arguments: { title: "  " } }).title, "js");
+    assert.equal(projectCodexDynamicToolItem({ ...call, server: "github" }).title, "js");
+  });
+
+  it.each(["inProgress", "completed", "failed"] as const)(
+    "presents ordinary MCP calls when %s",
+    (status) => {
+      const projection = projectCodexDynamicToolItem({
+        type: "mcpToolCall",
+        id: "weather-call",
+        server: "weather",
+        tool: "get_weather",
+        status,
+        arguments: { city: "Berlin" },
+      });
+      assert.equal(projection.title, "get weather");
+      assert.deepEqual(projection.toolSource, {
+        key: "mcp:weather",
+        name: "weather",
+        kind: "integration",
+      });
+      assert.deepEqual(projection.input, { city: "Berlin" });
+    },
+  );
+
+  it("uses Codex connector names without reading a display title from arguments", () => {
+    const projection = projectCodexDynamicToolItem({
+      type: "mcpToolCall",
+      id: "connector-call",
+      server: "_apps",
+      tool: "connector_get_weather",
+      status: "completed",
+      arguments: { title: "Argument, not display metadata" },
+      appContext: { connectorId: "weather-app", appName: "Weather", actionName: "Check weather" },
+    });
+    assert.equal(projection.title, "Check weather");
+    assert.equal(projection.toolSource?.name, "Weather");
   });
 
   it("preserves native browser and app icons alongside MCP tool output", () => {

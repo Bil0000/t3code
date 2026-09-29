@@ -57,6 +57,7 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { mcpToolPresentation } from "../../provider/McpToolPresentation.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
@@ -315,6 +316,7 @@ interface ActiveOpenCodeTurn {
   readonly parts: Map<string, Exclude<OpenCodePart, ToolPart>>;
   readonly partIdsByMessage: Map<string, Set<string>>;
   readonly toolNamesByCallId: Map<string, string>;
+  mcpServerNames?: ReadonlyArray<string>;
   readonly providerTurn: OrchestrationV2ProviderTurn;
   nextItemOrdinal: number;
   nativeUserMessageId: string | null;
@@ -1666,7 +1668,29 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
           >;
           const input = toolInput(part);
           const output = toolOutput(part);
-          const projectionKind = openCodeToolProjectionKind(part.tool);
+          if (part.tool.includes("_") && turn.mcpServerNames === undefined) {
+            turn.mcpServerNames = yield* runOpenCodeSdk("mcp.status", () =>
+              client.mcp.status(),
+            ).pipe(
+              Effect.map((response) => Object.keys(response.data ?? {})),
+              Effect.catch(() => Effect.succeed([])),
+            );
+          }
+          const matchingServers = turn.mcpServerNames?.filter((name) =>
+            part.tool.startsWith(`${name.replace(/[^a-zA-Z0-9_-]/g, "_")}_`),
+          );
+          const serverName = matchingServers?.length === 1 ? matchingServers[0] : undefined;
+          const presentation =
+            serverName === undefined
+              ? {}
+              : mcpToolPresentation({
+                  serverName,
+                  toolName: part.tool.slice(serverName.replace(/[^a-zA-Z0-9_-]/g, "_").length + 1),
+                  title: toolTitle(part) === part.tool ? undefined : toolTitle(part),
+                });
+          const projectionKind = matchingServers?.length
+            ? "dynamic_tool"
+            : openCodeToolProjectionKind(part.tool);
           let turnItem: OrchestrationV2TurnItem;
           if (projectionKind === "command_execution") {
             turnItem = {
@@ -1739,6 +1763,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                   ? formatReadToolLabel(readPath)
                   : base.title,
               type: "dynamic_tool",
+              ...presentation,
               toolName: part.tool,
               input,
               ...(output === undefined ? {} : { output }),

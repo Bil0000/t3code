@@ -1076,6 +1076,17 @@ describe("AcpAdapterV2", () => {
                       },
                     },
                     {
+                      sessionUpdate: "tool_call",
+                      toolCallId: "child-weather",
+                      title: "Check weather",
+                      status: "completed",
+                      rawInput: { server: "weather", tool: "get_weather", city: "Berlin" },
+                      _meta: {
+                        is_mcp_tool_call: true,
+                        "cognition.ai/subagent_context": { parentAgentId: "child-a" },
+                      },
+                    },
+                    {
                       sessionUpdate: "agent_message_chunk",
                       content: { type: "text", text: " → decider → event)." },
                       _meta: { "cognition.ai/streamingMessageId": "parent-message" },
@@ -1192,6 +1203,18 @@ describe("AcpAdapterV2", () => {
       );
       assert.deepEqual([...childMessages.values()], ["Checking the code.", "ONE"]);
       assert.equal(task?.prompt, "Run pwd, then reply ONE.");
+      const childMcp = items.find(
+        (item) =>
+          item.threadId === task?.childThreadId &&
+          item.type === "dynamic_tool" &&
+          item.toolName === "weather.get_weather",
+      );
+      assert.equal(childMcp?.title, "get weather");
+      assert.deepEqual(childMcp?.toolSource, {
+        key: "mcp:weather",
+        name: "weather",
+        kind: "integration",
+      });
       assert.isTrue(
         items.some(
           (item) =>
