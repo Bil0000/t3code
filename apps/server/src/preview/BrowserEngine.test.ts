@@ -72,6 +72,8 @@ it.effect("tries the next mirror and rejects a corrupt browser archive before ex
       ),
     );
     expect(result._tag).toBe("PreviewServerBrowserError");
+    expect(result.stage).toBe("install");
+    expect(result.reason).toBe("checksum");
     expect(requests).toEqual(urls);
     expect(yield* fs.exists(marker)).toBe(false);
     expect(yield* fs.exists(path.join(directory, "chromium"))).toBe(false);
@@ -96,6 +98,8 @@ it.effect(
       const path = yield* Path.Path;
       const result = yield* Effect.flip(engine.launch);
       expect(result._tag).toBe("PreviewServerBrowserError");
+      expect(result.stage).toBe("install");
+      expect(result.reason).toBe("checksum");
       expect(
         yield* fs.readDirectory(
           path.join(

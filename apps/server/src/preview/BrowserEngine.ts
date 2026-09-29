@@ -125,7 +125,10 @@ export const make = Effect.gen(function* () {
                     crypto.subtle.digest("SHA-512", archive),
                   );
                   if (Encoding.encodeBase64(new Uint8Array(digest)) !== SDK_INTEGRITY)
-                    throw new Error("The browser runtime checksum did not match.");
+                    return yield* new PreviewServerBrowserError({
+                      stage: "install",
+                      reason: "checksum",
+                    });
                   const archivePath = path.join(staging, "sdk.tgz");
                   yield* fs.writeFile(archivePath, archive);
                   const extracted = yield* runner.run({
