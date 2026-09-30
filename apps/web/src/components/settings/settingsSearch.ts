@@ -604,6 +604,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   {
+    id: "server-browser",
+    title: "Server browser",
+    to: "/settings/integrations",
+    searchTerms: ["install chromium remote environment preview download retry version"],
+    environmentOnly: true,
+  },
+  {
     id: "browser-profiles",
     title: "Browser profiles",
     to: "/settings/integrations",

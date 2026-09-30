@@ -8,7 +8,10 @@ import {
   resolveBrowserDefaults,
 } from "~/browser/browserDefaults";
 import { isWebUrl, resolveBrowserLinkTargetPreference } from "~/browser/browserLinkTarget";
-import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
+import {
+  openServerBrowserInstallPrompt,
+  type OpenPreviewMutation,
+} from "~/browser/openFileInPreview";
 import { recordVisitForThread } from "~/browserHistoryStore";
 import { applyPreviewServerSnapshot, isPreviewSupportedInRuntime } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
@@ -76,7 +79,10 @@ export async function openTerminalLinkInPreview<E>(
     },
   });
   if (result._tag === "Failure") {
-    if (isAtomCommandInterrupted(result)) {
+    if (
+      isAtomCommandInterrupted(result) ||
+      openServerBrowserInstallPrompt(input.threadRef, result.cause, input.url)
+    ) {
       return;
     }
     console.error(

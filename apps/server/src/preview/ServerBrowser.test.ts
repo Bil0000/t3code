@@ -51,6 +51,8 @@ it.effect("removes the server tab even when page and context teardown fail", () 
         Layer.provideMerge(PreviewManager.layer),
         Layer.provide(
           Layer.succeed(BrowserEngine.BrowserEngine, {
+            install: Effect.void,
+            installation: Stream.empty,
             launch: Effect.succeed({
               isConnected: () => true,
               close: () => Promise.resolve(),
@@ -100,6 +102,13 @@ describe.skipIf(!home)("managed server browser", () => {
         const address = fixture.address();
         if (!address || typeof address === "string") throw new Error("Missing fixture port");
         const browser = yield* ServerBrowser.ServerBrowser;
+        yield* browser.install;
+        const [installation] = yield* browser.installation.pipe(
+          Stream.filter((status) => status.state !== "installing"),
+          Stream.take(1),
+          Stream.runCollect,
+        );
+        expect(installation?.state).toBe("installed");
         const scope = {
           environmentId: EnvironmentId.make("test-env"),
           threadId: ThreadId.make("test-thread"),

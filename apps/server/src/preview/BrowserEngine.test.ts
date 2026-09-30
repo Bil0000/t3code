@@ -1,9 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { expect } from "vite-plus/test";
@@ -50,7 +52,14 @@ it.effect("tries the next mirror and rejects a corrupt browser archive before ex
     );
     const requests: string[] = [];
     const result = yield* Effect.gen(function* () {
-      return yield* Effect.flip((yield* BrowserEngine.BrowserEngine).launch);
+      const engine = yield* BrowserEngine.BrowserEngine;
+      yield* engine.install;
+      const [status] = yield* engine.installation.pipe(
+        Stream.filter((status) => status.state === "failed"),
+        Stream.take(1),
+        Stream.runCollect,
+      );
+      return status!.error!;
     }).pipe(
       Effect.provide(
         Layer.effect(BrowserEngine.BrowserEngine, BrowserEngine.make).pipe(
@@ -96,7 +105,13 @@ it.effect(
       const config = yield* ServerConfig;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const result = yield* Effect.flip(engine.launch);
+      yield* engine.install;
+      const [status] = yield* engine.installation.pipe(
+        Stream.filter((status) => status.state === "failed"),
+        Stream.take(1),
+        Stream.runCollect,
+      );
+      const result = status!.error!;
       expect(result._tag).toBe("PreviewServerBrowserError");
       expect(result.stage).toBe("install");
       expect(result.reason).toBe("checksum");
@@ -131,4 +146,92 @@ it.effect(
         ),
       ),
     ),
+);
+
+it.effect("requires confirmation before creating files or downloading a browser", () =>
+  Effect.gen(function* () {
+    const engine = yield* BrowserEngine.BrowserEngine;
+    const config = yield* ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const [status] = yield* engine.installation.pipe(Stream.take(1), Stream.runCollect);
+    expect(status?.state).toBe("not-installed");
+    expect((yield* Effect.flip(engine.launch)).reason).toBe("installation-required");
+    expect(yield* fs.exists(path.join(config.baseDir, "tools", "server-browser"))).toBe(false);
+  }).pipe(
+    Effect.provide(
+      BrowserEngine.layer.pipe(
+        Layer.provideMerge(layerTest(process.cwd(), { prefix: "t3-browser-consent-" })),
+        Layer.provide(
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("Must not download without confirmation")),
+          ),
+        ),
+        Layer.provide(
+          Layer.mock(ProcessRunner)({
+            run: () => Effect.die("Must not extract without confirmation"),
+          }),
+        ),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
+it.effect("keeps an explicit installation alive after its caller closes and supports retry", () =>
+  Effect.gen(function* () {
+    const requested = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let requests = 0;
+    yield* Effect.gen(function* () {
+      const engine = yield* BrowserEngine.BrowserEngine;
+      yield* Effect.scoped(engine.install);
+      yield* Deferred.await(requested);
+      yield* engine.install;
+      const [installing] = yield* engine.installation.pipe(Stream.take(1), Stream.runCollect);
+      expect(installing?.state).toBe("installing");
+      expect(installing?.stage).toBe("runtime");
+      expect(requests).toBe(1);
+      yield* Deferred.succeed(release, undefined);
+      const [failed] = yield* engine.installation.pipe(
+        Stream.filter((status) => status.state === "failed"),
+        Stream.take(1),
+        Stream.runCollect,
+      );
+      expect(failed?.error?.reason).toBe("checksum");
+      yield* engine.install;
+      yield* engine.installation.pipe(
+        Stream.filter((status) => status.state === "failed"),
+        Stream.take(1),
+        Stream.runDrain,
+      );
+      expect(requests).toBe(2);
+    }).pipe(
+      Effect.provide(
+        BrowserEngine.layer.pipe(
+          Layer.provide(layerTest(process.cwd(), { prefix: "t3-browser-background-install-" })),
+          Layer.provide(
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make((request) =>
+                Effect.gen(function* () {
+                  requests++;
+                  yield* Deferred.succeed(requested, undefined);
+                  yield* Deferred.await(release);
+                  return HttpClientResponse.fromWeb(request, new Response("corrupt"));
+                }),
+              ),
+            ),
+          ),
+          Layer.provide(
+            Layer.mock(ProcessRunner)({
+              run: () => Effect.die("Must not extract a corrupt archive"),
+            }),
+          ),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+  }),
 );

@@ -1,4 +1,7 @@
-import { PreviewServerBrowserError } from "@t3tools/contracts";
+import {
+  PreviewServerBrowserError,
+  type PreviewServerBrowserInstallation,
+} from "@t3tools/contracts";
 import { cliArchiveTarCommand } from "@t3tools/shared/cliRelease";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
@@ -9,6 +12,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import * as NodeModule from "node:module";
@@ -50,11 +56,15 @@ interface PlaywrightBundle {
 export class BrowserEngine extends Context.Service<
   BrowserEngine,
   {
+    readonly install: Effect.Effect<void, PreviewServerBrowserError>;
+    readonly installation: Stream.Stream<PreviewServerBrowserInstallation>;
     readonly launch: Effect.Effect<Browser, PreviewServerBrowserError>;
   }
 >()("t3/preview/BrowserEngine") {}
 
 export const make = Effect.gen(function* () {
+  const serviceScope = yield* Scope.Scope;
+  const setupGate = yield* Semaphore.make(1);
   const config = yield* Config.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -68,6 +78,46 @@ export const make = Effect.gen(function* () {
     "server-browser",
     SERVER_BROWSER_PLAYWRIGHT_VERSION,
   );
+  const sdkDirectory = path.join(directory, "sdk");
+  const entry = path.join(sdkDirectory, "index.js");
+  const browserDirectory = path.join(directory, "chromium");
+  const load = Effect.gen(function* () {
+    const require = NodeModule.createRequire(entry);
+    const sdk: typeof import("playwright-core") = yield* Effect.try(() => require(entry));
+    const core: PlaywrightBundle = yield* Effect.try(() =>
+      require(path.join(sdkDirectory, "lib", "coreBundle.js")),
+    );
+    const executable = core.registry.registry.findExecutable("chromium-headless-shell");
+    if (!executable?.downloadURLs.length)
+      throw new Error("This server platform does not support the browser.");
+    const relativeExecutable = path.relative(executable.directory, executable.executablePath());
+    return {
+      sdk,
+      core,
+      executable,
+      relativeExecutable,
+      executablePath: path.join(browserDirectory, relativeExecutable),
+    };
+  });
+  const installed = Effect.gen(function* () {
+    if (
+      !(yield* fs.exists(path.join(sdkDirectory, ".install-complete"))) ||
+      !(yield* fs.exists(entry)) ||
+      !(yield* fs.exists(path.join(browserDirectory, ".install-complete")))
+    )
+      return undefined;
+    const loaded = yield* load;
+    return (yield* fs.exists(loaded.executablePath)) ? loaded : undefined;
+  }).pipe(
+    Effect.orElseSucceed(() => undefined),
+    Effect.catchDefect(() => Effect.void),
+  );
+  const state = yield* SubscriptionRef.make<PreviewServerBrowserInstallation>({
+    state: (yield* installed) ? "installed" : "not-installed",
+    stage: null,
+    version: SERVER_BROWSER_PLAYWRIGHT_VERSION,
+    error: null,
+  });
   const fetch = (url: string) =>
     http.execute(HttpClientRequest.get(url)).pipe(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
@@ -105,8 +155,6 @@ export const make = Effect.gen(function* () {
             (release) => Effect.promise(() => release()).pipe(Effect.ignore),
           );
           return yield* Effect.gen(function* () {
-            const sdkDirectory = path.join(directory, "sdk");
-            const entry = path.join(sdkDirectory, "index.js");
             if (
               !(yield* fs.exists(path.join(sdkDirectory, ".install-complete"))) ||
               !(yield* fs.exists(entry))
@@ -148,20 +196,11 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
-            const require = NodeModule.createRequire(entry);
-            const sdk: typeof import("playwright-core") = yield* Effect.try(() => require(entry));
-            const core: PlaywrightBundle = yield* Effect.try(() =>
-              require(path.join(sdkDirectory, "lib", "coreBundle.js")),
-            );
-            const executable = core.registry.registry.findExecutable("chromium-headless-shell");
-            if (!executable?.downloadURLs.length)
-              throw new Error("This server platform does not support the browser.");
-            const browserDirectory = path.join(directory, "chromium");
-            const relativeExecutable = path.relative(
-              executable.directory,
-              executable.executablePath(),
-            );
-            const executablePath = path.join(browserDirectory, relativeExecutable);
+            yield* SubscriptionRef.update(state, (current) => ({
+              ...current,
+              stage: "browser" as const,
+            }));
+            const { core, executable, relativeExecutable, executablePath } = yield* load;
             if (
               !(yield* fs.exists(path.join(browserDirectory, ".install-complete"))) ||
               !(yield* fs.exists(executablePath))
@@ -208,7 +247,6 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
-            return { sdk, executablePath };
           }).pipe(Effect.raceFirst(Deferred.await(compromised)));
         }),
       ),
@@ -218,18 +256,78 @@ export const make = Effect.gen(function* () {
     isServerBrowserError(cause)
       ? cause
       : new PreviewServerBrowserError({ stage: "install", reason: "failed", cause });
+  const work = prepare.pipe(
+    Effect.catchDefect((cause) => Effect.fail(installationFailure(cause))),
+    Effect.mapError(installationFailure),
+    Effect.matchEffect({
+      onFailure: (error) =>
+        SubscriptionRef.update(state, (current) => ({
+          ...current,
+          state: "failed" as const,
+          stage: null,
+          error,
+        })),
+      onSuccess: () =>
+        SubscriptionRef.update(state, (current) => ({
+          ...current,
+          state: "installed" as const,
+          stage: null,
+          error: null,
+        })),
+    }),
+  );
+  const install = setupGate
+    .withPermit(
+      Effect.gen(function* () {
+        if ((yield* SubscriptionRef.get(state)).state === "installing") return;
+        if (yield* installed) {
+          yield* SubscriptionRef.update(state, (current) => ({
+            ...current,
+            state: "installed" as const,
+            stage: null,
+            error: null,
+          }));
+          return;
+        }
+        yield* SubscriptionRef.update(state, (current) => ({
+          ...current,
+          state: "installing" as const,
+          stage: "runtime" as const,
+          error: null,
+        }));
+        yield* Effect.forkIn(Effect.interruptible(work), serviceScope);
+      }),
+    )
+    .pipe(Effect.uninterruptible);
   return BrowserEngine.of({
-    launch: prepare.pipe(
-      Effect.catchDefect((cause) => Effect.fail(installationFailure(cause))),
-      Effect.mapError(installationFailure),
-      Effect.flatMap(({ sdk, executablePath }) =>
-        Effect.tryPromise({
-          try: () => sdk.chromium.launch({ executablePath, headless: true }),
-          catch: (cause) =>
-            new PreviewServerBrowserError({ stage: "launch", reason: "failed", cause }),
-        }),
-      ),
-    ),
+    install,
+    installation: SubscriptionRef.changes(state),
+    launch: Effect.gen(function* () {
+      const loaded = yield* installed;
+      if (!loaded) {
+        yield* SubscriptionRef.update(state, (current) =>
+          current.state === "installed"
+            ? { ...current, state: "not-installed" as const, stage: null, error: null }
+            : current,
+        );
+        return yield* new PreviewServerBrowserError({
+          stage: "install",
+          reason: "installation-required",
+        });
+      }
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
+        state: "installed" as const,
+        stage: null,
+        error: null,
+      }));
+      return yield* Effect.tryPromise({
+        try: () =>
+          loaded.sdk.chromium.launch({ executablePath: loaded.executablePath, headless: true }),
+        catch: (cause) =>
+          new PreviewServerBrowserError({ stage: "launch", reason: "failed", cause }),
+      });
+    }),
   });
 });
 

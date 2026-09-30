@@ -149,6 +149,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.terminalClose]: AuthTerminalOperateScope,
   [WS_METHODS.subscribeTerminalEvents]: AuthTerminalOperateScope,
   [WS_METHODS.subscribeTerminalMetadata]: AuthTerminalOperateScope,
+  [WS_METHODS.previewServerBrowserInstall]: AuthOrchestrationOperateScope,
+  [WS_METHODS.previewServerBrowserInstallation]: AuthOrchestrationReadScope,
   [WS_METHODS.previewServerBrowserControl]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewServerBrowserFrames]: AuthOrchestrationReadScope,
   [WS_METHODS.previewOpen]: AuthOrchestrationOperateScope,

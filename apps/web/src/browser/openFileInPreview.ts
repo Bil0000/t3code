@@ -1,10 +1,11 @@
-import type {
-  AssetCreateUrlResult,
-  AssetResource,
-  EnvironmentId,
-  PreviewOpenInput,
-  PreviewSessionSnapshot,
-  ScopedThreadRef,
+import {
+  PreviewServerBrowserError,
+  type AssetCreateUrlResult,
+  type AssetResource,
+  type EnvironmentId,
+  type PreviewOpenInput,
+  type PreviewSessionSnapshot,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import {
@@ -13,6 +14,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 import { resolveAssetUrl } from "~/assets/assetUrls";
@@ -46,6 +48,24 @@ export class BrowserSettingsReadError extends Data.TaggedError("BrowserSettingsR
   }
 }
 
+const isServerBrowserError = Schema.is(PreviewServerBrowserError);
+
+export function isServerBrowserInstallationRequired(cause: Cause.Cause<unknown>): boolean {
+  const failure = Cause.squash(cause);
+  return isServerBrowserError(failure) && failure.reason === "installation-required";
+}
+
+export function openServerBrowserInstallPrompt(
+  threadRef: ScopedThreadRef,
+  cause: Cause.Cause<unknown>,
+  url?: string,
+): boolean {
+  if (!isServerBrowserInstallationRequired(cause)) return false;
+  if (url !== undefined) rememberPreviewUrl(threadRef, url);
+  useRightPanelStore.getState().openBrowser(threadRef, null);
+  return true;
+}
+
 export type OpenPreviewMutation<E = unknown> = (input: {
   readonly environmentId: EnvironmentId;
   readonly input: PreviewOpenInput;
@@ -74,6 +94,12 @@ export async function openUrlInPreview<E>(input: {
       profileId: browserDefaultOpenProfileId(defaults),
     },
   });
+  if (
+    result._tag === "Failure" &&
+    openServerBrowserInstallPrompt(input.threadRef, result.cause, input.url)
+  ) {
+    return AsyncResult.success(undefined);
+  }
   return mapAtomCommandResult(result, (snapshot) => {
     applyPreviewServerSnapshot(input.threadRef, snapshot);
     rememberPreviewUrl(input.threadRef, input.url);

@@ -3497,6 +3497,18 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "terminal" },
           ),
+        [WS_METHODS.previewServerBrowserInstall]: () =>
+          observeRpcEffect(WS_METHODS.previewServerBrowserInstall, serverBrowser.install, {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewServerBrowserInstallation]: () =>
+          observeRpcStream(
+            WS_METHODS.previewServerBrowserInstallation,
+            serverBrowser.installation,
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
         [WS_METHODS.previewServerBrowserControl]: (input) =>
           observeRpcEffect(WS_METHODS.previewServerBrowserControl, serverBrowser.control(input), {
             "rpc.aggregate": "preview",

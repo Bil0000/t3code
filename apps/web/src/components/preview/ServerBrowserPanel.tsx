@@ -1,20 +1,40 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { PreviewServerBrowserInput, ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  PreviewServerBrowserInput,
+  PreviewServerBrowserInstallation,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useState } from "react";
+import { Globe } from "lucide-react";
+import { useCallback, useEffect, useEffectEvent, useState } from "react";
 
+import { isServerBrowserInstallationRequired } from "~/browser/openFileInPreview";
 import {
   removeUrlForThread,
   recordVisitForThread,
   useThreadRecentHistory,
 } from "~/browserHistoryStore";
 import { Button } from "~/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "~/components/ui/empty";
 import { applyPreviewServerSnapshot, useThreadPreviewState } from "~/previewStateStore";
+import { useEnvironment } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { subscribePreviewAction } from "./previewActionBus";
+import {
+  SERVER_BROWSER_INSTALL_REQUEST_FAILED,
+  serverBrowserInstallationStatus,
+  useServerBrowserInstallation,
+} from "./serverBrowserInstallation";
 
 export function ServerBrowserPanel({
   threadRef,
@@ -38,6 +58,20 @@ export function ServerBrowserPanel({
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
   const [focusUrlNonce, setFocusUrlNonce] = useState(0);
+  const environmentLabel = useEnvironment(threadRef.environmentId)?.label ?? "this environment";
+  const browser = useServerBrowserInstallation(threadRef.environmentId);
+  const installed = browser.statusFailed || browser.installation?.state === "installed";
+  const [installDismissed, setInstallDismissed] = useState(false);
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  const requestedUrl = state.recentlySeenUrls[0] ?? null;
+  const [promptedUrl, setPromptedUrl] = useState<string | null | undefined>(undefined);
+  if (browser.installation && !installed && !snapshot && promptedUrl !== requestedUrl) {
+    setPromptedUrl(requestedUrl);
+    if (requestedUrl !== null) {
+      setPendingUrl(requestedUrl);
+      setInstallDismissed(false);
+    }
+  }
   const handleRefresh = useCallback(() => {
     if (snapshot)
       void refresh({
@@ -52,7 +86,11 @@ export function ServerBrowserPanel({
       if (action === "focus-url") setFocusUrlNonce((value) => value + 1);
     });
   }, [visible, handleRefresh]);
-  const url = snapshot?.navStatus._tag === "Idle" ? "" : (snapshot?.navStatus.url ?? "");
+  const url = snapshot
+    ? snapshot.navStatus._tag === "Idle"
+      ? ""
+      : snapshot.navStatus.url
+    : (pendingUrl ?? "");
   const run = async (action: PreviewServerBrowserInput["action"]) => {
     if (!snapshot) return;
     const result = await control({
@@ -62,6 +100,11 @@ export function ServerBrowserPanel({
     setError(result._tag === "Failure" ? "The browser action failed. Try again." : null);
   };
   const submit = async (url: string) => {
+    if (!snapshot && !installed) {
+      setPendingUrl(url);
+      setInstallDismissed(false);
+      return;
+    }
     setOpening(true);
     setError(null);
     try {
@@ -75,11 +118,26 @@ export function ServerBrowserPanel({
       if (result._tag === "Success") {
         applyPreviewServerSnapshot(threadRef, result.value);
         recordVisitForThread(threadRef, url);
-      } else setError("Could not open the server browser. Check this environment and retry.");
+      } else {
+        if (isServerBrowserInstallationRequired(result.cause)) {
+          setPendingUrl(url);
+          setInstallDismissed(false);
+        } else setError("Could not open the server browser. Check this environment and retry.");
+      }
     } finally {
       setOpening(false);
     }
   };
+  const openPendingUrl = useEffectEvent(() => {
+    if (pendingUrl === null) return;
+    setPendingUrl(null);
+    void submit(pendingUrl);
+  });
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- The server stream reports when the install finishes.
+    if (installed) openPendingUrl();
+  }, [installed]);
+  const installation = browser.installation;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PreviewChromeRow
@@ -129,7 +187,22 @@ export function ServerBrowserPanel({
           onAction={run}
           onExit={() => setFocusUrlNonce((value) => value + 1)}
         />
-      ) : !snapshot ? (
+      ) : snapshot ? null : !installed && installation === null ? (
+        <p className="p-4 text-sm text-muted-foreground">Checking the server browser…</p>
+      ) : !installed && installation && (!installDismissed || browser.installing) ? (
+        <ServerBrowserInstallPrompt
+          environmentLabel={environmentLabel}
+          installation={installation}
+          installing={browser.installing}
+          requestFailed={browser.requestFailed}
+          pendingUrl={pendingUrl}
+          onInstall={() => void browser.install()}
+          onLater={() => {
+            setInstallDismissed(true);
+            setPendingUrl(null);
+          }}
+        />
+      ) : (
         <PreviewEmptyState
           threadRef={threadRef}
           environmentId={threadRef.environmentId}
@@ -138,8 +211,81 @@ export function ServerBrowserPanel({
           onRemoveRecent={(url) => removeUrlForThread(threadRef, url)}
           onOpenUrl={(url) => void submit(url)}
         />
-      ) : null}
+      )}
     </div>
+  );
+}
+
+function ServerBrowserInstallPrompt({
+  environmentLabel,
+  installation,
+  installing,
+  requestFailed,
+  pendingUrl,
+  onInstall,
+  onLater,
+}: {
+  environmentLabel: string;
+  installation: PreviewServerBrowserInstallation;
+  installing: boolean;
+  requestFailed: boolean;
+  pendingUrl: string | null;
+  onInstall: () => void;
+  onLater: () => void;
+}) {
+  const failed = !installing && installation.state === "failed";
+  return (
+    <Empty size="compact">
+      <EmptyMedia variant="icon">
+        <Globe className="size-4.5 text-muted-foreground" />
+      </EmptyMedia>
+      <EmptyHeader>
+        <EmptyTitle>
+          {installing
+            ? `Installing browser on ${environmentLabel}`
+            : failed
+              ? "Browser install failed"
+              : `Install a browser on ${environmentLabel}?`}
+        </EmptyTitle>
+        {installing ? (
+          <EmptyDescription role="status">
+            {installation.state === "installing"
+              ? serverBrowserInstallationStatus(installation)
+              : "Starting install…"}{" "}
+            {pendingUrl ? `${pendingUrl} opens when it finishes.` : "You can close this panel."}
+          </EmptyDescription>
+        ) : failed ? (
+          <EmptyDescription role="alert">
+            {serverBrowserInstallationStatus(installation)}
+          </EmptyDescription>
+        ) : (
+          <EmptyDescription>
+            Pages for this environment load in a browser on {environmentLabel}. It uses about 300 MB
+            of storage there.
+          </EmptyDescription>
+        )}
+      </EmptyHeader>
+      {installing ? null : (
+        <EmptyContent>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={onInstall}>
+              {failed ? "Retry" : "Install browser"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onLater}>
+              Later
+            </Button>
+          </div>
+          {requestFailed ? (
+            <p role="alert" className="text-xs text-destructive">
+              {SERVER_BROWSER_INSTALL_REQUEST_FAILED}
+            </p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            You can also install it from Settings &gt; Integrations.
+          </p>
+        </EmptyContent>
+      )}
+    </Empty>
   );
 }
 

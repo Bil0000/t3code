@@ -34,6 +34,15 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("allows browser install status reads without granting installation access", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.previewServerBrowserInstallation)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.previewServerBrowserInstall)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("allows relay status reads without granting relay installation access", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
       AuthRelayReadScope,

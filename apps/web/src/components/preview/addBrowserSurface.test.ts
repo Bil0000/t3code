@@ -1,4 +1,5 @@
 import {
+  PreviewServerBrowserError,
   DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_CLIENT_SETTINGS,
   FILL_PREVIEW_VIEWPORT,
@@ -6,6 +7,7 @@ import {
   type PreviewSessionSnapshot,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -16,6 +18,7 @@ import {
 } from "~/previewStateStore";
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
+import { openUrlInPreview } from "~/browser/openFileInPreview";
 
 import { addBrowserSurface } from "./addBrowserSurface";
 
@@ -80,4 +83,60 @@ describe("addBrowserSurface", () => {
       ).surfaces.map((surface) => surface.id),
     ).toEqual(["browser:tab-1", "browser:tab-2"]);
   });
+
+  it("opens the install prompt when the server browser is not installed", async () => {
+    const openPreview = vi.fn(async (_input: PreviewOpenInput) =>
+      AsyncResult.failure<PreviewSessionSnapshot, PreviewServerBrowserError>(
+        Cause.fail(
+          new PreviewServerBrowserError({ stage: "install", reason: "installation-required" }),
+        ),
+      ),
+    );
+
+    const result = await addBrowserSurface({
+      threadRef,
+      openPreview: ({ input }) => openPreview(input),
+    });
+
+    expect(result._tag).toBe("Success");
+    expect(surfaceIds()).toEqual(["browser:new"]);
+  });
+
+  it("keeps other open failures without opening a browser surface", async () => {
+    const openPreview = vi.fn(async (_input: PreviewOpenInput) =>
+      AsyncResult.failure<PreviewSessionSnapshot, PreviewServerBrowserError>(
+        Cause.fail(new PreviewServerBrowserError({ stage: "launch", reason: "failed" })),
+      ),
+    );
+
+    const result = await addBrowserSurface({
+      threadRef,
+      openPreview: ({ input }) => openPreview(input),
+    });
+
+    expect(result._tag).toBe("Failure");
+    expect(surfaceIds()).toEqual([]);
+  });
+
+  it("remembers a link opened on a cold server so the prompt can open it later", async () => {
+    const result = await openUrlInPreview({
+      threadRef,
+      url: "http://localhost:5173/",
+      openPreview: async () =>
+        AsyncResult.failure(
+          Cause.fail(
+            new PreviewServerBrowserError({ stage: "install", reason: "installation-required" }),
+          ),
+        ),
+    });
+
+    expect(result._tag).toBe("Success");
+    expect(surfaceIds()).toEqual(["browser:new"]);
+    expect(readThreadPreviewState(threadRef).recentlySeenUrls).toEqual(["http://localhost:5173/"]);
+  });
 });
+
+const surfaceIds = () =>
+  selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces.map(
+    (surface) => surface.id,
+  );

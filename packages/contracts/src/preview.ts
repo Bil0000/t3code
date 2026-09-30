@@ -359,11 +359,20 @@ export class PreviewServerBrowserError extends Schema.TaggedError<PreviewServerB
   "PreviewServerBrowserError",
   {
     stage: Schema.Literals(["install", "launch", "action"]),
-    reason: Schema.Literals(["failed", "checksum", "lock-lost", "closed", "unopened"]),
+    reason: Schema.Literals([
+      "failed",
+      "checksum",
+      "lock-lost",
+      "closed",
+      "unopened",
+      "installation-required",
+    ]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {
+    if (this.reason === "installation-required")
+      return "The server browser is not installed. Confirm installation in Browser or Settings > Integrations first.";
     if (this.reason === "checksum") return "The browser archive checksum did not match.";
     if (this.reason === "lock-lost") return "The browser installation lock was lost.";
     if (this.reason === "closed") return "The server browser tab was closed.";
@@ -374,6 +383,14 @@ export class PreviewServerBrowserError extends Schema.TaggedError<PreviewServerB
     return "The server browser action failed.";
   }
 }
+
+export const PreviewServerBrowserInstallation = Schema.Struct({
+  state: Schema.Literals(["not-installed", "installing", "installed", "failed"]),
+  stage: Schema.NullOr(Schema.Literals(["runtime", "browser"])),
+  version: Schema.String.check(Schema.isMaxLength(64)),
+  error: Schema.NullOr(PreviewServerBrowserError),
+});
+export type PreviewServerBrowserInstallation = typeof PreviewServerBrowserInstallation.Type;
 
 export const PreviewServerBrowserInput = Schema.Struct({
   threadId: ThreadId,

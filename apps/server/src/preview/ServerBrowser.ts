@@ -19,6 +19,7 @@ import {
   type PreviewResizeInput,
   type PreviewServerBrowserFrame,
   type PreviewServerBrowserInput,
+  type PreviewServerBrowserInstallation,
   type PreviewSessionSnapshot,
   type PreviewViewportSetting,
   type ThreadId,
@@ -72,6 +73,8 @@ const key = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
 export class ServerBrowser extends Context.Service<
   ServerBrowser,
   {
+    readonly install: Effect.Effect<void, PreviewServerBrowserError>;
+    readonly installation: Stream.Stream<PreviewServerBrowserInstallation>;
     readonly open: (
       input: PreviewOpenInput,
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewServerBrowserError>;
@@ -619,7 +622,18 @@ export const make = Effect.gen(function* () {
     yield* report(threadId, tabId, tab.page);
     return request.operation === "evaluate" ? result : (result ?? (yield* status(threadId, tabId)));
   });
-  return ServerBrowser.of({ open, navigate, resize, refresh, close, control, watch, invoke });
+  return ServerBrowser.of({
+    install: engine.install,
+    installation: engine.installation,
+    open,
+    navigate,
+    resize,
+    refresh,
+    close,
+    control,
+    watch,
+    invoke,
+  });
 });
 
 export const layer = Layer.effect(ServerBrowser, make);

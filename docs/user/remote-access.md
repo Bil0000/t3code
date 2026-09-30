@@ -10,8 +10,10 @@ environments run the browser on the host. A localhost URL reaches the dev server
 there. Agents can use it while your laptop is asleep; reopening the panel
 reconnects to the same page.
 
-T3 Code downloads the browser on first use. No separate browser tool or dev-server
-tunnel is needed. The host needs internet access for setup and the system libraries
+On first use, choose **Install browser** in the Browser panel. The download uses
+about 300 MB on the selected environment. Choose **Later** to skip it, then install
+or retry from **Settings → Integrations**. Installation status stays visible while
+the download runs. No separate browser tool or dev-server tunnel is needed. The host needs internet access for setup and the system libraries
 that Chromium requires. Browser tabs close when the T3 server stops. Imported
 desktop browser profiles and video recording remain desktop features.
 

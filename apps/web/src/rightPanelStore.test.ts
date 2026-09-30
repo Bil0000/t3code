@@ -955,4 +955,22 @@ describe("rightPanelStore", () => {
       ),
     ).toEqual(["terminal:term-1", "browser:tab-b", "browser:tab-c"]);
   });
+
+  it("keeps the new browser surface until a real tab replaces it", () => {
+    const store = useRightPanelStore.getState();
+    const surfaceIds = () =>
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.map(
+        (surface) => surface.id,
+      );
+    store.openBrowser(refA, null);
+
+    store.reconcileBrowserSurfaces(refA, []);
+    expect(surfaceIds()).toEqual(["browser:new"]);
+
+    store.reconcileBrowserSurfaces(refA, ["tab-a"]);
+    expect(surfaceIds()).toEqual(["browser:tab-a"]);
+
+    store.reconcileBrowserSurfaces(refA, []);
+    expect(surfaceIds()).toEqual([]);
+  });
 });

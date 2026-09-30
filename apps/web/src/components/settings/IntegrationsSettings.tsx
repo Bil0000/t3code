@@ -46,6 +46,11 @@ import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
 import { AnimatedHeight } from "~/components/AnimatedHeight";
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
 import { previewBridge } from "~/components/preview/previewBridge";
+import {
+  SERVER_BROWSER_INSTALL_REQUEST_FAILED,
+  serverBrowserInstallationStatus,
+  useServerBrowserInstallation,
+} from "~/components/preview/serverBrowserInstallation";
 import { cn, randomUUID } from "~/lib/utils";
 import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
 import { deviceEnvironment, useDeviceState } from "~/state/device";
@@ -854,6 +859,70 @@ function DeviceIntegrationControls({
   );
 }
 
+function ServerBrowserSettings() {
+  const { connectedEnvironments } = useSettingsScope();
+  const environments = connectedEnvironments.filter(
+    (environment) => environment.serverConfig?.serverBrowser === true,
+  );
+  if (environments.length === 0) return null;
+  return (
+    <SettingsSection id="server-browser" title="Server browser">
+      {environments.map((environment) => (
+        <ServerBrowserInstallRow
+          key={environment.environmentId}
+          environmentId={environment.environmentId}
+          label={environment.label}
+        />
+      ))}
+    </SettingsSection>
+  );
+}
+
+function ServerBrowserInstallRow({
+  environmentId,
+  label,
+}: {
+  environmentId: EnvironmentId;
+  label: string;
+}) {
+  const { installation, statusFailed, requestFailed, installing, install } =
+    useServerBrowserInstallation(environmentId);
+  const failed = !installing && installation?.state === "failed";
+  return (
+    <SettingsRow
+      title={label}
+      description="Chromium that runs on this environment to load pages in the Browser panel."
+      status={
+        statusFailed ? (
+          <span role="alert" className="text-destructive">
+            Could not read the install status.
+          </span>
+        ) : installation === null ? (
+          "Checking…"
+        ) : (
+          <span
+            role={failed || requestFailed ? "alert" : "status"}
+            className={cn((failed || requestFailed) && "text-destructive")}
+          >
+            {requestFailed
+              ? SERVER_BROWSER_INSTALL_REQUEST_FAILED
+              : installing && installation.state !== "installing"
+                ? "Starting install…"
+                : serverBrowserInstallationStatus(installation)}
+          </span>
+        )
+      }
+      control={
+        installation === null || installation.state === "installed" ? null : (
+          <Button size="sm" variant="outline" disabled={installing} onClick={() => void install()}>
+            {installing ? "Installing…" : failed ? "Retry" : "Install"}
+          </Button>
+        )
+      }
+    />
+  );
+}
+
 function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdatePrimarySettings();
@@ -1455,6 +1524,7 @@ export function IntegrationsSettingsPanel() {
           previewDefaults
         )}
       </SettingsSection>
+      <ServerBrowserSettings />
       <DeviceIntegrationSettings />
     </SettingsPageContainer>
   );

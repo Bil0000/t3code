@@ -3,8 +3,13 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { AsyncResult } from "effect/unstable/reactivity";
 
-import type { BrowserSettingsReadError, OpenPreviewMutation } from "~/browser/openFileInPreview";
+import {
+  openServerBrowserInstallPrompt,
+  type BrowserSettingsReadError,
+  type OpenPreviewMutation,
+} from "~/browser/openFileInPreview";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 import { openPreviewSession } from "./openPreviewSession";
@@ -21,6 +26,9 @@ export async function addBrowserSurface<E>(input: {
     threadRef: input.threadRef,
     ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
   });
+  if (result._tag === "Failure" && openServerBrowserInstallPrompt(input.threadRef, result.cause)) {
+    return AsyncResult.success(undefined);
+  }
   return mapAtomCommandResult(result, (snapshot) => {
     useRightPanelStore.getState().openBrowser(input.threadRef, snapshot.tabId);
   });
