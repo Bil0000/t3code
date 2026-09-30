@@ -152,7 +152,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.previewServerBrowserInstall]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewServerBrowserInstallation]: AuthOrchestrationReadScope,
   [WS_METHODS.previewServerBrowserControl]: AuthOrchestrationOperateScope,
-  [WS_METHODS.previewServerBrowserFrames]: AuthOrchestrationReadScope,
+  [WS_METHODS.previewServerBrowserFrames]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewNavigate]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewResize]: AuthOrchestrationOperateScope,
