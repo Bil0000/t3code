@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, EnvironmentId } from "@t3tools/contracts";
+
+import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 
 import {
   filterAvailableSettingsSearchItems,
   getSettingsSearchTargetScope,
   getThreadAutoSettlementSearchAvailability,
+  hasServerBrowserSearchTarget,
   isSettingsOverviewVisible,
   isSettingsSearchScopeAvailable,
   searchableSetting,
@@ -543,5 +546,47 @@ describe("settings sidebar scope", () => {
     expect(isSettingsOverviewVisible({ machine: "remote" })).toBe(false);
     expect(isSettingsOverviewVisible({ project: "project" })).toBe(true);
     expect(isSettingsOverviewVisible({ project: "project", checkout: "checkout" })).toBe(true);
+  });
+});
+
+describe("server browser search availability", () => {
+  function environment(id: string, { connected = true, serverBrowser = true } = {}) {
+    return {
+      environmentId: EnvironmentId.make(id),
+      label: id,
+      connection: { phase: connected ? ("connected" as const) : ("offline" as const) },
+      serverConfig: { settings: DEFAULT_SERVER_SETTINGS, serverBrowser },
+    };
+  }
+  const environments = [
+    environment("server"),
+    environment("laptop", { serverBrowser: false }),
+    environment("offline", { connected: false }),
+  ];
+  const group = (projectKey: string, environmentId: string) =>
+    ({
+      projectKey,
+      displayName: projectKey,
+      memberProjects: [
+        {
+          environmentId: EnvironmentId.make(environmentId),
+          physicalProjectKey: `${environmentId}:${projectKey}`,
+          workspaceRoot: `/repos/${projectKey}`,
+        },
+      ],
+    }) as unknown as SidebarProjectSnapshot;
+  const groups = [group("local-app", "laptop"), group("remote-app", "server")];
+  const available = (search: Parameters<typeof hasServerBrowserSearchTarget>[0]) =>
+    hasServerBrowserSearchTarget(search, groups, environments);
+
+  it("follows the environments the selected scope shows", () => {
+    expect(available({})).toBe(true);
+    expect(available({ project: "local-app" })).toBe(false);
+    expect(available({ project: "remote-app" })).toBe(true);
+    expect(available({ project: "local-app", checkout: "laptop:local-app" })).toBe(false);
+    expect(available({ project: "remote-app", checkout: "server:remote-app" })).toBe(true);
+    expect(available({ machine: "laptop" })).toBe(false);
+    expect(available({ machine: "offline" })).toBe(false);
+    expect(available({ machine: "server" })).toBe(true);
   });
 });

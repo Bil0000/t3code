@@ -1,11 +1,14 @@
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@t3tools/contracts";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ServerSettings } from "@t3tools/contracts";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import { DEFAULT_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { commandLabel } from "./KeybindingsSettings.logic";
+import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
+import { selectScopedSettingsEnvironments } from "./scopedSettings";
 import {
+  resolveSettingsScope,
   validateSettingsScopeSearch,
   type ResolvedSettingsScope,
   type SettingsScopeSearch,
@@ -887,6 +890,28 @@ interface AutoSettlementSearchEnvironment {
       readonly capabilities: { readonly threadAutoSettlement?: boolean };
     };
   } | null;
+}
+
+interface ServerBrowserSearchEnvironment {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly connection: { readonly phase: EnvironmentConnectionPhase };
+  readonly serverConfig: {
+    readonly settings: ServerSettings;
+    readonly serverBrowser?: boolean;
+  } | null;
+}
+
+export function hasServerBrowserSearchTarget(
+  search: SettingsScopeSearch,
+  groups: readonly SidebarProjectSnapshot[],
+  environments: readonly ServerBrowserSearchEnvironment[],
+): boolean {
+  return selectScopedSettingsEnvironments(
+    resolveSettingsScope(search, groups, environments),
+    environments,
+    null,
+  ).connectedEnvironments.some((environment) => environment.serverConfig?.serverBrowser === true);
 }
 
 /** Discovery needs one capable environment; the selected page needs every connected target to support it. */

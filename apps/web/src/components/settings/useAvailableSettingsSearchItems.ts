@@ -14,10 +14,13 @@ import type { SettingsScopeSearch } from "./settingsScope";
 import {
   filterAvailableSettingsSearchItems,
   getThreadAutoSettlementSearchAvailability,
+  hasServerBrowserSearchTarget,
 } from "./settingsSearch";
+import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 
 export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch = {}) {
   const { environments } = useEnvironments();
+  const groups = useSettingsProjectGroups();
   const primarySessionState = usePrimarySessionState();
   const localEnvironmentDisabled = isLocalEnvironmentDisabled();
   const desktopWsl = useEnvironmentQuery(
@@ -59,12 +62,14 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
         }),
         hasThreadAutoSettlement:
           getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0,
-        hasServerBrowserEnvironment: environments.some(
-          (environment) =>
-            (scopeSearch.machine === undefined ||
-              environment.environmentId === scopeSearch.machine) &&
-            environment.connection.phase === "connected" &&
-            environment.serverConfig?.serverBrowser === true,
+        hasServerBrowserEnvironment: hasServerBrowserSearchTarget(
+          {
+            project: scopeSearch.project,
+            machine: scopeSearch.machine,
+            checkout: scopeSearch.checkout,
+          },
+          groups,
+          environments,
         ),
       }),
     [
@@ -72,8 +77,11 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
       desktopWsl.data,
       desktopWsl.error,
       environments,
+      groups,
       localEnvironmentDisabled,
+      scopeSearch.checkout,
       scopeSearch.machine,
+      scopeSearch.project,
     ],
   );
 }
