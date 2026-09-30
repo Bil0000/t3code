@@ -843,10 +843,23 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
       tool: "connector_get_weather",
       status: "completed",
       arguments: { title: "Argument, not display metadata" },
-      appContext: { connectorId: "weather-app", appName: "Weather", actionName: "Check weather" },
+      appContext: {
+        connectorId: "weather-app",
+        appName: "Weather",
+        actionName: "Check weather",
+      },
+      result: {
+        content: [],
+        _meta: { source: { logoUrl: "https://example.com/weather.png" } },
+      },
     });
     assert.equal(projection.title, "Check weather");
     assert.equal(projection.toolSource?.name, "Weather");
+    assert.deepEqual(projection.toolIcon, {
+      _tag: "themed-logo",
+      logoUrl: "https://example.com/weather.png",
+    });
+    assert.deepEqual(projection.toolSource?.icon, projection.toolIcon);
   });
 
   it("preserves native browser and app icons alongside MCP tool output", () => {

@@ -1081,10 +1081,32 @@ describe("AcpAdapterV2", () => {
                       title: "Check weather",
                       status: "completed",
                       rawInput: { server: "weather", tool: "get_weather", city: "Berlin" },
+                      rawOutput: {
+                        result: {
+                          _meta: {
+                            source: { name: "Weather", logoUrl: "https://example.com/weather.png" },
+                          },
+                          content: [{ type: "text", text: "Sunny" }],
+                        },
+                      },
                       _meta: {
                         is_mcp_tool_call: true,
                         "cognition.ai/subagent_context": { parentAgentId: "child-a" },
                       },
+                    },
+                    {
+                      sessionUpdate: "tool_call",
+                      toolCallId: "parent-weather",
+                      title: "Check weather",
+                      status: "completed",
+                      rawInput: { server: "weather", tool: "get_weather", city: "Berlin" },
+                      rawOutput: {
+                        _meta: {
+                          source: { name: "Weather", logoUrl: "https://example.com/weather.png" },
+                        },
+                        content: [{ type: "text", text: "Sunny" }],
+                      },
+                      _meta: { is_mcp_tool_call: true },
                     },
                     {
                       sessionUpdate: "agent_message_chunk",
@@ -1209,12 +1231,22 @@ describe("AcpAdapterV2", () => {
           item.type === "dynamic_tool" &&
           item.toolName === "weather.get_weather",
       );
-      assert.equal(childMcp?.title, "get weather");
-      assert.deepEqual(childMcp?.toolSource, {
-        key: "mcp:weather",
-        name: "weather",
-        kind: "integration",
-      });
+      const parentMcp = items.find(
+        (item) =>
+          item.threadId === threadId &&
+          item.type === "dynamic_tool" &&
+          item.toolName === "weather.get_weather",
+      );
+      for (const item of [parentMcp, childMcp]) {
+        assert.equal(item?.title, "get weather");
+        assert.deepEqual(item?.toolSource, {
+          key: "mcp:weather",
+          name: "Weather",
+          kind: "integration",
+          icon: { _tag: "themed-logo", logoUrl: "https://example.com/weather.png" },
+        });
+        assert.deepEqual(item?.toolIcon, item?.toolSource?.icon);
+      }
       assert.isTrue(
         items.some(
           (item) =>
@@ -1239,7 +1271,7 @@ describe("AcpAdapterV2", () => {
       const parentTools = items.filter(
         (item) => item.threadId === threadId && item.type === "dynamic_tool",
       );
-      assert.equal(parentTools.length, 1);
+      assert.equal(parentTools.length, 2);
       assert.equal(parentTools[0]?.title, "Parent tool finished");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );

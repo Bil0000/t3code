@@ -2221,6 +2221,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.isNull(items[0]?.title);
       for (const item of items.slice(1)) {
         assert.equal(item.title, title ?? "get weather");
+        assert.deepEqual(item.toolIcon, {
+          _tag: "themed-logo",
+          logoUrl: "https://example.com/weather.png",
+        });
         assert.deepEqual(item.toolSource, {
           key: "mcp:weather",
           name: "Weather",

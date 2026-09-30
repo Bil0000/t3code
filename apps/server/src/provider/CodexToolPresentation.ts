@@ -219,7 +219,8 @@ export function mcpToolPresentation(
     serverName: appContext?.connectorId ?? item.server,
     toolName: item.tool,
     title: appContext?.actionName,
-    serverDisplayName: appContext?.appName ?? sourceMetadata?.name,
+    serverDisplayName: appContext?.appName,
+    source: sourceMetadata,
     iconUrl: sourceLogo?._tag === "themed-logo" ? sourceLogo.logoUrl : undefined,
     iconUrlDark: sourceLogo?._tag === "themed-logo" ? sourceLogo.logoUrlDark : undefined,
   });

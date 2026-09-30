@@ -14,6 +14,11 @@ describe("mcpToolPresentation", () => {
       }),
     ).toEqual({
       title: "Scrape page",
+      toolIcon: {
+        _tag: "themed-logo",
+        logoUrl: "https://example.com/icon.png",
+        logoUrlDark: "https://example.com/dark.png",
+      },
       toolSource: {
         key: "mcp:firecrawl-local",
         name: "Firecrawl",
@@ -25,6 +30,25 @@ describe("mcpToolPresentation", () => {
         },
       },
     });
+  });
+
+  it("uses MCP result source metadata for the tool and its integration", () => {
+    const presentation = mcpToolPresentation({
+      serverName: "firecrawl-local",
+      toolName: "firecrawl_scrape",
+      source: {
+        name: "Firecrawl",
+        logoUrl: "https://example.com/firecrawl.png",
+        logoUrlDark: "https://example.com/firecrawl-dark.png",
+      },
+    });
+    expect(presentation.toolSource?.name).toBe("Firecrawl");
+    expect(presentation.toolIcon).toEqual({
+      _tag: "themed-logo",
+      logoUrl: "https://example.com/firecrawl.png",
+      logoUrlDark: "https://example.com/firecrawl-dark.png",
+    });
+    expect(presentation.toolSource?.icon).toEqual(presentation.toolIcon);
   });
 
   it("uses readable fallback names without a guessed logo", () => {
@@ -61,5 +85,19 @@ describe("mcpToolPresentation", () => {
       {},
     );
     expect(mcpToolPresentation({ title: "Tool title" })).toEqual({ title: "Tool title" });
+  });
+
+  it.each([
+    null,
+    "logo",
+    { logoUrl: "file:///tmp/logo.png" },
+    { logoUrlDark: "https://example.com/dark.png" },
+  ])("ignores source metadata without a valid logo: %j", (source) => {
+    expect(mcpToolPresentation({ serverName: "weather", toolName: "get_weather", source })).toEqual(
+      {
+        title: "get weather",
+        toolSource: { key: "mcp:weather", name: "weather", kind: "integration" },
+      },
+    );
   });
 });

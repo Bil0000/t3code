@@ -35,6 +35,7 @@ export function assertClaudeMcpToolPresentationOutput(
 
   assert.equal(scrape?.status, "completed");
   assert.equal(scrape?.title, "Firecrawl scrape");
+  assert.deepEqual(scrape?.toolIcon, scrape?.toolSource?.icon);
   assert.deepEqual(scrape?.toolSource, {
     key: "mcp:firecrawl",
     name: "Firecrawl",
