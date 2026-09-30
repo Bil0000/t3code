@@ -30,6 +30,7 @@ import {
   type OrchestrationEvent,
   ORCHESTRATION_WS_METHODS,
   type PreviewEvent,
+  type PreviewSessionSnapshot,
   ProjectId,
   type ProviderAuthState,
   ProviderDriverKind,
@@ -550,6 +551,8 @@ const buildAppUnderTest = (options?: {
       ProviderSessionDirectory.ProviderSessionDirectory["Service"]
     >;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
+    serverBrowser?: Partial<ServerBrowser["Service"]>;
+    previewManager?: Partial<PreviewManager.PreviewManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
     threadDeletionReactor?: Partial<ThreadDeletionReactor["Service"]>;
     analyticsService?: Partial<AnalyticsService.AnalyticsService["Service"]>;
@@ -972,7 +975,7 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(
         Layer.mergeAll(
-          Layer.mock(ServerBrowser)({}),
+          Layer.mock(ServerBrowser)({ ...options?.layers?.serverBrowser }),
           Layer.mock(PreviewManager.PreviewManager)({
             open: () => Effect.die("PreviewManager not stubbed in this test"),
             navigate: () => Effect.die("PreviewManager not stubbed in this test"),
@@ -985,6 +988,7 @@ const buildAppUnderTest = (options?: {
             subscribeEvents: Effect.flatMap(PubSub.unbounded<PreviewEvent>(), (pubsub) =>
               PubSub.subscribe(pubsub),
             ),
+            ...options?.layers?.previewManager,
           }),
           Layer.mock(PortScanner.PortDiscovery)({
             scan: () => Effect.succeed([]),
@@ -1746,6 +1750,95 @@ const EMPTY_DEVICE_STATE: DeviceServiceState = {
 };
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
+  for (const mode of ["web", "desktop"] as const) {
+    it.effect(`routes preview RPCs by tab runtime in ${mode} mode`, () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("browser-routing-thread");
+        const legacyTab = {
+          threadId,
+          tabId: "legacy-tab",
+          navStatus: { _tag: "Idle" },
+          canGoBack: false,
+          canGoForward: false,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        } satisfies PreviewSessionSnapshot;
+        const serverTab = { ...legacyTab, tabId: "server-tab", runtime: "server" as const };
+        const desktopTab = { ...legacyTab, tabId: "desktop-tab", runtime: "desktop" as const };
+        const serverOpen = vi.fn(() => Effect.succeed(serverTab));
+        const desktopOpen = vi.fn(() => Effect.succeed(desktopTab));
+        const serverNavigate = vi.fn(() => Effect.succeed(serverTab));
+        const desktopNavigate = vi.fn(() => Effect.succeed(desktopTab));
+        const serverResize = vi.fn(() => Effect.succeed(serverTab));
+        const desktopResize = vi.fn(() => Effect.succeed(desktopTab));
+        const serverRefresh = vi.fn(() => Effect.void);
+        const desktopRefresh = vi.fn(() => Effect.void);
+        yield* buildAppUnderTest({
+          config: { mode },
+          layers: {
+            serverBrowser: {
+              open: serverOpen,
+              navigate: serverNavigate,
+              resize: serverResize,
+              refresh: serverRefresh,
+            },
+            previewManager: {
+              open: desktopOpen,
+              navigate: desktopNavigate,
+              resize: desktopResize,
+              refresh: desktopRefresh,
+              list: () =>
+                Effect.succeed({
+                  sessions: [serverTab, desktopTab, legacyTab],
+                  serverEpoch: "test-server",
+                  revision: 0,
+                }),
+            },
+          },
+        });
+        const wsUrl = yield* getWsServerUrl("/ws");
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            Effect.gen(function* () {
+              const defaultTab = yield* client[WS_METHODS.previewOpen]({ threadId });
+              assert.equal(defaultTab.runtime, mode === "web" ? "server" : "desktop");
+              assert.equal(
+                (yield* client[WS_METHODS.previewOpen]({ threadId, runtime: "server" })).runtime,
+                "server",
+              );
+              assert.equal(
+                (yield* client[WS_METHODS.previewOpen]({ threadId, runtime: "desktop" })).runtime,
+                "desktop",
+              );
+              for (const tab of [serverTab, desktopTab, legacyTab]) {
+                const runtime = tab === serverTab ? "server" : "desktop";
+                const target = { threadId, tabId: tab.tabId };
+                const navigated = yield* client[WS_METHODS.previewNavigate]({
+                  ...target,
+                  url: "https://example.test",
+                });
+                assert.equal(navigated.runtime, runtime);
+                const resized = yield* client[WS_METHODS.previewResize]({
+                  ...target,
+                  viewport: { _tag: "fill" },
+                });
+                assert.equal(resized.runtime, runtime);
+                yield* client[WS_METHODS.previewRefresh](target);
+              }
+            }),
+          ),
+        );
+        assert.equal(serverOpen.mock.calls.length, mode === "web" ? 2 : 1);
+        assert.equal(desktopOpen.mock.calls.length, mode === "desktop" ? 2 : 1);
+        for (const method of [serverNavigate, serverResize, serverRefresh]) {
+          assert.equal(method.mock.calls.length, 1);
+        }
+        for (const method of [desktopNavigate, desktopResize, desktopRefresh]) {
+          assert.equal(method.mock.calls.length, 2);
+        }
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+  }
+
   it.effect("parks HTTP ingress until command readiness", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
