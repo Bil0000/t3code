@@ -129,7 +129,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
-import { ServerBrowser } from "./preview/ServerBrowser.ts";
+import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -561,7 +561,7 @@ const makeWsRpcLayer = (
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
-      const serverBrowser = yield* ServerBrowser;
+      const serverBrowser = yield* ServerBrowser.ServerBrowser;
       const usesServerBrowser = (input: { threadId: ThreadId; tabId: string }) =>
         previewManager
           .list(input)
