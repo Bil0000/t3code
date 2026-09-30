@@ -198,6 +198,22 @@ describe("searchSettings", () => {
     expect(itemIds(true)).toContain("cursor-keychain-usage");
   });
 
+  it("offers server browser install only when a connected server supports it", () => {
+    const itemIds = (hasServerBrowserEnvironment: boolean) =>
+      filterAvailableSettingsSearchItems({
+        hasCloudPublicConfig: false,
+        hasEnvironment: true,
+        hasProviderSettingsEnvironment: true,
+        hasMacProviderSettingsEnvironment: false,
+        canManageLocalBackend: false,
+        isWslSettingsRowVisible: false,
+        hasThreadAutoSettlement: false,
+        hasServerBrowserEnvironment,
+      }).map((item) => item.id);
+    expect(itemIds(false)).not.toContain("server-browser");
+    expect(itemIds(true)).toContain("server-browser");
+  });
+
   it("keeps the local toggle searchable without offering hidden host publishing controls", () => {
     const availability = {
       hasCloudPublicConfig: true,
