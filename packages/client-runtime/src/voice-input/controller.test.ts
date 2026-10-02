@@ -539,6 +539,34 @@ describe("VoiceInputController", () => {
     await next.controller.interruptRecording();
   });
 
+  it("keeps the new abort controller when restarting the same composer after cancellation", async () => {
+    const transcription = deferred<string>();
+    const transcriptionEntered = deferred<void>();
+    const prepare = vi
+      .fn<VoiceTranscriber["prepare"]>()
+      .mockResolvedValueOnce(
+        preparedTranscription(() => {
+          transcriptionEntered.resolve(undefined);
+          return transcription.promise;
+        }),
+      )
+      .mockResolvedValue(preparedTranscription());
+    const harness = createHarness({ getTranscriber: () => ({ prepare }) });
+    await harness.controller.start();
+    const stopping = harness.controller.stop();
+    await transcriptionEntered.promise;
+    harness.controller.cancel();
+    const restarting = harness.controller.start();
+    transcription.resolve("late text");
+    await Promise.all([stopping, restarting]);
+    await harness.controller.stop();
+
+    expect(harness.commits).toEqual([
+      { text: "hello new text", selection: { start: 14, end: 14 } },
+    ]);
+    expect(harness.controller.currentState.phase).toBe("idle");
+  });
+
   it("does not start the microphone for an owner that changed during preparation", async () => {
     const preparation = deferred<PreparedVoiceTranscription>();
     const preparationEntered = deferred<void>();

@@ -213,8 +213,6 @@ export class VoiceInputController {
     }
     let sessionToken: VoiceInputSession | null = null;
     const operationToken = ++this.operationToken;
-    const abortController = new AbortController();
-    this.transcriptionAbortController = abortController;
     this.setState({ phase: "preparing", error: null, errorAction: null });
 
     try {
@@ -232,6 +230,8 @@ export class VoiceInputController {
         return;
       }
       this.sessionToken = sessionToken;
+      const abortController = new AbortController();
+      this.transcriptionAbortController = abortController;
 
       const transcriber = this.dependencies.getTranscriber();
       if (!transcriber) {
