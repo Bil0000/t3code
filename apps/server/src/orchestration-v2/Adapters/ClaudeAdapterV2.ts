@@ -2949,7 +2949,7 @@ export function makeClaudeAdapterV2(
             {
               readonly status: OrchestrationV2Subagent["status"];
               readonly attempt: number;
-              readonly transcriptAnswers: ReadonlyArray<string>;
+              readonly transcriptAnswer: string | undefined;
               readonly transcriptReadAttempts: number;
               readonly finalTranscriptRead: boolean;
               readonly result: string | undefined;
@@ -4173,9 +4173,9 @@ export function makeClaudeAdapterV2(
               });
             }
 
-            let transcriptAnswers = restarted ? [] : (previous?.transcriptAnswers ?? []);
+            let transcriptAnswer = restarted ? undefined : previous?.transcriptAnswer;
             let transcript: ReadonlyArray<string> = [];
-            if (settled && (changed || readTranscript)) {
+            if (settled) {
               // The member's own transcript, when the run left one: a missing or
               // unreadable file is expected (a run predating run-handle capture,
               // a member that never started) and falls back to the excerpt.
@@ -4195,18 +4195,18 @@ export function makeClaudeAdapterV2(
                             ),
                           }),
                     }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-              if (transcript.length > 0) transcriptAnswers = [transcript.join("\n\n")];
+              if (transcript.length > 0) transcriptAnswer = transcript.join("\n\n");
               const answer =
                 transcript.length > 0
-                  ? transcriptAnswers[0]
-                  : member.result !== undefined && changed && transcriptAnswers.length === 0
+                  ? transcriptAnswer
+                  : member.result !== undefined && changed && transcriptAnswer === undefined
                     ? `Partial answer from workflow progress:\n\n${member.result}`
-                    : attempt > 1 && changed && transcriptAnswers.length === 0
+                    : attempt > 1 && changed && transcriptAnswer === undefined
                       ? "No answer from this workflow attempt."
                       : undefined;
               if (
                 answer !== undefined &&
-                (transcript.length === 0 || restarted || answer !== previous?.transcriptAnswers[0])
+                (transcript.length === 0 || restarted || answer !== previous?.transcriptAnswer)
               ) {
                 yield* emitWorkflowMemberMessage({
                   nativeItemId: `${memberKey}:answer:200`,
@@ -4228,7 +4228,7 @@ export function makeClaudeAdapterV2(
                 label: member.label,
                 prompt,
                 model,
-                transcriptAnswers,
+                transcriptAnswer,
                 transcriptReadAttempts:
                   (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
                   (readTranscript ? 1 : 0),
