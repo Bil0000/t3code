@@ -518,6 +518,12 @@ function needsRecovery(
         projection.runs.some((run) =>
           ["queued", "preparing", "starting", "running", "waiting"].includes(run.status),
         ) ||
+        projection.subagents.some(
+          (subagent) =>
+            subagent.runId === null &&
+            subagent.origin === "provider_native" &&
+            ["pending", "running", "waiting"].includes(subagent.status),
+        ) ||
         projection.runtimeRequests.some((request) => request.status === "pending") ||
         projection.providerSessions.some(
           (session) => session.status !== "stopped" && session.status !== "error",

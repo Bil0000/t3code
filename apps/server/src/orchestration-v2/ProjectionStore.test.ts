@@ -328,7 +328,60 @@ it.effect("memory recovery selection includes unfinished items from missing runs
   }).pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
 
+const runlessNativeSubagentNeedsRecovery = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const threadId = yield* addRolledBackRecoveryCandidate("runless-native-recovery");
+  const now = yield* DateTime.now;
+  const id = NodeId.make("node:runless-native-recovery");
+  assert.notInclude(yield* store.getRecoveryThreadIds("runtime"), threadId);
+  for (const status of ["pending", "running", "waiting", "completed"] as const) {
+    yield* store.apply({
+      id: EventId.make(`event:runless-native-recovery:${status}`),
+      type: "subagent.updated",
+      threadId,
+      nodeId: id,
+      driver,
+      providerInstanceId,
+      occurredAt: now,
+      payload: {
+        id,
+        threadId,
+        runId: null,
+        parentNodeId: NodeId.make("node:runless-native-parent"),
+        origin: "provider_native",
+        createdBy: "agent",
+        driver,
+        providerInstanceId,
+        providerThreadId: null,
+        childThreadId: null,
+        nativeTaskRef: { driver, nativeId: "runless-native", strength: "strong" },
+        prompt: "Do the work",
+        title: "Workflow member",
+        model: null,
+        status,
+        result: null,
+        startedAt: now,
+        completedAt: status === "completed" ? now : null,
+        updatedAt: now,
+      },
+    });
+    assert.equal(
+      (yield* store.getRecoveryThreadIds("runtime")).includes(threadId),
+      status !== "completed",
+    );
+  }
+});
+
+it.effect("memory recovery selects unfinished runless native subagents", () =>
+  runlessNativeSubagentNeedsRecovery.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {
+  it.effect(
+    "SQL recovery selects unfinished runless native subagents",
+    () => runlessNativeSubagentNeedsRecovery,
+  );
+
   it.effect(
     "keeps restart-cancelled work through a stale run.updated",
     () => restartCancelledWorkSurvivesStaleRunUpdate,
