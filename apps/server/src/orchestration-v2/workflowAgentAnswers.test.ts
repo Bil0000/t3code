@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { afterAll, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 import { parseWorkflowAgentAnswers, readWorkflowAgentAnswers } from "./workflowAgentAnswers.ts";
 
@@ -77,7 +77,9 @@ describe("parseWorkflowAgentAnswers", () => {
 // Must sit under ~/.claude/projects: readContainedWorkflowFile rejects any path
 // outside it, so a tmpdir would fail containment instead of exercising the read.
 const root = NodePath.join(NodeOS.homedir(), ".claude", "projects", "__wf_answers_test__");
-NodeFS.mkdirSync(root, { recursive: true });
+beforeAll(() => {
+  NodeFS.mkdirSync(root, { recursive: true });
+});
 
 afterAll(() => {
   NodeFS.rmSync(root, { recursive: true, force: true });
