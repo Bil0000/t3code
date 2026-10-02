@@ -4450,7 +4450,7 @@ export function makeClaudeAdapterV2(
             return new Map(current).set(input.taskId, subagent);
           });
 
-          if (existingSubagent === undefined) {
+          if (subagent.childThread === null) {
             const childThread = makeSubagentChildThread({
               parentThread: input.context.input.appThread,
               childThreadId,
@@ -4474,11 +4474,13 @@ export function makeClaudeAdapterV2(
               createdBy: "agent",
               creationSource: "provider",
             });
-            yield* emitProviderEvent({
-              type: "app_thread.created",
-              driver: CLAUDE_PROVIDER,
-              appThread: childThread,
-            });
+            if (existingSubagent === undefined) {
+              yield* emitProviderEvent({
+                type: "app_thread.created",
+                driver: CLAUDE_PROVIDER,
+                appThread: childThread,
+              });
+            }
             subagent.childThread = childThread;
           }
 

@@ -2010,6 +2010,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
     readonly interrupt?: Effect.Effect<void>;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly subagentLaunchToolUseId?: string;
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2080,7 +2081,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               };
             }),
           forkSession: () => Effect.die("unused forkSession"),
-          subagentLaunchToolUseId: () => Effect.succeed(null),
+          subagentLaunchToolUseId: () => Effect.succeed(options?.subagentLaunchToolUseId ?? null),
           assertComplete: Effect.void,
         },
       });
@@ -7836,6 +7837,73 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }),
         );
         yield* Queue.take(harness.terminalReceipts);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("projects workflow member threads after resuming a restarted session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarnessWithOptions({
+          subagentLaunchToolUseId: WORKFLOW_TOOL_USE_ID,
+        });
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-workflow-resume"),
+            text: "Continue the workflow.",
+            attachments: [],
+          }),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...workflowToolUse,
+            message: {
+              model: "claude-sonnet-4-6",
+              content: [
+                { type: "tool_use", id: "toolu-resume-workflow", name: "SendMessage", input: {} },
+              ],
+            },
+          }),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...workflowTaskStarted,
+            tool_use_id: "toolu-resume-workflow",
+            prompt: "Continue the workflow.",
+          }),
+        );
+        yield* harness.offerAndWait(workflowLaunchAck);
+        yield* harness.offerAndWait(
+          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001040", state: "start" }),
+        );
+        yield* harness.offerAndWait(
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001041", result: "Resumed." }),
+        );
+        yield* Queue.take(harness.terminalReceipts);
+        const member = workflowMemberEvents(harness.events, 1).at(-1)?.subagent;
+        const coordinator = workflowCoordinatorEvents(harness.events).at(-1)?.subagent;
+        assert.isDefined(member);
+        assert.equal(member?.status, "running");
+        assert.isTrue(
+          harness.events.some(
+            (event) =>
+              event.type === "app_thread.created" && event.appThread.id === member?.childThreadId,
+          ),
+        );
+        assert.deepEqual(
+          threadMessages(harness.events, member?.childThreadId).map((event) => event.message.text),
+          ["Reply with exactly: A1"],
+        );
+        assert.isFalse(
+          harness.events.some(
+            (event) =>
+              event.type === "app_thread.created" &&
+              event.appThread.id === coordinator?.childThreadId,
+          ),
+        );
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );
