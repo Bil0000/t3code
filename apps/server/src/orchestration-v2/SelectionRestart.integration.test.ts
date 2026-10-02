@@ -408,6 +408,7 @@ it.live("retries a failed selection restart session open before completing", () 
       const result = yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
 
         yield* orchestrator.dispatch({
           type: "thread.create",
@@ -423,14 +424,21 @@ it.live("retries a failed selection restart session open before completing", () 
           branch: null,
           worktreePath: cwd,
         });
-        const running = yield* orchestrator.streamDomainEvents.pipe(
-          Stream.filter(
-            (event) => event.type === "provider-turn.updated" && event.payload.status === "running",
-          ),
-          Stream.take(1),
-          Stream.runDrain,
-          Effect.forkScoped,
-        );
+        const running = yield* eventSink
+          .stream({
+            threadId,
+            afterSequence: yield* eventSink.latestSequence({ threadId }),
+          })
+          .pipe(
+            Stream.map((stored) => stored.event),
+            Stream.filter(
+              (event) =>
+                event.type === "provider-turn.updated" && event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
         yield* orchestrator.dispatch({
           type: "message.dispatch",
           createdBy: "user",
@@ -452,14 +460,20 @@ it.live("retries a failed selection restart session open before completing", () 
           return yield* Effect.die("active restart test run is missing");
         }
 
-        const completed = yield* orchestrator.streamDomainEvents.pipe(
-          Stream.filter(
-            (event) => event.type === "run.updated" && event.payload.status === "completed",
-          ),
-          Stream.take(1),
-          Stream.runDrain,
-          Effect.forkScoped,
-        );
+        const completed = yield* eventSink
+          .stream({
+            threadId,
+            afterSequence: yield* eventSink.latestSequence({ threadId }),
+          })
+          .pipe(
+            Stream.map((stored) => stored.event),
+            Stream.filter(
+              (event) => event.type === "run.updated" && event.payload.status === "completed",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
         yield* orchestrator.dispatch({
           type: "message.dispatch",
           createdBy: "user",
