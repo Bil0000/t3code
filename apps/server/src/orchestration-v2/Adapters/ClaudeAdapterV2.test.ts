@@ -33,6 +33,7 @@ import {
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { afterAll, beforeAll } from "vite-plus/test";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -7974,6 +7975,95 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "between-turn workflow snapshot",
         );
         assert.equal(coordinatorCount(), betweenTurnCount + 1);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("does not replay stale idle progress over a completed workflow", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const clock = yield* Clock.Clock;
+        const progressRead = yield* Deferred.make<void>();
+        const releaseProgress = yield* Deferred.make<void>();
+        let pauseNextRead = false;
+        yield* Effect.gen(function* () {
+          const harness = yield* makeWakeHarness;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-idle-race-launch"),
+              text: "Run the workflow.",
+              attachments: [],
+            }),
+          );
+          yield* harness.offerAndWait(workflowToolUse);
+          yield* harness.offerAndWait(workflowTaskStarted);
+          yield* harness.offerAndWait(workflowLaunchAck);
+          yield* harness.offerAndWait(
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001060", state: "start" }),
+          );
+          yield* harness.offerAndWait(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001061", result: "Launched." }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              type: "system",
+              subtype: "task_notification",
+              task_id: WORKFLOW_TASK_ID,
+              tool_use_id: WORKFLOW_TOOL_USE_ID,
+              status: "completed",
+              summary: "Completed.",
+              output_file: "/tmp/workflow-idle-race.output",
+              uuid: "00000000-0000-4000-8000-000000001062",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* harness.offerAndWait(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001063", result: "Done." }),
+          );
+          const continuationInput = makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-idle-race-continuation"),
+            text: "Continue.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          });
+          pauseNextRead = true;
+          const progress = yield* harness
+            .offerAndWait(
+              workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001064", state: "start" }),
+            )
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(progressRead);
+          yield* harness.runtime.startTurn(continuationInput);
+          yield* Queue.take(harness.terminalReceipts);
+          yield* Deferred.succeed(releaseProgress, undefined);
+          yield* Fiber.join(progress);
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+          assert.equal(
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+            "completed",
+          );
+        }).pipe(
+          Effect.provideService(Clock.Clock, {
+            ...clock,
+            currentTimeMillis: Effect.gen(function* () {
+              if (pauseNextRead) {
+                pauseNextRead = false;
+                yield* Deferred.succeed(progressRead, undefined);
+                yield* Deferred.await(releaseProgress);
+              }
+              return yield* clock.currentTimeMillis;
+            }),
+          }),
+        );
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );

@@ -5426,16 +5426,22 @@ export function makeClaudeAdapterV2(
             workflow: workflowWithThreads,
             updatedAt: now,
           } satisfies OrchestrationV2Subagent;
-          yield* Ref.update(sessionSubagentsByTaskId, (current) =>
-            new Map(current).set(taskId, { ...registered, task }),
-          );
+          const coordinator = { ...registered, task };
+          const accepted = yield* Ref.modify(sessionSubagentsByTaskId, (current) => {
+            const latest = current.get(taskId);
+            if (latest !== registered || latest.task.status !== "running") {
+              return [false, current] as const;
+            }
+            return [true, new Map(current).set(taskId, coordinator)] as const;
+          });
+          if (!accepted) return;
           yield* emitProviderEvent({
             type: "subagent.updated",
             driver: CLAUDE_PROVIDER,
             subagent: task,
           });
           yield* projectClaudeWorkflowMembers({
-            coordinator: { ...registered, task },
+            coordinator,
             workflow: workflowWithThreads,
           });
         });
