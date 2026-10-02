@@ -4264,6 +4264,7 @@ export function makeClaudeAdapterV2(
             "running" | "completed" | "failed" | "cancelled"
           >;
           readonly reopen?: boolean;
+          readonly onlyIfRunning?: boolean;
         }) {
           // The session registry lets a wake-replay turn (fresh context maps)
           // hydrate a subagent that was created by an earlier, settled turn.
@@ -4420,6 +4421,29 @@ export function makeClaudeAdapterV2(
             lastAssistantMessageId:
               input.reopen === true ? null : (existingSubagent?.lastAssistantMessageId ?? null),
           } satisfies ActiveClaudeSubagent;
+          // The same terminal protection, applied atomically: a concurrent
+          // fiber (live stream vs continuation drain) may have terminalized
+          // the registry entry after this update's lookup read it. A resume
+          // re-open (task_started) bypasses it only when the registered entry
+          // is still the terminal generation the lookup resolved; if a
+          // concurrent fiber installed a newer terminal entry meanwhile, the
+          // re-open must not clobber its result.
+          const accepted = yield* Ref.modify(sessionSubagentsByTaskId, (current) => {
+            const registered = current.get(input.taskId);
+            if (
+              (input.onlyIfRunning === true &&
+                (registered?.task.status !== "running" ||
+                  registered.task.runId !== input.context.input.runId)) ||
+              (registered !== undefined &&
+                registered.task.status !== "running" &&
+                input.status === "running" &&
+                !(isReopen && registered === existingSubagent))
+            ) {
+              return [false, current] as const;
+            }
+            return [true, new Map(current).set(input.taskId, subagent)] as const;
+          });
+          if (!accepted) return;
           input.context.subagentsByTaskId.set(input.taskId, subagent);
           if (input.toolUseId !== undefined) {
             input.context.subagentsByToolUseId.set(input.toolUseId, subagent);
@@ -4430,25 +4454,6 @@ export function makeClaudeAdapterV2(
                 : new Map(current).set(toolUseId, input.taskId),
             );
           }
-          // The same terminal protection, applied atomically: a concurrent
-          // fiber (live stream vs continuation drain) may have terminalized
-          // the registry entry after this update's lookup read it. A resume
-          // re-open (task_started) bypasses it only when the registered entry
-          // is still the terminal generation the lookup resolved; if a
-          // concurrent fiber installed a newer terminal entry meanwhile, the
-          // re-open must not clobber its result.
-          yield* Ref.update(sessionSubagentsByTaskId, (current) => {
-            const registered = current.get(input.taskId);
-            if (
-              registered !== undefined &&
-              registered.task.status !== "running" &&
-              input.status === "running" &&
-              !(isReopen && registered === existingSubagent)
-            ) {
-              return current;
-            }
-            return new Map(current).set(input.taskId, subagent);
-          });
 
           if (subagent.childThread === null) {
             const childThread = makeSubagentChildThread({
@@ -5092,6 +5097,7 @@ export function makeClaudeAdapterV2(
                 context: input.context,
                 taskId,
                 status: input.status === "failed" ? "failed" : "cancelled",
+                onlyIfRunning: true,
               });
             }
           }

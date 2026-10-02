@@ -2031,6 +2031,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const continuationReceipts = yield* Queue.unbounded<ProviderContinuationRequest>();
       const terminalReceipts =
         yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>>();
+      const subagentReceipts =
+        yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "subagent.updated" }>>();
       const systemNoticeReceipts =
         yield* Queue.unbounded<Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }>>();
       let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
@@ -2105,6 +2107,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             if (event.type === "turn.terminal") {
               yield* Queue.offer(terminalReceipts, event);
             }
+            if (event.type === "subagent.updated") {
+              yield* Queue.offer(subagentReceipts, event);
+            }
             if (event.type === "turn_item.updated" && event.turnItem.type === "system_notice") {
               yield* Queue.offer(systemNoticeReceipts, event);
             }
@@ -2132,6 +2137,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         continuationReceipts,
         events,
         terminalReceipts,
+        subagentReceipts,
         systemNoticeReceipts,
         getOpenedOptions: () => openedOptions,
         terminalEvents,
@@ -7968,6 +7974,120 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "between-turn workflow snapshot",
         );
         assert.equal(coordinatorCount(), betweenTurnCount + 1);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("keeps a workflow completion that races with a failed continuation", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-workflow-race-launch"),
+            text: "Run two workflows.",
+            attachments: [],
+          }),
+        );
+        yield* harness.offerAndWait(workflowToolUse);
+        yield* harness.offerAndWait(workflowTaskStarted);
+        yield* harness.offerAndWait(workflowLaunchAck);
+        yield* harness.offerAndWait(
+          workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000001050",
+            state: "start",
+          }),
+        );
+        const secondStarted = claudeSdkFrame({
+          ...workflowTaskStarted,
+          task_id: "task-workflow-second",
+          tool_use_id: "toolu-workflow-second",
+          uuid: "00000000-0000-4000-8000-000000001051",
+        });
+        yield* harness.offerAndWait(secondStarted);
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001052", state: "start" }),
+            task_id: "task-workflow-second",
+            tool_use_id: "toolu-workflow-second",
+          }),
+        );
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000001053",
+            result: "Launched.",
+          }),
+        );
+        yield* Queue.take(harness.terminalReceipts);
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...workflowTaskStarted,
+            uuid: "00000000-0000-4000-8000-000000001054",
+          }),
+        );
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            ...secondStarted,
+            uuid: "00000000-0000-4000-8000-000000001055",
+          }),
+        );
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000001056",
+            result: "Parent failed.",
+            terminalReason: "api_error",
+            isError: true,
+          }),
+        );
+        const continuation = yield* harness.runtime
+          .startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-claude-workflow-race-continuation"),
+              text: "Continue.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+              messageCreatedBy: "agent",
+              messageCreationSource: "provider",
+            }),
+          )
+          .pipe(Effect.forkScoped);
+        let receipt = yield* Queue.take(harness.subagentReceipts);
+        while (
+          receipt.subagent.nativeTaskRef?.nativeId !== WORKFLOW_TASK_ID ||
+          receipt.subagent.status !== "failed"
+        ) {
+          receipt = yield* Queue.take(harness.subagentReceipts);
+        }
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "task_notification",
+            task_id: "task-workflow-second",
+            tool_use_id: "toolu-workflow-second",
+            status: "completed",
+            summary: "Second completed.",
+            output_file: "/tmp/workflow-second.output",
+            uuid: "00000000-0000-4000-8000-000000001057",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* Fiber.join(continuation);
+        yield* Queue.take(harness.terminalReceipts);
+        const second = harness.events.findLast(
+          (event) =>
+            event.type === "subagent.updated" &&
+            event.subagent.nativeTaskRef?.nativeId === "task-workflow-second",
+        );
+        assert.equal(
+          second?.type === "subagent.updated" ? second.subagent.status : undefined,
+          "completed",
+        );
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );
