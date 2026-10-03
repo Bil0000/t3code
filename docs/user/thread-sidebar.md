@@ -21,6 +21,10 @@ the project menu in that heading or from **New thread in...** in the command
 palette, or press `mod+alt+n`. On mobile, pick **No project** from the project
 list. To move a draft into a project, pick the project in the heading.
 
+Before sending the first message, use **Run on** to choose a connected machine.
+The thread and its files stay on that machine, so a remote thread can keep
+working when you close the app on your computer.
+
 Each thread without a project works in its own folder under `~/.t3/scratch` (the
 `scratch` folder of your T3 data directory), named after its date, the first words
 of its first message, and a short id, like

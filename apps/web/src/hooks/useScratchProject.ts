@@ -5,8 +5,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import { derivePhysicalProjectKey } from "~/logicalProject";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { waitForProject } from "~/state/entities";
 import { useEnvironments } from "~/state/environments";
@@ -30,10 +32,20 @@ function reportScratchFailure(error: unknown) {
  * creates it on first use; after that it is an ordinary project on the
  * non-git path, and each thread gets its own subfolder.
  */
-export function useScratchProject() {
+export function useScratchProject(draftId: DraftId | null = null) {
   const { environments } = useEnvironments();
   const ensureScratch = useAtomCommand(projectEnvironment.ensureScratch, { reportFailure: false });
   const handleNewThread = useNewThreadHandler();
+  const moveRequest = useRef(0);
+  const [movingDraft, setMovingDraft] = useState<{ draftId: DraftId; request: number } | null>(
+    null,
+  );
+  const isMovingScratchDraft = movingDraft?.draftId === draftId;
+  useEffect(() => {
+    return () => {
+      if (draftId !== null) moveRequest.current += 1;
+    };
+  }, [draftId]);
 
   /** The scratch folder of a connected environment, or null when it offers none. */
   const scratchWorkspaceRootFor = useCallback(
@@ -94,5 +106,56 @@ export function useScratchProject() {
     [handleNewThread, openScratchProject],
   );
 
-  return { scratchWorkspaceRootFor, scratchEnvironmentId, openScratchProject, startScratchThread };
+  async function moveScratchDraft(environmentId: EnvironmentId) {
+    if (!draftId || scratchWorkspaceRootFor(environmentId) === null) return;
+    const draft = useComposerDraftStore.getState().draftThreadsByThreadKey[draftId];
+    if (!draft || draft.promotedTo || draft.environmentId === environmentId) return;
+    const request = ++moveRequest.current;
+    setMovingDraft({ draftId, request });
+    try {
+      const project = await openScratchProject(environmentId);
+      if (
+        !project ||
+        request !== moveRequest.current ||
+        useComposerDraftStore.getState().draftThreadsByThreadKey[draftId] !== draft
+      )
+        return;
+      const content = useComposerDraftStore.getState().getComposerDraft(draftId);
+      if (content && (content.images.length > 0 || content.files.length > 0)) {
+        toastManager.add({
+          type: "warning",
+          title: "Keep attachments on this machine",
+          description:
+            "Remove attachments before choosing another machine, then attach them there.",
+        });
+        return;
+      }
+      useComposerDraftStore
+        .getState()
+        .setLogicalProjectDraftThreadId(
+          derivePhysicalProjectKey(project),
+          scopeProjectRef(project.environmentId, project.id),
+          draftId,
+          {
+            environmentSelection: "manual",
+            loadBalancedEnvironmentId: null,
+            branch: null,
+            worktreePath: null,
+            envMode: "local",
+            startFromOrigin: false,
+          },
+        );
+    } finally {
+      setMovingDraft((current) => (current?.request === request ? null : current));
+    }
+  }
+
+  return {
+    scratchWorkspaceRootFor,
+    scratchEnvironmentId,
+    openScratchProject,
+    startScratchThread,
+    moveScratchDraft,
+    isMovingScratchDraft,
+  };
 }

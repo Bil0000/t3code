@@ -2,7 +2,6 @@ import type {
   EnvironmentId,
   EnvironmentMachineKind,
   VcsRef,
-  ProjectId,
   WorktreeSubmodules,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -16,7 +15,6 @@ export {
 
 export interface EnvironmentOption {
   environmentId: EnvironmentId;
-  projectId: ProjectId;
   label: string;
   isPrimary: boolean;
   machine: EnvironmentMachineKind;
