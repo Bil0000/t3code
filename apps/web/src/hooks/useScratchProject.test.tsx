@@ -251,6 +251,28 @@ describe("scratch draft connection", () => {
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.environmentId).toBe("other");
   });
 
+  it("cancels a pending switch when the original machine is selected again", async () => {
+    let complete!: (value: ReturnType<typeof project>) => void;
+    mocks.waitForProject.mockReturnValue(
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    );
+    let moving!: Promise<void>;
+    await act(async () => {
+      moving = scratch.moveScratchDraft(remote);
+    });
+    await act(async () => {
+      await scratch.moveScratchDraft(EnvironmentId.make("local"));
+    });
+    expect(scratch.isMovingScratchDraft).toBe(false);
+    await act(async () => {
+      complete(project());
+      await moving;
+    });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.environmentId).toBe("local");
+  });
+
   it("does not retarget a draft after navigating to another draft", async () => {
     let complete!: (value: ReturnType<typeof project>) => void;
     mocks.waitForProject.mockReturnValue(

@@ -109,8 +109,12 @@ export function useScratchProject(draftId: DraftId | null = null) {
   async function moveScratchDraft(environmentId: EnvironmentId) {
     if (!draftId || scratchWorkspaceRootFor(environmentId) === null) return;
     const draft = useComposerDraftStore.getState().draftThreadsByThreadKey[draftId];
-    if (!draft || draft.promotedTo || draft.environmentId === environmentId) return;
+    if (!draft || draft.promotedTo) return;
     const request = ++moveRequest.current;
+    if (draft.environmentId === environmentId) {
+      setMovingDraft(null);
+      return;
+    }
     setMovingDraft({ draftId, request });
     try {
       const project = await openScratchProject(environmentId);
