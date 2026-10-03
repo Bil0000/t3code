@@ -2308,6 +2308,9 @@ export default function ChatView(props: ChatViewProps) {
       threadPanelPresentation,
     ),
   );
+  const inlineThreadPanelOpen = useRightPanelStore((state) =>
+    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, activeThreadRef, "inline"),
+  );
 
   useEffect(() => {
     if (!activeThreadRef) return;
@@ -10627,7 +10630,7 @@ export default function ChatView(props: ChatViewProps) {
           {/* Chat column */}
           <ChatCanvas
             composerOverlayElement={isDraftHeroState ? null : composerOverlayElement}
-            detailsCardOpen={threadPanelOpen}
+            detailsCardOpen={inlineThreadPanelOpen}
             data-chat-workspace-drop-target="true"
             onDragEnter={workspaceFileDropHandlers.onDragEnter}
             onDragOver={workspaceFileDropHandlers.onDragOver}

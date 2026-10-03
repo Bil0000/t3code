@@ -28,6 +28,30 @@ const expectClear = (result: ReturnType<typeof resolve>) => {
 };
 
 describe("chat canvas layout", () => {
+  it("keeps the laptop chat lane reserved while a tall workspace card folds during preview gestures", () => {
+    const container = { width: 1256, height: 896 };
+    const closed = resolveChatCanvasLayout({
+      container,
+      preview: null,
+      maxChatWidth: 736,
+      composerHeight: 164,
+    });
+    expect(closed.chat).toEqual({ left: 260, width: 640, insetStart: 240, insetEnd: 336 });
+    for (const player of [preview, { ...preview, lastInteraction: "resize" as const }]) {
+      for (const width of [320, 480, 900]) {
+        const opened = resolveChatCanvasLayout({
+          container,
+          maxChatWidth: 736,
+          composerHeight: 164,
+          detailsCardOpen: true,
+          detailsCard: { left: closed.card!.x, right: 1244, bottom: 884 },
+          preview: { ...player, width },
+        });
+        expect(opened.chat).toEqual(closed.chat);
+        expect(opened.card).toEqual(closed.card);
+      }
+    }
+  });
   it.each([preview.source, { width: 1000, height: 1523 }])(
     "keeps resized previews off the centered composer and workspace controls",
     (source) => {
