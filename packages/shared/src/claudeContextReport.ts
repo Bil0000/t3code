@@ -144,6 +144,24 @@ export function parseClaudeContextReport(text: string): ClaudeContextReport | nu
   };
 }
 
+export function latestClaudeContextReport(
+  messages: ReadonlyArray<{
+    readonly id: string;
+    readonly role: string;
+    readonly text: string;
+    readonly streaming: boolean;
+  }>,
+): { readonly id: string; readonly report: ClaudeContextReport } | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role === "user") return null;
+    if (message.role !== "assistant" || message.streaming) continue;
+    const report = parseClaudeContextReport(message.text);
+    if (report) return { id: message.id, report };
+  }
+  return null;
+}
+
 export function formatClaudeContextHeadline(report: ClaudeContextReport): string {
   return `${report.usedTokens} / ${report.maxTokens} (${formatClaudeContextPercent(report.usedPercent)})`;
 }
