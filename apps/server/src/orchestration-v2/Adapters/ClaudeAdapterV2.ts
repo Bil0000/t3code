@@ -5115,7 +5115,7 @@ export function makeClaudeAdapterV2(
           readonly result?: SDKResultMessage;
         }) {
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
-          if (input.status !== "completed") {
+          if (input.status !== "completed" && (yield* Ref.get(queryContext)) === null) {
             for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
               if (
                 subagent.task.workflow === undefined ||
