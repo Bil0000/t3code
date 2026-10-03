@@ -110,11 +110,11 @@ export function useScratchProject(draftId: DraftId | null = null) {
   );
 
   async function moveScratchDraft(environmentId: EnvironmentId) {
-    if (!draftId || scratchWorkspaceRootFor(environmentId) === null) return;
+    if (!draftId) return;
     const draft = useComposerDraftStore.getState().draftThreadsByThreadKey[draftId];
     if (!draft || draft.promotedTo) return;
     const request = ++moveRequest.current;
-    if (draft.environmentId === environmentId) {
+    if (draft.environmentId === environmentId || scratchWorkspaceRootFor(environmentId) === null) {
       setMovingDraft(null);
       return;
     }
