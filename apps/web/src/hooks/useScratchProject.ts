@@ -43,7 +43,10 @@ export function useScratchProject(draftId: DraftId | null = null) {
   const isMovingScratchDraft = movingDraft?.draftId === draftId;
   useEffect(() => {
     return () => {
-      if (draftId !== null) moveRequest.current += 1;
+      if (draftId !== null) {
+        moveRequest.current += 1;
+        setMovingDraft(null);
+      }
     };
   }, [draftId]);
 

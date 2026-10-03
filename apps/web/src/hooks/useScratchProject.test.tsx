@@ -285,6 +285,8 @@ describe("scratch draft connection", () => {
       moving = scratch.moveScratchDraft(remote);
     });
     act(() => renderer.update(<Probe id={DraftId.make("another-draft")} />));
+    act(() => renderer.update(<Probe />));
+    expect(scratch.isMovingScratchDraft).toBe(false);
     await act(async () => {
       complete(project());
       await moving;
