@@ -6,10 +6,7 @@ import { Popover, PopoverPopup, PopoverCreateHandle } from "../ui/popover";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import { useChatCanvas } from "./ChatCanvasContext";
-import {
-  resolveThreadDetailsCardDensity,
-  resolveThreadDetailsCardLayout,
-} from "./threadDetailsCardLayout";
+import { resolveThreadDetailsCardDensity } from "./threadDetailsCardLayout";
 
 /** One card owns its placement and folds content only when that content cannot fit. */
 export function ThreadDetailsCard({
@@ -26,16 +23,8 @@ export function ThreadDetailsCard({
   children: (density: "full" | "compact" | "essential") => ReactNode;
 }) {
   const canvas = useChatCanvas();
-  const preferredPlacement = canvas
-    ? resolveThreadDetailsCardLayout({
-        container: canvas.container,
-        chat: canvas.layout.chat,
-        frame: null,
-      })
-    : null;
-  const placement = canvas
-    ? resolveThreadDetailsCardLayout({ container: canvas.container, ...canvas.layout })
-    : null;
+  const preferredPlacement = canvas?.layout.card ?? null;
+  const placement = canvas?.layout.cardPlacement ?? null;
   const mode = placement ? "inline" : "popover";
   const inlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),

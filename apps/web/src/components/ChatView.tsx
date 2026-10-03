@@ -10627,6 +10627,7 @@ export default function ChatView(props: ChatViewProps) {
           {/* Chat column */}
           <ChatCanvas
             composerOverlayElement={isDraftHeroState ? null : composerOverlayElement}
+            detailsCardOpen={threadPanelOpen}
             data-chat-workspace-drop-target="true"
             onDragEnter={workspaceFileDropHandlers.onDragEnter}
             onDragOver={workspaceFileDropHandlers.onDragOver}

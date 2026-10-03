@@ -7,34 +7,47 @@ import {
 const resolve = (width: number, height: number, previewY: number | null = null) =>
   resolveThreadDetailsCardLayout({
     container: { width, height },
-    chat: { left: (width - 736) / 2, width: 736 },
     frame: previewY === null ? null : { x: width - 332, y: previewY, width: 320, height: 240 },
   });
 
 describe("floating details card", () => {
-  it("uses the right margin without reserving chat space", () => {
+  it.each([
+    [320, 360],
+    [390, 844],
+    [768, 600],
+    [943, 800],
+    [1015, 800],
+  ])("hides the card at %i by %i", (width, height) => {
+    expect(resolve(width!, height!)).toBeNull();
+  });
+  it("uses a stable right-hand lane", () => {
     expect(resolve(1600, 900)).toEqual({
       x: 1276,
       y: 12,
       width: 312,
       height: 876,
     });
-    expect(resolve(1344, 900)?.width).toBe(280);
+    expect(resolve(1344, 900)?.width).toBe(312);
   });
-  it("hides when the margin cannot hold readable controls", () => {
-    expect(resolve(1200, 900)).toBeNull();
+  it("keeps the card visible on a laptop", () => {
+    expect(resolve(1200, 900)).toMatchObject({ x: 876, width: 312 });
+    expect(resolve(1256, 896)?.width).toBe(312);
   });
   it("keeps the card at the top right while the preview is freely dragged vertically", () => {
     for (const y of [12, 170, 250, 400, 648]) {
-      expect(resolve(1600, 900, y)).toEqual({ x: 1276, y: 12, width: 312, height: 876 });
+      expect(resolve(1600, 900, y)).toEqual({
+        x: 1276,
+        y: 12,
+        width: 312,
+        height: 876,
+      });
     }
   });
   it("keeps width and height independent", () => {
-    expect(resolve(1344, 900, 600)).toMatchObject({ width: 280, height: 876 });
+    expect(resolve(1344, 900, 600)).toMatchObject({ width: 312, height: 876 });
     expect(
       resolveThreadDetailsCardLayout({
         container: { width: 1600, height: 900 },
-        chat: { left: 432, width: 736 },
         frame: { x: 12, y: 100, width: 320, height: 240 },
       })?.height,
     ).toBe(876);
@@ -45,7 +58,6 @@ describe("card content fitting", () => {
   const place = (previewY: number, previewHeight = 365, overlapsDetailsCard = false) =>
     resolveThreadDetailsCardLayout({
       container: { width: 1584, height: 988 },
-      chat: { left: 424, width: 736 },
       frame: { x: 1260, y: previewY, width: 240, height: previewHeight },
       overlapsDetailsCard,
     });
@@ -64,7 +76,7 @@ describe("card content fitting", () => {
     expect(resolveThreadDetailsCardDensity(place(350, 626, true)!.height, content)).toBe("compact");
     expect(resolveThreadDetailsCardDensity(place(12)!.height, content)).toBe("full");
   });
-  it("hides only when the available height cannot hold readable controls", () => {
+  it("hides the card when there is no room for essential controls", () => {
     expect(place(184, 792, true)).toMatchObject({ y: 12, height: 160 });
     expect(place(183, 793, true)).toBeNull();
   });
