@@ -32,7 +32,6 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import { afterAll, beforeAll } from "vite-plus/test";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -7805,31 +7804,25 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
   const WORKFLOW_TASK_ID = "task-workflow-run";
   const WORKFLOW_TOOL_USE_ID = "toolu-workflow-run";
-  // Not a tmpdir: readContainedWorkflowFile serves nothing outside this root.
-  const workflowTranscriptDir = NodePath.join(
-    NodeOS.homedir(),
-    ".claude",
-    "projects",
-    "__claude_adapter_v2_workflow_test__",
-  );
-  // beforeAll, not collection time: a filtered run skips afterAll and would leak.
-  beforeAll(() => {
-    NodeFS.mkdirSync(workflowTranscriptDir, { recursive: true });
-    NodeFS.writeFileSync(
-      NodePath.join(workflowTranscriptDir, "agent-a1.jsonl"),
-      `${JSON.stringify({
-        type: "assistant",
-        message: {
-          role: "assistant",
-          id: "msg_a1",
-          content: [{ type: "text", text: "A1 from the transcript" }],
-        },
-      })}\n`,
-    );
-  });
-  afterAll(() => {
-    NodeFS.rmSync(workflowTranscriptDir, { recursive: true, force: true });
-  });
+  const makeWorkflowHarnessWithOptions = (
+    options?: Parameters<typeof makeWakeHarnessWithOptions>[0],
+  ) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const configDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-wf-" });
+      const transcriptDir = NodePath.join(configDir, "projects", "workflow");
+      yield* fileSystem.makeDirectory(transcriptDir, { recursive: true });
+      yield* fileSystem.writeFileString(
+        NodePath.join(transcriptDir, "agent-a1.jsonl"),
+        '{"type":"assistant","message":{"role":"assistant","id":"msg_a1","content":[{"type":"text","text":"A1 from the transcript"}]}}\n',
+      );
+      const harness = yield* makeWakeHarnessWithOptions({
+        ...options,
+        environment: { ...options?.environment, CLAUDE_CONFIG_DIR: configDir },
+      });
+      return { ...harness, transcriptDir };
+    });
+  const makeWorkflowHarness = makeWorkflowHarnessWithOptions();
 
   const workflowToolUse = claudeSdkFrame({
     type: "assistant",
@@ -7859,28 +7852,29 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     uuid: "00000000-0000-4000-8000-000000001002",
     session_id: WAKE_NATIVE_SESSION,
   });
-  const workflowLaunchAck = claudeSdkFrame({
-    type: "user",
-    message: {
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: WORKFLOW_TOOL_USE_ID,
-          content: [{ type: "text", text: "Workflow launched." }],
-        },
-      ],
-    },
-    parent_tool_use_id: null,
-    uuid: "00000000-0000-4000-8000-000000001003",
-    session_id: WAKE_NATIVE_SESSION,
-    tool_use_result: {
-      status: "async_launched",
-      taskType: "local_workflow",
-      runId: "wf_probe",
-      transcriptDir: workflowTranscriptDir,
-    },
-  });
+  const workflowLaunchAck = (transcriptDir: string) =>
+    claudeSdkFrame({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: WORKFLOW_TOOL_USE_ID,
+            content: [{ type: "text", text: "Workflow launched." }],
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: "00000000-0000-4000-8000-000000001003",
+      session_id: WAKE_NATIVE_SESSION,
+      tool_use_result: {
+        status: "async_launched",
+        taskType: "local_workflow",
+        runId: "wf_probe",
+        transcriptDir,
+      },
+    });
   const workflowSnapshot = (input: {
     readonly uuid: string;
     readonly state: "start" | "done";
@@ -7952,12 +7946,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   // Both tests open the same way: tool_use, task_started, the launch ack that
   // carries the run handles, then the first roster snapshot.
   const launchWorkflow = Effect.fnUntraced(function* (input: {
-    readonly harness: Effect.Success<typeof makeWakeHarness>;
+    readonly harness: Effect.Success<typeof makeWorkflowHarness>;
     readonly snapshotUuid: string;
   }) {
     yield* Queue.offer(input.harness.sdkMessages, workflowToolUse);
     yield* Queue.offer(input.harness.sdkMessages, workflowTaskStarted);
-    yield* Queue.offer(input.harness.sdkMessages, workflowLaunchAck);
+    yield* Queue.offer(input.harness.sdkMessages, workflowLaunchAck(input.harness.transcriptDir));
     yield* Queue.offer(
       input.harness.sdkMessages,
       workflowSnapshot({ uuid: input.snapshotUuid, state: "start" }),
@@ -7971,7 +7965,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("projects each workflow member as its own subagent thread", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeWakeHarness;
+        const harness = yield* makeWorkflowHarness;
         const now = yield* DateTime.now;
         const coordinatorTurnItems = () =>
           harness.events.filter(
@@ -8117,7 +8111,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("projects workflow member threads after resuming a restarted session", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeWakeHarnessWithOptions({
+        const harness = yield* makeWorkflowHarnessWithOptions({
           subagentLaunchToolUseId: WORKFLOW_TOOL_USE_ID,
         });
         yield* harness.runtime.startTurn(
@@ -8148,7 +8142,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             prompt: "Continue the workflow.",
           }),
         );
-        yield* harness.offerAndWait(workflowLaunchAck);
+        yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
         yield* harness.offerAndWait(
           workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001040", state: "start" }),
         );
@@ -8184,7 +8178,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("does not republish a workflow roster on progress-only frames", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeWakeHarness;
+        const harness = yield* makeWorkflowHarness;
         const now = yield* DateTime.now;
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
@@ -8253,7 +8247,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const releaseProgress = yield* Deferred.make<void>();
         let pauseNextRead = false;
         yield* Effect.gen(function* () {
-          const harness = yield* makeWakeHarness;
+          const harness = yield* makeWorkflowHarness;
           yield* harness.runtime.startTurn(
             makeClaudeTestTurnInput({
               threadId: harness.threadId,
@@ -8266,7 +8260,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
           yield* harness.offerAndWait(workflowToolUse);
           yield* harness.offerAndWait(workflowTaskStarted);
-          yield* harness.offerAndWait(workflowLaunchAck);
+          yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
           yield* harness.offerAndWait(
             workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001060", state: "start" }),
           );
@@ -8337,7 +8331,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("keeps a workflow completion that races with a failed continuation", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeWakeHarness;
+        const harness = yield* makeWorkflowHarness;
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
             threadId: harness.threadId,
@@ -8350,7 +8344,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         yield* harness.offerAndWait(workflowToolUse);
         yield* harness.offerAndWait(workflowTaskStarted);
-        yield* harness.offerAndWait(workflowLaunchAck);
+        yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
         yield* harness.offerAndWait(
           workflowSnapshot({
             uuid: "00000000-0000-4000-8000-000000001050",
@@ -8462,7 +8456,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ([status, betweenTurns]) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const harness = yield* makeWakeHarness;
+          const harness = yield* makeWorkflowHarness;
           const now = yield* DateTime.now;
           yield* harness.runtime.startTurn(
             makeClaudeTestTurnInput({
@@ -8476,7 +8470,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
           yield* Queue.offer(harness.sdkMessages, workflowToolUse);
           yield* Queue.offer(harness.sdkMessages, workflowTaskStarted);
-          yield* Queue.offer(harness.sdkMessages, workflowLaunchAck);
+          yield* Queue.offer(harness.sdkMessages, workflowLaunchAck(harness.transcriptDir));
           yield* Queue.offer(
             harness.sdkMessages,
             workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001010", state: "start" }),
@@ -8557,7 +8551,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("reads a transcript that appears after a terminal workflow notification", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeWakeHarness;
+        const harness = yield* makeWorkflowHarness;
         const now = yield* DateTime.now;
         yield* harness.runtime.startTurn(
           makeClaudeTestTurnInput({
@@ -8603,7 +8597,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "terminal workflow notification",
         );
         NodeFS.writeFileSync(
-          NodePath.join(workflowTranscriptDir, "agent-a2.jsonl"),
+          NodePath.join(harness.transcriptDir, "agent-a2.jsonl"),
           '{"type":"assistant","message":{"role":"assistant","id":"msg_late","content":[{"type":"text","text":"A2 final answer"}]}}\n',
         );
         yield* Queue.offer(
@@ -8621,7 +8615,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001034", result: "Done." }),
         );
         yield* Queue.take(harness.terminalReceipts);
-        NodeFS.rmSync(NodePath.join(workflowTranscriptDir, "agent-a2.jsonl"), { force: true });
+        NodeFS.rmSync(NodePath.join(harness.transcriptDir, "agent-a2.jsonl"), { force: true });
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );
@@ -8629,7 +8623,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("answers settled workflow members from a transcript, or the snapshot excerpt", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeWakeHarness;
+        const harness = yield* makeWorkflowHarness;
         const now = yield* DateTime.now;
 
         yield* harness.runtime.startTurn(
@@ -8713,7 +8707,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const coordinatorEventsBeforeRepeat = workflowCoordinatorEvents(harness.events).length;
         const memberEventsBeforeRepeat = workflowMemberEvents(harness.events, 2).length;
         NodeFS.appendFileSync(
-          NodePath.join(workflowTranscriptDir, "agent-a1.jsonl"),
+          NodePath.join(harness.transcriptDir, "agent-a1.jsonl"),
           '{"type":"assistant","message":{"role":"assistant","id":"msg_a1","content":[{"type":"text","text":"A1 continued"}]}}\n',
         );
         yield* Queue.offer(
@@ -8737,7 +8731,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "A1 from the transcript\n\nA1 continued",
         );
         NodeFS.writeFileSync(
-          NodePath.join(workflowTranscriptDir, "agent-a2.jsonl"),
+          NodePath.join(harness.transcriptDir, "agent-a2.jsonl"),
           '{"type":"assistant","message":{"role":"assistant","id":"msg_a2","content":[{"type":"text","text":"A2 from the transcript"}]}}\n',
         );
         yield* Queue.offer(
@@ -8754,7 +8748,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "A2 from the transcript",
         );
         NodeFS.writeFileSync(
-          NodePath.join(workflowTranscriptDir, "agent-a1.jsonl"),
+          NodePath.join(harness.transcriptDir, "agent-a1.jsonl"),
           [
             '{"type":"assistant","message":{"role":"assistant","id":"msg_first","content":[{"type":"text","text":"First answer"}]}}',
             '{"type":"assistant","message":{"role":"assistant","id":"msg_second","content":[{"type":"text","text":"Second answer"}]}}',
@@ -8797,7 +8791,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }),
         );
         NodeFS.writeFileSync(
-          NodePath.join(workflowTranscriptDir, "agent-a1.jsonl"),
+          NodePath.join(harness.transcriptDir, "agent-a1.jsonl"),
           '{"type":"assistant","message":{"role":"assistant","id":"msg_retry","content":[{"type":"text","text":"A1 retry answer"}]}}\n',
         );
         yield* Queue.offer(
@@ -8816,7 +8810,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.deepEqual(currentAssistantAnswers(), ["A1 retry answer"]);
         assert.lengthOf(threadMessages(harness.events, firstThreadId), answerEventsDuringRetry + 1);
-        NodeFS.rmSync(NodePath.join(workflowTranscriptDir, "agent-a1.jsonl"));
+        NodeFS.rmSync(NodePath.join(harness.transcriptDir, "agent-a1.jsonl"));
         yield* Queue.offer(
           harness.sdkMessages,
           workflowSnapshot({
