@@ -40,6 +40,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock("~/state/environments", () => ({
   useEnvironments: () => ({ environments: mocks.environments }),
 }));
+vi.mock("~/rpc/atomRegistry", () => ({
+  appAtomRegistry: {
+    get: (environmentId: EnvironmentId) =>
+      mocks.environments.find((entry) => entry.environmentId === environmentId),
+  },
+}));
+vi.mock("~/state/presentation", () => ({
+  environmentPresentations: { presentationAtom: (environmentId: EnvironmentId) => environmentId },
+}));
 vi.mock("~/state/entities", () => ({ waitForProject: mocks.waitForProject }));
 vi.mock("~/state/projects", () => ({ projectEnvironment: { ensureScratch: {} } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => mocks.ensureScratch }));
@@ -73,6 +82,7 @@ function project(environmentId = remote) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.environments[0]!.connection.phase = "connected";
+  mocks.environments[1]!.connection.phase = "connected";
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   useComposerDraftStore.setState({
     draftThreadsByThreadKey: {},
@@ -142,6 +152,32 @@ describe("scratch draft connection", () => {
     });
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.environmentId).toBe("local");
     expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+    expect(scratch.isMovingScratchDraft).toBe(false);
+  });
+
+  it("keeps the draft on its original machine when the destination disconnects before its cached project arrives", async () => {
+    let complete!: (value: ReturnType<typeof project>) => void;
+    mocks.waitForProject.mockReturnValue(
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    );
+    let moving!: Promise<void>;
+    await act(async () => {
+      moving = scratch.moveScratchDraft(remote);
+    });
+    mocks.environments = mocks.environments.map((entry) =>
+      entry.environmentId === remote ? { ...entry, connection: { phase: "offline" } } : entry,
+    );
+    act(() => renderer.update(<Probe />));
+    await act(async () => {
+      complete(project());
+      await moving;
+    });
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.environmentId).toBe("local");
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
+      "Keep working while my Mac is closed",
+    );
     expect(scratch.isMovingScratchDraft).toBe(false);
   });
 

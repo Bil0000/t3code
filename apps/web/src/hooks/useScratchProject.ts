@@ -9,9 +9,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { derivePhysicalProjectKey } from "~/logicalProject";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { waitForProject } from "~/state/entities";
 import { useEnvironments } from "~/state/environments";
+import { environmentPresentations } from "~/state/presentation";
 import { projectEnvironment } from "~/state/projects";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -124,6 +126,8 @@ export function useScratchProject(draftId: DraftId | null = null) {
       if (
         !project ||
         request !== moveRequest.current ||
+        appAtomRegistry.get(environmentPresentations.presentationAtom(environmentId))?.connection
+          .phase !== "connected" ||
         useComposerDraftStore.getState().draftThreadsByThreadKey[draftId] !== draft
       )
         return;
