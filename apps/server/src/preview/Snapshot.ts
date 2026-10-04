@@ -1,7 +1,7 @@
 import {
   PreviewAutomationSnapshot,
   PreviewAutomationStatus,
-  type PreviewAutomationError,
+  PreviewAutomationError,
   type PreviewTabId,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
@@ -24,6 +24,13 @@ export class PreviewTextExportError extends Schema.TaggedError<PreviewTextExport
     return "Could not save the loaded page text. The page may have changed or the file could not be written.";
   }
 }
+
+const isPreviewAutomationError = Schema.is(PreviewAutomationError);
+const isPreviewTextExportError = Schema.is(PreviewTextExportError);
+const textExportError = (cause: unknown) =>
+  isPreviewAutomationError(cause) || isPreviewTextExportError(cause)
+    ? cause
+    : new PreviewTextExportError({ cause });
 
 const Capture = Schema.Struct({
   totalChars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -113,10 +120,9 @@ const make = Effect.gen(function* () {
     const id = NodeCrypto.randomUUID();
     let tabId = requestedTabId;
     if (tabId === undefined) {
-      const status = yield* broker.invoke({ scope, operation: "status", input: {} }).pipe(
-        Effect.flatMap(decodeStatus),
-        Effect.mapError((cause) => new PreviewTextExportError({ cause })),
-      );
+      const status = yield* broker
+        .invoke({ scope, operation: "status", input: {} })
+        .pipe(Effect.flatMap(decodeStatus), Effect.mapError(textExportError));
       if (!status.available || status.tabId === null) {
         return yield* new PreviewTextExportError({ cause: "No available preview tab." });
       }
@@ -204,7 +210,7 @@ const make = Effect.gen(function* () {
           ? fileSystem.remove(textPath).pipe(Effect.ignore)
           : Effect.void,
       ),
-      Effect.mapError((cause) => new PreviewTextExportError({ cause })),
+      Effect.mapError(textExportError),
     );
   });
 

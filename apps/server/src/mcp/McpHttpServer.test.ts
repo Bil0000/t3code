@@ -345,19 +345,21 @@ it.effect.each([
   ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("tells the agent how to fall back when no desktop app can run the snapshot", () =>
-  Effect.gen(function* () {
-    const snapshot = yield* callSnapshot({});
+it.effect.each([{}, { saveText: true }])(
+  "tells the agent how to fall back when no desktop app can run the snapshot %j",
+  (args) =>
+    Effect.gen(function* () {
+      const snapshot = yield* callSnapshot(args);
 
-    expect(snapshot.isError).toBe(true);
-    const [text] = snapshot.content;
-    expect(text?.type === "text" ? text.text : "").toContain(
-      "use a headless browser from the shell",
-    );
-    expect(snapshot.structuredContent).toMatchObject({
-      error: { _tag: "PreviewAutomationNoAvailableHostError" },
-    });
-  }).pipe(Effect.provide(TestLayer)),
+      expect(snapshot.isError).toBe(true);
+      const [text] = snapshot.content;
+      expect(text?.type === "text" ? text.text : "").toContain(
+        "use a headless browser from the shell",
+      );
+      expect(snapshot.structuredContent).toMatchObject({
+        error: { _tag: "PreviewAutomationNoAvailableHostError" },
+      });
+    }).pipe(Effect.provide(TestLayer)),
 );
 
 it.effect.each([
@@ -721,14 +723,18 @@ it.effect("reports text export failure without a successful snapshot or partial 
 
       const snapshot = yield* callSnapshot({ saveText: true, save: true });
 
-      const message =
-        "Could not save the loaded page text. The page may have changed or the file could not be written.";
+      const message = "Preview automation evaluate failed on client mcp-text-failure-client.";
       expect(snapshot.isError).toBe(true);
       expect(snapshot.content).toEqual([
         { type: "text", text: `Preview snapshot failed: ${message}` },
       ]);
       expect(snapshot.structuredContent).toEqual({
-        error: { _tag: "PreviewTextExportError", operation: "snapshot", failureCount: 1, message },
+        error: {
+          _tag: "PreviewAutomationExecutionError",
+          operation: "snapshot",
+          failureCount: 1,
+          message,
+        },
       });
       expect(host.requests.some((request) => request.operation === "snapshot")).toBe(false);
       expect(host.timers.size).toBe(0);

@@ -4,6 +4,8 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   PreviewAutomationNoAvailableHostError,
+  PreviewAutomationRequestQueueClosedError,
+  PreviewAutomationTimeoutError,
   PreviewTabId,
   ProviderInstanceId,
   ThreadId,
@@ -290,6 +292,52 @@ it.effect("does not create a capture when the resolved tab is unavailable", () =
     expect(page.reads()).toBe(0);
     assertClean(page);
   }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each(["status", "evaluate"] as const)(
+  "preserves browser recovery errors during text export %s",
+  (operation) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
+      const existing = path.join(config.browserArtifactsDir, "existing.txt");
+      yield* fs.writeFileString(existing, "keep this file");
+      for (const ErrorClass of [
+        PreviewAutomationNoAvailableHostError,
+        PreviewAutomationTimeoutError,
+        PreviewAutomationRequestQueueClosedError,
+      ]) {
+        const error = new ErrorClass({
+          ...scope,
+          operation,
+          clientId: "text-client",
+          connectionId: "text-connection",
+          requestId: "text-request",
+          timeoutMs: 15_000,
+        });
+        const page = makePage("loaded text");
+        const original = page.broker!;
+        page.broker = PreviewAutomationBroker.of({
+          ...original,
+          invoke: (request) =>
+            request.operation === operation &&
+            (operation === "status" ||
+              (request.input as { expression: string }).expression.includes("let end"))
+              ? Effect.fail(error)
+              : original.invoke(request),
+        });
+
+        const failed = yield* Effect.flip(runExport(page));
+
+        expect(failed).toBe(error);
+        expect(failed.message).toBe(error.message);
+        expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["existing.txt"]);
+        expect(yield* fs.readFileString(existing)).toBe("keep this file");
+        assertClean(page);
+      }
+    }).pipe(Effect.provide(TestLayer)),
 );
 
 it.effect("removes partial files and the browser capture on cancellation", () =>
