@@ -619,7 +619,7 @@ effectIt.effect("waits for cleanup and repairs its checkout before opening a pro
   }),
 );
 
-effectIt.effect("keeps cleanup out until provider turn startup accepts the turn", () =>
+effectIt.effect("keeps cleanup out until its provider session and running state are saved", () =>
   Effect.gen(function* () {
     const worktreePath = "/tmp/provider-start-before-cleanup";
     const startupEntered = yield* Deferred.make<void>();
@@ -629,9 +629,11 @@ effectIt.effect("keeps cleanup out until provider turn startup accepts the turn"
       worktreePath,
       failReadsAfterRunning: true,
     });
-    harness.startRootRun.mockImplementation(() =>
+    const open = harness.open.getMockImplementation()!;
+    harness.open.mockImplementation(() =>
       Deferred.succeed(startupEntered, undefined).pipe(
         Effect.andThen(Deferred.await(releaseStartup)),
+        Effect.andThen(open()),
       ),
     );
     const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
@@ -640,6 +642,8 @@ effectIt.effect("keeps cleanup out until provider turn startup accepts the turn"
     const cleanup = yield* withWorkspaceLease(
       worktreePath,
       Effect.sync(() => {
+        expect(harness.projection().providerSessions).toHaveLength(1);
+        expect(harness.projection().runs.at(-1)?.status).toBe("running");
         cleanupEntered = true;
       }),
     ).pipe(Effect.forkChild({ startImmediately: true }));
@@ -648,6 +652,34 @@ effectIt.effect("keeps cleanup out until provider turn startup accepts the turn"
     yield* Fiber.join(startup);
     yield* Fiber.join(cleanup);
     expect(cleanupEntered).toBe(true);
+  }),
+);
+
+effectIt.effect("starts another provider in the same checkout while a turn is pending", () =>
+  Effect.gen(function* () {
+    const worktreePath = "/tmp/provider-start-shared-checkout";
+    const turnEntered = yield* Deferred.make<void>();
+    const releaseTurn = yield* Deferred.make<void>();
+    const first = makeLocalCommandHarness({
+      text: "Continue",
+      worktreePath,
+      failReadsAfterRunning: true,
+    });
+    const second = makeLocalCommandHarness({
+      text: "Continue",
+      worktreePath,
+      failReadsAfterRunning: true,
+    });
+    first.startRootRun.mockImplementation(() =>
+      Deferred.succeed(turnEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseTurn))),
+    );
+    const pending = yield* first.start.pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(turnEntered);
+    yield* second.start;
+    expect(second.startRootRun).toHaveBeenCalledOnce();
+    expect(second.projection().runs.at(-1)?.status).toBe("running");
+    yield* Deferred.succeed(releaseTurn, undefined);
+    yield* Fiber.join(pending);
   }),
 );
 

@@ -1215,7 +1215,7 @@ export const layer: Layer.Layer<
         !noteContinuation
           ? session
           : makeDeliverySession(session, startWithHandoffs);
-      yield* runExecution.startRootRun({
+      return runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
         providerSessionId,
@@ -1269,9 +1269,10 @@ export const layer: Layer.Layer<
             input.runId,
           );
           const effect = start(input, projection);
-          return yield* projection.thread.worktreePath === null
+          const providerTurn = yield* projection.thread.worktreePath === null
             ? effect
             : withWorkspaceLease(path.resolve(projection.thread.worktreePath), effect);
+          if (providerTurn !== undefined) yield* providerTurn;
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnStartError(cause)
