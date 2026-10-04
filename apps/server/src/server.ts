@@ -3,6 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as IssueSyncReactor from "./orchestration-v2/IssueSyncReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 // @effect-diagnostics nodeBuiltinImport:off
@@ -510,6 +511,14 @@ const ProviderInstallationRefreshLive = Layer.effectDiscard(
   }),
 );
 
+const IssueServiceLive = IssueService.layer.pipe(
+  // One registry entry per supported host; the service only knows the registry.
+  Layer.provide(IssueProviderRegistry.layer),
+  Layer.provide(SourceControlProviderRegistryLayerLive),
+  Layer.provide(VcsProcess.layer),
+  Layer.provide(SourceControlRateLimit.layer),
+);
+
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   ThreadSettlementWorkerLive,
@@ -525,6 +534,17 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   ).pipe(
     Layer.provideMerge(PullRequestSyncReactor.layer),
     Layer.provide(PullRequestServiceLive),
+    Layer.provide(ProjectionStoreV2.layer),
+  ),
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* IssueSyncReactor.IssueSyncReactor;
+      yield* service.start();
+    }),
+  ).pipe(
+    Layer.provideMerge(IssueSyncReactor.layer),
+    Layer.provide(IssueServiceLive),
+    Layer.provide(LinearApiLive),
     Layer.provide(ProjectionStoreV2.layer),
   ),
   Layer.effectDiscard(
@@ -636,14 +656,6 @@ const commandReadinessLayer = HttpRouter.middleware(
       startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
     ),
   { global: true },
-);
-
-const IssueServiceLive = IssueService.layer.pipe(
-  // One registry entry per supported host; the service only knows the registry.
-  Layer.provide(IssueProviderRegistry.layer),
-  Layer.provide(SourceControlProviderRegistryLayerLive),
-  Layer.provide(VcsProcess.layer),
-  Layer.provide(SourceControlRateLimit.layer),
 );
 
 const makeRoutesLayer = Layer.mergeAll(

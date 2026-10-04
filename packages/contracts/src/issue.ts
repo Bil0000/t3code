@@ -930,6 +930,10 @@ export const ThreadIssueLink = Schema.Struct({
   ...ThreadIssueKey.fields,
   url: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
+  /** The tracker's state when linked or last synced; absent on links made before it was kept. */
+  state: Schema.optionalKey(IssueState),
+  /** Why a closed issue was closed, where the tracker says. */
+  stateReason: Schema.optionalKey(Schema.NullOr(IssueCloseReason)),
 });
 export type ThreadIssueLink = typeof ThreadIssueLink.Type;
 

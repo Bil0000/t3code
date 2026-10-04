@@ -232,6 +232,7 @@ import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as IssueSyncReactor from "./orchestration-v2/IssueSyncReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -1226,6 +1227,7 @@ const makeWsRpcLayer = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+      const issueSync = yield* IssueSyncReactor.IssueSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
@@ -2918,9 +2920,11 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "issues",
           }),
         [WS_METHODS.issuesRunAction]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesRunAction, issues.runAction(input), {
-            "rpc.aggregate": "issues",
-          }),
+          observeRpcEffect(
+            WS_METHODS.issuesRunAction,
+            issues.runAction(input).pipe(Effect.tap(() => issueSync.requestSync(input))),
+            { "rpc.aggregate": "issues" },
+          ),
         [WS_METHODS.issuesComment]: (input) =>
           observeRpcEffect(WS_METHODS.issuesComment, issues.comment(input), {
             "rpc.aggregate": "issues",
@@ -2938,9 +2942,17 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "issues",
           }),
         [WS_METHODS.issuesUpdate]: (input) =>
-          observeRpcEffect(WS_METHODS.issuesUpdate, issues.update(input), {
-            "rpc.aggregate": "issues",
-          }),
+          observeRpcEffect(
+            WS_METHODS.issuesUpdate,
+            issues
+              .update(input)
+              .pipe(
+                Effect.tap(() =>
+                  input.title === undefined ? Effect.void : issueSync.requestSync(input),
+                ),
+              ),
+            { "rpc.aggregate": "issues" },
+          ),
         [WS_METHODS.issuesSetLabels]: (input) =>
           observeRpcEffect(WS_METHODS.issuesSetLabels, issues.setLabels(input), {
             "rpc.aggregate": "issues",

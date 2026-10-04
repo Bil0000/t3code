@@ -74,6 +74,8 @@ const make = Effect.gen(function* () {
           number: detail.number,
           url: detail.url,
           title: detail.title,
+          state: detail.state,
+          stateReason: detail.stateReason,
         };
         if (
           (thread.issues ?? []).some(

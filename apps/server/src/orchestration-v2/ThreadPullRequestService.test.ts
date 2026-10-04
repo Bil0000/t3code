@@ -222,9 +222,12 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           // Startup backfill reads every active thread.
           expect(yield* Queue.take(reads)).toEqual({ location: "active", unsettledOnly: false });
           yield* service.drain;
-          yield* PubSub.publish(events, {
+          const metadataUpdated = (
+            id: string,
+            change: { readonly title?: string; readonly branch?: string },
+          ): OrchestrationV2DomainEvent => ({
             type: "thread.metadata-updated",
-            id: EventId.make("event:metadata"),
+            id: EventId.make(id),
             threadId: thread.id,
             occurredAt: NOW,
             payload: {
@@ -249,8 +252,20 @@ describe("ThreadPullRequestServiceV2 reads", () => {
               settledAt: null,
               lastVisitedAt: null,
               deletedAt: null,
+              ...change,
             },
           });
+          yield* PubSub.publish(events, metadataUpdated("event:metadata", {}));
+          expect(yield* Queue.take(reads)).toBe(thread.id);
+          yield* service.drain;
+          expect(yield* Queue.size(reads)).toBe(0);
+
+          // A title change leaves nothing new to discover; a branch change does.
+          yield* PubSub.publish(events, metadataUpdated("event:title", { title: "Renamed" }));
+          yield* PubSub.publish(
+            events,
+            metadataUpdated("event:branch", { branch: "feature/next" }),
+          );
           expect(yield* Queue.take(reads)).toBe(thread.id);
           yield* service.drain;
           expect(yield* Queue.size(reads)).toBe(0);

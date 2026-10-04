@@ -257,4 +257,72 @@ it.layer(testLayer)("V2 thread issue links", (it) => {
       assert.equal((yield* projections.getThread(threadId)).issues?.length, MAX_THREAD_ISSUES);
     }),
   );
+
+  it.effect("writes the tracker's title and state onto one link without bumping the thread", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = ThreadId.make("thread:issues:sync");
+      yield* createThread(threadId);
+      for (const number of [1, 2]) {
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`sync:link:${number}`),
+          threadId,
+          issueLink: issue(number),
+        });
+      }
+      const before = yield* projections.getThread(threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.issue-link.sync",
+        commandId: CommandId.make("sync:1"),
+        threadId,
+        ...issue(1),
+        title: "Renamed",
+        state: "closed",
+        stateReason: "not-planned",
+      });
+      const after = yield* projections.getThread(threadId);
+      assert.deepEqual(after.issues, [
+        { ...issue(1), title: "Renamed", state: "closed", stateReason: "not-planned" },
+        issue(2),
+      ]);
+      assert.equal(after.updatedAt.toString(), before.updatedAt.toString());
+      assert.deepEqual(
+        (yield* projections.getThreadsWithIssues())
+          .filter((thread) => thread.id === threadId)
+          .map((thread) => thread.issues),
+        [after.issues],
+      );
+    }),
+  );
+
+  it.effect("records nothing for a sync that changes nothing or names an unlinked issue", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("thread:issues:sync-noop");
+      yield* createThread(threadId);
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("sync-noop:link"),
+        threadId,
+        issueLink: { ...issue(1), state: "open", stateReason: null },
+      });
+      for (const [id, number] of [
+        ["sync-noop:same", 1],
+        ["sync-noop:unlinked", 2],
+      ] as const) {
+        const result = yield* orchestrator.dispatch({
+          type: "thread.issue-link.sync",
+          commandId: CommandId.make(id),
+          threadId,
+          ...issue(number),
+          title: issue(1).title,
+          state: "open",
+          stateReason: null,
+        });
+        assert.deepEqual(result.storedEvents, []);
+      }
+    }),
+  );
 });

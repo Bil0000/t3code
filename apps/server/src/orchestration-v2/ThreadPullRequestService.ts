@@ -363,12 +363,29 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  // What discovery reads of each thread, as last seen. Most metadata updates (titles, issue
+  // links and their syncs) change none of it and need no lookup.
+  const discoveryInputs = new Map<string, string>();
+
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
       case "thread.created":
       case "thread.unarchived":
-      case "thread.metadata-updated":
+      case "thread.metadata-updated": {
+        const { projectId, worktreePath, branch } = event.payload;
+        const inputs = JSON.stringify([projectId, worktreePath, branch]);
+        if (
+          event.type === "thread.metadata-updated" &&
+          discoveryInputs.get(event.threadId) === inputs
+        ) {
+          break;
+        }
+        discoveryInputs.set(event.threadId, inputs);
         return worker.enqueue({ threadId: event.threadId, refresh: false });
+      }
+      case "thread.deleted":
+        discoveryInputs.delete(event.threadId);
+        break;
       case "thread.unsettled":
       case "checkpoint.captured":
         return worker.enqueue({ threadId: event.threadId, refresh: true });

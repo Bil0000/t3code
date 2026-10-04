@@ -35,6 +35,8 @@ const issue: ThreadIssueLink = {
   number: 7,
   url: "https://github.com/t3tools/t3code/issues/7",
   title: "Canonical issue",
+  state: "open",
+  stateReason: null,
 };
 const pullRequest = {
   provider: "github",

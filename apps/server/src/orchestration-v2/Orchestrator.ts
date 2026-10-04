@@ -396,6 +396,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.metadata.update":
+    case "thread.issue-link.sync":
     case "thread.pull-request.link":
     case "thread.pull-request.unlink":
     case "thread.pull-request-link.sync":
@@ -2332,6 +2333,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.active.reorder"
           | "thread.mark-unread"
           | "thread.metadata.update"
+          | "thread.issue-link.sync"
           | "thread.pull-request.link"
           | "thread.pull-request.unlink"
           | "thread.pull-request-link.sync"
@@ -2907,6 +2909,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: now,
           };
         }
+        case "thread.issue-link.sync": {
+          const links = thread.issues ?? [];
+          const existing = links.find((issue) => threadIssueMatchesKey(issue, command));
+          if (
+            existing === undefined ||
+            (existing.title === command.title &&
+              existing.state === command.state &&
+              (existing.stateReason ?? null) === command.stateReason)
+          ) {
+            return thread;
+          }
+          const { title, state, stateReason } = command;
+          return {
+            ...thread,
+            issues: links.map((issue) =>
+              issue === existing ? { ...issue, title, state, stateReason } : issue,
+            ),
+            // A sync is the tracker's news, not activity on the thread.
+            updatedAt: thread.updatedAt,
+          };
+        }
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
         case "thread.pull-request-link.sync": {
@@ -3138,6 +3161,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.mark-unread":
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
+        case "thread.issue-link.sync":
         case "thread.title.regeneration.complete":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
@@ -3159,6 +3183,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.provider-switched" as const;
       }
     })();
+    // A sync that found nothing new, or a link removed since the read, tells no one anything.
+    if (command.type === "thread.issue-link.sync" && updatedThread === thread) return;
     yield* emit(
       events,
       command,
@@ -9551,6 +9577,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.active.reorder":
       case "thread.mark-unread":
       case "thread.metadata.update":
+      case "thread.issue-link.sync":
       case "thread.pull-request.link":
       case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":
@@ -9785,8 +9812,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const plan = yield* dispatchOnce(command).pipe(
       Effect.flatMap((planned) =>
         // A settle that finds the provider already ended everything has
-        // nothing to record, which is its expected outcome, not a failure.
-        planned.events.length > 0 || command.type === "thread.background-work.settle"
+        // nothing to record, which is its expected outcome, not a failure; so
+        // has an issue sync that raced a newer write or an unlink.
+        planned.events.length > 0 ||
+        command.type === "thread.background-work.settle" ||
+        command.type === "thread.issue-link.sync"
           ? Effect.succeed(planned)
           : Effect.fail(
               new OrchestratorDispatchError({

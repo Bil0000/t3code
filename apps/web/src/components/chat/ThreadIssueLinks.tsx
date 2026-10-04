@@ -5,6 +5,7 @@ import { useThreadShell } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useRightPanelStore } from "~/rightPanelStore";
+import { IssueStateGlyph } from "../issue/issuePresentation";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 
@@ -28,7 +29,7 @@ export function ThreadIssueLinks({ threadRef }: { threadRef: ScopedThreadRef }) 
             <div key={issue.url} className="flex items-center gap-1">
               <button
                 type="button"
-                className="min-w-0 flex-1 rounded-sm px-1 py-1 text-left text-xs hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex min-w-0 flex-1 items-start gap-1.5 rounded-sm px-1 py-1 text-left text-xs hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() =>
                   useRightPanelStore.getState().openIssue(threadRef, {
                     projectId: thread.projectId,
@@ -38,9 +39,18 @@ export function ThreadIssueLinks({ threadRef }: { threadRef: ScopedThreadRef }) 
                   })
                 }
               >
-                <span className="block truncate font-medium">{issue.title}</span>
-                <span className="text-muted-foreground">
-                  {issue.repository} · {issue.number}
+                {issue.state === undefined ? null : (
+                  <IssueStateGlyph
+                    state={issue.state}
+                    stateReason={issue.stateReason ?? null}
+                    className="mt-0.5 size-3.5"
+                  />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{issue.title}</span>
+                  <span className="text-muted-foreground">
+                    {issue.repository} · {issue.number}
+                  </span>
                 </span>
               </button>
               <Button
