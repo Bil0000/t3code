@@ -474,6 +474,7 @@ export function NewTaskDraftScreen(props: {
   const voiceInput = useVoiceInputController({
     ownerKey: flow.draftKey,
     readDraftMessage: () => (flow.draftKey ? getComposerDraftSnapshot(flow.draftKey).text : null),
+    selection: composerMenu.selection,
     disabled: isIncomingShareTransferPending || isImportingShare || flow.submitting,
     onChangeDraftMessage: flow.setPrompt,
     onChangeSelection: composerMenu.onSelectionChange,

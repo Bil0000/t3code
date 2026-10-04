@@ -15,13 +15,14 @@ export function createVoiceInputTarget(
   ownerKey: string,
   readText: () => string | null,
   commitDraft: VoiceInputTarget["commitDraft"],
+  selection: VoiceDraftSnapshot["selection"],
 ): VoiceInputTarget {
   return {
     ownerKey,
     readDraft: () => {
       const text = readText();
       if (text === null) return null;
-      return { ownerKey, text, selection: { start: text.length, end: text.length }, revision: 0 };
+      return { ownerKey, text, selection, revision: 0 };
     },
     commitDraft,
   };

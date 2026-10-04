@@ -14,6 +14,7 @@ const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: n
 export function useVoiceInputController(input: {
   readonly ownerKey: string | null;
   readonly readDraftMessage: () => string | null;
+  readonly selection: ComposerEditorSelection;
   readonly disabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onChangeSelection: (selection: ComposerEditorSelection) => void;
@@ -43,12 +44,17 @@ export function useVoiceInputController(input: {
     const captured = latestInput.current;
     if (!captured.ownerKey || captured.disabled) return;
     void session.start(
-      createVoiceInputTarget(captured.ownerKey, captured.readDraftMessage, (text, selection) => {
-        captured.onChangeDraftMessage(text);
-        if (mounted.current && latestInput.current.ownerKey === captured.ownerKey) {
-          latestInput.current.onChangeSelection(selection);
-        }
-      }),
+      createVoiceInputTarget(
+        captured.ownerKey,
+        captured.readDraftMessage,
+        (text, selection) => {
+          captured.onChangeDraftMessage(text);
+          if (mounted.current && latestInput.current.ownerKey === captured.ownerKey) {
+            latestInput.current.onChangeSelection(selection);
+          }
+        },
+        captured.selection,
+      ),
     );
   }, [session]);
   const state = global.ownerKey === input.ownerKey ? global.state : IDLE_STATE;

@@ -30,6 +30,26 @@ function createSession() {
 describe("global voice input", () => {
   beforeEach(() => resetVoiceInputGlobalsForTests());
 
+  it.each([
+    { selection: { start: 6, end: 11 }, expected: "hello spoken text", cursor: 17 },
+    { selection: { start: 6, end: 6 }, expected: "hello spoken text world", cursor: 18 },
+  ])(
+    "keeps the starting selection $selection after navigation",
+    async ({ selection, expected, cursor }) => {
+      const { session } = createSession();
+      const commit = vi.fn();
+      await session.start(createVoiceInputTarget("first", () => "hello world", commit, selection));
+      await session.start(
+        createVoiceInputTarget("second", () => "other prompt", vi.fn(), { start: 12, end: 12 }),
+      );
+      await session.controller.stop();
+      expect(commit).toHaveBeenCalledWith(expected, {
+        start: cursor,
+        end: cursor,
+      });
+    },
+  );
+
   it("appends to the starting draft after its screen leaves and another draft opens", async () => {
     const { session, recorder } = createSession();
     const drafts = new Map([
@@ -43,6 +63,7 @@ describe("global voice input", () => {
         targetKey,
         () => drafts.get(targetKey) ?? null,
         (text) => drafts.set(targetKey, text),
+        { start: 15, end: 15 },
       ),
     );
     visibleDraft = "second";
@@ -69,7 +90,9 @@ describe("global voice input", () => {
       });
       const firstCommit = vi.fn();
       const secondCommit = vi.fn();
-      const starting = session.start(createVoiceInputTarget("first", () => "first", firstCommit));
+      const starting = session.start(
+        createVoiceInputTarget("first", () => "first", firstCommit, { start: 5, end: 5 }),
+      );
       await preparationEntered.promise;
       let stopping: Promise<void> | null = null;
       if (phase !== "preparing") {
@@ -86,7 +109,9 @@ describe("global voice input", () => {
         stopping = session.controller.stop();
         await transcriptionEntered.promise;
       }
-      await session.start(createVoiceInputTarget("second", () => "second", secondCommit));
+      await session.start(
+        createVoiceInputTarget("second", () => "second", secondCommit, { start: 6, end: 6 }),
+      );
       expect(session.ownerKey).toBe("first");
       expect(session.controller.currentState.phase).toBe(phase);
       expect(prepare).toHaveBeenCalledTimes(1);
@@ -106,7 +131,9 @@ describe("global voice input", () => {
       const { session } = createSession();
       let text: string | null = "first";
       const commit = vi.fn();
-      await session.start(createVoiceInputTarget("first", () => text, commit));
+      await session.start(
+        createVoiceInputTarget("first", () => text, commit, { start: 5, end: 5 }),
+      );
       text = change === "removed" ? null : "edited prompt";
       await session.controller.stop();
       expect(commit).not.toHaveBeenCalled();
@@ -117,7 +144,9 @@ describe("global voice input", () => {
   it("finishes the original draft at the recording limit while it is off screen", async () => {
     const { session, recorder } = createSession();
     const commit = vi.fn();
-    await session.start(createVoiceInputTarget("first", () => "first", commit));
+    await session.start(
+      createVoiceInputTarget("first", () => "first", commit, { start: 5, end: 5 }),
+    );
     await session.controller.handleRecorderStatus({
       isFinished: true,
       hasError: false,
@@ -138,10 +167,14 @@ describe("global voice input", () => {
     });
     const oldCommit = vi.fn();
     const nextCommit = vi.fn();
-    const firstStart = session.start(createVoiceInputTarget("first", () => "first", oldCommit));
+    const firstStart = session.start(
+      createVoiceInputTarget("first", () => "first", oldCommit, { start: 5, end: 5 }),
+    );
     await preparationEntered.promise;
     session.controller.cancel();
-    const nextStart = session.start(createVoiceInputTarget("second", () => "second", nextCommit));
+    const nextStart = session.start(
+      createVoiceInputTarget("second", () => "second", nextCommit, { start: 6, end: 6 }),
+    );
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(recorder.record).not.toHaveBeenCalled();
     preparation.resolve({ locale: "en-US", transcribe: async () => "old transcript" });
