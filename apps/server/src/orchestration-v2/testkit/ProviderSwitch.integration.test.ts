@@ -1150,6 +1150,12 @@ describe("orchestration v2 provider switching", () => {
                 : 1,
             );
             assert.isTrue(compactTurns.every((turn) => turn.attachments.length === 0));
+            if (rejected) {
+              const errors = projection.visibleTurnItems.filter(
+                ({ item }) => item.runId === projection.runs.at(-1)!.id && item.type === "error",
+              );
+              assert.equal(errors.length, failed ? 1 : 0);
+            }
             assert.isTrue(
               projection.turnItems.some(
                 (item) =>

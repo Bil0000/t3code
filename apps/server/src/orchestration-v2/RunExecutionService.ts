@@ -646,7 +646,7 @@ export const layer: Layer.Layer<
             completedAt: null,
           };
           const { delegatedCompletion: _completion, ...run } = input.run;
-          const events = yield* Effect.forEach(
+          const events: Array<OrchestrationV2DomainEvent> = yield* Effect.forEach(
             [
               {
                 type: "run-attempt.updated",
@@ -676,6 +676,41 @@ export const layer: Layer.Layer<
                 } satisfies OrchestrationV2DomainEvent;
               }),
           );
+          if (retryContextFailure && input.failureItemPersisted && terminal.status === "failed") {
+            const {
+              failure: _failure,
+              retry: _retry,
+              ...item
+            } = makeProviderFailureTurnItem({
+              idAllocator,
+              driver: terminal.driver,
+              threadId: input.run.threadId,
+              runId: input.run.id,
+              nodeId: input.rootNode.id,
+              providerThreadId: terminal.providerThreadId,
+              providerTurnId: terminal.providerTurnId,
+              itemOrdinal: terminal.failureItemOrdinal,
+              failure: terminal.failure,
+              occurredAt: completedAt,
+            });
+            events.push({
+              id: yield* idAllocator.allocate.event({ threadId: input.run.threadId }),
+              type: "turn-item.updated",
+              threadId: input.run.threadId,
+              runId: input.run.id,
+              nodeId: input.rootNode.id,
+              providerInstanceId: input.run.providerInstanceId,
+              occurredAt: completedAt,
+              payload: {
+                ...item,
+                type: "system_notice",
+                title: "Context recovery",
+                status: "completed",
+                message:
+                  "Compacting the conversation before retrying the request that exceeded the context limit.",
+              },
+            });
+          }
           const commandId = CommandId.make(`command:context-compaction:${input.attempt.id}`);
           const continuation = yield* eventSink.writeIfRunCurrent({
             threadId: input.run.threadId,
