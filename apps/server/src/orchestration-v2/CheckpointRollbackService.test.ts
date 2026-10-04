@@ -4,6 +4,7 @@ import {
   CheckpointId,
   CheckpointScopeId,
   type OrchestrationV2ThreadProjection,
+  ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
@@ -18,6 +19,7 @@ import * as Option from "effect/Option";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Layer from "effect/Layer";
 
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
@@ -40,6 +42,7 @@ const checkpointRollbackServiceLayer = CheckpointRollbackService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       NodeServices.layer,
+      Layer.mock(GitWorkflow.GitWorkflowService)({}),
       Layer.mock(ProjectStore.ProjectStoreV2)({ get: () => Effect.succeed(unrelatedProject) }),
     ),
   ),
@@ -267,7 +270,7 @@ it.effect("rejects a rollback when provider selection changed before execution",
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect.each(["normal", "cleanup-first", "rollback-first"])("locks rollback with %s", (order) => {
+it.effect("rejects an unavailable rollback target before opening a session", () => {
   const threadId = ThreadId.make("thread:rollback-provider-turn-unavailable");
   const providerThreadId = ProviderThreadId.make(
     "provider-thread:rollback-provider-turn-unavailable",
@@ -279,22 +282,11 @@ it.effect.each(["normal", "cleanup-first", "rollback-first"])("locks rollback wi
   const scopeId = CheckpointScopeId.make("checkpoint-scope:rollback-provider-turn-unavailable");
   const providerInstanceId = ProviderInstanceId.make("provider_rollback_provider_turn_unavailable");
   const restore = vi.fn(() => Effect.die("checkpoint restore must not run"));
-  const release = Deferred.makeUnsafe<void>();
-  const openEntered = Deferred.makeUnsafe<void>();
-  let checkoutExists = true;
-  let cleanupEntered = false;
-  const open = vi.fn(() =>
-    Effect.gen(function* () {
-      if (!checkoutExists)
-        return yield* new ProviderWorkspaceMissingError({ threadId, cwd: process.cwd() });
-      yield* Deferred.succeed(openEntered, undefined);
-      if (order === "rollback-first") yield* Deferred.await(release);
-      return {} as never;
-    }),
-  );
+  const open = vi.fn(() => Effect.die("provider session open must not run"));
   const projection = {
     thread: {
-      worktreePath: process.cwd(),
+      worktreePath: "/tmp/missing-invalid-rollback-worktree",
+      branch: "feature/rollback",
       activeProviderThreadId: providerThreadId,
       modelSelection: { instanceId: providerInstanceId, model: "test-model" },
     },
@@ -334,49 +326,10 @@ it.effect.each(["normal", "cleanup-first", "rollback-first"])("locks rollback wi
 
   return Effect.gen(function* () {
     const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
-    const execute = service
-      .execute({
-        threadId,
-        providerThreadId,
-        checkpointId,
-        scopeId,
-        restoreFiles: false,
-      })
+    const error = yield* service
+      .execute({ threadId, providerThreadId, checkpointId, scopeId, restoreFiles: false })
       .pipe(Effect.flip);
-    const cleanupEffect = withWorkspaceLease(
-      process.cwd(),
-      Effect.gen(function* () {
-        cleanupEntered = true;
-        if (order === "cleanup-first") yield* Deferred.await(release);
-        checkoutExists = false;
-      }),
-    );
-    const cleanup =
-      order === "cleanup-first"
-        ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
-        : undefined;
-    const rollback = yield* execute.pipe(Effect.forkChild({ startImmediately: true }));
-    if (order === "cleanup-first") assert.equal(open.mock.calls.length, 0);
-    if (order === "rollback-first") yield* Deferred.await(openEntered);
-    const laterCleanup =
-      order === "rollback-first"
-        ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
-        : undefined;
-    if (order === "rollback-first") assert.isFalse(cleanupEntered);
-    yield* Deferred.succeed(release, undefined);
-    if (cleanup !== undefined) yield* Fiber.join(cleanup);
-    const error = yield* Fiber.join(rollback);
-    if (laterCleanup !== undefined) {
-      yield* Fiber.join(laterCleanup);
-      assert.isTrue(cleanupEntered);
-    }
-    if (order === "cleanup-first") {
-      assert.equal(error.reason, "unexpected-failure");
-      assert.instanceOf(error.cause, ProviderWorkspaceMissingError);
-      assert.equal(restore.mock.calls.length, 0);
-      return;
-    }
-
+    assert.equal(open.mock.calls.length, 0);
     assert.equal(error.reason, "provider-turn-unavailable");
     assert.equal(
       error.message,
@@ -386,6 +339,162 @@ it.effect.each(["normal", "cleanup-first", "rollback-first"])("locks rollback wi
     assert.equal(restore.mock.calls.length, 0);
   }).pipe(Effect.provide(testLayer));
 });
+
+it.effect.each([
+  { order: "normal", restoreFiles: true },
+  { order: "cleanup-first", restoreFiles: true },
+  { order: "cleanup-first", restoreFiles: false },
+  { order: "rollback-first", restoreFiles: true },
+])("locks rollback with %s", ({ order, restoreFiles }) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-rollback-" });
+    const worktreePath = path.join(workspaceRoot, "worktree");
+    yield* fileSystem.makeDirectory(worktreePath);
+    const threadId = ThreadId.make("rollback-worktree");
+    const projectId = ProjectId.make("rollback-worktree-project");
+    const providerThreadId = ProviderThreadId.make("rollback-worktree-provider-thread");
+    const providerSessionId = ProviderSessionId.make("rollback-worktree-provider-session");
+    const providerInstanceId = ProviderInstanceId.make("rollback-worktree-provider-instance");
+    const checkpointId = CheckpointId.make("rollback-worktree-checkpoint");
+    const scopeId = CheckpointScopeId.make("rollback-worktree-scope");
+    const branch = "feature/rollback";
+    const release = Deferred.makeUnsafe<void>();
+    const openEntered = Deferred.makeUnsafe<void>();
+    const calls: string[] = [];
+    let cleanupEntered = false;
+    const providerThread = { id: providerThreadId, providerSessionId, providerInstanceId };
+    const projection = {
+      thread: {
+        id: threadId,
+        projectId,
+        worktreePath,
+        branch,
+        activeProviderThreadId: providerThreadId,
+        modelSelection: { instanceId: providerInstanceId, model: "test-model" },
+      },
+      providerThreads: [providerThread],
+      providerSessions: [],
+      checkpoints: [{ id: checkpointId, scopeId, status: "ready", appRunOrdinal: 0 }],
+      checkpointScopes: [{ id: scopeId, cwd: worktreePath }],
+      runs: [],
+      attempts: [],
+      nodes: [],
+      providerTurns: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const testLayer = CheckpointRollbackService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(ProjectStore.ProjectStoreV2)({
+            get: (id) => {
+              assert.equal(id, projectId);
+              return Effect.succeed(Option.some({ workspaceRoot } as never));
+            },
+          }),
+          Layer.mock(GitWorkflow.GitWorkflowService)({
+            pruneWorktrees: (input) =>
+              Effect.sync(() => {
+                assert.deepEqual(input, { cwd: workspaceRoot });
+                calls.push("prune");
+              }),
+            createWorktree: (input) =>
+              Effect.gen(function* () {
+                assert.deepEqual(input, {
+                  cwd: workspaceRoot,
+                  refName: branch,
+                  path: worktreePath,
+                });
+                calls.push("create");
+                yield* fileSystem.makeDirectory(worktreePath);
+                return {} as never;
+              }),
+          }),
+          Layer.mock(CheckpointService.CheckpointServiceV2)({
+            restore: () =>
+              Effect.gen(function* () {
+                assert.isTrue(yield* fileSystem.exists(worktreePath));
+                calls.push("files");
+              }),
+          }),
+          Layer.mock(EventSink.EventSinkV2)({
+            write: () =>
+              Effect.sync(() => {
+                calls.push("projection");
+                return [];
+              }),
+          }),
+          IdAllocator.layer,
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getThreadRecords: () => Effect.succeed(projection),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                schemaVersion: 1,
+                snapshotSequence: 0,
+                threads: [],
+                archivedThreads: [],
+              }),
+          }),
+          Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+            open: () =>
+              Effect.gen(function* () {
+                if (!(yield* fileSystem.exists(worktreePath))) {
+                  return yield* new ProviderWorkspaceMissingError({ threadId, cwd: worktreePath });
+                }
+                calls.push("session");
+                yield* Deferred.succeed(openEntered, undefined);
+                if (order === "rollback-first") yield* Deferred.await(release);
+                return {} as never;
+              }),
+          }),
+          Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed({} as never) }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
+      const cleanupEffect = withWorkspaceLease(
+        worktreePath,
+        Effect.gen(function* () {
+          cleanupEntered = true;
+          if (order === "cleanup-first") yield* Deferred.await(release);
+          yield* fileSystem.remove(worktreePath, { recursive: true });
+          calls.push("cleanup");
+        }),
+      );
+      const cleanup =
+        order === "cleanup-first"
+          ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
+          : undefined;
+      const rollback = yield* service
+        .execute({ threadId, providerThreadId, checkpointId, scopeId, restoreFiles })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      if (order === "cleanup-first") assert.deepEqual(calls, []);
+      if (order === "rollback-first") yield* Deferred.await(openEntered);
+      const laterCleanup =
+        order === "rollback-first"
+          ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
+          : undefined;
+      if (order === "rollback-first") assert.isFalse(cleanupEntered);
+      yield* Deferred.succeed(release, undefined);
+      if (cleanup !== undefined) yield* Fiber.join(cleanup);
+      yield* Fiber.join(rollback);
+      if (laterCleanup !== undefined) yield* Fiber.join(laterCleanup);
+      const rollbackCalls = restoreFiles
+        ? ["session", "files", "projection"]
+        : ["session", "projection"];
+      assert.deepEqual(
+        calls,
+        order === "cleanup-first"
+          ? ["cleanup", "prune", "create", ...rollbackCalls]
+          : order === "rollback-first"
+            ? [...rollbackCalls, "cleanup"]
+            : rollbackCalls,
+      );
+    }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect.each([
   { restoreFiles: true, shared: "none" },

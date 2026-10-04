@@ -10,9 +10,11 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   isCheckpointRestoreIsolated,
@@ -83,6 +85,7 @@ export const layer: Layer.Layer<
   CheckpointRollbackServiceV2,
   never,
   | CheckpointServiceV2
+  | GitWorkflowService.GitWorkflowService
   | EventSinkV2
   | IdAllocatorV2
   | ProjectionStore.ProjectionStoreV2
@@ -95,6 +98,7 @@ export const layer: Layer.Layer<
   CheckpointRollbackServiceV2,
   Effect.gen(function* () {
     const checkpoints = yield* CheckpointServiceV2;
+    const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
     const eventSink = yield* EventSinkV2;
     const ids = yield* IdAllocatorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -160,6 +164,53 @@ export const layer: Layer.Layer<
         });
       }
 
+      const targetOrdinal = checkpoint.appRunOrdinal ?? 0;
+      const rollbackTarget: ProviderAdapterV2RollbackTarget =
+        targetOrdinal === 0
+          ? {
+              type: "thread_start",
+              checkpointId: checkpoint.id,
+              appRunOrdinal: 0,
+            }
+          : yield* Effect.gen(function* () {
+              const targetRun = projection.runs.find((run) => run.ordinal === targetOrdinal);
+              const targetAttempt = projection.attempts.find(
+                (attempt) => attempt.id === targetRun?.activeAttemptId,
+              );
+              const targetTurn = projection.providerTurns.find(
+                (turn) =>
+                  turn.id === targetAttempt?.providerTurnId ||
+                  turn.runAttemptId === targetAttempt?.id,
+              );
+              if (targetTurn === undefined || targetTurn.providerThreadId !== providerThread.id) {
+                return yield* new CheckpointRollbackExecutionError({
+                  reason: "provider-turn-unavailable",
+                  threadId: input.threadId,
+                  providerThreadId: input.providerThreadId,
+                  checkpointId: input.checkpointId,
+                });
+              }
+              return {
+                type: "provider_turn" as const,
+                checkpointId: checkpoint.id,
+                appRunOrdinal: targetOrdinal,
+                providerTurn: targetTurn,
+              };
+            });
+
+      const { worktreePath, branch } = projection.thread;
+      if (worktreePath != null && branch != null && !(yield* fileSystem.exists(worktreePath))) {
+        const project = yield* projects.get(projection.thread.projectId);
+        if (Option.isSome(project)) {
+          yield* gitWorkflow.pruneWorktrees({ cwd: project.value.workspaceRoot });
+          yield* gitWorkflow.createWorktree({
+            cwd: project.value.workspaceRoot,
+            refName: branch,
+            path: worktreePath,
+          });
+        }
+      }
+
       if (
         input.restoreFiles !== false &&
         !(yield* isCheckpointRestoreIsolated(projection.thread, scope, {
@@ -201,7 +252,6 @@ export const layer: Layer.Layer<
             }),
       });
 
-      const targetOrdinal = checkpoint.appRunOrdinal ?? 0;
       // Stopped and failed runs after the target leave the provider
       // conversation too, so they must not stay visible.
       const runsToRollback = projection.runs.filter(
@@ -227,38 +277,6 @@ export const layer: Layer.Layer<
           turn.providerThreadId === providerThread.id &&
           (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
       );
-      const rollbackTarget: ProviderAdapterV2RollbackTarget =
-        targetOrdinal === 0
-          ? {
-              type: "thread_start",
-              checkpointId: checkpoint.id,
-              appRunOrdinal: 0,
-            }
-          : yield* Effect.gen(function* () {
-              const targetRun = projection.runs.find((run) => run.ordinal === targetOrdinal);
-              const targetAttempt = projection.attempts.find(
-                (attempt) => attempt.id === targetRun?.activeAttemptId,
-              );
-              const targetTurn = projection.providerTurns.find(
-                (turn) =>
-                  turn.id === targetAttempt?.providerTurnId ||
-                  turn.runAttemptId === targetAttempt?.id,
-              );
-              if (targetTurn === undefined || targetTurn.providerThreadId !== providerThread.id) {
-                return yield* new CheckpointRollbackExecutionError({
-                  reason: "provider-turn-unavailable",
-                  threadId: input.threadId,
-                  providerThreadId: input.providerThreadId,
-                  checkpointId: input.checkpointId,
-                });
-              }
-              return {
-                type: "provider_turn" as const,
-                checkpointId: checkpoint.id,
-                appRunOrdinal: targetOrdinal,
-                providerTurn: targetTurn,
-              };
-            });
 
       const snapshot =
         runsToRollback.length === 0
