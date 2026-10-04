@@ -10,6 +10,13 @@ describe("buildRuntimeInstructions", () => {
     expect(instructions).toContain("call list_thread_pull_requests and link any PR");
   });
 
+  it("adds issue linking as its own block after the pull request one", () => {
+    const instructions = buildRuntimeInstructions({ harness: "Codex" });
+    const issueBlock = instructions.indexOf("<issue_linking>");
+    expect(issueBlock).toBeGreaterThan(instructions.indexOf("</pull_request_linking>"));
+    expect(instructions.slice(issueBlock)).toMatch(/^<issue_linking>\n[^<]+\n<\/issue_linking>$/);
+  });
+
   it("keeps known model and effort metadata on one line", () => {
     expect(
       buildRuntimeInstructions({
