@@ -10,12 +10,16 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Layer from "effect/Layer";
 
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
 import { isCheckpointRestoreIsolated } from "./CheckpointRestoreSafety.ts";
 import * as CheckpointService from "./CheckpointService.ts";
@@ -263,7 +267,7 @@ it.effect("rejects a rollback when provider selection changed before execution",
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("reports a missing provider turn as a structured rollback failure", () => {
+it.effect.each(["normal", "cleanup-first", "rollback-first"])("locks rollback with %s", (order) => {
   const threadId = ThreadId.make("thread:rollback-provider-turn-unavailable");
   const providerThreadId = ProviderThreadId.make(
     "provider-thread:rollback-provider-turn-unavailable",
@@ -275,6 +279,19 @@ it.effect("reports a missing provider turn as a structured rollback failure", ()
   const scopeId = CheckpointScopeId.make("checkpoint-scope:rollback-provider-turn-unavailable");
   const providerInstanceId = ProviderInstanceId.make("provider_rollback_provider_turn_unavailable");
   const restore = vi.fn(() => Effect.die("checkpoint restore must not run"));
+  const release = Deferred.makeUnsafe<void>();
+  const openEntered = Deferred.makeUnsafe<void>();
+  let checkoutExists = true;
+  let cleanupEntered = false;
+  const open = vi.fn(() =>
+    Effect.gen(function* () {
+      if (!checkoutExists)
+        return yield* new ProviderWorkspaceMissingError({ threadId, cwd: process.cwd() });
+      yield* Deferred.succeed(openEntered, undefined);
+      if (order === "rollback-first") yield* Deferred.await(release);
+      return {} as never;
+    }),
+  );
   const projection = {
     thread: {
       worktreePath: process.cwd(),
@@ -306,7 +323,7 @@ it.effect("reports a missing provider turn as a structured rollback failure", ()
             }),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-          open: () => Effect.succeed({} as never),
+          open,
         }),
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({} as never),
@@ -317,14 +334,48 @@ it.effect("reports a missing provider turn as a structured rollback failure", ()
 
   return Effect.gen(function* () {
     const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
-    const error = yield* service
+    const execute = service
       .execute({
         threadId,
         providerThreadId,
         checkpointId,
         scopeId,
+        restoreFiles: false,
       })
       .pipe(Effect.flip);
+    const cleanupEffect = withWorkspaceLease(
+      process.cwd(),
+      Effect.gen(function* () {
+        cleanupEntered = true;
+        if (order === "cleanup-first") yield* Deferred.await(release);
+        checkoutExists = false;
+      }),
+    );
+    const cleanup =
+      order === "cleanup-first"
+        ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
+        : undefined;
+    const rollback = yield* execute.pipe(Effect.forkChild({ startImmediately: true }));
+    if (order === "cleanup-first") assert.equal(open.mock.calls.length, 0);
+    if (order === "rollback-first") yield* Deferred.await(openEntered);
+    const laterCleanup =
+      order === "rollback-first"
+        ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
+        : undefined;
+    if (order === "rollback-first") assert.isFalse(cleanupEntered);
+    yield* Deferred.succeed(release, undefined);
+    if (cleanup !== undefined) yield* Fiber.join(cleanup);
+    const error = yield* Fiber.join(rollback);
+    if (laterCleanup !== undefined) {
+      yield* Fiber.join(laterCleanup);
+      assert.isTrue(cleanupEntered);
+    }
+    if (order === "cleanup-first") {
+      assert.equal(error.reason, "unexpected-failure");
+      assert.instanceOf(error.cause, ProviderWorkspaceMissingError);
+      assert.equal(restore.mock.calls.length, 0);
+      return;
+    }
 
     assert.equal(error.reason, "provider-turn-unavailable");
     assert.equal(

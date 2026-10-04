@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   isCheckpointRestoreIsolated,
   SHARED_WORKSPACE_RESTORE_MESSAGE,
@@ -20,7 +21,7 @@ import {
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
-import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2RollbackTarget } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
@@ -84,7 +85,7 @@ export const layer: Layer.Layer<
   | CheckpointServiceV2
   | EventSinkV2
   | IdAllocatorV2
-  | ProjectionStoreV2
+  | ProjectionStore.ProjectionStoreV2
   | ProviderSessionManagerV2
   | RuntimePolicyV2
   | FileSystem.FileSystem
@@ -96,21 +97,15 @@ export const layer: Layer.Layer<
     const checkpoints = yield* CheckpointServiceV2;
     const eventSink = yield* EventSinkV2;
     const ids = yield* IdAllocatorV2;
-    const projections = yield* ProjectionStoreV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManagerV2;
     const runtimePolicy = yield* RuntimePolicyV2;
     const fileSystem = yield* FileSystem.FileSystem;
     const projects = yield* ProjectStore.ProjectStoreV2;
     const path = yield* Path.Path;
 
-    const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
-      readonly threadId: ThreadId;
-      readonly providerThreadId: ProviderThreadId;
-      readonly checkpointId: CheckpointId;
-      readonly scopeId: CheckpointScopeId;
-      readonly restoreFiles?: boolean;
-    }) {
-      const projection = yield* projections.getThreadRecords(input.threadId, [
+    const readProjection = (threadId: ThreadId) =>
+      projections.getThreadRecords(threadId, [
         "providerThreads",
         "providerSessions",
         "checkpoints",
@@ -120,6 +115,17 @@ export const layer: Layer.Layer<
         "nodes",
         "providerTurns",
       ]);
+
+    const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (
+      input: {
+        readonly threadId: ThreadId;
+        readonly providerThreadId: ProviderThreadId;
+        readonly checkpointId: CheckpointId;
+        readonly scopeId: CheckpointScopeId;
+        readonly restoreFiles?: boolean;
+      },
+      projection: Effect.Success<ReturnType<typeof readProjection>>,
+    ) {
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === input.providerThreadId,
       );
@@ -344,7 +350,13 @@ export const layer: Layer.Layer<
 
     return CheckpointRollbackServiceV2.of({
       execute: (input) =>
-        execute(input).pipe(
+        Effect.gen(function* () {
+          const projection = yield* readProjection(input.threadId);
+          const effect = execute(input, projection);
+          return yield* projection.thread.worktreePath == null
+            ? effect
+            : withWorkspaceLease(path.resolve(projection.thread.worktreePath), effect);
+        }).pipe(
           Effect.mapError((cause) =>
             isCheckpointRollbackExecutionError(cause)
               ? cause

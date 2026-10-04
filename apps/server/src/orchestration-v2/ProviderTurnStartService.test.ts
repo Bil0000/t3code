@@ -18,12 +18,16 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/Services/ProviderAuthService.ts";
@@ -95,6 +99,7 @@ it("does not commit running state when inherited background routing cannot be re
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
+        Path.layer,
         Layer.succeed(FileSystem.FileSystem, { exists: () => Effect.succeed(false) } as never),
         Layer.mock(GitWorkflow.GitWorkflowService)({ pruneWorktrees, createWorktree }),
         Layer.mock(ProjectService.ProjectService)({
@@ -155,6 +160,7 @@ it("does not commit running state when inherited background routing cannot be re
 
 function makeLocalCommandHarness(input: {
   readonly text: string;
+  readonly worktreePath?: string;
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
@@ -236,8 +242,9 @@ function makeLocalCommandHarness(input: {
     thread: {
       id: threadId,
       activeProviderThreadId: providerThreadId,
-      branch: null,
-      worktreePath: null,
+      projectId: ProjectId.make("project-native-account-command"),
+      branch: input.worktreePath === undefined ? null : "feature/restore",
+      worktreePath: input.worktreePath ?? null,
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
       ...(input.previousNativeSession
@@ -483,6 +490,8 @@ function makeLocalCommandHarness(input: {
           return { committed, storedEvents: [] };
         }),
   );
+  const exists = vi.fn(() => Effect.succeed(true));
+  const createWorktree = vi.fn(() => Effect.succeed({} as never));
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -491,9 +500,16 @@ function makeLocalCommandHarness(input: {
         }),
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
-        FileSystem.layerNoop({}),
-        Layer.mock(GitWorkflow.GitWorkflowService)({}),
-        Layer.mock(ProjectService.ProjectService)({}),
+        Path.layer,
+        FileSystem.layerNoop({ exists }),
+        Layer.mock(GitWorkflow.GitWorkflowService)({
+          pruneWorktrees: () => Effect.void,
+          createWorktree,
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(Option.some({ workspaceRoot: "/tmp/native-account-project" } as never)),
+        }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getTurnStartContext: () =>
             Effect.succeed({
@@ -531,6 +547,8 @@ function makeLocalCommandHarness(input: {
     ),
   );
   return {
+    exists,
+    createWorktree,
     open,
     writeIfRunCurrent,
     startRootRun,
@@ -552,6 +570,86 @@ function makeLocalCommandHarness(input: {
     }).pipe(Effect.provide(layer)),
   };
 }
+
+effectIt.effect("waits for cleanup and repairs its checkout before opening a provider", () =>
+  Effect.gen(function* () {
+    const worktreePath = "/tmp/provider-start-cleanup-first";
+    const releaseCleanup = yield* Deferred.make<void>();
+    let checkoutExists = true;
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      worktreePath,
+      failReadsAfterRunning: true,
+    });
+    harness.exists.mockImplementation(() => Effect.sync(() => checkoutExists));
+    harness.createWorktree.mockImplementation(() =>
+      Effect.sync(() => {
+        checkoutExists = true;
+        return {} as never;
+      }),
+    );
+    const open = harness.open.getMockImplementation()!;
+    harness.open.mockImplementation(() => {
+      expect(checkoutExists).toBe(true);
+      return open();
+    });
+    const cleanup = yield* withWorkspaceLease(
+      worktreePath,
+      Deferred.await(releaseCleanup).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            checkoutExists = false;
+          }),
+        ),
+      ),
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+    const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(harness.exists).not.toHaveBeenCalled();
+    yield* Deferred.succeed(releaseCleanup, undefined);
+    yield* Fiber.join(cleanup);
+    yield* Fiber.join(startup);
+    expect(harness.createWorktree).toHaveBeenCalledWith({
+      cwd: "/tmp/native-account-project",
+      refName: "feature/restore",
+      path: worktreePath,
+    });
+    expect(harness.open).toHaveBeenCalledOnce();
+    expect(harness.startRootRun).toHaveBeenCalledOnce();
+  }),
+);
+
+effectIt.effect("keeps cleanup out until provider turn startup accepts the turn", () =>
+  Effect.gen(function* () {
+    const worktreePath = "/tmp/provider-start-before-cleanup";
+    const startupEntered = yield* Deferred.make<void>();
+    const releaseStartup = yield* Deferred.make<void>();
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      worktreePath,
+      failReadsAfterRunning: true,
+    });
+    harness.startRootRun.mockImplementation(() =>
+      Deferred.succeed(startupEntered, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseStartup)),
+      ),
+    );
+    const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(startupEntered);
+    let cleanupEntered = false;
+    const cleanup = yield* withWorkspaceLease(
+      worktreePath,
+      Effect.sync(() => {
+        cleanupEntered = true;
+      }),
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+    expect(cleanupEntered).toBe(false);
+    yield* Deferred.succeed(releaseStartup, undefined);
+    yield* Fiber.join(startup);
+    yield* Fiber.join(cleanup);
+    expect(cleanupEntered).toBe(true);
+  }),
+);
 
 effectIt.effect("terminalizes a starting run when its provider session cannot open", () =>
   Effect.gen(function* () {
