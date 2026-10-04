@@ -2507,6 +2507,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         }
 
         if (
+          event.type !== "subagent.interrupt-requested" &&
           event.type !== "thread.created" &&
           event.type !== "thread.archived" &&
           event.type !== "thread.unarchived" &&
