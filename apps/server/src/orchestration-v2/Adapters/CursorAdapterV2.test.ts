@@ -39,14 +39,15 @@ import { isCursorCancellationError, loggedCursorAgentOptions } from "./CursorAge
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 
 describe("CursorAdapterV2", () => {
-  for (const { status, model, lateModel } of [
+  it.effect.each([
     { status: "finished", model: undefined, lateModel: undefined },
     { status: "cancelled", model: "claude-opus-4-6", lateModel: undefined },
     { status: "error", model: "custom-fable", lateModel: undefined },
     { status: "finished", model: undefined, lateModel: "gpt-6-sol" },
     { status: "finished", model: "gpt-6-sol", lateModel: null },
-  ] as const) {
-    it.effect(`projects Cursor tasks: ${status}, late model ${lateModel}`, () =>
+  ] as const)(
+    "projects Cursor tasks: $status, late model $lateModel",
+    ({ status, model, lateModel }) =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -206,8 +207,7 @@ describe("CursorAdapterV2", () => {
         );
         assert.isNotNull(rows.at(-1)?.subagent.completedAt);
       }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer))),
-    );
-  }
+  );
 
   it.effect("fails standalone SDK transport diagnostics and sends compaction as /compress", () =>
     Effect.gen(function* () {
