@@ -96,6 +96,7 @@ const fixture = (escape = (value: string) => value) => {
   root.children.push(body);
   root.scrollHeight = 10_000;
   const elements: PageElement[] = [];
+  const selectorMatches = new Map<string, PageElement[]>();
   const nodes: Array<PageElement | PageText> = [];
   const element = (id: string, bounds: ReturnType<typeof rect>, parent = body) => {
     const value = new PageElement();
@@ -192,7 +193,26 @@ const fixture = (escape = (value: string) => value) => {
       title: "Page",
       readyState: "complete",
       compatMode: "CSS1Compat",
-      querySelectorAll: () => elements,
+      querySelectorAll(selector: string) {
+        if (selector === "a[href],button,input,textarea,select,[role],[tabindex]") return elements;
+        if (selectorMatches.has(selector)) return selectorMatches.get(selector)!;
+        return Array.from(
+          new Set([root, body, ...nodes.filter((node) => node instanceof PageElement)]),
+        ).filter(
+          (element) =>
+            (element.id && selector === "#" + element.id) ||
+            ["name", "data-testid"].some(
+              (attribute) =>
+                selector ===
+                element.tagName.toLowerCase() +
+                  "[" +
+                  attribute +
+                  "=" +
+                  element.getAttribute(attribute) +
+                  "]",
+            ),
+        );
+      },
       createRange: () => range,
       createTreeWalker() {
         let index = 0;
@@ -205,10 +225,80 @@ const fixture = (escape = (value: string) => value) => {
     context.document.compatMode = compatMode;
     return NodeVM.runInNewContext(snapshotPageExpression(), context) as SnapshotPage;
   };
-  return { root, body, elements, nodes, element, text, capture };
+  return { root, body, elements, nodes, selectorMatches, element, text, capture };
 };
 
 describe("snapshot page collector", () => {
+  it.each(["id", "name", "data-testid"])(
+    "uses unique document paths for duplicate %s targets in deep branches",
+    (attribute) => {
+      const page = fixture();
+      for (let branch = 0; branch < 2; branch++) {
+        let parent = page.element("", rect(0, 0));
+        parent.tagName = "SECTION";
+        for (let depth = 0; depth < 9; depth++) parent = page.element("", rect(0, 0), parent);
+        const scroller = page.element("", rect(0, 0), parent);
+        scroller.style.overflowY = "auto";
+        scroller.scrollHeight = 1_000;
+        const control = page.element("", rect(0, 0), scroller);
+        control.tagName = "BUTTON";
+        if (attribute === "id") scroller.id = control.id = "duplicate";
+        else {
+          scroller.attributes.set(attribute, "duplicate");
+          control.attributes.set(attribute, "duplicate");
+        }
+        page.elements.push(control);
+      }
+      const snapshot = page.capture();
+      const paths = [1, 2].map(
+        (branch) =>
+          ":root > div > section:nth-of-type(" +
+          branch +
+          ") > " +
+          Array.from({ length: 10 }, () => "div").join(" > "),
+      );
+      expect(snapshot.scroll?.containers.map((container) => container.selector)).toEqual(paths);
+      expect(snapshot.interactiveElements.map((element) => element.selector)).toEqual(
+        paths.map((path) => path + " > button"),
+      );
+    },
+  );
+
+  it.each(["id", "name", "data-testid"])("keeps short unique %s selectors", (attribute) => {
+    const page = fixture();
+    const control = page.element("", rect(0, 0));
+    control.tagName = "BUTTON";
+    if (attribute === "id") control.id = "unique";
+    else control.attributes.set(attribute, "unique");
+    page.elements.push(control);
+    expect(page.capture().interactiveElements[0]?.selector).toBe(
+      attribute === "id" ? "#unique" : "button[" + attribute + "=unique]",
+    );
+  });
+
+  it("uses a unique attribute when an id is duplicated", () => {
+    const page = fixture();
+    page.element("duplicate", rect(0, 0));
+    const control = page.element("duplicate", rect(0, 0));
+    control.tagName = "BUTTON";
+    control.attributes.set("data-testid", "unique");
+    page.elements.push(control);
+    expect(page.capture().interactiveElements[0]?.selector).toBe("button[data-testid=unique]");
+  });
+
+  it("reports omitted scroll containers when the unique ancestor path exceeds its budget", () => {
+    const page = fixture();
+    let scroller = page.body;
+    for (let depth = 0; depth < 200; depth++) scroller = page.element("", rect(0, 0), scroller);
+    scroller.style.overflowY = "auto";
+    scroller.scrollHeight = 1_000;
+    page.text("current label", scroller);
+    const snapshot = page.capture();
+    expect(snapshot.viewportText).toBe("current label");
+    expect(snapshot.scroll?.containers).toEqual([]);
+    expect(snapshot.scroll?.containersTruncated).toBe(true);
+  });
+
   it.each([
     ["transform", "matrix(0.707107, 0.707107, -0.707107, 0.707107, 0, 0)"],
     ["transform", "matrix(1, 0, 0.5, 1, 0, 0)"],
@@ -525,6 +615,7 @@ describe("snapshot page collector", () => {
     const control = page.element("", rect(0, 0));
     control.tagName = "BUTTON";
     control.attributes.set(attribute, "line\nnext");
+    page.selectorMatches.set(`button[${attribute}=line\\a next]`, [control]);
     page.elements.push(control);
     expect(page.capture().interactiveElements[0]?.selector).toBe(
       `button[${attribute}=line\\a next]`,
@@ -640,7 +731,7 @@ describe("snapshot page collector", () => {
       expect(snapshot.viewportText).toBe("");
       expect(snapshot.interactiveElements[0]?.inViewport).toBe(false);
       expect(snapshot.scroll?.containers[0]).toMatchObject({
-        selector: "div > div",
+        selector: ":root > div",
         y: 200,
         height: 100,
         scrollHeight: 1_000,

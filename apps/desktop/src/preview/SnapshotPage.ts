@@ -22,30 +22,40 @@ function collectSnapshotPage(): SnapshotPage {
     rect.left < clip.right &&
     rect.bottom > clip.top &&
     rect.top < clip.bottom;
+  const selectorTargets = new Map<string, Element | null>();
+  const uniquelyTargets = (selector: string, element: Element) => {
+    if (!selectorTargets.has(selector)) {
+      const matches = document.querySelectorAll(selector);
+      selectorTargets.set(selector, matches.length === 1 ? matches[0]! : null);
+    }
+    return selectorTargets.get(selector) === element;
+  };
   const selectorFor = (element: Element): string => {
-    if (element.id) return "#" + CSS.escape(element.id);
+    if (element.id) {
+      const selector = "#" + CSS.escape(element.id);
+      if (uniquelyTargets(selector, element)) return selector;
+    }
     for (const attribute of ["data-testid", "name"]) {
       const value = element.getAttribute(attribute);
-      if (value)
-        return element.tagName.toLowerCase() + "[" + attribute + "=" + CSS.escape(value) + "]";
+      if (value) {
+        const selector =
+          element.tagName.toLowerCase() + "[" + attribute + "=" + CSS.escape(value) + "]";
+        if (uniquelyTargets(selector, element)) return selector;
+      }
     }
     const parts: string[] = [];
-    for (
-      let current: Element | null = element;
-      current && parts.length < 8;
-      current = current.parentElement
-    ) {
+    for (let current: Element | null = element; current; current = current.parentElement) {
       const siblings = current.parentElement
         ? Array.from(current.parentElement.children).filter(
             (child) => child.tagName === current.tagName,
           )
         : [];
-      parts.unshift(
-        current.tagName.toLowerCase() +
+      parts.push(
+        (current === document.documentElement ? ":root" : current.tagName.toLowerCase()) +
           (siblings.length > 1 ? ":nth-of-type(" + (siblings.indexOf(current) + 1) + ")" : ""),
       );
     }
-    return parts.join(" > ");
+    return parts.toReversed().join(" > ");
   };
   const containers: Array<NonNullable<SnapshotPage["scroll"]>["containers"][number]> = [];
   let containersTruncated = false;
