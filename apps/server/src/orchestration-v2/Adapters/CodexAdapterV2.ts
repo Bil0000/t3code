@@ -5545,12 +5545,25 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   ? yield* toCodexInput(turnInput)
                   : [];
               const mcpSession = McpProviderSession.readMcpProviderSession(turnInput.threadId);
-              const providerReasoningEffort =
-                turnInput.runtimePolicy.interactionMode === "plan" || mcpSession !== undefined
-                  ? (yield* client.request("config/read", {
-                      cwd: turnInput.runtimePolicy.cwd ?? session.cwd,
-                    })).config.model_reasoning_effort
-                  : undefined;
+              const hasCollaborationMode =
+                turnInput.runtimePolicy.interactionMode === "plan" || mcpSession !== undefined;
+              const providerConfig = hasCollaborationMode
+                ? (yield* client.request("config/read", {
+                    cwd: turnInput.runtimePolicy.cwd ?? session.cwd,
+                  })).config
+                : undefined;
+              const planReasoningEffort = providerConfig?.plan_mode_reasoning_effort;
+              let providerReasoningEffort =
+                turnInput.runtimePolicy.interactionMode === "plan" &&
+                typeof planReasoningEffort === "string"
+                  ? planReasoningEffort
+                  : providerConfig?.model_reasoning_effort;
+              if (hasCollaborationMode && providerReasoningEffort == null) {
+                providerReasoningEffort = (yield* client.request("thread/read", {
+                  threadId,
+                  includeTurns: false,
+                })).thread.reasoningEffort;
+              }
               const turnStartParams = yield* buildCodexTurnStartParams({
                 nativeThreadId: threadId,
                 codexInput,

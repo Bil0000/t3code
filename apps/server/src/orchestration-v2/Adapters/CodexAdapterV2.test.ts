@@ -1732,12 +1732,28 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     });
 
   it.effect.each([
-    { interactionMode: "plan", hasT3Mcp: false, providerEffort: "high" },
-    { interactionMode: "default", hasT3Mcp: true, providerEffort: "high" },
-    { interactionMode: "plan", hasT3Mcp: false, providerEffort: null },
-    { interactionMode: "default", hasT3Mcp: false, providerEffort: null },
+    {
+      interactionMode: "plan",
+      hasT3Mcp: false,
+      providerEffort: "low",
+      planEffort: "high",
+      threadEffort: "low",
+    },
+    {
+      interactionMode: "default",
+      hasT3Mcp: true,
+      providerEffort: "low",
+      planEffort: "high",
+      threadEffort: "high",
+    },
+    { interactionMode: "plan", hasT3Mcp: false, providerEffort: "high", threadEffort: "low" },
+    { interactionMode: "default", hasT3Mcp: true, providerEffort: "high", threadEffort: "low" },
+    { interactionMode: "plan", hasT3Mcp: false, providerEffort: null, threadEffort: "high" },
+    { interactionMode: "default", hasT3Mcp: true, providerEffort: null, threadEffort: "high" },
+    { interactionMode: "plan", hasT3Mcp: false, providerEffort: null, threadEffort: null },
+    { interactionMode: "default", hasT3Mcp: false, providerEffort: null, threadEffort: "high" },
   ] as const)(
-    "uses provider effort for $interactionMode with MCP=$hasT3Mcp and effort=$providerEffort",
+    "uses provider effort for $interactionMode with MCP=$hasT3Mcp and effort=$providerEffort/$threadEffort",
     (input) =>
       Effect.gen(function* () {
         const nativeThreadId = "provider-effort-thread";
@@ -1759,6 +1775,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         });
         const hasCollaborationMode = input.interactionMode === "plan" || input.hasT3Mcp;
         const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
+        const planEffort = "planEffort" in input ? input.planEffort : undefined;
+        const configuredEffort =
+          input.interactionMode === "plan"
+            ? (planEffort ?? input.providerEffort)
+            : input.providerEffort;
+        const readsThreadEffort = hasCollaborationMode && configuredEffort === null;
+        const effectiveEffort = configuredEffort ?? input.threadEffort;
+        const turnRequestId = hasCollaborationMode ? (readsThreadEffort ? 5 : 4) : 3;
         const transcript = makeCodexReplayTranscript({
           scenario: "provider-effort",
           entries: [
@@ -1776,8 +1800,51 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     frame: {
                       id: 3,
                       result: {
-                        config: { model_reasoning_effort: input.providerEffort },
+                        config: {
+                          model_reasoning_effort: input.providerEffort,
+                          ...(planEffort === undefined
+                            ? {}
+                            : { plan_mode_reasoning_effort: planEffort }),
+                        },
                         origins: {},
+                      },
+                    },
+                  },
+                ]
+              : []),
+            ...(readsThreadEffort
+              ? [
+                  {
+                    type: "expect_outbound" as const,
+                    label: "thread/read",
+                    frame: {
+                      id: 4,
+                      method: "thread/read",
+                      params: { threadId: nativeThreadId, includeTurns: false },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "thread/read",
+                    frame: {
+                      id: 4,
+                      result: {
+                        thread: {
+                          id: nativeThreadId,
+                          sessionId: nativeThreadId,
+                          preview: "",
+                          ephemeral: true,
+                          modelProvider: "openai",
+                          createdAt: 1782622440,
+                          updatedAt: 1782622440,
+                          status: { type: "idle" as const },
+                          cwd: "/workspace",
+                          cliVersion: "0.156.1",
+                          source: "vscode" as const,
+                          projectId: null,
+                          turns: [],
+                          reasoningEffort: input.threadEffort,
+                        },
                       },
                     },
                   },
@@ -1787,7 +1854,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "expect_outbound",
               label: "turn/start",
               frame: {
-                id: hasCollaborationMode ? 4 : 3,
+                id: turnRequestId,
                 method: "turn/start",
                 params: {
                   ...params,
@@ -1798,9 +1865,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                           ...params.collaborationMode,
                           settings: {
                             ...params.collaborationMode.settings,
-                            ...(input.providerEffort === null
+                            ...(effectiveEffort === null
                               ? {}
-                              : { reasoning_effort: input.providerEffort }),
+                              : { reasoning_effort: effectiveEffort }),
                           },
                         },
                       }),
@@ -1811,7 +1878,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "emit_inbound",
               label: "turn/start",
               frame: {
-                id: hasCollaborationMode ? 4 : 3,
+                id: turnRequestId,
                 result: { turn: makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }) },
               },
             },
@@ -1827,13 +1894,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               assert.notProperty(actual, "effort");
               if (hasCollaborationMode) {
                 assert.nestedPropertyVal(actual, "collaborationMode.mode", input.interactionMode);
-                if (input.providerEffort === null)
+                if (effectiveEffort === null)
                   assert.notNestedProperty(actual, "collaborationMode.settings.reasoning_effort");
                 else
                   assert.nestedPropertyVal(
                     actual,
                     "collaborationMode.settings.reasoning_effort",
-                    input.providerEffort,
+                    effectiveEffort,
                   );
               } else assert.notProperty(actual, "collaborationMode");
             }),
@@ -2525,6 +2592,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
           modelSelection: CODEX_TEST_MODEL_SELECTION,
           hasT3Mcp: true,
+          providerReasoningEffort: "medium",
         });
         assert.include(
           params.additionalContext?.t3_code_orchestration?.value ?? "",
@@ -2543,7 +2611,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             {
               type: "emit_inbound",
               label: "config/read",
-              frame: { id: 3, result: { config: {}, origins: {} } },
+              frame: {
+                id: 3,
+                result: { config: { model_reasoning_effort: "medium" }, origins: {} },
+              },
             },
             {
               type: "expect_outbound",
