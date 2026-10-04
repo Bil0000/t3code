@@ -1,6 +1,4 @@
 import {
-  IssueActivity,
-  IssueDetail,
   IssueOperationError,
   IssueProviderKind,
   IssueUnavailableError,
@@ -59,15 +57,14 @@ const dependencies = [
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue body and a bounded page of comments. Linked issues use their saved project and host; unlinked references use this thread's project. Pass repository, number, and provider when needed. Pass url to choose between linked issues with the same repository and number on different hosts. If nextCommentsCursor is present, pass it as commentsCursor to read the next page. commentsTruncated=true with a null cursor means this host cannot return the rest through T3.",
+    "Read an issue body and a bounded page of comments as Markdown. Linked issues use their saved project and host; unlinked references use this thread's project. Pass repository, number, and provider when needed. Pass url to choose between linked issues with the same repository and number on different hosts. If nextCommentsCursor is present, pass it as commentsCursor to read the next page without reloading the issue body. commentsTruncated=true with a null cursor means this host cannot return the rest through T3.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     url: Schema.optional(TrimmedNonEmptyString),
     commentsCursor: Schema.optional(TrimmedNonEmptyString),
   }),
   success: Schema.Struct({
-    issue: IssueDetail,
-    comments: IssueActivity.fields.comments,
+    markdown: Schema.String,
     commentsTruncated: Schema.Boolean,
     nextCommentsCursor: Schema.NullOr(TrimmedNonEmptyString),
   }),

@@ -2,6 +2,8 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  IssueOperationError,
+  IssueUnavailableError,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -42,6 +44,8 @@ const LINK: ThreadIssueLink = {
 const THREAD: ProjectionStore.ProjectionThreadIssues = {
   id: ThreadId.make("issue-sync-thread"),
   projectId: PROJECT_ID,
+  settledOverride: null,
+  settledAt: null,
   issues: [LINK],
 };
 type SyncCommand = Extract<OrchestrationV2ServerCommand, { type: "thread.issue-link.sync" }>;
@@ -144,6 +148,8 @@ const makeHarness = Effect.fn("makeIssueSyncHarness")(function* (
   const sweeps = yield* Queue.unbounded<void>();
   const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
   const processed = yield* Queue.unbounded<void>();
+  const refreshes = yield* Queue.unbounded<IssueRef | undefined>();
+  const refreshed = yield* Queue.unbounded<void>();
   const context = yield* Layer.build(
     IssueSyncReactor.layer.pipe(
       Layer.provide(
@@ -158,6 +164,13 @@ const makeHarness = Effect.fn("makeIssueSyncHarness")(function* (
               ),
           }),
           Layer.mock(IssueService.IssueService)({
+            subscribeRefreshes: Stream.fromQueue(refreshes).pipe(
+              Stream.rechunk(1),
+              Stream.tap((ref) =>
+                ref === undefined ? Queue.offer(refreshed, undefined) : Effect.void,
+              ),
+              Stream.filter((ref) => ref !== undefined),
+            ),
             invalidate: (input) => Ref.update(invalidations, (rows) => [...rows, input]),
             detail: (ref) =>
               Ref.update(reads, (rows) => [...rows, ref]).pipe(Effect.andThen(read(ref))),
@@ -231,7 +244,23 @@ const makeHarness = Effect.fn("makeIssueSyncHarness")(function* (
     yield* Queue.take(processed);
     yield* reactor.drain;
   });
-  return { reactor, currentThreads, reads, invalidations, commands, sweeps, events, flushEvents };
+  const flushRefreshes = Effect.gen(function* () {
+    yield* Queue.offer(refreshes, undefined);
+    yield* Queue.take(refreshed);
+    yield* reactor.drain;
+  });
+  return {
+    reactor,
+    currentThreads,
+    reads,
+    invalidations,
+    commands,
+    sweeps,
+    events,
+    flushEvents,
+    refreshes,
+    flushRefreshes,
+  };
 });
 
 it.effect("updates a legacy link's title and state and shares a read across threads", () =>
@@ -331,15 +360,309 @@ it.effect("leaves an unchanged link alone and notices reopening on the slower cl
       yield* TestClock.adjust("1 minute");
       yield* Queue.take(fixture.sweeps);
       yield* fixture.reactor.drain;
-      assert.equal((yield* Ref.get(fixture.reads)).length, 1);
+      assert.equal((yield* Ref.get(fixture.reads)).length, 0);
       state = "open";
-      for (let minute = 0; minute < 14; minute++) {
+      for (let minute = 0; minute < 35; minute++) {
         yield* TestClock.adjust("1 minute");
         yield* Queue.take(fixture.sweeps);
         yield* fixture.reactor.drain;
+        if ((yield* Ref.get(fixture.commands)).length > 0) break;
       }
-      assert.equal((yield* Ref.get(fixture.reads)).length, 2);
+      assert.equal((yield* Ref.get(fixture.reads)).length, 1);
       assert.equal((yield* Ref.get(fixture.commands))[0]?.issue.state, "open");
+    }),
+  ),
+);
+
+it.effect("spreads active reads and slows down open issues on settled threads", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const active = yield* makeHarness(
+        [
+          {
+            ...THREAD,
+            issues: [7, 9].map((number) => ({
+              ...LINK,
+              number,
+              url: `https://github.com/owner/repo/issues/${number}`,
+            })),
+          },
+        ],
+        (ref) => Effect.succeed(detail(ref, { state: "open" })),
+      );
+      const settled = yield* makeHarness(
+        [{ ...THREAD, settledAt: DateTime.makeUnsafe("2026-10-04T00:00:00Z") }],
+        (ref) => Effect.succeed(detail(ref, { state: "open" })),
+      );
+      yield* active.reactor.drain;
+      yield* settled.reactor.drain;
+      for (let minute = 0; minute < 36; minute++) {
+        yield* TestClock.adjust("1 minute");
+        for (const fixture of [active, settled]) {
+          yield* Queue.take(fixture.sweeps);
+          yield* fixture.reactor.drain;
+        }
+        if (minute === 2) assert.equal((yield* Ref.get(active.reads)).length, 2);
+        if (minute === 4)
+          assert.deepEqual(
+            (yield* Ref.get(active.reads)).map((ref) => ref.number),
+            [7, 9, 7],
+          );
+        if (minute === 5)
+          assert.deepEqual(
+            (yield* Ref.get(active.reads)).map((ref) => ref.number),
+            [7, 9, 7, 9],
+          );
+        if (minute === 22) assert.equal((yield* Ref.get(settled.reads)).length, 1);
+      }
+      assert.equal((yield* Ref.get(settled.reads)).length, 2);
+    }),
+  ),
+);
+
+it.effect("backs off a signed-out source without blocking other projects or hosts", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makeHarness(
+        [
+          {
+            ...THREAD,
+            issues: [7, 8, 9].map((number) => ({
+              ...LINK,
+              number,
+              url: `https://github.com/owner/repo/issues/${number}`,
+            })),
+          },
+          { ...THREAD, id: ThreadId.make("healthy-project"), projectId: ProjectId.make("healthy") },
+          {
+            ...THREAD,
+            id: ThreadId.make("healthy-host"),
+            issues: [{ ...LINK, url: "https://enterprise.example/owner/repo/issues/7" }],
+          },
+        ],
+        (ref) =>
+          ref.projectId === PROJECT_ID && ref.host === "github.com"
+            ? Effect.fail(new IssueUnavailableError({ reason: "cli-unauthenticated" }))
+            : Effect.succeed(detail(ref)),
+      );
+      yield* fixture.reactor.drain;
+      assert.equal((yield* Ref.get(fixture.reads)).length, 3);
+      assert.equal((yield* Ref.get(fixture.commands)).length, 2);
+      for (let minute = 0; minute < 5; minute++) {
+        yield* TestClock.adjust("1 minute");
+        yield* Queue.take(fixture.sweeps);
+        yield* fixture.reactor.drain;
+        assert.equal((yield* Ref.get(fixture.reads)).length, minute < 4 ? 3 : 4);
+      }
+    }),
+  ),
+);
+
+it.effect("keeps at most four host reads in flight across all sources", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstReads = yield* Queue.unbounded<void>();
+      const laterReads = yield* Queue.unbounded<ProjectId>();
+      const firstGate = yield* Deferred.make<void>();
+      const laterGate = yield* Deferred.make<void>();
+      let active = 0;
+      let maximum = 0;
+      const fixture = yield* makeHarness(
+        [0, 1, 2, 3].map((source) => ({
+          ...THREAD,
+          id: ThreadId.make(`thread-${source}`),
+          projectId: ProjectId.make(`project-${source}`),
+          issues: [7, 8, 9].map((number) => ({
+            ...LINK,
+            number,
+            url: `https://github.com/owner/repo/issues/${number}`,
+          })),
+        })),
+        (ref) =>
+          Effect.gen(function* () {
+            active += 1;
+            maximum = Math.max(maximum, active);
+            if (ref.number === 7) {
+              yield* Queue.offer(firstReads, undefined);
+              yield* Deferred.await(firstGate);
+            } else {
+              yield* Queue.offer(laterReads, ref.projectId);
+              yield* Deferred.await(laterGate);
+            }
+            active -= 1;
+            return detail(ref);
+          }),
+      );
+      for (let source = 0; source < 4; source++) yield* Queue.take(firstReads);
+      yield* Deferred.succeed(firstGate, undefined);
+      const sources = new Set<ProjectId>();
+      while (sources.size < 4) sources.add(yield* Queue.take(laterReads));
+      yield* Deferred.succeed(laterGate, undefined);
+      yield* fixture.reactor.drain;
+      assert.equal((yield* Ref.get(fixture.reads)).length, 12);
+      assert.equal(maximum, 4);
+    }),
+  ),
+);
+
+it.effect("stops a source after a later issue finds signed-out credentials", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makeHarness(
+        [
+          {
+            ...THREAD,
+            issues: [7, 8, 9].map((number) => ({
+              ...LINK,
+              number,
+              url: `https://github.com/owner/repo/issues/${number}`,
+            })),
+          },
+        ],
+        (ref) =>
+          ref.number === 8
+            ? Effect.fail(new IssueUnavailableError({ reason: "cli-unauthenticated" }))
+            : Effect.succeed(detail(ref)),
+      );
+      yield* fixture.reactor.drain;
+      assert.deepEqual(
+        (yield* Ref.get(fixture.reads)).map((ref) => ref.number),
+        [7, 8],
+      );
+    }),
+  ),
+);
+
+it.effect("backs off a refused issue while syncing healthy issues from the same source", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makeHarness(
+        [
+          {
+            ...THREAD,
+            issues: [7, 8].map((number) => ({
+              ...LINK,
+              number,
+              url: `https://github.com/owner/repo/issues/${number}`,
+            })),
+          },
+        ],
+        (ref) =>
+          ref.number === 7
+            ? Effect.fail(new IssueOperationError({ operation: "detail", detail: "private issue" }))
+            : Effect.succeed(detail(ref)),
+      );
+      yield* fixture.reactor.drain;
+      assert.equal((yield* Ref.get(fixture.commands)).length, 1);
+      for (let minute = 0; minute < 30; minute++) {
+        yield* TestClock.adjust("1 minute");
+        yield* Queue.take(fixture.sweeps);
+        yield* fixture.reactor.drain;
+        assert.equal(
+          (yield* Ref.get(fixture.reads)).filter((ref) => ref.number === 7).length,
+          minute < 29 ? 1 : 2,
+        );
+      }
+    }),
+  ),
+);
+
+it.effect("refreshes changed issues immediately with project, provider and host bounds", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makeHarness(
+        [
+          { ...THREAD, issues: [{ ...LINK, state: "closed" }] },
+          {
+            ...THREAD,
+            id: ThreadId.make("other-project"),
+            projectId: ProjectId.make("other"),
+            issues: [{ ...LINK, state: "closed" }],
+          },
+          {
+            ...THREAD,
+            id: ThreadId.make("other-host"),
+            issues: [
+              { ...LINK, state: "closed", url: "https://enterprise.example/owner/repo/issues/7" },
+            ],
+          },
+          {
+            ...THREAD,
+            id: ThreadId.make("other-provider"),
+            issues: [{ ...LINK, state: "closed", provider: "custom" }],
+          },
+        ],
+        (ref) => Effect.succeed(detail(ref, { state: "open" })),
+      );
+      yield* fixture.reactor.drain;
+      assert.equal((yield* Ref.get(fixture.reads)).length, 0);
+      yield* Queue.offer(fixture.refreshes, {
+        projectId: PROJECT_ID,
+        provider: "github",
+        host: "github.com",
+        repository: LINK.repository,
+        number: LINK.number,
+      });
+      yield* fixture.flushRefreshes;
+      assert.equal((yield* Ref.get(fixture.reads)).length, 1);
+      const commands = yield* Ref.get(fixture.commands);
+      assert.equal(commands.length, 1);
+      assert.equal(commands[0]?.threadId, THREAD.id);
+      assert.equal(commands[0]?.issue.state, "open");
+    }),
+  ),
+);
+
+it.effect("does not consume a new link's event while refreshing another project", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const original = {
+        ...THREAD,
+        issues: [{ ...LINK, state: "closed" as const, linkId: CommandId.make("original") }],
+      };
+      const fixture = yield* makeHarness([original], (ref) =>
+        Effect.succeed(
+          detail(ref, {
+            title: ref.number === 8 ? "New issue title" : LINK.title,
+            state: "closed",
+          }),
+        ),
+      );
+      yield* fixture.reactor.drain;
+      const added = {
+        ...THREAD,
+        id: ThreadId.make("new-thread"),
+        projectId: ProjectId.make("new-project"),
+        issues: [
+          {
+            ...LINK,
+            number: 8,
+            url: "https://github.com/owner/repo/issues/8",
+            state: "closed" as const,
+            linkId: CommandId.make("new-link"),
+          },
+        ],
+      };
+      yield* Ref.set(fixture.currentThreads, [original, added]);
+      yield* Queue.offer(fixture.refreshes, {
+        projectId: PROJECT_ID,
+        provider: "github",
+        host: "github.com",
+        repository: LINK.repository,
+        number: LINK.number,
+      });
+      yield* fixture.flushRefreshes;
+      assert.deepEqual(
+        (yield* Ref.get(fixture.reads)).map((ref) => ref.number),
+        [7],
+      );
+      yield* Queue.offer(fixture.events, metadataEvent(added, "new-link"));
+      yield* fixture.flushEvents;
+      assert.deepEqual(
+        (yield* Ref.get(fixture.reads)).map((ref) => ref.number),
+        [7, 8],
+      );
+      assert.equal((yield* Ref.get(fixture.commands))[0]?.threadId, added.id);
     }),
   ),
 );
@@ -359,6 +682,11 @@ it.effect("keeps project, provider, and host routes separate", () =>
           ...THREAD,
           id: ThreadId.make("other-host"),
           issues: [{ ...LINK, url: "https://enterprise.example/owner/repo/issues/7" }],
+        },
+        {
+          ...THREAD,
+          id: ThreadId.make("invalid-url"),
+          issues: [{ ...LINK, url: "invalid" }],
         },
       ]);
       yield* fixture.reactor.drain;
@@ -416,6 +744,106 @@ it.effect("uses linked source projects for reads while keeping writes in the thr
       }
     }),
   ),
+);
+
+it.effect(
+  "refreshes a hinted source once across threads while keeping each write in its thread project",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sourceId = ProjectId.make("foreign-source");
+        const otherThreadProject = ProjectId.make("other-thread-project");
+        const linked = { ...LINK, projectId: sourceId, state: "closed" as const };
+        const fixture = yield* makeHarness(
+          [
+            { ...THREAD, issues: [linked] },
+            {
+              ...THREAD,
+              id: ThreadId.make("other-thread"),
+              projectId: otherThreadProject,
+              issues: [linked],
+            },
+            {
+              ...THREAD,
+              id: ThreadId.make("other-source"),
+              issues: [{ ...linked, projectId: ProjectId.make("different-source") }],
+            },
+          ],
+          (ref) => Effect.succeed(detail(ref, { state: "open" })),
+        );
+        yield* fixture.reactor.drain;
+        assert.equal((yield* Ref.get(fixture.reads)).length, 0);
+        yield* Queue.offer(fixture.refreshes, {
+          projectId: sourceId,
+          provider: LINK.provider,
+          repository: LINK.repository,
+          number: LINK.number,
+          host: "github.com",
+        });
+        yield* fixture.flushRefreshes;
+        const reads = yield* Ref.get(fixture.reads);
+        assert.equal(reads.length, 1);
+        assert.equal(reads[0]?.projectId, sourceId);
+        const commands = yield* Ref.get(fixture.commands);
+        assert.deepEqual(
+          commands.map((command) => [command.threadId, command.projectId]),
+          [
+            [THREAD.id, PROJECT_ID],
+            [ThreadId.make("other-thread"), otherThreadProject],
+          ],
+        );
+        for (const command of commands) {
+          assert.equal(command.issue.projectId, sourceId);
+          assert.equal(command.expectedIssue.projectId, sourceId);
+          assert.equal(command.issue.state, "open");
+        }
+      }),
+    ),
+);
+
+it.effect(
+  "backs off a hinted source without throttling another source in the same thread project",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const failingSource = ProjectId.make("failing-source");
+        const healthySource = ProjectId.make("healthy-source");
+        const fixture = yield* makeHarness(
+          [
+            {
+              ...THREAD,
+              issues: [7, 8].map((number) => ({
+                ...LINK,
+                projectId: failingSource,
+                number,
+                url: `https://github.com/owner/repo/issues/${number}`,
+              })),
+            },
+            {
+              ...THREAD,
+              id: ThreadId.make("healthy-thread"),
+              issues: [{ ...LINK, projectId: healthySource }],
+            },
+          ],
+          (ref) =>
+            ref.projectId === failingSource
+              ? Effect.fail(new IssueUnavailableError({ reason: "cli-unauthenticated" }))
+              : Effect.succeed(detail(ref)),
+        );
+        yield* fixture.reactor.drain;
+        assert.deepEqual(
+          (yield* Ref.get(fixture.reads)).map((ref) => ref.projectId).sort(),
+          [failingSource, healthySource].sort(),
+        );
+        assert.equal((yield* Ref.get(fixture.commands)).length, 1);
+        for (let minute = 0; minute < 5; minute++) {
+          yield* TestClock.adjust("1 minute");
+          yield* Queue.take(fixture.sweeps);
+          yield* fixture.reactor.drain;
+          assert.equal((yield* Ref.get(fixture.reads)).length, minute < 4 ? 2 : 3);
+        }
+      }),
+    ),
 );
 
 it.effect("does not replace a link with a result from another host or issue", () =>
