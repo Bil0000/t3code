@@ -43,6 +43,8 @@ class PageElement {
     overflowY: "visible",
     position: "static",
     transform: "none",
+    rotate: "none",
+    scale: "none",
     perspective: "none",
     filter: "none",
     backdropFilter: "none",
@@ -145,6 +147,40 @@ const fixture = (escape = (value: string) => value) => {
     scrollY: 4_000,
     location: { href: "https://example.test" },
     CSS: { escape },
+    DOMMatrixReadOnly: class {
+      transform: string;
+      constructor(transform: string) {
+        this.transform = transform;
+      }
+      toFloat64Array() {
+        const values = this.transform
+          .slice(this.transform.indexOf("(") + 1, -1)
+          .split(",")
+          .map(Number);
+        return new Float64Array(
+          values.length === 16
+            ? values
+            : [
+                values[0]!,
+                values[1]!,
+                0,
+                0,
+                values[2]!,
+                values[3]!,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                values[4]!,
+                values[5]!,
+                0,
+                1,
+              ],
+        );
+      }
+    },
     HTMLElement: PageElement,
     Node: { ELEMENT_NODE: 1 },
     NodeFilter: { SHOW_TEXT: 4, SHOW_ELEMENT: 1 },
@@ -173,6 +209,108 @@ const fixture = (escape = (value: string) => value) => {
 };
 
 describe("snapshot page collector", () => {
+  it.each([
+    ["transform", "matrix(0.707107, 0.707107, -0.707107, 0.707107, 0, 0)"],
+    ["transform", "matrix(1, 0, 0.5, 1, 0, 0)"],
+    ["transform", "matrix(-1, 0, 0, 1, 0, 0)"],
+    ["transform", "matrix3d(1,0,0,0,0,1,0,0,0,0,1,-0.002,0,0,0,1)"],
+    ["rotate", "45deg"],
+    ["perspective", "500px"],
+    ["scale", "-1 1"],
+  ] as const)("omits unsupported %s=%s clipping geometry", (property, value) => {
+    for (const effect of ["overflow", "contain", "path"]) {
+      for (const onAncestor of [false, true]) {
+        const page = fixture();
+        const parent = page.element("parent", rect(0, 0));
+        const scroller = page.element("scroll", rect(0, 0), parent);
+        (onAncestor ? parent : scroller).style[property] = value;
+        scroller.style.overflowY = "auto";
+        scroller.scrollHeight = 1_000;
+        if (effect === "contain") scroller.style.contain = "paint";
+        if (effect === "path") scroller.style.clipPath = "inset(0px)";
+        const uncertain = page.element("uncertain", rect(10, 5, 20, 10), scroller);
+        page.elements.push(uncertain);
+        page.text("uncertain label", uncertain);
+        const visible = page.element("visible", rect(0, 100));
+        page.elements.push(visible);
+        page.text("visible label", visible);
+        page.body.innerText = "uncertain label visible label";
+        const snapshot = page.capture();
+        expect(snapshot.viewportText).toBe("visible label");
+        expect(snapshot.visibleText).toBe("uncertain label visible label");
+        expect(snapshot.interactiveElements.map((element) => element.selector)).toEqual([
+          "#visible",
+        ]);
+        expect(snapshot.scroll?.containers).toEqual([]);
+        expect(snapshot.scroll?.containersTruncated).toBe(true);
+        expect(snapshot.truncated?.viewportText).toBe(true);
+        expect(snapshot.truncated?.interactiveElements).toBe(true);
+      }
+    }
+  });
+
+  it.each([
+    ["transform", "matrix(2, 0, 0, 3, 10, 20)"],
+    ["transform", "matrix(1, 0, 0, 1, 30, -10)"],
+    ["transform", "matrix3d(2,0,0,0,0,3,0,0,0,0,1,0,10,20,30,1)"],
+    ["rotate", "360deg"],
+    ["scale", "2 3"],
+  ] as const)("keeps axis-aligned %s=%s clipping", (property, value) => {
+    const page = fixture();
+    const scroller = page.element("scroll", rect(0, 0, 200, 60));
+    scroller.style[property] = value;
+    scroller.style.overflowY = "auto";
+    scroller.style.contain = "paint";
+    scroller.style.clipPath = "inset(0px)";
+    scroller.scrollHeight = 1_000;
+    const visible = page.element("visible", rect(20, 10), scroller);
+    page.elements.push(visible);
+    page.text("visible label", visible);
+    const snapshot = page.capture();
+    expect(snapshot.viewportText).toBe("visible label");
+    expect(snapshot.interactiveElements[0]?.inViewport).toBe(true);
+    expect(snapshot.scroll?.containers[0]?.selector).toBe("#scroll");
+    expect(snapshot.scroll?.containersTruncated).toBe(false);
+    expect(snapshot.truncated?.viewportText).toBe(false);
+    expect(snapshot.truncated?.interactiveElements).toBe(false);
+  });
+
+  it("preserves positioned overflow escapes but respects transformed paint clipping", () => {
+    const page = fixture();
+    const rotated = page.element("rotated", rect(0, 0));
+    rotated.style.rotate = "45deg";
+    const scroller = page.element("scroll", rect(0, 0), rotated);
+    scroller.style.overflowY = "auto";
+    scroller.scrollHeight = 1_000;
+    const escaped = page.element("escaped", rect(0, 100), scroller);
+    escaped.style.position = "absolute";
+    escaped.offsetParent = rotated;
+    page.elements.push(escaped);
+    page.text("escaped label", escaped);
+    const snapshot = page.capture();
+    expect(snapshot.viewportText).toBe("escaped label");
+    expect(snapshot.interactiveElements[0]?.selector).toBe("#escaped");
+    expect(snapshot.interactiveElements[0]?.inViewport).toBe(true);
+    scroller.style.contain = "paint";
+    const painted = page.capture();
+    expect(painted.viewportText).toBe("");
+    expect(painted.interactiveElements).toEqual([]);
+    expect(painted.truncated?.interactiveElements).toBe(true);
+  });
+
+  it("keeps transformed text and controls when no geometric clipping applies", () => {
+    const page = fixture();
+    const rotated = page.element("rotated", rect(0, 0));
+    rotated.style.rotate = "45deg";
+    page.elements.push(rotated);
+    page.text("rotated label", rotated);
+    const snapshot = page.capture();
+    expect(snapshot.viewportText).toBe("rotated label");
+    expect(snapshot.interactiveElements[0]?.inViewport).toBe(true);
+    expect(snapshot.truncated?.viewportText).toBe(false);
+    expect(snapshot.truncated?.interactiveElements).toBe(false);
+  });
+
   it.each(["inset(100%)", "inset(0px 0px 100%)", "circle(50%)"])(
     "omits scroll containers clipped by %s",
     (clipPath) => {
@@ -637,7 +775,7 @@ describe("snapshot page collector", () => {
     absolute.offsetParent = page.body;
     const transformed = page.element("transformed", rect(0, 0));
     transformed.style.overflowY = "hidden";
-    transformed.style.transform = "translateX(0px)";
+    transformed.style.transform = "matrix(1, 0, 0, 1, 0, 0)";
     const clipped = page.element("clipped", rect(0, 160), transformed);
     clipped.style.position = "fixed";
     clipped.offsetParent = transformed;

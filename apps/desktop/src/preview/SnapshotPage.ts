@@ -52,6 +52,8 @@ function collectSnapshotPage(): SnapshotPage {
   const clips = new Map<Element, Bounds | null>();
   const paintClips = new Map<Element, Bounds | null>();
   const unsupportedClips = new Set<Element>();
+  const unsupportedOverflowClips = new Set<Element>();
+  const transformedClips = new Map<Element, boolean>();
   let unsupportedClip = false;
   const styles = new Map<Element, CSSStyleDeclaration>();
   const styleFor = (element: Element) => {
@@ -62,6 +64,37 @@ function collectSnapshotPage(): SnapshotPage {
     }
     return style;
   };
+  const unsupportedTransform = (style: CSSStyleDeclaration) => {
+    if (style.perspective && style.perspective !== "none") return true;
+    if (
+      style.scale &&
+      style.scale !== "none" &&
+      style.scale.split(/\s+/).some((value) => Number.parseFloat(value) <= 0)
+    )
+      return true;
+    if (style.rotate && style.rotate !== "none") {
+      const angle = /([+-]?(?:\d+(?:\.\d*)?|\.\d+))(deg|rad|grad|turn)$/.exec(style.rotate);
+      const period =
+        angle?.[2] === "deg"
+          ? 360
+          : angle?.[2] === "rad"
+            ? 2 * Math.PI
+            : angle?.[2] === "grad"
+              ? 400
+              : 1;
+      if (!angle || Math.abs(Number(angle[1]) % period) > 1e-8) return true;
+    }
+    if (!style.transform || style.transform === "none") return false;
+    const values = new DOMMatrixReadOnly(style.transform).toFloat64Array();
+    return (
+      values[0]! <= 0 ||
+      values[5]! <= 0 ||
+      values[15] !== 1 ||
+      values.some(
+        (value, index) => ![0, 5, 10, 12, 13, 14, 15].includes(index) && Math.abs(value) > 1e-8,
+      )
+    );
+  };
   const paintClipFor = (element: Element): Bounds | null => {
     const pending: Element[] = [];
     let ancestor: Element | null = element;
@@ -71,15 +104,26 @@ function collectSnapshotPage(): SnapshotPage {
     }
     let clip = ancestor ? (paintClips.get(ancestor) ?? null) : viewport;
     let unsupported = ancestor ? unsupportedClips.has(ancestor) : false;
+    let transformed = ancestor ? (transformedClips.get(ancestor) ?? false) : false;
     for (let index = pending.length - 1; index >= 0; index--) {
       const current = pending[index]!;
       const style = styleFor(current);
+      transformed ||= unsupportedTransform(style);
+      transformedClips.set(current, transformed);
       if (clip && style.display !== "contents") {
         const paint =
           /\b(paint|content|strict)\b/.test(style.contain) &&
           !/^(inline$|table-(?!cell$|caption$)|ruby(?:$|-))/.test(style.display);
         const path = style.clipPath && style.clipPath !== "none";
         if (paint || path) {
+          if (transformed) {
+            unsupportedClip = true;
+            unsupported = true;
+            unsupportedClips.add(current);
+            clip = null;
+            paintClips.set(current, clip);
+            continue;
+          }
           const rect = current.getBoundingClientRect();
           const scaleX =
             current instanceof HTMLElement && current.offsetWidth
@@ -171,6 +215,7 @@ function collectSnapshotPage(): SnapshotPage {
           : ancestor.parentElement;
     }
     let parentClip: Bounds | null = ancestor ? (clips.get(ancestor) ?? null) : viewport;
+    let unsupportedOverflow = ancestor ? unsupportedOverflowClips.has(ancestor) : false;
     for (let index = pending.length - 1; index >= 0; index--) {
       const current = pending[index]!;
       const style = styleFor(current);
@@ -250,9 +295,15 @@ function collectSnapshotPage(): SnapshotPage {
           const scrollable =
             (/^(auto|scroll)$/.test(style.overflowX) && current.scrollWidth > clientWidth) ||
             (/^(auto|scroll)$/.test(style.overflowY) && current.scrollHeight > clientHeight);
-          if (scrollable && unsupportedClips.has(current)) containersTruncated = true;
+          if (transformedClips.get(current)) {
+            unsupportedClip = true;
+            unsupportedOverflow = true;
+          }
+          if (scrollable && (unsupportedClips.has(current) || unsupportedOverflow))
+            containersTruncated = true;
           if (
             scrollable &&
+            !unsupportedOverflow &&
             parentClip &&
             paintClip &&
             clip.right > clip.left &&
@@ -274,8 +325,15 @@ function collectSnapshotPage(): SnapshotPage {
           }
         }
       }
+      if (unsupportedOverflow) unsupportedOverflowClips.add(current);
       parentClip =
-        parentClip && paintClip && clip.right > clip.left && clip.bottom > clip.top ? clip : null;
+        !unsupportedOverflow &&
+        parentClip &&
+        paintClip &&
+        clip.right > clip.left &&
+        clip.bottom > clip.top
+          ? clip
+          : null;
       clips.set(current, parentClip);
     }
     return clips.get(element)!;
@@ -310,11 +368,11 @@ function collectSnapshotPage(): SnapshotPage {
     const rect = element.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) continue;
     paintClipFor(element);
-    if (unsupportedClips.has(element)) {
+    const current = inViewport(element, rect);
+    if (unsupportedClips.has(element) || unsupportedOverflowClips.has(element)) {
       controlsOmitted = true;
       continue;
     }
-    const current = inViewport(element, rect);
     elementCount++;
     const target = current ? currentElements : otherElements;
     if (target.length < maxElements) target.push(element);

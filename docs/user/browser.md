@@ -14,8 +14,9 @@ rendered main-page text to a UTF-8 file. The file has no total character cap. Th
 snapshot returns `textPath` in the environment so the agent can read the file
 in parts. This export does not scroll or load missing content.
 
-Complex CSS clip shapes can cause current-view text and controls to be omitted.
-The result reports these omissions. Use the screenshot to inspect those areas.
+Complex CSS clip shapes and transformed clips can cause current-view text and
+controls to be omitted. The result reports these omissions. Use the screenshot
+to inspect those areas.
 
 On old HTML pages, a scroll box on the page body can report a size that includes
 scrollbar space. Use the screenshot when precise edge positions matter.
