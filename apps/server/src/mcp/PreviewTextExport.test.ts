@@ -69,6 +69,7 @@ const makePage = (initialText: string) => {
     },
     beforeChunk: undefined as (() => void) | undefined,
     chunkGate: undefined as Effect.Effect<void> | undefined,
+    disposeGate: undefined as Effect.Effect<void> | undefined,
     broker: undefined as PreviewAutomationBroker["Service"] | undefined,
   };
   const invoke = <A>(request: PreviewAutomationInvokeInput) =>
@@ -92,7 +93,7 @@ const makePage = (initialText: string) => {
         page.beforeChunk?.();
         if (page.chunkGate) yield* page.chunkGate;
       }
-      return yield* Effect.try({
+      const value = yield* Effect.try({
         try: () => {
           const value = NodeVM.runInContext(expression, context) as A;
           expect(Buffer.byteLength(encodeJson(value), "utf8")).toBeLessThan(32_000);
@@ -100,6 +101,10 @@ const makePage = (initialText: string) => {
         },
         catch: () => new PreviewAutomationNoAvailableHostError({ ...scope, operation: "evaluate" }),
       });
+      if (expression.includes("capture?.dispose()") && page.disposeGate) {
+        yield* page.disposeGate;
+      }
+      return value;
     });
   page.broker = PreviewAutomationBroker.of({
     invoke,
@@ -270,6 +275,28 @@ it.effect("removes partial files and the browser capture on cancellation", () =>
     yield* Fiber.interrupt(fiber);
     const fs = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
+    expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
+    assertClean(page);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("removes the completed file when cancellation occurs during browser cleanup", () =>
+  Effect.gen(function* () {
+    const enteredDispose = yield* Deferred.make<void>();
+    const releaseDispose = yield* Deferred.make<void>();
+    const page = makePage("completed text");
+    page.disposeGate = Deferred.succeed(enteredDispose, undefined).pipe(
+      Effect.andThen(Deferred.await(releaseDispose)),
+    );
+    const fiber = yield* Effect.forkChild(runExport(page));
+    yield* Deferred.await(enteredDispose);
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    expect(yield* fs.readDirectory(config.browserArtifactsDir)).toHaveLength(1);
+    const interruption = yield* Effect.forkChild(Fiber.interrupt(fiber));
+    yield* Effect.yieldNow;
+    yield* Deferred.succeed(releaseDispose, undefined);
+    yield* Fiber.join(interruption);
     expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
     assertClean(page);
   }).pipe(Effect.provide(TestLayer)),

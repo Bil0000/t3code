@@ -15,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -62,12 +63,12 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
-const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
+const PreviewTestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-server-test-" })),
-  Layer.provideMerge(NodeServices.layer),
 );
+const TestLayer = PreviewTestLayer.pipe(Layer.provideMerge(NodeServices.layer));
 const PullRequestsTestLayer = McpHttpServer.PullRequestsToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provide(
@@ -134,7 +135,12 @@ const callSnapshot = (args: Record<string, unknown>) =>
 const serveTextExports = (
   clientId: string,
   text: string,
-  options: { switchTab?: boolean; navigate?: boolean } = {},
+  options: {
+    switchTab?: boolean;
+    navigate?: boolean;
+    snapshotFailure?: boolean;
+    beforeSnapshot?: Effect.Effect<void>;
+  } = {},
 ) =>
   Effect.gen(function* () {
     const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
@@ -167,6 +173,22 @@ const serveTextExports = (
       return Effect.gen(function* () {
         const request = event.request;
         let result: unknown = snapshotResult;
+        if (request.operation === "snapshot") {
+          if (options.beforeSnapshot) yield* options.beforeSnapshot;
+          if (options.snapshotFailure) {
+            yield* broker.respond({
+              clientId,
+              connectionId: event.connectionId,
+              requestId: request.requestId,
+              ok: false,
+              error: {
+                _tag: "PreviewAutomationExecutionError",
+                message: "private snapshot failure",
+              },
+            });
+            return;
+          }
+        }
         if (request.operation === "status") {
           result = {
             available: true,
@@ -693,6 +715,118 @@ it.effect("reports text export failure without a successful snapshot or partial 
       const config = yield* ServerConfig.ServerConfig;
       const fs = yield* FileSystem.FileSystem;
       expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("removes the completed text export when the following snapshot fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const host = yield* serveTextExports("mcp-export-snapshot-failure-client", "loaded text", {
+        snapshotFailure: true,
+      });
+
+      const snapshot = yield* callSnapshot({ saveText: true });
+
+      expect(snapshot.isError).toBe(true);
+      expect(snapshot.structuredContent).toMatchObject({
+        error: { _tag: "PreviewAutomationExecutionError", operation: "snapshot" },
+      });
+      expect(snapshot.content.every((content) => content.type === "text")).toBe(true);
+      expect(host.requests.at(-1)?.operation).toBe("snapshot");
+      expect(host.textReads()).toBe(1);
+      expect(host.timers.size).toBe(0);
+      expect(
+        Object.getOwnPropertyNames(host.context).filter((key) =>
+          key.startsWith("__t3_text_export_"),
+        ),
+      ).toEqual([]);
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("removes only its completed text export when saving the PNG fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
+      const existing = path.join(config.browserArtifactsDir, "existing.txt");
+      yield* fs.writeFileString(existing, "keep this file");
+      const host = yield* serveTextExports("mcp-export-png-failure-client", "loaded text");
+
+      const snapshot = yield* callSnapshot({ saveText: true, save: true });
+
+      expect(snapshot.isError).toBe(true);
+      expect(snapshot.structuredContent).toMatchObject({
+        error: { _tag: "PreviewScreenshotSaveError", operation: "snapshot" },
+      });
+      expect(snapshot.content.every((content) => content.type === "text")).toBe(true);
+      expect(host.textReads()).toBe(1);
+      expect(host.timers.size).toBe(0);
+      expect(
+        Object.getOwnPropertyNames(host.context).filter((key) =>
+          key.startsWith("__t3_text_export_"),
+        ),
+      ).toEqual([]);
+      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["existing.txt"]);
+      expect(yield* fs.readFileString(existing)).toBe("keep this file");
+    }),
+  ).pipe(
+    Effect.provide(
+      PreviewTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.effect(
+            FileSystem.FileSystem,
+            Effect.gen(function* () {
+              const fs = yield* FileSystem.FileSystem;
+              const path = yield* Path.Path;
+              return FileSystem.FileSystem.of({
+                ...fs,
+                writeFile: (filePath, bytes, options) =>
+                  filePath.endsWith(".png")
+                    ? fs.writeFileString(path.dirname(filePath), "fails on a directory")
+                    : fs.writeFile(filePath, bytes, options),
+              });
+            }),
+          ),
+        ),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
+it.effect("removes the completed text export when the following snapshot is cancelled", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const enteredSnapshot = yield* Deferred.make<void>();
+      const host = yield* serveTextExports("mcp-export-snapshot-cancel-client", "loaded text", {
+        beforeSnapshot: Deferred.succeed(enteredSnapshot, undefined).pipe(
+          Effect.andThen(Effect.never),
+        ),
+      });
+      const fiber = yield* Effect.forkChild(callSnapshot({ saveText: true }));
+      yield* Deferred.await(enteredSnapshot);
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toHaveLength(1);
+
+      yield* Fiber.interrupt(fiber);
+
+      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
+      expect(host.requests.at(-1)?.operation).toBe("snapshot");
+      expect(host.textReads()).toBe(1);
+      expect(host.timers.size).toBe(0);
+      expect(
+        Object.getOwnPropertyNames(host.context).filter((key) =>
+          key.startsWith("__t3_text_export_"),
+        ),
+      ).toEqual([]);
     }),
   ).pipe(Effect.provide(TestLayer)),
 );

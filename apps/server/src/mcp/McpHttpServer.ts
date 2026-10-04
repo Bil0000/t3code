@@ -512,97 +512,119 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
           if (payload?.saveText !== true || !isPreviewSnapshotInput(payload)) return undefined;
           return yield* savePreviewText(payload.tabId);
         });
-        return exportText.pipe(
-          Effect.flatMap((textExport) =>
-            built
-              .handle("preview_snapshot", {
-                ...payload,
-                ...(textExport === undefined ? {} : { tabId: textExport.tabId }),
-              })
-              .pipe(
-                Stream.unwrap,
-                Stream.run(Sink.last()),
-                Effect.flatMap(Effect.fromOption),
-                Effect.flatMap(({ encodedResult }) =>
-                  Effect.gen(function* () {
-                    const snapshot = encodedResult as SnapshotMetadata & {
-                      readonly url: string;
-                      readonly screenshot: {
-                        readonly mimeType: "image/png";
-                        readonly data: string;
-                        readonly width: number;
-                        readonly height: number;
-                      };
-                    };
-                    const { screenshot, ...page } = snapshot;
-                    const png = new Uint8Array(Buffer.from(screenshot.data, "base64"));
-                    const screenshotPath =
-                      payload?.save === true ? yield* saveScreenshot(snapshot.url, png) : undefined;
-                    const textArtifact =
-                      textExport === undefined
-                        ? {}
-                        : {
-                            textPath: textExport.textPath,
-                            textChars: textExport.totalChars,
-                            textBytes: textExport.sizeBytes,
-                            textUrl: textExport.url,
+        return Effect.uninterruptibleMask((restore) =>
+          restore(exportText).pipe(
+            Effect.flatMap((textExport) =>
+              restore(
+                built
+                  .handle("preview_snapshot", {
+                    ...payload,
+                    ...(textExport === undefined ? {} : { tabId: textExport.tabId }),
+                  })
+                  .pipe(
+                    Stream.unwrap,
+                    Stream.run(Sink.last()),
+                    Effect.flatMap(Effect.fromOption),
+                    Effect.flatMap(({ encodedResult }) =>
+                      Effect.gen(function* () {
+                        const snapshot = encodedResult as SnapshotMetadata & {
+                          readonly url: string;
+                          readonly screenshot: {
+                            readonly mimeType: "image/png";
+                            readonly data: string;
+                            readonly width: number;
+                            readonly height: number;
                           };
-                    if (screenshotPath !== undefined && payload?.includeImage === false) {
-                      // The agent only wants a file to show the user. The url keeps the site icon on the tool row.
-                      const saved = {
-                        url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-                        screenshotPath,
-                        ...textArtifact,
-                      };
-                      return new McpSchema.CallToolResult({
-                        isError: false,
-                        structuredContent: saved,
-                        content: [{ type: "text", text: encodeJsonText(saved) }],
-                      });
-                    }
-                    const metadata = {
-                      ...page,
-                      screenshot: {
-                        mimeType: screenshot.mimeType,
-                        width: screenshot.width,
-                        height: screenshot.height,
-                      },
-                      ...(screenshotPath === undefined ? {} : { screenshotPath }),
-                      ...textArtifact,
-                    };
-                    const bounded = boundSnapshotMetadata(metadata);
-                    return new McpSchema.CallToolResult({
-                      isError: false,
-                      structuredContent:
-                        bounded.omitted.length === 0
-                          ? bounded.value
-                          : { ...bounded.value, omitted: bounded.omitted },
-                      content: [
-                        // Keep the page identity readable even if a provider truncates the snapshot.
-                        {
-                          type: "text",
-                          text: encodeJsonText({
+                        };
+                        const { screenshot, ...page } = snapshot;
+                        const png = new Uint8Array(Buffer.from(screenshot.data, "base64"));
+                        const screenshotPath =
+                          payload?.save === true
+                            ? yield* saveScreenshot(snapshot.url, png)
+                            : undefined;
+                        const textArtifact =
+                          textExport === undefined
+                            ? {}
+                            : {
+                                textPath: textExport.textPath,
+                                textChars: textExport.totalChars,
+                                textBytes: textExport.sizeBytes,
+                                textUrl: textExport.url,
+                              };
+                        if (screenshotPath !== undefined && payload?.includeImage === false) {
+                          // The agent only wants a file to show the user. The url keeps the site icon on the tool row.
+                          const saved = {
                             url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-                          }),
-                        },
-                        { type: "text", text: bounded.text },
-                        ...(bounded.omitted.length === 0
-                          ? []
-                          : [
-                              {
-                                type: "text" as const,
-                                text: `Snapshot text was bounded. Omitted: ${bounded.omitted.join("; ")}.`,
-                              },
-                            ]),
-                        ...(payload?.includeImage === false
-                          ? []
-                          : [{ type: "image" as const, data: png, mimeType: screenshot.mimeType }]),
-                      ],
-                    });
-                  }),
+                            screenshotPath,
+                            ...textArtifact,
+                          };
+                          return new McpSchema.CallToolResult({
+                            isError: false,
+                            structuredContent: saved,
+                            content: [{ type: "text", text: encodeJsonText(saved) }],
+                          });
+                        }
+                        const metadata = {
+                          ...page,
+                          screenshot: {
+                            mimeType: screenshot.mimeType,
+                            width: screenshot.width,
+                            height: screenshot.height,
+                          },
+                          ...(screenshotPath === undefined ? {} : { screenshotPath }),
+                          ...textArtifact,
+                        };
+                        const bounded = boundSnapshotMetadata(metadata);
+                        return new McpSchema.CallToolResult({
+                          isError: false,
+                          structuredContent:
+                            bounded.omitted.length === 0
+                              ? bounded.value
+                              : { ...bounded.value, omitted: bounded.omitted },
+                          content: [
+                            // Keep the page identity readable even if a provider truncates the snapshot.
+                            {
+                              type: "text",
+                              text: encodeJsonText({
+                                url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
+                              }),
+                            },
+                            { type: "text", text: bounded.text },
+                            ...(bounded.omitted.length === 0
+                              ? []
+                              : [
+                                  {
+                                    type: "text" as const,
+                                    text: `Snapshot text was bounded. Omitted: ${bounded.omitted.join("; ")}.`,
+                                  },
+                                ]),
+                            ...(payload?.includeImage === false
+                              ? []
+                              : [
+                                  {
+                                    type: "image" as const,
+                                    data: png,
+                                    mimeType: screenshot.mimeType,
+                                  },
+                                ]),
+                          ],
+                        });
+                      }),
+                    ),
+                  ),
+              ).pipe(
+                Effect.onExit((exit) =>
+                  textExport !== undefined && exit._tag === "Failure"
+                    ? FileSystem.FileSystem.pipe(
+                        Effect.flatMap((fileSystem) => fileSystem.remove(textExport.textPath)),
+                        Effect.ignore,
+                      )
+                    : Effect.void,
                 ),
               ),
+            ),
           ),
+        ).pipe(
           Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, broker),
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provide(saveServices),

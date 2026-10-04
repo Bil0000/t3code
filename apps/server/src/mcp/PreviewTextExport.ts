@@ -58,19 +58,15 @@ export const savePreviewText = Effect.fn("PreviewTextExport.savePreviewText")(fu
       input: { expression, returnByValue: true },
       updateCurrentTab: false,
     });
+  let created = false;
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      let created = false;
-      let complete = false;
       yield* Effect.addFinalizer(() =>
         evaluate(`(() => {
           const capture = globalThis[${key}];
           capture?.dispose();
           return true;
         })()`).pipe(Effect.interruptible, Effect.timeoutOption(5000), Effect.ignore),
-      );
-      yield* Effect.addFinalizer(() =>
-        created && !complete ? fileSystem.remove(textPath).pipe(Effect.ignore) : Effect.void,
       );
       const capture = yield* evaluate(`(() => {
         const text = document.body?.innerText ?? "";
@@ -126,8 +122,14 @@ export const savePreviewText = Effect.fn("PreviewTextExport.savePreviewText")(fu
         offset = chunk.next;
       }
       yield* file.sync;
-      complete = true;
       return { textPath, totalChars: capture.totalChars, sizeBytes, url: capture.url, tabId };
     }),
-  ).pipe(Effect.mapError((cause) => new PreviewTextExportError({ cause })));
+  ).pipe(
+    Effect.onExit((exit) =>
+      created && exit._tag === "Failure"
+        ? fileSystem.remove(textPath).pipe(Effect.ignore)
+        : Effect.void,
+    ),
+    Effect.mapError((cause) => new PreviewTextExportError({ cause })),
+  );
 });
