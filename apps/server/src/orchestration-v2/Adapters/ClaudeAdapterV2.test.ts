@@ -862,7 +862,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
 });
 
 describe("ClaudeAdapterV2 context usage", () => {
-  it("projects assistant usage against the selected context window", () => {
+  it("leaves the context window unknown until Claude reports it", () => {
     const usage = ClaudeAdapterV2.claudeProviderTurnTokenUsage(
       {
         input_tokens: 42_000,
@@ -870,13 +870,12 @@ describe("ClaudeAdapterV2 context usage", () => {
         cache_read_input_tokens: 5_000,
         output_tokens: 1_000,
       },
-      CLAUDE_TEST_MODEL_SELECTION,
       "2026-08-29T00:00:00.000Z",
     );
 
     assert.deepEqual(usage, {
       usedTokens: 50_000,
-      maxTokens: 200_000,
+      maxTokens: null,
       inputTokens: 49_000,
       cachedInputTokens: 5_000,
       outputTokens: 1_000,
@@ -2201,6 +2200,125 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       };
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
+
+  it.effect.each([
+    { reported: 1_000_000, expected: 1_000_000 },
+    { reported: 200_000, expected: 200_000 },
+    { reported: undefined, expected: null },
+    { reported: Number.NaN, expected: null },
+  ])("uses only the main model's reported context window: $reported", ({ reported, expected }) =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      const latestUsage = () =>
+        harness.events
+          .flatMap((event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.tokenUsage
+              ? [event.providerTurn.tokenUsage]
+              : [],
+          )
+          .at(-1);
+      const assistant = (model: string) =>
+        claudeSdkFrame({
+          type: "assistant",
+          uuid: `context-${model}`,
+          session_id: WAKE_NATIVE_SESSION,
+          parent_tool_use_id: null,
+          user_message_uuid: harness.offeredMessages.at(-1)?.uuid,
+          message: {
+            id: `context-${model}`,
+            model,
+            content: [],
+            usage: {
+              input_tokens: 42_000,
+              cache_creation_input_tokens: 2_000,
+              cache_read_input_tokens: 5_000,
+              output_tokens: 1_000,
+            },
+          },
+        });
+      const modelUsage = {
+        "child-model": { contextWindow: 32_000, inputTokens: 900_000, outputTokens: 80_000 },
+        ...(reported === undefined ? {} : { "provider-main-model": { contextWindow: reported } }),
+      };
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("context-first"),
+          text: "Check context",
+          attachments: [],
+        }),
+      );
+      yield* harness.offerAndWait(assistant("provider-main-model"));
+      yield* harness.offerAndWait(
+        claudeSdkFrame({ ...turnOneResult, uuid: "context-result", modelUsage }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      assert.equal(latestUsage()?.usedTokens, 50_000);
+      assert.equal(latestUsage()?.maxTokens, expected);
+      assert.equal(
+        harness.runtime.getModelContextWindow?.(CLAUDE_TEST_MODEL_SELECTION, "/workspace"),
+        expected ?? undefined,
+      );
+      assert.equal(
+        harness.runtime.getModelContextWindow?.(CLAUDE_TEST_MODEL_SELECTION, "/other-project"),
+        undefined,
+      );
+      assert.equal(
+        harness.runtime.getModelContextWindow?.({
+          ...CLAUDE_TEST_MODEL_SELECTION,
+          model: "other-model",
+        }),
+        undefined,
+      );
+
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("context-second"),
+          providerTurnOrdinal: 2,
+          text: "Check context again",
+          attachments: [],
+        }),
+      );
+      yield* harness.offerAndWait(assistant("provider-main-model"));
+      yield* harness.offerAndWait(
+        claudeSdkFrame({
+          type: "system",
+          subtype: "compact_boundary",
+          uuid: "context-compaction",
+          session_id: WAKE_NATIVE_SESSION,
+          compact_metadata: { trigger: "auto", pre_tokens: 80_000, post_tokens: 10_000 },
+        }),
+      );
+      yield* harness.offerAndWait(assistant("provider-changed-model"));
+      yield* harness.offerAndWait(
+        claudeSdkFrame({ ...turnOneResult, uuid: "context-second-result", modelUsage }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      assert.equal(latestUsage()?.usedTokens, 50_000);
+      assert.equal(latestUsage()?.maxTokens, null);
+      assert.equal(harness.runtime.getModelContextWindow?.(CLAUDE_TEST_MODEL_SELECTION), undefined);
+      assert.deepEqual(
+        harness.events.flatMap((event) =>
+          event.type === "provider_turn.updated" && event.providerTurn.tokenUsage
+            ? [[event.providerTurn.tokenUsage.usedTokens, event.providerTurn.tokenUsage.maxTokens]]
+            : [],
+        ),
+        [
+          [50_000, null],
+          [50_000, expected],
+          [50_000, expected],
+          [10_000, expected],
+          [50_000, null],
+          [50_000, null],
+        ],
+      );
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
 
   it.effect.each(["completed", "interrupted"] as const)(
     "projects Claude thinking blocks when %s",
