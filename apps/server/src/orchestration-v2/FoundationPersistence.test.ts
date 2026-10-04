@@ -1509,8 +1509,8 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
     }).pipe(Effect.provide(Layer.fresh(TestLayer))),
   );
 
-  it.effect.each(["cancelled", "stop-request"] as const)(
-    "does not publish a stale provider start after %s",
+  it.effect.each(["cancelled", "stop-request", "paired-stop-request"] as const)(
+    "checks %s before publishing a provider retry",
     (mode) =>
       Effect.gen(function* () {
         const eventSink = yield* EventSink.EventSinkV2;
@@ -1522,6 +1522,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         const runId = RunId.make(`run:foundation-stale-provider-start:${mode}`);
         const attemptId = RunAttemptId.make(`run-attempt:foundation-stale-provider-start:${mode}`);
         const interruptRequestId = TurnItemId.make(`turn-item:foundation-stop-request:${mode}`);
+        const interruptResultId = TurnItemId.make(`turn-item:foundation-stop-result:${mode}`);
         const thread = makeThread(threadId, now);
         const startingRun: OrchestrationV2Run = {
           id: runId,
@@ -1571,7 +1572,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
             runId,
             activeAttemptId: attemptId,
             expectedStatus: "starting",
-            rejectInterruptRequestId: interruptRequestId,
+            rejectUnpairedInterrupt: { requestId: interruptRequestId, resultId: interruptResultId },
             effects: [
               {
                 id: `guarded-continuation:${mode}`,
@@ -1647,15 +1648,42 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
                   },
                 ],
         });
+        if (mode === "paired-stop-request") {
+          const request = (yield* projectionStore.getThreadProjection(threadId)).turnItems
+            .filter((item) => item.type === "run_interrupt_request")
+            .find((item) => item.id === interruptRequestId)!;
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make(`event:foundation-stale-provider-start:stop-result:${mode}`),
+                type: "turn-item.updated",
+                threadId,
+                runId,
+                providerInstanceId,
+                occurredAt: interruptedAt,
+                payload: {
+                  ...request,
+                  id: interruptResultId,
+                  type: "run_interrupt_result",
+                  message: "Stopped previous attempt",
+                },
+              },
+            ],
+          });
+        }
         yield* Deferred.succeed(releaseStaleStart, undefined);
 
         const staleResult = yield* Fiber.join(staleStartFiber);
-        assert.isFalse(staleResult.committed);
-        assert.deepEqual(yield* outbox.listByCommandId(commandId), []);
-        assert.deepEqual(staleResult.storedEvents, []);
-        assert.equal(yield* Ref.get(providerStartCount), 0);
+        const expectedWrites = mode === "paired-stop-request" ? 1 : 0;
+        assert.equal(staleResult.committed, expectedWrites === 1);
+        assert.lengthOf(yield* outbox.listByCommandId(commandId), expectedWrites);
+        assert.lengthOf(staleResult.storedEvents, expectedWrites);
+        assert.equal(yield* Ref.get(providerStartCount), expectedWrites);
         const projection = yield* projectionStore.getThreadProjection(threadId);
-        assert.equal(projection.runs[0]?.status, mode === "cancelled" ? "cancelled" : "starting");
+        assert.equal(
+          projection.runs[0]?.status,
+          mode === "cancelled" ? "cancelled" : expectedWrites ? "running" : "starting",
+        );
       }).pipe(Effect.provide(Layer.fresh(TestLayer))),
   );
 

@@ -92,7 +92,10 @@ export interface EventSinkV2Shape {
     readonly expectedStatus: OrchestrationV2Run["status"];
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
-    readonly rejectInterruptRequestId?: TurnItemId;
+    readonly rejectUnpairedInterrupt?: {
+      readonly requestId: TurnItemId;
+      readonly resultId: TurnItemId;
+    };
   }) => Effect.Effect<
     {
       readonly committed: boolean;
@@ -420,12 +423,17 @@ const baseLayer: Layer.Layer<
           `;
             const current = rows[0];
             const interrupted =
-              input.rejectInterruptRequestId === undefined
+              input.rejectUnpairedInterrupt === undefined
                 ? false
                 : (yield* sql`
-                  SELECT 1 FROM orchestration_v2_projection_turn_items
-                  WHERE thread_id = ${input.threadId}
-                    AND turn_item_id = ${input.rejectInterruptRequestId}
+                  SELECT 1 FROM orchestration_v2_projection_turn_items AS request
+                  WHERE request.thread_id = ${input.threadId}
+                    AND request.turn_item_id = ${input.rejectUnpairedInterrupt.requestId}
+                    AND NOT EXISTS (
+                      SELECT 1 FROM orchestration_v2_projection_turn_items AS result
+                      WHERE result.thread_id = ${input.threadId}
+                        AND result.turn_item_id = ${input.rejectUnpairedInterrupt.resultId}
+                    )
                   LIMIT 1
                 `).length > 0;
             if (

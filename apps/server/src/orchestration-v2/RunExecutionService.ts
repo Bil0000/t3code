@@ -682,10 +682,16 @@ export const layer: Layer.Layer<
             runId: input.run.id,
             activeAttemptId: input.attempt.id,
             expectedStatus: "running",
-            rejectInterruptRequestId: idAllocator.derive.runSignalTurnItem({
-              runId: input.run.id,
-              signal: "interrupt-request",
-            }),
+            rejectUnpairedInterrupt: {
+              requestId: idAllocator.derive.runSignalTurnItem({
+                runId: input.run.id,
+                signal: "interrupt-request",
+              }),
+              resultId: idAllocator.derive.runSignalTurnItem({
+                runId: input.run.id,
+                signal: "interrupt-result",
+              }),
+            },
             events,
             effects: [
               {
