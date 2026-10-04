@@ -21,7 +21,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { resolveWorkspacePath, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/Services/ProviderAuthService.ts";
@@ -1263,14 +1263,25 @@ export const layer: Layer.Layer<
     return ProviderTurnStartServiceV2.of({
       start: (input) =>
         Effect.gen(function* () {
-          const projection = yield* projectionStore.getTurnStartContext(
+          const storedProjection = yield* projectionStore.getTurnStartContext(
             input.threadId,
             input.runId,
           );
+          const worktreePath =
+            storedProjection.thread.worktreePath == null
+              ? null
+              : yield* resolveWorkspacePath(storedProjection.thread.worktreePath).pipe(
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                  Effect.provideService(Path.Path, path),
+                );
+          const projection =
+            worktreePath === null
+              ? storedProjection
+              : { ...storedProjection, thread: { ...storedProjection.thread, worktreePath } };
           const effect = start(input, projection);
-          const providerTurn = yield* projection.thread.worktreePath === null
+          const providerTurn = yield* worktreePath === null
             ? effect
-            : withWorkspaceLease(path.resolve(projection.thread.worktreePath), effect);
+            : withWorkspaceLease(worktreePath, effect);
           if (providerTurn !== undefined) yield* providerTurn;
         }).pipe(
           Effect.mapError((cause) =>

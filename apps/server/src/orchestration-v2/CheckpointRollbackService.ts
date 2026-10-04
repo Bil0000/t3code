@@ -15,7 +15,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { resolveWorkspacePath, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   isCheckpointRestoreIsolated,
   SHARED_WORKSPACE_RESTORE_MESSAGE,
@@ -369,11 +369,20 @@ export const layer: Layer.Layer<
     return CheckpointRollbackServiceV2.of({
       execute: (input) =>
         Effect.gen(function* () {
-          const projection = yield* readProjection(input.threadId);
+          const storedProjection = yield* readProjection(input.threadId);
+          const worktreePath =
+            storedProjection.thread.worktreePath == null
+              ? null
+              : yield* resolveWorkspacePath(storedProjection.thread.worktreePath).pipe(
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                  Effect.provideService(Path.Path, path),
+                );
+          const projection =
+            worktreePath === null
+              ? storedProjection
+              : { ...storedProjection, thread: { ...storedProjection.thread, worktreePath } };
           const effect = execute(input, projection);
-          return yield* projection.thread.worktreePath == null
-            ? effect
-            : withWorkspaceLease(path.resolve(projection.thread.worktreePath), effect);
+          return yield* worktreePath === null ? effect : withWorkspaceLease(worktreePath, effect);
         }).pipe(
           Effect.mapError((cause) =>
             isCheckpointRollbackExecutionError(cause)

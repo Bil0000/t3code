@@ -36,7 +36,7 @@ import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import { resolveWorkspacePath, withWorkspaceLease } from "./workspace/workspaceLease.ts";
 
 const decodeCleanupThread = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2AppThreadJson),
@@ -135,25 +135,37 @@ export const make = Effect.gen(function* () {
       !path.isAbsolute(relative)
     );
   };
-  const hasTerminal = (worktreePath: string) =>
-    [...liveTerminals.values()]
-      .flatMap((entries) => [...entries.values()])
-      .some((terminal) => {
-        if (terminal.status !== "starting" && terminal.status !== "running") return false;
-        const cwd = path.resolve(terminal.cwd);
-        return (
-          (terminal.worktreePath !== null &&
-            path.resolve(terminal.worktreePath) === worktreePath) ||
-          cwd === worktreePath ||
-          inside(worktreePath, cwd)
-        );
-      });
+  const hasTerminal = Effect.fn("StorageCleanup.hasTerminal")(function* (worktreePath: string) {
+    for (const terminal of [...liveTerminals.values()].flatMap((entries) => [
+      ...entries.values(),
+    ])) {
+      if (terminal.status !== "starting" && terminal.status !== "running") continue;
+      const cwd = yield* resolveWorkspacePath(terminal.cwd);
+      if (
+        (terminal.worktreePath !== null &&
+          (yield* resolveWorkspacePath(terminal.worktreePath)) === worktreePath) ||
+        cwd === worktreePath ||
+        inside(worktreePath, cwd)
+      )
+        return true;
+    }
+    return false;
+  });
 
   const readThreads = Effect.fn("StorageCleanup.readThreads")(function* () {
     const active = yield* projections.getShellSnapshot();
     const archived = yield* projections.getShellSnapshot({ location: "archive" });
     const projects = yield* projectStore.listShells();
-    return { projects, threads: [...active.threads, ...archived.archivedThreads] };
+    const threads = yield* Effect.forEach(
+      [...active.threads, ...archived.archivedThreads],
+      (thread) =>
+        thread.worktreePath === null
+          ? Effect.succeed(thread)
+          : resolveWorkspacePath(thread.worktreePath).pipe(
+              Effect.map((worktreePath) => ({ ...thread, worktreePath })),
+            ),
+    );
+    return { projects, threads };
   });
 
   // Local threads under another project need not have a worktreePath of their own.
@@ -164,9 +176,7 @@ export const make = Effect.gen(function* () {
     for (const project of projects) {
       const projectPath = path.resolve(project.workspaceRoot);
       if (projectPath === worktreePath || inside(worktreePath, projectPath)) return true;
-      const realPath = yield* fs
-        .realPath(projectPath)
-        .pipe(Effect.orElseSucceed(() => projectPath));
+      const realPath = yield* resolveWorkspacePath(projectPath);
       if (realPath === worktreePath || inside(worktreePath, realPath)) return true;
     }
     return false;
@@ -188,9 +198,15 @@ export const make = Effect.gen(function* () {
         `
       : [];
     const deletedThreads = (yield* Effect.forEach(deletedRows, (row) =>
-      decodeCleanupThread(row.payload_json).pipe(
-        Effect.map((thread) => ({ ...thread, workspaceRoot: row.workspaceRoot })),
-      ),
+      Effect.gen(function* () {
+        const thread = yield* decodeCleanupThread(row.payload_json);
+        return {
+          ...thread,
+          worktreePath:
+            thread.worktreePath === null ? null : yield* resolveWorkspacePath(thread.worktreePath),
+          workspaceRoot: row.workspaceRoot,
+        };
+      }),
     )).filter(
       (thread) =>
         thread.worktreePath !== null &&
@@ -233,7 +249,7 @@ export const make = Effect.gen(function* () {
       if (
         project === undefined ||
         (!deleted && !storageCleanupThreadIdle(thread, now)) ||
-        hasTerminal(worktreePath) ||
+        (yield* hasTerminal(worktreePath)) ||
         // Only the merge and unchanged rules need Git to decide eligibility.
         (!deleted && !old && !settled && !settings.worktreeUnchanged && !settings.worktreeOnMerge)
       )
@@ -309,7 +325,7 @@ export const make = Effect.gen(function* () {
           (entry) =>
             entry.worktreePath !== null && path.resolve(entry.worktreePath) === worktreePath,
         );
-        if (hasTerminal(worktreePath)) return;
+        if (yield* hasTerminal(worktreePath)) return;
         if (deleted) {
           if (
             latest.length > 0 ||
@@ -339,16 +355,12 @@ export const make = Effect.gen(function* () {
           SELECT payload_json FROM orchestration_v2_projection_provider_sessions
           WHERE status != 'stopped'
         `;
-        const sessions = yield* Effect.forEach(sessionRows, (row) =>
-          decodeCleanupSession(row.payload_json),
+        const sessionPaths = yield* Effect.forEach(sessionRows, (row) =>
+          decodeCleanupSession(row.payload_json).pipe(
+            Effect.flatMap((session) => resolveWorkspacePath(session.cwd)),
+          ),
         );
-        if (
-          sessions.some((session) => {
-            const cwd = path.resolve(session.cwd);
-            return cwd === worktreePath || inside(worktreePath, cwd);
-          })
-        )
-          return;
+        if (sessionPaths.some((cwd) => cwd === worktreePath || inside(worktreePath, cwd))) return;
         const finalStatus = yield* git.statusDetailsLocal(worktreePath);
         if (
           !finalStatus.isRepo ||

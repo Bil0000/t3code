@@ -152,6 +152,18 @@ describe("settled worktree retention", () => {
     "woke",
     "updated",
     "shared",
+    "shared-alias",
+    "shared-alias-late",
+    "session-alias",
+    "session-alias-descendant",
+    "terminal-alias",
+    "terminal-alias-descendant",
+    "terminal-worktree-alias",
+    "project-alias",
+    "project-alias-descendant",
+    "archived-alias",
+    "deleted-alias",
+    "deleted-shared-alias",
     "settled-event",
     "session-stop",
     "burst",
@@ -167,11 +179,17 @@ describe("settled worktree retention", () => {
       yield* fs.makeDirectory(worktreeDirectory, { recursive: true });
       const worktreePath = yield* fs.realPath(worktreeDirectory);
       yield* fs.writeFileString(path.join(worktreePath, ".git"), "gitdir: /test/admin");
+      const worktreeAlias = path.join(config.baseDir, "feature-alias");
+      yield* fs.symlink(worktreePath, worktreeAlias);
       let thread: OrchestrationV2AppThread = {
         ...shell(),
         lastVisitedAt: null,
         branch: "feature",
-        worktreePath,
+        worktreePath:
+          protection === "archived-alias" || protection.startsWith("deleted-")
+            ? worktreeAlias
+            : worktreePath,
+        deletedAt: protection.startsWith("deleted-") ? at(0) : null,
         settledOverride:
           protection === "legacy" ? null : protection === "pinned-active" ? "active" : "settled",
         settledAt:
@@ -181,7 +199,7 @@ describe("settled worktree retention", () => {
               ? at(-20 * DAY_MS)
               : at(0),
         updatedAt: protection === "auto-recent" ? at(0) : at(-10 * DAY_MS),
-        archivedAt: protection === "archived" ? at(0) : null,
+        archivedAt: protection === "archived" || protection === "archived-alias" ? at(0) : null,
       };
       const event = (
         type: "thread.created" | "thread.settled" | "thread.unsettled" | "thread.metadata-updated",
@@ -193,12 +211,30 @@ describe("settled worktree retention", () => {
         payload: thread,
       });
       yield* store.apply(event("thread.created"));
-      if (protection === "shared") {
+      if (protection.startsWith("deleted-")) {
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, default_model_selection_json,
+            scripts_json, created_at, updated_at, deleted_at
+          ) VALUES (
+            ${thread.projectId}, 'Project', ${config.baseDir}, NULL, '[]',
+            ${DateTime.formatIso(at(0))}, ${DateTime.formatIso(at(0))}, NULL
+          )
+        `;
+      }
+      if (["shared", "shared-alias", "deleted-shared-alias"].includes(protection)) {
         yield* store.apply({
           ...event("thread.created"),
           id: EventId.make("shared"),
           threadId: ThreadId.make("shared"),
-          payload: { ...thread, id: ThreadId.make("shared"), archivedAt: at(0) },
+          payload: {
+            ...thread,
+            id: ThreadId.make("shared"),
+            worktreePath: protection === "shared-alias" ? worktreeAlias : worktreePath,
+            deletedAt: null,
+            archivedAt: at(0),
+            settledOverride: "active",
+          },
         });
       }
       const session: OrchestrationV2ProviderSession = {
@@ -206,14 +242,22 @@ describe("settled worktree retention", () => {
         driver: ProviderDriverKind.make("codex"),
         providerInstanceId: thread.providerInstanceId,
         status: "ready",
-        cwd: worktreePath,
+        cwd: protection.startsWith("session-alias")
+          ? protection === "session-alias-descendant"
+            ? path.join(worktreeAlias, "missing-child")
+            : worktreeAlias
+          : worktreePath,
         model: null,
         capabilities: CodexProviderCapabilitiesV2,
         createdAt: at(0),
         updatedAt: at(0),
         lastError: null,
       };
-      if (protection === "session" || protection === "session-stop") {
+      if (
+        protection === "session" ||
+        protection === "session-stop" ||
+        protection.startsWith("session-alias")
+      ) {
         yield* store.apply({
           id: EventId.make("session"),
           type: "provider-session.attached",
@@ -235,6 +279,7 @@ describe("settled worktree retention", () => {
         Effect.provide(
           ServerSettings.layerTest({
             storageCleanup: {
+              worktreeOnDelete: protection.startsWith("deleted-"),
               worktreeSettledAfterDays:
                 protection === "project-custom"
                   ? null
@@ -291,7 +336,12 @@ describe("settled worktree retention", () => {
                   {
                     id: thread.projectId,
                     title: "Project",
-                    workspaceRoot: config.baseDir,
+                    workspaceRoot:
+                      protection === "project-alias"
+                        ? worktreeAlias
+                        : protection === "project-alias-descendant"
+                          ? path.join(worktreeAlias, "missing-child")
+                          : config.baseDir,
                     defaultModelSelection: null,
                     scripts: [],
                     createdAt: DateTime.formatIso(at(0)),
@@ -312,7 +362,32 @@ describe("settled worktree retention", () => {
             Layer.mock(GitManager.GitManager)({ invalidateStatus: () => Effect.void }),
             Layer.mock(TerminalManager.TerminalManager)({
               subscribeMetadata: (listener) =>
-                listener({ type: "snapshot", terminals: [] }).pipe(Effect.as(() => {})),
+                listener({
+                  type: "snapshot",
+                  terminals: protection.startsWith("terminal-")
+                    ? [
+                        {
+                          threadId: thread.id,
+                          terminalId: "term-1",
+                          cwd:
+                            protection === "terminal-worktree-alias"
+                              ? config.baseDir
+                              : protection === "terminal-alias-descendant"
+                                ? path.join(worktreeAlias, "missing-child")
+                                : worktreeAlias,
+                          worktreePath:
+                            protection === "terminal-worktree-alias" ? worktreeAlias : null,
+                          status: "running",
+                          pid: null,
+                          exitCode: null,
+                          exitSignal: null,
+                          hasRunningSubprocess: false,
+                          label: "Shell",
+                          updatedAt: DateTime.formatIso(at(0)),
+                        },
+                      ]
+                    : [],
+                }).pipe(Effect.as(() => {})),
             }),
             Layer.mock(GitVcsDriver.GitVcsDriver)({
               statusDetailsLocal: () =>
@@ -347,6 +422,19 @@ describe("settled worktree retention", () => {
                       return Deferred.succeed(gitStarted, undefined).pipe(
                         Effect.andThen(Deferred.await(releaseGit)),
                       );
+                    if (headReads === 1 && protection === "shared-alias-late")
+                      return store
+                        .apply({
+                          ...event("thread.created"),
+                          id: EventId.make("shared-late"),
+                          threadId: ThreadId.make("shared"),
+                          payload: {
+                            ...thread,
+                            id: ThreadId.make("shared"),
+                            worktreePath: worktreeAlias,
+                          },
+                        })
+                        .pipe(Effect.orDie);
                     if (headReads !== 1 || (protection !== "woke" && protection !== "updated"))
                       return Effect.void;
                     thread =
@@ -412,6 +500,8 @@ describe("settled worktree retention", () => {
         "legacy",
         "project-custom",
         "archived",
+        "archived-alias",
+        "deleted-alias",
         "settled-event",
         "session-stop",
         "burst",
@@ -420,7 +510,12 @@ describe("settled worktree retention", () => {
       assert.strictEqual(removals, removed ? 1 : 0);
       if (["wait", "auto-recent", "active", "pinned-active"].includes(protection))
         assert.strictEqual(headReads, 0);
-      assert.strictEqual(thread.worktreePath, worktreePath);
+      assert.strictEqual(
+        thread.worktreePath,
+        protection === "archived-alias" || protection.startsWith("deleted-")
+          ? worktreeAlias
+          : worktreePath,
+      );
       assert.strictEqual(thread.branch, "feature");
     }).pipe(
       Effect.provide(

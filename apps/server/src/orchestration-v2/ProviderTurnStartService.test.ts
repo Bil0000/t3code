@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
@@ -25,7 +26,10 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -100,7 +104,29 @@ it("does not commit running state when inherited background routing cannot be re
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
         Path.layer,
-        Layer.succeed(FileSystem.FileSystem, { exists: () => Effect.succeed(false) } as never),
+        FileSystem.layerNoop({
+          exists: () => Effect.succeed(false),
+          realPath: (cwd) =>
+            cwd === projection.thread.worktreePath
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "realPath",
+                    pathOrDescriptor: cwd,
+                  }),
+                )
+              : Effect.succeed(cwd),
+          readLink: (cwd) =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "NotFound",
+                module: "FileSystem",
+                method: "readLink",
+                pathOrDescriptor: cwd,
+              }),
+            ),
+        }),
         Layer.mock(GitWorkflow.GitWorkflowService)({ pruneWorktrees, createWorktree }),
         Layer.mock(ProjectService.ProjectService)({
           getById: () =>
@@ -161,6 +187,7 @@ it("does not commit running state when inherited background routing cannot be re
 function makeLocalCommandHarness(input: {
   readonly text: string;
   readonly worktreePath?: string;
+  readonly fileSystem?: FileSystem.FileSystem;
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
@@ -490,6 +517,10 @@ function makeLocalCommandHarness(input: {
           return { committed, storedEvents: [] };
         }),
   );
+  const resolveRuntimePolicy = vi.fn(
+    ({ thread }: Parameters<RuntimePolicy.RuntimePolicyV2Shape["resolve"]>[0]) =>
+      Effect.succeed({ cwd: thread.worktreePath ?? "/tmp/native-account-command" } as never),
+  );
   const exists = vi.fn(() => Effect.succeed(true));
   const createWorktree = vi.fn(() => Effect.succeed({} as never));
   const layer = ProviderTurnStart.layer.pipe(
@@ -501,7 +532,9 @@ function makeLocalCommandHarness(input: {
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
         Path.layer,
-        FileSystem.layerNoop({ exists }),
+        input.fileSystem === undefined
+          ? FileSystem.layerNoop({ exists, realPath: (cwd) => Effect.succeed(cwd) })
+          : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
         Layer.mock(GitWorkflow.GitWorkflowService)({
           pruneWorktrees: () => Effect.void,
           createWorktree,
@@ -541,12 +574,13 @@ function makeLocalCommandHarness(input: {
         Layer.mock(ProviderAuthService.ProviderAuthService)({ tryHandlePromptCommand }),
         Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
-          resolve: () => Effect.succeed({} as never),
+          resolve: resolveRuntimePolicy,
         }),
       ),
     ),
   );
   return {
+    resolveRuntimePolicy,
     exists,
     createWorktree,
     open,
@@ -571,88 +605,111 @@ function makeLocalCommandHarness(input: {
   };
 }
 
-effectIt.effect("waits for cleanup and repairs its checkout before opening a provider", () =>
+effectIt.effect.each(
+  [
+    { order: "cleanup-first", alias: "none" },
+    { order: "startup-first", alias: "none" },
+    { order: "cleanup-first", alias: "direct" },
+    { order: "cleanup-first", alias: "parent" },
+    { order: "cleanup-first", alias: "missing-parent" },
+    { order: "cleanup-first", alias: "dangling" },
+    { order: "startup-first", alias: "direct" },
+    { order: "startup-first", alias: "parent" },
+    { order: "startup-first", alias: "missing-parent" },
+    { order: "startup-first", alias: "dangling" },
+  ].filter(({ alias }) => alias === "none" || symlinksSupported),
+)("coordinates provider startup with %s", ({ order, alias }) =>
   Effect.gen(function* () {
-    const worktreePath = "/tmp/provider-start-cleanup-first";
-    const releaseCleanup = yield* Deferred.make<void>();
-    let checkoutExists = true;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-start-alias-" });
+    const physicalParent = path.join(workspaceRoot, "physical");
+    yield* fileSystem.makeDirectory(physicalParent);
+    const worktreePath = path.join(physicalParent, "worktree");
+    yield* fileSystem.makeDirectory(worktreePath);
+    const aliasPath = path.join(workspaceRoot, "alias");
+    const parentAlias = alias === "parent" || alias === "missing-parent";
+    if (alias !== "none") {
+      yield* fileSystem.symlink(parentAlias ? physicalParent : worktreePath, aliasPath);
+    }
+    const threadPath =
+      alias === "none" ? worktreePath : parentAlias ? path.join(aliasPath, "worktree") : aliasPath;
+    if (alias === "missing-parent" || alias === "dangling") {
+      yield* fileSystem.remove(worktreePath, { recursive: true });
+    }
+    const release = yield* Deferred.make<void>();
+    const openEntered = yield* Deferred.make<void>();
     const harness = makeLocalCommandHarness({
       text: "Continue",
-      worktreePath,
+      worktreePath: threadPath,
+      fileSystem,
       failReadsAfterRunning: true,
     });
-    harness.exists.mockImplementation(() => Effect.sync(() => checkoutExists));
     harness.createWorktree.mockImplementation(() =>
-      Effect.sync(() => {
-        checkoutExists = true;
-        return {} as never;
-      }),
+      fileSystem.makeDirectory(worktreePath).pipe(Effect.as({} as never), Effect.orDie),
     );
-    const open = harness.open.getMockImplementation()!;
-    harness.open.mockImplementation(() => {
-      expect(checkoutExists).toBe(true);
-      return open();
-    });
-    const cleanup = yield* withWorkspaceLease(
-      worktreePath,
-      Deferred.await(releaseCleanup).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            checkoutExists = false;
-          }),
-        ),
-      ),
-    ).pipe(Effect.forkChild({ startImmediately: true }));
-    const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
-    expect(harness.open).not.toHaveBeenCalled();
-    expect(harness.exists).not.toHaveBeenCalled();
-    yield* Deferred.succeed(releaseCleanup, undefined);
-    yield* Fiber.join(cleanup);
-    yield* Fiber.join(startup);
-    expect(harness.createWorktree).toHaveBeenCalledWith({
-      cwd: "/tmp/native-account-project",
-      refName: "feature/restore",
-      path: worktreePath,
-    });
-    expect(harness.open).toHaveBeenCalledOnce();
-    expect(harness.startRootRun).toHaveBeenCalledOnce();
-  }),
-);
-
-effectIt.effect("keeps cleanup out until its provider session and running state are saved", () =>
-  Effect.gen(function* () {
-    const worktreePath = "/tmp/provider-start-before-cleanup";
-    const startupEntered = yield* Deferred.make<void>();
-    const releaseStartup = yield* Deferred.make<void>();
-    const harness = makeLocalCommandHarness({
-      text: "Continue",
-      worktreePath,
-      failReadsAfterRunning: true,
-    });
     const open = harness.open.getMockImplementation()!;
     harness.open.mockImplementation(() =>
-      Deferred.succeed(startupEntered, undefined).pipe(
-        Effect.andThen(Deferred.await(releaseStartup)),
-        Effect.andThen(open()),
-      ),
-    );
-    const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
-    yield* Deferred.await(startupEntered);
-    let cleanupEntered = false;
-    const cleanup = yield* withWorkspaceLease(
-      worktreePath,
-      Effect.sync(() => {
-        expect(harness.projection().providerSessions).toHaveLength(1);
-        expect(harness.projection().runs.at(-1)?.status).toBe("running");
-        cleanupEntered = true;
+      Effect.gen(function* () {
+        expect(yield* fileSystem.exists(worktreePath).pipe(Effect.orDie)).toBe(true);
+        yield* Deferred.succeed(openEntered, undefined);
+        if (order === "startup-first") yield* Deferred.await(release);
+        return yield* open();
       }),
-    ).pipe(Effect.forkChild({ startImmediately: true }));
-    expect(cleanupEntered).toBe(false);
-    yield* Deferred.succeed(releaseStartup, undefined);
+    );
+    let cleanupEntered = false;
+    const cleanupEffect = withWorkspaceLease(
+      worktreePath,
+      Effect.gen(function* () {
+        cleanupEntered = true;
+        if (order === "cleanup-first") yield* Deferred.await(release);
+        else {
+          expect(harness.projection().providerSessions).toHaveLength(1);
+          expect(harness.projection().runs.at(-1)?.status).toBe("running");
+        }
+        yield* fileSystem.remove(worktreePath, { recursive: true, force: true });
+      }),
+    );
+    const cleanup =
+      order === "cleanup-first"
+        ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
+        : undefined;
+    const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
+    if (order === "cleanup-first") expect(harness.open).not.toHaveBeenCalled();
+    if (order === "startup-first") yield* Deferred.await(openEntered);
+    const laterCleanup =
+      order === "startup-first"
+        ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
+        : undefined;
+    if (order === "startup-first") expect(cleanupEntered).toBe(false);
+    yield* Deferred.succeed(release, undefined);
+    if (cleanup !== undefined) yield* Fiber.join(cleanup);
     yield* Fiber.join(startup);
-    yield* Fiber.join(cleanup);
-    expect(cleanupEntered).toBe(true);
-  }),
+    if (laterCleanup !== undefined) yield* Fiber.join(laterCleanup);
+    if (order === "cleanup-first" || alias === "missing-parent" || alias === "dangling") {
+      expect(harness.createWorktree).toHaveBeenCalledWith({
+        cwd: "/tmp/native-account-project",
+        refName: "feature/restore",
+        path: worktreePath,
+      });
+    }
+    expect(harness.resolveRuntimePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread: expect.objectContaining({ worktreePath }),
+      }),
+    );
+    expect(harness.open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePolicy: expect.objectContaining({ cwd: worktreePath }),
+      }),
+    );
+    expect(harness.startRootRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appThread: expect.objectContaining({ worktreePath }),
+        runtimePolicy: expect.objectContaining({ cwd: worktreePath }),
+      }),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 effectIt.effect("starts another provider in the same checkout while a turn is pending", () =>

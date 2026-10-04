@@ -340,18 +340,38 @@ it.effect("rejects an unavailable rollback target before opening a session", () 
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect.each([
-  { order: "normal", restoreFiles: true },
-  { order: "cleanup-first", restoreFiles: true },
-  { order: "cleanup-first", restoreFiles: false },
-  { order: "rollback-first", restoreFiles: true },
-])("locks rollback with %s", ({ order, restoreFiles }) =>
+it.effect.each(
+  [
+    { order: "normal", restoreFiles: true, alias: "none" },
+    { order: "cleanup-first", restoreFiles: true, alias: "none" },
+    { order: "cleanup-first", restoreFiles: false, alias: "none" },
+    { order: "rollback-first", restoreFiles: true, alias: "none" },
+    { order: "cleanup-first", restoreFiles: true, alias: "direct" },
+    { order: "cleanup-first", restoreFiles: false, alias: "parent" },
+    { order: "cleanup-first", restoreFiles: true, alias: "missing-parent" },
+    { order: "cleanup-first", restoreFiles: false, alias: "dangling" },
+    { order: "rollback-first", restoreFiles: true, alias: "direct" },
+    { order: "rollback-first", restoreFiles: false, alias: "parent" },
+    { order: "rollback-first", restoreFiles: true, alias: "missing-parent" },
+    { order: "rollback-first", restoreFiles: false, alias: "dangling" },
+  ].filter(({ alias }) => alias === "none" || symlinksSupported),
+)("locks rollback with %s", ({ order, restoreFiles, alias }) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-rollback-" });
     const worktreePath = path.join(workspaceRoot, "worktree");
     yield* fileSystem.makeDirectory(worktreePath);
+    const aliasPath = path.join(workspaceRoot, "alias");
+    const parentAlias = alias === "parent" || alias === "missing-parent";
+    if (alias !== "none") {
+      yield* fileSystem.symlink(parentAlias ? workspaceRoot : worktreePath, aliasPath);
+    }
+    const threadPath =
+      alias === "none" ? worktreePath : parentAlias ? path.join(aliasPath, "worktree") : aliasPath;
+    if (alias === "missing-parent" || alias === "dangling") {
+      yield* fileSystem.remove(worktreePath, { recursive: true });
+    }
     const threadId = ThreadId.make("rollback-worktree");
     const projectId = ProjectId.make("rollback-worktree-project");
     const providerThreadId = ProviderThreadId.make("rollback-worktree-provider-thread");
@@ -369,7 +389,7 @@ it.effect.each([
       thread: {
         id: threadId,
         projectId,
-        worktreePath,
+        worktreePath: threadPath,
         branch,
         activeProviderThreadId: providerThreadId,
         modelSelection: { instanceId: providerInstanceId, model: "test-model" },
@@ -437,8 +457,9 @@ it.effect.each([
               }),
           }),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-            open: () =>
+            open: (input) =>
               Effect.gen(function* () {
+                assert.equal(input.runtimePolicy.cwd, worktreePath);
                 if (!(yield* fileSystem.exists(worktreePath).pipe(Effect.orDie))) {
                   return yield* new ProviderWorkspaceMissingError({ threadId, cwd: worktreePath });
                 }
@@ -448,7 +469,12 @@ it.effect.each([
                 return {} as never;
               }),
           }),
-          Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed({} as never) }),
+          Layer.mock(RuntimePolicy.RuntimePolicyV2)({
+            resolve: ({ thread }) => {
+              assert.equal(thread.worktreePath, worktreePath);
+              return Effect.succeed({ cwd: thread.worktreePath } as never);
+            },
+          }),
         ),
       ),
     );
@@ -459,7 +485,7 @@ it.effect.each([
         Effect.gen(function* () {
           cleanupEntered = true;
           if (order === "cleanup-first") yield* Deferred.await(release);
-          yield* fileSystem.remove(worktreePath, { recursive: true });
+          yield* fileSystem.remove(worktreePath, { recursive: true, force: true });
           calls.push("cleanup");
         }),
       );
@@ -489,7 +515,11 @@ it.effect.each([
         order === "cleanup-first"
           ? ["cleanup", "prune", "create", ...rollbackCalls]
           : order === "rollback-first"
-            ? [...rollbackCalls, "cleanup"]
+            ? [
+                ...(alias === "missing-parent" || alias === "dangling" ? ["prune", "create"] : []),
+                ...rollbackCalls,
+                "cleanup",
+              ]
             : rollbackCalls,
       );
     }).pipe(Effect.provide(testLayer));
