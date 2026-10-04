@@ -227,7 +227,7 @@ export function LinearIntegrationSettings() {
             <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 px-3 py-3 text-sm font-medium sm:px-4">
               <span className="flex min-w-0 items-center gap-2 text-left group-data-panel-open:flex-col group-data-panel-open:items-start group-data-panel-open:gap-1">
                 <span className="shrink-0">Project connections</span>
-                <span className="truncate text-[13px] font-normal text-muted-foreground/80 group-data-panel-open:whitespace-normal">
+                <span className="truncate text-xs font-normal text-muted-foreground/80 group-data-panel-open:whitespace-normal">
                   Choose the Linear account and team for each T3 project.
                 </span>
               </span>

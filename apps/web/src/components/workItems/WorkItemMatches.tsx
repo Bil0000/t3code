@@ -56,7 +56,7 @@ export function WorkItemMatchRows({
   }
   return (
     <div className="space-y-1">
-      <p className="px-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <p className="px-2 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
         Suggestions
       </p>
       {matches.map((match) => (
@@ -71,9 +71,9 @@ export function WorkItemMatchRows({
           >
             <span className="min-w-0 flex-1">
               <span className="block truncate text-xs font-medium">{match.title}</span>
-              <span className="block text-[11px] text-muted-foreground">{match.reason}</span>
+              <span className="block text-2xs text-muted-foreground">{match.reason}</span>
             </span>
-            <Badge variant="outline" className="shrink-0 text-[9px]">
+            <Badge variant="outline" size="sm">
               {match.confidence === "high" ? "High confidence" : "Medium confidence"}
             </Badge>
             <ArrowUpRightIcon
@@ -83,9 +83,8 @@ export function WorkItemMatchRows({
           </button>
           {onLink ? (
             <Button
-              size="xs"
-              variant="ghost"
-              className="h-6 shrink-0 px-2 text-[10px] text-muted-foreground"
+              size="micro"
+              variant="ghost-muted"
               disabled={linking}
               onClick={() => onLink(match)}
             >

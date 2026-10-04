@@ -913,7 +913,7 @@ export function PullRequestSummaryTab({
                 <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
                 <span className="min-w-0 flex-1 truncate">{link.title}</span>
                 {link.closesIssue ? (
-                  <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
+                  <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-3xs text-muted-foreground">
                     closed by this
                   </span>
                 ) : null}
