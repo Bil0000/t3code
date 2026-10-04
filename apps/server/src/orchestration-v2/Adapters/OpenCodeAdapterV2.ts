@@ -3222,6 +3222,8 @@ export function makeOpenCodeAdapterV2(
                 orchestrationSystemPrompt,
                 buildRuntimeInstructions({
                   harness: "OpenCode",
+                  issueToolsAvailable:
+                    hasT3Mcp && (mcpSession?.capabilities?.has("issues") ?? false),
                   model: turnInput.modelSelection.model,
                 }),
               ]
