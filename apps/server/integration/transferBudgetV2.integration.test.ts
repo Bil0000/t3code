@@ -10,6 +10,7 @@ import {
   AuthSessionId,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  EnvironmentId,
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
   ORCHESTRATION_V2_WS_METHODS,
@@ -35,6 +36,7 @@ import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcServer, RpcSerialization } from "effect/unstable/rpc";
+import * as ServerEnvironment from "../src/environment/ServerEnvironment.ts";
 import { SqlitePersistenceMemory } from "../src/persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStoreLive } from "../src/persistence/Layers/OrchestrationEventStore.ts";
 import * as EventStore from "../src/orchestration-v2/EventStore.ts";
@@ -109,6 +111,11 @@ const enrichment = Layer.unwrap(
 );
 // The transfer history has no project events, so shell streams never read a project shell.
 const services = management.pipe(
+  Layer.provideMerge(
+    Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("transfer-test")),
+    }),
+  ),
   Layer.provideMerge(ProjectStore.layer),
   Layer.provideMerge(Layer.mock(ProjectService.ProjectService)({})),
   Layer.provideMerge(enrichment),

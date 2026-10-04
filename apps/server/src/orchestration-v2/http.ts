@@ -6,6 +6,7 @@ import {
   TurnItemId,
   type OrchestrationProjectShell,
 } from "@t3tools/contracts";
+import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -18,6 +19,7 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as OrchestrationEventStore from "../persistence/Services/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import {
@@ -70,6 +72,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
     const sql = yield* SqlClient.SqlClient;
+    const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
@@ -217,7 +220,17 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 }),
               ),
             );
-          let sizeBytes = 0;
+          let sizeBytes = Buffer.byteLength(
+            threadTranscriptHeader(yield* environment.getEnvironmentId, {
+              threadId: projection.thread.id,
+              title: projection.thread.title,
+              updatedAt: projection.updatedAt,
+            }),
+            "utf8",
+          );
+          if (sizeBytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+            return yield* failEnvironmentInvalidRequest("thread_transcript_too_large");
+          }
           for (const row of projection.visibleTurnItems) {
             sizeBytes += projectedRowEncodedBytes(row) + 1;
             if (sizeBytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {

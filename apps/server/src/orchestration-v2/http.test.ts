@@ -4,15 +4,18 @@ import {
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
+  EnvironmentId,
   EventId,
   ORCHESTRATION_PROTOCOL_HEADER,
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
   OrchestrationV2AppThread,
   OrchestrationV2TurnItem,
   OrchestrationV2ThreadTranscript,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   ThreadId,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -24,6 +27,7 @@ import * as Etag from "effect/unstable/http/Etag";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 
 import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
@@ -43,11 +47,12 @@ const decodeTranscript = Schema.decodeUnknownEffect(
 );
 
 const now = DateTime.makeUnsafe("2026-09-29T00:00:00.000Z");
+const environmentId = EnvironmentId.make("source-بيئة");
 const output = "Full tool output. ".repeat(4_000);
 const thread = Schema.decodeUnknownSync(OrchestrationV2AppThread)({
   id: "source-thread",
   projectId: "source-project",
-  title: "Source conversation",
+  title: "Source 界\nconversation",
   providerInstanceId: "codex",
   modelSelection: { instanceId: "codex", model: "gpt-5.4" },
   runtimeMode: "full-access",
@@ -115,17 +120,15 @@ it.effect("exports full history with size, scope, and missing-thread checks", ()
           occurredAt: now,
           payload: thread,
         },
-        ...items.map((item) => ({
-          id: EventId.make(`create-${item.id}`),
-          type: "turn-item.updated" as const,
-          threadId: thread.id,
-          occurredAt: now,
-          payload: item,
-        })),
       ],
     });
     const routes = HttpApiBuilder.layer(TranscriptTestApi).pipe(
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(
+        Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+          getEnvironmentId: Effect.succeed(environmentId),
+        }),
+      ),
       Layer.provide(
         Layer.succeed(EnvironmentAuthenticatedAuth, (effect) =>
           Effect.suspend(() =>
@@ -157,6 +160,21 @@ it.effect("exports full history with size, scope, and missing-thread checks", ()
         ),
       );
 
+    const emptyResponse = yield* read(thread.id);
+    expect(emptyResponse.status).toBe(200);
+    expect(
+      (yield* decodeTranscript(yield* Effect.promise(() => emptyResponse.json()))).items,
+    ).toEqual([]);
+    yield* eventSink.write({
+      events: items.map((item) => ({
+        id: EventId.make(`create-${item.id}`),
+        type: "turn-item.updated" as const,
+        threadId: thread.id,
+        occurredAt: now,
+        payload: item,
+      })),
+    });
+
     const response = yield* read(thread.id);
     expect(response.status).toBe(200);
     const transcript = yield* decodeTranscript(yield* Effect.promise(() => response.json()));
@@ -165,22 +183,44 @@ it.effect("exports full history with size, scope, and missing-thread checks", ()
     expect(transcript.items[0]?.visibility).toBe("local");
     expect(transcript.items[199]?.position).toBe(199);
 
-    const largeOutput = "界".repeat(100_000);
-    yield* eventSink.write({
-      events: items.map((item) => ({
-        id: EventId.make(`enlarge-${item.id}`),
-        type: "turn-item.updated" as const,
-        threadId: thread.id,
-        occurredAt: now,
-        payload: { ...item, output: largeOutput },
-      })),
-    });
-    const oversized = yield* read(thread.id);
-    expect(oversized.status).toBe(400);
-    expect(yield* Effect.promise(() => oversized.json())).toMatchObject({
-      _tag: "EnvironmentRequestInvalidError",
-      reason: "thread_transcript_too_large",
-    });
+    const emptyOutputRows = transcript.items.map((row, position) =>
+      position === 0 ? { ...row, item: { ...row.item, output: "" } } : row,
+    );
+    const header = threadTranscriptHeader(environmentId, transcript);
+    const baseSize =
+      Buffer.byteLength(header, "utf8") +
+      emptyOutputRows.reduce(
+        (size, row) => size + Buffer.byteLength(`${JSON.stringify(row)}\n`, "utf8"),
+        0,
+      );
+    const boundaryOutput = "界" + "x".repeat(PROVIDER_SEND_TURN_MAX_FILE_BYTES - baseSize - 3);
+    for (const [suffix, expectedStatus] of [
+      ["", 200],
+      ["x", 400],
+    ] as const) {
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make(`boundary-${expectedStatus}`),
+            type: "turn-item.updated",
+            threadId: thread.id,
+            occurredAt: now,
+            payload: {
+              ...items.find((item) => item.type === "command_execution")!,
+              output: boundaryOutput + suffix,
+            },
+          },
+        ],
+      });
+      const response = yield* read(thread.id);
+      expect(response.status).toBe(expectedStatus);
+      if (expectedStatus === 400) {
+        expect(yield* Effect.promise(() => response.json())).toMatchObject({
+          _tag: "EnvironmentRequestInvalidError",
+          reason: "thread_transcript_too_large",
+        });
+      }
+    }
 
     expect((yield* read(ThreadId.make("missing"))).status).toBe(404);
     allowed = false;
