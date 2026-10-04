@@ -1,10 +1,9 @@
-import {
-  isTerminalSubagentStatus,
-  type AgentPanelWorkflowGroup,
-  type RuntimeSubagent,
+import type {
+  AgentPanelWorkflowGroup,
+  RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
-import { ChevronDownIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { AgentElapsed } from "./AgentElapsed";
@@ -41,22 +40,43 @@ function phaseElapsed(phase: AgentPanelWorkflowGroup["phases"][number]) {
   };
 }
 
+const mutedDot = <span className="size-1.5 rounded-full bg-muted-foreground/50" />;
+
 /**
- * Phase state as the panel already says it elsewhere: a coloured dot, and the
- * running phase tinted so the active step is findable without reading counts.
+ * Phase state as the panel already says it elsewhere: settled phases get a
+ * check or cross, the running phase a ringed dot, so the active step is
+ * findable without reading counts.
  */
 function phaseStatus(phase: AgentPanelWorkflowGroup["phases"][number]) {
-  if (phase.state === "running") return { dot: "bg-info", label: "running" } as const;
+  if (phase.state === "running") {
+    return {
+      glyph: <span className="size-1.5 rounded-full bg-info ring-3 ring-info/20" />,
+      label: "running",
+    } as const;
+  }
   if (phase.members.some((member) => member.status === "failed")) {
-    return { dot: "bg-destructive", label: "failed" } as const;
+    return { glyph: <XIcon className="size-3 text-destructive" />, label: "failed" } as const;
   }
   if (
     phase.members.some((member) => member.status === "cancelled" || member.status === "interrupted")
   ) {
-    return { dot: "bg-muted-foreground/50", label: "stopped" } as const;
+    return { glyph: mutedDot, label: "stopped" } as const;
   }
-  if (phase.state === "done") return { dot: "bg-success", label: "done" } as const;
-  return { dot: "bg-muted-foreground/50", label: "not started" } as const;
+  if (phase.state === "done") {
+    return { glyph: <CheckIcon className="size-3 text-success" />, label: "done" } as const;
+  }
+  return { glyph: mutedDot, label: "not started" } as const;
+}
+
+/**
+ * A tree branch drawn by the list item itself: a line down its side, stopping
+ * at the row's middle on the last item, and a tick into its 32px row.
+ */
+function branchClass(active: boolean) {
+  return cn(
+    "relative ps-3.5 before:absolute before:start-0 before:top-0 before:h-full before:w-px after:absolute after:start-0 after:top-4 after:h-px after:w-2.5 last:before:h-4",
+    active ? "before:bg-info/35 after:bg-info/35" : "before:bg-border after:bg-border",
+  );
 }
 
 /** Members run under the coordinator's provider, so they share its glyph. */
@@ -65,15 +85,18 @@ function WorkflowMemberRow({
   provider,
   driver,
   onOpen,
+  branchActive,
 }: {
   member: RuntimeSubagent;
   provider: ServerProvider | undefined;
   driver: ProviderDriverKind | undefined;
   onOpen: (threadId: string) => void;
+  branchActive: boolean;
 }) {
   const threadId = member.childThreadId;
+  const running = member.status === "running";
   return (
-    <li className="group">
+    <li className={cn("group", branchClass(branchActive))}>
       <Tooltip>
         <TooltipTrigger
           delay={200}
@@ -83,17 +106,22 @@ function WorkflowMemberRow({
               aria-label={`Open ${member.title} chat`}
               disabled={threadId === null}
               onClick={() => threadId !== null && onOpen(threadId)}
-              className="min-w-0"
+              className="h-8 min-w-0"
             />
           }
         >
           <ThreadRelationshipIcon driver={driver} provider={provider} status={member.status} />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium leading-4 text-foreground/85">
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate font-normal",
+              running ? "text-foreground/90" : "text-foreground/65",
+            )}
+          >
             {member.title}
           </span>
           <span className="sr-only">{member.status}</span>
           {member.startedAt ? (
-            <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
+            <span className="shrink-0 font-mono text-2xs font-normal tabular-nums text-muted-foreground">
               <AgentElapsed agent={member} />
             </span>
           ) : null}
@@ -129,7 +157,8 @@ export function ThreadLineageWorkflowRow({
   readonly onOpenThread: (threadId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [openPhases, setOpenPhases] = useState<ReadonlySet<number>>(() => new Set());
+  // The running phase opens itself; a toggle flips whatever the phase would show.
+  const [toggledPhases, setToggledPhases] = useState<ReadonlySet<number>>(() => new Set());
   const label = group.workflow.workflowName ?? group.workflow.title;
   const phases = group.phases.filter((phase) => phase.members.length > 0);
   return (
@@ -150,52 +179,58 @@ export function ThreadLineageWorkflowRow({
             aria-hidden
             className={cn(
               "size-3.5 text-muted-foreground transition-transform",
-              !expanded && "-rotate-90",
+              expanded && "rotate-180",
             )}
           />
         </ThreadDetailsControl>
       </div>
       {expanded ? (
-        <ul className="m-0 list-none p-0 pe-8 ps-5">
+        <ul className="m-0 list-none p-0 ps-4.5">
           {phases.map((phase) => {
-            const open = openPhases.has(phase.index);
+            const running = phase.state === "running";
+            const open = running !== toggledPhases.has(phase.index);
             const status = phaseStatus(phase);
             return (
-              <li key={phase.index} className="mt-1 first:mt-0">
-                {/* Chevron sits in the member glyph's box, so titles share a column. */}
+              <li key={phase.index} className={branchClass(false)}>
                 <button
                   type="button"
                   aria-expanded={open}
                   onClick={() =>
-                    setOpenPhases((phases) => {
+                    setToggledPhases((phases) => {
                       const next = new Set(phases);
                       if (!next.delete(phase.index)) next.add(phase.index);
                       return next;
                     })
                   }
-                  className={cn(
-                    "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-sm font-medium hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]",
-                    phase.state === "running"
-                      ? "bg-info/8 text-info"
-                      : "text-muted-foreground/65 hover:text-foreground/80",
-                  )}
+                  className="flex h-8 w-full cursor-pointer items-center gap-1.5 rounded-lg pe-2.5 text-left text-xs hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]"
                 >
-                  <ChevronDownIcon
-                    aria-hidden
-                    className={cn("size-3 shrink-0 transition-transform", !open && "-rotate-90")}
-                  />
-                  <span className="min-w-0 flex-1 truncate">{phase.title}</span>
-                  <span className="shrink-0 font-normal opacity-70">
-                    <AgentElapsed agent={phaseElapsed(phase)} />
+                  <span aria-hidden className="flex w-4 shrink-0 justify-center">
+                    {status.glyph}
                   </span>
-                  <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", status.dot)} />
-                  <span className="shrink-0 tabular-nums">
-                    {phase.settledCount}/{phase.members.length}
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate",
+                      running ? "font-semibold text-foreground/90" : "text-muted-foreground",
+                    )}
+                  >
+                    {phase.title}
+                  </span>
+                  <span
+                    className={cn(
+                      "w-18 shrink-0 text-end font-mono text-2xs tabular-nums",
+                      running ? "text-info" : "text-muted-foreground/70",
+                    )}
+                  >
+                    {phase.settledCount}/{phase.members.length}{" "}
+                    {phase.members.length === 1 ? "agent" : "agents"}
+                  </span>
+                  <span className="w-14 shrink-0 text-end font-mono text-2xs text-muted-foreground/70">
+                    <AgentElapsed agent={phaseElapsed(phase)} />
                   </span>
                   <span className="sr-only">{status.label}</span>
                 </button>
                 {open ? (
-                  <ul className="m-0 mt-0.5 list-none p-0">
+                  <ul className="m-0 list-none p-0 ps-2">
                     {phase.members.map((member) => (
                       <WorkflowMemberRow
                         key={member.id}
@@ -203,6 +238,7 @@ export function ThreadLineageWorkflowRow({
                         provider={provider}
                         driver={driver}
                         onOpen={onOpenThread}
+                        branchActive={running}
                       />
                     ))}
                   </ul>
@@ -217,6 +253,7 @@ export function ThreadLineageWorkflowRow({
               provider={provider}
               driver={driver}
               onOpen={onOpenThread}
+              branchActive={false}
             />
           ))}
           {phases.length === 0 && group.unphasedMembers.length === 0 ? (
@@ -228,13 +265,19 @@ export function ThreadLineageWorkflowRow({
   );
 }
 
-export function ThreadLineageWorkflowCount({ group }: { group: AgentPanelWorkflowGroup }) {
-  const members = [...group.phases.flatMap((phase) => phase.members), ...group.unphasedMembers];
-  const settled = members.filter((member) => isTerminalSubagentStatus(member.status)).length;
+/** Settled phases out of every phase the workflow has declared or started. */
+export function ThreadLineageWorkflowPhases({ group }: { group: AgentPanelWorkflowGroup }) {
+  const done = group.phases.filter((phase) => phase.state === "done").length;
   return (
-    <>
-      {settled}/{members.length}
-      <span className="sr-only"> agents settled</span>
-    </>
+    <span
+      className={cn(
+        "rounded-sm px-1",
+        group.workflow.status === "failed"
+          ? "bg-destructive/12 text-destructive-foreground"
+          : "bg-foreground/6",
+      )}
+    >
+      {done}/{group.phases.length} phases
+    </span>
   );
 }

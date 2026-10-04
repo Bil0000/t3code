@@ -106,10 +106,10 @@ it("opens the correct chat for every workflow phase and unphased member", async 
         typeof node.props["aria-expanded"] === "boolean" &&
         !node.props["aria-label"],
     );
-  // Phases start closed, so only the unphased member shows.
-  expect(memberButtons()).toHaveLength(1);
+  // Only the running phase starts open, beside the unphased member.
+  expect(memberButtons()).toHaveLength(3);
   expect(phaseButtons()).toHaveLength(3);
-  for (const phase of phaseButtons()) await act(async () => phase.props.onClick());
+  for (const phase of phaseButtons().slice(0, 2)) await act(async () => phase.props.onClick());
   expect(memberButtons()).toHaveLength(7);
   for (const agent of agents) {
     await act(async () =>
@@ -122,9 +122,10 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   }
   const rendered = JSON.stringify(renderer.toJSON());
   for (const phase of phases) expect(rendered).toContain(phase.title);
-  // Six of the seven members settled; only the last phase still has one running.
-  expect(rendered).toContain('"6","/","7"');
-  expect(rendered).toContain('"1","/","2"');
+  // Two of three phases settled; only the last phase still has one running.
+  expect(rendered).toContain('"2","/","3"," phases"');
+  expect(rendered).toContain('"1","/","2"," ","agents"');
+  expect(rendered).toContain("Running");
   // The phase holding the running member reports itself as the active one.
   expect(rendered).toContain("running");
   expect(rendered).toContain("done");

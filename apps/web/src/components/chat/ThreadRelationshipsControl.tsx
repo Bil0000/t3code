@@ -40,6 +40,7 @@ import {
 import { useMemo, useState, type ReactNode } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { cn } from "../../lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import {
   useProjects,
@@ -51,7 +52,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AgentElapsed } from "./AgentElapsed";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
-import { ThreadLineageWorkflowCount, ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
+import { ThreadLineageWorkflowPhases, ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -393,13 +394,15 @@ export function ThreadRelationshipsPanel(props: {
                 relationshipHint
               );
               const elapsed = agent?.startedAt ? <AgentElapsed agent={agent} /> : null;
+              // A workflow reports its own run, which outlives the coordinator thread's turns.
+              const rowStatus = workflowGroup?.workflow.status ?? status;
               const relationshipContent = (
                 <>
                   <ThreadRelationshipIcon
                     driver={isSubagent && !isParent ? providerDriver : undefined}
                     provider={provider}
                     fallbackIcon={RelationshipIcon}
-                    status={status}
+                    status={rowStatus}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
@@ -408,11 +411,15 @@ export function ThreadRelationshipsPanel(props: {
                   </span>
                   {agent ? (
                     workflowGroup || agent.startedAt ? (
-                      <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
+                      <span
+                        className={cn(
+                          "flex shrink-0 items-center gap-1.5 text-2xs font-normal tabular-nums text-muted-foreground",
+                          workflowGroup && "font-mono",
+                        )}
+                      >
                         {workflowGroup ? (
-                          <ThreadLineageWorkflowCount group={workflowGroup} />
+                          <ThreadLineageWorkflowPhases group={workflowGroup} />
                         ) : null}
-                        {workflowGroup && elapsed ? " · " : null}
                         {elapsed}
                       </span>
                     ) : null
@@ -420,8 +427,13 @@ export function ThreadRelationshipsPanel(props: {
                     <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                   )}
                   {!isMergeTarget ? (
-                    <span className="shrink-0 text-2xs text-muted-foreground">
-                      {threadRelationshipStatusLabel(status)}
+                    // A workflow's badge carries its state; the row has no room for the word.
+                    <span
+                      className={
+                        workflowGroup ? "sr-only" : "shrink-0 text-2xs text-muted-foreground"
+                      }
+                    >
+                      {threadRelationshipStatusLabel(rowStatus)}
                     </span>
                   ) : null}
                 </>
