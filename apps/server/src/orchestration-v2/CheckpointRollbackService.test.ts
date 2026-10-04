@@ -407,14 +407,14 @@ it.effect.each([
                   path: worktreePath,
                 });
                 calls.push("create");
-                yield* fileSystem.makeDirectory(worktreePath);
+                yield* fileSystem.makeDirectory(worktreePath).pipe(Effect.orDie);
                 return {} as never;
               }),
           }),
           Layer.mock(CheckpointService.CheckpointServiceV2)({
             restore: () =>
               Effect.gen(function* () {
-                assert.isTrue(yield* fileSystem.exists(worktreePath));
+                assert.isTrue(yield* fileSystem.exists(worktreePath).pipe(Effect.orDie));
                 calls.push("files");
               }),
           }),
@@ -439,7 +439,7 @@ it.effect.each([
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             open: () =>
               Effect.gen(function* () {
-                if (!(yield* fileSystem.exists(worktreePath))) {
+                if (!(yield* fileSystem.exists(worktreePath).pipe(Effect.orDie))) {
                   return yield* new ProviderWorkspaceMissingError({ threadId, cwd: worktreePath });
                 }
                 calls.push("session");
