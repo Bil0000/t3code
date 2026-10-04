@@ -22,11 +22,17 @@ agent-written summary.
 A handoff must leave room for existing provider context, your request and attachments, instructions,
 tools, and subsequent work. If the target conversation leaves too little room, T3 Code runs native
 compaction in that same conversation, then retries your request once. Your saved chat and original
-request stay intact. This also applies to an overfull model switch within one provider when the
-new model capacity is known. No encrypted state is copied between providers.
+request stay intact. Native compaction summarizes the provider conversation; the full saved chat
+remains available through the T3 Code thread-reading tool. This also applies to an overfull model
+switch within one provider when the new model capacity is known. If the provider instead reports
+that the request exceeds its context limit, T3 Code can compact and retry once, even when the model
+capacity is unknown. This recovery requires native compaction support and stops if the agent has
+already sent an answer, started a tool, or delegated work. No encrypted state is copied between
+providers.
 
-If compaction is unsupported, fails, is stopped, or still leaves too little room, T3 Code reports
-the failure without silently replacing the session or shortening your request. Reduce the request
+If compaction is stopped, the run stays stopped and the original request is not sent again. If
+compaction is unsupported, fails, or still leaves too little room, T3 Code reports the failure
+without silently replacing the session or shortening your request. Reduce the request
 or select a larger-context model before trying again.
 
 Server operators can set `T3CODE_CONTEXT_HANDOFF_TOKEN_CAP` to change the initial history allowance

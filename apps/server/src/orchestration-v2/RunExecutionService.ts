@@ -49,7 +49,11 @@ import type {
 import { ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import type { ProjectionStoreV2Error } from "./ProjectionStore.ts";
-import { makeProviderFailure, makeProviderFailureTurnItem } from "./ProviderFailure.ts";
+import {
+  isContextWindowFailure,
+  makeProviderFailure,
+  makeProviderFailureTurnItem,
+} from "./ProviderFailure.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 
 export interface ProviderEventRoutingState {
@@ -516,6 +520,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly shouldStartProviderTurn?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+  readonly canRetryContextFailure?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly message: ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
@@ -561,6 +566,7 @@ export const layer: Layer.Layer<
       readonly attempt: OrchestrationV2RunAttempt;
       readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
       readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+      readonly canRetryContextFailure?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
       readonly openRunOwnedSubagents?: OpenRunOwnedSubagentProjection;
       readonly terminal: ProviderTerminalEvent;
       readonly failureItemPersisted: boolean;
@@ -572,18 +578,21 @@ export const layer: Layer.Layer<
     }) =>
       Effect.gen(function* () {
         const completedAt = yield* DateTime.now;
-        const finalizedAttempt: OrchestrationV2RunAttempt | null = {
-          ...input.attempt,
-          status: input.terminal.status,
-          completedAt,
-        };
+        const contextRejected =
+          input.terminal.status === "failed" && isContextWindowFailure(input.terminal.failure);
+        const stopped =
+          (input.attempt.contextCompaction || contextRejected) &&
+          (yield* input.hasUnpairedRunInterruptRequest?.() ?? Effect.succeed(false));
+        let terminal: ProviderTerminalEvent = stopped
+          ? { ...input.terminal, status: "interrupted", failure: null }
+          : input.terminal;
         const shouldFinalizeRun =
           input.shouldFinalizeRun === undefined ? true : yield* input.shouldFinalizeRun();
         if (!shouldFinalizeRun) {
           // Superseded attempt (steer / selection restart). Emit
           // run_interrupt_result only when hard Stop left an unpaired request
           // for this run; plain steers and already-paired stops emit nothing.
-          if (input.terminal.status === "interrupted") {
+          if (terminal.status === "interrupted") {
             const hasUnpairedRequest =
               input.hasUnpairedRunInterruptRequest === undefined
                 ? false
@@ -615,18 +624,21 @@ export const layer: Layer.Layer<
           }
           return;
         }
+        const retryContextFailure =
+          !stopped &&
+          contextRejected &&
+          !input.attempt.contextCompaction &&
+          (yield* input.canRetryContextFailure?.() ?? Effect.succeed(false));
         if (
-          input.attempt.contextCompaction &&
-          input.terminal.status === "completed" &&
-          // A provider may finish compacting after Stop; Stop still ends the run.
-          !(yield* input.hasUnpairedRunInterruptRequest?.() ?? Effect.succeed(false))
+          (input.attempt.contextCompaction && terminal.status === "completed") ||
+          retryContextFailure
         ) {
           const attemptOrdinal = input.attempt.attemptOrdinal + 1;
           const nextAttempt: OrchestrationV2RunAttempt = {
             ...input.attempt,
             id: idAllocator.derive.runAttempt({ runId: input.run.id, attemptOrdinal }),
             attemptOrdinal,
-            contextCompaction: false,
+            contextCompaction: retryContextFailure,
             providerTurnId: null,
             reason: "provider_recovery",
             status: "pending",
@@ -636,7 +648,10 @@ export const layer: Layer.Layer<
           const { delegatedCompletion: _completion, ...run } = input.run;
           const events = yield* Effect.forEach(
             [
-              { type: "run-attempt.updated", payload: finalizedAttempt },
+              {
+                type: "run-attempt.updated",
+                payload: { ...input.attempt, status: terminal.status, completedAt },
+              },
               { type: "run-attempt.created", payload: nextAttempt },
               {
                 type: "run.updated",
@@ -662,11 +677,15 @@ export const layer: Layer.Layer<
               }),
           );
           const commandId = CommandId.make(`command:context-compaction:${input.attempt.id}`);
-          yield* eventSink.writeIfRunCurrent({
+          const continuation = yield* eventSink.writeIfRunCurrent({
             threadId: input.run.threadId,
             runId: input.run.id,
             activeAttemptId: input.attempt.id,
             expectedStatus: "running",
+            rejectInterruptRequestId: idAllocator.derive.runSignalTurnItem({
+              runId: input.run.id,
+              signal: "interrupt-request",
+            }),
             events,
             effects: [
               {
@@ -677,8 +696,15 @@ export const layer: Layer.Layer<
               },
             ],
           });
-          return;
+          if (continuation.committed) return;
+          if (!(yield* input.shouldFinalizeRun?.() ?? Effect.succeed(true))) return;
+          terminal = { ...terminal, status: "interrupted", failure: null };
         }
+        const finalizedAttempt: OrchestrationV2RunAttempt = {
+          ...input.attempt,
+          status: terminal.status,
+          completedAt,
+        };
         const allocateEventId = () => idAllocator.allocate.event({ threadId: input.run.threadId });
         const open = input.openRunOwnedSubagents ?? emptyOpenRunOwnedSubagentProjection();
         const hasOpenSubagentProjection =
@@ -687,17 +713,16 @@ export const layer: Layer.Layer<
           open.childTurnItems.size > 0 ||
           open.nodes.size > 0;
         const cascadedSubagentEvents =
-          isRunOwnedSubagentTerminalStatus(input.terminal.status) && hasOpenSubagentProjection
+          isRunOwnedSubagentTerminalStatus(terminal.status) && hasOpenSubagentProjection
             ? yield* cascadeTerminalizeRunOwnedSubagents({
                 run: input.run,
                 open,
-                status: input.terminal.status,
+                status: terminal.status,
                 completedAt,
                 allocateEventId,
               })
             : [];
-        const persistedStatus =
-          input.terminal.status === "completed" ? "waiting" : input.terminal.status;
+        const persistedStatus = terminal.status === "completed" ? "waiting" : terminal.status;
         // Completion cohorts are advanced by Orchestrator while a provider
         // turn is in flight. Do not replay the run snapshot captured at start
         // over a newer acknowledgement, successor, or Stop barrier.
@@ -706,17 +731,17 @@ export const layer: Layer.Layer<
         const finalizedRun: OrchestrationV2Run = {
           ...runWithoutDelegatedCompletion,
           status: persistedStatus,
-          completedAt: input.terminal.status === "completed" ? null : completedAt,
+          completedAt: terminal.status === "completed" ? null : completedAt,
         };
         const finalizedRootNode: OrchestrationV2ExecutionNode = {
           ...input.rootNode,
           status: persistedStatus,
-          completedAt: input.terminal.status === "completed" ? null : completedAt,
+          completedAt: terminal.status === "completed" ? null : completedAt,
           checkpointScopeId: input.checkpointScope.id,
         };
         const finalizedProviderThread: OrchestrationV2ProviderThread = {
           ...input.providerThread,
-          status: finalProviderThreadStatus(input.terminal.threadDisposition),
+          status: finalProviderThreadStatus(terminal.threadDisposition),
           updatedAt: completedAt,
         };
         const runEventId = yield* allocateEventId();
@@ -730,9 +755,9 @@ export const layer: Layer.Layer<
         // ahead of any later run's start on this thread's effect lane.
         const finalization = {
           effects:
-            input.terminal.status === "completed" ||
-            input.terminal.status === "interrupted" ||
-            input.terminal.status === "cancelled"
+            terminal.status === "completed" ||
+            terminal.status === "interrupted" ||
+            terminal.status === "cancelled"
               ? [
                   {
                     id: `effect:checkpoint.capture:${input.run.id}`,
@@ -750,21 +775,17 @@ export const layer: Layer.Layer<
             // Terminalize open run-owned subagent rows before the root run
             // settles so projections never keep a forever-running subagent card.
             ...cascadedSubagentEvents,
-            ...(finalizedAttempt === null
-              ? []
-              : [
-                  {
-                    id: yield* allocateEventId(),
-                    type: "run-attempt.updated" as const,
-                    threadId: input.run.threadId,
-                    runId: input.run.id,
-                    nodeId: input.rootNode.id,
-                    providerInstanceId: input.run.providerInstanceId,
-                    occurredAt: completedAt,
-                    payload: finalizedAttempt,
-                  },
-                ]),
-            ...(input.terminal.status === "interrupted"
+            {
+              id: yield* allocateEventId(),
+              type: "run-attempt.updated" as const,
+              threadId: input.run.threadId,
+              runId: input.run.id,
+              nodeId: input.rootNode.id,
+              providerInstanceId: input.run.providerInstanceId,
+              occurredAt: completedAt,
+              payload: finalizedAttempt,
+            },
+            ...(terminal.status === "interrupted"
               ? [
                   {
                     id: yield* allocateEventId(),
@@ -784,7 +805,7 @@ export const layer: Layer.Layer<
                   },
                 ]
               : []),
-            ...(input.terminal.status === "failed" && !input.failureItemPersisted
+            ...(terminal.status === "failed" && !input.failureItemPersisted
               ? [
                   {
                     id: yield* allocateEventId(),
@@ -796,14 +817,14 @@ export const layer: Layer.Layer<
                     occurredAt: completedAt,
                     payload: makeProviderFailureTurnItem({
                       idAllocator,
-                      driver: input.terminal.driver,
+                      driver: terminal.driver,
                       threadId: input.run.threadId,
                       runId: input.run.id,
                       nodeId: input.rootNode.id,
-                      providerThreadId: input.terminal.providerThreadId,
-                      providerTurnId: input.terminal.providerTurnId,
-                      itemOrdinal: input.terminal.failureItemOrdinal,
-                      failure: input.terminal.failure,
+                      providerThreadId: terminal.providerThreadId,
+                      providerTurnId: terminal.providerTurnId,
+                      itemOrdinal: terminal.failureItemOrdinal,
+                      failure: terminal.failure,
                       occurredAt: completedAt,
                     }),
                   },
@@ -1010,6 +1031,18 @@ export const layer: Layer.Layer<
                 : { relatedProviderThreadIds: input.relatedProviderThreadIds }),
             }),
           );
+          const providerWorkObserved = yield* Ref.make(false);
+          const canRetryContextFailure = () =>
+            Ref.get(providerWorkObserved).pipe(
+              Effect.flatMap((worked) =>
+                worked ||
+                input.session.compactThread === undefined ||
+                (input.message.text.trim().toLowerCase() === "/compact" &&
+                  input.message.attachments.length === 0)
+                  ? Effect.succeed(false)
+                  : (input.canRetryContextFailure?.() ?? Effect.succeed(false)),
+              ),
+            );
           const rootTerminalSeen = yield* Ref.make(false);
           const rootRunFinalized = yield* Ref.make(false);
           const providerThreadOwnerLost = yield* Ref.make(false);
@@ -1041,6 +1074,7 @@ export const layer: Layer.Layer<
                       hasUnpairedRunInterruptRequest: input.hasUnpairedRunInterruptRequest,
                     }),
                 openRunOwnedSubagents: openSubagents,
+                canRetryContextFailure,
                 terminal,
                 failureItemPersisted: terminal.status === "failed",
                 refreshAfterTurn,
@@ -1245,6 +1279,27 @@ export const layer: Layer.Layer<
                   DateTime.toEpochMillis(yield* DateTime.now),
                 );
                 if (deliveredEvent) {
+                  if (
+                    event.type === "subagent.updated" ||
+                    (event.type === "node.updated" &&
+                      (event.node.kind === "tool_call" || event.node.kind === "subagent")) ||
+                    event.type === "runtime_request.updated" ||
+                    (event.type === "turn_item.updated" &&
+                      event.turnItem.type === "assistant_message" &&
+                      event.turnItem.text.trim() !== "") ||
+                    (event.type === "turn_item.updated" &&
+                      [
+                        "command_execution",
+                        "dynamic_tool",
+                        "file_change",
+                        "file_search",
+                        "web_search",
+                        "subagent",
+                        "proposed_plan",
+                        "todo_list",
+                      ].includes(event.turnItem.type))
+                  )
+                    yield* Ref.set(providerWorkObserved, true);
                   // Root provider_thread.updated always uses an ownership gate:
                   // pre-terminal writeIfRunCurrent (attempt still running), or
                   // post-terminal writeIfProviderThreadOwner so late roster
@@ -1359,6 +1414,13 @@ export const layer: Layer.Layer<
                                           expectedStatus: "running",
                                         },
                                         openRunOwnedSubagents: openSubagents,
+                                        canRetryContextFailure,
+                                        ...(input.hasUnpairedRunInterruptRequest === undefined
+                                          ? {}
+                                          : {
+                                              hasUnpairedRunInterruptRequest:
+                                                input.hasUnpairedRunInterruptRequest,
+                                            }),
                                         terminal: makeFailedTerminalEvent(
                                           makeProviderFailure({
                                             cause: Cause.squash(cause),
@@ -1465,6 +1527,13 @@ export const layer: Layer.Layer<
                               expectedStatus: "running",
                             },
                             openRunOwnedSubagents: openSubagents,
+                            canRetryContextFailure,
+                            ...(input.hasUnpairedRunInterruptRequest === undefined
+                              ? {}
+                              : {
+                                  hasUnpairedRunInterruptRequest:
+                                    input.hasUnpairedRunInterruptRequest,
+                                }),
                             terminal: makeFailedTerminalEvent(
                               makeProviderFailure({
                                 cause: Cause.squash(cause),

@@ -10,6 +10,7 @@ import {
   NodeId,
   type ProjectId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -91,6 +92,7 @@ export interface EventSinkV2Shape {
     readonly expectedStatus: OrchestrationV2Run["status"];
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
+    readonly rejectInterruptRequestId?: TurnItemId;
   }) => Effect.Effect<
     {
       readonly committed: boolean;
@@ -417,7 +419,17 @@ const baseLayer: Layer.Layer<
             LIMIT 1
           `;
             const current = rows[0];
+            const interrupted =
+              input.rejectInterruptRequestId === undefined
+                ? false
+                : (yield* sql`
+                  SELECT 1 FROM orchestration_v2_projection_turn_items
+                  WHERE thread_id = ${input.threadId}
+                    AND turn_item_id = ${input.rejectInterruptRequestId}
+                  LIMIT 1
+                `).length > 0;
             if (
+              interrupted ||
               current === undefined ||
               current.status !== input.expectedStatus ||
               current.active_attempt_id !== input.activeAttemptId

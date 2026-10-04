@@ -153,6 +153,17 @@ export const layer: Layer.Layer<
             Effect.catchCause(() => Effect.succeed(input.inheritedBackgroundTurnItems)),
           ),
         shouldStartProviderTurn: () => isCurrentAttemptInStatus("running"),
+        canRetryContextFailure: () =>
+          projectionStore
+            .getRuntimeRecoveryProjection(input.threadId)
+            .pipe(
+              Effect.map(
+                (current) =>
+                  !current.attempts.some(
+                    (candidate) => candidate.runId === input.runId && candidate.contextCompaction,
+                  ),
+              ),
+            ),
         shouldFinalizeRun: () =>
           projectionStore.getRuntimeRecoveryProjection(input.threadId).pipe(
             Effect.map((current) => {
@@ -902,7 +913,7 @@ export const layer: Layer.Layer<
         },
       );
       let resumedContext: Effect.Success<ReturnType<typeof getHandoffContext>> | undefined;
-      let contextCompaction = false;
+      let contextCompaction = attempt.contextCompaction === true;
       const loadedProviderThread = yield* Effect.gen(function* () {
         if (nativeForkTransfer !== undefined) {
           const sourceProjection = yield* projectionStore.getThreadRecords(
@@ -982,6 +993,7 @@ export const layer: Layer.Layer<
               }),
         );
         if (resumed._tag === "Success") {
+          if (contextCompaction) return resumed.success;
           if (message.text.trim().toLowerCase() === "/compact" && message.attachments.length === 0)
             return resumed.success;
           const context = yield* getHandoffContext(resumed.success);
@@ -1026,6 +1038,14 @@ export const layer: Layer.Layer<
         }
 
         if (!(yield* isCurrentAttemptInStatus("starting"))) return providerThread;
+        if (contextCompaction) {
+          yield* settleStartFailure({
+            signal: "provider-thread-load-failure",
+            title: "Provider turn failed to start",
+            error: resumed.failure,
+          });
+          return undefined;
+        }
         yield* Effect.logWarning("Provider resume failed; attempting a fresh native session", {
           driver: session.driver,
           providerThreadId: providerThread.id,
@@ -1386,6 +1406,7 @@ export const layer: Layer.Layer<
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
+        canRetryContextFailure: runControls.canRetryContextFailure,
         message: {
           messageId: message.id,
           text: contextCompaction ? "/compact" : userText,
