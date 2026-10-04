@@ -17,7 +17,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
  * the whole repository path into the link, so there the match is exact — a nested GitLab project
  * is a different repository from the group above it, not the same one seen from further down.
  */
-function findProjectForIssue(
+export function findProjectForIssue(
   projects: ReadonlyArray<EnvironmentProject>,
   link: { readonly host: string; readonly repository: string },
 ): EnvironmentProject | undefined {
