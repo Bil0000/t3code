@@ -203,7 +203,9 @@ export function ThreadRelationshipsPanel(props: {
 }) {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
-  const providers = useServerConfigs().get(props.environmentId)?.providers;
+  const config = useServerConfigs().get(props.environmentId);
+  const providers = config?.providers;
+  const supportsSubagentInterrupt = config?.environment.capabilities.subagentInterrupt === true;
   const subagentsByThreadId = useMemo(
     () =>
       new Map(
@@ -403,7 +405,8 @@ export function ThreadRelationshipsPanel(props: {
                 agent?.startedAt &&
                 ((agent.origin === "app_owned" &&
                   ["pending", "running", "waiting"].includes(agent.status)) ||
-                  (agent.origin === "provider_native" &&
+                  (supportsSubagentInterrupt &&
+                    agent.origin === "provider_native" &&
                     agent.driver === "codex" &&
                     agent.status === "running"));
               const threadTitle = relationshipThreadTitle({

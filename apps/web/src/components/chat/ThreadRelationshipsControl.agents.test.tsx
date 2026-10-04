@@ -104,7 +104,19 @@ it("stops only active subagents from lineage without opening their thread", asyn
 
   state.command.mockClear();
   state.projection = { ...projection, subagents: [{ ...agent, origin: "provider_native" }] };
-  await act(async () => renderer.update(cloneElement(panel)));
+  for (const supported of [undefined, false, true]) {
+    state.configs.set("test", {
+      environment: {
+        capabilities: supported === undefined ? {} : { subagentInterrupt: supported },
+      },
+    });
+    await act(async () => renderer.update(cloneElement(panel)));
+    expect(
+      renderer.root.findAll(
+        (node) => node.type === "button" && node.props["aria-label"] === "Stop subagent Worker",
+      ),
+    ).toHaveLength(supported === true ? 1 : 0);
+  }
   await act(async () => stopButton().props.onClick());
   expect(state.command).toHaveBeenCalledWith({
     environmentId: "test",
@@ -289,6 +301,7 @@ it("shows readable models and only differing workspace details in agent tooltips
   ];
   state.shells = [{ environmentId: "test", source: child }];
   state.configs.set("test", {
+    environment: { capabilities: {} },
     providers: [
       {
         instanceId: "codex",
