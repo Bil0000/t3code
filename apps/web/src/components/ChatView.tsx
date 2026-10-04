@@ -8,7 +8,11 @@ import {
   resolveWorktreeSetupProgress,
 } from "./ChatView.logic";
 import * as DateTime from "effect/DateTime";
-import { latestVisibleContextReport, restorePlanFollowUpComposer } from "./ChatView.logic";
+import {
+  latestVisibleContextReport,
+  queuedEditHasStoredContent,
+  restorePlanFollowUpComposer,
+} from "./ChatView.logic";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./chat/queuedMessageEdit";
 import {
@@ -1749,10 +1753,12 @@ export default function ChatView(props: ChatViewProps) {
     return (draft?.images.length ?? 0) > 0 || (draft?.files.length ?? 0) > 0;
   });
   // Anything beyond the prompt text: attachments, terminal or element contexts, annotations.
-  const composerHasNonPromptContent = useComposerDraftStore((store) => {
+  const composerDraftHasNonPromptContent = useComposerDraftStore((store) => {
     const draft = store.getComposerDraft(composerDraftTarget);
     return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
   });
+  const composerHasNonPromptContent =
+    composerDraftHasNonPromptContent || queuedEditHasStoredContent(editingQueuedRun);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);

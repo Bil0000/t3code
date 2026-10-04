@@ -16,11 +16,7 @@ import {
   type ServerConfig as T3ServerConfig,
   type UsageLimitsReport,
 } from "@t3tools/contracts";
-import {
-  collectProviderUsageLimits,
-  hasProviderUsageLimits,
-  isUsageLimitsCommand,
-} from "@t3tools/shared/usageLimits";
+import { collectProviderUsageLimits, hasProviderUsageLimits } from "@t3tools/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
 import {
@@ -34,10 +30,7 @@ import {
   type RefObject,
 } from "react";
 import { Alert, Keyboard, Platform, Pressable, View, type ViewStyle } from "react-native";
-import {
-  isContextCommand,
-  offersLocalContextCommand,
-} from "@t3tools/client-runtime/providerSkills";
+import { offersLocalContextCommand } from "@t3tools/client-runtime/providerSkills";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import {
   composerAttachmentUploadBlockReason,
@@ -103,6 +96,7 @@ import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/com
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import {
   resolveComposerSendPresentation,
+  resolveLocalComposerCommands,
   type ComposerSendPresentation,
 } from "./composerSendPresentation";
 import { ComposerCommandPopover } from "./ComposerCommandPopover";
@@ -466,11 +460,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const { onSendMessage, onChangeDraftMessage, onShowUsageLimits, onShowUsageContext } = props;
   const contextCommandOffered =
     selectedProviderStatus !== null &&
-    offersLocalContextCommand(
-      selectedProviderStatus,
-      props.projectCwd,
-      props.draftAttachments.length + (queuedEdit?.existingAttachments.length ?? 0),
-    );
+    offersLocalContextCommand(selectedProviderStatus, props.projectCwd);
   const openUsageContext = useCallback(() => {
     if (onShowUsageContext()) return true;
     Alert.alert("Context usage unavailable", "This thread has not reported context usage yet.");
@@ -499,6 +489,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
     return report !== null;
   }, [currentModelSelection.instanceId, onShowUsageLimits, props.serverConfig]);
+  const draftContext = useAtomValue(
+    composerDraftsAtom,
+    useCallback((drafts) => drafts[composerDraftKey]?.context, [composerDraftKey]),
+  );
+  const localCommands = resolveLocalComposerCommands({
+    prompt: props.draftMessage,
+    draftAttachmentCount: props.draftAttachments.length,
+    queuedAttachmentCount: queuedEdit?.existingAttachments.length ?? 0,
+    draftContext,
+    contextOffered: contextCommandOffered,
+    usageLimitsOffered,
+  });
 
   const composerMenu = useComposerCommandMenu({
     draftMessage: props.draftMessage,
@@ -521,9 +523,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         : props.onUpdateInteractionMode,
     offersUsageLimits: usageLimitsOffered,
     // With attachments aboard the pick just inserts the text, so it sends as a prompt.
-    onUsageLimits:
-      usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
-    onContext: contextCommandOffered ? openUsageContext : undefined,
+    onUsageLimits: localCommands.usageLimits ? openUsageLimits : undefined,
+    onContext: localCommands.context ? openUsageContext : undefined,
   });
   const voiceInput = useVoiceInputController({
     ownerKey: composerDraftKey,
@@ -615,16 +616,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       if (voiceInput.blocksSubmission || pendingPastedTextAttachmentCountRef.current > 0) return;
       // Typed out in full rather than picked from the menu. Attachments mean the
       // user is sending a prompt, so those go through as usual.
-      if (
-        usageLimitsOffered &&
-        isUsageLimitsCommand(props.draftMessage) &&
-        props.draftAttachments.length === 0
-      ) {
-        if (openUsageLimits()) onChangeDraftMessage("");
-        return;
-      }
-      if (contextCommandOffered && isContextCommand(props.draftMessage)) {
-        if (openUsageContext()) onChangeDraftMessage("");
+      if (localCommands.typed) {
+        const open = localCommands.typed === "context" ? openUsageContext : openUsageLimits;
+        if (open()) onChangeDraftMessage("");
         return;
       }
       const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
@@ -649,12 +643,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }
     },
     [
-      props.draftMessage,
-      props.draftAttachments.length,
+      localCommands.typed,
       onChangeDraftMessage,
       openUsageLimits,
-      usageLimitsOffered,
-      contextCommandOffered,
       openUsageContext,
       onSendMessage,
       props.environmentId,

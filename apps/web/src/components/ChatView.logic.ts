@@ -1371,3 +1371,16 @@ export function latestVisibleContextReport(
     ? null
     : latestContextReport(messages);
 }
+
+export function queuedEditHasStoredContent(
+  edit: {
+    readonly existingAttachments: ReadonlyArray<unknown>;
+    readonly context?: { readonly records: ReadonlyArray<object> } | undefined;
+  } | null,
+) {
+  return (
+    edit !== null &&
+    (edit.existingAttachments.length > 0 ||
+      (edit.context?.records ?? []).some((record) => !("attachmentId" in record)))
+  );
+}

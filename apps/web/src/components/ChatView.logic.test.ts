@@ -1,6 +1,7 @@
 import {
   findRecordedWorktreeSetup,
   latestVisibleContextReport,
+  queuedEditHasStoredContent,
   resolveVisibleWorktreeSetup,
 } from "./ChatView.logic";
 import {
@@ -2230,5 +2231,28 @@ describe("latestVisibleContextReport", () => {
         "first",
       )?.id,
     ).toBe("second-report");
+  });
+});
+
+describe("queuedEditHasStoredContent", () => {
+  const terminal = { contextId: "terminal:1", kind: "terminal" };
+  const image = { contextId: "image:1", kind: "image", attachmentId: "a1" };
+
+  it("counts stored attachments and context so local commands save the edit instead", () => {
+    expect(queuedEditHasStoredContent(null)).toBe(false);
+    expect(queuedEditHasStoredContent({ existingAttachments: [] })).toBe(false);
+    expect(queuedEditHasStoredContent({ existingAttachments: [{ id: "a1" }] })).toBe(true);
+    expect(
+      queuedEditHasStoredContent({
+        existingAttachments: [],
+        context: { records: [terminal] },
+      }),
+    ).toBe(true);
+    expect(
+      queuedEditHasStoredContent({
+        existingAttachments: [],
+        context: { records: [image] },
+      }),
+    ).toBe(false);
   });
 });
