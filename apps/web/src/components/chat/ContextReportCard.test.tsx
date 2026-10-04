@@ -1,7 +1,7 @@
 import { parseContextReport } from "@t3tools/shared/contextReport";
 import { act, useState } from "react";
 import { create, type ReactTestRendererNode } from "react-test-renderer";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ContextReportCard, ContextReportDisclosure } from "./ContextReportCard";
 
@@ -55,6 +55,40 @@ describe("ContextReportCard", () => {
     const section = renderer.root.findByProps({ "aria-expanded": false });
     act(() => section.props.onClick());
     expect(textOf(renderer)).toContain("mcp__github__add_issue_comment");
+  });
+
+  it("renders repeated columns and rows without key warnings", () => {
+    const report = parseContextReport(`## Context Usage
+**Tokens:** 1k / 200k (0.5%)
+### Skills
+| Name | Name | Tokens |
+|---|---|---|
+| review | review | 40 |
+| review | review | 40 |
+`)!;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(<ContextReportCard report={report} />);
+    });
+    const section = renderer.root.findByProps({ "aria-expanded": false });
+    act(() => section.props.onClick());
+
+    expect(renderer.root.findAllByType("th").map((cell) => cell.children)).toEqual([
+      ["Name"],
+      ["Name"],
+      ["Tokens"],
+    ]);
+    expect(renderer.root.findAllByType("td").map((cell) => cell.children[0])).toEqual([
+      "review",
+      "review",
+      "40",
+      "review",
+      "review",
+      "40",
+    ]);
+    expect(consoleError.mock.calls.flat().join("\n")).not.toContain("same key");
+    consoleError.mockRestore();
   });
 
   it("keeps the full report reachable from a collapsed timeline row", () => {

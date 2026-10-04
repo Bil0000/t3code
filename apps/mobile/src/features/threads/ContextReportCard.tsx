@@ -42,8 +42,9 @@ function SectionRow(props: { readonly section: ContextSection }) {
       </Pressable>
       {open ? (
         <View className="mb-2 ml-5 gap-1">
-          {section.rows.map((row) => (
-            <View key={row.join("|")} className="flex-row items-center gap-3">
+          {section.rows.map((row, rowIndex) => (
+            // oxlint-disable-next-line react/no-array-index-key
+            <View key={rowIndex} className="flex-row items-center gap-3">
               <Text selectable className="flex-1 text-xs text-foreground-secondary">
                 {row
                   .slice(0, -1)

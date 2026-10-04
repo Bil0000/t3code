@@ -1,3 +1,4 @@
+/* oxlint-disable react/no-array-index-key */
 import {
   contextSegmentColor,
   contextUsedCategories,
@@ -39,19 +40,19 @@ function SectionRow({ section }: { section: ContextSection }) {
         <table className="ms-5 mb-1 w-[calc(100%-1.25rem)] text-xs">
           <thead className="text-secondary-label">
             <tr>
-              {section.columns.map((column) => (
-                <th key={column} className="px-1 py-0.5 text-start font-medium last:text-end">
+              {section.columns.map((column, columnIndex) => (
+                <th key={columnIndex} className="px-1 py-0.5 text-start font-medium last:text-end">
                   {column}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody className="text-muted-foreground">
-            {section.rows.map((row) => (
-              <tr key={row.join("|")}>
+            {section.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
                 {row.map((cell, cellIndex) => (
                   <td
-                    key={section.columns[cellIndex]}
+                    key={cellIndex}
                     className="px-1 py-0.5 tabular-nums [overflow-wrap:anywhere] last:text-end"
                   >
                     {cell}
