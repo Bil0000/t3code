@@ -31,7 +31,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
-import { ChatAttachment } from "./chatAttachment.ts";
+import { ChatAttachment, ChatAttachmentInput } from "./chatAttachment.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
@@ -54,7 +54,7 @@ import {
   ProviderInteractionMode,
   ProviderRequestKind,
   ProviderUserInputAnswers,
-  UserInputAttachments,
+  UserInputAttachmentsInput,
   UserInputAttachmentAnswerPayload,
   RuntimeMode,
 } from "./providerPolicy.ts";
@@ -2672,7 +2672,7 @@ export const OrchestrationV2Command = Schema.Union([
     messageId: MessageId,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
-    attachments: Schema.Array(ChatAttachment),
+    attachments: Schema.Array(ChatAttachmentInput),
     /** Seed the temporary title and generate a durable replacement for the first message. */
     titleSeed: Schema.optional(TrimmedNonEmptyString),
     modelSelection: Schema.optional(ModelSelection),
@@ -2767,7 +2767,7 @@ export const OrchestrationV2Command = Schema.Union([
     text: Schema.String,
     // Full replacement list. Absent = leave the message's attachments as-is,
     // so pre-attachment clients editing text keep the original attachments.
-    attachments: Schema.optional(Schema.Array(ChatAttachment)),
+    attachments: Schema.optional(Schema.Array(ChatAttachmentInput)),
   }),
   Schema.Struct({
     type: Schema.Literal("runtime-request.respond"),
@@ -2776,7 +2776,7 @@ export const OrchestrationV2Command = Schema.Union([
     requestId: RuntimeRequestId,
     decision: Schema.optional(ProviderApprovalDecision),
     answers: Schema.optional(ProviderUserInputAnswers),
-    attachmentsByQuestionId: Schema.optional(UserInputAttachments),
+    attachmentsByQuestionId: Schema.optional(UserInputAttachmentsInput),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.user-input.dismiss"),
@@ -2998,7 +2998,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
       messageId: Schema.optional(MessageId),
       text: Schema.String,
       context: Schema.optional(OrchestrationMessageContext),
-      attachments: Schema.Array(ChatAttachment),
+      attachments: Schema.Array(ChatAttachmentInput),
     }),
   ),
 });
