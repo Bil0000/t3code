@@ -21,17 +21,17 @@ function SectionRow({ section }: { section: ContextSection }) {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full cursor-pointer select-none items-center gap-1.5 rounded-md px-1 py-1 text-sm leading-relaxed hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        className="flex w-full cursor-pointer select-none items-center gap-2 rounded-md px-1 py-1 text-xs hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <ChevronRightIcon
           aria-hidden="true"
           className={cn(
-            "size-3.5 shrink-0 text-icon-muted transition-transform",
+            "size-3 shrink-0 text-icon-muted transition-transform",
             open && "rotate-90",
           )}
         />
         <span className="min-w-0 flex-1 truncate text-start text-foreground">{section.title}</span>
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+        <span className="shrink-0 text-muted-foreground tabular-nums">
           {section.totalTokens !== null ? `${formatContextTokens(section.totalTokens)} · ` : ""}
           {section.rows.length}
         </span>

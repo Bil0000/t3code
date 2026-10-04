@@ -32,7 +32,7 @@ function SectionRow(props: { readonly section: ContextSection }) {
           tintColorClassName="accent-icon-subtle"
           type="monochrome"
         />
-        <Text className="flex-1 text-sm text-foreground" numberOfLines={1}>
+        <Text className="flex-1 text-xs text-foreground" numberOfLines={1}>
           {section.title}
         </Text>
         <Text className="text-xs tabular-nums text-foreground-muted">
