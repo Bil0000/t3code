@@ -135,6 +135,10 @@ it("does not commit running state when inherited background routing cannot be re
             ),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadRecords: () => {
+            projectionReadCount += 1;
+            return Effect.succeed(projection);
+          },
           getTurnStartContext: () => {
             projectionReadCount += 1;
             return Effect.succeed({
@@ -523,6 +527,9 @@ function makeLocalCommandHarness(input: {
   );
   const exists = vi.fn(() => Effect.succeed(true));
   const createWorktree = vi.fn(() => Effect.succeed({} as never));
+  const getThreadRecords = vi.fn<ProjectionStore.ProjectionStoreV2Shape["getThreadRecords"]>(() =>
+    Effect.succeed(projection),
+  );
   const getTurnStartContext = vi.fn(() =>
     Effect.succeed({
       ...projection,
@@ -554,6 +561,7 @@ function makeLocalCommandHarness(input: {
             Effect.succeed(Option.some({ workspaceRoot: "/tmp/native-account-project" } as never)),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadRecords,
           getTurnStartContext,
           getRuntimeRecoveryProjection: () =>
             Effect.as(failReadIfRunning, {
@@ -582,6 +590,7 @@ function makeLocalCommandHarness(input: {
     ),
   );
   return {
+    getThreadRecords,
     getTurnStartContext,
     setProjection: (next: OrchestrationV2ThreadProjection) => {
       projection = next;
@@ -718,6 +727,19 @@ effectIt.effect.each(
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+effectIt.effect("reads only thread state before taking the startup lease", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({ text: "/logout", previousNativeSession: true });
+    yield* harness.start;
+    expect(harness.getThreadRecords).toHaveBeenCalledExactlyOnceWith(
+      harness.projection().thread.id,
+      [],
+    );
+    expect(harness.getTurnStartContext).toHaveBeenCalledOnce();
+    expect(harness.projection().runs.at(-1)?.status).toBe("completed");
+  }),
+);
+
 effectIt.effect("reads current startup state after waiting for the workspace lease", () =>
   Effect.gen(function* () {
     const worktreePath = "/tmp/provider-start-fresh-state";
@@ -728,15 +750,15 @@ effectIt.effect("reads current startup state after waiting for the workspace lea
       worktreePath,
       failReadsAfterRunning: true,
     });
-    const read = harness.getTurnStartContext.getMockImplementation()!;
-    harness.getTurnStartContext.mockImplementationOnce(() =>
-      Deferred.succeed(readEntered, undefined).pipe(Effect.andThen(read())),
+    harness.getThreadRecords.mockImplementationOnce(() =>
+      Deferred.succeed(readEntered, undefined).pipe(Effect.as(harness.projection())),
     );
     const holder = yield* withWorkspaceLease(worktreePath, Deferred.await(release)).pipe(
       Effect.forkChild({ startImmediately: true }),
     );
     const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
     yield* Deferred.await(readEntered);
+    expect(harness.getTurnStartContext).not.toHaveBeenCalled();
     const projection = harness.projection();
     harness.setProjection({
       ...projection,
@@ -764,12 +786,11 @@ effectIt.effect.each(["worktree", "root"])(
         ...(initial === "worktree" ? { worktreePath: oldPath } : {}),
         failReadsAfterRunning: true,
       });
-      const read = harness.getTurnStartContext.getMockImplementation()!;
-      harness.getTurnStartContext.mockImplementationOnce(() => {
-        const projection = read();
+      harness.getThreadRecords.mockImplementationOnce(() => {
+        const projection = harness.projection();
         return Deferred.succeed(readEntered, undefined).pipe(
           Effect.andThen(Deferred.await(releaseOld)),
-          Effect.andThen(projection),
+          Effect.as(projection),
         );
       });
       let newLeaseReleased = false;

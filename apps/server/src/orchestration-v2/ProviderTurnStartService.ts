@@ -1270,7 +1270,7 @@ export const layer: Layer.Layer<
                   Effect.provideService(FileSystem.FileSystem, fileSystem),
                   Effect.provideService(Path.Path, path),
                 );
-          const initial = yield* projectionStore.getTurnStartContext(input.threadId, input.runId);
+          const initial = yield* projectionStore.getThreadRecords(input.threadId, []);
           let worktreePath = yield* resolvePath(initial.thread.worktreePath);
           while (true) {
             const effect = Effect.gen(function* () {

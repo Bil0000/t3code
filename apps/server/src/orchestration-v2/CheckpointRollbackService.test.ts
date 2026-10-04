@@ -80,6 +80,15 @@ it.effect.each(["initial", "waiting"])(
       ],
       checkpointScopes: [{ id: scopeId, cwd: process.cwd() }],
     } as unknown as OrchestrationV2ThreadProjection;
+    const getThreadRecords = vi.fn<ProjectionStore.ProjectionStoreV2Shape["getThreadRecords"]>(
+      () => {
+        const current = projection;
+        readCount++;
+        return readCount === 1
+          ? Deferred.succeed(readEntered, undefined).pipe(Effect.as(current))
+          : Effect.succeed(current);
+      },
+    );
     const testLayer = checkpointRollbackServiceLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -87,13 +96,7 @@ it.effect.each(["initial", "waiting"])(
           Layer.mock(EventSink.EventSinkV2)({}),
           IdAllocator.layer,
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
-            getThreadRecords: () => {
-              const current = projection;
-              readCount++;
-              return readCount === 1
-                ? Deferred.succeed(readEntered, undefined).pipe(Effect.as(current))
-                : Effect.succeed(current);
-            },
+            getThreadRecords,
             getShellSnapshot: () =>
               Effect.succeed({
                 schemaVersion: 1,
@@ -138,6 +141,9 @@ it.effect.each(["initial", "waiting"])(
       }
       const error = yield* Fiber.join(rollback);
 
+      assert.equal(getThreadRecords.mock.calls.length, 2);
+      assert.deepEqual(getThreadRecords.mock.calls[0]?.[1], []);
+      assert.equal(getThreadRecords.mock.calls[1]?.[1].includes("checkpoints"), true);
       assert.equal(error.reason, "rollback-target-invalid");
       assert.equal(
         error.message,

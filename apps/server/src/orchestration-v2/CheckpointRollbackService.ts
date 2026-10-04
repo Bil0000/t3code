@@ -376,7 +376,7 @@ export const layer: Layer.Layer<
                   Effect.provideService(FileSystem.FileSystem, fileSystem),
                   Effect.provideService(Path.Path, path),
                 );
-          const initial = yield* readProjection(input.threadId);
+          const initial = yield* projections.getThreadRecords(input.threadId, []);
           let worktreePath = yield* resolvePath(initial.thread.worktreePath);
           while (true) {
             const effect = Effect.gen(function* () {
