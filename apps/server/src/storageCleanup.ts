@@ -357,7 +357,20 @@ export const make = Effect.gen(function* () {
         `;
         const sessionPaths = yield* Effect.forEach(sessionRows, (row) =>
           decodeCleanupSession(row.payload_json).pipe(
-            Effect.flatMap((session) => resolveWorkspacePath(session.cwd)),
+            Effect.flatMap((session) =>
+              resolveWorkspacePath(session.cwd).pipe(
+                Effect.tapError((error) =>
+                  Effect.logWarning(
+                    "storage cleanup could not resolve provider session workspace",
+                    {
+                      sessionId: session.id,
+                      cwd: session.cwd,
+                      error,
+                    },
+                  ),
+                ),
+              ),
+            ),
           ),
         );
         if (sessionPaths.some((cwd) => cwd === worktreePath || inside(worktreePath, cwd))) return;

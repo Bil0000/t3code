@@ -18,6 +18,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
@@ -156,8 +157,10 @@ describe("settled worktree retention", () => {
     "shared-alias-late",
     "session-alias",
     "session-alias-descendant",
+    "session-alias-cycle",
     "terminal-alias",
     "terminal-alias-descendant",
+    "terminal-alias-cycle",
     "terminal-worktree-alias",
     "project-alias",
     "project-alias-descendant",
@@ -167,8 +170,12 @@ describe("settled worktree retention", () => {
     "settled-event",
     "session-stop",
     "burst",
-  ] as const)("preserves the original cleanup rules (%s)", (protection) =>
-    Effect.gen(function* () {
+  ] as const)("preserves the original cleanup rules (%s)", (protection) => {
+    const warnings: string[] = [];
+    const logger = Logger.make(({ logLevel, message }) => {
+      if (logLevel === "Warn") warnings.push(String(message));
+    });
+    return Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -181,6 +188,10 @@ describe("settled worktree retention", () => {
       yield* fs.writeFileString(path.join(worktreePath, ".git"), "gitdir: /test/admin");
       const worktreeAlias = path.join(config.baseDir, "feature-alias");
       yield* fs.symlink(worktreePath, worktreeAlias);
+      const activityAlias = protection.endsWith("-cycle")
+        ? path.join(config.baseDir, "cycle")
+        : worktreeAlias;
+      if (protection.endsWith("-cycle")) yield* fs.symlink(activityAlias, activityAlias);
       let thread: OrchestrationV2AppThread = {
         ...shell(),
         lastVisitedAt: null,
@@ -245,7 +256,7 @@ describe("settled worktree retention", () => {
         cwd: protection.startsWith("session-alias")
           ? protection === "session-alias-descendant"
             ? path.join(worktreeAlias, "missing-child")
-            : worktreeAlias
+            : activityAlias
           : worktreePath,
         model: null,
         capabilities: CodexProviderCapabilitiesV2,
@@ -374,7 +385,7 @@ describe("settled worktree retention", () => {
                               ? config.baseDir
                               : protection === "terminal-alias-descendant"
                                 ? path.join(worktreeAlias, "missing-child")
-                                : worktreeAlias,
+                                : activityAlias,
                           worktreePath:
                             protection === "terminal-worktree-alias" ? worktreeAlias : null,
                           status: "running",
@@ -508,6 +519,14 @@ describe("settled worktree retention", () => {
       ].includes(protection);
       assert.strictEqual(yield* fs.exists(worktreePath), !removed);
       assert.strictEqual(removals, removed ? 1 : 0);
+      if (protection === "session-alias-cycle")
+        assert.isTrue(
+          warnings.some((message) =>
+            message.includes("storage cleanup could not resolve provider session workspace"),
+          ),
+        );
+      if (protection === "terminal-alias-cycle")
+        assert.isTrue(warnings.some((message) => message.includes("worktree cleanup failed")));
       if (["wait", "auto-recent", "active", "pinned-active"].includes(protection))
         assert.strictEqual(headReads, 0);
       assert.strictEqual(
@@ -522,9 +541,10 @@ describe("settled worktree retention", () => {
         Layer.mergeAll(
           ServerConfig.layerTest(process.cwd(), { prefix: "t3-settled-cleanup-" }),
           ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+          Logger.layer([logger], { mergeWithExisting: false }),
         ).pipe(Layer.provideMerge(NodeServices.layer)),
       ),
       Effect.scoped,
-    ),
-  );
+    );
+  });
 });
