@@ -26,6 +26,8 @@ const decodeDetail = Schema.decodeUnknownSync(IssueDetail);
 const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
 const decodeThreadIssueKey = Schema.decodeUnknownSync(ThreadIssueKey);
 const decodeThreadIssueLink = Schema.decodeUnknownOption(ThreadIssueLink);
+const decodeThreadIssueLinkSync = Schema.decodeSync(ThreadIssueLink);
+const decodeIssueRef = Schema.decodeUnknownSync(IssueRef);
 const GITHUB_SOURCE = issueSourceKey("github", "github.com");
 const GITLAB_SOURCE = issueSourceKey("gitlab", "gitlab.com");
 
@@ -35,6 +37,12 @@ it("accepts legacy unlink keys and keeps host URLs while links require a URL", (
   expect(decodeThreadIssueKey(key)).toEqual(key);
   expect(decodeThreadIssueKey(hostedKey)).toEqual(hostedKey);
   expect(decodeThreadIssueLink({ ...key, title: "Issue 1" })._tag).toBe("None");
+  const link = { ...hostedKey, title: "Issue 1" };
+  expect(decodeThreadIssueLinkSync(link)).toEqual(link);
+  expect(decodeThreadIssueLinkSync({ ...link, state: "closed" })).toEqual({
+    ...link,
+    state: "closed",
+  });
 });
 
 const LIST_RESULT: IssueListResult = {
@@ -146,13 +154,14 @@ describe("IssueListResult", () => {
 describe("IssueRef", () => {
   it("keeps an optional provider to disambiguate equal repository names", () => {
     expect(
-      Schema.decodeUnknownSync(IssueRef)({
+      decodeIssueRef({
         projectId: "project-1",
         repository: "ENG",
         number: 7,
         provider: "linear",
+        host: "linear.app",
       }),
-    ).toMatchObject({ provider: "linear" });
+    ).toMatchObject({ provider: "linear", host: "linear.app" });
   });
 });
 

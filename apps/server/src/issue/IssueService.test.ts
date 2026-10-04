@@ -202,6 +202,38 @@ const ONE_PROJECT = [
   project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
 ];
 
+it.effect("keeps a cached read from bypassing the requested host", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: ({ host }) => {
+            assert.equal(host, "github.com");
+            reads += 1;
+            return Effect.succeed(issueDetail(7));
+          },
+        }),
+      ],
+    });
+    yield* service.detail(REFERENCE);
+    const error = yield* service
+      .detail({
+        ...REFERENCE,
+        provider: "github",
+        host: "github.enterprise.test",
+      })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "IssueOperationError");
+    assert.equal(reads, 1);
+    yield* service.detail({ ...REFERENCE, provider: "github", host: "GITHUB.COM" });
+    assert.equal(reads, 2);
+    yield* service.detail({ ...REFERENCE, provider: "github", host: "github.com" });
+    assert.equal(reads, 2);
+  }),
+);
+
 /** The two writes whose capability and permission refusals are checked as a pair. */
 const labelling = (service: IssueService.IssueService["Service"]) =>
   service.setLabels({ ...REFERENCE, labels: ["bug"] });

@@ -370,7 +370,7 @@ export const make = Effect.gen(function* () {
    * remote: that field travels through the client, so it is never handed to a provider verbatim.
    */
   const requireProject = (
-    ref: Pick<IssueRef, "projectId" | "provider" | "repository">,
+    ref: Pick<IssueRef, "projectId" | "provider" | "repository" | "host">,
   ): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
       Effect.flatMap(
@@ -382,7 +382,8 @@ export const make = Effect.gen(function* () {
           const match = supported.find(
             (project) =>
               project.repository.toLowerCase() === repository &&
-              (ref.provider === undefined || project.adapter.kind === ref.provider),
+              (ref.provider === undefined || project.adapter.kind === ref.provider) &&
+              (ref.host === undefined || project.host.toLowerCase() === ref.host.toLowerCase()),
           );
           if (match === undefined) {
             return Effect.fail(
@@ -1572,16 +1573,18 @@ export const make = Effect.gen(function* () {
 
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, provider, repository, number] = JSON.parse(key) as [
+      const [, projectId, provider, repository, number, host] = JSON.parse(key) as [
         number,
         string,
         string | null,
         string,
         number,
+        string | null,
       ];
       return detailUncached({
         projectId,
         ...(provider === null ? {} : { provider }),
+        ...(host === null ? {} : { host }),
         repository,
         number,
       } as IssueRef);
@@ -1599,22 +1602,25 @@ export const make = Effect.gen(function* () {
       input.provider ?? null,
       input.repository,
       input.number,
+      input.host?.toLowerCase() ?? null,
     ]);
     return staleDetail(key, Cache.get(detailCache, key));
   };
 
   const activityCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, provider, repository, number] = JSON.parse(key) as [
+      const [, projectId, provider, repository, number, host] = JSON.parse(key) as [
         number,
         string,
         string | null,
         string,
         number,
+        string | null,
       ];
       return activityUncached({
         projectId,
         ...(provider === null ? {} : { provider }),
+        ...(host === null ? {} : { host }),
         repository,
         number,
       } as IssueRef);
@@ -1635,6 +1641,7 @@ export const make = Effect.gen(function* () {
       input.provider ?? null,
       input.repository,
       input.number,
+      input.host?.toLowerCase() ?? null,
     ]);
     return staleActivity(key, Cache.get(activityCache, key));
   };
