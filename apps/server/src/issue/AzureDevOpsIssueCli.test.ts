@@ -156,33 +156,35 @@ layer((it) => {
     }),
   );
 
-  for (const [sort, field] of [
-    ["created", "CreatedDate"],
-    ["updated", "ChangedDate"],
-    ["comments", "CommentCount"],
-  ] as const) {
-    for (const order of ["asc", "desc"] as const) {
-      it.effect(`orders by ${sort} ${order} before limiting the page`, () =>
-        Effect.gen(function* () {
-          listing([workItem(1, { "System.CommentCount": 9 })]);
-          const provider = yield* AzureDevOpsIssueProvider.make;
-          const page = yield* provider.listIssues({
-            cwd: "/w",
-            repository: "web",
-            host: "dev.azure.com",
-            state: "all",
-            involvement: "all",
-            viewer: "me",
-            limit: 2,
-            sort,
-            order,
-          });
-          expect(wiqlOf()).toContain(`ORDER BY [System.${field}] ${order.toUpperCase()}`);
-          expect(page.items[0]?.commentCount).toBe(9);
-        }),
-      );
-    }
-  }
+  it.effect.each(
+    (
+      [
+        ["created", "CreatedDate"],
+        ["updated", "ChangedDate"],
+        ["comments", "CommentCount"],
+      ] as const
+    ).flatMap(([sort, field]) =>
+      (["asc", "desc"] as const).map((order) => ({ sort, field, order })),
+    ),
+  )("orders by $sort $order before limiting the page", ({ sort, field, order }) =>
+    Effect.gen(function* () {
+      listing([workItem(1, { "System.CommentCount": 9 })]);
+      const provider = yield* AzureDevOpsIssueProvider.make;
+      const page = yield* provider.listIssues({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        state: "all",
+        involvement: "all",
+        viewer: "me",
+        limit: 2,
+        sort,
+        order,
+      });
+      expect(wiqlOf()).toContain(`ORDER BY [System.${field}] ${order.toUpperCase()}`);
+      expect(page.items[0]?.commentCount).toBe(9);
+    }),
+  );
 
   it.effect("reads the DevOps profile without requiring an Azure subscription", () =>
     Effect.gen(function* () {
