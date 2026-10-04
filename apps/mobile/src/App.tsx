@@ -24,6 +24,7 @@ import { shouldHandleAppLink } from "./lib/appLinking";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";
 import { VoiceInputProvider } from "./features/voice-input/VoiceInputProvider";
+import { GlobalVoiceInputControl } from "./features/voice-input/GlobalVoiceInputControl";
 
 import "../global.css";
 
@@ -94,6 +95,7 @@ function AppContent() {
               {/* Anchored-menu overlays render here — in-window, so the
                 keyboard stays up while a dropdown is open. */}
               <OverlayPortalHost />
+              <GlobalVoiceInputControl />
             </VoiceInputProvider>
           </SafeAreaProvider>
         </KeyboardProvider>

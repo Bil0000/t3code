@@ -30,7 +30,6 @@ import {
 } from "@t3tools/client-runtime/voice-input";
 import { normalizeVoiceInputDecibels, VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
 import { VoiceInputSession } from "./voiceInputSession";
-import { GlobalVoiceInputControl } from "./GlobalVoiceInputControl";
 
 const INITIAL_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
 const VOICE_METERING_INTERVAL_MS = 80;
@@ -72,12 +71,7 @@ const VoiceInputContext = createContext<ReturnType<typeof useVoiceInputRuntime> 
 
 export function VoiceInputProvider({ children }: { readonly children: ReactNode }) {
   const runtime = useVoiceInputRuntime();
-  return (
-    <VoiceInputContext value={runtime}>
-      {children}
-      <GlobalVoiceInputControl />
-    </VoiceInputContext>
-  );
+  return <VoiceInputContext value={runtime}>{children}</VoiceInputContext>;
 }
 
 export function useGlobalVoiceInput() {
