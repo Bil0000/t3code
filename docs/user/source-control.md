@@ -231,7 +231,8 @@ through the host; the UI can remove a saved link without a host request.
 
 A thread can hold several pull requests, including reviews from another repository on the same host.
 Use **Link issue or PR** in the command palette or the thread header's right-click menu, **Link**
-in the **Linked items** panel, or right-click a pull request link in the conversation.
+in the **Linked items** panel, or right-click an issue or pull request URL in the conversation.
+Use **Link to thread** to attach it, or **Unlink from thread** to remove its saved link.
 Creating a pull request from Git actions links it automatically.
 Agents can link their pull requests with the `link_pull_request` tool.
 
