@@ -38,9 +38,9 @@ const make = Effect.gen(function* () {
 
   const requireThread = Effect.fn("IssuesToolkit.requireThread")(function* () {
     const scope = yield* McpInvocationContext.requireMcpCapability("issues");
-    const thread = yield* engine.getThreadShell(scope.threadId).pipe(
-      Effect.mapError((cause) => new IssueThreadLinkFailedError({ cause })),
-    );
+    const thread = yield* engine
+      .getThreadShell(scope.threadId)
+      .pipe(Effect.mapError((cause) => new IssueThreadLinkFailedError({ cause })));
     if (thread === null) {
       return yield* new IssueThreadNotFoundError({ threadId: scope.threadId });
     }
