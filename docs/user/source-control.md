@@ -210,6 +210,10 @@ lists them below the thread's pull requests. Click an issue to open it, or unlin
 An issue's **Linked threads** section takes you back to those conversations, where you can follow
 their linked pull requests. These controls are available on web and desktop.
 
+In the **Link** dialog, paste a full issue URL or enter `owner/repo#N` for a repository on the
+current project’s host. GitLab work item URLs are accepted. Check the issue title and state in
+the preview before linking. A pull request cannot be added as an issue.
+
 ### Link issues and pull requests
 
 Use **Link pull request** in an issue's related work, or **Link issue** in a pull request's related
