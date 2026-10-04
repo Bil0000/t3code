@@ -98,6 +98,36 @@ const ListThreadIssuesTool = Tool.make("list_thread_issues", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+const ReadIssueTool = Tool.make("read_issue", {
+  description:
+    "Read an issue in this thread's project: its description, labels, state, and newest comments. Works for any issue, linked or not. Prefer it over tracker CLIs. The markdown says when comments were left out.",
+  parameters: Schema.Struct({
+    ...IssueTargetInput.fields,
+    commentsCursor: Schema.optional(
+      TrimmedNonEmptyString.annotate({
+        description:
+          "nextCommentsCursor from a previous read_issue call, to read the earlier comments before that page.",
+      }),
+    ),
+  }),
+  success: Schema.Struct({
+    markdown: Schema.String.annotate({
+      description: "The issue and a page of its comments as markdown.",
+    }),
+    nextCommentsCursor: Schema.NullOr(Schema.String).annotate({
+      description:
+        "Pass back as commentsCursor to read earlier comments; null when there are none to page to.",
+    }),
+  }),
+  failure: IssueToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Read issue")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
 const PullRequestTargetInput = Schema.Struct({
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
@@ -169,6 +199,7 @@ export const IssuesToolkit = Toolkit.make(
   LinkIssueTool,
   UnlinkIssueTool,
   ListThreadIssuesTool,
+  ReadIssueTool,
   LinkIssueToPullRequestTool,
   UnlinkIssueFromPullRequestTool,
   ListIssuePullRequestLinksTool,
