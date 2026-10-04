@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type {
   IssueListState,
+  IssueListOrder,
   IssueInvolvement,
   IssueTrackerAccount,
   IssueTrackerConnection,
@@ -14,6 +15,7 @@ import type {
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const API_URL = "https://api.linear.app/graphql";
 const MAX_PAGE = 250;
@@ -100,7 +102,7 @@ const ListEnvelope = Schema.Struct({
   data: Schema.Struct({
     issues: Schema.Struct({
       nodes: Schema.Array(Issue),
-      pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
+      pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean, hasPreviousPage: Schema.Boolean }),
     }),
   }),
 });
@@ -140,10 +142,10 @@ const CONNECTION_QUERY = `query T3LinearConnection {
   teams(first: 250) { nodes { id key name } }
 }`;
 const VIEWER_QUERY = `query T3LinearViewer { viewer { ${USER_FIELDS} } }`;
-const LIST_QUERY = `query T3LinearIssues($first: Int!, $filter: IssueFilter!) {
-  issues(first: $first, filter: $filter, orderBy: updatedAt) {
+const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $filter: IssueFilter!) {
+  issues(first: $first, last: $last, filter: $filter, orderBy: updatedAt) {
     nodes { ${ISSUE_FIELDS} }
-    pageInfo { hasNextPage }
+    pageInfo { hasNextPage hasPreviousPage }
   }
 }`;
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
@@ -242,8 +244,9 @@ export class LinearApi extends Context.Service<
       readonly involvement: IssueInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      readonly order?: IssueListOrder | undefined;
       readonly query?: string;
-      readonly updatedBefore?: string;
+      readonly cursor?: ProviderListCursor | undefined;
       readonly credentialId?: string;
     }) => Effect.Effect<
       { readonly issues: ReadonlyArray<LinearIssue>; readonly truncated: boolean },
@@ -621,18 +624,25 @@ const make = Effect.gen(function* () {
           { description: { containsIgnoreCase: input.query } },
         ];
       }
-      if (input.updatedBefore !== undefined) filter.updatedAt = { lte: input.updatedBefore };
-      const first = Math.min(input.limit + 1, MAX_PAGE);
+      if (input.cursor !== undefined) filter.updatedAt = { lte: input.cursor.updatedBefore };
+      if (input.cursor?.seenAt?.length) filter.number = { nin: input.cursor.seenAt };
+      const size = Math.min(input.limit + 1, MAX_PAGE);
+      const ascending = input.order === "asc";
       return request(
         input.credentialId,
         "issue list",
         LIST_QUERY,
-        first === 0 ? {} : { first, filter },
+        { [ascending ? "last" : "first"]: size, filter },
         ListEnvelope,
       ).pipe(
         Effect.map(({ data }) => ({
-          issues: data.issues.nodes.slice(0, input.limit),
-          truncated: data.issues.nodes.length > input.limit || data.issues.pageInfo.hasNextPage,
+          issues: (ascending ? data.issues.nodes.toReversed() : data.issues.nodes).slice(
+            0,
+            input.limit,
+          ),
+          truncated:
+            data.issues.nodes.length > input.limit ||
+            (ascending ? data.issues.pageInfo.hasPreviousPage : data.issues.pageInfo.hasNextPage),
         })),
       );
     },

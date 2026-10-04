@@ -123,24 +123,27 @@ export const make = Effect.gen(function* () {
     getViewer: () => api.getViewer().pipe(Effect.mapError(fail("getViewer"))),
 
     listIssues: (input) =>
-      api
-        .listIssues({
-          repository: input.repository,
-          state: input.state,
-          limit: input.limit,
-          query: input.query,
-          cursor: input.cursor,
-        })
-        .pipe(
-          Effect.mapError(fail("listIssues")),
-          Effect.map((batch) => ({
-            items: batch.items.map(toIssue),
-            truncated: batch.truncated,
-            // Bitbucket is asked for `-updated_on` whether or not it is being carried on from,
-            // so every page it answers is one a cursor can continue.
-            continues: true,
-          })),
-        ),
+      input.involvement === "mentioned"
+        ? unsupported("listIssues", "Bitbucket issues do not support filtering by mentions.")
+        : api
+            .listIssues({
+              repository: input.repository,
+              state: input.state,
+              involvement: input.involvement,
+              viewer: input.viewer,
+              limit: input.limit,
+              order: input.order,
+              query: input.query,
+              cursor: input.cursor,
+            })
+            .pipe(
+              Effect.mapError(fail("listIssues")),
+              Effect.map((batch) => ({
+                items: batch.items.map(toIssue),
+                truncated: batch.truncated,
+                continues: input.order !== "asc",
+              })),
+            ),
 
     getIssue: (input) => {
       const target = { repository: input.repository, number: input.number };
@@ -169,7 +172,7 @@ export const make = Effect.gen(function* () {
         Effect.mapError(fail("getIssueActivity")),
         Effect.map((page) => ({
           comments: page.comments,
-          commentCount: page.comments.length,
+          commentCount: page.commentCount,
           commentsTruncated: page.truncated,
           // Nothing beyond the comments themselves is reported.
           events: [],

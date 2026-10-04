@@ -6,6 +6,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
 import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
+import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const mockedExecute = vi.fn<GitLabCli.GitLabCli["Service"]["execute"]>();
 
@@ -157,6 +158,73 @@ afterEach(() => {
 });
 
 layer("GitLabIssueCli.layer", (it) => {
+  it.effect(
+    "pages through tied updates without loss and reads the oldest slice in ascending order",
+    () =>
+      Effect.gen(function* () {
+        const rows = Array.from({ length: 123 }, (_, index) => ({
+          iid: index + 1,
+          title: `Issue ${index + 1}`,
+          web_url: `https://gitlab.com/acme/web/-/issues/${index + 1}`,
+          state: "opened",
+          created_at: "2026-07-01T00:00:00.000Z",
+          updated_at:
+            index < 121 ? "2026-07-03T00:00:00.000Z" : `2026-07-0${123 - index}T00:00:00.000Z`,
+        }));
+        mockedExecute.mockImplementation(({ args }) => {
+          const params = new URL(args[1] ?? "", "https://gitlab.test").searchParams;
+          const before = params.get("updated_before");
+          const seen = new Set(params.getAll("not[iids][]").map(Number));
+          const selected = rows.filter(
+            (row) => (before === null || row.updated_at <= before) && !seen.has(row.iid),
+          );
+          selected.sort(
+            (left, right) =>
+              (params.get("sort") === "asc" ? 1 : -1) *
+              left.updated_at.localeCompare(right.updated_at),
+          );
+          const size = Number(params.get("per_page"));
+          const start = (Number(params.get("page")) - 1) * size;
+          return Effect.succeed(output(JSON.stringify(selected.slice(start, start + size))));
+        });
+        const provider = yield* GitLabIssueProvider.make;
+        const input = {
+          cwd: "/w",
+          repository: "acme/web",
+          host: "gitlab.com",
+          state: "open",
+          involvement: "all",
+          viewer: "bilal",
+          limit: 10,
+        } as const;
+        const delivered: number[] = [];
+        let cursor: ProviderListCursor | undefined;
+        let truncated = true;
+        for (let page = 0; page < 14 && truncated; page++) {
+          const batch = yield* provider.listIssues({ ...input, cursor });
+          delivered.push(...batch.items.map((item) => item.number));
+          truncated = batch.truncated;
+          const boundary = batch.items.at(-1)?.updatedAt;
+          assert.isDefined(boundary);
+          cursor = {
+            updatedBefore: boundary,
+            seenAt: [
+              ...(cursor?.updatedBefore === boundary ? (cursor.seenAt ?? []) : []),
+              ...batch.items
+                .filter((item) => item.updatedAt === boundary)
+                .map((item) => item.number),
+            ],
+          };
+        }
+        expect(delivered).toEqual(rows.map((row) => row.iid));
+        assert.isFalse(truncated);
+        const oldest = yield* provider.listIssues({ ...input, order: "asc" });
+        expect(oldest.items.map((item) => item.number)).toEqual([123, 122, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert.isTrue(oldest.truncated);
+        assert.isFalse(oldest.continues);
+      }),
+  );
+
   it.effect("asks GitLab for one row more than the page, to probe for a next page", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(3, 1))));

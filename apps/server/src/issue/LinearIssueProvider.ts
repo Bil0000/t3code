@@ -174,8 +174,9 @@ export const make = Effect.gen(function* () {
           involvement: input.involvement,
           viewer: input.viewer,
           limit: input.limit,
+          order: input.order,
           ...(input.query === undefined ? {} : { query: input.query }),
-          ...(input.cursor === undefined ? {} : { updatedBefore: input.cursor.updatedBefore }),
+          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
           ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
         })
         .pipe(
@@ -183,7 +184,7 @@ export const make = Effect.gen(function* () {
           Effect.map(({ issues, truncated }) => ({
             items: issues.map(toIssue),
             truncated,
-            continues: true,
+            continues: input.order !== "asc",
           })),
         ),
     getIssue: (input) =>

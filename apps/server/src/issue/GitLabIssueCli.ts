@@ -13,6 +13,7 @@ import type {
   IssueLabelCandidateList,
   IssueLinkedPullRequest,
   IssueListState,
+  IssueListOrder,
   IssueReaction,
   IssueReactionContent,
   IssueTemplate,
@@ -139,6 +140,7 @@ export class GitLabIssueCli extends Context.Service<
       readonly involvement: Exclude<IssueInvolvement, "mentioned">;
       readonly viewer: string;
       readonly limit: number;
+      readonly order?: IssueListOrder | undefined;
       /** Free text for GitLab's own `search`, which matches title and description. */
       readonly query?: string | undefined;
       /** Where to carry on from in GitLab's stable update-ordered row set. */
@@ -295,7 +297,15 @@ function searchParams(search: string | undefined): ReadonlyArray<readonly [strin
 function cursorParams(
   cursor: ProviderListCursor | undefined,
 ): ReadonlyArray<readonly [string, string]> {
-  return cursor === undefined ? [] : [["updated_before", cursor.updatedBefore]];
+  return cursor === undefined
+    ? []
+    : [
+        ["updated_before", cursor.updatedBefore],
+        ...(cursor.seenAt ?? []).map((number): readonly [string, string] => [
+          "not[iids][]",
+          String(number),
+        ]),
+      ];
 }
 
 function query(params: ReadonlyArray<readonly [string, string]>): string {
@@ -361,6 +371,7 @@ const make = Effect.gen(function* () {
     readonly involvement: Exclude<IssueInvolvement, "mentioned">;
     readonly viewer: string;
     readonly limit: number;
+    readonly order?: IssueListOrder | undefined;
     readonly query?: string | undefined;
     readonly cursor?: ProviderListCursor | undefined;
     readonly page: number;
@@ -384,7 +395,7 @@ const make = Effect.gen(function* () {
         ...searchParams(input.query),
         ...cursorParams(input.cursor),
         ["order_by", "updated_at"],
-        ["sort", "desc"],
+        ["sort", input.order ?? "desc"],
         ["per_page", String(perPage)],
         ["page", String(input.page)],
       ])}`,

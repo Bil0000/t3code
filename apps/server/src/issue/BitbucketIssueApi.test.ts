@@ -2,11 +2,15 @@ import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import * as BitbucketIssueApi from "./BitbucketIssueApi.ts";
+import * as BitbucketIssueProvider from "./BitbucketIssueProvider.ts";
+import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const mockedRequest = vi.fn<BitbucketApi.BitbucketApi["Service"]["request"]>();
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const layer = it.layer(
   BitbucketIssueApi.layer.pipe(
@@ -71,6 +75,234 @@ afterEach(() => {
 });
 
 layer("BitbucketIssueApi.layer", (it) => {
+  it.effect(
+    "pages through tied updates without loss and reads the oldest slice in ascending order",
+    () =>
+      Effect.gen(function* () {
+        const rows = Array.from({ length: 63 }, (_, index) => ({
+          id: index + 1,
+          title: `Issue ${index + 1}`,
+          links: { html: { href: `https://bitbucket.org/acme/web/issues/${index + 1}` } },
+          state: "open",
+          created_on: "2026-07-01T00:00:00.000Z",
+          updated_on:
+            index < 61 ? "2026-07-03T00:00:00.000Z" : `2026-07-0${63 - index}T00:00:00.000Z`,
+        }));
+        mockedRequest.mockImplementation(({ url }) => {
+          const params = new URL(url, "https://bitbucket.test").searchParams;
+          const filter = params.get("q") ?? "";
+          const before = /updated_on <= ([^ ]+)/.exec(filter)?.[1];
+          const seen = new Set(
+            Array.from(filter.matchAll(/id != (\d+)/g), (match) => Number(match[1])),
+          );
+          const selected = rows.filter(
+            (row) => (before === undefined || row.updated_on <= before) && !seen.has(row.id),
+          );
+          selected.sort(
+            (left, right) =>
+              (params.get("sort") === "updated_on" ? 1 : -1) *
+              left.updated_on.localeCompare(right.updated_on),
+          );
+          const size = Number(params.get("pagelen"));
+          const start = (Number(params.get("page") ?? "1") - 1) * size;
+          const next = new URL(url, "https://bitbucket.test");
+          next.searchParams.set("page", String(start / size + 2));
+          return Effect.succeed(
+            response(
+              valuePage(
+                selected.slice(start, start + size),
+                selected.length > start + size ? next.href : undefined,
+              ),
+            ),
+          );
+        });
+        const provider = yield* BitbucketIssueProvider.make;
+        const input = {
+          cwd: "/w",
+          repository: "acme/web",
+          host: "bitbucket.org",
+          state: "open",
+          involvement: "all",
+          viewer: "bilal",
+          limit: 10,
+        } as const;
+        const delivered: number[] = [];
+        let cursor: ProviderListCursor | undefined;
+        let truncated = true;
+        for (let page = 0; page < 8 && truncated; page++) {
+          const batch = yield* provider.listIssues({ ...input, cursor });
+          delivered.push(...batch.items.map((item) => item.number));
+          truncated = batch.truncated;
+          const boundary = batch.items.at(-1)?.updatedAt;
+          assert.isDefined(boundary);
+          cursor = {
+            updatedBefore: boundary,
+            seenAt: [
+              ...(cursor?.updatedBefore === boundary ? (cursor.seenAt ?? []) : []),
+              ...batch.items
+                .filter((item) => item.updatedAt === boundary)
+                .map((item) => item.number),
+            ],
+          };
+        }
+        expect(delivered).toEqual(rows.map((row) => row.id));
+        assert.isFalse(truncated);
+        const oldest = yield* provider.listIssues({ ...input, order: "asc" });
+        expect(oldest.items.map((item) => item.number)).toEqual([63, 62, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert.isTrue(oldest.truncated);
+        assert.isFalse(oldest.continues);
+      }),
+  );
+
+  it.effect.each(["assigned", "authored"] as const)(
+    "filters $0 issues using the signed-in nickname",
+    (involvement) =>
+      Effect.gen(function* () {
+        const rows = ["other", "bilal"].map((nickname, index) => ({
+          id: index + 7,
+          title: "Issue",
+          state: "open",
+          created_on: "2026-07-01T00:00:00.000Z",
+          updated_on: "2026-07-01T00:00:00.000Z",
+          links: { html: { href: `https://bitbucket.org/acme/web/issues/${index + 7}` } },
+          reporter: { nickname },
+          assignee: { nickname },
+        }));
+        mockedRequest.mockImplementation(({ url }) => {
+          const filter = new URL(url, "https://bitbucket.test").searchParams.get("q") ?? "";
+          const relation = involvement === "assigned" ? "assignee" : "reporter";
+          return Effect.succeed(
+            response(
+              valuePage(filter.includes(`${relation}.nickname = "bilal"`) ? rows.slice(1) : rows),
+            ),
+          );
+        });
+        const provider = yield* BitbucketIssueProvider.make;
+        const result = yield* provider.listIssues({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "bitbucket.org",
+          state: "open",
+          involvement,
+          viewer: "bilal",
+          limit: 10,
+        });
+        expect(result.items.map((item) => item.number)).toEqual([8]);
+      }),
+  );
+
+  it.effect("escapes the viewer nickname in involvement filters", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(valuePage([]))));
+      const provider = yield* BitbucketIssueProvider.make;
+      yield* provider.listIssues({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "bitbucket.org",
+        state: "open",
+        involvement: "assigned",
+        viewer: String.raw`a\" OR state = "closed"`,
+        limit: 10,
+      });
+      expect(filterOfCall(0)).toContain(
+        String.raw`assignee.nickname = "a\\\" OR state = \"closed\""`,
+      );
+    }),
+  );
+
+  it.effect("refuses unsupported mention filters without returning unrelated issues", () =>
+    Effect.gen(function* () {
+      const provider = yield* BitbucketIssueProvider.make;
+      const error = yield* Effect.flip(
+        provider.listIssues({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "bitbucket.org",
+          state: "open",
+          involvement: "mentioned",
+          viewer: "bilal",
+          limit: 10,
+        }),
+      );
+      expect(error.detail).toContain("do not support filtering by mentions");
+      expect(mockedRequest).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("keeps the host comment count when filtered comments reach the page cap", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockImplementation(({ url }) => {
+        const page = Number(new URL(url, "https://bitbucket.test").searchParams.get("page") ?? "1");
+        return Effect.succeed(
+          response(
+            JSON.stringify({
+              ...(page === 1 ? { size: 500 } : {}),
+              values: [
+                { id: page, content: { raw: "Visible" }, created_on: "2026-07-01T00:00:00.000Z" },
+                {
+                  id: page + 10,
+                  content: { raw: "Deleted" },
+                  deleted: true,
+                  created_on: "2026-07-01T00:00:00.000Z",
+                },
+              ],
+              next: `https://bitbucket.test/comments?page=${page + 1}`,
+            }),
+          ),
+        );
+      });
+      const provider = yield* BitbucketIssueProvider.make;
+      const result = yield* provider.getIssueActivity({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "bitbucket.org",
+        number: 7,
+      });
+      assert.strictEqual(result.commentCount, 500);
+      assert.strictEqual(result.comments.length, 10);
+      assert.isTrue(result.commentsTruncated);
+      assert.strictEqual(mockedRequest.mock.calls.length, 10);
+    }),
+  );
+
+  it.effect("keeps the host count when a complete comment read omits deleted and empty rows", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(
+        Effect.succeed(
+          response(
+            encodeJson({
+              size: 3,
+              values: [
+                {
+                  id: 1,
+                  content: { raw: "Visible" },
+                  created_on: "2026-07-01T00:00:00.000Z",
+                },
+                {
+                  id: 2,
+                  content: { raw: "Deleted" },
+                  deleted: true,
+                  created_on: "2026-07-01T00:00:00.000Z",
+                },
+                { id: 3, content: { raw: " " }, created_on: "2026-07-01T00:00:00.000Z" },
+              ],
+            }),
+          ),
+        ),
+      );
+      const provider = yield* BitbucketIssueProvider.make;
+      const result = yield* provider.getIssueActivity({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "bitbucket.org",
+        number: 7,
+      });
+      assert.strictEqual(result.commentCount, 3);
+      assert.strictEqual(result.comments.length, 1);
+      assert.isFalse(result.commentsTruncated);
+    }),
+  );
+
   it.effect("lists open issues at Bitbucket's page ceiling", () =>
     Effect.gen(function* () {
       mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(3, 1))));
@@ -418,6 +650,7 @@ layer("BitbucketIssueApi.layer", (it) => {
       const result = yield* api.listComments({ repository: "acme/web", number: 7 });
 
       expect(result.comments.map((comment) => comment.id)).toEqual(["10", "13"]);
+      assert.strictEqual(result.commentCount, 2);
       assert.isFalse(result.truncated);
       expect(callAt(1).url).toBe("https://api.bitbucket.org/2.0/comments?page=2");
     }),
@@ -442,26 +675,19 @@ layer("BitbucketIssueApi.layer", (it) => {
     }),
   );
 
-  for (const status of [410, 403]) {
-    it.effect(`handles repository permission HTTP ${status}`, () =>
-      Effect.gen(function* () {
-        const failure = new BitbucketApi.BitbucketResponseError({
-          operation: "request",
-          status,
-          responseBodyLength: 0,
-        });
-        mockedRequest.mockReturnValueOnce(Effect.fail(failure));
-        const api = yield* BitbucketIssueApi.BitbucketIssueApi;
-        const result = yield* Effect.result(
-          api.getRepositoryPermission({ repository: "acme/web" }),
-        );
-        assert.deepStrictEqual(
-          result,
-          status === 410 ? Result.succeed(true) : Result.fail(failure),
-        );
-      }),
-    );
-  }
+  it.effect.each([410, 403])("handles repository permission HTTP $0", (status) =>
+    Effect.gen(function* () {
+      const failure = new BitbucketApi.BitbucketResponseError({
+        operation: "request",
+        status,
+        responseBodyLength: 0,
+      });
+      mockedRequest.mockReturnValueOnce(Effect.fail(failure));
+      const api = yield* BitbucketIssueApi.BitbucketIssueApi;
+      const result = yield* Effect.result(api.getRepositoryPermission({ repository: "acme/web" }));
+      assert.deepStrictEqual(result, status === 410 ? Result.succeed(true) : Result.fail(failure));
+    }),
+  );
 
   it.effect("fails the read when Bitbucket answers with something unreadable", () =>
     Effect.gen(function* () {

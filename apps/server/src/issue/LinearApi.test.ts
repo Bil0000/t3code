@@ -8,6 +8,9 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as LinearApi from "./LinearApi.ts";
+import * as LinearIssueProvider from "./LinearIssueProvider.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const bytes = (value: string) => new TextEncoder().encode(value);
 const Json = Schema.fromJsonString(Schema.Unknown);
@@ -213,7 +216,7 @@ it.effect("keeps Linear list continuation when the API page cap is reached", () 
               labels: { nodes: [] },
             },
           ],
-          pageInfo: { hasNextPage: true },
+          pageInfo: { hasNextPage: true, hasPreviousPage: false },
         },
       },
     }),
@@ -560,3 +563,100 @@ it.effect("removes Linear comment reactions from API arrays", () => {
     assert.deepStrictEqual(requests.at(-1)?.body.variables, { id: "reaction-1" });
   }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "pages through tied Linear updates without loss and reads the oldest slice in ascending order",
+  () => {
+    const rows = Array.from({ length: 263 }, (_, index) => ({
+      id: `issue-${index + 1}`,
+      identifier: `ENG-${index + 1}`,
+      number: index + 1,
+      title: `Issue ${index + 1}`,
+      url: `https://linear.app/acme/issue/ENG-${index + 1}`,
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: index < 261 ? "2026-07-03T00:00:00.000Z" : `2026-07-0${263 - index}T00:00:00.000Z`,
+      state: { name: "Open", type: "started" },
+    }));
+    const { layer, requests } = makeLayer({
+      envToken: "lin_api_test",
+      response: (body) => {
+        const variables = body.variables as {
+          first?: number;
+          last?: number;
+          filter: { updatedAt?: { lte: string }; number?: { nin: number[] } };
+        };
+        const selected = rows.filter(
+          (row) =>
+            (variables.filter.updatedAt === undefined ||
+              row.updatedAt <= variables.filter.updatedAt.lte) &&
+            !variables.filter.number?.nin.includes(row.number),
+        );
+        const size = variables.first ?? variables.last ?? 50;
+        return {
+          data: {
+            issues: {
+              nodes: variables.last === undefined ? selected.slice(0, size) : selected.slice(-size),
+              pageInfo: {
+                hasNextPage: variables.last === undefined && selected.length > size,
+                hasPreviousPage: variables.last !== undefined && selected.length > size,
+              },
+            },
+          },
+        };
+      },
+    });
+    return Effect.gen(function* () {
+      const provider = yield* LinearIssueProvider.make;
+      const input = {
+        cwd: "/w",
+        repository: "ENG",
+        host: "linear.app",
+        state: "open",
+        involvement: "all",
+        viewer: "user-1",
+        limit: 10,
+      } as const;
+      const delivered: number[] = [];
+      let cursor: ProviderListCursor | undefined;
+      let truncated = true;
+      for (let page = 0; page < 28 && truncated; page++) {
+        const batch = yield* provider.listIssues({ ...input, cursor });
+        delivered.push(...batch.items.map((item) => item.number));
+        truncated = batch.truncated;
+        const boundary = batch.items.at(-1)?.updatedAt;
+        assert.isDefined(boundary);
+        cursor = {
+          updatedBefore: boundary,
+          seenAt: [
+            ...(cursor?.updatedBefore === boundary ? (cursor.seenAt ?? []) : []),
+            ...batch.items.filter((item) => item.updatedAt === boundary).map((item) => item.number),
+          ],
+        };
+      }
+      assert.deepStrictEqual(
+        delivered,
+        rows.map((row) => row.number),
+      );
+      assert.isFalse(truncated);
+      const oldest = yield* provider.listIssues({ ...input, order: "asc" });
+      assert.deepStrictEqual(
+        oldest.items.map((item) => item.number),
+        [263, 262, 261, 260, 259, 258, 257, 256, 255, 254],
+      );
+      assert.isTrue(oldest.truncated);
+      assert.isFalse(oldest.continues);
+      assert.include(String(requests.at(-1)?.body.query), "last: $last");
+      const cappedOldest = yield* provider.listIssues({ ...input, limit: 500, order: "asc" });
+      assert.strictEqual(cappedOldest.items.length, 250);
+      assert.strictEqual(cappedOldest.items[0]?.number, 263);
+      assert.isTrue(cappedOldest.truncated);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          layer,
+          ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
+        ),
+      ),
+    );
+  },
+);

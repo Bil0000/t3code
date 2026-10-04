@@ -99,14 +99,17 @@ export const make = Effect.gen(function* () {
               involvement: input.involvement,
               viewer: input.viewer,
               limit: input.limit,
+              order: input.order,
               query: input.query,
               cursor: input.cursor,
             })
             .pipe(
               Effect.mapError(fail("listIssues")),
-              // GitLab is asked for its issues by update, newest first, whether or not it is being
-              // carried on from — so every page it answers is one a cursor can continue.
-              Effect.map(({ items, truncated }) => ({ items, truncated, continues: true })),
+              Effect.map(({ items, truncated }) => ({
+                items,
+                truncated,
+                continues: input.order !== "asc",
+              })),
             ),
 
     getIssue: (input) =>

@@ -3,7 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type { IssueAction, IssueComment, IssueListState } from "@t3tools/contracts";
+import type {
+  IssueAction,
+  IssueComment,
+  IssueInvolvement,
+  IssueListOrder,
+  IssueListState,
+} from "@t3tools/contracts";
 
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import {
@@ -96,13 +102,22 @@ export class BitbucketIssueApi extends Context.Service<
     /** A function rather than a value, so the request is built per call and not at layer time. */
     readonly getViewer: () => Effect.Effect<string, BitbucketIssueApiError>;
 
-    readonly listIssues: (input: {
-      readonly repository: string;
-      readonly state: IssueListState;
-      readonly limit: number;
-      readonly query?: string | undefined;
-      readonly cursor?: ProviderListCursor | undefined;
-    }) => Effect.Effect<BitbucketIssueBatch, BitbucketIssueApiError>;
+    readonly listIssues: (
+      input: {
+        readonly repository: string;
+        readonly state: IssueListState;
+        readonly limit: number;
+        readonly order?: IssueListOrder | undefined;
+        readonly query?: string | undefined;
+        readonly cursor?: ProviderListCursor | undefined;
+      } & (
+        | { readonly involvement?: "all"; readonly viewer?: string }
+        | {
+            readonly involvement: Exclude<IssueInvolvement, "all" | "mentioned">;
+            readonly viewer: string;
+          }
+      ),
+    ) => Effect.Effect<BitbucketIssueBatch, BitbucketIssueApiError>;
 
     readonly getIssue: (input: {
       readonly repository: string;
@@ -118,7 +133,11 @@ export class BitbucketIssueApi extends Context.Service<
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<
-      { readonly comments: ReadonlyArray<IssueComment>; readonly truncated: boolean },
+      {
+        readonly comments: ReadonlyArray<IssueComment>;
+        readonly commentCount: number;
+        readonly truncated: boolean;
+      },
       BitbucketIssueApiError
     >;
 
@@ -293,17 +312,23 @@ const make = Effect.gen(function* () {
     readonly url: string;
     readonly page: number;
     readonly collected: ReadonlyArray<IssueComment>;
+    readonly commentCount: number;
   }): Effect.Effect<
-    { readonly comments: ReadonlyArray<IssueComment>; readonly truncated: boolean },
+    {
+      readonly comments: ReadonlyArray<IssueComment>;
+      readonly commentCount: number;
+      readonly truncated: boolean;
+    },
     BitbucketIssueApiError
   > =>
     readPage({ operation: "listComments", url: input.url, decode: decodeIssueCommentsJson }).pipe(
       Effect.flatMap((page) => {
         const collected = [...input.collected, ...page.comments];
+        const commentCount = Math.max(input.commentCount, page.size ?? 0, collected.length);
         if (page.next !== null && input.page < CONVERSATION_PAGES) {
-          return commentsPage({ url: page.next, page: input.page + 1, collected });
+          return commentsPage({ url: page.next, page: input.page + 1, collected, commentCount });
         }
-        return Effect.succeed({ comments: collected, truncated: page.next !== null });
+        return Effect.succeed({ comments: collected, commentCount, truncated: page.next !== null });
       }),
     );
 
@@ -347,11 +372,18 @@ const make = Effect.gen(function* () {
         // being skipped.
         const predicates = [
           stateFilter(input.state),
+          ...(input.involvement === "assigned" || input.involvement === "authored"
+            ? [
+                `${input.involvement === "assigned" ? "assignee" : "reporter"}.nickname = "${filterLiteral(input.viewer)}"`,
+              ]
+            : []),
           ...(search.length === 0 ? [] : [searchFilter(search)]),
           ...(input.cursor === undefined ? [] : [`updated_on <= ${input.cursor.updatedBefore}`]),
+          ...(input.cursor?.seenAt ?? []).map((number) => `id != ${number}`),
         ];
+        const sort = input.order === "asc" ? "updated_on" : "-updated_on";
         return listPage({
-          url: `${path}/issues?pagelen=${MAX_PAGE_SIZE}&sort=-updated_on&q=${encodeURIComponent(
+          url: `${path}/issues?pagelen=${MAX_PAGE_SIZE}&sort=${sort}&q=${encodeURIComponent(
             predicates.join(" AND "),
           )}`,
           limit: input.limit,
@@ -393,6 +425,7 @@ const make = Effect.gen(function* () {
           url: `${path}/issues/${input.number}/comments?pagelen=${MAX_PAGE_SIZE}`,
           page: 1,
           collected: [],
+          commentCount: 0,
         }),
       ),
 
