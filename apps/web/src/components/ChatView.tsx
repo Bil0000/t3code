@@ -10690,6 +10690,7 @@ export default function ChatView(props: ChatViewProps) {
           draftId: composerDraftTarget,
         }}
         onStateChange={handleIssueTabStatusChange}
+        onOpenLinkedPullRequest={openLinkedPullRequest}
       />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />

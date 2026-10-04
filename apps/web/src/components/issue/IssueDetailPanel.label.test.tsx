@@ -153,6 +153,7 @@ let currentDetail = detail;
 let currentActivity = activity;
 
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { IssuesPanel } from "./IssuesPanel";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { CommentComposer } from "../sourceControl/CommentComposer";
 import { IssueSummaryTab } from "./IssueSummaryTab";
@@ -365,3 +366,33 @@ it.each(["comment-failed", "action-failed", "success"])(
     expect(commands.refresh).toHaveBeenCalledTimes(outcome === "comment-failed" ? 0 : 2);
   },
 );
+
+it("opens a related pull request through the thread issues panel handler", () => {
+  hooks.reset();
+  const onOpenLinkedPullRequest = vi.fn();
+  const issues = IssuesPanel({
+    environmentId: "environment-1" as EnvironmentId,
+    projectId: detail.projectId,
+    selected: { projectId: detail.projectId, repository: "acme/project", number: 42 },
+    onSelect: vi.fn(),
+    handoffTarget: { kind: "new-thread" },
+    onStateChange: vi.fn(),
+    onOpenLinkedPullRequest,
+  });
+  const panel = visitElements(
+    (issues.type as (props: typeof issues.props) => ReactElement)(issues.props),
+    (element) => element.type === IssueDetailPanel,
+  )!;
+  hooks.reset();
+  const summary = visitElements(
+    IssueDetailPanel(panel.props as Parameters<typeof IssueDetailPanel>[0]),
+    (element) => element.type === IssueSummaryTab,
+  )!;
+  const link = {
+    repository: "acme/project",
+    number: 503,
+    url: "https://github.com/acme/project/pull/503",
+  };
+  (summary.props.onOpenLinkedPullRequest as (value: typeof link) => void)(link);
+  expect(onOpenLinkedPullRequest).toHaveBeenCalledWith(link);
+});
