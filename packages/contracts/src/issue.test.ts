@@ -43,6 +43,11 @@ it("accepts legacy unlink keys and keeps host URLs while links require a URL", (
     ...link,
     state: "closed",
   });
+  expect(decodeThreadIssueLink({ ...link, projectId: "source-project" })).toMatchObject({
+    _tag: "Some",
+    value: { ...link, projectId: "source-project" },
+  });
+  expect(decodeThreadIssueLink({ ...link, projectId: "" })._tag).toBe("None");
 });
 
 const LIST_RESULT: IssueListResult = {

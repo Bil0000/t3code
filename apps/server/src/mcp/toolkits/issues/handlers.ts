@@ -62,7 +62,42 @@ const make = Effect.gen(function* () {
     read_issue: (input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread();
-        const ref = issueRef(thread.projectId, input);
+        const matches = (thread.issues ?? []).filter(
+          (issue) =>
+            issue.repository.toLowerCase() === input.repository.toLowerCase() &&
+            issue.number === input.number &&
+            (input.provider === undefined || issue.provider === input.provider) &&
+            (input.url === undefined ||
+              normalizeWorkItemLinkKey(issue).url ===
+                normalizeWorkItemLinkKey({ provider: issue.provider, url: input.url }).url),
+        );
+        if (matches.length > 1) {
+          return yield* new IssueOperationError({
+            operation: "read",
+            detail: "More than one issue matches this repository and number. Pass url.",
+          });
+        }
+        const linked = matches[0];
+        if (input.url !== undefined && linked === undefined) {
+          return yield* new IssueOperationError({
+            operation: "read",
+            detail: "No linked issue matches this URL.",
+          });
+        }
+        let ref = issueRef(thread.projectId, input);
+        if (linked !== undefined) {
+          const url = URL.parse(linked.url);
+          if (url === null || (url.protocol !== "https:" && url.protocol !== "http:")) {
+            return yield* new IssueOperationError({
+              operation: "read",
+              detail: "The linked issue URL is invalid.",
+            });
+          }
+          ref = {
+            ...issueRef(linked.projectId ?? thread.projectId, linked),
+            host: url.host,
+          };
+        }
         const issue = yield* issues.detail(ref);
         if (input.commentsCursor !== undefined) {
           const page = yield* issues.commentsPage({ ...ref, cursor: input.commentsCursor });

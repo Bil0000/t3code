@@ -262,6 +262,72 @@ describe("issue toolkit handlers", () => {
     }),
   );
 
+  it.effect("reads linked issues and comment pages from their saved source", () =>
+    Effect.gen(function* () {
+      const foreign = ProjectId.make("foreign-project");
+      for (const linked of [issue, { ...issue, projectId: foreign }]) {
+        const harness = yield* makeHarness(thread([linked]));
+        const input = { repository: issue.repository.toUpperCase(), number: issue.number };
+        const ref = {
+          projectId: linked.projectId ?? projectId,
+          provider: issue.provider,
+          repository: issue.repository,
+          number: issue.number,
+          host: "github.com",
+        };
+        yield* harness.call("read_issue", input);
+        yield* harness.call("read_issue", { ...input, commentsCursor: "next-page" });
+        expect(yield* Ref.get(harness.detailRequests)).toEqual([ref, ref]);
+        expect(yield* Ref.get(harness.activityRequests)).toEqual([ref]);
+        expect(yield* Ref.get(harness.commentsPageRequests)).toEqual([
+          { ...ref, cursor: "next-page" },
+        ]);
+        expect(yield* harness.call("read_issue", input, []).pipe(Effect.flip)).toMatchObject({
+          _tag: "McpCapabilityUnavailableError",
+          capability: "issues",
+        });
+        expect(yield* Ref.get(harness.detailRequests)).toEqual([ref, ref]);
+      }
+    }),
+  );
+
+  it.effect("requires a URL for linked issues with the same number on different hosts", () =>
+    Effect.gen(function* () {
+      const enterprise = {
+        ...issue,
+        projectId: ProjectId.make("enterprise-project"),
+        url: "https://github.example.com/t3tools/t3code/issues/7",
+      };
+      const harness = yield* makeHarness(thread([issue, enterprise]));
+      const input = { repository: issue.repository, number: issue.number, provider: "github" };
+      expect(yield* harness.call("read_issue", input).pipe(Effect.flip)).toMatchObject({
+        _tag: "IssueOperationError",
+        detail: "More than one issue matches this repository and number. Pass url.",
+      });
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([]);
+      yield* harness.call("read_issue", { ...input, url: `${enterprise.url}#comment` });
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([
+        { projectId: enterprise.projectId, ...input, host: "github.example.com" },
+      ]);
+    }),
+  );
+
+  it.effect("rejects an unmatched URL instead of using it to choose a source", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(thread([issue]));
+      expect(
+        yield* harness
+          .call("read_issue", {
+            repository: issue.repository,
+            number: issue.number,
+            url: "https://other.example.com/t3tools/t3code/issues/7",
+          })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "IssueOperationError", detail: "No linked issue matches this URL." });
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([]);
+    }),
+  );
+
   it.effect("routes every supported issue provider through IssueService", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

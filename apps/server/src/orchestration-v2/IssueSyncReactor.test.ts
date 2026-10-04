@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type IssueDetail,
+  type IssueInvalidateInput,
   type IssueRef,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2DomainEvent,
@@ -138,6 +139,7 @@ const makeHarness = Effect.fn("makeIssueSyncHarness")(function* (
   const activation = yield* Deferred.make<void>();
   const currentThreads = yield* Ref.make(threads);
   const reads = yield* Ref.make<ReadonlyArray<IssueRef>>([]);
+  const invalidations = yield* Ref.make<ReadonlyArray<IssueInvalidateInput>>([]);
   const commands = yield* Ref.make<ReadonlyArray<SyncCommand>>([]);
   const sweeps = yield* Queue.unbounded<void>();
   const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
@@ -156,7 +158,7 @@ const makeHarness = Effect.fn("makeIssueSyncHarness")(function* (
               ),
           }),
           Layer.mock(IssueService.IssueService)({
-            invalidate: () => Effect.void,
+            invalidate: (input) => Ref.update(invalidations, (rows) => [...rows, input]),
             detail: (ref) =>
               Ref.update(reads, (rows) => [...rows, ref]).pipe(Effect.andThen(read(ref))),
           }),
@@ -229,7 +231,7 @@ const makeHarness = Effect.fn("makeIssueSyncHarness")(function* (
     yield* Queue.take(processed);
     yield* reactor.drain;
   });
-  return { reactor, currentThreads, reads, commands, sweeps, events, flushEvents };
+  return { reactor, currentThreads, reads, invalidations, commands, sweeps, events, flushEvents };
 });
 
 it.effect("updates a legacy link's title and state and shares a read across threads", () =>
@@ -366,6 +368,56 @@ it.effect("keeps project, provider, and host routes separate", () =>
   ),
 );
 
+it.effect("uses linked source projects for reads while keeping writes in the thread project", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const sources = [ProjectId.make("linear-account-a"), ProjectId.make("linear-account-b")];
+      const fixture = yield* makeHarness(
+        [
+          THREAD,
+          ...sources.map((projectId) => ({
+            ...THREAD,
+            id: ThreadId.make(projectId),
+            issues: [
+              {
+                ...LINK,
+                projectId,
+                provider: "linear",
+                repository: "ENG",
+                url: "https://linear.app/team/issue/ENG-7/title",
+              },
+            ],
+          })),
+        ],
+        (ref) =>
+          Effect.succeed(
+            detail(ref, {
+              title: `Title from ${ref.projectId}`,
+              ...(ref.provider === "linear"
+                ? { url: "https://linear.app/team/issue/ENG-7/title" }
+                : {}),
+            }),
+          ),
+      );
+      yield* fixture.reactor.drain;
+      const reads = yield* Ref.get(fixture.reads);
+      assert.deepEqual(reads.map((ref) => ref.projectId).sort(), [PROJECT_ID, ...sources].sort());
+      assert.deepEqual(
+        yield* Ref.get(fixture.invalidations),
+        reads.map((reference) => ({ reference })),
+      );
+      const commands = yield* Ref.get(fixture.commands);
+      assert.equal(commands.length, 3);
+      for (const command of commands) {
+        assert.equal(command.projectId, PROJECT_ID);
+        const sourceProjectId = command.expectedIssue.projectId ?? PROJECT_ID;
+        assert.equal(command.issue.title, `Title from ${sourceProjectId}`);
+        assert.equal(command.issue.projectId, command.expectedIssue.projectId);
+      }
+    }),
+  ),
+);
+
 it.effect("does not replace a link with a result from another host or issue", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -415,6 +467,7 @@ it.effect("does not write a host result after relink or a newer title or state",
       const original = { ...LINK, linkId: CommandId.make("original") };
       const replacements: ReadonlyArray<ThreadIssueLink> = [
         { ...original, linkId: CommandId.make("relinked") },
+        { ...original, projectId: ProjectId.make("new-source-project") },
         { ...original, title: "Newer title" },
         { ...original, state: "open" },
       ];

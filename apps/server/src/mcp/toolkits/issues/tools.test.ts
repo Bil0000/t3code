@@ -18,6 +18,7 @@ it("publishes a provider-compatible read-only issue tool with T3 labels", () => 
       repository: { type: "string" },
       number: { type: "integer" },
       provider: { anyOf: [{ type: "string" }, { type: "null" }] },
+      url: { anyOf: [{ type: "string" }, { type: "null" }] },
       commentsCursor: { anyOf: [{ type: "string" }, { type: "null" }] },
     },
   });

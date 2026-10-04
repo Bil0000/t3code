@@ -930,6 +930,7 @@ export type ThreadIssueKey = typeof ThreadIssueKey.Type;
 
 export const ThreadIssueLink = Schema.Struct({
   ...ThreadIssueKey.fields,
+  projectId: Schema.optionalKey(ProjectId),
   url: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
   state: Schema.optionalKey(IssueState),

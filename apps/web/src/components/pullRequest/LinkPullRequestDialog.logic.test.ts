@@ -1,12 +1,36 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { changeRequestWebUrl, resolveLinkPullRequestInput } from "./LinkPullRequestDialog";
+import {
+  changeRequestWebUrl,
+  linkIssuePreviewMatchesReference,
+  linkPullRequestPreviewTarget,
+  linkReferenceKind,
+  resolveLinkIssueInput,
+  resolveLinkPullRequestInput,
+} from "./LinkPullRequestDialog";
 
 const project = {
   host: "github.com",
   repository: "acme/web",
   webUrl: (number: number) => changeRequestWebUrl("github", "github.com", "acme/web", number),
 };
+
+describe("linkIssuePreviewMatchesReference", () => {
+  it.each([
+    ["https://linear.app/workspace-b/issue/ENG-42/old-title", true],
+    ["https://linear.app/workspace-a/issue/ENG-42", false],
+    ["https://linear.app/workspace-b/issue/ENG-43", false],
+    ["https://linear.app/workspace-b/issue/OPS-42", false],
+    ["#42", true],
+  ])("checks the Linear workspace and identifier for %s", (reference, matches) => {
+    expect(
+      linkIssuePreviewMatchesReference(reference, {
+        provider: "linear",
+        url: "https://linear.app/workspace-b/issue/ENG-42/new-title",
+      }),
+    ).toBe(matches);
+  });
+});
 
 describe("resolveLinkPullRequestInput", () => {
   it.each([
@@ -64,11 +88,14 @@ describe("resolveLinkPullRequestInput", () => {
     });
   });
 
-  it("returns null for input that is not a reference", () => {
-    expect(
-      resolveLinkPullRequestInput({ reference: "hello", project, hasProject: () => true }),
-    ).toBeNull();
-  });
+  it.each(["hello", "#0", "https://github.com/acme/web/pull/0"])(
+    "returns null for %s, which is not a reference",
+    (reference) => {
+      expect(
+        resolveLinkPullRequestInput({ reference, project, hasProject: () => true }),
+      ).toBeNull();
+    },
+  );
 
   it("resolves a bare number against the thread's own repository", () => {
     expect(
@@ -132,5 +159,164 @@ describe("changeRequestWebUrl", () => {
       "https://gitlab.com/g/sub/repo/-/merge_requests/5",
     );
     expect(changeRequestWebUrl("unknown", "x", "a/b", 1)).toBeNull();
+  });
+});
+
+describe("linkReferenceKind", () => {
+  it.each([
+    ["https://github.com/acme/web/issues/4", "issue"],
+    ["https://gitlab.com/g/sub/repo/-/issues/4", "issue"],
+    ["https://dev.azure.com/org/project/_workitems/edit/4", "issue"],
+    ["https://github.com/acme/web/pull/4", "pull-request"],
+    ["https://linear.app/acme/issue/ENG-4/fix-login", "issue"],
+    ["gh pr checkout 4", "pull-request"],
+  ] as const)("detects %s as %s whatever was chosen", (reference, kind) => {
+    expect(linkReferenceKind(reference, "issue")).toBe(kind);
+    expect(linkReferenceKind(reference, "pull-request")).toBe(kind);
+  });
+
+  it("lets the chosen kind decide a bare number", () => {
+    expect(linkReferenceKind("#4", "issue")).toBe("issue");
+    expect(linkReferenceKind("4", "pull-request")).toBe("pull-request");
+  });
+});
+
+describe("resolveLinkIssueInput", () => {
+  const own = { id: "p1" as never, repository: "acme/web" };
+
+  it("resolves a bare number against the thread's own repository", () => {
+    expect(
+      resolveLinkIssueInput({
+        reference: "#9",
+        project: own,
+        findProject: () => undefined,
+        linearProjectId: () => undefined,
+      }),
+    ).toEqual({ issue: { projectId: "p1", repository: "acme/web", number: 9 } });
+  });
+
+  it("asks for a URL when a bare number has no project", () => {
+    expect(
+      resolveLinkIssueInput({
+        reference: "9",
+        project: null,
+        findProject: () => undefined,
+        linearProjectId: () => undefined,
+      }),
+    ).toMatchObject({ error: expect.stringContaining("full URL") });
+  });
+
+  it("reads a URL with the project that owns its repository", () => {
+    const findProject = (link: { repository: string }) =>
+      link.repository === "org/project"
+        ? { id: "p2" as never, repository: "org/project/web" }
+        : undefined;
+    expect(
+      resolveLinkIssueInput({
+        reference: "https://dev.azure.com/org/project/_workitems/edit/12",
+        project: own,
+        findProject,
+        linearProjectId: () => undefined,
+      }),
+    ).toEqual({ issue: { projectId: "p2", repository: "org/project/web", number: 12 } });
+    expect(
+      resolveLinkIssueInput({
+        reference: "https://github.com/other/repo/issues/12",
+        project: own,
+        findProject,
+        linearProjectId: () => undefined,
+      }),
+    ).toMatchObject({ error: expect.stringContaining("github.com/other/repo") });
+  });
+
+  it("returns null for input that is not an issue reference", () => {
+    expect(
+      resolveLinkIssueInput({
+        reference: "hello",
+        project: own,
+        findProject: () => own,
+        linearProjectId: () => undefined,
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    "#0",
+    "https://github.com/acme/web/issues/0",
+    "https://dev.azure.com/org/project/_workitems/edit/0",
+    "https://linear.app/acme/issue/ENG-0",
+  ])("refuses number zero in %s", (reference) => {
+    expect(
+      resolveLinkIssueInput({
+        reference,
+        project: own,
+        findProject: () => own,
+        linearProjectId: () => own.id,
+      }),
+    ).toBeNull();
+  });
+
+  it("reads a Linear URL with the project bound to its team", () => {
+    const linearProjectId = (team: string) => (team === "ENG" ? ("p3" as never) : undefined);
+    expect(
+      resolveLinkIssueInput({
+        reference: "https://linear.app/acme/issue/ENG-12/fix-login",
+        project: own,
+        findProject: () => undefined,
+        linearProjectId,
+      }),
+    ).toEqual({
+      issue: {
+        projectId: "p3",
+        provider: "linear",
+        host: "linear.app",
+        repository: "ENG",
+        number: 12,
+      },
+    });
+    expect(
+      resolveLinkIssueInput({
+        reference: "https://linear.app/acme/issue/OPS-12",
+        project: own,
+        findProject: () => undefined,
+        linearProjectId,
+      }),
+    ).toMatchObject({ error: expect.stringContaining("OPS") });
+  });
+});
+
+describe("linkPullRequestPreviewTarget", () => {
+  const backend = {
+    id: "backend",
+    environmentId: "env",
+    repositoryIdentity: {
+      canonicalKey: "github.com/acme/backend",
+      provider: "github",
+      owner: "acme",
+      name: "backend",
+    },
+  } as never;
+  const target = (url: string, anyRepositoryOnHost: boolean) =>
+    linkPullRequestPreviewTarget({
+      environmentId: "env" as never,
+      projects: [backend],
+      pullRequestsEnabled: true,
+      anyRepositoryOnHost,
+      url,
+    });
+
+  it("reads another repository on the host through a project there, keeping its own repository", () => {
+    expect(target("https://github.com/acme/frontend/pull/7", true)).toEqual({
+      environmentId: "env",
+      input: { projectId: "backend", host: "github.com", repository: "acme/frontend", number: 7 },
+    });
+  });
+
+  it("leaves another repository unread where links are not host-wide", () => {
+    expect(target("https://github.com/acme/frontend/pull/7", false)).toBeNull();
+  });
+
+  it("does not read a Azure repository nothing has checked out", () => {
+    expect(target("https://dev.azure.com/org/project/_git/web/pullrequest/7", true)).toBeNull();
   });
 });

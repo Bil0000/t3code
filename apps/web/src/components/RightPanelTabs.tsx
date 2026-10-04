@@ -176,7 +176,7 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   issue: "Issues are only available from a project checked out from a host.",
-  pullRequests: "No linked pull requests are available for this thread.",
+  pullRequests: "No linked pull requests or issues are available for this thread.",
   device: "Devices are only available from a thread.",
 } as const;
 
@@ -200,7 +200,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   diff: "Available for Git repositories.",
   pullRequest: "No pull request on this branch yet.",
   issue: "Available for projects with a host.",
-  pullRequests: "No linked pull requests available.",
+  pullRequests: "No linked pull requests or issues available.",
   device: "Available from a thread.",
 } as const;
 
@@ -396,7 +396,7 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddPullRequest,
     },
     {
-      label: "Linked pull requests",
+      label: "Linked items",
       icon: PullRequestGlyph.link,
       shortcut: "L",
       available: props.pullRequestsAvailable,
@@ -631,7 +631,7 @@ function surfaceTitle(
     case "issues":
       return surface.selected ? `#${surface.selected.number}` : "Issues";
     case "pull-requests":
-      return "Pull requests";
+      return "Linked items";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -940,7 +940,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddIssue,
     },
     {
-      label: "Linked pull requests",
+      label: "Linked items",
       icon: PullRequestGlyph.link,
       shortcut: "L",
       available: props.pullRequestsAvailable,

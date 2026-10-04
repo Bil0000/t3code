@@ -1,22 +1,31 @@
-import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
+import {
+  SourceControlProviderKind,
+  type ScopedThreadRef,
+  type ThreadIssueLink,
+  type ThreadPullRequestLink,
+} from "@t3tools/contracts";
 import {
   resolveThreadPullRequestChains,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
 import {
   ArrowUpRightIcon,
+  CircleDotIcon,
   EyeIcon,
   EyeOffIcon,
   LinkIcon,
   MoreHorizontalIcon,
   PlusIcon,
 } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import * as Schema from "effect/Schema";
+import { useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { useOpenPrLink } from "~/lib/openPullRequestLink";
+import { findProjectForLink, openLinkInBrowser } from "~/lib/openIssueLink";
+import { shouldOpenPullRequestExternally, useOpenPrLink } from "~/lib/openPullRequestLink";
 import { cn } from "~/lib/utils";
-import { useServerConfigs, useThreadShell } from "~/state/entities";
+import { useRightPanelStore } from "~/rightPanelStore";
+import { useProjects, useServerConfigs, useThreadShell } from "~/state/entities";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -42,6 +51,7 @@ import {
   pullRequestChecksStatePresentation,
 } from "./pullRequestPresentation";
 import { PullRequestGlyph } from "./pullRequestIcons";
+import { resolveIssueState } from "../issue/issuePresentation";
 
 const SOURCE_LABELS: Record<ThreadPullRequestLink["source"], string> = {
   manual: "Linked by you",
@@ -68,6 +78,94 @@ function ChecksGlyph({
       </TooltipTrigger>
       <TooltipPopup>{presentation.label}</TooltipPopup>
     </Tooltip>
+  );
+}
+
+function RowMenu({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    // Out of the row's flow, so no row reserves a column for a button only the hovered one
+    // shows. It sits over the right end of the second line on the row's own hover color,
+    // fading in from the left, so it covers the time and leaves the diff counts alone.
+    <span
+      className={cn(
+        "absolute right-0 bottom-0.5 flex items-center rounded-r-md bg-background pr-1 pl-5",
+        "[mask-image:linear-gradient(to_right,transparent,black_1rem)]",
+        // Hidden means untouchable too: on a touch screen there is no hover, and an invisible
+        // layer over the right of the row would otherwise swallow the tap meant for the link.
+        "pointer-events-none opacity-0 group-hover/pr-row:pointer-events-auto group-hover/pr-row:opacity-100",
+        "has-[[data-popup-open]]:pointer-events-auto has-[[data-popup-open]]:opacity-100",
+        "has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100",
+      )}
+    >
+      <span aria-hidden className="absolute inset-0 bg-accent/60" />
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button variant="ghost" size="icon-micro" aria-label={label} className="relative">
+              <MoreHorizontalIcon className="size-3.5" />
+            </Button>
+          }
+        />
+        <MenuPopup align="end" side="bottom">
+          {children}
+        </MenuPopup>
+      </Menu>
+    </span>
+  );
+}
+
+const isSourceControlProvider = Schema.is(SourceControlProviderKind);
+
+function IssueRow({
+  issue,
+  onOpen,
+  onUnlink,
+}: {
+  issue: ThreadIssueLink;
+  onOpen: (issue: ThreadIssueLink) => void;
+  onUnlink: (issue: ThreadIssueLink) => void;
+}) {
+  const presentation =
+    issue.state === undefined ? null : resolveIssueState({ state: issue.state, stateReason: null });
+  const Icon = presentation?.Icon ?? CircleDotIcon;
+  const openIssue = (event: MouseEvent<HTMLElement>) => {
+    if (shouldOpenPullRequestExternally(event)) return;
+    event.preventDefault();
+    onOpen(issue);
+  };
+  return (
+    <div className={cn(PULL_REQUEST_ROW_CLASS, "relative pl-2 hover:bg-accent/60")}>
+      <Icon
+        role="img"
+        aria-label={presentation?.label ?? "Issue"}
+        className={cn("size-4 shrink-0", presentation?.toneClassName ?? "text-muted-foreground")}
+      />
+      <a href={issue.url} onClick={openIssue} className="flex min-w-0 flex-1">
+        <PullRequestRowLines
+          number={<span className={PULL_REQUEST_ROW_NUMBER_CLASS}>#{issue.number}</span>}
+          title={issue.title}
+          meta={
+            <span className="flex min-w-0 max-w-32 font-mono">
+              <MiddleTruncate value={issue.repository} />
+            </span>
+          }
+        />
+      </a>
+      <RowMenu label={`Actions for issue #${issue.number}`}>
+        <MenuItem onClick={() => void writeTextToClipboard(issue.url, "link")}>
+          <LinkIcon className="size-3.5" />
+          Copy link
+        </MenuItem>
+        <MenuItem onClick={() => openLinkInBrowser(issue.url)}>
+          <ArrowUpRightIcon className="size-3.5" />
+          Open on host
+        </MenuItem>
+        <MenuItem onClick={() => onUnlink(issue)}>
+          <PullRequestGlyph.unlink className="size-3.5" />
+          Unlink from thread
+        </MenuItem>
+      </RowMenu>
+    </div>
   );
 }
 
@@ -206,66 +304,36 @@ function LinkRow({
           updatedAt={snapshot?.updatedAt}
         />
       </a>
-      {/* Out of the row's flow, so no row reserves a column for a button only the hovered one
-          shows. It sits over the right end of the second line on the row's own hover color,
-          fading in from the left, so it covers the time and leaves the diff counts alone. */}
-      <span
-        className={cn(
-          "absolute right-0 bottom-0.5 flex items-center rounded-r-md bg-background pr-1 pl-5",
-          "[mask-image:linear-gradient(to_right,transparent,black_1rem)]",
-          // Hidden means untouchable too: on a touch screen there is no hover, and an invisible
-          // layer over the right of the row would otherwise swallow the tap meant for the link.
-          "pointer-events-none opacity-0 group-hover/pr-row:pointer-events-auto group-hover/pr-row:opacity-100",
-          "has-[[data-popup-open]]:pointer-events-auto has-[[data-popup-open]]:opacity-100",
-          "has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100",
-        )}
-      >
-        <span aria-hidden className="absolute inset-0 bg-accent/60" />
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-micro"
-                aria-label={`Actions for #${link.number}`}
-                className="relative"
-              >
-                <MoreHorizontalIcon className="size-3.5" />
-              </Button>
-            }
-          />
-          <MenuPopup align="end" side="bottom">
-            <MenuItem onClick={() => void writeTextToClipboard(link.url, "link")}>
-              <LinkIcon className="size-3.5" />
-              Copy link
-            </MenuItem>
-            <MenuItem onClick={(event) => openPrLink(event, link.url, threadRef)}>
-              <ArrowUpRightIcon className="size-3.5" />
-              Open
-            </MenuItem>
-            {onSetWatching !== null && open ? (
-              <MenuItem onClick={() => onSetWatching(link, !watching)}>
-                {watching ? <EyeOffIcon className="size-3.5" /> : <EyeIcon className="size-3.5" />}
-                {watching ? "Stop watching" : "Watch for changes"}
-              </MenuItem>
-            ) : null}
-            <MenuItem onClick={() => onUnlink(link)}>
-              <PullRequestGlyph.unlink className="size-3.5" />
-              {link.source === "stack" ? "Dismiss from thread" : "Unlink from thread"}
-            </MenuItem>
-          </MenuPopup>
-        </Menu>
-      </span>
+      <RowMenu label={`Actions for #${link.number}`}>
+        <MenuItem onClick={() => void writeTextToClipboard(link.url, "link")}>
+          <LinkIcon className="size-3.5" />
+          Copy link
+        </MenuItem>
+        <MenuItem onClick={(event) => openPrLink(event, link.url, threadRef)}>
+          <ArrowUpRightIcon className="size-3.5" />
+          Open
+        </MenuItem>
+        {onSetWatching !== null && open ? (
+          <MenuItem onClick={() => onSetWatching(link, !watching)}>
+            {watching ? <EyeOffIcon className="size-3.5" /> : <EyeIcon className="size-3.5" />}
+            {watching ? "Stop watching" : "Watch for changes"}
+          </MenuItem>
+        ) : null}
+        <MenuItem onClick={() => onUnlink(link)}>
+          <PullRequestGlyph.unlink className="size-3.5" />
+          {link.source === "stack" ? "Dismiss from thread" : "Unlink from thread"}
+        </MenuItem>
+      </RowMenu>
     </div>
   );
 }
 
 export function ThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThreadRef }) {
-  const configs = useServerConfigs();
-  if (configs.get(threadRef.environmentId)?.environment.capabilities.threadPullRequests !== true) {
+  const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
+  if (capabilities?.threadPullRequests !== true && capabilities?.issues !== true) {
     return (
       <PullRequestsUnavailableState
-        title="Linked pull requests unavailable"
+        title="Linked items unavailable"
         error="This environment does not support multiple linked pull requests."
       />
     );
@@ -277,12 +345,43 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
   const thread = useThreadShell(threadRef);
   const openLinkDialog = useCallback(() => openLinkPullRequestDialog(threadRef), [threadRef]);
   const unlink = useAtomCommand(threadEnvironment.unlinkPullRequest, { reportFailure: true });
+  const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: true });
   const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
-  const supportsWatch =
-    useServerConfigs().get(threadRef.environmentId)?.environment.capabilities
-      .threadPullRequestWatch === true;
-  const links = useMemo(() => visibleThreadPullRequests(thread?.pullRequests ?? []), [thread]);
+  const capabilities = useServerConfigs().get(threadRef.environmentId)?.environment.capabilities;
+  const supportsWatch = capabilities?.threadPullRequestWatch === true;
+  const supportsPullRequests = capabilities?.threadPullRequests === true;
+  const supportsIssues = capabilities?.issues === true;
+  const projects = useProjects();
+  const links = useMemo(
+    () => (supportsPullRequests ? visibleThreadPullRequests(thread?.pullRequests ?? []) : []),
+    [supportsPullRequests, thread],
+  );
   const lines = useMemo(() => pullRequestListLines(resolveThreadPullRequestChains(links)), [links]);
+  const issues = useMemo(() => thread?.issues ?? [], [thread]);
+  const handleOpenIssue = useCallback(
+    (issue: ThreadIssueLink) => {
+      const environmentProjects = projects.filter(
+        (candidate) => candidate.environmentId === threadRef.environmentId,
+      );
+      const project =
+        issue.projectId !== undefined
+          ? environmentProjects.find((candidate) => candidate.id === issue.projectId)
+          : isSourceControlProvider(issue.provider)
+            ? findProjectForLink(environmentProjects, issue)
+            : environmentProjects.find((candidate) => candidate.id === thread?.projectId);
+      if (!supportsIssues || project === undefined) {
+        openLinkInBrowser(issue.url);
+        return;
+      }
+      useRightPanelStore.getState().openIssue(threadRef, {
+        projectId: project.id,
+        provider: issue.provider,
+        repository: issue.repository,
+        number: issue.number,
+      });
+    },
+    [projects, supportsIssues, thread?.projectId, threadRef],
+  );
   const handleUnlink = useCallback(
     (link: ThreadPullRequestLink) => {
       void unlink({
@@ -296,6 +395,23 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
       });
     },
     [threadRef, unlink],
+  );
+  const handleUnlinkIssue = useCallback(
+    (issue: ThreadIssueLink) => {
+      void updateMetadata({
+        environmentId: threadRef.environmentId,
+        input: {
+          threadId: threadRef.threadId,
+          issueUnlink: {
+            provider: issue.provider,
+            repository: issue.repository,
+            number: issue.number,
+            url: issue.url,
+          },
+        },
+      });
+    },
+    [threadRef, updateMetadata],
   );
   const handleSetWatching = useCallback(
     (link: ThreadPullRequestLink, watching: boolean) => {
@@ -313,8 +429,10 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     [threadRef, watch],
   );
   const openCount = useMemo(
-    () => links.filter((link) => link.snapshot === null || link.snapshot.state === "open").length,
-    [links],
+    () =>
+      links.filter((link) => link.snapshot === null || link.snapshot.state === "open").length +
+      issues.filter((issue) => issue.state !== "closed").length,
+    [issues, links],
   );
   const lastSynced = useMemo(() => {
     let latest: string | null = null;
@@ -325,18 +443,18 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     return latest;
   }, [links]);
 
-  if (links.length === 0) {
+  if (links.length === 0 && issues.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <PullRequestGlyph.link aria-hidden className="size-6 text-muted-foreground/60" />
-        <p className="text-sm font-medium">No linked pull requests</p>
+        <p className="text-sm font-medium">No linked items</p>
         <p className="max-w-60 text-xs text-muted-foreground">
-          Pull requests the agent opens from this thread land here. Link one yourself from a URL or
-          a number.
+          Pull requests and issues linked to this thread appear here. Paste a URL or enter a number
+          to link one.
         </p>
         <Button size="sm" variant="outline" onClick={openLinkDialog}>
           <PlusIcon className="size-3.5" />
-          Link pull request
+          Link
         </Button>
       </div>
     );
@@ -355,11 +473,19 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               onSetWatching={supportsWatch ? handleSetWatching : null}
             />
           ))}
+          {issues.map((issue) => (
+            <IssueRow
+              key={issue.url}
+              issue={issue}
+              onOpen={handleOpenIssue}
+              onUnlink={handleUnlinkIssue}
+            />
+          ))}
         </div>
       </ScrollArea>
       <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">
         <span>
-          {openCount} open · {links.length} linked
+          {openCount} open · {links.length + issues.length} linked
           {lastSynced ? ` · synced ${formatRelativeTimeLabel(lastSynced)}` : ""}
         </span>
         <Button size="xs" variant="ghost" onClick={openLinkDialog}>

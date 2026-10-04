@@ -76,7 +76,7 @@ const make = Effect.gen(function* () {
         if (requested !== undefined && (link.linkId === undefined || !requested.has(link.linkId)))
           continue;
         const key = encodeSyncKey([
-          thread.projectId,
+          link.projectId ?? thread.projectId,
           link.provider,
           link.repository.toLowerCase(),
           link.number,
@@ -110,7 +110,7 @@ const make = Effect.gen(function* () {
           const url = new URL(first.link.url);
           if (url.protocol !== "https:" && url.protocol !== "http:") return;
           const ref = {
-            projectId: first.thread.projectId,
+            projectId: first.link.projectId ?? first.thread.projectId,
             provider: first.link.provider,
             repository: first.link.repository,
             number: first.link.number,
