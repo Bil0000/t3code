@@ -247,12 +247,9 @@ export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId):
 }
 
 export function readEnvironmentSupportsWorkItemLinking(environmentId: EnvironmentId): boolean {
-  return (
-    threadPullRequestLinkMode(
-      appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
-        .capabilities,
-    ) !== "unsupported"
-  );
+  const capabilities = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)
+    ?.environment.capabilities;
+  return threadPullRequestLinkMode(capabilities) !== "unsupported" || capabilities?.issues === true;
 }
 
 /** Whether the environment's server understands thread.snooze/unsnooze.
