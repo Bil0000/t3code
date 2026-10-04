@@ -1,8 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { PreparedVoiceTranscription } from "@t3tools/client-runtime/voice-input";
+import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { resetVoiceInputGlobalsForTests } from "../../../../../packages/client-runtime/src/voice-input/controller";
 
-import { createVoiceInputTarget, VoiceInputSession } from "./voiceInputSession";
+import {
+  createVoiceInputTarget,
+  VoiceInputSession,
+  type VoiceInputTarget,
+} from "./voiceInputSession";
+
+function createTarget(
+  ownerKey: string,
+  readText: () => string | null,
+  commit: VoiceInputTarget["commitDraft"],
+  selection: { start: number; end: number },
+) {
+  return createVoiceInputTarget(ownerKey, readText, commit, selection, () => () => {});
+}
 
 function createSession() {
   const recorder = {
@@ -38,9 +52,9 @@ describe("global voice input", () => {
     async ({ selection, expected, cursor }) => {
       const { session } = createSession();
       const commit = vi.fn();
-      await session.start(createVoiceInputTarget("first", () => "hello world", commit, selection));
+      await session.start(createTarget("first", () => "hello world", commit, selection));
       await session.start(
-        createVoiceInputTarget("second", () => "other prompt", vi.fn(), { start: 12, end: 12 }),
+        createTarget("second", () => "other prompt", vi.fn(), { start: 12, end: 12 }),
       );
       await session.controller.stop();
       expect(commit).toHaveBeenCalledWith(expected, {
@@ -59,7 +73,7 @@ describe("global voice input", () => {
     let visibleDraft = "first";
     const targetKey = visibleDraft;
     await session.start(
-      createVoiceInputTarget(
+      createTarget(
         targetKey,
         () => drafts.get(targetKey) ?? null,
         (text) => drafts.set(targetKey, text),
@@ -91,7 +105,7 @@ describe("global voice input", () => {
       const firstCommit = vi.fn();
       const secondCommit = vi.fn();
       const starting = session.start(
-        createVoiceInputTarget("first", () => "first", firstCommit, { start: 5, end: 5 }),
+        createTarget("first", () => "first", firstCommit, { start: 5, end: 5 }),
       );
       await preparationEntered.promise;
       let stopping: Promise<void> | null = null;
@@ -110,7 +124,7 @@ describe("global voice input", () => {
         await transcriptionEntered.promise;
       }
       await session.start(
-        createVoiceInputTarget("second", () => "second", secondCommit, { start: 6, end: 6 }),
+        createTarget("second", () => "second", secondCommit, { start: 6, end: 6 }),
       );
       expect(session.ownerKey).toBe("first");
       expect(session.controller.currentState.phase).toBe(phase);
@@ -131,9 +145,7 @@ describe("global voice input", () => {
       const { session } = createSession();
       let text: string | null = "first";
       const commit = vi.fn();
-      await session.start(
-        createVoiceInputTarget("first", () => text, commit, { start: 5, end: 5 }),
-      );
+      await session.start(createTarget("first", () => text, commit, { start: 5, end: 5 }));
       text = change === "removed" ? null : "edited prompt";
       await session.controller.stop();
       expect(commit).not.toHaveBeenCalled();
@@ -144,9 +156,7 @@ describe("global voice input", () => {
   it("finishes the original draft at the recording limit while it is off screen", async () => {
     const { session, recorder } = createSession();
     const commit = vi.fn();
-    await session.start(
-      createVoiceInputTarget("first", () => "first", commit, { start: 5, end: 5 }),
-    );
+    await session.start(createTarget("first", () => "first", commit, { start: 5, end: 5 }));
     await session.controller.handleRecorderStatus({
       isFinished: true,
       hasError: false,
@@ -157,14 +167,41 @@ describe("global voice input", () => {
     expect(session.controller.currentState.phase).toBe("idle");
   });
 
+  it("rejects a transcript when its off-screen draft changes and returns to the original text", async () => {
+    const registry = AtomRegistry.make();
+    const draft = Atom.make("hello world");
+    const unsubscribe = vi.fn();
+    const { session } = createSession();
+    const commit = vi.fn();
+    const target = createVoiceInputTarget(
+      "first",
+      () => registry.get(draft),
+      commit,
+      { start: 6, end: 6 },
+      (onChange) => {
+        const stop = registry.subscribe(draft, onChange);
+        return () => {
+          stop();
+          unsubscribe();
+        };
+      },
+    );
+    await session.start(target);
+    registry.set(draft, "changed");
+    registry.set(draft, "hello world");
+    await session.controller.stop();
+    expect(commit).not.toHaveBeenCalled();
+    expect(session.controller.currentState.error).toContain("draft changed");
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    registry.dispose();
+  });
+
   it("stops recording when its queued edit is discarded", async () => {
     const { session, recorder } = createSession();
     const commit = vi.fn();
     let draft: string | null = "queued prompt";
     const ownerKey = "thread~queued-edit~run";
-    await session.start(
-      createVoiceInputTarget(ownerKey, () => draft, commit, { start: 13, end: 13 }),
-    );
+    await session.start(createTarget(ownerKey, () => draft, commit, { start: 13, end: 13 }));
     session.cancel(ownerKey);
     draft = null;
     await session.controller.stop();
@@ -177,12 +214,26 @@ describe("global voice input", () => {
     expect(commit).not.toHaveBeenCalled();
   });
 
+  it.each(["complete", "cancel"] as const)(
+    "releases draft observation after %s",
+    async (finish) => {
+      const { session } = createSession();
+      const unsubscribe = vi.fn();
+      const subscribe = vi.fn(() => unsubscribe);
+      await session.start(
+        createVoiceInputTarget("first", () => "first", vi.fn(), { start: 5, end: 5 }, subscribe),
+      );
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      if (finish === "complete") await session.controller.stop();
+      else session.cancel("first");
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("keeps another prompt's recording when a queued edit is discarded", async () => {
     const { session, recorder } = createSession();
     const commit = vi.fn();
-    await session.start(
-      createVoiceInputTarget("other prompt", () => "hello", commit, { start: 5, end: 5 }),
-    );
+    await session.start(createTarget("other prompt", () => "hello", commit, { start: 5, end: 5 }));
     session.cancel("thread~queued-edit~run");
     expect(recorder.stop).not.toHaveBeenCalled();
     expect(session.controller.currentState.phase).toBe("recording");
@@ -201,12 +252,12 @@ describe("global voice input", () => {
     const oldCommit = vi.fn();
     const nextCommit = vi.fn();
     const firstStart = session.start(
-      createVoiceInputTarget("first", () => "first", oldCommit, { start: 5, end: 5 }),
+      createTarget("first", () => "first", oldCommit, { start: 5, end: 5 }),
     );
     await preparationEntered.promise;
     session.cancel("first");
     const nextStart = session.start(
-      createVoiceInputTarget("second", () => "second", nextCommit, { start: 6, end: 6 }),
+      createTarget("second", () => "second", nextCommit, { start: 6, end: 6 }),
     );
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(recorder.record).not.toHaveBeenCalled();
