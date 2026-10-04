@@ -26,13 +26,6 @@ interface ClosePreviewSessionInput<E> {
 export async function closePreviewSession<E>(
   input: ClosePreviewSessionInput<E>,
 ): Promise<AtomCommandResult<void, E>> {
-  const historyId = input.snapshot
-    ? useClosedViewStore.getState().remember({
-        kind: "browser",
-        threadRef: input.threadRef,
-        snapshot: input.snapshot,
-      })
-    : undefined;
   beginPreviewSessionClose(input.threadRef, input.tabId);
   const result = await input.closePreview({
     environmentId: input.threadRef.environmentId,
@@ -40,7 +33,12 @@ export async function closePreviewSession<E>(
   });
   if (result._tag === "Failure") {
     cancelPreviewSessionClose(input.threadRef, input.snapshot, input.tabId);
-    if (historyId) useClosedViewStore.getState().remove(historyId);
+  } else if (input.snapshot) {
+    useClosedViewStore.getState().remember({
+      kind: "browser",
+      threadRef: input.threadRef,
+      snapshot: input.snapshot,
+    });
   }
   return result;
 }
