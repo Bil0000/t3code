@@ -40,11 +40,12 @@ const TextChunk = Schema.Struct({
   text: Schema.String.check(Schema.isMaxLength(4096)),
   next: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 });
-const encodeKey = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
+const encodePageString = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 const decodeCapture = Schema.decodeUnknownEffect(Capture);
 const decodeTextChunk = Schema.decodeUnknownEffect(TextChunk);
 const decodeStatus = Schema.decodeUnknownEffect(PreviewAutomationStatus);
 const decodeSnapshot = Schema.decodeUnknownEffect(PreviewAutomationSnapshot);
+const decodeCaptureMatch = Schema.decodeUnknownEffect(Schema.Literal(true));
 
 export class PreviewScreenshotSaveError extends Schema.TaggedError<PreviewScreenshotSaveError>()(
   "PreviewScreenshotSaveError",
@@ -128,7 +129,7 @@ const make = Effect.gen(function* () {
       }
       tabId = status.tabId;
     }
-    const key = yield* encodeKey(`__t3_text_export_${id}`).pipe(Effect.orDie);
+    const key = yield* encodePageString(`__t3_text_export_${id}`).pipe(Effect.orDie);
     const textPath = path.join(config.browserArtifactsDir, `browser-text-${id}.txt`);
     const evaluate = (expression: string) =>
       broker.invoke({
@@ -138,29 +139,31 @@ const make = Effect.gen(function* () {
         input: { expression, returnByValue: true },
         updateCurrentTab: false,
       });
-    let created = false;
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        yield* Effect.addFinalizer(() =>
-          evaluate(`(() => {
+    yield* Effect.addFinalizer(() =>
+      evaluate(`(() => {
             const capture = globalThis[${key}];
             capture?.dispose();
             return true;
           })()`).pipe(Effect.interruptible, Effect.timeoutOption(5000), Effect.ignore),
-        );
+    );
+    let created = false;
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
         const capture = yield* evaluate(`(() => {
           const text = document.body?.innerText ?? "";
           let timer;
           const dispose = () => {
             clearTimeout(timer);
+            removeEventListener("pagehide", dispose);
             if (globalThis[${key}] === capture) delete globalThis[${key}];
           };
           const refresh = () => {
             clearTimeout(timer);
             timer = setTimeout(dispose, 300000);
           };
-          const capture = Object.freeze({ text, url: location.href, dispose, refresh });
+          const capture = Object.freeze({ text, url: location.href, document, dispose, refresh });
           Object.defineProperty(globalThis, ${key}, { value: capture, configurable: true });
+          addEventListener("pagehide", dispose, { once: true });
           refresh();
           return { totalChars: text.length, url: capture.url.slice(0, 2048) };
       })()`).pipe(Effect.flatMap(decodeCapture));
@@ -179,7 +182,7 @@ const make = Effect.gen(function* () {
         while (offset < capture.totalChars) {
           const chunk = yield* evaluate(`(() => {
             const capture = globalThis[${key}];
-            if (!capture || capture.url !== location.href) throw new Error("Text capture lost.");
+            if (!capture || capture.document !== document || capture.url !== location.href) throw new Error("Text capture lost.");
             let end = Math.min(${offset} + 4096, capture.text.length);
             if (end < capture.text.length) {
               const last = capture.text.charCodeAt(end - 1);
@@ -202,7 +205,14 @@ const make = Effect.gen(function* () {
           offset = chunk.next;
         }
         yield* file.sync;
-        return { textPath, totalChars: capture.totalChars, sizeBytes, url: capture.url, tabId };
+        return {
+          textPath,
+          totalChars: capture.totalChars,
+          sizeBytes,
+          url: capture.url,
+          tabId,
+          captureKey: key,
+        };
       }),
     ).pipe(
       Effect.onExit((exit) =>
@@ -232,42 +242,71 @@ const make = Effect.gen(function* () {
     input: SnapshotInput,
     use: (capture: SnapshotCapture) => Effect.Effect<A, E, R>,
   ) {
-    return yield* Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        let textExport: SnapshotCapture["textExport"];
-        if (input.saveText === true) {
-          textExport = yield* restore(saveText(input.scope, input.tabId));
-        }
-        const exportedText = textExport;
-        return yield* restore(
-          Effect.gen(function* () {
-            const tabId = exportedText?.tabId ?? input.tabId;
-            const snapshot = yield* broker
-              .invoke({
-                scope: input.scope,
-                operation: "snapshot",
-                input: {},
-                ...(tabId === undefined ? {} : { tabId }),
-              })
-              .pipe(Effect.flatMap(decodeSnapshot));
-            const png = new Uint8Array(Buffer.from(snapshot.screenshot.data, "base64"));
-            const screenshotPath =
-              input.save === true ? yield* saveScreenshot(snapshot.url, png) : undefined;
-            return yield* use({
-              snapshot,
-              png,
-              ...(exportedText === undefined ? {} : { textExport: exportedText }),
-              ...(screenshotPath === undefined ? {} : { screenshotPath }),
-            });
-          }),
-        ).pipe(
-          Effect.onExit((exit) =>
-            exportedText !== undefined && exit._tag === "Failure"
-              ? fileSystem.remove(exportedText.textPath).pipe(Effect.ignore)
-              : Effect.void,
-          ),
-        );
-      }),
+    let exportedText: (SnapshotCapture["textExport"] & { readonly captureKey: string }) | undefined;
+    return yield* Effect.scoped(
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          if (input.saveText === true) {
+            exportedText = yield* restore(saveText(input.scope, input.tabId));
+          }
+          const capturedText = exportedText;
+          return yield* restore(
+            Effect.gen(function* () {
+              const tabId = capturedText?.tabId ?? input.tabId;
+              const snapshot = yield* broker
+                .invoke({
+                  scope: input.scope,
+                  operation: "snapshot",
+                  input: {},
+                  ...(tabId === undefined ? {} : { tabId }),
+                })
+                .pipe(Effect.flatMap(decodeSnapshot));
+              let textExport: SnapshotCapture["textExport"];
+              if (capturedText !== undefined) {
+                const { captureKey, ...artifact } = capturedText;
+                for (let offset = 0; offset < Math.max(snapshot.url.length, 1); offset += 4096) {
+                  const urlChunk = yield* encodePageString(
+                    snapshot.url.slice(offset, offset + 4096),
+                  ).pipe(Effect.orDie);
+                  yield* broker
+                    .invoke({
+                      scope: input.scope,
+                      operation: "evaluate",
+                      tabId: capturedText.tabId,
+                      updateCurrentTab: false,
+                      input: {
+                        expression: `(() => {
+                    const capture = globalThis[${captureKey}];
+                    if (!capture || capture.document !== document || capture.url !== location.href) return false;
+                    capture.refresh();
+                    return capture.url.length === ${snapshot.url.length} && capture.url.slice(${offset}, ${offset + 4096}) === ${urlChunk};
+                  })()`,
+                        returnByValue: true,
+                      },
+                    })
+                    .pipe(Effect.flatMap(decodeCaptureMatch), Effect.mapError(textExportError));
+                }
+                textExport = artifact;
+              }
+              const png = new Uint8Array(Buffer.from(snapshot.screenshot.data, "base64"));
+              const screenshotPath =
+                input.save === true ? yield* saveScreenshot(snapshot.url, png) : undefined;
+              return yield* use({
+                snapshot,
+                png,
+                ...(textExport === undefined ? {} : { textExport }),
+                ...(screenshotPath === undefined ? {} : { screenshotPath }),
+              });
+            }),
+          );
+        }),
+      ),
+    ).pipe(
+      Effect.onExit((exit) =>
+        exportedText !== undefined && exit._tag === "Failure"
+          ? fileSystem.remove(exportedText.textPath).pipe(Effect.ignore)
+          : Effect.void,
+      ),
     );
   });
 

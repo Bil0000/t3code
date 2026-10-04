@@ -148,6 +148,7 @@ const serveTextExports = (
     const switched = yield* Deferred.make<void>();
     const requests: PreviewAutomationRequest[] = [];
     const timers = new Set<() => void>();
+    const listeners = new Map<string, () => void>();
     let textReads = 0;
     let chunks = 0;
     const context = NodeVM.createContext({
@@ -165,6 +166,10 @@ const serveTextExports = (
         return callback;
       },
       clearTimeout: (callback: () => void) => timers.delete(callback),
+      addEventListener: (event: string, callback: () => void) => listeners.set(event, callback),
+      removeEventListener: (event: string, callback: () => void) => {
+        if (listeners.get(event) === callback) listeners.delete(event);
+      },
     });
     const events = yield* broker.connect({ clientId, environmentId });
     yield* Stream.runForEach(events, (event) => {
@@ -243,7 +248,7 @@ const serveTextExports = (
       }).pipe(Effect.forkScoped, Effect.asVoid);
     }).pipe(Effect.forkScoped);
     yield* Deferred.await(connected);
-    return { requests, context, timers, textReads: () => textReads };
+    return { requests, context, timers, listeners, textReads: () => textReads };
   });
 
 it("normalizes empty successful notification responses to accepted", () => {
@@ -633,7 +638,9 @@ it.effect.each([
       const pageRequests = host.requests.filter((request) => request.operation !== "status");
       expect(pageRequests.length).toBeGreaterThan(10);
       expect(pageRequests.every((request) => request.tabId === tabId)).toBe(true);
-      expect(pageRequests.at(-1)).toMatchObject({ operation: "snapshot", input: {} });
+      expect(pageRequests.filter((request) => request.operation === "snapshot")).toEqual([
+        expect.objectContaining({ operation: "snapshot", input: {} }),
+      ]);
       const texts = snapshot.content.filter((content) => content.type === "text");
       const metadata = texts[options.save && !options.includeImage ? 0 : 1];
       expect(metadata?.type === "text" ? decodeJsonText(metadata.text) : null).toMatchObject({
@@ -750,6 +757,44 @@ it.effect("reports text export failure without a successful snapshot or partial 
   ).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect.each(["navigation", "reload"] as const)(
+  "does not return saved text from the old page after %s before snapshot",
+  (change) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const options: { beforeSnapshot?: Effect.Effect<void> } = {};
+        const host = yield* serveTextExports(
+          "mcp-export-page-change-client",
+          "loaded text",
+          options,
+        );
+        options.beforeSnapshot = Effect.gen(function* () {
+          expect(yield* fs.readDirectory(config.browserArtifactsDir)).toHaveLength(1);
+          if (change === "navigation")
+            NodeVM.runInContext("location.href = 'https://other.test/'", host.context);
+          else host.listeners.get("pagehide")!();
+        }).pipe(Effect.orDie);
+
+        const snapshot = yield* callSnapshot({ saveText: true });
+
+        expect(snapshot.isError).toBe(true);
+        expect(snapshot.content.every((content) => content.type === "text")).toBe(true);
+        expect(snapshot.structuredContent).not.toHaveProperty("textPath");
+        expect(host.requests.filter((request) => request.operation === "snapshot")).toHaveLength(1);
+        expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
+        expect(host.timers.size).toBe(0);
+        expect(host.listeners.size).toBe(0);
+        expect(
+          Object.getOwnPropertyNames(host.context).filter((key) =>
+            key.startsWith("__t3_text_export_"),
+          ),
+        ).toEqual([]);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("removes the completed text export when the following snapshot fails", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -764,7 +809,7 @@ it.effect("removes the completed text export when the following snapshot fails",
         error: { _tag: "PreviewAutomationExecutionError", operation: "snapshot" },
       });
       expect(snapshot.content.every((content) => content.type === "text")).toBe(true);
-      expect(host.requests.at(-1)?.operation).toBe("snapshot");
+      expect(host.requests.filter((request) => request.operation === "snapshot")).toHaveLength(1);
       expect(host.textReads()).toBe(1);
       expect(host.timers.size).toBe(0);
       expect(
@@ -850,7 +895,7 @@ it.effect("removes the completed text export when the following snapshot is canc
       yield* Fiber.interrupt(fiber);
 
       expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
-      expect(host.requests.at(-1)?.operation).toBe("snapshot");
+      expect(host.requests.filter((request) => request.operation === "snapshot")).toHaveLength(1);
       expect(host.textReads()).toBe(1);
       expect(host.timers.size).toBe(0);
       expect(

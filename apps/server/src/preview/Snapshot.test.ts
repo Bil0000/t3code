@@ -43,6 +43,7 @@ const makePage = (initialText: string) => {
   let text = initialText;
   let reads = 0;
   const timers = new Set<() => void>();
+  const listeners = new Map<string, () => void>();
   const requests: PreviewAutomationInvokeInput[] = [];
   const context = NodeVM.createContext({
     document: {
@@ -59,10 +60,15 @@ const makePage = (initialText: string) => {
       return callback;
     },
     clearTimeout: (callback: () => void) => timers.delete(callback),
+    addEventListener: (event: string, callback: () => void) => listeners.set(event, callback),
+    removeEventListener: (event: string, callback: () => void) => {
+      if (listeners.get(event) === callback) listeners.delete(event);
+    },
   });
   const page = {
     context,
     timers,
+    listeners,
     requests,
     reads: () => reads,
     available: true,
@@ -70,6 +76,7 @@ const makePage = (initialText: string) => {
       text = value;
     },
     beforeChunk: undefined as (() => void) | undefined,
+    beforeSnapshot: undefined as (() => void) | undefined,
     chunkGate: undefined as Effect.Effect<void> | undefined,
     disposeGate: undefined as Effect.Effect<void> | undefined,
     broker: undefined as PreviewAutomationBroker["Service"] | undefined,
@@ -89,8 +96,9 @@ const makePage = (initialText: string) => {
       }
       if (request.operation === "snapshot") {
         expect(request.tabId).toBe(tabId);
+        page.beforeSnapshot?.();
         return {
-          url: "https://example.test/page",
+          url: NodeVM.runInContext("location.href", context),
           title: "Page",
           loading: false,
           visibleText: "Page",
@@ -150,6 +158,7 @@ const runExport = (page: ReturnType<typeof makePage>, target?: PreviewTabId) =>
   );
 const assertClean = (page: ReturnType<typeof makePage>) => {
   expect(page.timers.size).toBe(0);
+  expect(page.listeners.size).toBe(0);
   expect(
     Object.getOwnPropertyNames(page.context).filter((name) => name.startsWith("__t3_text_export_")),
   ).toEqual([]);
@@ -183,7 +192,7 @@ it.effect("keeps Unicode pairs intact at chunk boundaries", () =>
     expect(yield* fs.readFileString(saved.textPath)).toBe(text);
     expect(saved.sizeBytes).toBe(Buffer.byteLength(text));
     expect(page.requests.some((request) => request.operation === "status")).toBe(false);
-    expect(page.requests.at(-1)?.operation).toBe("snapshot");
+    expect(page.requests.filter((request) => request.operation === "snapshot")).toHaveLength(1);
     assertClean(page);
   }).pipe(Effect.provide(TestLayer)),
 );
@@ -215,6 +224,69 @@ it.effect("freezes captured text while the page changes", () =>
     const saved = yield* runExport(page);
     const fs = yield* FileSystem.FileSystem;
     expect(yield* fs.readFileString(saved.textPath)).toBe(text);
+    expect(page.reads()).toBe(1);
+    assertClean(page);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each(["navigation", "reload", "new document"] as const)(
+  "removes the completed text export after %s before the snapshot",
+  (change) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
+      const existing = path.join(config.browserArtifactsDir, "existing.txt");
+      yield* fs.writeFileString(existing, "keep this file");
+      const page = makePage("original loaded text");
+      page.beforeSnapshot = () => {
+        if (change === "navigation") {
+          NodeVM.runInContext("location.href = 'https://other.test/'", page.context);
+        } else {
+          if (change === "reload") page.listeners.get("pagehide")!();
+          NodeVM.runInContext(
+            "document = { body: { innerText: 'different document' } }",
+            page.context,
+          );
+        }
+      };
+
+      const result = yield* Effect.result(runExport(page));
+
+      expect(result._tag).toBe("Failure");
+      expect(page.reads()).toBe(1);
+      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["existing.txt"]);
+      expect(yield* fs.readFileString(existing)).toBe("keep this file");
+      assertClean(page);
+    }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("validates an unchanged page with a full URL longer than the output limit", () =>
+  Effect.gen(function* () {
+    const page = makePage("loaded text");
+    const url = `https://example.test/page?q=${"x".repeat(70_000)}`;
+    NodeVM.runInContext(`location.href = ${encodeJson(url)}`, page.context);
+
+    const saved = yield* runExport(page);
+
+    const fs = yield* FileSystem.FileSystem;
+    expect(yield* fs.readFileString(saved.textPath)).toBe("loaded text");
+    expect(saved.url).toBe(url.slice(0, 2048));
+    expect(page.reads()).toBe(1);
+    assertClean(page);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("allows a text edit in the same document before the snapshot", () =>
+  Effect.gen(function* () {
+    const page = makePage("original loaded text");
+    page.beforeSnapshot = () => page.setText("edited loaded text");
+
+    const saved = yield* runExport(page);
+
+    const fs = yield* FileSystem.FileSystem;
+    expect(yield* fs.readFileString(saved.textPath)).toBe("original loaded text");
     expect(page.reads()).toBe(1);
     assertClean(page);
   }).pipe(Effect.provide(TestLayer)),
