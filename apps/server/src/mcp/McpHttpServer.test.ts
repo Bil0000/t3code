@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodeHttp from "node:http";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { expect, it } from "@effect/vitest";
@@ -12,7 +14,14 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
-import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpBody,
+  HttpClient,
+  HttpRouter,
+  HttpServer,
+  HttpServerResponse,
+} from "effect/unstable/http";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerConfig from "../config.ts";
@@ -671,6 +680,201 @@ it.effect("sheds log entries before locators when every list is full", () =>
   ).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("bounds JSON-escaped page identifiers after other snapshot fields are empty", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* serveSnapshots("mcp-escaped-identifiers-client", {
+        ...snapshotResult,
+        url: `http://example.test/${"\u0000".repeat(3_000)}`,
+        title: "\u0000".repeat(3_000),
+        visibleText: "",
+      });
+      const snapshot = yield* callSnapshot({ includeImage: false });
+      expect(snapshot.isError).toBe(false);
+      const [, text, notice] = snapshot.content;
+      const body = text?.type === "text" ? text.text : "";
+      expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(
+        McpHttpServer.MAX_SNAPSHOT_TEXT_BYTES,
+      );
+      expect(notice?.type === "text" ? notice.text : "").toContain(
+        "url or title after 1024 characters",
+      );
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect(
+  "keeps current-view text and controls when offscreen controls and logs fill the budget",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scroll = {
+          x: 0,
+          y: 12_000,
+          width: 1_000,
+          height: 800,
+          scrollWidth: 1_000,
+          scrollHeight: 20_000,
+          containers: [],
+          containersTruncated: false,
+        };
+        yield* serveSnapshots("mcp-current-view-client", {
+          ...snapshotResult,
+          visibleText: "Page start ".repeat(4_000),
+          viewportText: "Bottom of page: choose Continue to finish.",
+          scroll,
+          truncated: { visibleText: true, viewportText: false, interactiveElements: true },
+          interactiveElements: Array.from({ length: 240 }, (_, index) => ({
+            tag: "button",
+            role: "button",
+            name: `Button ${index}`,
+            selector: `#button-${index}-${"x".repeat(500)}`,
+            inViewport: index >= 237,
+            x: 0,
+            y: index >= 237 ? 20 : -1_000,
+            width: 10,
+            height: 10,
+          })),
+          consoleEntries: Array.from({ length: 100 }, (_, index) => ({
+            level: "log",
+            text: `Log ${index}: ${"x".repeat(2_000)}`,
+            timestamp: "t",
+          })),
+        });
+
+        const snapshot = yield* callSnapshot({ includeImage: false });
+        expect(snapshot.isError).toBe(false);
+        const [, text, notice] = snapshot.content;
+        const body = text?.type === "text" ? text.text : "";
+        expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(
+          McpHttpServer.MAX_SNAPSHOT_TEXT_BYTES,
+        );
+        const parsed = decodeJsonText(body) as {
+          readonly viewportText: string;
+          readonly scroll: unknown;
+          readonly truncated: unknown;
+          readonly interactiveElements: ReadonlyArray<{ readonly name: string }>;
+        };
+        expect(parsed.viewportText).toBe("Bottom of page: choose Continue to finish.");
+        expect(parsed.scroll).toEqual(scroll);
+        expect(parsed.truncated).toEqual({
+          visibleText: true,
+          viewportText: false,
+          interactiveElements: true,
+        });
+        expect(parsed.interactiveElements.slice(0, 3).map((element) => element.name)).toEqual([
+          "Button 237",
+          "Button 238",
+          "Button 239",
+        ]);
+        expect(notice?.type === "text" ? notice.text : "").toContain("interactiveElements");
+        expect(snapshot.structuredContent).toEqual({ ...parsed, omitted: expect.any(Array) });
+        expect(snapshot.content.some((content) => content.type === "image")).toBe(false);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each(["界😀".repeat(5_000), `${"a".repeat(7_999)}${"😀".repeat(4_000)}`])(
+  "bounds current-view Unicode text without splitting a character %#",
+  (viewportText) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* serveSnapshots("mcp-viewport-unicode-client", {
+          ...snapshotResult,
+          viewportText,
+          visibleText: "Offscreen ".repeat(4_000),
+          truncated: { visibleText: false, viewportText: false, interactiveElements: false },
+          interactiveElements: Array.from({ length: 20 }, (_, index) => ({
+            tag: "button",
+            role: "button",
+            name: `Button ${index}`,
+            selector: `#button-${index}-${"x".repeat(500)}`,
+            inViewport: true,
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+          })),
+        });
+        const snapshot = yield* callSnapshot({ includeImage: false });
+        expect(snapshot.isError).toBe(false);
+        const [, text, notice] = snapshot.content;
+        const body = text?.type === "text" ? text.text : "";
+        expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(
+          McpHttpServer.MAX_SNAPSHOT_TEXT_BYTES,
+        );
+        const parsed = decodeJsonText(body) as {
+          readonly viewportText: string;
+          readonly interactiveElements: ReadonlyArray<unknown>;
+        };
+        expect(parsed.interactiveElements.length).toBeGreaterThan(0);
+        expect(parsed.viewportText.length).toBeGreaterThan(1_000);
+        expect(parsed.viewportText.endsWith("…")).toBe(true);
+        expect(parsed.viewportText.isWellFormed()).toBe(true);
+        expect(parsed).toMatchObject({ truncated: { viewportText: true } });
+        expect(notice?.type === "text" ? notice.text : "").toContain("viewportText after");
+        expect(snapshot.structuredContent).toEqual({ ...parsed, omitted: expect.any(Array) });
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("keeps current-view Unicode text in full when it fits the snapshot budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const viewportText = "界".repeat(5_000);
+      yield* serveSnapshots("mcp-viewport-full-unicode-client", {
+        ...snapshotResult,
+        visibleText: "",
+        viewportText,
+      });
+      const snapshot = yield* callSnapshot({ includeImage: false });
+      expect(snapshot.isError).toBe(false);
+      expect(snapshot.structuredContent).toMatchObject({ viewportText });
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("bounds scroll-container locators while preserving page scroll position", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* serveSnapshots("mcp-scroll-budget-client", {
+        ...snapshotResult,
+        viewportText: "Current content",
+        scroll: {
+          x: 20,
+          y: 8_000,
+          width: 1_000,
+          height: 800,
+          scrollWidth: 2_000,
+          scrollHeight: 10_000,
+          containers: Array.from({ length: 20 }, () => ({
+            selector: `#${"x".repeat(30_000)}`,
+            x: 0,
+            y: 200,
+            width: 100,
+            height: 100,
+            scrollWidth: 100,
+            scrollHeight: 1_000,
+          })),
+          containersTruncated: false,
+        },
+      });
+      const snapshot = yield* callSnapshot({ includeImage: false });
+      expect(snapshot.isError).toBe(false);
+      const [, text, notice] = snapshot.content;
+      const body = text?.type === "text" ? text.text : "";
+      expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(
+        McpHttpServer.MAX_SNAPSHOT_TEXT_BYTES,
+      );
+      expect(decodeJsonText(body)).toMatchObject({
+        viewportText: "Current content",
+        scroll: { x: 20, y: 8_000, containers: [], containersTruncated: true },
+      });
+      expect(notice?.type === "text" ? notice.text : "").toContain("20 of 20 scrollContainers");
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("terminates HTTP MCP sessions with DELETE", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -722,7 +926,16 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
       });
       expect(reusedSessionResponse.status).toBe(404);
     }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  ).pipe(
+    Effect.provide(
+      HttpServer.layerTestClient.pipe(
+        Layer.provide(FetchHttpClient.layer),
+        Layer.provideMerge(
+          NodeHttpServer.layer(NodeHttp.createServer, { host: "127.0.0.1", port: 0 }),
+        ),
+      ),
+    ),
+  ),
 );
 
 it.effect("registers annotated tools and preserves authenticated request context", () =>
