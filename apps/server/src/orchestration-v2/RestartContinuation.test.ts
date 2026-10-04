@@ -35,7 +35,7 @@ const attemptId = RunAttemptId.make("attempt:restart");
 // "No project" threads belong to the environment's Scratch project.
 const scratchProjectId = ProjectId.make("project:scratch");
 
-function makeProjection() {
+function makeProjection(contextCompaction = false) {
   return {
     thread: {
       id: threadId,
@@ -79,7 +79,7 @@ function makeProjection() {
       },
     ],
     runtimeRequests: [],
-    attempts: [],
+    attempts: contextCompaction ? [{ id: attemptId, contextCompaction: true }] : [],
     nodes: [],
     subagents: [],
     messages: [],
@@ -111,7 +111,6 @@ it("requires matching saved native state for an unfinished root run", () => {
       ],
     },
     { ...projection, providerTurns: [] },
-    { ...projection, attempts: [{ id: attemptId, contextCompaction: true }] },
     ...[
       "queued",
       "preparing",
@@ -124,6 +123,10 @@ it("requires matching saved native state for an unfinished root run", () => {
     ].map((status) => ({ ...projection, runs: [{ ...projection.runs[0]!, status }] })),
   ])
     assert.isUndefined(restartContinuationRun(invalid as OrchestrationV2ThreadProjection));
+});
+
+it("continues an unfinished root run during automatic context compaction", () => {
+  assert.equal(restartContinuationRun(makeProjection(true))?.id, runId);
 });
 
 it("continues a live turn whose session the adapter never marked running", () => {
@@ -254,13 +257,15 @@ it.effect("does not continue a failed run that lost background work", () =>
 );
 
 it.effect.each([
-  [false, undefined],
-  [true, undefined],
-  [false, true],
-  [true, false],
+  [false, undefined, false],
+  [true, undefined, false],
+  [false, true, false],
+  [true, false, false],
+  [false, undefined, true],
+  [true, undefined, true],
 ] as const)(
-  "atomically records restart intent with cancellation when opt-in is %s and project override is %s",
-  ([enabled, projectOverride]) =>
+  "atomically records restart intent with cancellation when opt-in is %s, project override is %s and compaction is %s",
+  ([enabled, projectOverride, contextCompaction]) =>
     Effect.gen(function* () {
       let committed: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | undefined;
       const recovery = yield* ProviderRuntimeRecovery.make.pipe(
@@ -279,7 +284,7 @@ it.effect.each([
             }),
             Layer.mock(ProjectionStore.ProjectionStoreV2)({
               getRecoveryThreadIds: () => Effect.succeed([threadId]),
-              getRuntimeRecoveryProjection: () => Effect.succeed(makeProjection()),
+              getRuntimeRecoveryProjection: () => Effect.succeed(makeProjection(contextCompaction)),
             }),
             Layer.mock(EventSink.EventSinkV2)({
               commitCommand: (input) => {

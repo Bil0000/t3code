@@ -28,7 +28,7 @@ const CONTINUE_PROMPT = "Continue where you left off.";
 export function restartContinuationRun(
   projection: Pick<
     ProjectionRuntimeRecoveryState,
-    "thread" | "runs" | "attempts" | "providerThreads" | "providerSessions" | "providerTurns"
+    "thread" | "runs" | "providerThreads" | "providerSessions" | "providerTurns"
   >,
 ): OrchestrationV2Run | undefined {
   if (projection.thread.archivedAt !== null || projection.thread.deletedAt !== null) return;
@@ -40,13 +40,7 @@ export function restartContinuationRun(
         : latest,
     undefined,
   );
-  if (
-    !run ||
-    projection.attempts.some(
-      (attempt) => attempt.id === run.activeAttemptId && attempt.contextCompaction,
-    )
-  )
-    return;
+  if (!run) return;
   const preparedContinuation =
     run.status === "starting" && run.restartContinuationOfRunId !== undefined;
   if (run.status !== "running" && !preparedContinuation) return;
