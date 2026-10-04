@@ -1361,9 +1361,13 @@ export function restorePlanFollowUpComposer(input: {
 
 export function latestVisibleContextReport(
   messages: Parameters<typeof latestContextReport>[0],
-  pendingMessageId: string | null,
+  pendingMessages: ReadonlyArray<{ readonly threadKey: string; readonly id: string }>,
+  threadKey: string,
 ) {
-  return pendingMessageId !== null && !messages.some((message) => message.id === pendingMessageId)
+  return pendingMessages.some(
+    (pending) =>
+      pending.threadKey === threadKey && !messages.some((message) => message.id === pending.id),
+  )
     ? null
     : latestContextReport(messages);
 }

@@ -3456,14 +3456,24 @@ export default function ChatView(props: ChatViewProps) {
     readonly threadKey: string;
     readonly openedAt: number;
   } | null>(null);
-  const [pendingContextMessage, setPendingContextMessage] = useState<{
-    readonly threadKey: string;
-    readonly id: MessageId;
-  } | null>(null);
+  const [pendingContextMessages, setPendingContextMessages] = useState<
+    ReadonlyArray<{ readonly threadKey: string; readonly id: MessageId }>
+  >([]);
   const releasePendingContextMessage = useCallback(
-    (id: MessageId) => setPendingContextMessage((current) => (current?.id === id ? null : current)),
+    (id: MessageId) =>
+      setPendingContextMessages((current) => current.filter((message) => message.id !== id)),
     [],
   );
+  useEffect(() => {
+    setPendingContextMessages((current) => {
+      const pending = current.filter(
+        (message) =>
+          message.threadKey !== routeThreadKey ||
+          !serverProjection?.messages.some((candidate) => candidate.id === message.id),
+      );
+      return pending.length === current.length ? current : pending;
+    });
+  }, [routeThreadKey, serverProjection?.messages]);
   // Answered locally from the last Limits snapshot; the agent never sees it.
   const openUsageLimits = useCallback(() => {
     const now = Date.now();
@@ -7399,9 +7409,10 @@ export default function ChatView(props: ChatViewProps) {
     () =>
       latestVisibleContextReport(
         serverProjection?.messages ?? [],
-        pendingContextMessage?.threadKey === routeThreadKey ? pendingContextMessage.id : null,
+        pendingContextMessages,
+        routeThreadKey,
       ),
-    [pendingContextMessage, routeThreadKey, serverProjection?.messages],
+    [pendingContextMessages, routeThreadKey, serverProjection?.messages],
   );
   const [dismissedContextReportIds, setDismissedContextReportIds] = useState<
     Record<string, string>
@@ -8286,7 +8297,10 @@ export default function ChatView(props: ChatViewProps) {
     sendInFlightRef.current = true;
     beginLocalDispatch();
     setThreadError(threadId, null);
-    setPendingContextMessage({ threadKey: routeThreadKey, id: messageId });
+    setPendingContextMessages((current) => [
+      ...current,
+      { threadKey: routeThreadKey, id: messageId },
+    ]);
     setOptimisticUserMessages((messages) => [
       ...messages,
       {
@@ -9449,7 +9463,10 @@ export default function ChatView(props: ChatViewProps) {
         messageId: messageIdForSend,
       });
     }
-    setPendingContextMessage({ threadKey: routeThreadKey, id: messageIdForSend });
+    setPendingContextMessages((current) => [
+      ...current,
+      { threadKey: routeThreadKey, id: messageIdForSend },
+    ]);
     setOptimisticUserMessages((existing) => [
       ...existing,
       {
@@ -10117,7 +10134,10 @@ export default function ChatView(props: ChatViewProps) {
       messageId: messageIdForSend,
     });
 
-    setPendingContextMessage({ threadKey: routeThreadKey, id: messageIdForSend });
+    setPendingContextMessages((current) => [
+      ...current,
+      { threadKey: routeThreadKey, id: messageIdForSend },
+    ]);
     setOptimisticUserMessages((existing) => [
       ...existing,
       {

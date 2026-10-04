@@ -2174,13 +2174,61 @@ describe("latestVisibleContextReport", () => {
   };
 
   it("hides the previous report until the server echoes the sent message", () => {
-    expect(latestVisibleContextReport([report], null)?.id).toBe("report");
-    expect(latestVisibleContextReport([report], "sent")).toBeNull();
+    const pending = [{ threadKey: "first", id: "sent" }];
+    expect(latestVisibleContextReport([report], [], "first")?.id).toBe("report");
+    expect(latestVisibleContextReport([report], pending, "first")).toBeNull();
     expect(
       latestVisibleContextReport(
         [report, { id: "sent", role: "user", text: "next", streaming: false }],
-        "sent",
+        pending,
+        "first",
       ),
     ).toBeNull();
+  });
+
+  it("keeps sends in separate threads pending until each thread catches up", () => {
+    const pending = [
+      { threadKey: "first", id: "first-send" },
+      { threadKey: "second", id: "second-send" },
+    ];
+    expect(latestVisibleContextReport([report], pending, "first")).toBeNull();
+    expect(latestVisibleContextReport([report], pending, "second")).toBeNull();
+    expect(latestVisibleContextReport([report], pending, "third")?.id).toBe("report");
+    expect(
+      latestVisibleContextReport(
+        [
+          report,
+          { id: "first-send", role: "user", text: "next", streaming: false },
+          { ...report, id: "first-report" },
+        ],
+        pending,
+        "first",
+      )?.id,
+    ).toBe("first-report");
+    expect(latestVisibleContextReport([report], pending, "second")).toBeNull();
+  });
+
+  it("waits for every outstanding send in the same thread", () => {
+    const pending = [
+      { threadKey: "first", id: "first-send" },
+      { threadKey: "first", id: "second-send" },
+    ];
+    const messages = [
+      report,
+      { id: "first-send", role: "user", text: "next", streaming: false },
+      { ...report, id: "first-report" },
+    ];
+    expect(latestVisibleContextReport(messages, pending, "first")).toBeNull();
+    expect(
+      latestVisibleContextReport(
+        [
+          ...messages,
+          { id: "second-send", role: "user", text: "next again", streaming: false },
+          { ...report, id: "second-report" },
+        ],
+        pending,
+        "first",
+      )?.id,
+    ).toBe("second-report");
   });
 });
