@@ -59,6 +59,28 @@ const make = Effect.gen(function* () {
       : Effect.fail(new IssueThreadLinkFailedError({ cause }));
 
   return IssuesToolkit.of({
+    read_issue: (input) =>
+      Effect.gen(function* () {
+        const thread = yield* requireThread();
+        const ref = issueRef(thread.projectId, input);
+        const issue = yield* issues.detail(ref);
+        if (input.commentsCursor !== undefined) {
+          const page = yield* issues.commentsPage({ ...ref, cursor: input.commentsCursor });
+          return {
+            issue,
+            comments: page.comments,
+            commentsTruncated: page.nextCursor !== null,
+            nextCommentsCursor: page.nextCursor,
+          };
+        }
+        const activity = yield* issues.activity(ref);
+        return {
+          issue: { ...issue, commentCount: Math.max(issue.commentCount, activity.commentCount) },
+          comments: activity.comments,
+          commentsTruncated: activity.commentsTruncated,
+          nextCommentsCursor: activity.nextCommentsCursor ?? null,
+        };
+      }),
     link_issue: (input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread();

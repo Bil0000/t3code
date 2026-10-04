@@ -1,10 +1,13 @@
 import {
   CommandId,
   EnvironmentId,
+  IssueOperationError,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   type IssueDetail,
+  type IssueActivity,
+  type IssueCommentsPageResult,
   type PullRequestDetail,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
@@ -45,6 +48,65 @@ const pullRequest = {
 };
 const savedLink = { issue, pullRequest };
 
+const issueDetail: IssueDetail = {
+  ...issue,
+  projectId,
+  projectTitle: "T3 Code",
+  workspaceRoot: "/tmp/project",
+  body: "Read the issue body before changing the code.",
+  author: { login: "reporter", name: null, avatarUrl: null },
+  state: "open",
+  stateReason: null,
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-01T00:00:00Z",
+  closedAt: null,
+  assignees: [],
+  labels: [],
+  milestone: null,
+  commentCount: 2,
+  linkedPullRequests: [],
+  capabilities: {
+    sorts: ["updated"],
+    referenceStyle: "hash",
+    closesViaPullRequest: true,
+    comment: true,
+    actions: [],
+    closeReasons: [],
+    create: false,
+    issueTemplates: false,
+    edit: false,
+    labels: false,
+    assignees: false,
+    listLabelCandidates: false,
+    listAssigneeCandidates: false,
+    search: false,
+    linkedPullRequests: false,
+    timelineEvents: false,
+  },
+  viewerPermissions: {
+    actions: [],
+    comment: false,
+    edit: false,
+    labels: false,
+    assignees: false,
+    create: false,
+  },
+};
+const comment = {
+  id: "comment-1",
+  author: issueDetail.author,
+  body: "This also affects remote clients.",
+  createdAt: "2026-01-01T01:00:00Z",
+  url: `${issue.url}#issuecomment-1`,
+};
+const issueActivity: IssueActivity = {
+  comments: [comment],
+  commentCount: 3,
+  commentsTruncated: true,
+  nextCommentsCursor: "next-comments-page",
+  events: [],
+};
+
 const thread = (issues: ReadonlyArray<ThreadIssueLink> = []): OrchestrationV2ThreadShell => ({
   ...v2PullRequestThread({
     id: threadId,
@@ -78,9 +140,16 @@ const invocation = (capabilities: ReadonlyArray<McpInvocationContext.McpCapabili
 const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   current: OrchestrationV2ThreadShell | null = thread(),
   dispatchError?: Orchestrator.OrchestratorDispatchError,
+  content: {
+    activity?: IssueActivity;
+    page?: IssueCommentsPageResult;
+    readError?: IssueOperationError;
+  } = {},
 ) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
   const detailRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+  const activityRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
+  const commentsPageRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const pullRequestDetailRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const routingRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const savedLinkRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
@@ -99,7 +168,21 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     Layer.mock(IssueService.IssueService)({
       detail: (ref) =>
         Ref.update(detailRequests, (recorded) => [...recorded, ref]).pipe(
-          Effect.as(issue as IssueDetail),
+          Effect.andThen(
+            content.readError
+              ? Effect.fail(content.readError)
+              : Effect.succeed({ ...issueDetail, provider: ref.provider ?? issue.provider }),
+          ),
+        ),
+      activity: (ref) =>
+        Ref.update(activityRequests, (recorded) => [...recorded, ref]).pipe(
+          Effect.as(content.activity ?? issueActivity),
+        ),
+      commentsPage: (ref) =>
+        Ref.update(commentsPageRequests, (recorded) => [...recorded, ref]).pipe(
+          Effect.as(
+            content.page ?? { comments: [{ ...comment, id: "comment-2" }], nextCursor: null },
+          ),
         ),
     }),
     Layer.mock(WorkItemLinks.WorkItemLinks)({
@@ -152,6 +235,8 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   return {
     commands,
     detailRequests,
+    activityRequests,
+    commentsPageRequests,
     pullRequestDetailRequests,
     routingRequests,
     savedLinkRequests,
@@ -160,6 +245,121 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect("reads an unlinked issue body and bounded comments through the thread project", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const input = { repository: issue.repository, number: issue.number };
+      expect(yield* harness.call("read_issue", input)).toEqual({
+        issue: { ...issueDetail, commentCount: 3 },
+        comments: [comment],
+        commentsTruncated: true,
+        nextCommentsCursor: "next-comments-page",
+      });
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([{ projectId, ...input }]);
+      expect(yield* Ref.get(harness.activityRequests)).toEqual([{ projectId, ...input }]);
+      expect(yield* Ref.get(harness.commentsPageRequests)).toEqual([]);
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+    }),
+  );
+
+  it.effect("routes every supported issue provider through IssueService", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const providers = ["github", "gitlab", "bitbucket", "azure-devops", "linear", "custom"];
+      for (const provider of providers) {
+        const result = yield* harness.call("read_issue", {
+          repository: issue.repository,
+          number: issue.number,
+          provider,
+        });
+        expect(result.issue.provider).toBe(provider);
+      }
+      expect(yield* Ref.get(harness.detailRequests)).toEqual(
+        providers.map((provider) => ({
+          projectId,
+          repository: issue.repository,
+          number: issue.number,
+          provider,
+        })),
+      );
+    }),
+  );
+
+  it.effect("continues comment pages without reloading the first page", () =>
+    Effect.gen(function* () {
+      const input = { repository: issue.repository, number: issue.number, provider: "github" };
+      for (const nextCursor of ["third-page", null]) {
+        const page = { comments: [{ ...comment, id: "comment-2" }], nextCursor };
+        const harness = yield* makeHarness(thread(), undefined, { page });
+        const result = yield* harness.call("read_issue", {
+          ...input,
+          commentsCursor: "next-comments-page",
+        });
+        expect(result).toEqual({
+          issue: issueDetail,
+          comments: page.comments,
+          commentsTruncated: nextCursor !== null,
+          nextCommentsCursor: nextCursor,
+        });
+        expect(yield* Ref.get(harness.commentsPageRequests)).toEqual([
+          { projectId, ...input, cursor: "next-comments-page" },
+        ]);
+        expect(yield* Ref.get(harness.activityRequests)).toEqual([]);
+      }
+    }),
+  );
+
+  it.effect("reports native truncation when the provider cannot continue", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(thread(), undefined, {
+        activity: { ...issueActivity, nextCommentsCursor: undefined },
+      });
+      const result = yield* harness.call("read_issue", {
+        repository: issue.repository,
+        number: issue.number,
+      });
+      expect(result.commentsTruncated).toBe(true);
+      expect(result.nextCommentsCursor).toBeNull();
+    }),
+  );
+
+  it.effect("rejects missing capabilities and missing threads before reading the host", () =>
+    Effect.gen(function* () {
+      const input = { repository: issue.repository, number: issue.number };
+      const denied = yield* makeHarness();
+      expect(yield* denied.call("read_issue", input, []).pipe(Effect.flip)).toMatchObject({
+        _tag: "McpCapabilityUnavailableError",
+        capability: "issues",
+      });
+      const missing = yield* makeHarness(null);
+      expect(yield* missing.call("read_issue", input).pipe(Effect.flip)).toMatchObject({
+        _tag: "IssueThreadNotFoundError",
+        threadId,
+      });
+      for (const harness of [denied, missing]) {
+        expect(yield* Ref.get(harness.detailRequests)).toEqual([]);
+        expect(yield* Ref.get(harness.activityRequests)).toEqual([]);
+        expect(yield* Ref.get(harness.commentsPageRequests)).toEqual([]);
+      }
+    }),
+  );
+
+  it.effect("preserves IssueService project refusal and does not read comments", () =>
+    Effect.gen(function* () {
+      const readError = new IssueOperationError({
+        operation: "resolveRepository",
+        detail: "The issue does not belong to the selected project.",
+      });
+      const harness = yield* makeHarness(thread(), undefined, { readError });
+      expect(
+        yield* harness
+          .call("read_issue", { repository: "other/project", number: 7 })
+          .pipe(Effect.flip),
+      ).toEqual(readError);
+      expect(yield* Ref.get(harness.activityRequests)).toEqual([]);
+    }),
+  );
+
   it.effect("links the canonical issue to the credential's thread", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

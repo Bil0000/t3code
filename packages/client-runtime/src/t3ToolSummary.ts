@@ -369,6 +369,16 @@ export function summarizeT3ToolCalls(
     case "link-pr":
       label = phrase("Linked", "link", quantity(selected.length, "pull request"));
       break;
+    case "read-issue":
+      label = phrase(
+        "Read",
+        "read",
+        quantity(
+          countEntities(selected.map((call) => id(asRecord(call.output?.issue)?.url))),
+          "issue",
+        ),
+      );
+      break;
     case "unlink-pr":
       label = phrase("Unlinked", "unlink", quantity(selected.length, "pull request"));
       break;

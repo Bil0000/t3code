@@ -1,4 +1,6 @@
 import {
+  IssueActivity,
+  IssueDetail,
   IssueOperationError,
   IssueProviderKind,
   IssueUnavailableError,
@@ -54,6 +56,28 @@ const dependencies = [
   Orchestrator.OrchestratorV2,
   IssueService.IssueService,
 ];
+
+const ReadIssueTool = Tool.make("read_issue", {
+  description:
+    "Read an issue body and a bounded page of comments from this thread's project. The issue need not be linked to the thread. Pass repository, number, and provider when needed. If nextCommentsCursor is present, pass it as commentsCursor to read the next page. commentsTruncated=true with a null cursor means this host cannot return the rest through T3.",
+  parameters: Schema.Struct({
+    ...IssueTargetInput.fields,
+    commentsCursor: Schema.optional(TrimmedNonEmptyString),
+  }),
+  success: Schema.Struct({
+    issue: IssueDetail,
+    comments: IssueActivity.fields.comments,
+    commentsTruncated: Schema.Boolean,
+    nextCommentsCursor: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+  failure: IssueToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Read issue")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
 
 const LinkIssueTool = Tool.make("link_issue", {
   description:
@@ -166,6 +190,7 @@ const ListIssuePullRequestLinksTool = Tool.make("list_issue_pull_request_links",
   .annotate(Tool.OpenWorld, false);
 
 export const IssuesToolkit = Toolkit.make(
+  ReadIssueTool,
   LinkIssueTool,
   UnlinkIssueTool,
   ListThreadIssuesTool,
