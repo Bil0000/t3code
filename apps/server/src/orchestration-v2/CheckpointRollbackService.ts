@@ -369,20 +369,36 @@ export const layer: Layer.Layer<
     return CheckpointRollbackServiceV2.of({
       execute: (input) =>
         Effect.gen(function* () {
-          const storedProjection = yield* readProjection(input.threadId);
-          const worktreePath =
-            storedProjection.thread.worktreePath == null
-              ? null
-              : yield* resolveWorkspacePath(storedProjection.thread.worktreePath).pipe(
+          const resolvePath = (worktreePath: string | null) =>
+            worktreePath == null
+              ? Effect.succeed(null)
+              : resolveWorkspacePath(worktreePath).pipe(
                   Effect.provideService(FileSystem.FileSystem, fileSystem),
                   Effect.provideService(Path.Path, path),
                 );
-          const projection =
-            worktreePath === null
-              ? storedProjection
-              : { ...storedProjection, thread: { ...storedProjection.thread, worktreePath } };
-          const effect = execute(input, projection);
-          return yield* worktreePath === null ? effect : withWorkspaceLease(worktreePath, effect);
+          const initial = yield* readProjection(input.threadId);
+          let worktreePath = yield* resolvePath(initial.thread.worktreePath);
+          while (true) {
+            const effect = Effect.gen(function* () {
+              const storedProjection = yield* readProjection(input.threadId);
+              const freshPath = yield* resolvePath(storedProjection.thread.worktreePath);
+              if (freshPath !== worktreePath) return freshPath;
+              const projection =
+                freshPath === null
+                  ? storedProjection
+                  : {
+                      ...storedProjection,
+                      thread: { ...storedProjection.thread, worktreePath: freshPath },
+                    };
+              yield* execute(input, projection);
+              return undefined;
+            });
+            const freshPath = yield* worktreePath === null
+              ? effect
+              : withWorkspaceLease(worktreePath, effect);
+            if (freshPath === undefined) return;
+            worktreePath = freshPath;
+          }
         }).pipe(
           Effect.mapError((cause) =>
             isCheckpointRollbackExecutionError(cause)

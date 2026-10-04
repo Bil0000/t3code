@@ -1263,26 +1263,43 @@ export const layer: Layer.Layer<
     return ProviderTurnStartServiceV2.of({
       start: (input) =>
         Effect.gen(function* () {
-          const storedProjection = yield* projectionStore.getTurnStartContext(
-            input.threadId,
-            input.runId,
-          );
-          const worktreePath =
-            storedProjection.thread.worktreePath == null
-              ? null
-              : yield* resolveWorkspacePath(storedProjection.thread.worktreePath).pipe(
+          const resolvePath = (worktreePath: string | null) =>
+            worktreePath == null
+              ? Effect.succeed(null)
+              : resolveWorkspacePath(worktreePath).pipe(
                   Effect.provideService(FileSystem.FileSystem, fileSystem),
                   Effect.provideService(Path.Path, path),
                 );
-          const projection =
-            worktreePath === null
-              ? storedProjection
-              : { ...storedProjection, thread: { ...storedProjection.thread, worktreePath } };
-          const effect = start(input, projection);
-          const providerTurn = yield* worktreePath === null
-            ? effect
-            : withWorkspaceLease(worktreePath, effect);
-          if (providerTurn !== undefined) yield* providerTurn;
+          const initial = yield* projectionStore.getTurnStartContext(input.threadId, input.runId);
+          let worktreePath = yield* resolvePath(initial.thread.worktreePath);
+          while (true) {
+            const effect = Effect.gen(function* () {
+              const storedProjection = yield* projectionStore.getTurnStartContext(
+                input.threadId,
+                input.runId,
+              );
+              const freshPath = yield* resolvePath(storedProjection.thread.worktreePath);
+              if (freshPath !== worktreePath)
+                return { retry: true as const, worktreePath: freshPath };
+              const projection =
+                freshPath === null
+                  ? storedProjection
+                  : {
+                      ...storedProjection,
+                      thread: { ...storedProjection.thread, worktreePath: freshPath },
+                    };
+              return { retry: false as const, providerTurn: yield* start(input, projection) };
+            });
+            const result = yield* worktreePath === null
+              ? effect
+              : withWorkspaceLease(worktreePath, effect);
+            if (result.retry) {
+              worktreePath = result.worktreePath;
+              continue;
+            }
+            if (result.providerTurn !== undefined) yield* result.providerTurn;
+            return;
+          }
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnStartError(cause)

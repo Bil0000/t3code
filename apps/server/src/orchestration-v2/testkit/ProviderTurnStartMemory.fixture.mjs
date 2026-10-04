@@ -180,9 +180,9 @@ await Effect.runPromise(
       current = { ...current, runs: [{ ...liveRun, status: "completed" }] };
       NodeAssert.equal(yield* controls.shouldFinalizeRun(), false);
       NodeAssert.deepEqual(yield* controls.loadInheritedBackgroundTurnItems(), []);
-      NodeAssert.equal(fullReads, i + 1);
+      NodeAssert.equal(fullReads, (i + 1) * 2);
       NodeAssert.equal(yield* controls.hasUnpairedRunInterruptRequest(), false);
-      NodeAssert.equal(fullReads, i + 1);
+      NodeAssert.equal(fullReads, (i + 1) * 2);
       current = null;
       if (i === Math.floor(count / 2) - 1 || i === count - 1) {
         yield* Effect.promise(async () => {

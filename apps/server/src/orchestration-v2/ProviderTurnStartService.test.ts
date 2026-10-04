@@ -172,7 +172,7 @@ it("does not commit running state when inherited background routing cannot be re
       .pipe(Effect.flip);
 
     expect(error._tag).toBe("ProviderTurnStartError");
-    expect(projectionReadCount).toBe(2);
+    expect(projectionReadCount).toBe(3);
     expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
     expect(createWorktree).toHaveBeenCalledWith({
       cwd: "/tmp/provider-turn-start-project",
@@ -523,6 +523,16 @@ function makeLocalCommandHarness(input: {
   );
   const exists = vi.fn(() => Effect.succeed(true));
   const createWorktree = vi.fn(() => Effect.succeed({} as never));
+  const getTurnStartContext = vi.fn(() =>
+    Effect.succeed({
+      ...projection,
+      hasConversation: projection.messages.some(
+        (m) =>
+          m.role === "user" &&
+          (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
+      ),
+    }),
+  );
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -544,15 +554,7 @@ function makeLocalCommandHarness(input: {
             Effect.succeed(Option.some({ workspaceRoot: "/tmp/native-account-project" } as never)),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getTurnStartContext: () =>
-            Effect.succeed({
-              ...projection,
-              hasConversation: projection.messages.some(
-                (m) =>
-                  m.role === "user" &&
-                  (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
-              ),
-            }),
+          getTurnStartContext,
           getRuntimeRecoveryProjection: () =>
             Effect.as(failReadIfRunning, {
               ...projection,
@@ -580,6 +582,10 @@ function makeLocalCommandHarness(input: {
     ),
   );
   return {
+    getTurnStartContext,
+    setProjection: (next: OrchestrationV2ThreadProjection) => {
+      projection = next;
+    },
     resolveRuntimePolicy,
     exists,
     createWorktree,
@@ -710,6 +716,107 @@ effectIt.effect.each(
       }),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+effectIt.effect("reads current startup state after waiting for the workspace lease", () =>
+  Effect.gen(function* () {
+    const worktreePath = "/tmp/provider-start-fresh-state";
+    const release = yield* Deferred.make<void>();
+    const readEntered = yield* Deferred.make<void>();
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      worktreePath,
+      failReadsAfterRunning: true,
+    });
+    const read = harness.getTurnStartContext.getMockImplementation()!;
+    harness.getTurnStartContext.mockImplementationOnce(() =>
+      Deferred.succeed(readEntered, undefined).pipe(Effect.andThen(read())),
+    );
+    const holder = yield* withWorkspaceLease(worktreePath, Deferred.await(release)).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(readEntered);
+    const projection = harness.projection();
+    harness.setProjection({
+      ...projection,
+      runs: projection.runs.map((run) => ({ ...run, status: "running" })),
+    });
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(holder);
+    yield* Fiber.join(startup);
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+  }),
+);
+
+effectIt.effect.each(["worktree", "root"])(
+  "takes the new startup lease when its path changes from %s",
+  (initial) =>
+    Effect.gen(function* () {
+      const oldPath = "/tmp/provider-start-old-path";
+      const newPath = "/tmp/provider-start-new-path";
+      const releaseOld = yield* Deferred.make<void>();
+      const releaseNew = yield* Deferred.make<void>();
+      const readEntered = yield* Deferred.make<void>();
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        ...(initial === "worktree" ? { worktreePath: oldPath } : {}),
+        failReadsAfterRunning: true,
+      });
+      const read = harness.getTurnStartContext.getMockImplementation()!;
+      harness.getTurnStartContext.mockImplementationOnce(() => {
+        const projection = read();
+        return Deferred.succeed(readEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseOld)),
+          Effect.andThen(projection),
+        );
+      });
+      let newLeaseReleased = false;
+      const holder = yield* withWorkspaceLease(
+        newPath,
+        Deferred.await(releaseNew).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              newLeaseReleased = true;
+            }),
+          ),
+        ),
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+      const oldHolder =
+        initial === "worktree"
+          ? yield* withWorkspaceLease(oldPath, Deferred.await(releaseOld)).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            )
+          : undefined;
+      harness.exists.mockImplementation(() => Effect.succeed(false));
+      const open = harness.open.getMockImplementation()!;
+      harness.open.mockImplementation(() => {
+        expect(newLeaseReleased).toBe(true);
+        return open();
+      });
+      const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(readEntered);
+      const projection = harness.projection();
+      harness.setProjection({
+        ...projection,
+        thread: { ...projection.thread, worktreePath: newPath, branch: "feature/restore" },
+      });
+      yield* Deferred.succeed(releaseOld, undefined);
+      if (oldHolder !== undefined) yield* Fiber.join(oldHolder);
+      expect(harness.open).not.toHaveBeenCalled();
+      yield* Deferred.succeed(releaseNew, undefined);
+      yield* Fiber.join(holder);
+      yield* Fiber.join(startup);
+      expect(harness.createWorktree).toHaveBeenCalledExactlyOnceWith({
+        cwd: "/tmp/native-account-project",
+        refName: "feature/restore",
+        path: newPath,
+      });
+      expect(harness.open).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimePolicy: expect.objectContaining({ cwd: newPath }) }),
+      );
+    }),
 );
 
 effectIt.effect("starts another provider in the same checkout while a turn is pending", () =>
