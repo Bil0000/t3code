@@ -153,7 +153,10 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "snoozedUntil"
 >;
 
-export type ProjectionThreadIssues = Pick<OrchestrationV2AppThread, "id" | "projectId" | "issues">;
+export type ProjectionThreadIssues = Pick<
+  OrchestrationV2AppThread,
+  "id" | "projectId" | "settledOverride" | "settledAt" | "issues"
+>;
 
 /** The thread fields pull request sync reads, for a thread with at least one link. */
 export type ProjectionThreadPullRequests = Pick<
@@ -5207,6 +5210,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             Effect.map((thread): ProjectionThreadIssues => ({
               id: thread.id,
               projectId: thread.projectId,
+              settledOverride: thread.settledOverride,
+              settledAt: thread.settledAt,
               issues: thread.issues ?? [],
             })),
           ),
@@ -5690,6 +5695,8 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               .map((thread): ProjectionThreadIssues => ({
                 id: thread.id,
                 projectId: thread.projectId,
+                settledOverride: thread.settledOverride,
+                settledAt: thread.settledAt,
                 issues: thread.issues ?? [],
               })),
           ),

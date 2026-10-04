@@ -186,6 +186,8 @@ it.layer(testLayer)("V2 thread issue links", (it) => {
         {
           id: threadId,
           projectId: before.projectId,
+          settledOverride: before.settledOverride,
+          settledAt: before.settledAt,
           issues: [synced],
         },
       ]);

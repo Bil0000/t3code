@@ -1,6 +1,7 @@
 import {
   CommandId,
   normalizeWorkItemLinkKey,
+  type IssueRef,
   type ThreadId,
   type ThreadIssueLink,
 } from "@t3tools/contracts";
@@ -21,12 +22,29 @@ import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
-const CLOSED_SYNC_INTERVAL_MS = 15 * 60 * 1_000;
+const OPEN_SYNC_INTERVAL_MS = 5 * 60 * 1_000;
+const SLOW_SYNC_INTERVAL_MS = 30 * 60 * 1_000;
 const encodeSyncKey = Schema.encodeSync(
   Schema.fromJsonString(
     Schema.Tuple([Schema.String, Schema.String, Schema.String, Schema.Number, Schema.String]),
   ),
 );
+const encodeSourceKey = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String, Schema.String])),
+);
+
+function spreadInterval(key: string, intervalMs: number): number {
+  let hash = 0;
+  for (let index = 0; index < key.length; index++) {
+    hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
+  }
+  return intervalMs * (0.8 + 0.4 * (hash / 0xffffffff));
+}
+
+interface LinkEntry {
+  readonly thread: ProjectionStore.ProjectionThreadIssues;
+  readonly link: ThreadIssueLink;
+}
 
 export class IssueSyncReactor extends Context.Service<
   IssueSyncReactor,
@@ -42,6 +60,8 @@ const make = Effect.gen(function* () {
   const issues = yield* IssueService.IssueService;
   const crypto = yield* Crypto.Crypto;
   const lastSyncedAt = new Map<string, number>();
+  const retryAt = new Map<string, number>();
+  const sourceRetryAt = new Map<string, number>();
   const observedLinks = new Map<ThreadId, ReadonlySet<CommandId>>();
   const requestedLinks = new Map<ThreadId, Set<CommandId>>();
 
@@ -55,25 +75,35 @@ const make = Effect.gen(function* () {
   const sweep = Effect.fn("IssueSyncReactor.sweep")(function* (
     threadId?: ThreadId,
     requested?: ReadonlySet<CommandId>,
+    changed?: IssueRef,
   ) {
     const threads = yield* projections.getThreadsWithIssues(threadId);
     const now = DateTime.toEpochMillis(yield* DateTime.now);
-    const groups = new Map<
-      string,
-      Array<{
-        readonly thread: ProjectionStore.ProjectionThreadIssues;
-        readonly link: ThreadIssueLink;
-      }>
-    >();
+    const groups = new Map<string, LinkEntry[]>();
     for (const thread of threads) {
-      observedLinks.set(
-        thread.id,
-        new Set(
-          (thread.issues ?? []).flatMap((link) => (link.linkId === undefined ? [] : [link.linkId])),
-        ),
-      );
+      if (threadId === undefined && changed === undefined) {
+        observedLinks.set(
+          thread.id,
+          new Set(
+            (thread.issues ?? []).flatMap((link) =>
+              link.linkId === undefined ? [] : [link.linkId],
+            ),
+          ),
+        );
+      }
       for (const link of thread.issues ?? []) {
         if (requested !== undefined && (link.linkId === undefined || !requested.has(link.linkId)))
+          continue;
+        const url = URL.parse(link.url);
+        if (url === null || (url.protocol !== "https:" && url.protocol !== "http:")) continue;
+        if (
+          changed !== undefined &&
+          (changed.projectId !== thread.projectId ||
+            changed.repository.toLowerCase() !== link.repository.toLowerCase() ||
+            changed.number !== link.number ||
+            (changed.provider !== undefined && changed.provider !== link.provider) ||
+            (changed.host !== undefined && changed.host.toLowerCase() !== url.host.toLowerCase()))
+        )
           continue;
         const key = encodeSyncKey([
           thread.projectId,
@@ -87,75 +117,138 @@ const make = Effect.gen(function* () {
         groups.set(key, entries);
       }
     }
-    if (threadId === undefined) {
-      for (const key of lastSyncedAt.keys()) if (!groups.has(key)) lastSyncedAt.delete(key);
+    if (threadId === undefined && changed === undefined) {
+      for (const map of [lastSyncedAt, retryAt]) {
+        for (const key of map.keys()) if (!groups.has(key)) map.delete(key);
+      }
       const activeThreads = new Set(threads.map((thread) => thread.id));
       for (const id of observedLinks.keys()) if (!activeThreads.has(id)) observedLinks.delete(id);
     }
 
-    yield* Effect.forEach(
-      groups,
-      ([key, entries]) =>
-        Effect.gen(function* () {
-          const last = lastSyncedAt.get(key);
-          if (
-            requested === undefined &&
-            entries.every(({ link }) => link.state === "closed") &&
-            last !== undefined &&
-            now - last < CLOSED_SYNC_INTERVAL_MS
-          ) {
-            return;
-          }
-          const first = entries[0]!;
-          const url = new URL(first.link.url);
-          if (url.protocol !== "https:" && url.protocol !== "http:") return;
-          const ref = {
-            projectId: first.thread.projectId,
-            provider: first.link.provider,
-            repository: first.link.repository,
-            number: first.link.number,
-            host: url.host,
-          };
+    const forced = requested !== undefined || changed !== undefined;
+    const dueBySource = new Map<string, Array<[string, LinkEntry[]]>>();
+    const activeSources = new Set<string>();
+    for (const [key, entries] of groups) {
+      const first = entries[0]!;
+      const sourceKey = encodeSourceKey([
+        first.thread.projectId,
+        first.link.provider,
+        new URL(first.link.url).host.toLowerCase(),
+      ]);
+      activeSources.add(sourceKey);
+      if (!forced) {
+        if (now < (sourceRetryAt.get(sourceKey) ?? 0) || now < (retryAt.get(key) ?? 0)) continue;
+        const last = lastSyncedAt.get(key);
+        if (last === undefined && entries.every(({ link }) => link.state !== undefined)) {
           lastSyncedAt.set(key, now);
-          yield* issues.invalidate({ reference: ref });
-          const detail = yield* issues.detail(ref);
-          if (
-            detail.projectId !== ref.projectId ||
-            detail.provider !== ref.provider ||
-            detail.repository.toLowerCase() !== ref.repository.toLowerCase() ||
-            detail.number !== ref.number ||
-            normalizeWorkItemLinkKey(detail).url !== normalizeWorkItemLinkKey(first.link).url
-          ) {
-            return;
+          continue;
+        }
+        const active = entries.some(
+          ({ thread, link }) =>
+            link.state !== "closed" &&
+            thread.settledOverride !== "settled" &&
+            thread.settledAt === null,
+        );
+        if (
+          last !== undefined &&
+          now - last < spreadInterval(key, active ? OPEN_SYNC_INTERVAL_MS : SLOW_SYNC_INTERVAL_MS)
+        )
+          continue;
+      }
+      const due = dueBySource.get(sourceKey) ?? [];
+      due.push([key, entries]);
+      dueBySource.set(sourceKey, due);
+    }
+    if (threadId === undefined && changed === undefined) {
+      for (const key of sourceRetryAt.keys())
+        if (!activeSources.has(key)) sourceRetryAt.delete(key);
+    }
+    const syncGroup = (sourceKey: string, [key, entries]: [string, LinkEntry[]]) =>
+      Effect.gen(function* () {
+        const first = entries[0]!;
+        const url = new URL(first.link.url);
+        const ref = {
+          projectId: first.thread.projectId,
+          provider: first.link.provider,
+          repository: first.link.repository,
+          number: first.link.number,
+          host: url.host,
+        };
+        yield* issues.invalidate({ reference: ref });
+        const detail = yield* issues.detail(ref);
+        if (
+          detail.projectId !== ref.projectId ||
+          detail.provider !== ref.provider ||
+          detail.repository.toLowerCase() !== ref.repository.toLowerCase() ||
+          detail.number !== ref.number ||
+          normalizeWorkItemLinkKey(detail).url !== normalizeWorkItemLinkKey(first.link).url
+        ) {
+          retryAt.set(key, now + SLOW_SYNC_INTERVAL_MS);
+          return;
+        }
+        retryAt.delete(key);
+        sourceRetryAt.delete(sourceKey);
+        lastSyncedAt.set(key, now);
+        for (const { thread, link } of entries) {
+          if (link.title === detail.title && link.state === detail.state) continue;
+          const uuid = yield* crypto.randomUUIDv4;
+          yield* engine
+            .dispatch({
+              type: "thread.issue-link.sync",
+              commandId: CommandId.make(`server:issue-sync:${thread.id}:${uuid}`),
+              threadId: thread.id,
+              projectId: thread.projectId,
+              issue: { ...link, title: detail.title, state: detail.state },
+              expectedIssue: link,
+            })
+            .pipe(Effect.catchCause(logSkipped({ threadId: thread.id, key })));
+        }
+      }).pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            if (
+              error._tag === "IssueUnavailableError" &&
+              (error.reason === "cli-missing" || error.reason === "cli-unauthenticated")
+            ) {
+              sourceRetryAt.set(sourceKey, now + OPEN_SYNC_INTERVAL_MS);
+            } else {
+              retryAt.set(key, now + SLOW_SYNC_INTERVAL_MS);
+            }
+          }),
+        ),
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+          if (now >= (retryAt.get(key) ?? 0) && now >= (sourceRetryAt.get(sourceKey) ?? 0))
+            retryAt.set(key, now + OPEN_SYNC_INTERVAL_MS);
+          return logSkipped({ key })(cause);
+        }),
+      );
+    yield* Effect.forEach(
+      dueBySource,
+      ([sourceKey, due]) =>
+        Effect.gen(function* () {
+          if (forced) sourceRetryAt.delete(sourceKey);
+          for (const group of due) {
+            if (now < (sourceRetryAt.get(sourceKey) ?? 0)) return;
+            yield* syncGroup(sourceKey, group);
           }
-          for (const { thread, link } of entries) {
-            if (link.title === detail.title && link.state === detail.state) continue;
-            const uuid = yield* crypto.randomUUIDv4;
-            yield* engine
-              .dispatch({
-                type: "thread.issue-link.sync",
-                commandId: CommandId.make(`server:issue-sync:${thread.id}:${uuid}`),
-                threadId: thread.id,
-                projectId: thread.projectId,
-                issue: { ...link, title: detail.title, state: detail.state },
-                expectedIssue: link,
-              })
-              .pipe(Effect.catchCause(logSkipped({ threadId: thread.id, key })));
-          }
-        }).pipe(Effect.catchCause(logSkipped({ key }))),
+        }),
       { concurrency: 4, discard: true },
     );
   });
 
-  const worker = yield* makeDrainableWorker((threadId: ThreadId | undefined) =>
+  const worker = yield* makeDrainableWorker((request: ThreadId | IssueRef | undefined) =>
     Effect.suspend(() => {
+      const changed = typeof request === "object" ? request : undefined;
+      const threadId = typeof request === "string" ? request : undefined;
       const requested = threadId === undefined ? undefined : requestedLinks.get(threadId);
       if (threadId !== undefined) requestedLinks.delete(threadId);
-      return sweep(threadId, requested);
-    }).pipe(Effect.catchCause(logSkipped({ threadId }))),
+      return sweep(threadId, requested, changed);
+    }).pipe(Effect.catchCause(logSkipped({ request }))),
   );
   const start: IssueSyncReactor["Service"]["start"] = Effect.fn("IssueSyncReactor.start")(
     function* () {
+      yield* forkParked(Stream.runForEach(issues.subscribeRefreshes, worker.enqueue));
       yield* forkParked(
         Stream.runForEach(engine.streamDomainEvents, (event) => {
           if (event.type === "thread.archived" || event.type === "thread.deleted") {
