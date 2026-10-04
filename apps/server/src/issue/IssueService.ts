@@ -5,6 +5,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import {
   IssueOperationError,
   IssueUnavailableError,
@@ -142,6 +144,7 @@ export class IssueService extends Context.Service<
     ) => Effect.Effect<IssueAssigneeCandidateList, IssueError>;
     readonly templates: (input: IssueRepositoryRef) => Effect.Effect<IssueTemplateList, IssueError>;
     readonly invalidate: (input: IssueInvalidateInput) => Effect.Effect<void>;
+    readonly subscribeRefreshes: Stream.Stream<IssueRef>;
   }
 >()("t3/issue/IssueService") {}
 
@@ -337,6 +340,7 @@ export const make = Effect.gen(function* () {
   const registry = yield* IssueProviderRegistry.IssueProviderRegistry;
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  const refreshes = yield* PubSub.unbounded<IssueRef>();
 
   const listWorkspaceProjects = (
     filter: Pick<IssueListInput, "projectId" | "host">,
@@ -1696,7 +1700,10 @@ export const make = Effect.gen(function* () {
     list,
     detail,
     activity,
-    runAction: invalidatedByMutation(runAction),
+    runAction: (input) =>
+      invalidatedByMutation(runAction)(input).pipe(
+        Effect.tap(() => PubSub.publish(refreshes, input)),
+      ),
     commentsPage,
     comment: invalidatedByMutation(comment),
     updateComment: invalidatedByMutation(updateComment),
@@ -1705,7 +1712,8 @@ export const make = Effect.gen(function* () {
     // to forget yet.
     create: (input) =>
       create(input).pipe(Effect.tap(() => Effect.sync(() => (listingsEpoch = ++epochCounter)))),
-    update: invalidatedByMutation(update),
+    update: (input) =>
+      invalidatedByMutation(update)(input).pipe(Effect.tap(() => PubSub.publish(refreshes, input))),
     setLabels: invalidatedByMutation(setLabels),
     setAssignees: invalidatedByMutation(setAssignees),
     // The candidate lists are deliberately read fresh per menu-open, so they stay uncached.
@@ -1713,6 +1721,7 @@ export const make = Effect.gen(function* () {
     assigneeCandidates,
     templates,
     invalidate,
+    subscribeRefreshes: Stream.fromPubSub(refreshes),
   });
 });
 

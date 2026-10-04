@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import {
   issueProjectSourceKey,
   issueSourceKey,
@@ -10,6 +12,7 @@ import {
   type IssueViewerPermissions,
   type OrchestrationProjectShell,
   type ProjectId,
+  type IssueRef,
 } from "@t3tools/contracts";
 
 import * as ProjectService from "../project/ProjectService.ts";
@@ -1814,6 +1817,36 @@ it.effect("a write forgets the listings and the issue it touched, with no client
     yield* service.detail(REFERENCE);
     assert.deepStrictEqual([listCalls, detailCalls], [2, 2]);
   }),
+);
+
+it.effect(
+  "publishes refreshes after successful close, reopen and edit, but not failed writes",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* makeService({
+          projects: ONE_PROJECT,
+          providers: [fakeProvider("github")],
+        });
+        const refreshes = yield* Queue.unbounded<IssueRef>();
+        yield* service.subscribeRefreshes.pipe(
+          Stream.runForEach((ref) => Queue.offer(refreshes, ref)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+        const ref = { ...REFERENCE, provider: "github", host: "github.com" };
+        for (const action of ["close", "reopen"] as const) {
+          const input = { ...ref, action };
+          yield* service.runAction(input);
+          assert.deepEqual(yield* Queue.take(refreshes), input);
+        }
+        const error = yield* Effect.flip(service.update({ ...ref, title: "   " }));
+        assert.equal(error._tag, "IssueOperationError");
+        const input = { ...ref, title: "Edited title" };
+        yield* service.update(input);
+        assert.deepEqual(yield* Queue.take(refreshes), input);
+        assert.equal(yield* Queue.size(refreshes), 0);
+      }),
+    ),
 );
 
 it.effect("a new issue forgets the listings that would hold it", () =>

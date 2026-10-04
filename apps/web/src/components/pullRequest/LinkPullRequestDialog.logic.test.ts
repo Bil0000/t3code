@@ -30,6 +30,21 @@ describe("linkIssuePreviewMatchesReference", () => {
       }),
     ).toBe(matches);
   });
+
+  it("refuses an issue read that answered with a pull request", () => {
+    expect(
+      linkIssuePreviewMatchesReference("#42", {
+        provider: "github",
+        url: "https://github.com/acme/web/pull/42",
+      }),
+    ).toBe(false);
+    expect(
+      linkIssuePreviewMatchesReference("#42", {
+        provider: "github",
+        url: "https://github.com/acme/web/issues/42",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("resolveLinkPullRequestInput", () => {
@@ -165,7 +180,14 @@ describe("changeRequestWebUrl", () => {
 describe("linkReferenceKind", () => {
   it.each([
     ["https://github.com/acme/web/issues/4", "issue"],
+    ["https://github.com/groups/repo/issues/4", "issue"],
+    ["https://dev.azure.com/groups/project/_workitems/edit/4", "issue"],
+    ["https://bitbucket.org/acme/web/issues/4/fix-login", "issue"],
     ["https://gitlab.com/g/sub/repo/-/issues/4", "issue"],
+    ["https://gitlab.com/g/sub/repo/-/work_items/4", "issue"],
+    ["acme/api#4", "issue"],
+    ["https://github.com/acme/web/issues/4/files", "pull-request"],
+    ["https://gitlab.com/groups/g/-/work_items/4", "pull-request"],
     ["https://dev.azure.com/org/project/_workitems/edit/4", "issue"],
     ["https://github.com/acme/web/pull/4", "pull-request"],
     ["https://linear.app/acme/issue/ENG-4/fix-login", "issue"],
@@ -182,7 +204,7 @@ describe("linkReferenceKind", () => {
 });
 
 describe("resolveLinkIssueInput", () => {
-  const own = { id: "p1" as never, repository: "acme/web" };
+  const own = { id: "p1" as never, host: "github.com", repository: "acme/web" };
 
   it("resolves a bare number against the thread's own repository", () => {
     expect(
@@ -207,8 +229,8 @@ describe("resolveLinkIssueInput", () => {
   });
 
   it("reads a URL with the project that owns its repository", () => {
-    const findProject = (link: { repository: string }) =>
-      link.repository === "org/project"
+    const findProject = (link: { host: string; repository: string }) =>
+      link.host === "dev.azure.com" && link.repository === "org/project"
         ? { id: "p2" as never, repository: "org/project/web" }
         : undefined;
     expect(
@@ -227,6 +249,73 @@ describe("resolveLinkIssueInput", () => {
         linearProjectId: () => undefined,
       }),
     ).toMatchObject({ error: expect.stringContaining("github.com/other/repo") });
+  });
+
+  it.each([
+    ["https://github.com/groups/repo/issues/7", "github.com", "groups/repo"],
+    ["https://dev.azure.com/groups/project/_workitems/edit/7", "dev.azure.com", "groups/project"],
+    ["https://bitbucket.org/acme/web/issues/7/fix-login", "bitbucket.org", "acme/web"],
+  ])("preserves supported issue URL %s", (reference, host, repository) => {
+    expect(
+      resolveLinkIssueInput({
+        reference,
+        project: own,
+        findProject: (link) =>
+          link.host === host && link.repository === repository
+            ? { id: "p2" as never, repository }
+            : undefined,
+        linearProjectId: () => undefined,
+      }),
+    ).toEqual({ issue: { projectId: "p2", repository, number: 7 } });
+  });
+
+  it("reads a GitLab work item through the project that owns its nested repository", () => {
+    expect(
+      resolveLinkIssueInput({
+        reference: "https://gitlab.com/g/sub/repo/-/work_items/7?show=1#note_2",
+        project: own,
+        findProject: (link) =>
+          link.host === "gitlab.com" && link.repository === "g/sub/repo"
+            ? { id: "p2" as never, repository: "g/sub/repo" }
+            : undefined,
+        linearProjectId: () => undefined,
+      }),
+    ).toEqual({ issue: { projectId: "p2", repository: "g/sub/repo", number: 7 } });
+  });
+
+  it("reads owner/repo#N on the thread project's host", () => {
+    const findProject = (link: { host: string; repository: string }) =>
+      link.host === "github.com" && link.repository === "acme/api"
+        ? { id: "p2" as never, repository: "acme/api" }
+        : undefined;
+    const resolve = (reference: string, project: typeof own | null = own) =>
+      resolveLinkIssueInput({ reference, project, findProject, linearProjectId: () => undefined });
+    expect(resolve("acme/api#5")).toEqual({
+      issue: { projectId: "p2", repository: "acme/api", number: 5 },
+    });
+    expect(resolve("acme/other#5")).toMatchObject({
+      error: expect.stringContaining("github.com/acme/other"),
+    });
+    expect(resolve("acme/api#5", null)).toMatchObject({
+      error: expect.stringContaining("full URL"),
+    });
+    expect(resolve("acme/api5")).toBeNull();
+  });
+
+  it.each([
+    "https://github.com/acme/web/issues/12/files",
+    "https://github.com/acme/web/pull/12",
+    "https://gitlab.com/groups/g/-/work_items/12",
+    "ftp://github.com/acme/web/issues/12",
+  ])("ignores %s, which names no repository issue", (reference) => {
+    expect(
+      resolveLinkIssueInput({
+        reference,
+        project: own,
+        findProject: () => own,
+        linearProjectId: () => undefined,
+      }),
+    ).toBeNull();
   });
 
   it("returns null for input that is not an issue reference", () => {

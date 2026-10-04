@@ -18,7 +18,7 @@ import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { findProjectForLink, repositoryForProjectLink } from "~/lib/openIssueLink";
+import { findProjectForIssue, repositoryForProjectLink } from "~/lib/openIssueLink";
 import {
   findProjectOnChangeRequestHost,
   parseChangeRequestUrl,
@@ -174,11 +174,26 @@ export function linkPullRequestPreviewTarget(input: {
 
 type LinkKind = "issue" | "pull-request";
 
-const ISSUE_URL_PATH = /^\/(.+?)\/(?:-\/)?(?:issues|_workitems\/edit)\/([1-9]\d{0,8})(?:\/|$)/u;
+const ISSUE_URL_PATHS = [
+  /^\/((?:[\w.-]+\/)+[\w.-]+)\/-\/(?:issues|work_items)\/([1-9]\d{0,8})\/?$/u,
+  /^\/([\w.-]+\/[\w.-]+)\/issues\/([1-9]\d{0,8})\/?$/u,
+  /^\/([^/]+(?:\/[^/]+)?)\/_workitems\/edit\/([1-9]\d{0,8})\/?$/u,
+];
+const REPOSITORY_ISSUE = /^([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d{0,8})$/u;
 const LINEAR_ISSUE_PATH = /^\/[^/]+\/issue\/([A-Za-z0-9]+)-([1-9]\d{0,8})(?:\/|$)/u;
 
 const linearIssueMatch = (url: URL) =>
   url.hostname.toLowerCase() === "linear.app" ? LINEAR_ISSUE_PATH.exec(url.pathname) : null;
+
+const issueUrlMatch = (url: URL) => {
+  if (/^\/groups\/.+\/-\/(?:issues|work_items)\//u.test(url.pathname)) return null;
+  if (url.hostname === "bitbucket.org") {
+    return /^\/([\w.-]+\/[\w.-]+)\/issues\/([1-9]\d{0,8})(?:\/[^/]+)?\/?$/u.exec(url.pathname);
+  }
+  return (
+    ISSUE_URL_PATHS.map((path) => path.exec(url.pathname)).find((match) => match !== null) ?? null
+  );
+};
 
 const selectLinearBindings = (settings: UnifiedSettings) =>
   settings.issueTracking.connections.linear?.projectBindings;
@@ -186,10 +201,11 @@ const selectLinearBindings = (settings: UnifiedSettings) =>
 export function linkReferenceKind(reference: string, chosen: LinkKind): LinkKind {
   const trimmed = reference.trim();
   if (/^#?\d+$/u.test(trimmed)) return chosen;
+  if (REPOSITORY_ISSUE.test(trimmed)) return "issue";
   if (!URL.canParse(trimmed)) return "pull-request";
   const url = new URL(trimmed);
   return /^https?:$/u.test(url.protocol) &&
-    (ISSUE_URL_PATH.test(url.pathname) || linearIssueMatch(url) !== null)
+    (issueUrlMatch(url) !== null || linearIssueMatch(url) !== null)
     ? "issue"
     : "pull-request";
 }
@@ -203,6 +219,7 @@ export function linkIssuePreviewMatchesReference(
   reference: string,
   issue: { readonly provider: string; readonly url: string },
 ): boolean {
+  if (parseChangeRequestUrl(issue.url) !== null) return false;
   if (issue.provider !== "linear" || !URL.canParse(reference)) return true;
   const requested = new URL(reference);
   const preview = new URL(issue.url);
@@ -215,11 +232,10 @@ export function linkIssuePreviewMatchesReference(
 
 export function resolveLinkIssueInput(input: {
   readonly reference: string;
-  readonly project: IssueProject | null;
+  readonly project: (IssueProject & { readonly host: string }) | null;
   readonly findProject: (link: {
+    readonly host: string;
     readonly repository: string;
-    readonly number: number;
-    readonly url: string;
   }) => IssueProject | undefined;
   readonly linearProjectId: (team: string) => ProjectId | undefined;
 }): { issue: IssueRef } | { error: string } | null {
@@ -235,10 +251,9 @@ export function resolveLinkIssueInput(input: {
       issue: { projectId: input.project.id, repository: input.project.repository, number },
     };
   }
-  if (!URL.canParse(trimmed)) return null;
-  const url = new URL(trimmed);
-  if (!/^https?:$/u.test(url.protocol)) return null;
-  const linear = linearIssueMatch(url);
+  const url = URL.canParse(trimmed) ? new URL(trimmed) : null;
+  if (url !== null && !/^https?:$/u.test(url.protocol)) return null;
+  const linear = url === null ? null : linearIssueMatch(url);
   if (linear?.[1] && linear[2]) {
     const projectId = input.linearProjectId(linear[1]);
     if (projectId === undefined) {
@@ -254,15 +269,18 @@ export function resolveLinkIssueInput(input: {
       },
     };
   }
-  const match = ISSUE_URL_PATH.exec(url.pathname);
+  const match = url === null ? REPOSITORY_ISSUE.exec(trimmed) : issueUrlMatch(url);
   if (!match?.[1] || !match[2]) return null;
-  const link = { repository: match[1], number: Number(match[2]), url: trimmed };
-  const project = input.findProject(link);
+  const host = url?.hostname ?? input.project?.host;
+  if (host === undefined) {
+    return { error: "Paste a full URL to link an issue from another repository." };
+  }
+  const project = input.findProject({ host, repository: match[1] });
   if (project === undefined) {
-    return { error: `No project in this environment can read ${url.hostname}/${link.repository}.` };
+    return { error: `No project in this environment can read ${host}/${match[1]}.` };
   }
   return {
-    issue: { projectId: project.id, repository: project.repository, number: link.number },
+    issue: { projectId: project.id, repository: project.repository, number: Number(match[2]) },
   };
 }
 
@@ -346,7 +364,7 @@ function LinkPullRequestDialog({
             reference,
             project: ownProject,
             findProject: (link) => {
-              const project = findProjectForLink(environmentProjects, link);
+              const project = findProjectForIssue(environmentProjects, link);
               return project === undefined
                 ? undefined
                 : {
@@ -562,7 +580,9 @@ function LinkPullRequestDialog({
             </p>
           ) : issueReferenceMismatch ? (
             <p className="text-destructive text-xs">
-              This project is connected to a different Linear workspace. Check its Linear account.
+              {previewIssue.provider === "linear"
+                ? "This project is connected to a different Linear workspace. Check its Linear account."
+                : `${previewIssue.repository} #${previewIssue.number} is a pull request, not an issue.`}
             </p>
           ) : previewQuery.error !== null ? (
             <p className="text-destructive text-xs">{previewQuery.error}</p>
