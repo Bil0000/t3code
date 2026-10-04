@@ -12,7 +12,7 @@ export type SnapshotPage = Pick<
   | "interactiveElements"
 >;
 
-export function collectSnapshotPage(): SnapshotPage {
+function collectSnapshotPage(): SnapshotPage {
   const maxTextLength = 20_000;
   const maxElements = 200;
   const viewport = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };

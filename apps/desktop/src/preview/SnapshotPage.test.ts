@@ -1,7 +1,7 @@
 import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 
-import { snapshotPageExpression } from "./SnapshotPage.ts";
+import { snapshotPageExpression, type SnapshotPage } from "./SnapshotPage.ts";
 
 const rect = (x: number, y: number, width = 100, height = 20) => ({
   x,
@@ -159,9 +159,7 @@ const fixture = () => {
   const capture = (scrollingElement: PageElement | null = root, compatMode = "CSS1Compat") => {
     context.document.scrollingElement = scrollingElement;
     context.document.compatMode = compatMode;
-    return NodeVM.runInNewContext(snapshotPageExpression(), context) as ReturnType<
-      typeof import("./SnapshotPage.ts").collectSnapshotPage
-    >;
+    return NodeVM.runInNewContext(snapshotPageExpression(), context) as SnapshotPage;
   };
   return { root, body, elements, texts, element, text, capture };
 };
