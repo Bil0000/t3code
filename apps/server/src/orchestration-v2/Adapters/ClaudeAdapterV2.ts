@@ -3032,7 +3032,8 @@ export function makeClaudeAdapterV2(
             {
               readonly status: OrchestrationV2Subagent["status"];
               readonly attempt: number;
-              readonly transcriptAnswer: string | undefined;
+              /** Digest of the last emitted transcript answer, not the text: it can run to the transcript cap. */
+              readonly transcriptAnswerDigest: string | undefined;
               readonly transcriptReadAttempts: number;
               readonly finalTranscriptRead: boolean;
               readonly result: string | undefined;
@@ -4277,7 +4278,7 @@ export function makeClaudeAdapterV2(
               });
             }
 
-            let transcriptAnswer = restarted ? undefined : previous?.transcriptAnswer;
+            let transcriptAnswerDigest = restarted ? undefined : previous?.transcriptAnswerDigest;
             let transcript: ReadonlyArray<string> = [];
             if (settled) {
               // The member's own transcript, when the run left one: a missing or
@@ -4299,18 +4300,23 @@ export function makeClaudeAdapterV2(
                             ),
                           }),
                     }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-              if (transcript.length > 0) transcriptAnswer = transcript.join("\n\n");
+              const transcriptAnswer = transcript.length > 0 ? transcript.join("\n\n") : undefined;
+              const answerDigest =
+                transcriptAnswer === undefined
+                  ? undefined
+                  : NodeCrypto.createHash("sha256").update(transcriptAnswer).digest("hex");
+              const previousDigest = transcriptAnswerDigest;
+              if (answerDigest !== undefined) transcriptAnswerDigest = answerDigest;
               const answer =
-                transcript.length > 0
-                  ? transcriptAnswer
-                  : member.result !== undefined && changed && transcriptAnswer === undefined
-                    ? `Partial answer from workflow progress:\n\n${member.result}`
-                    : attempt > 1 && changed && transcriptAnswer === undefined
-                      ? "No answer from this workflow attempt."
-                      : undefined;
+                transcriptAnswer ??
+                (member.result !== undefined && changed && previousDigest === undefined
+                  ? `Partial answer from workflow progress:\n\n${member.result}`
+                  : attempt > 1 && changed && previousDigest === undefined
+                    ? "No answer from this workflow attempt."
+                    : undefined);
               if (
                 answer !== undefined &&
-                (transcript.length === 0 || restarted || answer !== previous?.transcriptAnswer)
+                (transcriptAnswer === undefined || restarted || answerDigest !== previousDigest)
               ) {
                 yield* emitWorkflowMemberMessage({
                   nativeItemId: `${memberKey}:answer:200`,
@@ -4332,7 +4338,7 @@ export function makeClaudeAdapterV2(
                 label: member.label,
                 prompt,
                 model,
-                transcriptAnswer,
+                transcriptAnswerDigest,
                 transcriptReadAttempts:
                   (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
                   (readTranscript ? 1 : 0),
