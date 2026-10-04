@@ -191,7 +191,7 @@ import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { Checkbox } from "./ui/checkbox";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
-import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
+import { openLinkThreadItemDialog } from "./LinkThreadItemDialog";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { searchSettings, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
@@ -1963,22 +1963,44 @@ function OpenCommandPaletteDialog(props: {
       title: "Link pull request to thread",
       icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
       run: async () => {
-        openLinkPullRequestDialog(threadRef);
+        openLinkThreadItemDialog(threadRef, "pull-request");
       },
     });
-    if (activeThreadServerConfig?.environment.capabilities.threadPullRequests === true) {
-      actionItems.push({
-        kind: "action",
-        value: "action:open-thread-pull-requests",
-        searchTerms: ["pull requests", "linked", "stack", "prs"],
-        title: "Show linked pull requests",
-        disabled: visibleThreadPullRequests(activeThread.pullRequests).length === 0,
-        icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
-        run: async () => {
-          useRightPanelStore.getState().open(threadRef, "pull-requests");
-        },
-      });
-    }
+  }
+
+  if (activeThread !== null && activeThreadServerConfig?.environment.capabilities.issues === true) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:link-issue",
+      searchTerms: ["link", "issue", "attach", "ticket"],
+      title: "Link issue to thread",
+      icon: <CircleDotIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openLinkThreadItemDialog(threadRef, "issue");
+      },
+    });
+  }
+
+  const linkedItemCapabilities = activeThreadServerConfig?.environment.capabilities;
+  const listsLinkedPullRequests = linkedItemCapabilities?.threadPullRequests === true;
+  const listsLinkedIssues = linkedItemCapabilities?.issues === true;
+  if (activeThread !== null && (listsLinkedPullRequests || listsLinkedIssues)) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:open-thread-pull-requests",
+      searchTerms: ["pull requests", "issues", "linked", "stack", "prs"],
+      title: "Show linked items",
+      disabled:
+        (!listsLinkedPullRequests ||
+          visibleThreadPullRequests(activeThread.pullRequests).length === 0) &&
+        (!listsLinkedIssues || (activeThread.issues?.length ?? 0) === 0),
+      icon: <PullRequestGlyph.link className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        useRightPanelStore.getState().open(threadRef, "pull-requests");
+      },
+    });
   }
 
   if (activeThread !== null) {

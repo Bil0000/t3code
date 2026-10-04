@@ -1,79 +1,89 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
-import { CircleDotIcon, UnlinkIcon } from "lucide-react";
-import { useState } from "react";
+import type { ScopedThreadRef, ThreadIssueLink } from "@t3tools/contracts";
+import { ArrowUpRightIcon, CircleDotIcon, LinkIcon, UnlinkIcon } from "lucide-react";
+import { useOpenLink } from "~/browser/useOpenLink";
+import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useIssueLinking } from "~/hooks/useIssueLinking";
+import { cn } from "~/lib/utils";
 import { useThreadShell } from "~/state/entities";
-import { threadEnvironment } from "~/state/threads";
-import { useAtomCommand } from "~/state/use-atom-command";
 import { useRightPanelStore } from "~/rightPanelStore";
+import { LinkedItemRowActions, LinkedItemRowLines, LINKED_ITEM_ROW_CLASS } from "../LinkedItemRow";
 import { Button } from "../ui/button";
-import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
+import { MenuItem } from "../ui/menu";
+import { toastManager } from "../ui/toast";
 
+/** The header's count of linked issues; opens the Linked items tab, where they are listed. */
 export function ThreadIssueLinks({ threadRef }: { threadRef: ScopedThreadRef }) {
   const thread = useThreadShell(threadRef);
-  const update = useAtomCommand(threadEnvironment.updateMetadata);
-  const [pending, setPending] = useState(false);
+  const count = thread?.issues?.length ?? 0;
+  if (count === 0) return null;
+  return (
+    <Button
+      size="xs"
+      variant="ghost"
+      aria-label="Linked issues"
+      onClick={() => useRightPanelStore.getState().open(threadRef, "pull-requests")}
+    >
+      <CircleDotIcon aria-hidden className="size-3.5" />
+      {count}
+    </Button>
+  );
+}
+
+/** The thread's linked issues as rows of the Linked items tab: open one, or unlink it. */
+export function ThreadIssueRows({ threadRef }: { threadRef: ScopedThreadRef }) {
+  const thread = useThreadShell(threadRef);
+  const issueLinking = useIssueLinking(threadRef.environmentId);
+  const openLink = useOpenLink(threadRef);
   const issues = thread?.issues ?? [];
   if (!thread || issues.length === 0) return null;
 
-  return (
-    <Popover>
-      <PopoverTrigger render={<Button size="xs" variant="ghost" />} aria-label="Linked issues">
-        <CircleDotIcon aria-hidden className="size-3.5" />
-        {issues.length}
-      </PopoverTrigger>
-      <PopoverPopup align="end" width="md">
-        <PopoverTitle className="mb-2">Linked issues</PopoverTitle>
-        <div className="max-h-64 space-y-1 overflow-y-auto">
-          {issues.map((issue) => (
-            <div key={issue.url} className="flex items-center gap-1">
-              <button
-                type="button"
-                className="min-w-0 flex-1 rounded-sm px-1 py-1 text-left text-xs hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() =>
-                  useRightPanelStore.getState().openIssue(threadRef, {
-                    projectId: thread.projectId,
-                    provider: issue.provider,
-                    repository: issue.repository,
-                    number: issue.number,
-                  })
-                }
-              >
-                <span className="block truncate font-medium">{issue.title}</span>
-                <span className="text-muted-foreground">
-                  {issue.repository} · {issue.number}
-                </span>
-              </button>
-              <Button
-                size="icon-xs"
-                variant="ghost-muted"
-                aria-label={`Unlink ${issue.title}`}
-                disabled={pending}
-                onClick={async () => {
-                  setPending(true);
-                  try {
-                    await update({
-                      environmentId: threadRef.environmentId,
-                      input: {
-                        threadId: threadRef.threadId,
-                        issueUnlink: {
-                          provider: issue.provider,
-                          repository: issue.repository,
-                          number: issue.number,
-                          url: issue.url,
-                        },
-                      },
-                    });
-                  } finally {
-                    setPending(false);
-                  }
-                }}
-              >
-                <UnlinkIcon aria-hidden className="size-3.5" />
-              </Button>
-            </div>
-          ))}
-        </div>
-      </PopoverPopup>
-    </Popover>
-  );
+  const unlink = async (issue: ThreadIssueLink) => {
+    try {
+      await issueLinking.unlink(threadRef, issue);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to unlink issue",
+        description: error instanceof Error ? error.message : "The request failed.",
+      });
+    }
+  };
+
+  return issues.map((issue) => (
+    <div key={issue.url} className={cn(LINKED_ITEM_ROW_CLASS, "pl-2")}>
+      <CircleDotIcon aria-hidden className="mt-4.5 size-4 shrink-0 text-muted-foreground" />
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 text-left"
+        onClick={() =>
+          useRightPanelStore.getState().openIssue(threadRef, {
+            projectId: thread.projectId,
+            provider: issue.provider,
+            repository: issue.repository,
+            number: issue.number,
+          })
+        }
+      >
+        <LinkedItemRowLines
+          reference={`${issue.repository}#${issue.number}`}
+          referenceTooltip={issue.url}
+          title={issue.title}
+        />
+      </button>
+      <LinkedItemRowActions label={`Actions for ${issue.repository}#${issue.number}`}>
+        <MenuItem onClick={() => void writeTextToClipboard(issue.url, "link")}>
+          <LinkIcon className="size-3.5" />
+          Copy link
+        </MenuItem>
+        <MenuItem onClick={(event) => void openLink(issue.url, { event })}>
+          <ArrowUpRightIcon className="size-3.5" />
+          Open
+        </MenuItem>
+        <MenuItem onClick={() => void unlink(issue)}>
+          <UnlinkIcon className="size-3.5" />
+          Unlink from thread
+        </MenuItem>
+      </LinkedItemRowActions>
+    </div>
+  ));
 }

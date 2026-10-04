@@ -280,7 +280,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { DetailGhost } from "./sourceControl/ListGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type IssueTabStatus } from "./RightPanelTabs";
-import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
+import { LinkThreadItemDialogHost } from "./LinkThreadItemDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
@@ -5265,8 +5265,15 @@ export default function ChatView(props: ChatViewProps) {
     (activeThreadShell ?? activeThread)?.pullRequests ?? [],
   );
   const visiblePullRequestCount = visiblePullRequests.length;
-  const pullRequestsSurfaceAvailable =
+  const linkedIssueCount = (activeThreadShell ?? activeThread)?.issues?.length ?? 0;
+  const linkedPullRequestsAvailable =
     isServerThread && supportsThreadPullRequests && visiblePullRequestCount > 0;
+  // The Linked items tab also opens for issues alone; proactive opening stays about pull requests.
+  const pullRequestsSurfaceAvailable =
+    linkedPullRequestsAvailable ||
+    (isServerThread &&
+      serverConfig?.environment.capabilities.issues === true &&
+      linkedIssueCount > 0);
   const addPullRequestsSurface = useCallback(() => {
     if (!activeThreadRef || !pullRequestsSurfaceAvailable) return;
     useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
@@ -5478,7 +5485,7 @@ export default function ChatView(props: ChatViewProps) {
     updateThreadMetadata,
   ]);
   const hasLinkedPullRequestDetail = persistedLinkedThreadPullRequest !== null;
-  const proactivePullRequestsKey = pullRequestsSurfaceAvailable
+  const proactivePullRequestsKey = linkedPullRequestsAvailable
     ? JSON.stringify(
         visiblePullRequests.map((link) => [link.host, link.repository, link.number]).sort(),
       )
@@ -5598,7 +5605,7 @@ export default function ChatView(props: ChatViewProps) {
     };
     if (eligibleLink && pullRequestsCapabilityKnown) {
       if (
-        pullRequestsSurfaceAvailable &&
+        linkedPullRequestsAvailable &&
         (visiblePullRequestCount > 1 || !hasLinkedPullRequestDetail || !supportsPullRequests)
       ) {
         panels.openProactive(
@@ -5634,7 +5641,7 @@ export default function ChatView(props: ChatViewProps) {
       newlyCompletedTurnId !== null &&
       !(
         proactivePullRequestsKey !== null &&
-        (!pullRequestsCapabilityKnown || supportsPullRequests || pullRequestsSurfaceAvailable)
+        (!pullRequestsCapabilityKnown || supportsPullRequests || linkedPullRequestsAvailable)
       );
     const completedCheckpoint = eligibleCompletion
       ? turnDiffSummaries.find((checkpoint) => checkpoint.runId === newlyCompletedTurnId)
@@ -5674,7 +5681,7 @@ export default function ChatView(props: ChatViewProps) {
     hasLinkedPullRequestDetail,
     onDiffPanelOpen,
     pullRequestsCapabilityKnown,
-    pullRequestsSurfaceAvailable,
+    linkedPullRequestsAvailable,
     visiblePullRequestCount,
 
     settings.proactivePanelsEnabled,
@@ -11727,7 +11734,7 @@ export default function ChatView(props: ChatViewProps) {
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>
-      <LinkPullRequestDialogHost />
+      <LinkThreadItemDialogHost />
       {expandedImage && (
         <ExpandedImageDialog
           key={expandedImageKey(expandedImage)}

@@ -2,23 +2,26 @@ import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { ThreadIssueLinks } from "./ThreadIssueLinks";
+import { ThreadIssueRows } from "./ThreadIssueLinks";
 
-const { shell, update, openIssue } = vi.hoisted(() => ({
+const { shell, unlink, openIssue } = vi.hoisted(() => ({
   shell: vi.fn(),
-  update: vi.fn(async () => ({ _tag: "Success" })),
+  unlink: vi.fn(async () => undefined),
   openIssue: vi.fn(),
 }));
 vi.mock("~/state/entities", () => ({ useThreadShell: shell }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => update }));
+vi.mock("~/hooks/useIssueLinking", () => ({ useIssueLinking: () => ({ unlink }) }));
+vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 vi.mock("~/rightPanelStore", () => ({ useRightPanelStore: { getState: () => ({ openIssue }) } }));
-vi.mock("../ui/popover", () => ({
-  Popover: "div",
-  PopoverPopup: "section",
-  PopoverTitle: "h3",
-  PopoverTrigger: "button",
-}));
 vi.mock("../ui/button", () => ({ Button: "button" }));
+vi.mock("../ui/menu", () => ({ MenuItem: "button" }));
+vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => vi.fn() }));
+vi.mock("~/hooks/useCopyToClipboard", () => ({ writeTextToClipboard: vi.fn() }));
+vi.mock("../LinkedItemRow", () => ({
+  LINKED_ITEM_ROW_CLASS: "",
+  LinkedItemRowLines: ({ title }: { title: string }) => <span>{title}</span>,
+  LinkedItemRowActions: ({ children }: { children: unknown }) => children,
+}));
 const ref = { environmentId: "remote", threadId: "thread-1" } as ScopedThreadRef;
 const issue = {
   provider: "github",
@@ -28,6 +31,10 @@ const issue = {
   url: "https://github.com/acme/app/issues/12",
 };
 let renderer: ReactTestRenderer;
+const unlinkButtons = () =>
+  renderer.root
+    .findAllByType("button")
+    .filter((button) => button.children.includes("Unlink from thread"));
 afterEach(async () => {
   await act(() => renderer?.unmount());
   vi.clearAllMocks();
@@ -36,7 +43,7 @@ afterEach(async () => {
 it("opens the linked issue as the thread panel's own tab and unlinks by identity", async () => {
   shell.mockReturnValue({ projectId: "project-1", issues: [issue] });
   await act(() => {
-    renderer = create(<ThreadIssueLinks threadRef={ref} />);
+    renderer = create(<ThreadIssueRows threadRef={ref} />);
   });
   const buttons = renderer.root.findAllByType("button");
   await act(() =>
@@ -52,45 +59,25 @@ it("opens the linked issue as the thread panel's own tab and unlinks by identity
     repository: "acme/app",
     number: 12,
   });
-  await act(() =>
-    renderer.root.findByProps({ "aria-label": "Unlink Fix refresh" }).props.onClick(),
-  );
-  expect(update).toHaveBeenCalledWith({
-    environmentId: "remote",
-    input: {
-      threadId: "thread-1",
-      issueUnlink: {
-        provider: "github",
-        repository: "acme/app",
-        number: 12,
-        url: "https://github.com/acme/app/issues/12",
-      },
-    },
-  });
+  await act(() => unlinkButtons()[0]!.props.onClick());
+  expect(unlink).toHaveBeenCalledWith(ref, issue);
 });
 
 it("unlinks only the selected host's issue when two hosts share its repository and number", async () => {
   const enterprise = { ...issue, url: "https://github.acme.test/acme/app/issues/12" };
   shell.mockReturnValue({ projectId: "project-1", issues: [issue, enterprise] });
   await act(() => {
-    renderer = create(<ThreadIssueLinks threadRef={ref} />);
+    renderer = create(<ThreadIssueRows threadRef={ref} />);
   });
-  const unlinkButtons = renderer.root.findAllByProps({ "aria-label": "Unlink Fix refresh" });
-  expect(unlinkButtons).toHaveLength(2);
-  await act(() => unlinkButtons[1]!.props.onClick());
-  expect(update).toHaveBeenCalledExactlyOnceWith({
-    environmentId: "remote",
-    input: {
-      threadId: "thread-1",
-      issueUnlink: { provider: "github", repository: "acme/app", number: 12, url: enterprise.url },
-    },
-  });
+  expect(unlinkButtons()).toHaveLength(2);
+  await act(() => unlinkButtons()[1]!.props.onClick());
+  expect(unlink).toHaveBeenCalledExactlyOnceWith(ref, enterprise);
 });
 
 it("renders nothing for threads from older servers without issue links", async () => {
   shell.mockReturnValue({ projectId: "project-1" });
   await act(() => {
-    renderer = create(<ThreadIssueLinks threadRef={ref} />);
+    renderer = create(<ThreadIssueRows threadRef={ref} />);
   });
   expect(renderer.toJSON()).toBeNull();
 });
