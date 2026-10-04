@@ -44,6 +44,10 @@ export class VoiceInputSession {
     return this.target?.ownerKey ?? null;
   }
 
+  cancel(ownerKey: string | null): void {
+    if (ownerKey !== null && this.ownerKey === ownerKey) this.controller.cancel();
+  }
+
   retry(): Promise<void> {
     return this.target ? this.start(this.target) : Promise.resolve();
   }

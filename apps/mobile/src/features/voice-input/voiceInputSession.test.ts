@@ -157,6 +157,39 @@ describe("global voice input", () => {
     expect(session.controller.currentState.phase).toBe("idle");
   });
 
+  it("stops recording when its queued edit is discarded", async () => {
+    const { session, recorder } = createSession();
+    const commit = vi.fn();
+    let draft: string | null = "queued prompt";
+    const ownerKey = "thread~queued-edit~run";
+    await session.start(
+      createVoiceInputTarget(ownerKey, () => draft, commit, { start: 13, end: 13 }),
+    );
+    session.cancel(ownerKey);
+    draft = null;
+    await session.controller.stop();
+    expect(recorder.stop).toHaveBeenCalledTimes(1);
+    expect(session.controller.currentState).toEqual({
+      phase: "idle",
+      error: null,
+      errorAction: null,
+    });
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it("keeps another prompt's recording when a queued edit is discarded", async () => {
+    const { session, recorder } = createSession();
+    const commit = vi.fn();
+    await session.start(
+      createVoiceInputTarget("other prompt", () => "hello", commit, { start: 5, end: 5 }),
+    );
+    session.cancel("thread~queued-edit~run");
+    expect(recorder.stop).not.toHaveBeenCalled();
+    expect(session.controller.currentState.phase).toBe("recording");
+    await session.controller.stop();
+    expect(commit).toHaveBeenCalledWith("hello spoken text", { start: 17, end: 17 });
+  });
+
   it("waits for canceled native work before starting a recording for another draft", async () => {
     const preparation = Promise.withResolvers<PreparedVoiceTranscription>();
     const preparationEntered = Promise.withResolvers<void>();
@@ -171,7 +204,7 @@ describe("global voice input", () => {
       createVoiceInputTarget("first", () => "first", oldCommit, { start: 5, end: 5 }),
     );
     await preparationEntered.promise;
-    session.controller.cancel();
+    session.cancel("first");
     const nextStart = session.start(
       createVoiceInputTarget("second", () => "second", nextCommit, { start: 6, end: 6 }),
     );
