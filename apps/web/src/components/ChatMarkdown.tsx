@@ -1,4 +1,5 @@
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
+import { useIssueLinking } from "~/hooks/useIssueLinking";
 import { useAtomValue } from "@effect/atom-react";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
@@ -2457,6 +2458,7 @@ function useChatMarkdownState({
     reportFailure: false,
   });
   const pullRequestLinking = usePullRequestLinking(threadRef?.environmentId);
+  const issueLinking = useIssueLinking(threadRef?.environmentId);
   const environmentId = threadRef?.environmentId ?? explicitEnvironmentId ?? null;
   const remoteOpen = useRemoteOpenResolution(environmentId);
   const canUseShellActions = canUseMarkdownFileShellActions(
@@ -2632,6 +2634,31 @@ function useChatMarkdownState({
       await pullRequestLinking.changeLink(threadRef, href, linked);
     },
     [linkedThreadPullRequestFor, pullRequestLinking, threadRef],
+  );
+  // Issue links get the same Link/Unlink item as pull request links, so an issue the agent
+  // mentions can be attached without copying its URL into the Link issue dialog.
+  const threadIssueLinkActionFor = useCallback(
+    (href: string): "link-to-thread" | "unlink-from-thread" | undefined => {
+      if (threadRef === undefined || readThreadShell(threadRef) === null) return undefined;
+      if (issueLinking.linkedIssueFor(threadRef, href) !== null) return "unlink-from-thread";
+      return issueLinking.refForUrl(href) === null ? undefined : "link-to-thread";
+    },
+    [issueLinking, threadRef],
+  );
+  const updateThreadIssueLink = useCallback(
+    async (href: string, linked: boolean) => {
+      if (threadRef === undefined) throw new Error("This link is not in a thread.");
+      if (!linked) {
+        const linkedIssue = issueLinking.linkedIssueFor(threadRef, href);
+        if (linkedIssue === null) throw new Error("This issue is no longer linked.");
+        await issueLinking.unlink(threadRef, linkedIssue);
+        return;
+      }
+      const ref = issueLinking.refForUrl(href);
+      if (ref === null) throw new Error("No project in this environment can read this issue.");
+      await issueLinking.link(threadRef, ref);
+    },
+    [issueLinking, threadRef],
   );
   const openExternalLinkInPreview = useCallback(
     (url: string) => {
@@ -2848,6 +2875,8 @@ function useChatMarkdownState({
       skills,
       text,
       threadRef,
+      threadIssueLinkActionFor,
+      updateThreadIssueLink,
       updateThreadPullRequestLink,
     }),
     [
@@ -2879,6 +2908,8 @@ function useChatMarkdownState({
       skills,
       text,
       threadRef,
+      threadIssueLinkActionFor,
+      updateThreadIssueLink,
       updateThreadPullRequestLink,
     ],
   );
@@ -3019,6 +3050,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
       linkedThreadPullRequestFor,
       resolveThreadPullRequest,
       serverConfig,
+      threadIssueLinkActionFor,
+      updateThreadIssueLink,
       updateThreadPullRequestLink,
       fileLinkChip,
       renderContextReference,
@@ -3144,12 +3177,19 @@ const CHAT_MARKDOWN_COMPONENTS = {
             event.stopPropagation();
             const api = readLocalApi();
             if (!api) return;
-            const threadLinkAction =
+            const pullRequestLinkAction =
               linkedThreadPullRequestFor(href) !== null
                 ? "unlink-from-thread"
                 : resolveThreadPullRequest(href) === null
                   ? undefined
                   : "link-to-thread";
+            // A `#123` reference autolink may well be a pull request served under /issues/.
+            const issueLinkAction =
+              pullRequestLinkAction === undefined && pullRequestAutolink !== "reference"
+                ? threadIssueLinkActionFor(href)
+                : undefined;
+            const linkedNoun = issueLinkAction === undefined ? "pull request" : "issue";
+            const threadLinkAction = pullRequestLinkAction ?? issueLinkAction;
             void showExternalLinkContextMenu({
               href,
               canOpenInPreview,
@@ -3167,20 +3207,18 @@ const CHAT_MARKDOWN_COMPONENTS = {
               },
               openExternal: (target) => api.shell.openExternal(target),
               copyLink: (target) => writeTextToClipboard(target, "link"),
-              updateThreadLink: updateThreadPullRequestLink,
+              updateThreadLink:
+                issueLinkAction === undefined ? updateThreadPullRequestLink : updateThreadIssueLink,
               reportFailure: (operation, cause) => {
                 reportMarkdownActionFailure({ operation, target: href }, cause);
-                if (
-                  operation === "link-pull-request-to-thread" ||
-                  operation === "unlink-pull-request-from-thread"
-                ) {
+                if (operation === "link-to-thread" || operation === "unlink-from-thread") {
                   toastManager.add(
                     stackedThreadToast({
                       type: "error",
                       title:
-                        operation === "link-pull-request-to-thread"
-                          ? "Unable to link pull request"
-                          : "Unable to unlink pull request",
+                        operation === "link-to-thread"
+                          ? `Unable to link ${linkedNoun}`
+                          : `Unable to unlink ${linkedNoun}`,
                       description: cause instanceof Error ? cause.message : "The request failed.",
                     }),
                   );

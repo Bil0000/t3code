@@ -206,6 +206,7 @@ model to suggest related work or possible duplicates.
 
 Agents can use `link_issue`, `list_thread_issues`, and `unlink_issue` to keep issues with their
 current thread. The thread header's **Linked issues** button opens each issue or removes its link.
+Right-click an issue link in the conversation to link that issue to the thread, or to unlink it.
 An issue's **Linked threads** section takes you back to those conversations, where you can follow
 their linked pull requests. These controls are available on web and desktop.
 
