@@ -1,11 +1,18 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
+import * as NodeVM from "node:vm";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PreviewTabId,
+  ProviderInstanceId,
+  ThreadId,
+  type PreviewAutomationRequest,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -34,6 +41,7 @@ const threadId = ThreadId.make("thread-mcp-test");
 const tabId = PreviewTabId.make("tab-mcp-test");
 const alternateTabId = PreviewTabId.make("tab-mcp-alternate");
 const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const invocation = {
   environmentId,
   threadId,
@@ -121,6 +129,99 @@ const callSnapshot = (args: Record<string, unknown>) =>
         Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
+  });
+
+const serveTextExports = (
+  clientId: string,
+  text: string,
+  options: { switchTab?: boolean; navigate?: boolean } = {},
+) =>
+  Effect.gen(function* () {
+    const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+    const connected = yield* Deferred.make<void>();
+    const switched = yield* Deferred.make<void>();
+    const requests: PreviewAutomationRequest[] = [];
+    const timers = new Set<() => void>();
+    let textReads = 0;
+    let chunks = 0;
+    const context = NodeVM.createContext({
+      document: {
+        body: {
+          get innerText() {
+            textReads++;
+            return text;
+          },
+        },
+      },
+      location: { href: snapshotResult.url },
+      setTimeout: (callback: () => void) => {
+        timers.add(callback);
+        return callback;
+      },
+      clearTimeout: (callback: () => void) => timers.delete(callback),
+    });
+    const events = yield* broker.connect({ clientId, environmentId });
+    yield* Stream.runForEach(events, (event) => {
+      if (event.type === "connected") return Deferred.succeed(connected, undefined);
+      requests.push(event.request);
+      return Effect.gen(function* () {
+        const request = event.request;
+        let result: unknown = snapshotResult;
+        if (request.operation === "status") {
+          result = {
+            available: true,
+            visible: true,
+            tabId: request.tabId === alternateTabId ? alternateTabId : tabId,
+            url: snapshotResult.url,
+            title: snapshotResult.title,
+            loading: false,
+          };
+        } else if (request.operation === "evaluate") {
+          if (options.switchTab) yield* Deferred.await(switched);
+          const expression = (request.input as { expression: string }).expression;
+          if (options.navigate && expression.includes("let end") && ++chunks === 2) {
+            NodeVM.runInContext("location.href = 'https://other.test/'", context);
+          }
+          try {
+            result = NodeVM.runInContext(expression, context);
+          } catch {
+            yield* broker.respond({
+              clientId,
+              connectionId: event.connectionId,
+              requestId: request.requestId,
+              ok: false,
+              error: {
+                _tag: "PreviewAutomationExecutionError",
+                message: "private renderer failure",
+              },
+            });
+            return;
+          }
+        }
+        yield* broker.respond({
+          clientId,
+          connectionId: event.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result,
+        });
+        if (
+          options.switchTab &&
+          request.operation === "status" &&
+          request.tabId !== alternateTabId
+        ) {
+          yield* broker.invoke({
+            scope: invocation,
+            operation: "status",
+            tabId: alternateTabId,
+            input: {},
+          });
+          yield* Deferred.succeed(switched, undefined);
+        }
+      }).pipe(Effect.forkScoped, Effect.asVoid);
+    }).pipe(Effect.forkScoped);
+    yield* Deferred.await(connected);
+    return { requests, context, timers, textReads: () => textReads };
   });
 
 it("normalizes empty successful notification responses to accepted", () => {
@@ -358,26 +459,30 @@ it.effect.each([
   ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("rejects non-boolean snapshot image options before selecting a browser host", () =>
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    for (const includeImage of ["false", 0, null]) {
-      const result = yield* server
-        .callTool({
-          name: "preview_snapshot",
-          arguments: { includeImage },
-        })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
-      expect(result.isError).toBe(true);
-      expect(result.content).toEqual([{ type: "text", text: "Preview snapshot failed: AiError." }]);
-      expect(result.structuredContent).toEqual({
-        error: { _tag: "AiError", operation: "snapshot", failureCount: 1 },
-      });
-    }
-  }).pipe(Effect.provide(TestLayer)),
+it.effect.each(["includeImage", "saveText"])(
+  "rejects non-boolean snapshot %s options before selecting a browser host",
+  (option) =>
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      for (const value of ["false", 0, null]) {
+        const result = yield* server
+          .callTool({
+            name: "preview_snapshot",
+            arguments: { [option]: value },
+          })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([
+          { type: "text", text: "Preview snapshot failed: AiError." },
+        ]);
+        expect(result.structuredContent).toEqual({
+          error: { _tag: "AiError", operation: "snapshot", failureCount: 1 },
+        });
+      }
+    }).pipe(Effect.provide(TestLayer)),
 );
 
 it.effect("saves the snapshot PNG on request and reports its path", () =>
@@ -439,6 +544,155 @@ it.effect("reports a tagged error when the screenshot cannot be saved", () =>
       expect(snapshot.structuredContent).toEqual({
         error: { _tag: "PreviewScreenshotSaveError", operation: "snapshot", failureCount: 1 },
       });
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each([
+  { save: false, includeImage: false },
+  { save: true, includeImage: false },
+  { save: true, includeImage: true },
+])("exports complete loaded text with snapshot options %j", (options) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const loadedText = "a".repeat(4095) + "😀中文\n".repeat(12_000) + "Offscreen loaded end";
+      const host = yield* serveTextExports("mcp-text-export-client", loadedText, {
+        switchTab: true,
+      });
+
+      const snapshot = yield* callSnapshot({ saveText: true, ...options });
+
+      expect(snapshot.isError).toBe(false);
+      const saved = snapshot.structuredContent as {
+        readonly textPath: string;
+        readonly screenshotPath?: string;
+      };
+      expect(saved).toMatchObject({
+        textPath: expect.any(String),
+        textChars: loadedText.length,
+        textBytes: Buffer.byteLength(loadedText, "utf8"),
+        textUrl: snapshotResult.url,
+      });
+      expect(path.dirname(saved.textPath)).toBe(config.browserArtifactsDir);
+      expect(path.basename(saved.textPath)).toMatch(/^browser-text-[0-9a-f-]+\.txt$/);
+      expect(yield* fs.readFileString(saved.textPath)).toBe(loadedText);
+      expect(host.textReads()).toBe(1);
+      expect(host.requests.filter((request) => request.operation === "status")).toHaveLength(2);
+      const pageRequests = host.requests.filter((request) => request.operation !== "status");
+      expect(pageRequests.length).toBeGreaterThan(10);
+      expect(pageRequests.every((request) => request.tabId === tabId)).toBe(true);
+      expect(pageRequests.at(-1)).toMatchObject({ operation: "snapshot", input: {} });
+      const texts = snapshot.content.filter((content) => content.type === "text");
+      const metadata = texts[options.save && !options.includeImage ? 0 : 1];
+      expect(metadata?.type === "text" ? decodeJsonText(metadata.text) : null).toMatchObject({
+        textPath: saved.textPath,
+        textChars: loadedText.length,
+        textBytes: Buffer.byteLength(loadedText, "utf8"),
+        textUrl: snapshotResult.url,
+      });
+      expect(
+        metadata?.type === "text" ? Buffer.byteLength(metadata.text, "utf8") : Infinity,
+      ).toBeLessThanOrEqual(McpHttpServer.MAX_SNAPSHOT_TEXT_BYTES);
+      expect(encodeJsonText(saved)).not.toContain("Offscreen loaded end");
+      expect(snapshot.content.some((content) => content.type === "image")).toBe(
+        options.includeImage,
+      );
+      if (options.save) {
+        expect(path.dirname(saved.screenshotPath!)).toBe(config.browserArtifactsDir);
+        expect(Buffer.from(yield* fs.readFile(saved.screenshotPath!)).toString()).toBe("png");
+      } else expect(saved).not.toHaveProperty("screenshotPath");
+      if (options.save && !options.includeImage) {
+        expect(Object.keys(saved).sort()).toEqual([
+          "screenshotPath",
+          "textBytes",
+          "textChars",
+          "textPath",
+          "textUrl",
+          "url",
+        ]);
+        expect(snapshot.content).toHaveLength(1);
+      }
+      expect(host.timers.size).toBe(0);
+      expect(
+        Object.getOwnPropertyNames(host.context).filter((key) =>
+          key.startsWith("__t3_text_export_"),
+        ),
+      ).toEqual([]);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each([{}, { saveText: false }])("keeps text export opt-in %j", (options) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const host = yield* serveTextExports("mcp-text-not-requested-client", "Loaded text");
+
+      const snapshot = yield* callSnapshot({ ...options, includeImage: false });
+
+      expect(snapshot.isError).toBe(false);
+      expect(host.requests).toHaveLength(1);
+      expect(host.requests[0]).toMatchObject({ operation: "snapshot", input: {} });
+      expect(host.textReads()).toBe(0);
+      expect(snapshot.structuredContent).not.toHaveProperty("textPath");
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.exists(config.browserArtifactsDir)).toBe(false);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("rejects an invalid snapshot before starting a requested text export", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const host = yield* serveTextExports("mcp-invalid-text-export-client", "Loaded text");
+
+      const snapshot = yield* callSnapshot({ saveText: true, includeImage: "wrong" });
+
+      expect(snapshot.isError).toBe(true);
+      expect(host.requests).toEqual([]);
+      expect(host.textReads()).toBe(0);
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.exists(config.browserArtifactsDir)).toBe(false);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("reports text export failure without a successful snapshot or partial files", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const host = yield* serveTextExports(
+        "mcp-text-failure-client",
+        "private text ".repeat(10_000),
+        {
+          navigate: true,
+        },
+      );
+
+      const snapshot = yield* callSnapshot({ saveText: true, save: true });
+
+      const message =
+        "Could not save the loaded page text. The page may have changed or the file could not be written.";
+      expect(snapshot.isError).toBe(true);
+      expect(snapshot.content).toEqual([
+        { type: "text", text: `Preview snapshot failed: ${message}` },
+      ]);
+      expect(snapshot.structuredContent).toEqual({
+        error: { _tag: "PreviewTextExportError", operation: "snapshot", failureCount: 1, message },
+      });
+      expect(host.requests.some((request) => request.operation === "snapshot")).toBe(false);
+      expect(host.timers.size).toBe(0);
+      expect(
+        Object.getOwnPropertyNames(host.context).filter((key) =>
+          key.startsWith("__t3_text_export_"),
+        ),
+      ).toEqual([]);
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
     }),
   ).pipe(Effect.provide(TestLayer)),
 );

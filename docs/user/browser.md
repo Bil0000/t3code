@@ -9,6 +9,11 @@ Snapshots have a size limit. Current-view text takes priority over page text and
 logs. The result reports omitted content so the agent can request more detail.
 The screenshot shows the current view.
 
+An agent can set `saveText=true` when taking a snapshot to save all loaded,
+rendered main-page text to a UTF-8 file. The file has no total character cap. The
+snapshot returns `textPath` in the environment so the agent can read the file
+in parts. This export does not scroll or load missing content.
+
 Complex CSS clip shapes can cause current-view text and controls to be omitted.
 The result reports these omissions. Use the screenshot to inspect those areas.
 

@@ -119,7 +119,7 @@ const PreviewSetAppearanceTool = safeBrowserTool(
 export const PreviewSnapshotTool = readonlyBrowserTool(
   Tool.make("preview_snapshot", {
     description:
-      "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, and a PNG screenshot. When the desktop host supports it, viewportText describes the current view, scroll reports page and visible container scroll positions, and inViewport elements come first. visibleText also includes rendered text outside the view; content not yet loaded requires scrolling. The text is capped near 20 KB, keeps current-view text ahead of offscreen page text, and lists what it omitted; use preview_evaluate to read more. Set includeImage=false for text-only output with the same page metadata. Set save=true to also write the PNG to disk and get screenshotPath back; with includeImage=false, save=true returns only the url and screenshotPath. Embed that path in your reply as ![alt](screenshotPath) so the user sees it. This is the only way to show the user a screenshot; the image in the tool result is not saved anywhere.",
+      "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use the current tab. Returns page state, semantic elements, diagnostics, action history, and a PNG screenshot. When the desktop host supports it, viewportText describes the current view, scroll reports page and visible container scroll positions, and inViewport elements come first. visibleText also includes rendered text outside the view; content not yet loaded requires scrolling. The text is capped near 20 KB, keeps current-view text ahead of offscreen page text, and lists what it omitted. Set saveText=true to save all loaded, rendered main-page text to a UTF-8 file without a total character cap; textPath points to the file in the environment. This does not scroll or load missing text, and excludes embedded frames and shadow DOM. Set includeImage=false for text-only output with the same page metadata. Set save=true to also write the PNG to disk and get screenshotPath back; with includeImage=false, save=true returns only the url and saved artifact paths. Embed screenshotPath in your reply as ![alt](screenshotPath) so the user sees it. This is the only way to show the user a screenshot; the image in the tool result is not saved anywhere.",
     parameters: Schema.Struct({
       ...PreviewAutomationTabTargetInput.fields,
       includeImage: Schema.optional(
@@ -131,7 +131,13 @@ export const PreviewSnapshotTool = readonlyBrowserTool(
       save: Schema.optional(
         Schema.Boolean.annotate({
           description:
-            "Write the screenshot PNG to disk and return its absolute path as screenshotPath. With includeImage=false, return only the url and screenshotPath. Defaults to false.",
+            "Write the screenshot PNG to disk and return its absolute path as screenshotPath. With includeImage=false, return only the url and saved artifact details. Defaults to false.",
+        }),
+      ),
+      saveText: Schema.optional(
+        Schema.Boolean.annotate({
+          description:
+            "Save all loaded, rendered main-page text to a UTF-8 file and return textPath, textChars, and textBytes. No total character cap; snapshot output stays bounded. Does not scroll or load missing content. Defaults to false.",
         }),
       ),
     }),

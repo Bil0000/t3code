@@ -41,5 +41,7 @@ jobs:
           apps/desktop/src/preview/Manager.test.ts
           apps/server/src/mcp/McpHttpServer.test.ts
           apps/server/src/mcp/PreviewAutomationBroker.test.ts
+          apps/server/src/mcp/PreviewTextExport.test.ts
+          apps/server/src/mcp/toolkits/preview/tools.test.ts
           packages/contracts/src/previewAutomationSnapshot.test.ts
           packages/contracts/src/preview.test.ts
