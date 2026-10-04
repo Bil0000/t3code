@@ -1,16 +1,13 @@
-import {
-  formatClaudeContextHeadline,
-  type ClaudeContextReport,
-} from "@t3tools/shared/claudeContextReport";
+import { formatContextHeadline, type ContextReport } from "@t3tools/shared/contextReport";
 import { ChartPieIcon } from "lucide-react";
 
-import { ClaudeContextCard } from "./ClaudeContextCard";
+import { ContextReportCard } from "./ContextReportCard";
 import { ComposerBanner } from "./ComposerBanner";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 
-export function claudeContextBannerItem(
+export function contextReportBannerItem(
   id: string,
-  report: ClaudeContextReport,
+  report: ContextReport,
   onDismiss: () => void,
 ): ComposerBannerStackItem {
   return {
@@ -19,13 +16,13 @@ export function claudeContextBannerItem(
     priority: "notice",
     icon: <ChartPieIcon />,
     title: "Context window",
-    description: `${report.model ?? "Claude"} · ${formatClaudeContextHeadline(report)}`,
+    description: `${report.model ? `${report.model} · ` : ""}${formatContextHeadline(report)}`,
     dismissLabel: "Dismiss context window",
     onDismiss,
     children: (
       <ComposerBanner.Scroll>
         <ComposerBanner.Body className="pt-1 pb-1.5 pe-2">
-          <ClaudeContextCard report={report} />
+          <ContextReportCard report={report} />
         </ComposerBanner.Body>
       </ComposerBanner.Scroll>
     ),

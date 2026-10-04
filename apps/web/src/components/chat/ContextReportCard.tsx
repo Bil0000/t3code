@@ -1,18 +1,18 @@
 import {
-  claudeContextSegmentColor,
-  claudeContextUsedCategories,
-  formatClaudeContextHeadline,
-  formatClaudeContextPercent,
-  formatClaudeContextTokens,
-  type ClaudeContextReport,
-  type ClaudeContextSection,
-} from "@t3tools/shared/claudeContextReport";
+  contextSegmentColor,
+  contextUsedCategories,
+  formatContextHeadline,
+  formatContextPercent,
+  formatContextTokens,
+  type ContextReport,
+  type ContextSection,
+} from "@t3tools/shared/contextReport";
 import { ChartPieIcon, ChevronRightIcon } from "lucide-react";
 import { memo, useState } from "react";
 
 import { cn } from "~/lib/utils";
 
-function SectionRow({ section }: { section: ClaudeContextSection }) {
+function SectionRow({ section }: { section: ContextSection }) {
   const [open, setOpen] = useState(false);
   return (
     <div>
@@ -31,9 +31,7 @@ function SectionRow({ section }: { section: ClaudeContextSection }) {
         />
         <span className="min-w-0 flex-1 truncate text-start text-foreground">{section.title}</span>
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {section.totalTokens !== null
-            ? `${formatClaudeContextTokens(section.totalTokens)} · `
-            : ""}
+          {section.totalTokens !== null ? `${formatContextTokens(section.totalTokens)} · ` : ""}
           {section.rows.length}
         </span>
       </button>
@@ -68,12 +66,12 @@ function SectionRow({ section }: { section: ClaudeContextSection }) {
   );
 }
 
-export const ClaudeContextCard = memo(function ClaudeContextCard({
+export const ContextReportCard = memo(function ContextReportCard({
   report,
 }: {
-  report: ClaudeContextReport;
+  report: ContextReport;
 }) {
-  const used = claudeContextUsedCategories(report);
+  const used = contextUsedCategories(report);
 
   return (
     <div className="flex flex-col gap-2">
@@ -92,7 +90,7 @@ export const ClaudeContextCard = memo(function ClaudeContextCard({
               className="h-full"
               style={{
                 width: `${Math.min(100, category.percent)}%`,
-                backgroundColor: claudeContextSegmentColor(index, used.length),
+                backgroundColor: contextSegmentColor(index, used.length),
               }}
             />
           ))
@@ -118,13 +116,13 @@ export const ClaudeContextCard = memo(function ClaudeContextCard({
                   style={
                     usedIndex === -1
                       ? undefined
-                      : { backgroundColor: claudeContextSegmentColor(usedIndex, used.length) }
+                      : { backgroundColor: contextSegmentColor(usedIndex, used.length) }
                   }
                 />
                 <span className="truncate text-foreground">{category.name}</span>
                 <span className="text-muted-foreground tabular-nums">{category.tokens}</span>
                 <span className="min-w-10 text-end text-secondary-label tabular-nums">
-                  {formatClaudeContextPercent(category.percent)}
+                  {formatContextPercent(category.percent)}
                 </span>
               </li>
             );
@@ -142,12 +140,12 @@ export const ClaudeContextCard = memo(function ClaudeContextCard({
   );
 });
 
-export function ClaudeContextDisclosure({
+export function ContextReportDisclosure({
   report,
   expanded,
   onToggle,
 }: {
-  report: ClaudeContextReport;
+  report: ContextReport;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -163,7 +161,8 @@ export function ClaudeContextDisclosure({
           <ChartPieIcon aria-hidden className="block size-4 shrink-0 stroke-2 opacity-70" />
         </span>
         <span className="min-w-0 flex-1 truncate text-secondary-label">
-          Context window · {report.model ?? "Claude"} · {formatClaudeContextHeadline(report)}
+          Context window · {report.model ? `${report.model} · ` : ""}
+          {formatContextHeadline(report)}
         </span>
         <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
           <ChevronRightIcon
@@ -176,7 +175,7 @@ export function ClaudeContextDisclosure({
       </button>
       {expanded ? (
         <div className="ms-7 px-0.5 py-1 select-text">
-          <ClaudeContextCard report={report} />
+          <ContextReportCard report={report} />
         </div>
       ) : null}
     </div>

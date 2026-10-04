@@ -1,15 +1,12 @@
-import {
-  formatClaudeContextHeadline,
-  type ClaudeContextReport,
-} from "@t3tools/shared/claudeContextReport";
+import { formatContextHeadline, type ContextReport } from "@t3tools/shared/contextReport";
 import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
-import { ClaudeContextCardBody } from "./ClaudeContextCard";
+import { ContextReportCardBody } from "./ContextReportCard";
 
-export function ComposerClaudeContext(props: {
-  readonly report: ClaudeContextReport;
+export function ComposerContextReport(props: {
+  readonly report: ContextReport;
   readonly onClose: () => void;
 }) {
   const { report } = props;
@@ -30,7 +27,7 @@ export function ComposerClaudeContext(props: {
             </Text>
             <Text className="text-xs tabular-nums text-foreground-muted" numberOfLines={1}>
               {report.model ? `${report.model} · ` : ""}
-              {formatClaudeContextHeadline(report)}
+              {formatContextHeadline(report)}
             </Text>
           </View>
           <Pressable
@@ -48,7 +45,7 @@ export function ComposerClaudeContext(props: {
             />
           </Pressable>
         </View>
-        <ClaudeContextCardBody report={report} />
+        <ContextReportCardBody report={report} />
       </ScrollView>
     </View>
   );

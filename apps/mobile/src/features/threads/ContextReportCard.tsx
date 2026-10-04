@@ -1,18 +1,18 @@
 import {
-  claudeContextSegmentColor,
-  claudeContextUsedCategories,
-  formatClaudeContextPercent,
-  formatClaudeContextTokens,
-  type ClaudeContextReport,
-  type ClaudeContextSection,
-} from "@t3tools/shared/claudeContextReport";
+  contextSegmentColor,
+  contextUsedCategories,
+  formatContextPercent,
+  formatContextTokens,
+  type ContextReport,
+  type ContextSection,
+} from "@t3tools/shared/contextReport";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 
-function SectionRow(props: { readonly section: ClaudeContextSection }) {
+function SectionRow(props: { readonly section: ContextSection }) {
   const [open, setOpen] = useState(false);
   const { section } = props;
   return (
@@ -21,7 +21,7 @@ function SectionRow(props: { readonly section: ClaudeContextSection }) {
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
         accessibilityLabel={`${section.title}, ${
-          section.totalTokens !== null ? `${formatClaudeContextTokens(section.totalTokens)}, ` : ""
+          section.totalTokens !== null ? `${formatContextTokens(section.totalTokens)}, ` : ""
         }${section.rows.length} ${section.rows.length === 1 ? "item" : "items"}`}
         onPress={() => setOpen((value) => !value)}
         className="min-h-11 flex-row items-center gap-2"
@@ -36,9 +36,7 @@ function SectionRow(props: { readonly section: ClaudeContextSection }) {
           {section.title}
         </Text>
         <Text className="text-xs tabular-nums text-foreground-muted">
-          {section.totalTokens !== null
-            ? `${formatClaudeContextTokens(section.totalTokens)} · `
-            : ""}
+          {section.totalTokens !== null ? `${formatContextTokens(section.totalTokens)} · ` : ""}
           {section.rows.length}
         </Text>
       </Pressable>
@@ -63,9 +61,9 @@ function SectionRow(props: { readonly section: ClaudeContextSection }) {
   );
 }
 
-export function ClaudeContextCardBody(props: { readonly report: ClaudeContextReport }) {
+export function ContextReportCardBody(props: { readonly report: ContextReport }) {
   const { report } = props;
-  const used = claudeContextUsedCategories(report);
+  const used = contextUsedCategories(report);
   return (
     <View className="gap-2.5">
       <View className="h-2 flex-row overflow-hidden rounded-full bg-subtle">
@@ -76,7 +74,7 @@ export function ClaudeContextCardBody(props: { readonly report: ClaudeContextRep
               className="h-full"
               style={{
                 width: `${Math.min(100, category.percent)}%`,
-                backgroundColor: claudeContextSegmentColor(index, used.length),
+                backgroundColor: contextSegmentColor(index, used.length),
               }}
             />
           ))
@@ -105,7 +103,7 @@ export function ClaudeContextCardBody(props: { readonly report: ClaudeContextRep
                   style={
                     usedIndex === -1
                       ? undefined
-                      : { backgroundColor: claudeContextSegmentColor(usedIndex, used.length) }
+                      : { backgroundColor: contextSegmentColor(usedIndex, used.length) }
                   }
                 />
                 <Text className="flex-1 text-xs text-foreground" numberOfLines={1}>
@@ -115,7 +113,7 @@ export function ClaudeContextCardBody(props: { readonly report: ClaudeContextRep
                   {category.tokens}
                 </Text>
                 <Text className="min-w-10 text-right text-xs tabular-nums text-foreground-secondary">
-                  {formatClaudeContextPercent(category.percent)}
+                  {formatContextPercent(category.percent)}
                 </Text>
               </View>
             );

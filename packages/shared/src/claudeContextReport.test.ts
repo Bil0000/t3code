@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  claudeContextUsedCategories,
-  formatClaudeContextHeadline,
-  formatClaudeContextTokens,
-  latestClaudeContextReport,
-  parseClaudeContextReport,
-  parseClaudeContextTokens,
-} from "./claudeContextReport.ts";
+  contextUsedCategories,
+  formatContextHeadline,
+  formatContextTokens,
+  latestContextReport,
+} from "./contextReport.ts";
+import { parseClaudeContextReport, parseClaudeContextTokens } from "./claudeContextReport.ts";
 
 const REPORT = `## Context Usage
 
@@ -78,7 +77,7 @@ describe("parseClaudeContextReport", () => {
       "Autocompact buffer",
     ]);
     expect(report!.categories[0]).toEqual({ name: "System prompt", tokens: "4.8k", percent: 2.4 });
-    expect(claudeContextUsedCategories(report!).map((category) => category.name)).toEqual([
+    expect(contextUsedCategories(report!).map((category) => category.name)).toEqual([
       "System prompt",
       "System tools",
       "MCP tools",
@@ -152,7 +151,7 @@ describe("parseClaudeContextReport", () => {
   });
 });
 
-describe("latestClaudeContextReport", () => {
+describe("latestContextReport", () => {
   const message = (id: string, text: string, role = "assistant", streaming = false) => ({
     id,
     role,
@@ -161,7 +160,7 @@ describe("latestClaudeContextReport", () => {
   });
 
   it("returns the newest settled assistant report and skips the rest", () => {
-    const latest = latestClaudeContextReport([
+    const latest = latestContextReport([
       message("m1", REPORT),
       message("m2", "plain answer"),
       message("m3", REPORT.replace("79.5k", "90k")),
@@ -169,17 +168,17 @@ describe("latestClaudeContextReport", () => {
       message("m5", REPORT, "assistant", true),
     ]);
     expect(latest?.id).toBe("m3");
-    expect(formatClaudeContextHeadline(latest!.report)).toBe("90k / 200k (40%)");
+    expect(formatContextHeadline(latest!.report)).toBe("90k / 200k (40%)");
   });
 
   it("drops the report once the user sends another message", () => {
     expect(
-      latestClaudeContextReport([message("m1", REPORT), message("m2", "next task", "user")]),
+      latestContextReport([message("m1", REPORT), message("m2", "next task", "user")]),
     ).toBeNull();
   });
 
   it("returns null without a parseable report", () => {
-    expect(latestClaudeContextReport([message("m1", "## Context Usage\nbroken")])).toBeNull();
+    expect(latestContextReport([message("m1", "## Context Usage\nbroken")])).toBeNull();
   });
 });
 
@@ -204,6 +203,6 @@ describe("token labels", () => {
     [1_000_000, "1m"],
     [1_250_000, "1.3m"],
   ])("formats %d as %j", (value, expected) => {
-    expect(formatClaudeContextTokens(value)).toBe(expected);
+    expect(formatContextTokens(value)).toBe(expected);
   });
 });

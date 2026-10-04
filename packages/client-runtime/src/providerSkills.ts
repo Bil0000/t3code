@@ -111,6 +111,14 @@ function resolveProviderWorkspaceSnapshot(
   return provider.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd);
 }
 
+export function hasCompleteProviderWorkspaceSnapshot(
+  provider: ServerProvider | null | undefined,
+  cwd: string | null | undefined,
+): boolean {
+  const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
+  return Boolean(snapshot && !snapshot.slashCommandsPending);
+}
+
 export function resolveProviderSkillsForCwd(
   provider: ServerProvider,
   cwd: string | null | undefined,
@@ -123,4 +131,23 @@ export function resolveProviderSlashCommandsForCwd(
   cwd: string | null | undefined,
 ): ServerProvider["slashCommands"] {
   return resolveProviderWorkspaceSnapshot(provider, cwd)?.slashCommands ?? provider.slashCommands;
+}
+
+export const CONTEXT_COMMAND = {
+  name: "context",
+  description: "Show context window usage",
+} satisfies ServerProviderSlashCommand;
+
+export function isContextCommand(prompt: string): boolean {
+  return prompt.trim().toLowerCase() === "/context";
+}
+
+export function offersLocalContextCommand(
+  provider: ServerProvider,
+  cwd: string | null | undefined,
+): boolean {
+  if (cwd && !hasCompleteProviderWorkspaceSnapshot(provider, cwd)) return false;
+  return !resolveProviderSlashCommandsForCwd(provider, cwd).some(
+    (command) => command.name === CONTEXT_COMMAND.name,
+  );
 }

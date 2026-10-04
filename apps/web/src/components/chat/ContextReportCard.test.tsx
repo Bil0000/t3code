@@ -1,9 +1,9 @@
-import { parseClaudeContextReport } from "@t3tools/shared/claudeContextReport";
+import { parseContextReport } from "@t3tools/shared/contextReport";
 import { act, useState } from "react";
 import { create, type ReactTestRendererNode } from "react-test-renderer";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ClaudeContextCard, ClaudeContextDisclosure } from "./ClaudeContextCard";
+import { ContextReportCard, ContextReportDisclosure } from "./ContextReportCard";
 
 const REPORT = `## Context Usage
 
@@ -38,12 +38,12 @@ function textOf(renderer: ReturnType<typeof create>): string {
   return walk(renderer.toJSON());
 }
 
-describe("ClaudeContextCard", () => {
+describe("ContextReportCard", () => {
   it("shows the bar and categories, and expands a section to its rows", () => {
-    const report = parseClaudeContextReport(REPORT)!;
+    const report = parseContextReport(REPORT)!;
     let renderer!: ReturnType<typeof create>;
     act(() => {
-      renderer = create(<ClaudeContextCard report={report} />);
+      renderer = create(<ContextReportCard report={report} />);
     });
 
     expect(textOf(renderer)).toContain("[40]");
@@ -58,11 +58,11 @@ describe("ClaudeContextCard", () => {
   });
 
   it("keeps the full report reachable from a collapsed timeline row", () => {
-    const report = parseClaudeContextReport(REPORT)!;
+    const report = parseContextReport(REPORT)!;
     function Report() {
       const [expanded, setExpanded] = useState(false);
       return (
-        <ClaudeContextDisclosure
+        <ContextReportDisclosure
           report={report}
           expanded={expanded}
           onToggle={() => setExpanded(!expanded)}

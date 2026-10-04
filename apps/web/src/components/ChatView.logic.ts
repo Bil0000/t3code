@@ -1,4 +1,5 @@
 import * as Option from "effect/Option";
+import { latestContextReport } from "@t3tools/shared/contextReport";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
@@ -1356,4 +1357,13 @@ export function restorePlanFollowUpComposer(input: {
     prompt: input.snapshot.prompt,
     detectTrigger: true,
   });
+}
+
+export function latestVisibleContextReport(
+  messages: Parameters<typeof latestContextReport>[0],
+  pendingMessageId: string | null,
+) {
+  return pendingMessageId !== null && !messages.some((message) => message.id === pendingMessageId)
+    ? null
+    : latestContextReport(messages);
 }

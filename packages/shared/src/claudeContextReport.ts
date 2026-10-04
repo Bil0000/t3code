@@ -1,27 +1,4 @@
-export interface ClaudeContextCategory {
-  readonly name: string;
-  readonly tokens: string;
-  readonly percent: number;
-}
-
-export interface ClaudeContextSection {
-  readonly title: string;
-  readonly columns: ReadonlyArray<string>;
-  readonly rows: ReadonlyArray<ReadonlyArray<string>>;
-  readonly totalTokens: number | null;
-}
-
-export interface ClaudeContextReport {
-  readonly model: string | null;
-  readonly usedTokens: string;
-  readonly maxTokens: string;
-  readonly usedPercent: number;
-  readonly overLimit: string | null;
-  readonly categories: ReadonlyArray<ClaudeContextCategory>;
-  readonly sections: ReadonlyArray<ClaudeContextSection>;
-}
-
-const FREE_SPACE_CATEGORIES = new Set(["Free space", "Autocompact buffer"]);
+import type { ContextCategory, ContextReport, ContextSection } from "./contextReport.ts";
 
 export function parseClaudeContextTokens(text: string): number | null {
   const match = /^[~<>\s]*([\d,]+(?:\.\d+)?)\s*([km])?$/iu.exec(text.trim());
@@ -40,9 +17,7 @@ function splitRow(line: string): ReadonlyArray<string> | null {
     .map((cell) => cell.trim());
 }
 
-function parseTable(
-  lines: ReadonlyArray<string>,
-): Pick<ClaudeContextSection, "columns" | "rows"> | null {
+function parseTable(lines: ReadonlyArray<string>): Pick<ContextSection, "columns" | "rows"> | null {
   const [headerLine, separatorLine, ...rowLines] = lines;
   const columns = headerLine === undefined ? null : splitRow(headerLine);
   const separator = separatorLine === undefined ? null : splitRow(separatorLine);
@@ -64,10 +39,10 @@ function parseTable(
 }
 
 function parseCategories(
-  table: Pick<ClaudeContextSection, "columns" | "rows">,
-): ReadonlyArray<ClaudeContextCategory> | null {
+  table: Pick<ContextSection, "columns" | "rows">,
+): ReadonlyArray<ContextCategory> | null {
   if (table.columns.length !== 3) return null;
-  const categories: ClaudeContextCategory[] = [];
+  const categories: ContextCategory[] = [];
   for (const [name = "", tokens = "", percentText = ""] of table.rows) {
     const percentMatch = /^(\d+(?:\.\d+)?)%$/u.exec(percentText);
     if (!percentMatch?.[1] || parseClaudeContextTokens(tokens) === null) return null;
@@ -76,7 +51,7 @@ function parseCategories(
   return categories;
 }
 
-function sectionTotalTokens(table: Pick<ClaudeContextSection, "columns" | "rows">): number | null {
+function sectionTotalTokens(table: Pick<ContextSection, "columns" | "rows">): number | null {
   const tokenColumn = table.columns.findIndex((column) => /^tokens$/iu.test(column));
   if (tokenColumn === -1) return null;
   let total = 0;
@@ -88,7 +63,7 @@ function sectionTotalTokens(table: Pick<ClaudeContextSection, "columns" | "rows"
   return total;
 }
 
-export function parseClaudeContextReport(text: string): ClaudeContextReport | null {
+export function parseClaudeContextReport(text: string): ContextReport | null {
   if (!text.trimStart().startsWith("## Context Usage")) return null;
   const lines = text
     .split("\n")
@@ -117,8 +92,8 @@ export function parseClaudeContextReport(text: string): ClaudeContextReport | nu
     return null;
   }
 
-  let categories: ReadonlyArray<ClaudeContextCategory> | null = null;
-  const sections: ClaudeContextSection[] = [];
+  let categories: ReadonlyArray<ContextCategory> | null = null;
+  const sections: ContextSection[] = [];
   while (lines.length > 0) {
     const title = lines.shift()!.slice("### ".length).trim();
     const end = lines.findIndex((line) => line.startsWith("### "));
@@ -142,49 +117,4 @@ export function parseClaudeContextReport(text: string): ClaudeContextReport | nu
     categories: categories ?? [],
     sections,
   };
-}
-
-export function latestClaudeContextReport(
-  messages: ReadonlyArray<{
-    readonly id: string;
-    readonly role: string;
-    readonly text: string;
-    readonly streaming: boolean;
-  }>,
-): { readonly id: string; readonly report: ClaudeContextReport } | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (message.role === "user") return null;
-    if (message.role !== "assistant" || message.streaming) continue;
-    const report = parseClaudeContextReport(message.text);
-    if (report) return { id: message.id, report };
-  }
-  return null;
-}
-
-export function formatClaudeContextHeadline(report: ClaudeContextReport): string {
-  return `${report.usedTokens} / ${report.maxTokens} (${formatClaudeContextPercent(report.usedPercent)})`;
-}
-
-export function claudeContextUsedCategories(
-  report: ClaudeContextReport,
-): ReadonlyArray<ClaudeContextCategory> {
-  return report.categories.filter((category) => !FREE_SPACE_CATEGORIES.has(category.name));
-}
-
-export function formatClaudeContextPercent(value: number): string {
-  return value < 10 ? `${value.toFixed(1).replace(/\.0$/u, "")}%` : `${Math.round(value)}%`;
-}
-
-export function formatClaudeContextTokens(value: number): string {
-  if (value < 1_000) return `${Math.round(value)}`;
-  if (value < 1_000_000) {
-    const thousands = value / 1_000;
-    return `${thousands < 10 ? thousands.toFixed(1).replace(/\.0$/u, "") : Math.round(thousands)}k`;
-  }
-  return `${(value / 1_000_000).toFixed(1).replace(/\.0$/u, "")}m`;
-}
-
-export function claudeContextSegmentColor(index: number, count: number): string {
-  return `hsl(${Math.round((index / Math.max(count, 1)) * 300)} 55% 58%)`;
 }

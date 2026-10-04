@@ -10,6 +10,7 @@ import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import { repairMarkdownFileLinks } from "@t3tools/client-runtime/repair-markdown-file-links";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   type OrchestrationMessageContext,
@@ -36,6 +37,8 @@ import {
   type CodexArtifactTemplate,
 } from "@t3tools/client-runtime/codex-artifact-templates";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
+import { isMarkdownFileLinkLabel } from "@t3tools/client-runtime/markdown-links";
+import { getTextContent, type MarkdownNode } from "react-native-nitro-markdown/headless";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -48,14 +51,11 @@ import {
   splitCodexArtifactTemplateMarkdown,
 } from "@t3tools/client-runtime/codex-markdown-directives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
-import {
-  formatClaudeContextHeadline,
-  parseClaudeContextReport,
-} from "@t3tools/shared/claudeContextReport";
+import { formatContextHeadline, parseContextReport } from "@t3tools/shared/contextReport";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
-import { ClaudeContextCardBody } from "./ClaudeContextCard";
+import { ContextReportCardBody } from "./ContextReportCard";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
@@ -727,7 +727,7 @@ interface MarkdownStyleSet {
 }
 
 const failedMarkdownFaviconHosts = new Set<string>();
-const MarkdownLinkLabelContext = createContext(false);
+const MarkdownLinkLabelContext = createContext<"file" | "other" | null>(null);
 const markdownLinkStyles = StyleSheet.create({
   inlineIcon: {
     width: 14,
@@ -819,6 +819,22 @@ function MarkdownInlineCode(props: {
   );
 }
 
+function MarkdownImage(props: {
+  readonly node: MarkdownNode;
+  readonly renderImage: MarkdownImageRenderer;
+}) {
+  const insideLink = useContext(MarkdownLinkLabelContext);
+  if (insideLink === "file")
+    return <NativeText>{props.node.alt ?? props.node.title ?? ""}</NativeText>;
+  return props.node.href
+    ? props.renderImage({
+        href: props.node.href,
+        alt: props.node.alt ?? null,
+        title: props.node.title ?? null,
+      })
+    : null;
+}
+
 const ARTIFACT_TEMPLATE_SYMBOL_BY_KIND: Record<
   CodexArtifactTemplate["artifactKind"],
   AppSymbolName
@@ -895,7 +911,17 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
 }) {
   const segments = useMemo(
-    () => splitCodexArtifactTemplateMarkdown(props.markdown),
+    () =>
+      splitCodexArtifactTemplateMarkdown(props.markdown).map((segment) =>
+        segment.kind === "markdown"
+          ? {
+              ...segment,
+              markdown: renderCodexFileCitationsAsMarkdown(
+                repairMarkdownFileLinks(segment.markdown),
+              ),
+            }
+          : segment,
+      ),
     [props.markdown],
   );
 
@@ -911,7 +937,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
     }
     if (segment.markdown.trim().length === 0) return null;
 
-    const markdown = renderCodexFileCitationsAsMarkdown(segment.markdown);
+    const markdown = segment.markdown;
     return hasNativeSelectableMarkdownText() ? (
       <SelectableMarkdownText
         key={`markdown:${segment.sourceOffset}`}
@@ -1189,26 +1215,31 @@ function useMarkdownStyles(
       preserveSoftBreaks: boolean,
       highlightCode: boolean,
     ): CustomRenderers => ({
-      link: ({ children, href = "" }) => {
+      link: ({ children, node, href = "" }) => {
         const presentation = resolveMarkdownLinkPresentation(href);
         if (presentation.kind === "file") {
           return (
-            <NativeText
-              className="font-t3-bold"
-              onPress={() => onLinkPress(href)}
-              style={{ color: inlineTextColor }}
-            >
-              <Image
-                source={markdownFileIconSource(presentation.icon)}
-                style={markdownLinkStyles.inlineIcon}
-              />
-              {presentation.label}
-            </NativeText>
+            <MarkdownLinkLabelContext.Provider value="file">
+              <NativeText onPress={() => onLinkPress(href)} style={{ color: inlineTextColor }}>
+                {!isMarkdownFileLinkLabel(getTextContent(node), href) && <>{children} </>}
+                <NativeText
+                  className="font-t3-bold"
+                  onPress={() => onLinkPress(href)}
+                  style={{ color: inlineTextColor }}
+                >
+                  <Image
+                    source={markdownFileIconSource(presentation.icon)}
+                    style={markdownLinkStyles.inlineIcon}
+                  />
+                  {presentation.label}
+                </NativeText>
+              </NativeText>
+            </MarkdownLinkLabelContext.Provider>
           );
         }
         if (presentation.kind === "external") {
           return (
-            <MarkdownLinkLabelContext.Provider value>
+            <MarkdownLinkLabelContext.Provider value="other">
               <MarkdownExternalLink
                 href={presentation.href}
                 host={presentation.host}
@@ -1222,7 +1253,7 @@ function useMarkdownStyles(
         }
         const linkHref = presentation.href;
         return (
-          <MarkdownLinkLabelContext.Provider value>
+          <MarkdownLinkLabelContext.Provider value="other">
             <NativeText
               className="underline"
               onPress={
@@ -1271,14 +1302,7 @@ function useMarkdownStyles(
           })}
         </View>
       ),
-      image: ({ node }) =>
-        node.href
-          ? (renderImage({
-              href: node.href,
-              alt: node.alt ?? null,
-              title: node.title ?? null,
-            }) ?? undefined)
-          : undefined,
+      image: ({ node }) => <MarkdownImage node={node} renderImage={renderImage} />,
       code_inline: ({ content }) => (
         <MarkdownInlineCode
           content={content ?? ""}
@@ -1832,7 +1856,7 @@ function renderFeedEntry(
     // intrinsic width before the container is clamped, overlapping the
     // timestamp/copy button row. Pinning the width removes that pass.
     const enterAnimated = isFreshTimestamp(message.createdAt);
-    const contextReport = message.streaming ? null : parseClaudeContextReport(message.text);
+    const contextReport = message.streaming ? null : parseContextReport(message.text);
     return (
       <Animated.View
         className={cn(
@@ -1849,9 +1873,9 @@ function renderFeedEntry(
             onToggle={() => props.onToggleWorkRow(entry.id, entry.id)}
             rowSizing={props.workRowSizing}
             iconSubtleColor={iconSubtleColor}
-            label={`Context window · ${contextReport.model ?? "Claude"} · ${formatClaudeContextHeadline(contextReport)}`}
+            label={`Context window · ${contextReport.model ? `${contextReport.model} · ` : ""}${formatContextHeadline(contextReport)}`}
           >
-            <ClaudeContextCardBody report={contextReport} />
+            <ContextReportCardBody report={contextReport} />
           </ThreadContextReportRow>
         ) : renderedText.trim().length > 0 ? (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>

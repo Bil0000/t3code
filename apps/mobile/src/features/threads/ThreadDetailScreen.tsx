@@ -1,4 +1,4 @@
-import { useThreadReportedModelSelection } from "../../state/entities";
+import { useThreadActiveContextUsage, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
@@ -82,7 +82,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
-import { latestClaudeContextReport } from "@t3tools/shared/claudeContextReport";
+import {
+  contextReportFromUsage,
+  latestContextReport as findLatestContextReport,
+} from "@t3tools/shared/contextReport";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
@@ -106,7 +109,7 @@ import type {
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
-import { ComposerClaudeContext } from "./ComposerClaudeContext";
+import { ComposerContextReport } from "./ComposerContextReport";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
@@ -131,9 +134,11 @@ import {
 import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
+import { appendPendingThreadMessages } from "./pending-thread-feed";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
+import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
 
 export interface ThreadDetailScreenProps {
   readonly worktreeSetup?: WorktreeSetupCardProps | null;
@@ -306,7 +311,12 @@ const USER_INPUT_TOGGLE_TIMING = {
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const navigation = useNavigation();
+  const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection({
+    environmentId: props.environmentId,
+    threadId: props.selectedThread.id,
+  });
+  const activeContextUsage = useThreadActiveContextUsage({
     environmentId: props.environmentId,
     threadId: props.selectedThread.id,
   });
@@ -476,11 +486,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     }
     if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
       return {
-        kind: "waiting",
+        kind: "background",
         label: pendingBackgroundWork.title,
         accessibilityLabel: `${pendingBackgroundWork.title}: ${pendingBackgroundWork.items
           .map((item) => item.label)
           .join(", ")}`,
+        waiting: pendingBackgroundWork.waiting,
       };
     }
     return null;
@@ -575,11 +586,25 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const dismissUsageLimits = useCallback(() => setUsageLimitsPanel(null), []);
   const latestContextReport = useMemo(
     () =>
-      latestClaudeContextReport(
-        selectedThreadFeed.flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
+      findLatestContextReport(
+        appendPendingThreadMessages(
+          selectedThreadFeed,
+          selectedThreadFeed,
+          props.queuedMessages,
+        ).flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
       ),
-    [selectedThreadFeed],
+    [props.queuedMessages, selectedThreadFeed],
   );
+  const usageContextReport = useMemo(
+    () => contextReportFromUsage(activeContextUsage?.usage, activeContextUsage?.model),
+    [activeContextUsage],
+  );
+  const [usageContextThreadKey, setUsageContextThreadKey] = useState<string | null>(null);
+  const usageContext = usageContextThreadKey === selectedThreadKey ? usageContextReport : null;
+  const showUsageContext = useCallback(() => {
+    setUsageContextThreadKey(usageContextReport === null ? null : selectedThreadKey);
+    return usageContextReport !== null;
+  }, [selectedThreadKey, usageContextReport]);
   const [dismissedContextReportIds, setDismissedContextReportIds] = useState<
     Record<string, string>
   >({});
@@ -1185,7 +1210,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   >
                     <ComposerQueuedEditBanner
                       saving={props.isSavingQueuedEdit}
-                      onCancel={props.onCancelQueuedRunEdit}
+                      onCancel={() => {
+                        voiceInputSession.cancel(props.composerDraftKey);
+                        props.onCancelQueuedRunEdit();
+                      }}
                     />
                   </Animated.View>
                 ) : null}
@@ -1208,7 +1236,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     entering={FadeInDown.duration(220)}
                     exiting={FadeOut.duration(140)}
                   >
-                    <ComposerClaudeContext
+                    <ComposerContextReport
                       report={contextReport.report}
                       onClose={() =>
                         setDismissedContextReportIds((current) => ({
@@ -1216,6 +1244,18 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                           [selectedThreadKey]: contextReport.id,
                         }))
                       }
+                    />
+                  </Animated.View>
+                ) : null}
+                {usageContext && activeUserInputRequestId === null ? (
+                  <Animated.View
+                    className="shrink-0 px-4 pb-3"
+                    entering={FadeInDown.duration(220)}
+                    exiting={FadeOut.duration(140)}
+                  >
+                    <ComposerContextReport
+                      report={usageContext}
+                      onClose={() => setUsageContextThreadKey(null)}
                     />
                   </Animated.View>
                 ) : null}
@@ -1378,6 +1418,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       onStopThread={props.onStopThread}
                       onSendMessage={handleSendMessage}
                       onShowUsageLimits={showUsageLimits}
+                      onShowUsageContext={showUsageContext}
                       canSwitchProvider={props.canSwitchThreadProvider}
                       onUpdateModelSelection={props.onUpdateThreadModelSelection}
                       onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}

@@ -34,6 +34,10 @@ import {
   type RefObject,
 } from "react";
 import { Alert, Keyboard, Platform, Pressable, View, type ViewStyle } from "react-native";
+import {
+  isContextCommand,
+  offersLocalContextCommand,
+} from "@t3tools/client-runtime/providerSkills";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import {
   composerAttachmentUploadBlockReason,
@@ -54,9 +58,13 @@ import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import {
+  getComposerDraftSnapshot,
+  composerDraftsAtom,
+  setComposerDraftText,
   composerContextImportsAtom,
   countComposerDraftAttachmentsAfterSelection,
 } from "../../state/use-composer-drafts";
+import { appAtomRegistry } from "../../state/atom-registry";
 import type { ComposerDocumentAttachment } from "../../lib/composerContext";
 import { useProject, useThreadShells } from "../../state/entities";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -187,6 +195,7 @@ export interface ThreadComposerProps {
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   /** `/usage-limits` resolves locally; the host decides where the report shows. Null clears it. */
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
+  readonly onShowUsageContext: () => boolean;
   /**
    * Whether the model picker may offer providers other than this thread's.
    * False keeps the catalog on the instance the thread's session runs on.
@@ -454,7 +463,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       draftKey: composerDraftKey,
     });
   };
-  const { onSendMessage, onChangeDraftMessage, onShowUsageLimits } = props;
+  const { onSendMessage, onChangeDraftMessage, onShowUsageLimits, onShowUsageContext } = props;
+  const contextCommandOffered =
+    selectedProviderStatus !== null &&
+    offersLocalContextCommand(selectedProviderStatus, props.projectCwd);
+  const openUsageContext = useCallback(() => {
+    if (onShowUsageContext()) return true;
+    Alert.alert("Context usage unavailable", "This thread has not reported context usage yet.");
+    return false;
+  }, [onShowUsageContext]);
   // T3 owns /usage-limits only where Limits has data for the selected provider;
   // elsewhere the name stays the provider's own and is sent through untouched.
   const usageLimitsOffered =
@@ -502,12 +519,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     // With attachments aboard the pick just inserts the text, so it sends as a prompt.
     onUsageLimits:
       usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
+    onContext:
+      contextCommandOffered && props.draftAttachments.length === 0 ? openUsageContext : undefined,
   });
   const voiceInput = useVoiceInputController({
-    ownerKey: composerOwnerKey,
-    draftMessage: props.draftMessage,
+    ownerKey: composerDraftKey,
+    label: props.selectedThread.title || "Untitled thread",
+    readDraftMessage: () => getComposerDraftSnapshot(composerDraftKey).text,
+    subscribeToDraftChanges: (onChange) => appAtomRegistry.subscribe(composerDraftsAtom, onChange),
     selection: composerMenu.selection,
-    onChangeDraftMessage: props.onChangeDraftMessage,
+    onChangeDraftMessage: (text) => setComposerDraftText(composerDraftKey, text),
     onChangeSelection: composerMenu.onSelectionChange,
   });
   const voicePresentation = resolveVoiceComposerPresentation(
@@ -599,6 +620,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         if (openUsageLimits()) onChangeDraftMessage("");
         return;
       }
+      if (
+        contextCommandOffered &&
+        isContextCommand(props.draftMessage) &&
+        props.draftAttachments.length === 0
+      ) {
+        if (openUsageContext()) onChangeDraftMessage("");
+        return;
+      }
       const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
       if (inFlightThreadIdsRef.current.has(threadKey)) return;
       inFlightThreadIdsRef.current.add(threadKey);
@@ -626,6 +655,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       onChangeDraftMessage,
       openUsageLimits,
       usageLimitsOffered,
+      contextCommandOffered,
+      openUsageContext,
       onSendMessage,
       props.environmentId,
       props.environmentLabel,

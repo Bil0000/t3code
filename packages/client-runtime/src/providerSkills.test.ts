@@ -6,6 +6,8 @@ import {
   formatProviderSkillDisplayName,
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
+  hasCompleteProviderWorkspaceSnapshot,
+  offersLocalContextCommand,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
   resolveProviderSkillSourceKind,
@@ -250,5 +252,56 @@ describe("workspace provider snapshots", () => {
   it("keeps the machine snapshot before this cwd has a provider snapshot", () => {
     expect(resolveProviderSkillsForCwd(provider, "/workspace/project-b")).toEqual(provider.skills);
     expect(resolveProviderSlashCommandsForCwd(provider, null)).toEqual(provider.slashCommands);
+  });
+
+  it("uses partial workspace skills and commands while keeping discovery retryable", () => {
+    const partial = {
+      ...provider,
+      workspaceSnapshots: provider.workspaceSnapshots.map((snapshot) => ({
+        ...snapshot,
+        slashCommands: [{ name: "compact" }],
+        slashCommandsPending: true,
+      })),
+    } satisfies ServerProvider;
+    expect(resolveProviderSkillsForCwd(partial, "/workspace/project-a")).toEqual(
+      provider.workspaceSnapshots[0]?.skills,
+    );
+    expect(resolveProviderSlashCommandsForCwd(partial, "/workspace/project-a")).toEqual([
+      { name: "compact" },
+    ]);
+    expect(hasCompleteProviderWorkspaceSnapshot(partial, "/workspace/project-a")).toBe(false);
+    expect(hasCompleteProviderWorkspaceSnapshot(provider, "/workspace/project-a")).toBe(true);
+    expect(hasCompleteProviderWorkspaceSnapshot(provider, "/workspace/project-b")).toBe(false);
+    expect(hasCompleteProviderWorkspaceSnapshot(undefined, "/workspace/project-a")).toBe(false);
+    expect(hasCompleteProviderWorkspaceSnapshot(provider, null)).toBe(false);
+  });
+});
+
+describe("offersLocalContextCommand", () => {
+  it("yields to a native /context and to unfinished command discovery", () => {
+    const native = { ...provider, slashCommands: [{ name: "context" }] } satisfies ServerProvider;
+    const pending = {
+      ...provider,
+      workspaceSnapshots: provider.workspaceSnapshots.map((snapshot) => ({
+        ...snapshot,
+        slashCommandsPending: true,
+      })),
+    } satisfies ServerProvider;
+    const nativeInWorkspace = {
+      ...provider,
+      workspaceSnapshots: provider.workspaceSnapshots.map((snapshot) => ({
+        ...snapshot,
+        slashCommands: [{ name: "context" }],
+      })),
+    } satisfies ServerProvider;
+    expect(offersLocalContextCommand(provider, "/workspace/project-a")).toBe(true);
+    expect(offersLocalContextCommand(provider, null)).toBe(true);
+    expect(offersLocalContextCommand(native, null)).toBe(false);
+    expect(offersLocalContextCommand(nativeInWorkspace, "/workspace/project-a")).toBe(false);
+    expect(offersLocalContextCommand(pending, "/workspace/project-a")).toBe(false);
+    expect(offersLocalContextCommand(provider, "/workspace/project-b")).toBe(false);
+    expect(
+      offersLocalContextCommand({ ...provider, workspaceSnapshots: [] }, "/workspace/project-a"),
+    ).toBe(false);
   });
 });

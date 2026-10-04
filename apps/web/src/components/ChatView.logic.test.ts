@@ -1,4 +1,8 @@
-import { findRecordedWorktreeSetup, resolveVisibleWorktreeSetup } from "./ChatView.logic";
+import {
+  findRecordedWorktreeSetup,
+  latestVisibleContextReport,
+  resolveVisibleWorktreeSetup,
+} from "./ChatView.logic";
 import {
   recallCheckoutIsRepo,
   rememberCheckoutIsRepo,
@@ -2158,5 +2162,25 @@ describe("waitForRevertedMessage", () => {
     await vi.advanceTimersByTimeAsync(50);
     await settled;
     vi.useRealTimers();
+  });
+});
+
+describe("latestVisibleContextReport", () => {
+  const report = {
+    id: "report",
+    role: "assistant",
+    text: "## Context Usage\n\n**Tokens:** 10k / 200k (5%)",
+    streaming: false,
+  };
+
+  it("hides the previous report until the server echoes the sent message", () => {
+    expect(latestVisibleContextReport([report], null)?.id).toBe("report");
+    expect(latestVisibleContextReport([report], "sent")).toBeNull();
+    expect(
+      latestVisibleContextReport(
+        [report, { id: "sent", role: "user", text: "next", streaming: false }],
+        "sent",
+      ),
+    ).toBeNull();
   });
 });

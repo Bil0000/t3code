@@ -3,8 +3,8 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import { ComposerBannerStack } from "./ComposerBannerStack";
-import { claudeContextBannerItem } from "./ComposerClaudeContext";
-import { parseClaudeContextReport } from "@t3tools/shared/claudeContextReport";
+import { contextReportBannerItem } from "./ComposerContextReport";
+import { parseContextReport } from "@t3tools/shared/contextReport";
 
 vi.mock("../ui/popover", () => ({
   Popover: "popover",
@@ -25,7 +25,7 @@ afterEach(async () => {
 it("shows a replacement context report and dismisses it from the composer", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
-  const report = parseClaudeContextReport(`## Context Usage
+  const report = parseContextReport(`## Context Usage
 **Model:** claude-sonnet-5
 **Tokens:** 79.5k / 200k (40%)
 ### MCP Tools
@@ -36,7 +36,7 @@ it("shows a replacement context report and dismisses it from the composer", asyn
   const onDismiss = () => renderer.update(<ComposerBannerStack items={[]} />);
   await act(() => {
     renderer = create(
-      <ComposerBannerStack items={[claudeContextBannerItem("report-1", report, onDismiss)]} />,
+      <ComposerBannerStack items={[contextReportBannerItem("report-1", report, onDismiss)]} />,
     );
   });
   expect(JSON.stringify(renderer.toJSON())).toContain("79.5k / 200k (40%)");
@@ -46,7 +46,7 @@ it("shows a replacement context report and dismisses it from the composer", asyn
   await act(() =>
     renderer.update(
       <ComposerBannerStack
-        items={[claudeContextBannerItem("report-2", { ...report, usedTokens: "90k" }, onDismiss)]}
+        items={[contextReportBannerItem("report-2", { ...report, usedTokens: "90k" }, onDismiss)]}
       />,
     ),
   );

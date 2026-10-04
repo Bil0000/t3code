@@ -36,8 +36,10 @@ import {
   getProviderSkillsForSlashMenu,
   getProviderSlashCommandsForSlashMenu,
   isProviderSkillUserInvocable,
+  hasCompleteProviderWorkspaceSnapshot,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
+  CONTEXT_COMMAND,
 } from "@t3tools/client-runtime/providerSkills";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -182,6 +184,7 @@ export function useComposerCommandMenu({
   onChangeDraftMessage,
   onUpdateInteractionMode,
   onUsageLimits,
+  onContext,
 }: {
   readonly draftMessage: string;
   readonly ownerKey: string | null;
@@ -203,6 +206,7 @@ export function useComposerCommandMenu({
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   /** Picking /usage-limits is the action itself; the draft keeps nothing of it. */
   readonly onUsageLimits?: () => void;
+  readonly onContext?: () => void;
 }) {
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
   const previousOwnerKeyRef = useRef(ownerKey);
@@ -245,17 +249,43 @@ export function useComposerCommandMenu({
     reportFailure: false,
   });
   const selectedProviderInstanceId = selectedProviderStatus?.instanceId;
-  const hasWorkspaceSnapshot = Boolean(
-    projectCwd &&
-    selectedProviderStatus?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === projectCwd),
+  const hasWorkspaceSnapshot = hasCompleteProviderWorkspaceSnapshot(
+    selectedProviderStatus,
+    projectCwd,
   );
   const workspaceRefreshKeyRef = useRef<string | null>(null);
-  const workspaceRefreshRetryRef = useRef<{ key: string; notBefore: number } | null>(null);
+  const [workspaceRefreshRetry, setWorkspaceRefreshRetry] = useState<{
+    key: string;
+    notBefore: number;
+  } | null>(null);
+  const workspaceRefreshScopeKey =
+    environmentId && projectCwd && selectedProviderInstanceId
+      ? `${environmentId}:${selectedProviderInstanceId}:${projectCwd}`
+      : null;
+  const workspaceSlashCommandsPending =
+    selectedProviderStatus?.workspaceSnapshots?.some(
+      (snapshot) => snapshot.cwd === projectCwd && snapshot.slashCommandsPending === true,
+    ) ?? false;
+  useEffect(() => {
+    if (
+      !workspaceSlashCommandsPending ||
+      !workspaceRefreshRetry ||
+      workspaceRefreshRetry.key !== workspaceRefreshScopeKey
+    )
+      return;
+    const timeout = setTimeout(
+      () => {
+        setWorkspaceRefreshRetry((current) => (current === workspaceRefreshRetry ? null : current));
+      },
+      Math.max(0, workspaceRefreshRetry.notBefore - Date.now()),
+    );
+    return () => clearTimeout(timeout);
+  }, [workspaceRefreshRetry, workspaceRefreshScopeKey, workspaceSlashCommandsPending]);
   const hadWorkspaceSnapshotRef = useRef(false);
   useEffect(() => {
     if (hadWorkspaceSnapshotRef.current && !hasWorkspaceSnapshot) {
       workspaceRefreshKeyRef.current = null;
-      workspaceRefreshRetryRef.current = null;
+      setWorkspaceRefreshRetry(null);
     }
     hadWorkspaceSnapshotRef.current = hasWorkspaceSnapshot;
   }, [hasWorkspaceSnapshot]);
@@ -265,19 +295,19 @@ export function useComposerCommandMenu({
     if (workspaceRefreshKeyRef.current === key) return;
     if (hasWorkspaceSnapshot) {
       workspaceRefreshKeyRef.current = key;
-      workspaceRefreshRetryRef.current = null;
+      setWorkspaceRefreshRetry(null);
       return;
     }
-    const retry = workspaceRefreshRetryRef.current;
+    const retry = workspaceRefreshRetry;
     if (retry?.key === key && Date.now() < retry.notBefore) return;
     workspaceRefreshKeyRef.current = key;
     const retryLater = () => {
       if (workspaceRefreshKeyRef.current !== key) return;
       workspaceRefreshKeyRef.current = null;
-      workspaceRefreshRetryRef.current = {
+      setWorkspaceRefreshRetry({
         key,
         notBefore: Date.now() + WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS,
-      };
+      });
     };
     void refreshProviders({
       environmentId,
@@ -285,9 +315,12 @@ export function useComposerCommandMenu({
     }).then((result) => {
       const refreshed =
         result._tag === "Success" &&
-        result.value.providers
-          .find((provider) => provider.instanceId === selectedProviderInstanceId)
-          ?.workspaceSnapshots?.some((snapshot) => snapshot.cwd === projectCwd);
+        hasCompleteProviderWorkspaceSnapshot(
+          result.value.providers.find(
+            (provider) => provider.instanceId === selectedProviderInstanceId,
+          ),
+          projectCwd,
+        );
       if (!refreshed && workspaceRefreshKeyRef.current === key) {
         retryLater();
       }
@@ -299,6 +332,7 @@ export function useComposerCommandMenu({
     projectCwd,
     refreshProviders,
     selectedProviderInstanceId,
+    workspaceRefreshRetry,
   ]);
 
   const trigger = useMemo(() => {
@@ -354,7 +388,10 @@ export function useComposerCommandMenu({
           ? {
               ...selectedProviderStatus,
               slashCommands: getProviderSlashCommandsForSlashMenu(
-                resolveProviderSlashCommandsForCwd(selectedProviderStatus, projectCwd),
+                [
+                  ...resolveProviderSlashCommandsForCwd(selectedProviderStatus, projectCwd),
+                  ...(onContext ? [CONTEXT_COMMAND] : []),
+                ],
                 visibleSkills,
               ),
             }
@@ -489,6 +526,7 @@ export function useComposerCommandMenu({
     threadShells,
     hasThread,
     hasCompactableConversation,
+    onContext,
     onUpdateInteractionMode,
     pathSearch.entries,
     pullRequestSearch.entries,
@@ -571,15 +609,19 @@ export function useComposerCommandMenu({
         return;
       }
 
-      if (
-        item.type === "provider-slash-command" &&
-        item.command.name === USAGE_LIMITS_COMMAND.name &&
-        onUsageLimits
-      ) {
+      const localCommand =
+        item.type !== "provider-slash-command"
+          ? undefined
+          : item.command.name === USAGE_LIMITS_COMMAND.name
+            ? onUsageLimits
+            : item.command.name === CONTEXT_COMMAND.name
+              ? onContext
+              : undefined;
+      if (localCommand) {
         const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
         setSelection({ start: cleared.cursor, end: cleared.cursor });
         onChangeDraftMessage(cleared.text);
-        onUsageLimits();
+        localCommand();
         return;
       }
 
@@ -602,6 +644,7 @@ export function useComposerCommandMenu({
       ownerKey,
       items,
       onChangeDraftMessage,
+      onContext,
       onUpdateInteractionMode,
       onUsageLimits,
       selectedProviderStatus?.showInteractionModeToggle,
