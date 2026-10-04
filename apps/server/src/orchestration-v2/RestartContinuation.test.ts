@@ -660,6 +660,7 @@ const queuedFollowUp = {
 it.effect.each([
   "resume",
   "prepared-resume",
+  "request-after-compaction",
   "started-continuation",
   "stopped",
   "disabled",
@@ -682,32 +683,53 @@ it.effect.each([
     };
     const projection = {
       ...cutMidTurn(),
-      ...(["prepared-resume", "started-continuation"].includes(scenario)
+      ...(scenario === "request-after-compaction"
         ? {
-            runs: [
-              {
-                ...cutMidTurn().runs[0]!,
-                id: RunId.make("run:compaction-source"),
-                ordinal: 0,
-                activeAttemptId: RunAttemptId.make("attempt:compaction-source"),
-              },
-              {
-                ...cutMidTurn().runs[0]!,
-                restartContinuationOfRunId: RunId.make("run:compaction-source"),
-              },
-            ],
+            runs: cutMidTurn().runs,
             attempts: [
-              { id: RunAttemptId.make("attempt:compaction-source"), contextCompaction: true },
+              {
+                id: RunAttemptId.make("attempt:compaction-source"),
+                runId,
+                contextCompaction: true,
+              },
+              { id: attemptId, runId, contextCompaction: false },
             ],
-            providerTurns: scenario === "prepared-resume" ? [] : cutMidTurn().providerTurns,
+            providerTurns: [],
           }
-        : { attempts: [{ id: attemptId, contextCompaction: true }] }),
+        : ["prepared-resume", "started-continuation"].includes(scenario)
+          ? {
+              runs: [
+                {
+                  ...cutMidTurn().runs[0]!,
+                  id: RunId.make("run:compaction-source"),
+                  ordinal: 0,
+                  activeAttemptId: RunAttemptId.make("attempt:compaction-source"),
+                },
+                {
+                  ...cutMidTurn().runs[0]!,
+                  restartContinuationOfRunId: RunId.make("run:compaction-source"),
+                },
+              ],
+              attempts: [
+                { id: RunAttemptId.make("attempt:compaction-source"), contextCompaction: true },
+              ],
+              providerTurns: scenario === "prepared-resume" ? [] : cutMidTurn().providerTurns,
+            }
+          : { attempts: [{ id: attemptId, contextCompaction: true }] }),
       messages: scenario === "missing-request" ? [] : [message],
       turnItems:
         scenario === "stopped"
           ? [{ id: "turn-item:interrupt", runId, type: "run_interrupt_request" }]
           : [],
     } as unknown as OrchestrationV2ThreadProjection;
+    if (scenario === "request-after-compaction")
+      assert.equal(
+        restartContinuationRun({
+          ...projection,
+          runs: [{ ...projection.runs[0]!, status: "starting" }],
+        })?.id,
+        runId,
+      );
     const commands: Parameters<
       ThreadManagementService.ThreadManagementService["Service"]["dispatch"]
     >[0][] = [];
@@ -726,7 +748,12 @@ it.effect.each([
         ),
       ),
     );
-    const resumed = ["resume", "prepared-resume", "started-continuation"].includes(scenario);
+    const resumed = [
+      "resume",
+      "prepared-resume",
+      "request-after-compaction",
+      "started-continuation",
+    ].includes(scenario);
     assert.lengthOf(commands, resumed ? 1 : 0);
     if (resumed) {
       const command = commands[0]!;

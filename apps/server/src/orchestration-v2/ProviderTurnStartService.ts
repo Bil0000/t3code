@@ -1045,7 +1045,13 @@ export const layer: Layer.Layer<
         }
 
         if (!(yield* isCurrentAttemptInStatus("starting"))) return providerThread;
-        if (contextCompaction || compactionContinuation) {
+        if (
+          contextCompaction ||
+          compactionContinuation ||
+          projection.attempts.some(
+            (candidate) => candidate.runId === run.id && candidate.contextCompaction,
+          )
+        ) {
           yield* settleStartFailure({
             signal: "provider-thread-load-failure",
             title: "Provider turn failed to start",

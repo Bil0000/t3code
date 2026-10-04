@@ -123,6 +123,7 @@ function makeTestAdapter(input: {
   readonly workBeforeRejection?: boolean;
   readonly rejectContextBeforeStart?: boolean;
   readonly failCompactionResume?: boolean;
+  readonly failPostCompactionResume?: boolean;
   readonly responseBeforeRejection?: "completed" | "streaming" | "streaming-message";
   readonly getModelContextWindow?: (selection: ModelSelection) => number | undefined;
   readonly canReuseContextUsage?: ProviderAdapterV2SessionRuntime["canReuseContextUsage"];
@@ -322,6 +323,12 @@ function makeTestAdapter(input: {
               if (
                 contextRejected &&
                 input.failCompactionResume &&
+                input.failResumeOnce !== undefined
+              )
+                yield* Ref.set(input.failResumeOnce, true);
+              if (
+                compacting &&
+                input.failPostCompactionResume &&
                 input.failResumeOnce !== undefined
               )
                 yield* Ref.set(input.failResumeOnce, true);
@@ -534,6 +541,7 @@ describe("orchestration v2 provider switching", () => {
     "exhausted-rejected-repeat-native",
     "exhausted-rejected-start-error-native",
     "exhausted-rejected-resume-failure-native",
+    "exhausted-rejected-resume-failure-after-compaction-native",
     "exhausted-rejected-unsupported-native",
     "exhausted-rejected-work-native",
     "exhausted-rejected-response-native",
@@ -672,7 +680,10 @@ describe("orchestration v2 provider switching", () => {
                   repeatContextRejection: scenario.includes("rejected-repeat"),
                   workBeforeRejection: scenario.includes("rejected-work"),
                   rejectContextBeforeStart: scenario.includes("rejected-start-error"),
-                  failCompactionResume: scenario.includes("rejected-resume-failure"),
+                  failCompactionResume:
+                    scenario.includes("rejected-resume-failure") &&
+                    !scenario.includes("after-compaction"),
+                  failPostCompactionResume: scenario.includes("after-compaction"),
                   ...(scenario.includes("rejected-response")
                     ? {
                         responseBeforeRejection: scenario.includes("response-streaming-message")
@@ -1188,7 +1199,8 @@ describe("orchestration v2 provider switching", () => {
                 scenario === "exhausted-effort-change-native" ||
                 scenario === "exhausted-unknown-capacity-native" ||
                 scenario.includes("unsupported") ||
-                scenario.includes("rejected-resume-failure") ||
+                (scenario.includes("rejected-resume-failure") &&
+                  !scenario.includes("after-compaction")) ||
                 scenario.includes("rejected-response") ||
                 scenario.includes("rejected-work")
                 ? 0

@@ -41,8 +41,10 @@ export function restartContinuationRun(
     undefined,
   );
   if (!run) return;
+  const pendingCompactionRequest = hasPendingCompactionRequest(run, projection);
   const preparedContinuation =
-    run.status === "starting" && run.restartContinuationOfRunId !== undefined;
+    run.status === "starting" &&
+    (run.restartContinuationOfRunId !== undefined || pendingCompactionRequest);
   if (run.status !== "running" && !preparedContinuation) return;
   const liveTurnRequired = !preparedContinuation;
   if (projection.thread.providerInstanceId !== run.providerInstanceId) return;
@@ -76,7 +78,7 @@ export function restartContinuationRun(
     return;
   if (
     liveTurnRequired &&
-    !hasPendingCompactionRequest(run, projection) &&
+    !pendingCompactionRequest &&
     !projection.providerTurns.some(
       (turn) =>
         turn.providerThreadId === providerThread.id &&
@@ -94,17 +96,16 @@ export function hasPendingCompactionRequest(
 ): boolean {
   let current = source;
   while (current !== undefined) {
-    const attemptId = current.activeAttemptId;
+    const { id: runId, activeAttemptId: attemptId } = current;
     if (
       projection.attempts.some((attempt) => attempt.id === attemptId && attempt.contextCompaction)
     )
       return true;
+    if (projection.providerTurns.some((turn) => turn.runAttemptId === attemptId)) return false;
+    if (projection.attempts.some((attempt) => attempt.runId === runId && attempt.contextCompaction))
+      return true;
     const sourceId = current.restartContinuationOfRunId;
-    if (
-      sourceId === undefined ||
-      projection.providerTurns.some((turn) => turn.runAttemptId === attemptId)
-    )
-      return false;
+    if (sourceId === undefined) return false;
     current = projection.runs.find((run) => run.id === sourceId);
   }
   return false;
