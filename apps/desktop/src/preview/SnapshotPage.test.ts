@@ -173,6 +173,40 @@ const fixture = (escape = (value: string) => value) => {
 };
 
 describe("snapshot page collector", () => {
+  it.each(["inset(100%)", "inset(0px 0px 100%)", "circle(50%)"])(
+    "omits scroll containers clipped by %s",
+    (clipPath) => {
+      for (const onAncestor of [false, true]) {
+        const page = fixture();
+        const parent = page.element("parent", rect(0, 0));
+        const scroller = page.element("scroll", rect(0, 0), parent);
+        (onAncestor ? parent : scroller).style.clipPath = clipPath;
+        scroller.style.overflowY = "auto";
+        scroller.scrollHeight = 1_000;
+        const snapshot = page.capture();
+        expect(snapshot.scroll?.containers).toEqual([]);
+        expect(snapshot.scroll?.containersTruncated).toBe(clipPath === "circle(50%)");
+      }
+    },
+  );
+
+  it("keeps partially clipped scroll containers and omits known offscreen areas", () => {
+    const page = fixture();
+    const visible = page.element("partial", rect(0, 0));
+    visible.style.clipPath = "inset(50% 0px 0px)";
+    visible.style.overflowY = "auto";
+    visible.scrollHeight = 1_000;
+    const offscreen = page.element("offscreen", rect(0, 250));
+    offscreen.style.clipPath = "inset(0px)";
+    offscreen.style.overflowY = "auto";
+    offscreen.scrollHeight = 1_000;
+    const snapshot = page.capture();
+    expect(snapshot.scroll?.containers.map((container) => container.selector)).toEqual([
+      "#partial",
+    ]);
+    expect(snapshot.scroll?.containersTruncated).toBe(false);
+  });
+
   it.each(["paint", "content", "strict", "layout"])(
     "respects %s containment on boxes and the body",
     (contain) => {

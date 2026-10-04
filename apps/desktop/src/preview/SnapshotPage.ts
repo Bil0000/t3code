@@ -175,7 +175,6 @@ function collectSnapshotPage(): SnapshotPage {
       const current = pending[index]!;
       const style = styleFor(current);
       if (
-        !parentClip ||
         style.display === "none" ||
         style.opacity === "0" ||
         style.contentVisibility === "hidden"
@@ -184,7 +183,14 @@ function collectSnapshotPage(): SnapshotPage {
         parentClip = null;
         continue;
       }
-      const clip = { ...parentClip };
+      const clip = { ...(parentClip ?? viewport) };
+      const paintClip = paintClipFor(current);
+      if (paintClip) {
+        clip.left = Math.max(clip.left, paintClip.left);
+        clip.top = Math.max(clip.top, paintClip.top);
+        clip.right = Math.min(clip.right, paintClip.right);
+        clip.bottom = Math.min(clip.bottom, paintClip.bottom);
+      }
       const rootStyle = styleFor(document.documentElement);
       const viewportBody =
         current === document.body &&
@@ -244,7 +250,15 @@ function collectSnapshotPage(): SnapshotPage {
           const scrollable =
             (/^(auto|scroll)$/.test(style.overflowX) && current.scrollWidth > clientWidth) ||
             (/^(auto|scroll)$/.test(style.overflowY) && current.scrollHeight > clientHeight);
-          if (scrollable && intersects(rect, parentClip)) {
+          if (scrollable && unsupportedClips.has(current)) containersTruncated = true;
+          if (
+            scrollable &&
+            parentClip &&
+            paintClip &&
+            clip.right > clip.left &&
+            clip.bottom > clip.top &&
+            intersects(rect, clip)
+          ) {
             const selector = containers.length < 20 ? selectorFor(current) : null;
             if (selector !== null && selector.length <= 1_000) {
               containers.push({
@@ -260,14 +274,8 @@ function collectSnapshotPage(): SnapshotPage {
           }
         }
       }
-      const paintClip = paintClipFor(current);
-      if (paintClip) {
-        clip.left = Math.max(clip.left, paintClip.left);
-        clip.top = Math.max(clip.top, paintClip.top);
-        clip.right = Math.min(clip.right, paintClip.right);
-        clip.bottom = Math.min(clip.bottom, paintClip.bottom);
-      }
-      parentClip = paintClip && clip.right > clip.left && clip.bottom > clip.top ? clip : null;
+      parentClip =
+        parentClip && paintClip && clip.right > clip.left && clip.bottom > clip.top ? clip : null;
       clips.set(current, parentClip);
     }
     return clips.get(element)!;
