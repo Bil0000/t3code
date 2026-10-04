@@ -35,9 +35,10 @@ compaction is unsupported, fails, or still leaves too little room, T3 Code repor
 without silently replacing the session or shortening your request. Reduce the request
 or select a larger-context model before trying again.
 
-If the server restarts during automatic compaction, **Settings → General → Continue threads after
-restarts** controls whether T3 Code continues with your saved request and attachments. This setting
-is off by default.
+If the server restarts during automatic compaction or after it finishes but before the retry,
+**Settings → General → Continue threads after restarts** controls whether T3 Code continues with
+your saved request and attachments. This setting is off by default. When it is off, the run does
+not continue; send the request again after the restart.
 
 Server operators can set `T3CODE_CONTEXT_HANDOFF_TOKEN_CAP` to change the initial history allowance
 (default 16,000; clamped to 1,024–64,000). This is an upper bound, not a provider context-window
