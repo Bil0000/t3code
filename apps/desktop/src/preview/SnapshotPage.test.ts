@@ -15,12 +15,14 @@ const rect = (x: number, y: number, width = 100, height = 20) => ({
 });
 
 class PageElement {
+  nodeType = 1;
   tagName = "DIV";
   id = "";
   innerText = "";
   parentElement: PageElement | null = null;
   offsetParent: PageElement | null = null;
   children: PageElement[] = [];
+  attributes = new Map<string, string>();
   clientLeft = 0;
   clientTop = 0;
   clientWidth = 100;
@@ -49,8 +51,8 @@ class PageElement {
     borderRightWidth: "0px",
     borderBottomWidth: "0px",
   };
-  getAttribute() {
-    return null;
+  getAttribute(attribute: string) {
+    return this.attributes.get(attribute) ?? null;
   }
   getBoundingClientRect() {
     return this.bounds;
@@ -76,26 +78,28 @@ class PageElement {
 }
 
 type PageText = {
+  nodeType: number;
   data: string;
   length: number;
   parentElement: PageElement;
   rectangles: (start: number, end: number) => ReturnType<typeof rect>[];
 };
 
-const fixture = () => {
+const fixture = (escape = (value: string) => value) => {
   const root = new PageElement();
   const body = new PageElement();
   body.parentElement = root;
   root.children.push(body);
   root.scrollHeight = 10_000;
   const elements: PageElement[] = [];
-  const texts: PageText[] = [];
+  const nodes: Array<PageElement | PageText> = [];
   const element = (id: string, bounds: ReturnType<typeof rect>, parent = body) => {
     const value = new PageElement();
     value.id = id;
     value.bounds = bounds;
     value.parentElement = parent;
     parent.children.push(value);
+    nodes.push(value);
     return value;
   };
   const text = (
@@ -103,7 +107,8 @@ const fixture = () => {
     parent: PageElement,
     rectangles: PageText["rectangles"] = () => [parent.bounds],
   ) => {
-    texts.push({ data, length: data.length, parentElement: parent, rectangles });
+    const value = { nodeType: 3, data, length: data.length, parentElement: parent, rectangles };
+    nodes.push(value);
   };
   let start = 0;
   let end = 0;
@@ -137,9 +142,10 @@ const fixture = () => {
     scrollX: 0,
     scrollY: 4_000,
     location: { href: "https://example.test" },
-    CSS: { escape: (value: string) => value },
+    CSS: { escape },
     HTMLElement: PageElement,
-    NodeFilter: { SHOW_TEXT: 4 },
+    Node: { ELEMENT_NODE: 1 },
+    NodeFilter: { SHOW_TEXT: 4, SHOW_ELEMENT: 1 },
     getComputedStyle: (value: PageElement) => value.style,
     document: {
       documentElement: root,
@@ -152,7 +158,7 @@ const fixture = () => {
       createRange: () => range,
       createTreeWalker() {
         let index = 0;
-        return { nextNode: () => texts[index++] ?? null };
+        return { nextNode: () => nodes[index++] ?? null };
       },
     },
   };
@@ -161,10 +167,75 @@ const fixture = () => {
     context.document.compatMode = compatMode;
     return NodeVM.runInNewContext(snapshotPageExpression(), context) as SnapshotPage;
   };
-  return { root, body, elements, texts, element, text, capture };
+  return { root, body, elements, nodes, element, text, capture };
 };
 
 describe("snapshot page collector", () => {
+  it.each(["name", "data-testid"])("escapes line breaks in %s selectors", (attribute) => {
+    const page = fixture((value) => value.replaceAll("\n", "\\a "));
+    const control = page.element("", rect(0, 0));
+    control.tagName = "BUTTON";
+    control.attributes.set(attribute, "line\nnext");
+    page.elements.push(control);
+    expect(page.capture().interactiveElements[0]?.selector).toBe(
+      `button[${attribute}=line\\a next]`,
+    );
+  });
+
+  it("finds image and canvas scroll areas without text or controls", () => {
+    const page = fixture();
+    for (const tag of ["IMG", "CANVAS"]) {
+      const scroller = page.element(`scroll-${tag}`, rect(0, 0));
+      scroller.style.overflowY = "auto";
+      scroller.scrollHeight = 1_000;
+      scroller.scrollTop = 200;
+      page.element("", rect(0, 0), scroller).tagName = tag;
+    }
+    const hidden = page.element("hidden", rect(0, 0));
+    hidden.style.opacity = "0";
+    const hiddenScroller = page.element("hidden-scroll", rect(0, 0), hidden);
+    hiddenScroller.style.overflowY = "auto";
+    hiddenScroller.scrollHeight = 1_000;
+    const clipped = page.element("clipping", rect(0, 0));
+    clipped.style.overflowY = "hidden";
+    const clippedScroller = page.element("clipped-scroll", rect(0, 100), clipped);
+    clippedScroller.style.overflowY = "auto";
+    clippedScroller.scrollHeight = 1_000;
+    const snapshot = page.capture();
+    expect(snapshot.viewportText).toBe("");
+    expect(snapshot.interactiveElements).toEqual([]);
+    expect(
+      snapshot.scroll?.containers.map((container) => [container.selector, container.y]),
+    ).toEqual([
+      ["#scroll-IMG", 200],
+      ["#scroll-CANVAS", 200],
+    ]);
+  });
+
+  it("finds an independently scrolling image-only body", () => {
+    const page = fixture();
+    page.root.style.overflowY = "hidden";
+    page.body.style.overflowY = "auto";
+    page.body.scrollHeight = 1_000;
+    page.element("image", rect(0, 0)).tagName = "IMG";
+    expect(page.capture().scroll?.containers[0]?.height).toBe(20);
+  });
+
+  it("keeps scanning scroll areas after text is capped and reports an incomplete scan", () => {
+    const page = fixture();
+    page.text("x".repeat(25_000), page.element("text", rect(0, 0)));
+    const scroller = page.element("later-scroll", rect(0, 0));
+    scroller.style.overflowY = "auto";
+    scroller.scrollHeight = 1_000;
+    expect(page.capture().scroll?.containers[0]?.selector).toBe("#later-scroll");
+    const empty = page.element("empty", rect(0, 0));
+    page.nodes.length = 100_001;
+    page.nodes.fill(empty);
+    const snapshot = page.capture();
+    expect(snapshot.truncated?.viewportText).toBe(true);
+    expect(snapshot.scroll?.containersTruncated).toBe(true);
+  });
+
   it("keeps bottom text after more than 4096 offscreen paragraphs", () => {
     const page = fixture();
     for (let index = 0; index < 5_000; index++) {
@@ -391,7 +462,11 @@ describe("snapshot page collector", () => {
   });
 
   it("reports capped viewport text and scroll container metadata", () => {
-    const page = fixture();
+    let selectorsRead = 0;
+    const page = fixture((value) => {
+      selectorsRead++;
+      return value;
+    });
     for (let index = 0; index < 21; index++) {
       const container = page.element(`scroll-${index}`, rect(0, 0));
       container.style.overflowY = "scroll";
@@ -403,6 +478,7 @@ describe("snapshot page collector", () => {
     const snapshot = page.capture();
     expect(snapshot.scroll?.containers).toHaveLength(20);
     expect(snapshot.scroll?.containersTruncated).toBe(true);
+    expect(selectorsRead).toBe(20);
     expect(snapshot.viewportText).toHaveLength(20_000);
     expect(snapshot.truncated?.viewportText).toBe(true);
   });

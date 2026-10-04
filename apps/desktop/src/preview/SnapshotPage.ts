@@ -27,7 +27,7 @@ function collectSnapshotPage(): SnapshotPage {
     for (const attribute of ["data-testid", "name"]) {
       const value = element.getAttribute(attribute);
       if (value)
-        return element.tagName.toLowerCase() + "[" + attribute + "=" + JSON.stringify(value) + "]";
+        return element.tagName.toLowerCase() + "[" + attribute + "=" + CSS.escape(value) + "]";
     }
     const parts: string[] = [];
     for (
@@ -140,8 +140,8 @@ function collectSnapshotPage(): SnapshotPage {
             (/^(auto|scroll)$/.test(style.overflowX) && current.scrollWidth > clientWidth) ||
             (/^(auto|scroll)$/.test(style.overflowY) && current.scrollHeight > clientHeight);
           if (scrollable && intersects(rect, parentClip)) {
-            const selector = selectorFor(current);
-            if (containers.length < 20 && selector.length <= 1_000) {
+            const selector = containers.length < 20 ? selectorFor(current) : null;
+            if (selector !== null && selector.length <= 1_000) {
               containers.push({
                 selector,
                 x: current.scrollLeft,
@@ -258,16 +258,32 @@ function collectSnapshotPage(): SnapshotPage {
     readText(node, middle, end, clip);
   };
   if (document.body) {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    if (rendered(document.body)) clipFor(document.body);
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    );
     let node = walker.nextNode();
     let visited = 0;
-    while (node && !viewportTextTruncated) {
-      if (++visited > 50_000) {
+    while (node) {
+      if (++visited > 100_000) {
         viewportTextTruncated = true;
+        containersTruncated = true;
         break;
+      }
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node as Element;
+        const style = styleFor(element);
+        if (/^(auto|scroll)$/.test(style.overflowX) || /^(auto|scroll)$/.test(style.overflowY)) {
+          if (rendered(element) && intersects(element.getBoundingClientRect(), viewport))
+            clipFor(element);
+        }
+        node = walker.nextNode();
+        continue;
       }
       const parent = node.parentElement;
       if (
+        !viewportTextTruncated &&
         parent &&
         !/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(parent.tagName) &&
         rendered(parent)
