@@ -329,6 +329,7 @@ import {
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { pendingDraftWork } from "./pendingDraftWork";
+import { importComposerThreadAttachment } from "./composerThreadImport";
 import { isTimelineScrollTarget } from "./timelineScrollTarget";
 import {
   createComposerScrollGestureState,
@@ -2412,6 +2413,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    * the next draft.
    */
   const pendingImageCompressionsRef = useRef<Map<string, number>>(new Map());
+  const pendingThreadImportsRef = useRef<Map<string, number>>(new Map());
   const isRevertingCheckpointRef = useRef(isRevertingCheckpoint);
   isRevertingCheckpointRef.current = isRevertingCheckpoint;
 
@@ -3091,6 +3093,37 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const loadThreadTranscript = useAtomCommand(orchestrationEnvironment.threadTranscript, {
     reportFailure: false,
   });
+  const countReservedAttachments = useCallback(() => {
+    const questionRequest = pendingUserInputs[0];
+    const otherQuestionKeys =
+      questionAttachmentTarget && questionRequest && activeThreadId
+        ? questionRequest.questions
+            .map((question) =>
+              questionAttachmentDraftId(
+                environmentId,
+                activeThreadId,
+                questionRequest.requestId,
+                question.id,
+              ),
+            )
+            .filter((key) => key !== questionAttachmentTarget)
+        : [];
+    return (
+      composerImagesRef.current.length +
+      composerFilesRef.current.length +
+      (pendingImageCompressionsRef.current.get(attachmentTargetKey) ?? 0) +
+      (pendingThreadImportsRef.current.get(attachmentTargetKey) ?? 0) +
+      countQuestionAttachments(otherQuestionKeys)
+    );
+  }, [
+    activeThreadId,
+    attachmentTargetKey,
+    composerFilesRef,
+    composerImagesRef,
+    environmentId,
+    pendingUserInputs,
+    questionAttachmentTarget,
+  ]);
   /**
    * Bytes for a pasted image or file come back through the source environment's asset URL
    * (the client is the only party that can reach both) and re-enter this draft as a normal
@@ -3141,6 +3174,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       // The draft these bytes belong to may have been sent or switched away from while they
       // downloaded. Dropping them here keeps them out of whatever draft is open now.
       if (attachmentTargetKeyRef.current !== importTargetKey) return;
+      const replacesFileMarker =
+        record.kind === "file" &&
+        composerFilesRef.current.some(
+          (candidate) =>
+            composerFileNeedsReattach(candidate) &&
+            composerFileMatchesReattachMarker(candidate, {
+              name: record.name,
+              mimeType: file.type,
+              sizeBytes: file.size,
+            }),
+        );
+      if (
+        !replacesFileMarker &&
+        (pendingThreadImportsRef.current.get(importTargetKey) ?? 0) > 0 &&
+        countReservedAttachments() >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+      ) {
+        fail("The attachment limit has been reached.");
+        return;
+      }
       if (record.kind === "image") {
         const accepted = addComposerImage({
           type: "image",
@@ -3168,7 +3220,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           fail("The draft rejected this attachment (duplicate or attachment limit reached).");
       }
     },
-    [addComposerFilesToDraft, addComposerImage, attachmentTargetKey, createAssetUrl],
+    [
+      addComposerFilesToDraft,
+      addComposerImage,
+      composerFilesRef,
+      countReservedAttachments,
+      createAssetUrl,
+    ],
   );
   const importAttachmentRecord = useCallback(
     async (
@@ -5610,28 +5668,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Callbacks: attachments
   // ------------------------------------------------------------------
-  const countReservedAttachments = () => {
-    const questionRequest = pendingUserInputs[0];
-    const otherQuestionKeys =
-      questionAttachmentTarget && questionRequest && activeThreadId
-        ? questionRequest.questions
-            .map((question) =>
-              questionAttachmentDraftId(
-                environmentId,
-                activeThreadId,
-                questionRequest.requestId,
-                question.id,
-              ),
-            )
-            .filter((key) => key !== questionAttachmentTarget)
-        : [];
-    return (
-      composerImagesRef.current.length +
-      composerFilesRef.current.length +
-      (pendingImageCompressionsRef.current.get(attachmentTargetKey) ?? 0) +
-      countQuestionAttachments(otherQuestionKeys)
-    );
-  };
   /** Resolves true when at least one chip was inserted for the accepted attachments. */
   const addComposerAttachments = async (
     files: File[],
@@ -6124,15 +6160,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         data: { threadRef: routeThreadRef, hideCopyButton: true },
       });
       try {
-        const result = await loadThreadTranscript({
-          environmentId: ref.environmentId,
-          input: { threadId: ref.threadId },
+        await importComposerThreadAttachment({
+          targetKey,
+          pendingImports: pendingThreadImportsRef.current,
+          countReservedAttachments,
+          load: async () => {
+            const result = await loadThreadTranscript({
+              environmentId: ref.environmentId,
+              input: { threadId: ref.threadId },
+            });
+            if (result._tag !== "Success") {
+              throw squashAtomCommandFailure(result);
+            }
+            return threadContextAttachment(ref.environmentId, result.value);
+          },
+          isActive,
+          attach: attachDroppedThreadFile,
+          onLimitReached: () => {
+            if (activeThreadId) {
+              setThreadError(
+                activeThreadId,
+                `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
+              );
+            }
+          },
         });
-        if (!isActive()) return;
-        if (result._tag !== "Success") {
-          throw squashAtomCommandFailure(result);
-        }
-        await attachDroppedThreadFile(threadContextAttachment(ref.environmentId, result.value));
       } catch (error) {
         if (!isActive()) return;
         toastManager.add({
