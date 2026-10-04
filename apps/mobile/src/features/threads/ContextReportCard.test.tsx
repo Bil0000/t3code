@@ -1,4 +1,4 @@
-import { parseContextReport } from "@t3tools/shared/contextReport";
+import { contextReportFromUsage, parseContextReport } from "@t3tools/shared/contextReport";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -24,4 +24,12 @@ it("keeps each expanded section value with its column label and order", () => {
   expect(markup).toContain("Plugin: foo · Size: 1.2k");
   expect(markup).toContain("Notes: new column");
   expect(markup.indexOf("Plugin: foo")).toBeLessThan(markup.indexOf("Notes: new column"));
+});
+
+it("shows usage-only reports as used and free context with exact counts", () => {
+  const report = contextReportFromUsage({ usedTokens: 0, maxTokens: 200_000, outputTokens: 0 })!;
+  const markup = renderToStaticMarkup(<ContextReportCardBody report={report} />);
+  expect(markup).toContain("Category: Free space");
+  expect(markup).toContain("200,000");
+  expect(markup).toContain("Counter: Output");
 });

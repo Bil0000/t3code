@@ -15,7 +15,7 @@ import {
 } from "./contextReport.ts";
 
 describe("contextReportFromUsage", () => {
-  it("shows current Codex usage without inventing a category breakdown", () => {
+  it("shows current Codex usage with exact counts and reported counters", () => {
     const usage: ThreadTokenUsageSnapshot = {
       usedTokens: 64_600,
       maxTokens: 258_400,
@@ -23,6 +23,7 @@ describe("contextReportFromUsage", () => {
       inputTokens: 60_000,
       outputTokens: 4_600,
       cachedInputTokens: 50_000,
+      reasoningOutputTokens: 1_200,
     };
     const report = contextReportFromUsage(usage, "gpt-6.1-sol");
     expect(report).toEqual({
@@ -31,31 +32,104 @@ describe("contextReportFromUsage", () => {
       maxTokens: "258k",
       usedPercent: 25,
       overLimit: null,
-      categories: [],
-      sections: [],
+      categories: [
+        { name: "Used context", tokens: "65k", percent: 25 },
+        { name: "Free space", tokens: "194k", percent: 75 },
+      ],
+      sections: [
+        {
+          title: "Exact token counts",
+          columns: ["Category", "Tokens"],
+          rows: [
+            ["Used context", "64,600"],
+            ["Free space", "193,800"],
+            ["Context window", "258,400"],
+          ],
+          totalTokens: null,
+        },
+        {
+          title: "Reported usage",
+          columns: ["Counter", "Tokens"],
+          rows: [
+            ["Input", "60,000"],
+            ["Cached input", "50,000"],
+            ["Output", "4,600"],
+            ["Reasoning", "1,200"],
+          ],
+          totalTokens: null,
+        },
+      ],
     });
     expect(formatContextHeadline(report!)).toBe("65k / 258k (25%)");
+    expect(contextUsedCategories(report!).map((category) => category.name)).toEqual([
+      "Used context",
+    ]);
   });
 
-  it("accepts V2 turn usage with nullable capacity", () => {
+  it("shows only capacity counts when a harness reports no counters", () => {
     const usage: OrchestrationV2ProviderTurnTokenUsage = {
       usedTokens: 40_000,
       maxTokens: 200_000,
       updatedAt: "2026-10-04T12:00:00.000Z",
     };
-    expect(contextReportFromUsage(usage)).toMatchObject({ usedPercent: 20 });
+    const report = contextReportFromUsage(usage);
+    expect(report).toMatchObject({ usedPercent: 20 });
+    expect(report?.sections.map((section) => section.title)).toEqual(["Exact token counts"]);
     expect(contextReportFromUsage({ ...usage, maxTokens: null })).toBeNull();
   });
 
-  it("keeps zero usage and over-limit usage", () => {
-    expect(contextReportFromUsage({ usedTokens: 0, maxTokens: 200_000 })).toMatchObject({
+  it("keeps counters larger than the context out of the occupancy breakdown", () => {
+    const report = contextReportFromUsage({
+      usedTokens: 30_000,
+      maxTokens: 100_000,
+      inputTokens: 900_000,
+      outputTokens: 80_000,
+    });
+    expect(report?.categories.map((category) => [category.name, category.percent])).toEqual([
+      ["Used context", 30],
+      ["Free space", 70],
+    ]);
+    expect(report?.sections[1]?.rows).toEqual([
+      ["Input", "900,000"],
+      ["Output", "80,000"],
+    ]);
+  });
+
+  it("keeps zero usage and clamps free space when over the limit", () => {
+    expect(
+      contextReportFromUsage({ usedTokens: 0, maxTokens: 200_000, reasoningOutputTokens: 0 }),
+    ).toMatchObject({
       usedTokens: "0",
       usedPercent: 0,
       model: null,
+      categories: [
+        { name: "Used context", tokens: "0", percent: 0 },
+        { name: "Free space", tokens: "200k", percent: 100 },
+      ],
+      sections: [
+        {
+          rows: [
+            ["Used context", "0"],
+            ["Free space", "200,000"],
+            ["Context window", "200,000"],
+          ],
+        },
+        { rows: [["Reasoning", "0"]] },
+      ],
     });
     expect(contextReportFromUsage({ usedTokens: 210_000, maxTokens: 200_000 })).toMatchObject({
       usedPercent: 105,
       overLimit: "10k tokens over",
+      categories: [{ percent: 105 }, { tokens: "0", percent: 0 }],
+      sections: [
+        {
+          rows: [
+            ["Used context", "210,000"],
+            ["Free space", "0"],
+            ["Context window", "200,000"],
+          ],
+        },
+      ],
     });
   });
 

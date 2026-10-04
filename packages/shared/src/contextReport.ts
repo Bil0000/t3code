@@ -27,9 +27,23 @@ export interface ContextReport {
 
 const FREE_SPACE_CATEGORIES = new Set(["Free space", "Autocompact buffer"]);
 
+const REPORTED_USAGE_COUNTERS = [
+  ["inputTokens", "Input"],
+  ["cachedInputTokens", "Cached input"],
+  ["outputTokens", "Output"],
+  ["reasoningOutputTokens", "Reasoning"],
+] as const;
+
 export function contextReportFromUsage(
   usage:
-    | { readonly usedTokens: number; readonly maxTokens?: number | null | undefined }
+    | {
+        readonly usedTokens: number;
+        readonly maxTokens?: number | null | undefined;
+        readonly inputTokens?: number | undefined;
+        readonly cachedInputTokens?: number | undefined;
+        readonly outputTokens?: number | undefined;
+        readonly reasoningOutputTokens?: number | undefined;
+      }
     | null
     | undefined,
   model: string | null = null,
@@ -44,17 +58,53 @@ export function contextReportFromUsage(
   ) {
     return null;
   }
+  const freeTokens = Math.max(0, usage.maxTokens - usage.usedTokens);
+  const usedPercent = (usage.usedTokens / usage.maxTokens) * 100;
+  const reportedRows = REPORTED_USAGE_COUNTERS.flatMap(([key, label]) => {
+    const value = usage[key];
+    return value !== undefined && Number.isSafeInteger(value) && value >= 0
+      ? [[label, value.toLocaleString("en-US")]]
+      : [];
+  });
   return {
     model,
     usedTokens: formatContextTokens(usage.usedTokens),
     maxTokens: formatContextTokens(usage.maxTokens),
-    usedPercent: (usage.usedTokens / usage.maxTokens) * 100,
+    usedPercent,
     overLimit:
       usage.usedTokens > usage.maxTokens
         ? `${formatContextTokens(usage.usedTokens - usage.maxTokens)} tokens over`
         : null,
-    categories: [],
-    sections: [],
+    categories: [
+      { name: "Used context", tokens: formatContextTokens(usage.usedTokens), percent: usedPercent },
+      {
+        name: "Free space",
+        tokens: formatContextTokens(freeTokens),
+        percent: (freeTokens / usage.maxTokens) * 100,
+      },
+    ],
+    sections: [
+      {
+        title: "Exact token counts",
+        columns: ["Category", "Tokens"],
+        rows: [
+          ["Used context", usage.usedTokens.toLocaleString("en-US")],
+          ["Free space", freeTokens.toLocaleString("en-US")],
+          ["Context window", usage.maxTokens.toLocaleString("en-US")],
+        ],
+        totalTokens: null,
+      },
+      ...(reportedRows.length > 0
+        ? [
+            {
+              title: "Reported usage",
+              columns: ["Counter", "Tokens"],
+              rows: reportedRows,
+              totalTokens: null,
+            },
+          ]
+        : []),
+    ],
   };
 }
 
@@ -98,5 +148,6 @@ export function formatContextTokens(value: number): string {
 }
 
 export function contextSegmentColor(index: number, count: number): string {
+  if (count === 1) return "hsl(210 65% 58%)";
   return `hsl(${Math.round((index / Math.max(count, 1)) * 300)} 55% 58%)`;
 }

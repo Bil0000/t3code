@@ -1,4 +1,4 @@
-import { parseContextReport } from "@t3tools/shared/contextReport";
+import { contextReportFromUsage, parseContextReport } from "@t3tools/shared/contextReport";
 import { act, useState } from "react";
 import { create, type ReactTestRendererNode } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -55,6 +55,29 @@ describe("ContextReportCard", () => {
     const section = renderer.root.findByProps({ "aria-expanded": false });
     act(() => section.props.onClick());
     expect(textOf(renderer)).toContain("mcp__github__add_issue_comment");
+  });
+
+  it("shows usage-only reports with exact counts behind collapsed sections", () => {
+    const report = contextReportFromUsage(
+      { usedTokens: 64_600, maxTokens: 258_400, inputTokens: 60_000, outputTokens: 4_600 },
+      "gpt-6.1-sol",
+    )!;
+    let renderer!: ReturnType<typeof create>;
+    act(() => {
+      renderer = create(<ContextReportCard report={report} />);
+    });
+
+    expect(textOf(renderer)).toContain("[25]Used context65k25%Free space194k75%");
+    expect(textOf(renderer)).toContain("Exact token counts3Reported usage2");
+    expect(textOf(renderer)).not.toContain("193,800");
+
+    const [exact, reported] = renderer.root.findAllByProps({ "aria-expanded": false });
+    act(() => exact!.props.onClick());
+    expect(textOf(renderer)).toContain("Used context64,600Free space193,800Context window258,400");
+    act(() => reported!.props.onClick());
+    expect(textOf(renderer)).toContain("CounterTokensInput60,000Output4,600");
+    act(() => exact!.props.onClick());
+    expect(textOf(renderer)).not.toContain("193,800");
   });
 
   it("renders repeated columns and rows without key warnings", () => {
