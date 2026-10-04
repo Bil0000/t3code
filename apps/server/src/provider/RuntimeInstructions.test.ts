@@ -11,11 +11,14 @@ describe("buildRuntimeInstructions", () => {
   });
 
   it.each(["Codex", "Claude Code", "Cursor", "Grok", "OpenCode", "Antigravity"])(
-    "links issue work through the available T3 tool in %s",
+    "links created and requested issues through the available T3 tool in %s",
     (harness) => {
       const instructions = buildRuntimeInstructions({ harness, issueToolsAvailable: true });
       expect(instructions).toContain(`</pull_request_linking>\n\n${ISSUE_LINKING_INSTRUCTIONS}`);
       expect(instructions).toContain("the user asks you to work on an issue");
+      expect(instructions).toContain(
+        "call link_issue immediately after creating an issue for this thread",
+      );
       expect(instructions).toContain(
         "attach that issue to the current thread before starting work",
       );
