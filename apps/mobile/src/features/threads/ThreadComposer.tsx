@@ -54,6 +54,8 @@ import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import {
+  getComposerDraftSnapshot,
+  setComposerDraftText,
   composerContextImportsAtom,
   countComposerDraftAttachmentsAfterSelection,
 } from "../../state/use-composer-drafts";
@@ -503,10 +505,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
   });
   const voiceInput = useVoiceInputController({
-    ownerKey: composerOwnerKey,
-    draftMessage: props.draftMessage,
-    selection: composerMenu.selection,
-    onChangeDraftMessage: props.onChangeDraftMessage,
+    ownerKey: composerDraftKey,
+    readDraftMessage: () => getComposerDraftSnapshot(composerDraftKey).text,
+    onChangeDraftMessage: (text) => setComposerDraftText(composerDraftKey, text),
     onChangeSelection: composerMenu.onSelectionChange,
   });
   const voicePresentation = resolveVoiceComposerPresentation(
