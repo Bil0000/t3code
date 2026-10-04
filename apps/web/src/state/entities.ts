@@ -9,6 +9,7 @@ import {
   type EnvironmentThreadStatus,
   type ThreadHistoryMeta,
 } from "@t3tools/client-runtime/state/threads";
+import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
@@ -242,6 +243,15 @@ export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId):
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadSettlement === true
+  );
+}
+
+export function readEnvironmentSupportsWorkItemLinking(environmentId: EnvironmentId): boolean {
+  return (
+    threadPullRequestLinkMode(
+      appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
+        .capabilities,
+    ) !== "unsupported"
   );
 }
 

@@ -1,5 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
+import { openLinkPullRequestDialog } from "../components/pullRequest/LinkPullRequestDialog";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -25,6 +26,7 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
+  readEnvironmentSupportsWorkItemLinking,
   readThreadShell,
   useProjects,
 } from "../state/entities";
@@ -138,6 +140,7 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+          workItemLinking: readEnvironmentSupportsWorkItemLinking(threadRef.environmentId),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
@@ -247,6 +250,9 @@ export function useThreadActionMenu(input: {
             return;
           case "mark-unread":
             markThreadUnread(threadRef);
+            return;
+          case "link-work-item":
+            openLinkPullRequestDialog(threadRef);
             return;
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;

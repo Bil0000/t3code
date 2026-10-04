@@ -23,6 +23,7 @@ export type ThreadActionMenuId =
   | "rename"
   | "regenerate-title"
   | "mark-unread"
+  | "link-work-item"
   | "copy"
   | "copy-path"
   | "copy-branch"
@@ -96,6 +97,7 @@ export interface ThreadActionMenuState {
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
+    readonly workItemLinking: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
@@ -164,6 +166,9 @@ export function buildThreadActionMenuItems(
             disabled: state.isRegeneratingTitle,
           },
         ]
+      : []),
+    ...(state.supports.workItemLinking
+      ? [{ id: "link-work-item" as const, label: "Link issue or PR…", icon: "link" }]
       : []),
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
     ...(state.projectFilter
