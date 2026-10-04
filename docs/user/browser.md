@@ -9,6 +9,9 @@ Snapshots have a size limit. Current-view text takes priority over page text and
 logs. The result reports omitted content so the agent can request more detail.
 The screenshot shows the current view.
 
+Complex CSS clip shapes can cause current-view text and controls to be omitted.
+The result reports these omissions. Use the screenshot to inspect those areas.
+
 On old HTML pages, a scroll box on the page body can report a size that includes
 scrollbar space. Use the screenshot when precise edge positions matter.
 

@@ -50,6 +50,9 @@ function collectSnapshotPage(): SnapshotPage {
   const containers: Array<NonNullable<SnapshotPage["scroll"]>["containers"][number]> = [];
   let containersTruncated = false;
   const clips = new Map<Element, Bounds | null>();
+  const paintClips = new Map<Element, Bounds | null>();
+  const unsupportedClips = new Set<Element>();
+  let unsupportedClip = false;
   const styles = new Map<Element, CSSStyleDeclaration>();
   const styleFor = (element: Element) => {
     let style = styles.get(element);
@@ -58,6 +61,104 @@ function collectSnapshotPage(): SnapshotPage {
       styles.set(element, style);
     }
     return style;
+  };
+  const paintClipFor = (element: Element): Bounds | null => {
+    const pending: Element[] = [];
+    let ancestor: Element | null = element;
+    while (ancestor && !paintClips.has(ancestor)) {
+      pending.push(ancestor);
+      ancestor = ancestor.parentElement;
+    }
+    let clip = ancestor ? (paintClips.get(ancestor) ?? null) : viewport;
+    let unsupported = ancestor ? unsupportedClips.has(ancestor) : false;
+    for (let index = pending.length - 1; index >= 0; index--) {
+      const current = pending[index]!;
+      const style = styleFor(current);
+      if (clip && style.display !== "contents") {
+        const paint =
+          /\b(paint|content|strict)\b/.test(style.contain) &&
+          !/^(inline$|table-(?!cell$|caption$)|ruby(?:$|-))/.test(style.display);
+        const path = style.clipPath && style.clipPath !== "none";
+        if (paint || path) {
+          const rect = current.getBoundingClientRect();
+          const scaleX =
+            current instanceof HTMLElement && current.offsetWidth
+              ? rect.width / current.offsetWidth
+              : 1;
+          const scaleY =
+            current instanceof HTMLElement && current.offsetHeight
+              ? rect.height / current.offsetHeight
+              : 1;
+          let left = rect.left;
+          let top = rect.top;
+          let right = rect.right;
+          let bottom = rect.bottom;
+          if (paint) {
+            const margin = /^(?:padding-box )?(\d+(?:\.\d+)?|\.\d+)px$/.exec(
+              style.overflowClipMargin || "0px",
+            );
+            if (!margin) {
+              unsupportedClip = true;
+              unsupported = true;
+              unsupportedClips.add(current);
+              clip = null;
+              paintClips.set(current, clip);
+              continue;
+            }
+            const outset = Number.parseFloat(margin[1]!);
+            left += (current.clientLeft - outset) * scaleX;
+            top += (current.clientTop - outset) * scaleY;
+            right -= (Number.parseFloat(style.borderRightWidth) - outset) * scaleX;
+            bottom -= (Number.parseFloat(style.borderBottomWidth) - outset) * scaleY;
+          }
+          if (path) {
+            const values = /^inset\(([^()]+)\)$/.exec(style.clipPath)?.[1]?.trim().split(/\s+/);
+            if (
+              !values ||
+              values.length > 4 ||
+              values.some((value) => !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:px|%)?$/.test(value))
+            ) {
+              unsupportedClip = true;
+              unsupported = true;
+              unsupportedClips.add(current);
+              clip = null;
+              paintClips.set(current, clip);
+              continue;
+            }
+            const offsets = [
+              values[0]!,
+              values[1] ?? values[0]!,
+              values[2] ?? values[0]!,
+              values[3] ?? values[1] ?? values[0]!,
+            ].map(
+              (value, side) =>
+                Number.parseFloat(value) *
+                (value.endsWith("%")
+                  ? (side % 2 === 0 ? rect.height : rect.width) / 100
+                  : side % 2 === 0
+                    ? scaleY
+                    : scaleX),
+            );
+            left = paint ? Math.max(left, rect.left + offsets[3]!) : rect.left + offsets[3]!;
+            top = paint ? Math.max(top, rect.top + offsets[0]!) : rect.top + offsets[0]!;
+            right = paint ? Math.min(right, rect.right - offsets[1]!) : rect.right - offsets[1]!;
+            bottom = paint
+              ? Math.min(bottom, rect.bottom - offsets[2]!)
+              : rect.bottom - offsets[2]!;
+          }
+          clip = {
+            left: Math.max(clip.left, left),
+            top: Math.max(clip.top, top),
+            right: Math.min(clip.right, right),
+            bottom: Math.min(clip.bottom, bottom),
+          };
+          if (clip.right <= clip.left || clip.bottom <= clip.top) clip = null;
+        }
+      }
+      if (unsupported) unsupportedClips.add(current);
+      paintClips.set(current, clip);
+    }
+    return paintClips.get(element)!;
   };
   const clipFor = (element: Element): Bounds | null => {
     const pending: Element[] = [];
@@ -87,6 +188,10 @@ function collectSnapshotPage(): SnapshotPage {
       const rootStyle = styleFor(document.documentElement);
       const viewportBody =
         current === document.body &&
+        style.contain === "none" &&
+        rootStyle.contain === "none" &&
+        style.contentVisibility === "visible" &&
+        rootStyle.contentVisibility === "visible" &&
         rootStyle.overflowX === "visible" &&
         rootStyle.overflowY === "visible";
       if (current !== document.documentElement && !viewportBody && style.display !== "contents") {
@@ -155,7 +260,14 @@ function collectSnapshotPage(): SnapshotPage {
           }
         }
       }
-      parentClip = clip.right > clip.left && clip.bottom > clip.top ? clip : null;
+      const paintClip = paintClipFor(current);
+      if (paintClip) {
+        clip.left = Math.max(clip.left, paintClip.left);
+        clip.top = Math.max(clip.top, paintClip.top);
+        clip.right = Math.min(clip.right, paintClip.right);
+        clip.bottom = Math.min(clip.bottom, paintClip.bottom);
+      }
+      parentClip = paintClip && clip.right > clip.left && clip.bottom > clip.top ? clip : null;
       clips.set(current, parentClip);
     }
     return clips.get(element)!;
@@ -182,12 +294,18 @@ function collectSnapshotPage(): SnapshotPage {
   const currentElements: Element[] = [];
   const otherElements: Element[] = [];
   let elementCount = 0;
+  let controlsOmitted = false;
   for (const element of document.querySelectorAll(
     "a[href],button,input,textarea,select,[role],[tabindex]",
   )) {
     if (!rendered(element)) continue;
     const rect = element.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) continue;
+    paintClipFor(element);
+    if (unsupportedClips.has(element)) {
+      controlsOmitted = true;
+      continue;
+    }
     const current = inViewport(element, rect);
     elementCount++;
     const target = current ? currentElements : otherElements;
@@ -319,8 +437,8 @@ function collectSnapshotPage(): SnapshotPage {
     },
     truncated: {
       visibleText: visibleText.length > maxTextLength,
-      viewportText: viewportTextTruncated,
-      interactiveElements: elementCount > maxElements,
+      viewportText: viewportTextTruncated || unsupportedClip,
+      interactiveElements: elementCount > maxElements || controlsOmitted,
     },
   };
 }

@@ -47,6 +47,8 @@ class PageElement {
     filter: "none",
     backdropFilter: "none",
     contain: "none",
+    clipPath: "none",
+    overflowClipMargin: "0px",
     willChange: "auto",
     borderRightWidth: "0px",
     borderBottomWidth: "0px",
@@ -171,6 +173,181 @@ const fixture = (escape = (value: string) => value) => {
 };
 
 describe("snapshot page collector", () => {
+  it.each(["paint", "content", "strict", "layout"])(
+    "respects %s containment on boxes and the body",
+    (contain) => {
+      for (const onBody of [false, true]) {
+        const page = fixture();
+        const parent = onBody ? page.body : page.element("clip", rect(0, 0, 150, 60));
+        parent.bounds = rect(0, 0, 150, 60);
+        parent.clientWidth = parent.offsetWidth = 150;
+        parent.clientHeight = parent.offsetHeight = 60;
+        parent.style.contain = contain;
+        const hidden = page.element("hidden", rect(0, 120), parent);
+        page.elements.push(hidden);
+        page.text("hidden label", hidden);
+        const snapshot = page.capture();
+        expect(snapshot.viewportText).toBe(contain === "layout" ? "hidden label" : "");
+        expect(snapshot.interactiveElements[0]?.inViewport).toBe(contain === "layout");
+      }
+    },
+  );
+
+  it.each(["inset(0px)", "inset(0%)", "inset(10px 10% 20px 5%)"])(
+    "clips text and controls with %s on boxes and the body",
+    (clipPath) => {
+      for (const onBody of [false, true]) {
+        const page = fixture();
+        const parent = onBody ? page.body : page.element("clip", rect(0, 0, 150, 60));
+        parent.bounds = rect(0, 0, 150, 60);
+        parent.offsetWidth = 150;
+        parent.offsetHeight = 60;
+        parent.style.clipPath = clipPath;
+        const hidden = page.element("hidden", rect(0, 120), parent);
+        const visible = page.element("visible", rect(20, 20, 50, 10), parent);
+        page.elements.push(hidden, visible);
+        page.text("hidden label", hidden);
+        page.text("visible label", visible);
+        const snapshot = page.capture();
+        expect(snapshot.viewportText).toBe("visible label");
+        expect(snapshot.interactiveElements.map((element) => element.inViewport)).toEqual([
+          true,
+          false,
+        ]);
+        expect(snapshot.truncated?.viewportText).toBe(false);
+      }
+    },
+  );
+
+  it("clips positioned descendants at static clip-path ancestors", () => {
+    const page = fixture();
+    const parent = page.element("clip", rect(0, 0, 150, 60));
+    parent.style.clipPath = "inset(0px)";
+    for (const position of ["fixed", "absolute"]) {
+      const hidden = page.element(position, rect(0, 120), parent);
+      hidden.style.position = position;
+      hidden.offsetParent = position === "absolute" ? page.body : null;
+      page.elements.push(hidden);
+      page.text("hidden label", hidden);
+    }
+    const snapshot = page.capture();
+    expect(snapshot.viewportText).toBe("");
+    expect(snapshot.interactiveElements.every((element) => !element.inViewport)).toBe(true);
+  });
+
+  it.each(["inline", "table-row", "ruby", "ruby-text"])(
+    "does not apply paint containment to %s boxes",
+    (display) => {
+      const page = fixture();
+      const parent = page.element("clip", rect(0, 0));
+      parent.style.display = display;
+      parent.style.contain = "paint";
+      const visible = page.element("visible", rect(0, 120), parent);
+      visible.style.position = "absolute";
+      visible.offsetParent = page.body;
+      page.elements.push(visible);
+      page.text("visible label", visible);
+      const snapshot = page.capture();
+      expect(snapshot.viewportText).toBe("visible label");
+      expect(snapshot.interactiveElements[0]?.inViewport).toBe(true);
+    },
+  );
+
+  it("respects paint containment overflow clip margins", () => {
+    const page = fixture();
+    const parent = page.element("clip", rect(0, 0, 100, 100));
+    parent.offsetHeight = 100;
+    parent.style.contain = "paint";
+    parent.style.overflowClipMargin = "padding-box 20px";
+    const visible = page.element("visible", rect(0, 105, 50, 10), parent);
+    const hidden = page.element("hidden", rect(0, 140), parent);
+    page.elements.push(visible, hidden);
+    page.text("visible label", visible);
+    page.text("hidden label", hidden);
+    const snapshot = page.capture();
+    expect(snapshot.viewportText).toBe("visible label");
+    expect(snapshot.interactiveElements.map((element) => element.inViewport)).toEqual([
+      true,
+      false,
+    ]);
+    parent.style.overflowClipMargin = "content-box 20px";
+    const omitted = page.capture();
+    expect(omitted.viewportText).toBe("");
+    expect(omitted.interactiveElements).toEqual([]);
+    expect(omitted.truncated?.viewportText).toBe(true);
+    expect(omitted.truncated?.interactiveElements).toBe(true);
+  });
+
+  it.each(["paint", "layout"])(
+    "finds independent body scrolling when %s containment prevents overflow propagation",
+    (contain) => {
+      for (const onRoot of [false, true]) {
+        const page = fixture();
+        (onRoot ? page.root : page.body).style.contain = contain;
+        page.root.bounds = rect(0, 0, 300, 200);
+        page.body.bounds = rect(0, 0, 150, 60);
+        page.body.clientWidth = page.body.offsetWidth = 150;
+        page.body.clientHeight = page.body.offsetHeight = 60;
+        page.body.style.overflowY = "auto";
+        page.body.scrollHeight = 500;
+        page.body.scrollTop = 200;
+        const hidden = page.element("hidden", rect(0, 120));
+        page.elements.push(hidden);
+        page.text("hidden label", hidden);
+        const snapshot = page.capture();
+        expect(snapshot.viewportText).toBe("");
+        expect(snapshot.interactiveElements[0]?.inViewport).toBe(false);
+        expect(snapshot.scroll?.containers[0]).toMatchObject({
+          y: 200,
+          height: 60,
+          scrollHeight: 500,
+        });
+      }
+    },
+  );
+
+  it("uses border-box inset percentages and permits negative insets", () => {
+    const page = fixture();
+    const parent = page.element("clip", rect(0, 0, 100, 100));
+    parent.clientLeft = parent.clientTop = 10;
+    parent.style.borderRightWidth = parent.style.borderBottomWidth = "10px";
+    parent.style.clipPath = "inset(0px)";
+    const label = page.element("label", rect(2, 2, 5, 5), parent);
+    page.text("border label", label);
+    expect(page.capture().viewportText).toBe("border label");
+    parent.style.contain = "paint";
+    expect(page.capture().viewportText).toBe("");
+    parent.style.contain = "none";
+    parent.style.clipPath = "inset(-50px)";
+    label.bounds = rect(0, 120);
+    expect(page.capture().viewportText).toBe("border label");
+    parent.style.clipPath = "inset(0 0 50%)";
+    label.bounds = rect(0, 60);
+    expect(page.capture().viewportText).toBe("");
+  });
+
+  it.each(["circle(50%)", "inset(0px round 20px)", "inset(calc(10px + 5%))"])(
+    "reports omitted text and controls for unsupported %s geometry",
+    (clipPath) => {
+      const page = fixture();
+      const parent = page.element("clip", rect(0, 0, 100, 100));
+      parent.style.clipPath = clipPath;
+      const uncertain = page.element("uncertain", rect(20, 20), parent);
+      uncertain.style.position = "fixed";
+      const visible = page.element("visible", rect(0, 140));
+      page.elements.push(uncertain, visible);
+      page.text("uncertain label", uncertain);
+      page.text("visible label", visible);
+      page.body.innerText = "uncertain label visible label";
+      const snapshot = page.capture();
+      expect(snapshot.viewportText).toBe("visible label");
+      expect(snapshot.visibleText).toBe("uncertain label visible label");
+      expect(snapshot.interactiveElements.map((element) => element.selector)).toEqual(["#visible"]);
+      expect(snapshot.truncated?.viewportText).toBe(true);
+      expect(snapshot.truncated?.interactiveElements).toBe(true);
+    },
+  );
+
   it.each(["name", "data-testid"])("escapes line breaks in %s selectors", (attribute) => {
     const page = fixture((value) => value.replaceAll("\n", "\\a "));
     const control = page.element("", rect(0, 0));
