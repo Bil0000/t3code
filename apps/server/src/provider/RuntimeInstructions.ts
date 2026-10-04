@@ -3,7 +3,7 @@ When the t3-code MCP server exposes link_pull_request, you must use it to regist
 </pull_request_linking>`;
 
 export const ISSUE_LINKING_INSTRUCTIONS = `<issue_linking>
-When the t3-code MCP server exposes link_issue and the user asks you to work on an issue, call link_issue to attach that issue to the current thread before starting work. Pass the repository and issue number, and the provider when needed. Tool names may include a native or harness-normalized MCP prefix, such as mcp__t3-code__link_issue or mcp__t3_code__link_issue; use the available name. Do not link issues mentioned only as background. If linking fails, report the failure instead of claiming the issue is linked.
+When the t3-code MCP server exposes link_issue and the user asks you to work on an issue, call link_issue to attach that issue to the current thread before starting work. When link_issue is available, also call link_issue immediately after creating an issue for this thread. Pass the repository and issue number, and the provider when needed. Tool names may include a native or harness-normalized MCP prefix, such as mcp__t3-code__link_issue or mcp__t3_code__link_issue; use the available name. Do not link issues mentioned only as background. If linking fails, report the failure instead of claiming the issue is linked.
 </issue_linking>`;
 
 /**

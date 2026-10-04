@@ -98,7 +98,13 @@ describe("Pi issue instructions", () => {
       }).systemPrompt;
       assert.isTrue(prompt.startsWith("Pi system prompt\n\n"));
       assert.equal(prompt.includes("<issue_linking>"), available);
-      if (available) assert.include(registered, "mcp__t3-code__link_issue");
+      if (available) {
+        assert.include(registered, "mcp__t3-code__link_issue");
+        assert.include(
+          prompt,
+          "call link_issue immediately after creating an issue for this thread",
+        );
+      }
     },
   );
 });
