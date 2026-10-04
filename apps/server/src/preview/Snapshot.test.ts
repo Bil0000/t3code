@@ -13,15 +13,15 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
-import { McpInvocationContext } from "./McpInvocationContext.ts";
 import {
   PreviewAutomationBroker,
   type PreviewAutomationInvokeInput,
-} from "./PreviewAutomationBroker.ts";
-import { savePreviewText } from "./PreviewTextExport.ts";
+} from "../mcp/PreviewAutomationBroker.ts";
+import * as Snapshot from "./Snapshot.ts";
 
 const tabId = PreviewTabId.make("text-tab");
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -85,6 +85,26 @@ const makePage = (initialText: string) => {
           loading: false,
         } as A;
       }
+      if (request.operation === "snapshot") {
+        expect(request.tabId).toBe(tabId);
+        return {
+          url: "https://example.test/page",
+          title: "Page",
+          loading: false,
+          visibleText: "Page",
+          interactiveElements: [],
+          accessibilityTree: {},
+          consoleEntries: [],
+          networkEntries: [],
+          actionTimeline: [],
+          screenshot: {
+            mimeType: "image/png",
+            data: Buffer.from("png").toString("base64"),
+            width: 10,
+            height: 5,
+          },
+        } as A;
+      }
       expect(request.operation).toBe("evaluate");
       expect(request.tabId).toBe(tabId);
       expect(request.timeoutMs).toBeUndefined();
@@ -116,8 +136,14 @@ const makePage = (initialText: string) => {
 };
 
 const runExport = (page: ReturnType<typeof makePage>, target?: PreviewTabId) =>
-  savePreviewText(target).pipe(
-    Effect.provideService(McpInvocationContext, scope),
+  Effect.gen(function* () {
+    const snapshot = yield* Snapshot.PreviewSnapshot;
+    return yield* snapshot.withSnapshot(
+      { scope, saveText: true, ...(target === undefined ? {} : { tabId: target }) },
+      ({ textExport }) => Effect.succeed(textExport!),
+    );
+  }).pipe(
+    Effect.provide(Snapshot.layer),
     Effect.provideService(PreviewAutomationBroker, page.broker!),
   );
 const assertClean = (page: ReturnType<typeof makePage>) => {
@@ -154,7 +180,8 @@ it.effect("keeps Unicode pairs intact at chunk boundaries", () =>
     const fs = yield* FileSystem.FileSystem;
     expect(yield* fs.readFileString(saved.textPath)).toBe(text);
     expect(saved.sizeBytes).toBe(Buffer.byteLength(text));
-    expect(page.requests.every((request) => request.operation === "evaluate")).toBe(true);
+    expect(page.requests.some((request) => request.operation === "status")).toBe(false);
+    expect(page.requests.at(-1)?.operation).toBe("snapshot");
     assertClean(page);
   }).pipe(Effect.provide(TestLayer)),
 );
@@ -300,4 +327,40 @@ it.effect("removes the completed file when cancellation occurs during browser cl
     expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
     assertClean(page);
   }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each(["failure", "cancellation"] as const)(
+  "removes its export after snapshot result delivery %s",
+  (outcome) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
+      const existing = path.join(config.browserArtifactsDir, "existing.txt");
+      yield* fs.writeFileString(existing, "keep this file");
+      const enteredUse = yield* Deferred.make<void>();
+      const page = makePage("completed text");
+      const delivery = Effect.gen(function* () {
+        const snapshots = yield* Snapshot.PreviewSnapshot;
+        return yield* snapshots.withSnapshot({ scope, saveText: true }, ({ textExport }) =>
+          Effect.gen(function* () {
+            expect(yield* fs.readFileString(textExport!.textPath)).toBe("completed text");
+            yield* Deferred.succeed(enteredUse, undefined);
+            return yield* outcome === "failure" ? Effect.fail("delivery failed") : Effect.never;
+          }),
+        );
+      }).pipe(
+        Effect.provide(Snapshot.layer),
+        Effect.provideService(PreviewAutomationBroker, page.broker!),
+      );
+      const fiber = yield* Effect.forkChild(delivery);
+      yield* Deferred.await(enteredUse);
+      if (outcome === "cancellation") yield* Fiber.interrupt(fiber);
+      const result = yield* Fiber.await(fiber);
+      expect(result._tag).toBe("Failure");
+      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["existing.txt"]);
+      expect(yield* fs.readFileString(existing)).toBe("keep this file");
+      assertClean(page);
+    }).pipe(Effect.provide(TestLayer)),
 );

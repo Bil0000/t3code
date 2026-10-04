@@ -1,22 +1,17 @@
-import * as NodeCrypto from "node:crypto";
 import * as Cause from "effect/Cause";
-import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
-import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
+import { AiError, McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { PreviewAutomationError } from "@t3tools/contracts";
 
 import packageJson from "../../package.json" with { type: "json" };
-import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -32,19 +27,11 @@ import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { ThreadToolkitHandlersLive } from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
-import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
-import { PreviewTextExportError, savePreviewText } from "./PreviewTextExport.ts";
+import * as PreviewSnapshot from "../preview/Snapshot.ts";
 import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
-import {
-  PreviewSnapshotToolkitHandlersLive,
-  PreviewStandardToolkitHandlersLive,
-} from "./toolkits/preview/handlers.ts";
-import {
-  PreviewSnapshotTool,
-  PreviewSnapshotToolkit,
-  PreviewStandardToolkit,
-} from "./toolkits/preview/tools.ts";
+import { PreviewStandardToolkitHandlersLive } from "./toolkits/preview/handlers.ts";
+import { PreviewSnapshotTool, PreviewStandardToolkit } from "./toolkits/preview/tools.ts";
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
@@ -177,20 +164,24 @@ type SnapshotMetadata = {
   readonly url: string;
   readonly title: string;
   readonly visibleText: string;
-  readonly viewportText?: string;
-  readonly truncated?: {
-    readonly visibleText: boolean;
-    readonly viewportText: boolean;
-    readonly interactiveElements: boolean;
-  };
-  readonly scroll?: {
-    readonly containers: ReadonlyArray<unknown>;
-    readonly containersTruncated: boolean;
-    readonly [key: string]: unknown;
-  };
+  readonly viewportText?: string | undefined;
+  readonly truncated?:
+    | {
+        readonly visibleText: boolean;
+        readonly viewportText: boolean;
+        readonly interactiveElements: boolean;
+      }
+    | undefined;
+  readonly scroll?:
+    | {
+        readonly containers: ReadonlyArray<unknown>;
+        readonly containersTruncated: boolean;
+        readonly [key: string]: unknown;
+      }
+    | undefined;
   readonly interactiveElements: ReadonlyArray<{
     readonly name: string;
-    readonly inViewport?: boolean;
+    readonly inViewport?: boolean | undefined;
     readonly [key: string]: unknown;
   }>;
   readonly consoleEntries: ReadonlyArray<unknown>;
@@ -388,54 +379,9 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
   return { value: value(), text, omitted };
 };
 
-export class PreviewScreenshotSaveError extends Schema.TaggedError<PreviewScreenshotSaveError>()(
-  "PreviewScreenshotSaveError",
-  { screenshotPath: Schema.String, cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return `Could not save preview screenshot to ${this.screenshotPath}.`;
-  }
-}
-
-const MAX_SCREENSHOT_SITE_SLUG_LENGTH = 40;
-
-/** Hostname reduced to a filename-safe slug, matching the desktop's own screenshot names. */
-const screenshotSiteSlug = (rawUrl: string): string => {
-  try {
-    const slug = new URL(rawUrl).hostname
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, MAX_SCREENSHOT_SITE_SLUG_LENGTH)
-      .replace(/-+$/g, "");
-    return slug || "site";
-  } catch {
-    return "site";
-  }
-};
-
-/** Writes the snapshot PNG under the browser artifacts directory and returns its path. */
-const saveScreenshot = Effect.fn("McpHttpServer.saveScreenshot")(function* (
-  pageUrl: string,
-  data: Uint8Array,
-) {
-  const config = yield* ServerConfig.ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const millis = yield* Clock.currentTimeMillis;
-  // Two saves in the same millisecond must not overwrite each other.
-  const fileName = `browser-screenshot-${screenshotSiteSlug(pageUrl)}-${millis.toString(36)}-${NodeCrypto.randomUUID().slice(0, 8)}.png`;
-  const screenshotPath = path.join(config.browserArtifactsDir, fileName);
-  yield* fileSystem.makeDirectory(config.browserArtifactsDir, { recursive: true }).pipe(
-    Effect.andThen(fileSystem.writeFile(screenshotPath, data)),
-    Effect.mapError((cause) => new PreviewScreenshotSaveError({ screenshotPath, cause })),
-  );
-  return screenshotPath;
-});
-
 const isPreviewAutomationError = Schema.is(PreviewAutomationError);
-const isPreviewTextExportError = Schema.is(PreviewTextExportError);
-const isPreviewSnapshotInput = Schema.is(PreviewSnapshotTool.parametersSchema);
+const isPreviewTextExportError = Schema.is(PreviewSnapshot.PreviewTextExportError);
+const decodePreviewSnapshotInput = Schema.decodeUnknownEffect(PreviewSnapshotTool.parametersSchema);
 
 const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
   if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
@@ -478,12 +424,7 @@ const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
 
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
-  const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-  // The MCP tool runner only supplies the client, so hand the save path its services here.
-  const saveServices = yield* Effect.context<
-    ServerConfig.ServerConfig | FileSystem.FileSystem | Path.Path
-  >();
-  const built = yield* PreviewSnapshotToolkit;
+  const snapshots = yield* PreviewSnapshot.PreviewSnapshot;
   const tool = PreviewSnapshotTool;
   yield* server.addTool({
     tool: new McpSchema.Tool({
@@ -508,130 +449,99 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
           fiber.context,
           McpInvocationContext.McpInvocationContext,
         );
-        const exportText = Effect.gen(function* () {
-          if (payload?.saveText !== true || !isPreviewSnapshotInput(payload)) return undefined;
-          return yield* savePreviewText(payload.tabId);
-        });
-        return Effect.uninterruptibleMask((restore) =>
-          restore(exportText).pipe(
-            Effect.flatMap((textExport) =>
-              restore(
-                built
-                  .handle("preview_snapshot", {
-                    ...payload,
-                    ...(textExport === undefined ? {} : { tabId: textExport.tabId }),
-                  })
-                  .pipe(
-                    Stream.unwrap,
-                    Stream.run(Sink.last()),
-                    Effect.flatMap(Effect.fromOption),
-                    Effect.flatMap(({ encodedResult }) =>
-                      Effect.gen(function* () {
-                        const snapshot = encodedResult as SnapshotMetadata & {
-                          readonly url: string;
-                          readonly screenshot: {
-                            readonly mimeType: "image/png";
-                            readonly data: string;
-                            readonly width: number;
-                            readonly height: number;
-                          };
-                        };
-                        const { screenshot, ...page } = snapshot;
-                        const png = new Uint8Array(Buffer.from(screenshot.data, "base64"));
-                        const screenshotPath =
-                          payload?.save === true
-                            ? yield* saveScreenshot(snapshot.url, png)
-                            : undefined;
-                        const textArtifact =
-                          textExport === undefined
-                            ? {}
-                            : {
-                                textPath: textExport.textPath,
-                                textChars: textExport.totalChars,
-                                textBytes: textExport.sizeBytes,
-                                textUrl: textExport.url,
-                              };
-                        if (screenshotPath !== undefined && payload?.includeImage === false) {
-                          // The agent only wants a file to show the user. The url keeps the site icon on the tool row.
-                          const saved = {
-                            url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-                            screenshotPath,
-                            ...textArtifact,
-                          };
-                          return new McpSchema.CallToolResult({
-                            isError: false,
-                            structuredContent: saved,
-                            content: [{ type: "text", text: encodeJsonText(saved) }],
-                          });
-                        }
-                        const metadata = {
-                          ...page,
-                          screenshot: {
-                            mimeType: screenshot.mimeType,
-                            width: screenshot.width,
-                            height: screenshot.height,
-                          },
-                          ...(screenshotPath === undefined ? {} : { screenshotPath }),
+        return decodePreviewSnapshotInput(payload ?? {}).pipe(
+          Effect.mapError((cause) =>
+            AiError.make({
+              module: "Toolkit",
+              method: "preview_snapshot.handle",
+              reason: new AiError.ToolParameterValidationError({
+                toolName: "preview_snapshot",
+                description: cause.message,
+              }),
+            }),
+          ),
+          Effect.flatMap((input) =>
+            McpInvocationContext.requireMcpCapability("preview").pipe(
+              Effect.flatMap((scope) =>
+                snapshots.withSnapshot(
+                  { scope, ...input },
+                  ({ snapshot, png, textExport, screenshotPath }) =>
+                    Effect.sync(() => {
+                      const { screenshot, ...page } = snapshot;
+                      const textArtifact =
+                        textExport === undefined
+                          ? {}
+                          : {
+                              textPath: textExport.textPath,
+                              textChars: textExport.totalChars,
+                              textBytes: textExport.sizeBytes,
+                              textUrl: textExport.url,
+                            };
+                      if (screenshotPath !== undefined && input.includeImage === false) {
+                        // The agent only wants a file to show the user. The url keeps the site icon on the tool row.
+                        const saved = {
+                          url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
+                          screenshotPath,
                           ...textArtifact,
                         };
-                        const bounded = boundSnapshotMetadata(metadata);
                         return new McpSchema.CallToolResult({
                           isError: false,
-                          structuredContent:
-                            bounded.omitted.length === 0
-                              ? bounded.value
-                              : { ...bounded.value, omitted: bounded.omitted },
-                          content: [
-                            // Keep the page identity readable even if a provider truncates the snapshot.
-                            {
-                              type: "text",
-                              text: encodeJsonText({
-                                url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
-                              }),
-                            },
-                            { type: "text", text: bounded.text },
-                            ...(bounded.omitted.length === 0
-                              ? []
-                              : [
-                                  {
-                                    type: "text" as const,
-                                    text: `Snapshot text was bounded. Omitted: ${bounded.omitted.join("; ")}.`,
-                                  },
-                                ]),
-                            ...(payload?.includeImage === false
-                              ? []
-                              : [
-                                  {
-                                    type: "image" as const,
-                                    data: png,
-                                    mimeType: screenshot.mimeType,
-                                  },
-                                ]),
-                          ],
+                          structuredContent: saved,
+                          content: [{ type: "text", text: encodeJsonText(saved) }],
                         });
-                      }),
-                    ),
-                  ),
-              ).pipe(
-                Effect.onExit((exit) =>
-                  textExport !== undefined && exit._tag === "Failure"
-                    ? FileSystem.FileSystem.pipe(
-                        Effect.flatMap((fileSystem) => fileSystem.remove(textExport.textPath)),
-                        Effect.ignore,
-                      )
-                    : Effect.void,
+                      }
+                      const metadata = {
+                        ...page,
+                        screenshot: {
+                          mimeType: screenshot.mimeType,
+                          width: screenshot.width,
+                          height: screenshot.height,
+                        },
+                        ...(screenshotPath === undefined ? {} : { screenshotPath }),
+                        ...textArtifact,
+                      };
+                      const bounded = boundSnapshotMetadata(metadata);
+                      return new McpSchema.CallToolResult({
+                        isError: false,
+                        structuredContent:
+                          bounded.omitted.length === 0
+                            ? bounded.value
+                            : { ...bounded.value, omitted: bounded.omitted },
+                        content: [
+                          // Keep the page identity readable even if a provider truncates the snapshot.
+                          {
+                            type: "text",
+                            text: encodeJsonText({
+                              url: cutText(snapshot.url, MAX_SNAPSHOT_IDENTIFIER_CHARS),
+                            }),
+                          },
+                          { type: "text", text: bounded.text },
+                          ...(bounded.omitted.length === 0
+                            ? []
+                            : [
+                                {
+                                  type: "text" as const,
+                                  text: `Snapshot text was bounded. Omitted: ${bounded.omitted.join("; ")}.`,
+                                },
+                              ]),
+                          ...(input.includeImage === false
+                            ? []
+                            : [
+                                {
+                                  type: "image" as const,
+                                  data: png,
+                                  mimeType: screenshot.mimeType,
+                                },
+                              ]),
+                        ],
+                      });
+                    }),
                 ),
               ),
             ),
           ),
-        ).pipe(
-          Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, broker),
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provide(saveServices),
-          Effect.matchCauseEffect({
-            onFailure: previewSnapshotFailure,
-            onSuccess: Effect.succeed,
-          }),
+          Effect.matchCauseEffect({ onFailure: previewSnapshotFailure, onSuccess: Effect.succeed }),
         );
       }),
   });
@@ -790,7 +700,7 @@ const PreviewStandardToolkitRegistrationLive = McpServer.toolkit(PreviewStandard
 );
 
 const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnapshot()).pipe(
-  Layer.provide(PreviewSnapshotToolkitHandlersLive),
+  Layer.provide(PreviewSnapshot.layer),
 );
 
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(

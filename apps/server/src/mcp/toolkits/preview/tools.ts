@@ -279,5 +279,3 @@ export const PreviewStandardToolkit = Toolkit.make(
   PreviewRecordingStartTool,
   PreviewRecordingStopTool,
 );
-
-export const PreviewSnapshotToolkit = Toolkit.make(PreviewSnapshotTool);

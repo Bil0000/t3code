@@ -507,6 +507,31 @@ it.effect.each(["includeImage", "saveText"])(
     }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("accepts a snapshot call with the arguments field omitted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const inputs = yield* serveSnapshots("mcp-omitted-snapshot-arguments-client", snapshotResult);
+      const server = yield* McpServer.McpServer;
+
+      const snapshot = yield* server
+        .callTool({ name: "preview_snapshot" })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(snapshot.isError).toBe(false);
+      expect(inputs).toEqual([{}]);
+      expect(snapshot.structuredContent).toMatchObject({
+        url: snapshotResult.url,
+        title: snapshotResult.title,
+        visibleText: snapshotResult.visibleText,
+      });
+      expect(snapshot.content.some((content) => content.type === "image")).toBe(true);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("saves the snapshot PNG on request and reports its path", () =>
   Effect.scoped(
     Effect.gen(function* () {
