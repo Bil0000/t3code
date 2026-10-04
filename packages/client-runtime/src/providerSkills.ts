@@ -145,7 +145,9 @@ export function isContextCommand(prompt: string): boolean {
 export function offersLocalContextCommand(
   provider: ServerProvider,
   cwd: string | null | undefined,
+  attachmentCount = 0,
 ): boolean {
+  if (attachmentCount > 0) return false;
   if (cwd && !hasCompleteProviderWorkspaceSnapshot(provider, cwd)) return false;
   return !resolveProviderSlashCommandsForCwd(provider, cwd).some(
     (command) => command.name === CONTEXT_COMMAND.name,

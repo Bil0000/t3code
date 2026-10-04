@@ -466,7 +466,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const { onSendMessage, onChangeDraftMessage, onShowUsageLimits, onShowUsageContext } = props;
   const contextCommandOffered =
     selectedProviderStatus !== null &&
-    offersLocalContextCommand(selectedProviderStatus, props.projectCwd);
+    offersLocalContextCommand(
+      selectedProviderStatus,
+      props.projectCwd,
+      props.draftAttachments.length + (queuedEdit?.existingAttachments.length ?? 0),
+    );
   const openUsageContext = useCallback(() => {
     if (onShowUsageContext()) return true;
     Alert.alert("Context usage unavailable", "This thread has not reported context usage yet.");
@@ -519,8 +523,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     // With attachments aboard the pick just inserts the text, so it sends as a prompt.
     onUsageLimits:
       usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
-    onContext:
-      contextCommandOffered && props.draftAttachments.length === 0 ? openUsageContext : undefined,
+    onContext: contextCommandOffered ? openUsageContext : undefined,
   });
   const voiceInput = useVoiceInputController({
     ownerKey: composerDraftKey,
@@ -620,11 +623,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         if (openUsageLimits()) onChangeDraftMessage("");
         return;
       }
-      if (
-        contextCommandOffered &&
-        isContextCommand(props.draftMessage) &&
-        props.draftAttachments.length === 0
-      ) {
+      if (contextCommandOffered && isContextCommand(props.draftMessage)) {
         if (openUsageContext()) onChangeDraftMessage("");
         return;
       }

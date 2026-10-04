@@ -278,6 +278,11 @@ describe("workspace provider snapshots", () => {
 });
 
 describe("offersLocalContextCommand", () => {
+  it("leaves attachment-bearing prompts to the provider", () => {
+    expect(offersLocalContextCommand(provider, "/workspace/project-a", 1)).toBe(false);
+    expect(offersLocalContextCommand(provider, "/workspace/project-a", 0)).toBe(true);
+  });
+
   it("yields to a native /context and to unfinished command discovery", () => {
     const native = { ...provider, slashCommands: [{ name: "context" }] } satisfies ServerProvider;
     const pending = {
