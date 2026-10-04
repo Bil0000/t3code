@@ -154,6 +154,8 @@ describe("settled worktree retention", () => {
     "updated",
     "shared",
     "shared-alias",
+    "shared-alias-cycle",
+    "archived-shared-alias-cycle",
     "shared-alias-late",
     "session-alias",
     "session-alias-descendant",
@@ -233,7 +235,15 @@ describe("settled worktree retention", () => {
           )
         `;
       }
-      if (["shared", "shared-alias", "deleted-shared-alias"].includes(protection)) {
+      if (
+        [
+          "shared",
+          "shared-alias",
+          "shared-alias-cycle",
+          "archived-shared-alias-cycle",
+          "deleted-shared-alias",
+        ].includes(protection)
+      ) {
         yield* store.apply({
           ...event("thread.created"),
           id: EventId.make("shared"),
@@ -241,9 +251,13 @@ describe("settled worktree retention", () => {
           payload: {
             ...thread,
             id: ThreadId.make("shared"),
-            worktreePath: protection === "shared-alias" ? worktreeAlias : worktreePath,
+            worktreePath: protection.endsWith("-cycle")
+              ? activityAlias
+              : protection === "shared-alias"
+                ? worktreeAlias
+                : worktreePath,
             deletedAt: null,
-            archivedAt: at(0),
+            archivedAt: protection === "shared-alias-cycle" ? null : at(0),
             settledOverride: "active",
           },
         });
@@ -525,7 +539,11 @@ describe("settled worktree retention", () => {
             message.includes("storage cleanup could not resolve provider session workspace"),
           ),
         );
-      if (protection === "terminal-alias-cycle")
+      if (
+        ["terminal-alias-cycle", "shared-alias-cycle", "archived-shared-alias-cycle"].includes(
+          protection,
+        )
+      )
         assert.isTrue(warnings.some((message) => message.includes("worktree cleanup failed")));
       if (["wait", "auto-recent", "active", "pinned-active"].includes(protection))
         assert.strictEqual(headReads, 0);
