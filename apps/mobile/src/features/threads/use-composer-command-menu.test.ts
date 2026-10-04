@@ -151,7 +151,7 @@ describe("workspace command discovery retry", () => {
     cwd: string;
     status?: ServerProvider;
     draftMessage?: string;
-    onContext?: () => void;
+    onContext?: () => boolean;
     onChangeDraftMessage?: (value: string) => void;
     onMenu?: (menu: ReturnType<typeof useComposerCommandMenu>) => void;
   }) {
@@ -197,41 +197,45 @@ describe("workspace command discovery retry", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps the local context action beside a same-named skill", async () => {
-    const status = {
-      ...provider,
-      workspaceSnapshots: [
-        {
-          ...provider.workspaceSnapshots[0]!,
-          slashCommandsPending: false,
-          skills: [{ name: "context", path: "/project-a/SKILL.md", enabled: true }],
-        },
-      ],
-    };
-    const onContext = vi.fn();
-    const onChangeDraftMessage = vi.fn();
-    let menu!: ReturnType<typeof useComposerCommandMenu>;
-    await act(async () => {
-      root.render(
-        createElement(Probe, {
-          cwd: "/project-a",
-          status,
-          draftMessage: "/context",
-          onContext,
-          onChangeDraftMessage,
-          onMenu: (value) => {
-            menu = value;
+  it.each([true, false])(
+    "keeps the local context action beside a skill when opening succeeds=%s",
+    async (opens) => {
+      const status = {
+        ...provider,
+        workspaceSnapshots: [
+          {
+            ...provider.workspaceSnapshots[0]!,
+            slashCommandsPending: false,
+            skills: [{ name: "context", path: "/project-a/SKILL.md", enabled: true }],
           },
-        }),
-      );
-    });
-    expect(menu.items.map((item) => item.id)).toEqual(["pcmd:context", "skill:context"]);
-    await act(async () => {
-      menu.onSelect(menu.items[0]!);
-    });
-    expect(onContext).toHaveBeenCalledOnce();
-    expect(onChangeDraftMessage).toHaveBeenCalledWith("");
-  });
+        ],
+      };
+      const onContext = vi.fn(() => opens);
+      const onChangeDraftMessage = vi.fn();
+      let menu!: ReturnType<typeof useComposerCommandMenu>;
+      await act(async () => {
+        root.render(
+          createElement(Probe, {
+            cwd: "/project-a",
+            status,
+            draftMessage: "/context",
+            onContext,
+            onChangeDraftMessage,
+            onMenu: (value) => {
+              menu = value;
+            },
+          }),
+        );
+      });
+      expect(menu.items.map((item) => item.id)).toEqual(["pcmd:context", "skill:context"]);
+      await act(async () => {
+        menu.onSelect(menu.items[0]!);
+      });
+      expect(onContext).toHaveBeenCalledOnce();
+      if (opens) expect(onChangeDraftMessage).toHaveBeenCalledWith("");
+      else expect(onChangeDraftMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps native context as a prompt without a local action", async () => {
     const status = {

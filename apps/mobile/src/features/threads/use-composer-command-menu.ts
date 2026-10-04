@@ -206,7 +206,7 @@ export function useComposerCommandMenu({
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   /** Picking /usage-limits is the action itself; the draft keeps nothing of it. */
   readonly onUsageLimits?: () => void;
-  readonly onContext?: () => void;
+  readonly onContext?: () => boolean;
 }) {
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
   const previousOwnerKeyRef = useRef(ownerKey);
@@ -618,10 +618,13 @@ export function useComposerCommandMenu({
               ? onContext
               : undefined;
       if (localCommand) {
+        const opensContext =
+          item.type === "provider-slash-command" && item.command.name === CONTEXT_COMMAND.name;
+        if (opensContext && onContext?.() === false) return;
         const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
         setSelection({ start: cleared.cursor, end: cleared.cursor });
         onChangeDraftMessage(cleared.text);
-        localCommand();
+        if (!opensContext) localCommand();
         return;
       }
 
