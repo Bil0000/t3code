@@ -694,6 +694,7 @@ export function buildCodexTurnStartParams(input: {
   readonly codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly modelSelection: ModelSelection;
+  readonly providerReasoningEffort?: CodexSchema.ClientRequest__ReasoningEffort | null;
   readonly hasT3Mcp?: boolean;
   readonly browserToolsAvailable?: boolean;
   readonly deviceToolsAvailable?: boolean;
@@ -735,6 +736,9 @@ export function buildCodexTurnStartParams(input: {
             mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "default",
             settings: {
               model: input.modelSelection.model,
+              ...(input.providerReasoningEffort == null
+                ? {}
+                : { reasoning_effort: input.providerReasoningEffort }),
               ...(developerInstructions === undefined
                 ? {}
                 : { developer_instructions: developerInstructions }),
@@ -5541,11 +5545,18 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   ? yield* toCodexInput(turnInput)
                   : [];
               const mcpSession = McpProviderSession.readMcpProviderSession(turnInput.threadId);
+              const providerReasoningEffort =
+                turnInput.runtimePolicy.interactionMode === "plan" || mcpSession !== undefined
+                  ? (yield* client.request("config/read", {
+                      cwd: turnInput.runtimePolicy.cwd ?? session.cwd,
+                    })).config.model_reasoning_effort
+                  : undefined;
               const turnStartParams = yield* buildCodexTurnStartParams({
                 nativeThreadId: threadId,
                 codexInput,
                 runtimePolicy: turnInput.runtimePolicy,
                 modelSelection: turnInput.modelSelection,
+                ...(providerReasoningEffort === undefined ? {} : { providerReasoningEffort }),
                 hasT3Mcp: mcpSession !== undefined,
                 browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
                 deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
