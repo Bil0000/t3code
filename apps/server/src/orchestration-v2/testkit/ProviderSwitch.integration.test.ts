@@ -123,7 +123,7 @@ function makeTestAdapter(input: {
   readonly workBeforeRejection?: boolean;
   readonly rejectContextBeforeStart?: boolean;
   readonly failCompactionResume?: boolean;
-  readonly responseBeforeRejection?: boolean;
+  readonly responseBeforeRejection?: "completed" | "streaming" | "streaming-message";
   readonly getModelContextWindow?: (selection: ModelSelection) => number | undefined;
   readonly canReuseContextUsage?: ProviderAdapterV2SessionRuntime["canReuseContextUsage"];
   readonly tokenUsageByRunOrdinal?: Readonly<
@@ -391,7 +391,9 @@ function makeTestAdapter(input: {
                       `message:${input.driver}:${turnInput.threadId}:${turnInput.attemptId}:assistant`,
                     ),
                     text: response,
-                    streaming: false,
+                    streaming:
+                      contextRejected &&
+                      input.responseBeforeRejection?.startsWith("streaming") === true,
                   },
                 },
                 {
@@ -446,6 +448,32 @@ function makeTestAdapter(input: {
                   event.type === "turn_item.updated"
                 )
                   continue;
+                if (
+                  contextRejected &&
+                  input.responseBeforeRejection === "streaming-message" &&
+                  event.type === "turn_item.updated" &&
+                  event.turnItem.type === "assistant_message"
+                ) {
+                  yield* PubSub.publish(events, {
+                    type: "message.updated",
+                    driver: input.driver,
+                    message: {
+                      id: event.turnItem.messageId,
+                      threadId: turnInput.threadId,
+                      runId: turnInput.runId,
+                      nodeId: turnInput.rootNodeId,
+                      createdBy: "agent",
+                      creationSource: "provider",
+                      role: "assistant",
+                      text: response,
+                      attachments: [],
+                      streaming: true,
+                      createdAt: eventTime,
+                      updatedAt: eventTime,
+                    },
+                  });
+                  continue;
+                }
                 yield* PubSub.publish(events, event);
               }
             }),
@@ -504,6 +532,10 @@ describe("orchestration v2 provider switching", () => {
     "exhausted-rejected-unsupported-native",
     "exhausted-rejected-work-native",
     "exhausted-rejected-response-native",
+    "exhausted-rejected-response-streaming-native",
+    "exhausted-rejected-response-streaming-paragraph-native",
+    "exhausted-rejected-response-streaming-message-native",
+    "exhausted-rejected-response-streaming-message-paragraph-native",
     "exhausted-effort-change-native",
     "exhausted-manual-uppercase-native",
     "exhausted-missed-input-native",
@@ -636,7 +668,15 @@ describe("orchestration v2 provider switching", () => {
                   workBeforeRejection: scenario.includes("rejected-work"),
                   rejectContextBeforeStart: scenario.includes("rejected-start-error"),
                   failCompactionResume: scenario.includes("rejected-resume-failure"),
-                  responseBeforeRejection: scenario.includes("rejected-response"),
+                  ...(scenario.includes("rejected-response")
+                    ? {
+                        responseBeforeRejection: scenario.includes("response-streaming-message")
+                          ? "streaming-message"
+                          : scenario.includes("response-streaming")
+                            ? "streaming"
+                            : "completed",
+                      }
+                    : {}),
                   contextRejectionCode: scenario.includes("rejected-codex")
                     ? "contextWindowExceeded"
                     : scenario.includes("rejected-opencode")
@@ -1321,6 +1361,7 @@ describe("orchestration v2 provider switching", () => {
                 },
               },
               registry,
+              { responseStreamingMode: scenario.includes("paragraph") ? "paragraph" : "turn" },
             ),
           ),
         );

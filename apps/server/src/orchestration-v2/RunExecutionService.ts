@@ -1315,32 +1315,35 @@ export const layer: Layer.Layer<
             Stream.tap((event) =>
               Effect.gen(function* () {
                 let storedEventCount = 0;
+                if (
+                  event.type === "subagent.updated" ||
+                  (event.type === "node.updated" &&
+                    (event.node.kind === "tool_call" || event.node.kind === "subagent")) ||
+                  event.type === "runtime_request.updated" ||
+                  (event.type === "message.updated" &&
+                    event.message.role === "assistant" &&
+                    event.message.text.trim() !== "") ||
+                  (event.type === "turn_item.updated" &&
+                    event.turnItem.type === "assistant_message" &&
+                    event.turnItem.text.trim() !== "") ||
+                  (event.type === "turn_item.updated" &&
+                    [
+                      "command_execution",
+                      "dynamic_tool",
+                      "file_change",
+                      "file_search",
+                      "web_search",
+                      "subagent",
+                      "proposed_plan",
+                      "todo_list",
+                    ].includes(event.turnItem.type))
+                )
+                  yield* Ref.set(providerWorkObserved, true);
                 const deliveredEvent = filterAssistantEvent(
                   event,
                   DateTime.toEpochMillis(yield* DateTime.now),
                 );
                 if (deliveredEvent) {
-                  if (
-                    event.type === "subagent.updated" ||
-                    (event.type === "node.updated" &&
-                      (event.node.kind === "tool_call" || event.node.kind === "subagent")) ||
-                    event.type === "runtime_request.updated" ||
-                    (event.type === "turn_item.updated" &&
-                      event.turnItem.type === "assistant_message" &&
-                      event.turnItem.text.trim() !== "") ||
-                    (event.type === "turn_item.updated" &&
-                      [
-                        "command_execution",
-                        "dynamic_tool",
-                        "file_change",
-                        "file_search",
-                        "web_search",
-                        "subagent",
-                        "proposed_plan",
-                        "todo_list",
-                      ].includes(event.turnItem.type))
-                  )
-                    yield* Ref.set(providerWorkObserved, true);
                   // Root provider_thread.updated always uses an ownership gate:
                   // pre-terminal writeIfRunCurrent (attempt still running), or
                   // post-terminal writeIfProviderThreadOwner so late roster
