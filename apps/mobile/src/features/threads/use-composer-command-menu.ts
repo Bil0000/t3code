@@ -387,13 +387,13 @@ export function useComposerCommandMenu({
         selectedProviderStatus: selectedProviderStatus
           ? {
               ...selectedProviderStatus,
-              slashCommands: getProviderSlashCommandsForSlashMenu(
-                [
-                  ...resolveProviderSlashCommandsForCwd(selectedProviderStatus, projectCwd),
-                  ...(onContext ? [CONTEXT_COMMAND] : []),
-                ],
-                visibleSkills,
-              ),
+              slashCommands: [
+                ...getProviderSlashCommandsForSlashMenu(
+                  resolveProviderSlashCommandsForCwd(selectedProviderStatus, projectCwd),
+                  visibleSkills,
+                ),
+                ...(onContext ? [CONTEXT_COMMAND] : []),
+              ],
             }
           : null,
       });
