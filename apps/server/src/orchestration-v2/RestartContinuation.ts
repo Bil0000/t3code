@@ -28,7 +28,7 @@ const CONTINUE_PROMPT = "Continue where you left off.";
 export function restartContinuationRun(
   projection: Pick<
     ProjectionRuntimeRecoveryState,
-    "thread" | "runs" | "providerThreads" | "providerSessions" | "providerTurns"
+    "thread" | "runs" | "attempts" | "providerThreads" | "providerSessions" | "providerTurns"
   >,
 ): OrchestrationV2Run | undefined {
   if (projection.thread.archivedAt !== null || projection.thread.deletedAt !== null) return;
@@ -76,6 +76,7 @@ export function restartContinuationRun(
     return;
   if (
     liveTurnRequired &&
+    !hasPendingCompactionRequest(run, projection) &&
     !projection.providerTurns.some(
       (turn) =>
         turn.providerThreadId === providerThread.id &&
@@ -85,6 +86,28 @@ export function restartContinuationRun(
   )
     return;
   return run;
+}
+
+export function hasPendingCompactionRequest(
+  source: OrchestrationV2Run | undefined,
+  projection: Pick<ProjectionRuntimeRecoveryState, "runs" | "attempts" | "providerTurns">,
+): boolean {
+  let current = source;
+  while (current !== undefined) {
+    const attemptId = current.activeAttemptId;
+    if (
+      projection.attempts.some((attempt) => attempt.id === attemptId && attempt.contextCompaction)
+    )
+      return true;
+    const sourceId = current.restartContinuationOfRunId;
+    if (
+      sourceId === undefined ||
+      projection.providerTurns.some((turn) => turn.runAttemptId === attemptId)
+    )
+      return false;
+    current = projection.runs.find((run) => run.id === sourceId);
+  }
+  return false;
 }
 
 export const continueRestartedRun = Effect.fn("RestartContinuation.continueRestartedRun")(
@@ -145,6 +168,9 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       (message) => message.id === source.userMessageId,
     );
     if (sourceMessage !== undefined && isNativeMaintenanceCommand(sourceMessage)) return;
+    const compacting = hasPendingCompactionRequest(source, projection);
+    if (compacting && sourceMessage === undefined) return;
+    const continuationText = compacting ? sourceMessage!.text : CONTINUE_PROMPT;
     const note = restartContinuationNote(
       source,
       projection.runs,
@@ -160,11 +186,14 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       messageId,
       text:
         noteText === undefined
-          ? CONTINUE_PROMPT
+          ? continuationText
           : note.settled
             ? noteText
-            : `${noteText}\n\n${CONTINUE_PROMPT}`,
-      attachments: [],
+            : `${noteText}\n\n${continuationText}`,
+      attachments: compacting ? sourceMessage!.attachments : [],
+      ...(compacting && sourceMessage?.context !== undefined
+        ? { context: sourceMessage.context }
+        : {}),
       modelSelection: source.modelSelection,
       dispatchMode: { type: "start_immediately" },
       createdBy: "agent",

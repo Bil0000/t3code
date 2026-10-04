@@ -263,7 +263,12 @@ function makeTestAdapter(input: {
                   driver: input.driver,
                   threadId: turnInput.threadId,
                   providerThreadId: turnInput.providerThread.id,
-                  text: turnInput.message.text,
+                  text:
+                    input.driver === CODEX_DRIVER &&
+                    turnInput.restartContinuationOfRunId !== undefined &&
+                    turnInput.message.text !== "/compact"
+                      ? ""
+                      : turnInput.message.text,
                   attachments: turnInput.message.attachments,
                 },
               ]);
@@ -1368,6 +1373,215 @@ describe("orchestration v2 provider switching", () => {
       }),
     ),
   );
+  it.live.each([
+    [CODEX_MODEL_SELECTION, false, true],
+    [CLAUDE_MODEL_SELECTION, false, true],
+    [CODEX_MODEL_SELECTION, true, true],
+    [CLAUDE_MODEL_SELECTION, true, true],
+    [CODEX_MODEL_SELECTION, false, false],
+  ] as const)(
+    "keeps the waiting request after a compaction restart with %j",
+    ([selection, failResume, runningWhileHeld]) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* checkpointWorkspace(`compaction-restart-${selection.instanceId}`);
+          const databaseLayer = Layer.succeed(SqlClient.SqlClient, yield* SqlClient.SqlClient);
+          const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const generation = yield* Ref.make(0);
+          const started = yield* Deferred.make<void>();
+          const restarted = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const request = "Use the diagram and keep the API unchanged.";
+          const attachments: ReadonlyArray<ChatAttachment> = [
+            {
+              type: "image",
+              id: "diagram",
+              name: "diagram.png",
+              mimeType: "image/png",
+              sizeBytes: 10,
+            },
+          ];
+          const driver =
+            selection.instanceId === CODEX_MODEL_SELECTION.instanceId
+              ? CODEX_DRIVER
+              : CLAUDE_DRIVER;
+          const adapter = {
+            instanceId: selection.instanceId,
+            driver,
+            capabilities:
+              driver === CODEX_DRIVER ? CodexProviderCapabilitiesV2 : ClaudeProviderCapabilitiesV2,
+            modelSelection: selection,
+            responseByRunOrdinal: {},
+            capturedTurns,
+            nativeThreadGeneration: generation,
+            compaction: "success" as const,
+            getModelContextWindow: (model: ModelSelection) =>
+              model.model === "small-model" ? 32_000 : 258_400,
+            runningWhileHeld,
+          };
+          const scenario = { name: `compaction-restart-${driver}`, runtimePolicyOverride: { cwd } };
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const orchestrator = yield* Orchestrator.OrchestratorV2;
+              const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+              const daemon = yield* EffectWorker.runDaemon.pipe(Effect.forkScoped);
+              yield* orchestrator.dispatch({
+                type: "thread.create",
+                commandId: CommandId.make("restart:create"),
+                threadId,
+                projectId,
+                createdBy: "user",
+                creationSource: "web",
+                title: "Compaction restart",
+                modelSelection: selection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+              });
+              const priorCompleted = yield* orchestrator.streamStoredEvents.pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    event.type === "run.updated" && event.payload.status === "completed",
+                ),
+                Stream.runHead,
+                Effect.forkScoped,
+              );
+              yield* orchestrator.dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make("restart:prior"),
+                messageId: MessageId.make("restart:prior"),
+                threadId,
+                createdBy: "user",
+                creationSource: "web",
+                text: "Prior constraints",
+                attachments: [],
+                modelSelection: selection,
+                dispatchMode: { type: "start_immediately" },
+              });
+              yield* Fiber.join(priorCompleted);
+              yield* worker.drain();
+              const running = yield* orchestrator.streamStoredEvents.pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    event.type === "provider-turn.updated" &&
+                    event.payload.ordinal === 2 &&
+                    event.payload.status === "running",
+                ),
+                Stream.runHead,
+                Effect.forkScoped,
+              );
+              yield* orchestrator.dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make("restart:request"),
+                messageId: MessageId.make("restart:request"),
+                threadId,
+                createdBy: "user",
+                creationSource: "web",
+                text: request,
+                attachments,
+                modelSelection: { ...selection, model: "small-model" },
+                dispatchMode: { type: "start_immediately" },
+              });
+              yield* Deferred.await(started);
+              if (runningWhileHeld) yield* Fiber.join(running);
+              const before = yield* orchestrator.getThreadProjection(threadId);
+              yield* Fiber.interrupt(daemon);
+              const source = before.runs.at(-1)!;
+              assert.isTrue(
+                before.attempts.find((attempt) => attempt.id === source.activeAttemptId)
+                  ?.contextCompaction,
+              );
+              const saved = before.turnItems.filter(
+                (item) => item.type === "user_message" || item.type === "assistant_message",
+              );
+              const after = yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const orchestrator = yield* Orchestrator.OrchestratorV2;
+                  const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+                  if (failResume) {
+                    yield* worker.drain();
+                    return yield* orchestrator.getThreadProjection(threadId);
+                  }
+                  yield* Deferred.await(restarted);
+                  const completed = yield* orchestrator.streamStoredEvents.pipe(
+                    Stream.filter(
+                      ({ event }) =>
+                        event.type === "run.updated" &&
+                        event.payload.restartContinuationOfRunId === source.id &&
+                        event.payload.status === "completed",
+                    ),
+                    Stream.runHead,
+                    Effect.forkScoped,
+                  );
+                  yield* Deferred.succeed(release, undefined);
+                  yield* Fiber.join(completed);
+                  yield* worker.drain();
+                  return yield* orchestrator.getThreadProjection(threadId);
+                }).pipe(
+                  Effect.provide(
+                    Layer.fresh(
+                      makeOrchestratorV2ReplayLayerWithRegistry(
+                        scenario,
+                        ProviderAdapterRegistry.makeLayer([
+                          makeTestAdapter({
+                            ...adapter,
+                            failResume,
+                            holdRunOrdinal: 3,
+                            holdFirstTurn: restarted,
+                            releaseFirstTurn: release,
+                          }),
+                        ]),
+                        {
+                          databaseLayer,
+                          recoverOnStartup: true,
+                          continueThreadsAfterServerUpdate: true,
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              );
+              assert.equal(after.runs.find((run) => run.id === source.id)?.status, "cancelled");
+              assert.equal(after.runs.at(-1)?.restartContinuationOfRunId, source.id);
+              assert.equal(after.runs.at(-1)?.status, failResume ? "failed" : "completed");
+              assert.equal(yield* Ref.get(generation), 1);
+              const delivered = (yield* Ref.get(capturedTurns)).filter(
+                (turn) => turn.text === request,
+              );
+              assert.lengthOf(delivered, failResume ? 0 : 1);
+              if (!failResume) {
+                assert.deepEqual(delivered[0]!.attachments, attachments);
+                assert.equal(delivered[0]!.providerThreadId, source.providerThreadId);
+              }
+              for (const item of saved)
+                assert.deepEqual(
+                  after.turnItems.find((candidate) => candidate.id === item.id),
+                  item,
+                );
+            }).pipe(
+              Effect.provide(
+                Layer.fresh(
+                  makeOrchestratorV2ReplayLayerWithRegistry(
+                    scenario,
+                    ProviderAdapterRegistry.makeLayer([
+                      makeTestAdapter({
+                        ...adapter,
+                        tokenUsageByRunOrdinal: { 1: { usedTokens: 207_362, maxTokens: 258_400 } },
+                        holdRunOrdinal: 2,
+                        holdFirstTurn: started,
+                      }),
+                    ]),
+                    { databaseLayer, runEffectWorker: false },
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).pipe(Effect.provide(SqlitePersistenceMemory)),
+      ),
+  );
+
   it.live.each(["turn-start", "injection", "large-missed-request"] as const)(
     "recovers %s failure without duplicating history in the same native thread",
     (failure) =>

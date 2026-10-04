@@ -90,6 +90,14 @@ function makeProjection(contextCompaction = false) {
 it("requires matching saved native state for an unfinished root run", () => {
   const projection = makeProjection();
   assert.equal(restartContinuationRun(projection)?.id, runId);
+  assert.equal(
+    restartContinuationRun({
+      ...projection,
+      attempts: [{ id: attemptId, contextCompaction: true }],
+      providerTurns: [],
+    } as unknown as OrchestrationV2ThreadProjection)?.id,
+    runId,
+  );
   for (const invalid of [
     { ...projection, thread: { ...projection.thread, archivedAt: {} } },
     { ...projection, thread: { ...projection.thread, deletedAt: {} } },
@@ -648,6 +656,99 @@ const queuedFollowUp = {
   status: "queued",
   queueHeld: true,
 };
+
+it.effect.each([
+  "resume",
+  "prepared-resume",
+  "started-continuation",
+  "stopped",
+  "disabled",
+  "missing-request",
+] as const)("handles a restart during automatic compaction when %s", (scenario) =>
+  Effect.gen(function* () {
+    const message = {
+      id: MessageId.make("message:user"),
+      text: "Use the attached diagram and keep the API unchanged.",
+      attachments: [
+        {
+          type: "image",
+          id: "diagram",
+          name: "diagram.png",
+          mimeType: "image/png",
+          sizeBytes: 10,
+        },
+      ],
+      context: { version: 1 as const, records: [] },
+    };
+    const projection = {
+      ...cutMidTurn(),
+      ...(["prepared-resume", "started-continuation"].includes(scenario)
+        ? {
+            runs: [
+              {
+                ...cutMidTurn().runs[0]!,
+                id: RunId.make("run:compaction-source"),
+                ordinal: 0,
+                activeAttemptId: RunAttemptId.make("attempt:compaction-source"),
+              },
+              {
+                ...cutMidTurn().runs[0]!,
+                restartContinuationOfRunId: RunId.make("run:compaction-source"),
+              },
+            ],
+            attempts: [
+              { id: RunAttemptId.make("attempt:compaction-source"), contextCompaction: true },
+            ],
+            providerTurns: scenario === "prepared-resume" ? [] : cutMidTurn().providerTurns,
+          }
+        : { attempts: [{ id: attemptId, contextCompaction: true }] }),
+      messages: scenario === "missing-request" ? [] : [message],
+      turnItems:
+        scenario === "stopped"
+          ? [{ id: "turn-item:interrupt", runId, type: "run_interrupt_request" }]
+          : [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const commands: Parameters<
+      ThreadManagementService.ThreadManagementService["Service"]["dispatch"]
+    >[0][] = [];
+    yield* continueRestartedRun({ threadId, sourceRunId: runId }).pipe(
+      Effect.provide(
+        Layer.merge(
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: () => Effect.succeed(projection),
+            recoverDelegatedTask: () => Effect.void,
+            dispatch: (command) => {
+              commands.push(command);
+              return Effect.succeed({} as never);
+            },
+          }),
+          ServerSettings.layerTest({ continueThreadsAfterServerUpdate: scenario !== "disabled" }),
+        ),
+      ),
+    );
+    const resumed = ["resume", "prepared-resume", "started-continuation"].includes(scenario);
+    assert.lengthOf(commands, resumed ? 1 : 0);
+    if (resumed) {
+      const command = commands[0]!;
+      assert.equal(command.type, "message.dispatch");
+      if (command.type === "message.dispatch") {
+        assert.equal(
+          command.text,
+          scenario === "started-continuation" ? "Continue where you left off." : message.text,
+        );
+        assert.deepEqual(
+          command.attachments,
+          scenario === "started-continuation" ? [] : message.attachments,
+        );
+        assert.deepEqual(
+          command.context,
+          scenario === "started-continuation" ? undefined : message.context,
+        );
+        assert.equal(command.restartContinuationOfRunId, runId);
+      }
+    }
+  }),
+);
 
 it.effect("continues a cut run past queued follow-ups, which stay held", () =>
   Effect.gen(function* () {

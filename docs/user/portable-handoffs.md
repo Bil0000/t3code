@@ -30,10 +30,14 @@ capacity is unknown. This recovery requires native compaction support and stops 
 already sent an answer, started a tool, or delegated work. No encrypted state is copied between
 providers.
 
-If compaction is stopped, the run stays stopped and the original request is not sent again. If
+If you stop compaction, the run stays stopped and the original request is not sent again. If
 compaction is unsupported, fails, or still leaves too little room, T3 Code reports the failure
 without silently replacing the session or shortening your request. Reduce the request
 or select a larger-context model before trying again.
+
+If the server restarts during automatic compaction, **Settings → General → Continue threads after
+restarts** controls whether T3 Code continues with your saved request and attachments. This setting
+is off by default.
 
 Server operators can set `T3CODE_CONTEXT_HANDOFF_TOKEN_CAP` to change the initial history allowance
 (default 16,000; clamped to 1,024–64,000). This is an upper bound, not a provider context-window

@@ -51,6 +51,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import { hasPendingCompactionRequest } from "./RestartContinuation.ts";
 import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
@@ -618,12 +619,18 @@ export const layer: Layer.Layer<
         });
       // Delivered once: this run's provider turn marks the work as told. A
       // restart continuation is prompted by its own text or resumes natively.
-      const noteContinuation = isRestartNoteContinuation(
-        run,
-        projection.runs,
-        projection.providerTurns,
-        projection.attempts,
-      );
+      const continuationSource =
+        run.restartContinuationOfRunId === undefined
+          ? undefined
+          : projection.runs.find((source) => source.id === run.restartContinuationOfRunId);
+      const compactionContinuation = hasPendingCompactionRequest(continuationSource, projection);
+      const promptedContinuation =
+        isRestartNoteContinuation(
+          run,
+          projection.runs,
+          projection.providerTurns,
+          projection.attempts,
+        ) || compactionContinuation;
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
@@ -1038,7 +1045,7 @@ export const layer: Layer.Layer<
         }
 
         if (!(yield* isCurrentAttemptInStatus("starting"))) return providerThread;
-        if (contextCompaction) {
+        if (contextCompaction || compactionContinuation) {
           yield* settleStartFailure({
             signal: "provider-thread-load-failure",
             title: "Provider turn failed to start",
@@ -1338,10 +1345,10 @@ export const layer: Layer.Layer<
           const context = [delivery.context, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");
-          // A note continuation has no turn to resume; its text is the prompt.
+          // Note and compaction continuations start with their saved prompt.
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
           yield* start({
-            ...(noteContinuation ? promptedInput : turnInput),
+            ...(promptedContinuation ? promptedInput : turnInput),
             message: {
               ...turnInput.message,
               text: context === "" ? userText : `${context}\n\nUser message:\n${userText}`,
@@ -1375,7 +1382,7 @@ export const layer: Layer.Layer<
         (effectiveHandoffs.length === 0 &&
           retryHandoff.length === 0 &&
           restartNote === "" &&
-          !noteContinuation)
+          !promptedContinuation)
           ? session
           : makeDeliverySession(session, startWithHandoffs);
       yield* runExecution.startRootRun({
