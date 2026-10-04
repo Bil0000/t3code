@@ -157,8 +157,8 @@ export function ThreadLineageWorkflowRow({
   readonly onOpenThread: (threadId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  // The running phase opens itself; a toggle flips whatever the phase would show.
-  const [toggledPhases, setToggledPhases] = useState<ReadonlySet<number>>(() => new Set());
+  // The running phase opens itself until the user picks a side for it.
+  const [phaseOpen, setPhaseOpen] = useState<ReadonlyMap<number, boolean>>(() => new Map());
   const label = group.workflow.workflowName ?? group.workflow.title;
   const phases = group.phases.filter((phase) => phase.members.length > 0);
   return (
@@ -188,20 +188,14 @@ export function ThreadLineageWorkflowRow({
         <ul className="m-0 list-none p-0 ps-4.5">
           {phases.map((phase) => {
             const running = phase.state === "running";
-            const open = running !== toggledPhases.has(phase.index);
+            const open = phaseOpen.get(phase.index) ?? running;
             const status = phaseStatus(phase);
             return (
               <li key={phase.index} className={branchClass(false)}>
                 <button
                   type="button"
                   aria-expanded={open}
-                  onClick={() =>
-                    setToggledPhases((phases) => {
-                      const next = new Set(phases);
-                      if (!next.delete(phase.index)) next.add(phase.index);
-                      return next;
-                    })
-                  }
+                  onClick={() => setPhaseOpen((phases) => new Map(phases).set(phase.index, !open))}
                   className="flex h-8 w-full cursor-pointer items-center gap-1.5 rounded-lg pe-2.5 text-left text-xs hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]"
                 >
                   <span aria-hidden className="flex w-4 shrink-0 justify-center">
@@ -271,7 +265,7 @@ export function ThreadLineageWorkflowPhases({ group }: { group: AgentPanelWorkfl
   return (
     <span
       className={cn(
-        "rounded-sm px-1",
+        "rounded-sm px-1 text-3xs",
         group.workflow.status === "failed"
           ? "bg-destructive/12 text-destructive-foreground"
           : "bg-foreground/6",

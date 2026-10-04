@@ -62,7 +62,7 @@ it("opens the correct chat for every workflow phase and unphased member", async 
     startedAt: 1_700_000_000_000 + index * 1000,
     durationMs: 5000,
   }));
-  state.projection = {
+  const project = (members: typeof agents) => ({
     thread: { id: "parent", lineage: { relationshipToParent: null } },
     runs: [],
     providerThreads: [],
@@ -79,17 +79,19 @@ it("opens the correct chat for every workflow phase and unphased member", async 
         startedAt: null,
         completedAt: null,
         updatedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
-        workflow: { name: "Checkout review", phases, agents },
+        workflow: { name: "Checkout review", phases, agents: members },
       },
     ],
-  };
+  });
+  state.projection = project(agents);
+  const panel = (
+    <ThreadRelationshipsPanel
+      environmentId={EnvironmentId.make("remote")}
+      threadId={ThreadId.make("parent")}
+    />
+  );
   await act(async () => {
-    renderer = create(
-      <ThreadRelationshipsPanel
-        environmentId={EnvironmentId.make("remote")}
-        threadId={ThreadId.make("parent")}
-      />,
-    );
+    renderer = create(panel);
   });
   await act(async () =>
     renderer.root.findByProps({ "aria-label": "Expand Checkout review" }).props.onClick(),
@@ -138,6 +140,19 @@ it("opens the correct chat for every workflow phase and unphased member", async 
     await act(async () => phase.props.onClick());
     expect(memberButtons()).toHaveLength(7);
   }
+  // A phase the user closed stays closed once it starts running, and stays
+  // closed after it settles.
+  await act(async () => phaseButtons()[0]!.props.onClick());
+  expect(memberButtons()).toHaveLength(5);
+  const restarted = agents.map((agent) =>
+    agent.index === 0 ? { ...agent, state: "running" } : agent,
+  );
+  state.projection = project(restarted);
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(memberButtons()).toHaveLength(5);
+  state.projection = project(agents);
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(memberButtons()).toHaveLength(5);
   await act(async () =>
     renderer.root.findByProps({ "aria-label": "Collapse Checkout review" }).props.onClick(),
   );

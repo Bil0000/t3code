@@ -42,7 +42,6 @@ import {
 import { useMemo, useState, type ReactNode } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
-import { cn } from "../../lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import {
   useProjects,
@@ -443,12 +442,7 @@ export function ThreadRelationshipsPanel(props: {
                   </span>
                   {agent ? (
                     workflowGroup || agent.startedAt ? (
-                      <span
-                        className={cn(
-                          "flex shrink-0 items-center gap-1.5 text-2xs font-normal tabular-nums text-muted-foreground",
-                          workflowGroup && "font-mono",
-                        )}
-                      >
+                      <span className="flex shrink-0 items-center gap-1.5 text-2xs font-normal tabular-nums text-muted-foreground">
                         {workflowGroup ? (
                           <ThreadLineageWorkflowPhases group={workflowGroup} />
                         ) : null}
