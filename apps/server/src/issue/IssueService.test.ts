@@ -2142,3 +2142,53 @@ it.effect("passes a reaction through with its subject id", () =>
     });
   }),
 );
+
+it.effect(
+  "shares issue summaries and refreshes them after writes without reading full detail",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("github", {
+            getIssueSummary: () =>
+              Effect.sync(() => {
+                reads++;
+                return issue(7, "2026-07-02T00:00:00Z");
+              }),
+            getIssue: () => Effect.die("full detail must not be read"),
+            getViewer: () => Effect.die("viewer must not be read"),
+          }),
+        ],
+      });
+      yield* Effect.all([service.summary(REFERENCE), service.summary(REFERENCE)], {
+        concurrency: 2,
+      });
+      yield* service.summary(REFERENCE);
+      assert.equal(reads, 1);
+      yield* service.invalidate({ reference: REFERENCE });
+      yield* service.summary(REFERENCE);
+      assert.equal(reads, 2);
+    }),
+);
+
+it.effect("falls back to issue detail when a provider has no summary read", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () =>
+            Effect.sync(() => {
+              reads++;
+              return issueDetail(7);
+            }),
+        }),
+      ],
+    });
+    assert.equal((yield* service.summary(REFERENCE)).title, "Issue 7");
+    assert.equal(reads, 1);
+  }),
+);

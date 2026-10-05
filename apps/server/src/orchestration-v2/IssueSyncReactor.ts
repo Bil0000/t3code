@@ -18,9 +18,12 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as IssueService from "../issue/IssueService.ts";
+import { IssueProviderError } from "../issue/IssueProvider.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+
+const isIssueProviderError = Schema.is(IssueProviderError);
 
 const OPEN_SYNC_INTERVAL_MS = 5 * 60 * 1_000;
 const SLOW_SYNC_INTERVAL_MS = 30 * 60 * 1_000;
@@ -174,8 +177,7 @@ const make = Effect.gen(function* () {
           number: first.link.number,
           host: url.host,
         };
-        yield* issues.invalidate({ reference: ref });
-        const detail = yield* issues.detail(ref);
+        const detail = yield* issues.summary(ref);
         if (
           detail.projectId !== ref.projectId ||
           detail.provider !== ref.provider ||
@@ -206,7 +208,9 @@ const make = Effect.gen(function* () {
       }).pipe(
         Effect.tapError((error) =>
           Effect.sync(() => {
-            if (
+            if (isIssueProviderError(error.cause) && error.cause.reason === "rate-limited") {
+              retryAt.set(key, error.cause.retryAt ?? now + OPEN_SYNC_INTERVAL_MS);
+            } else if (
               error._tag === "IssueUnavailableError" &&
               (error.reason === "cli-missing" || error.reason === "cli-unauthenticated")
             ) {

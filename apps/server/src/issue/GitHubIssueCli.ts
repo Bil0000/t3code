@@ -216,6 +216,23 @@ export interface GitHubIssueCommentsPage {
   readonly nextCursor: string | null;
 }
 
+const decodeIssueSummary = Schema.decodeResult(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        repository: Schema.Struct({
+          issue: Schema.Struct({
+            number: Schema.Int,
+            title: Schema.String,
+            url: Schema.String,
+            state: Schema.Literals(["OPEN", "CLOSED"]),
+          }),
+        }),
+      }),
+    }),
+  ),
+);
+
 export class GitHubIssueCli extends Context.Service<
   GitHubIssueCli,
   {
@@ -259,6 +276,16 @@ export class GitHubIssueCli extends Context.Service<
       readonly query?: string | undefined;
       readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<GitHubIssueSearchBatch, GitHubIssueCliError>;
+
+    readonly getIssueSummary: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    }) => Effect.Effect<
+      Pick<GitHubIssueDetail, "number" | "title" | "url" | "state">,
+      GitHubIssueCliError
+    >;
 
     readonly getIssueDetail: (input: {
       readonly cwd: string;
@@ -590,6 +617,7 @@ function closeReasonArgs(reason: IssueCloseReason | undefined): ReadonlyArray<st
 const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
   const graphQlBudget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+  const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
 
   // `gh` resolves a bare `owner/repo` against whichever host it defaults to, which is github.com.
   // Naming the host makes a GitHub Enterprise repository resolve to its own install rather than to
@@ -625,33 +653,59 @@ const make = Effect.gen(function* () {
     readonly decode: (raw: string) => Result.Result<A, unknown>;
   }): Effect.Effect<A, GitHubIssueCliError> =>
     Effect.gen(function* () {
-      const query = yield* graphQlBudget.query(input.host, input.query);
-      const result = yield* github.execute(
-        input.privateVariables === undefined
-          ? {
-              cwd: input.cwd,
-              args: [
-                "api",
-                "graphql",
-                "--hostname",
-                input.host,
-                ...(input.variables ?? []).flat(),
-                "-f",
-                `query=${query}`,
-              ],
-            }
-          : {
-              cwd: input.cwd,
-              args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
-              stdin: encodeGraphQlRequestJson({
-                query,
-                variables: input.privateVariables,
-              }),
-            },
+      const credential = yield* GitHubCli.PinnedGitHubCredential;
+      return yield* Effect.gen(function* () {
+        const key = { provider: "github" as const, host: input.host };
+        const allowReserve = yield* GitHubCli.AllowGitHubReserve;
+        const lease = yield* limits.check(key, allowReserve ? { allowPaused: true } : undefined);
+        const query = yield* graphQlBudget.query(
+          input.host,
+          input.query,
+          allowReserve ? { allowReserve: true } : undefined,
+        );
+        const result = yield* github
+          .execute(
+            input.privateVariables === undefined
+              ? {
+                  cwd: input.cwd,
+                  args: [
+                    "api",
+                    "graphql",
+                    "--hostname",
+                    input.host,
+                    ...(input.variables ?? []).flat(),
+                    "-f",
+                    `query=${query}`,
+                  ],
+                }
+              : {
+                  cwd: input.cwd,
+                  args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
+                  stdin: encodeGraphQlRequestJson({
+                    query,
+                    variables: input.privateVariables,
+                  }),
+                },
+          )
+          .pipe(
+            Effect.tap(() => limits.recordSuccess({ ...key, lease })),
+            Effect.tapError((error) =>
+              error._tag === "GitHubCliRateLimitError"
+                ? limits.recordRateLimit({ ...key, lease, retryAt: error.retryAt })
+                : Effect.void,
+            ),
+          );
+        yield* graphQlBudget.observe(input.host, result.stdout);
+        const decoded = input.decode(result.stdout.trim());
+        return Result.isSuccess(decoded)
+          ? decoded.success
+          : yield* readError(input)(decoded.failure);
+      }).pipe(
+        Effect.provideService(
+          SourceControlRateLimit.CredentialScope,
+          credential?.credentialFingerprint ?? (yield* SourceControlRateLimit.CredentialScope),
+        ),
       );
-      yield* graphQlBudget.observe(input.host, result.stdout);
-      const decoded = input.decode(result.stdout.trim());
-      return Result.isSuccess(decoded) ? decoded.success : yield* readError(input)(decoded.failure);
     });
 
   const graphql = (input: {
@@ -1049,6 +1103,31 @@ const make = Effect.gen(function* () {
     },
 
     getIssueDetail: issueDetail,
+
+    getIssueSummary: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "getIssueSummary",
+        variables: [
+          ["-f", `owner=${owner}`],
+          ["-f", `name=${name}`],
+          ["-F", `number=${input.number}`],
+        ],
+        query: `query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            issue(number: $number) { number title url state }
+          }
+        }`,
+        decode: (raw) =>
+          Result.map(decodeIssueSummary(raw), ({ data }) => ({
+            ...data.repository.issue,
+            state:
+              data.repository.issue.state === "CLOSED" ? ("closed" as const) : ("open" as const),
+          })),
+      });
+    },
 
     getIssueSupplement: (input) => {
       const { owner, name } = parseRepositorySelector(input.repository);

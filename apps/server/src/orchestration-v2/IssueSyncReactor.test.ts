@@ -27,6 +27,7 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
 import * as IssueService from "../issue/IssueService.ts";
+import { IssueProviderError } from "../issue/IssueProvider.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as IssueSyncReactor from "./IssueSyncReactor.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -172,7 +173,7 @@ const makeHarness = Effect.fn("makeIssueSyncHarness")(function* (
               Stream.filter((ref) => ref !== undefined),
             ),
             invalidate: (input) => Ref.update(invalidations, (rows) => [...rows, input]),
-            detail: (ref) =>
+            summary: (ref) =>
               Ref.update(reads, (rows) => [...rows, ref]).pipe(Effect.andThen(read(ref))),
           }),
           Layer.mock(Orchestrator.OrchestratorV2)({
@@ -730,10 +731,7 @@ it.effect("uses linked source projects for reads while keeping writes in the thr
       yield* fixture.reactor.drain;
       const reads = yield* Ref.get(fixture.reads);
       assert.deepEqual(reads.map((ref) => ref.projectId).sort(), [PROJECT_ID, ...sources].sort());
-      assert.deepEqual(
-        yield* Ref.get(fixture.invalidations),
-        reads.map((reference) => ({ reference })),
-      );
+      assert.deepEqual(yield* Ref.get(fixture.invalidations), []);
       const commands = yield* Ref.get(fixture.commands);
       assert.equal(commands.length, 3);
       for (const command of commands) {
@@ -962,4 +960,42 @@ it.effect("cancels an in-flight read when the reactor scope closes", () =>
     yield* Deferred.await(interrupted);
     assert.deepEqual(yield* Ref.get(fixture.commands), []);
   }),
+);
+
+it.effect("resumes issue sync at the provider reset instead of waiting thirty minutes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let reads = 0;
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const fixture = yield* makeHarness([THREAD], (ref) => {
+        reads++;
+        return reads === 1
+          ? Effect.fail(
+              new IssueOperationError({
+                operation: "summary",
+                detail: "paused",
+                cause: new IssueProviderError({
+                  provider: "github",
+                  operation: "summary",
+                  reason: "rate-limited",
+                  detail: "paused",
+                  retryAt: now + 120000,
+                }),
+              }),
+            )
+          : Effect.succeed(detail(ref));
+      });
+      yield* fixture.reactor.drain;
+      assert.equal(reads, 1);
+      yield* TestClock.adjust("1 minute");
+      yield* Queue.take(fixture.sweeps);
+      yield* fixture.reactor.drain;
+      assert.equal(reads, 1);
+      yield* TestClock.adjust("1 minute");
+      yield* Queue.take(fixture.sweeps);
+      yield* fixture.reactor.drain;
+      assert.equal(reads, 2);
+      assert.equal((yield* Ref.get(fixture.commands)).length, 1);
+    }),
+  ),
 );
