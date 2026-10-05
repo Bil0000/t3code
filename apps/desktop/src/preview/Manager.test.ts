@@ -4376,6 +4376,8 @@ describe("PreviewManager", () => {
         let routeToIframe = false;
         let interruptFrameKeyDown = false;
         let holdKeyUp = false;
+        let waitForTarget: (() => Promise<void>) | undefined;
+        let waitForReceipt: (() => Promise<void>) | undefined;
         let releaseKeyUp: (() => void) | undefined;
         let notifyKeyUpQueued: (() => void) | undefined;
         const keyUpQueued = new Promise<void>((resolve) => {
@@ -4405,15 +4407,17 @@ describe("PreviewManager", () => {
           },
         });
         const frame = {
-          executeJavaScript: vi.fn(async (expression: string) =>
-            NodeVM.runInContext(expression, frameContext),
-          ),
+          executeJavaScript: vi.fn(async (expression: string) => {
+            if (expression.endsWith("?.promise")) await waitForReceipt?.();
+            return NodeVM.runInContext(expression, frameContext);
+          }),
         };
         let humanInput: ((_event: unknown, signal: unknown) => void) | undefined;
         const sendCommand = vi.fn(
           async (method: string, params?: Record<string, unknown>, sessionId?: string) => {
             if (method === "Runtime.evaluate") {
               if (params?.["returnByValue"] === true) return { result: { value: { ok: true } } };
+              await waitForTarget?.();
               return {
                 result:
                   routeToIframe && !sessionId
@@ -4683,6 +4687,46 @@ describe("PreviewManager", () => {
             "desktop:menu-action",
             "view.reopenClosed",
           );
+        }
+        failKeyDown = false;
+        for (const stage of ["target", "receipt"]) {
+          const paused = yield* Deferred.make<void>();
+          let resume: (() => void) | undefined;
+          const wait = () =>
+            new Promise<void>((resolve) => {
+              resume = resolve;
+              Deferred.doneUnsafe(paused, Effect.void);
+            });
+          if (stage === "target") waitForTarget = wait;
+          else waitForReceipt = wait;
+          sendToHost.mockClear();
+          preventReopen.mockClear();
+          const running = yield* manager
+            .automationPress("tab_input", { key: "x" })
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(paused);
+          expect(sendToHost).not.toHaveBeenCalled();
+          beforeInput?.(
+            { preventDefault: preventReopen } as unknown as Electron.Event,
+            {
+              type: "keyDown",
+              key: "x",
+              meta: false,
+              control: false,
+              shift: false,
+              alt: false,
+            } as Electron.Input,
+          );
+          expect(preventReopen).toHaveBeenCalledOnce();
+          expect(sendToHost).toHaveBeenCalledExactlyOnceWith(
+            "desktop:menu-action",
+            "view.reopenClosed",
+          );
+          waitForTarget = undefined;
+          waitForReceipt = undefined;
+          resume?.();
+          yield* Fiber.join(running);
+          expect(sendToHost).toHaveBeenCalledOnce();
         }
       }),
     ),

@@ -4419,10 +4419,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     // WebContents.focus() is a no-op for webview guests. Native input targets
     // this guest's widget directly, so Enter cannot submit the host composer.
     yield* Effect.gen(function* () {
-      yield* Effect.acquireRelease(
-        Effect.sync(() => automationKeyboardTargets.add(wc.id)),
-        () => Effect.sync(() => automationKeyboardTargets.delete(wc.id)),
-      );
       const { sessionId, contextId } = yield* resolveKeyboardTarget(
         tabId,
         send,
@@ -4533,11 +4529,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           yield* attempt(
             { operation: "automationPress.sendInputEvent", tabId, webContentsId: wc.id },
             () => {
+              automationKeyboardTargets.add(wc.id);
               try {
-                wc.sendInputEvent(keySequence.keyDown);
-                if (keySequence.char) wc.sendInputEvent(keySequence.char);
+                try {
+                  wc.sendInputEvent(keySequence.keyDown);
+                  if (keySequence.char) wc.sendInputEvent(keySequence.char);
+                } finally {
+                  wc.sendInputEvent(keySequence.keyUp);
+                }
               } finally {
-                wc.sendInputEvent(keySequence.keyUp);
+                automationKeyboardTargets.delete(wc.id);
               }
             },
           );
