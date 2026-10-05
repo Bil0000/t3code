@@ -15,7 +15,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
@@ -42,10 +41,11 @@ const TestLayer = ServerConfig.layerTest(process.cwd(), { prefix: "t3-preview-te
 const makePage = (initialText: string) => {
   let text = initialText;
   let reads = 0;
-  const timers = new Set<() => void>();
-  const listeners = new Map<string, () => void>();
+  const timers = new Map<() => void, number>();
+  const listeners = new Set<() => void>();
   const requests: PreviewAutomationInvokeInput[] = [];
   const context = NodeVM.createContext({
+    TextEncoder,
     document: {
       body: {
         get innerText() {
@@ -55,14 +55,18 @@ const makePage = (initialText: string) => {
       },
     },
     location: { href: "https://example.test/page" },
-    setTimeout: (callback: () => void) => {
-      timers.add(callback);
+    setTimeout: (callback: () => void, delay: number) => {
+      timers.set(callback, delay);
       return callback;
     },
     clearTimeout: (callback: () => void) => timers.delete(callback),
-    addEventListener: (event: string, callback: () => void) => listeners.set(event, callback),
+    addEventListener: (event: string, callback: () => void) => {
+      expect(event).toBe("pagehide");
+      listeners.add(callback);
+    },
     removeEventListener: (event: string, callback: () => void) => {
-      if (listeners.get(event) === callback) listeners.delete(event);
+      expect(event).toBe("pagehide");
+      listeners.delete(callback);
     },
   });
   const page = {
@@ -75,10 +79,10 @@ const makePage = (initialText: string) => {
     setText: (value: string) => {
       text = value;
     },
-    beforeChunk: undefined as (() => void) | undefined,
     beforeSnapshot: undefined as (() => void) | undefined,
+    snapshotGate: undefined as Effect.Effect<void> | undefined,
+    captureGate: undefined as Effect.Effect<void> | undefined,
     chunkGate: undefined as Effect.Effect<void> | undefined,
-    disposeGate: undefined as Effect.Effect<void> | undefined,
     broker: undefined as PreviewAutomationBroker["Service"] | undefined,
   };
   const invoke = <A>(request: PreviewAutomationInvokeInput) =>
@@ -94,9 +98,15 @@ const makePage = (initialText: string) => {
           loading: false,
         } as A;
       }
+      if (request.tabId !== undefined && request.tabId !== tabId) {
+        return yield* new PreviewAutomationNoAvailableHostError({
+          ...scope,
+          operation: request.operation,
+        });
+      }
       if (request.operation === "snapshot") {
-        expect(request.tabId).toBe(tabId);
         page.beforeSnapshot?.();
+        if (page.snapshotGate) yield* page.snapshotGate;
         return {
           url: NodeVM.runInContext("location.href", context),
           title: "Page",
@@ -118,22 +128,18 @@ const makePage = (initialText: string) => {
       expect(request.operation).toBe("evaluate");
       expect(request.tabId).toBe(tabId);
       expect(request.timeoutMs).toBeUndefined();
+      expect(request.updateCurrentTab).toBe(false);
       const expression = (request.input as { expression: string }).expression;
-      if (expression.includes("let end")) {
-        page.beforeChunk?.();
-        if (page.chunkGate) yield* page.chunkGate;
-      }
+      if (expression.includes("let end") && page.chunkGate) yield* page.chunkGate;
       const value = yield* Effect.try({
         try: () => {
           const value = NodeVM.runInContext(expression, context) as A;
-          expect(Buffer.byteLength(encodeJson(value), "utf8")).toBeLessThan(32_000);
+          expect(Buffer.byteLength(encodeJson(value), "utf8")).toBeLessThan(16_512);
           return value;
         },
         catch: () => new PreviewAutomationNoAvailableHostError({ ...scope, operation: "evaluate" }),
       });
-      if (expression.includes("capture?.dispose()") && page.disposeGate) {
-        yield* page.disposeGate;
-      }
+      if (expression.includes("Object.defineProperty") && page.captureGate) yield* page.captureGate;
       return value;
     });
   page.broker = PreviewAutomationBroker.of({
@@ -145,242 +151,394 @@ const makePage = (initialText: string) => {
   return page;
 };
 
-const runExport = (page: ReturnType<typeof makePage>, target?: PreviewTabId) =>
-  Effect.gen(function* () {
-    const snapshot = yield* Snapshot.PreviewSnapshot;
-    return yield* snapshot.withSnapshot(
-      { scope, saveText: true, ...(target === undefined ? {} : { tabId: target }) },
-      ({ textExport }) => Effect.succeed(textExport!),
-    );
-  }).pipe(
-    Effect.provide(Snapshot.layer),
-    Effect.provideService(PreviewAutomationBroker, page.broker!),
+const captureText = Effect.fnUntraced(function* (requestedTabId?: PreviewTabId) {
+  const snapshot = yield* Snapshot.PreviewSnapshot;
+  return yield* snapshot.withSnapshot(
+    {
+      scope,
+      captureText: true,
+      ...(requestedTabId === undefined ? {} : { tabId: requestedTabId }),
+    },
+    ({ textCapture }) => Effect.succeed(textCapture!),
+  );
+});
+const readText = Effect.fnUntraced(function* (
+  captureId: string,
+  offset = 0,
+  release = false,
+  requestScope = scope,
+  requestedTabId = tabId,
+) {
+  const snapshot = yield* Snapshot.PreviewSnapshot;
+  return yield* snapshot.readText({
+    scope: requestScope,
+    tabId: requestedTabId,
+    captureId,
+    offset,
+    release,
+  });
+});
+const providePage = (page: ReturnType<typeof makePage>) =>
+  Effect.provide(
+    Snapshot.layer.pipe(Layer.provide(Layer.succeed(PreviewAutomationBroker, page.broker!))),
   );
 const assertClean = (page: ReturnType<typeof makePage>) => {
   expect(page.timers.size).toBe(0);
   expect(page.listeners.size).toBe(0);
   expect(
-    Object.getOwnPropertyNames(page.context).filter((name) => name.startsWith("__t3_text_export_")),
+    Object.getOwnPropertyNames(page.context).filter((name) =>
+      name.startsWith("__t3_text_capture_"),
+    ),
   ).toEqual([]);
 };
 
-it.effect("exports all loaded text through bounded V1 evaluate chunks and pins the tab", () =>
-  Effect.gen(function* () {
+it.effect("leaves default snapshots unchanged and does not create browser or disk text", () => {
+  const page = makePage("loaded text");
+  return Effect.gen(function* () {
+    const snapshots = yield* Snapshot.PreviewSnapshot;
+    const result = yield* snapshots.withSnapshot({ scope }, Effect.succeed);
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    expect(result.textCapture).toBeUndefined();
+    expect(result.snapshot.visibleText).toBe("Page");
+    expect(Buffer.from(result.png).toString()).toBe("png");
+    expect(page.reads()).toBe(0);
+    expect(page.requests.map((request) => request.operation)).toEqual(["snapshot"]);
+    expect(yield* fs.exists(config.browserArtifactsDir)).toBe(false);
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect(
+  "reads all loaded text in bounded parts without disk writes or repeated DOM reads",
+  () => {
     const text = "\u0001".repeat(70_000) + "loaded end";
     const page = makePage(text);
-    const saved = yield* runExport(page);
-    const fs = yield* FileSystem.FileSystem;
-    expect(yield* fs.readFileString(saved.textPath)).toBe(text);
-    expect(saved).toMatchObject({
-      totalChars: text.length,
-      sizeBytes: Buffer.byteLength(text),
-      tabId,
-      url: "https://example.test/page",
-    });
-    expect(page.reads()).toBe(1);
-    expect(page.requests[0]?.operation).toBe("status");
-    assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
+    return Effect.gen(function* () {
+      const captured = yield* captureText();
+      expect(captured).toMatchObject({
+        totalChars: text.length,
+        tabId,
+        url: "https://example.test/page",
+      });
+      expect(page.requests[0]?.operation).toBe("status");
+      expect(page.requests.filter((request) => request.operation === "evaluate")).toHaveLength(2);
+      let offset = 0;
+      let collected = "";
+      while (offset < captured.totalChars) {
+        const part = yield* readText(captured.captureId, offset);
+        expect(part.text.length).toBeLessThanOrEqual(4096);
+        expect(part.nextOffset).toBe(offset + part.text.length);
+        expect(part.totalChars).toBe(text.length);
+        expect(part.done).toBe(part.nextOffset === text.length);
+        expect(part.released).toBe(false);
+        collected += part.text;
+        offset = part.nextOffset;
+      }
+      expect(collected).toBe(text);
+      expect(page.reads()).toBe(1);
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      expect(yield* fs.exists(config.browserArtifactsDir)).toBe(false);
+      yield* readText(captured.captureId, 0, true);
+      assertClean(page);
+    }).pipe(providePage(page), Effect.provide(TestLayer));
+  },
 );
 
-it.effect("keeps Unicode pairs intact at chunk boundaries", () =>
-  Effect.gen(function* () {
-    const text = "a".repeat(4095) + "😀中文" + "b".repeat(4093) + "🚀";
-    const page = makePage(text);
-    const saved = yield* runExport(page, tabId);
-    const fs = yield* FileSystem.FileSystem;
-    expect(yield* fs.readFileString(saved.textPath)).toBe(text);
-    expect(saved.sizeBytes).toBe(Buffer.byteLength(text));
+it.effect("preserves Unicode pairs at read boundaries and rejects an offset inside a pair", () => {
+  const text = "a".repeat(4095) + "😀中文" + "b".repeat(4093) + "🚀";
+  const page = makePage(text);
+  return Effect.gen(function* () {
+    const captured = yield* captureText(tabId);
+    const first = yield* readText(captured.captureId);
+    expect(first.text).toBe("a".repeat(4095));
+    const second = yield* readText(captured.captureId, first.nextOffset);
+    expect(second.text.startsWith("😀中文")).toBe(true);
+    const third = yield* readText(captured.captureId, second.nextOffset);
+    expect(first.text + second.text + third.text).toBe(text);
+    expect(yield* Effect.flip(readText(captured.captureId, 4096))).toBeInstanceOf(
+      Snapshot.PreviewTextCaptureError,
+    );
     expect(page.requests.some((request) => request.operation === "status")).toBe(false);
-    expect(page.requests.filter((request) => request.operation === "snapshot")).toHaveLength(1);
+    yield* readText(captured.captureId, 0, true);
     assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
-);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
 
-it.effect("writes an empty loaded page without reading chunks", () =>
-  Effect.gen(function* () {
-    const page = makePage("");
-    const saved = yield* runExport(page);
-    const fs = yield* FileSystem.FileSystem;
-    expect(yield* fs.readFileString(saved.textPath)).toBe("");
-    expect(saved).toMatchObject({ totalChars: 0, sizeBytes: 0 });
+it.effect.each(["", "short text"])("retains completed reads for retries: %j", (text) => {
+  const page = makePage(text);
+  return Effect.gen(function* () {
+    const captured = yield* captureText();
+    const first = yield* readText(captured.captureId);
+    expect(first).toEqual({
+      text,
+      nextOffset: text.length,
+      totalChars: text.length,
+      done: true,
+      released: false,
+    });
+    expect(yield* readText(captured.captureId)).toEqual(first);
+    expect(yield* readText(captured.captureId, text.length)).toEqual({
+      text: "",
+      nextOffset: text.length,
+      totalChars: text.length,
+      done: true,
+      released: false,
+    });
+    const released = yield* readText(captured.captureId, 0, true);
+    expect(released).toEqual({
+      text: "",
+      nextOffset: 0,
+      totalChars: text.length,
+      done: true,
+      released: true,
+    });
+    expect(yield* Effect.flip(readText(captured.captureId))).toBeInstanceOf(
+      Snapshot.PreviewTextCaptureError,
+    );
     assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
-);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
 
-it.effect("freezes captured text while the page changes", () =>
-  Effect.gen(function* () {
-    const text = "original ".repeat(9000);
-    const page = makePage(text);
-    page.beforeChunk = () => {
-      page.setText("changed page");
-      const key = Object.getOwnPropertyNames(page.context).find((name) =>
-        name.startsWith("__t3_text_export_"),
-      )!;
-      expect(
-        NodeVM.runInContext(`Object.isFrozen(globalThis[${encodeJson(key)}])`, page.context),
-      ).toBe(true);
-    };
-    const saved = yield* runExport(page);
-    const fs = yield* FileSystem.FileSystem;
-    expect(yield* fs.readFileString(saved.textPath)).toBe(text);
+it.effect("freezes loaded text while the same document changes", () => {
+  const page = makePage("original ".repeat(9000));
+  return Effect.gen(function* () {
+    page.beforeSnapshot = () => page.setText("changed before snapshot");
+    const captured = yield* captureText();
+    const key = Object.getOwnPropertyNames(page.context).find((name) =>
+      name.startsWith("__t3_text_capture_"),
+    )!;
+    expect(
+      NodeVM.runInContext(`Object.isFrozen(globalThis[${encodeJson(key)}])`, page.context),
+    ).toBe(true);
+    page.setText("changed before read");
+    expect((yield* readText(captured.captureId)).text).toBe(
+      "original ".repeat(9000).slice(0, 4096),
+    );
     expect(page.reads()).toBe(1);
+    yield* readText(captured.captureId, 0, true);
     assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
-);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
 
 it.effect.each(["navigation", "reload", "new document"] as const)(
-  "removes the completed text export after %s before the snapshot",
-  (change) =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const config = yield* ServerConfig.ServerConfig;
-      yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
-      const existing = path.join(config.browserArtifactsDir, "existing.txt");
-      yield* fs.writeFileString(existing, "keep this file");
-      const page = makePage("original loaded text");
+  "rejects %s before snapshot delivery and removes its capture",
+  (change) => {
+    const page = makePage("original loaded text");
+    return Effect.gen(function* () {
       page.beforeSnapshot = () => {
-        if (change === "navigation") {
+        if (change === "navigation")
           NodeVM.runInContext("location.href = 'https://other.test/'", page.context);
-        } else {
-          if (change === "reload") page.listeners.get("pagehide")!();
+        else {
+          if (change === "reload") [...page.listeners][0]!();
           NodeVM.runInContext(
             "document = { body: { innerText: 'different document' } }",
             page.context,
           );
         }
       };
-
-      const result = yield* Effect.result(runExport(page));
-
-      expect(result._tag).toBe("Failure");
-      expect(page.reads()).toBe(1);
-      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["existing.txt"]);
-      expect(yield* fs.readFileString(existing)).toBe("keep this file");
+      expect(yield* Effect.flip(captureText())).toBeInstanceOf(Snapshot.PreviewTextCaptureError);
       assertClean(page);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(providePage(page), Effect.provide(TestLayer));
+  },
 );
 
-it.effect("validates an unchanged page with a full URL longer than the output limit", () =>
-  Effect.gen(function* () {
-    const page = makePage("loaded text");
+it.effect("validates a full page URL longer than the evaluate output limit", () => {
+  const page = makePage("loaded text");
+  return Effect.gen(function* () {
     const url = `https://example.test/page?q=${"x".repeat(70_000)}`;
     NodeVM.runInContext(`location.href = ${encodeJson(url)}`, page.context);
-
-    const saved = yield* runExport(page);
-
-    const fs = yield* FileSystem.FileSystem;
-    expect(yield* fs.readFileString(saved.textPath)).toBe("loaded text");
-    expect(saved.url).toBe(url.slice(0, 2048));
+    const captured = yield* captureText();
+    expect(captured.url).toBe(url.slice(0, 2048));
+    expect((yield* readText(captured.captureId)).text).toBe("loaded text");
     expect(page.reads()).toBe(1);
+    yield* readText(captured.captureId, 0, true);
     assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
-);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
 
-it.effect("allows a text edit in the same document before the snapshot", () =>
-  Effect.gen(function* () {
-    const page = makePage("original loaded text");
-    page.beforeSnapshot = () => page.setText("edited loaded text");
-
-    const saved = yield* runExport(page);
-
-    const fs = yield* FileSystem.FileSystem;
-    expect(yield* fs.readFileString(saved.textPath)).toBe("original loaded text");
-    expect(page.reads()).toBe(1);
-    assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
-);
-
-it.effect.each(["navigation", "expiry"] as const)("removes partial text after %s", (failure) =>
-  Effect.gen(function* () {
-    const page = makePage("text ".repeat(20_000));
-    let chunks = 0;
-    page.beforeChunk = () => {
-      if (++chunks !== 2) return;
+it.effect.each(["navigation", "expiry", "pagehide", "new document"] as const)(
+  "rejects further reads after %s",
+  (failure) => {
+    const page = makePage("text ".repeat(2000));
+    return Effect.gen(function* () {
+      const captured = yield* captureText();
+      yield* readText(captured.captureId);
       if (failure === "navigation")
         NodeVM.runInContext("location.href = 'https://other.test/'", page.context);
-      else [...page.timers][0]!();
-    };
-    const result = yield* Effect.result(runExport(page));
-    expect(result._tag).toBe("Failure");
-    const fs = yield* FileSystem.FileSystem;
-    const config = yield* ServerConfig.ServerConfig;
-    expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
-    assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
+      else if (failure === "expiry") {
+        expect([...page.timers.values()]).toEqual([300_000]);
+        [...page.timers.keys()][0]!();
+      } else if (failure === "pagehide") [...page.listeners][0]!();
+      else NodeVM.runInContext("document = { body: { innerText: 'different' } }", page.context);
+      expect(yield* Effect.flip(readText(captured.captureId, 4096))).toBeInstanceOf(
+        Snapshot.PreviewTextCaptureError,
+      );
+      if (page.timers.size > 0) [...page.timers.keys()][0]!();
+      assertClean(page);
+    }).pipe(providePage(page), Effect.provide(TestLayer));
+  },
 );
 
-it.effect("cleans the browser capture when the artifacts directory cannot be created", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const config = yield* ServerConfig.ServerConfig;
-    yield* fs.makeDirectory(config.stateDir, { recursive: true });
-    yield* fs.writeFileString(config.browserArtifactsDir, "existing file");
-    const page = makePage("text");
-    const result = yield* Effect.result(runExport(page));
-    expect(result._tag).toBe("Failure");
-    expect(yield* fs.readFileString(config.browserArtifactsDir)).toBe("existing file");
-    assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
+it.effect.each(["environmentId", "threadId", "providerSessionId", "providerInstanceId"] as const)(
+  "does not disclose or release another %s's capture",
+  (field) => {
+    const page = makePage("private text");
+    return Effect.gen(function* () {
+      const captured = yield* captureText();
+      const otherScope = { ...scope, [field]: "different-owner" };
+      expect(yield* Effect.flip(readText(captured.captureId, 0, false, otherScope))).toBeInstanceOf(
+        Snapshot.PreviewTextCaptureError,
+      );
+      expect(yield* Effect.flip(readText(captured.captureId, 0, true, otherScope))).toBeInstanceOf(
+        Snapshot.PreviewTextCaptureError,
+      );
+      expect((yield* readText(captured.captureId)).text).toBe("private text");
+      yield* readText(captured.captureId, 0, true);
+      assertClean(page);
+    }).pipe(providePage(page), Effect.provide(TestLayer));
+  },
 );
 
-it.effect("removes a partial file when writing the next chunk fails", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const config = yield* ServerConfig.ServerConfig;
-    const page = makePage("text ".repeat(3000));
-    let writes = 0;
-    const failingFs = FileSystem.FileSystem.of({
-      ...fs,
-      open: (filePath, options) =>
-        fs.open(filePath, options).pipe(
-          Effect.map((file) => ({
-            ...file,
-            writeAll: (bytes) =>
-              ++writes === 2
-                ? fs.writeFileString(config.browserArtifactsDir, "fails on a directory")
-                : file.writeAll(bytes),
-          })),
-        ),
-    });
-    const result = yield* Effect.result(
-      runExport(page).pipe(Effect.provideService(FileSystem.FileSystem, failingFs)),
+it.effect("rejects a different tab or capture version without releasing the valid capture", () => {
+  const page = makePage("private text");
+  return Effect.gen(function* () {
+    const captured = yield* captureText();
+    expect(
+      yield* Effect.flip(
+        readText(captured.captureId, 0, false, scope, PreviewTabId.make("other-tab")),
+      ),
+    ).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
+    expect(yield* Effect.flip(readText("wrong-capture"))).toBeInstanceOf(
+      Snapshot.PreviewTextCaptureError,
     );
-    expect(result._tag).toBe("Failure");
-    expect(writes).toBe(2);
-    expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
+    expect(yield* Effect.flip(readText("wrong-capture", 0, true))).toBeInstanceOf(
+      Snapshot.PreviewTextCaptureError,
+    );
+    expect((yield* readText(captured.captureId)).text).toBe("private text");
+    yield* readText(captured.captureId, 0, true);
     assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect.each([-1, 0.5, 5, Number.NaN, Number.POSITIVE_INFINITY])(
+  "rejects invalid offset %s without damaging the capture",
+  (offset) => {
+    const page = makePage("text");
+    return Effect.gen(function* () {
+      const captured = yield* captureText();
+      expect(yield* Effect.flip(readText(captured.captureId, offset))).toBeInstanceOf(
+        Snapshot.PreviewTextCaptureError,
+      );
+      expect((yield* readText(captured.captureId)).text).toBe("text");
+      yield* readText(captured.captureId, 0, true);
+      assertClean(page);
+    }).pipe(providePage(page), Effect.provide(TestLayer));
+  },
 );
 
-it.effect("does not create a capture when the resolved tab is unavailable", () =>
-  Effect.gen(function* () {
-    const page = makePage("text");
-    page.available = false;
-    const result = yield* Effect.result(runExport(page));
-    expect(result._tag).toBe("Failure");
+it.effect("replaces the prior capture and keeps one timer and page listener", () => {
+  const page = makePage("first text");
+  return Effect.gen(function* () {
+    const first = yield* captureText();
+    page.setText("second text");
+    const second = yield* captureText();
+    expect(second.captureId).not.toBe(first.captureId);
+    expect(page.timers.size).toBe(1);
+    expect(page.listeners.size).toBe(1);
+    expect(yield* Effect.flip(readText(first.captureId))).toBeInstanceOf(
+      Snapshot.PreviewTextCaptureError,
+    );
+    expect(yield* Effect.flip(readText(first.captureId, 0, true))).toBeInstanceOf(
+      Snapshot.PreviewTextCaptureError,
+    );
+    expect((yield* readText(second.captureId)).text).toBe("second text");
+    yield* readText(second.captureId, 0, true);
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect.each(["failure", "cancellation"] as const)(
+  "removes an undelivered capture after result delivery %s",
+  (outcome) => {
+    const page = makePage("completed text");
+    return Effect.gen(function* () {
+      const enteredUse = yield* Deferred.make<void>();
+      const snapshots = yield* Snapshot.PreviewSnapshot;
+      const fiber = yield* Effect.forkChild(
+        snapshots.withSnapshot({ scope, captureText: true }, ({ textCapture }) =>
+          Effect.gen(function* () {
+            expect(textCapture?.totalChars).toBe(14);
+            yield* Deferred.succeed(enteredUse, undefined);
+            return yield* outcome === "failure" ? Effect.fail("delivery failed") : Effect.never;
+          }),
+        ),
+      );
+      yield* Deferred.await(enteredUse);
+      if (outcome === "cancellation") yield* Fiber.interrupt(fiber);
+      expect((yield* Fiber.await(fiber))._tag).toBe("Failure");
+      assertClean(page);
+    }).pipe(providePage(page), Effect.provide(TestLayer));
+  },
+);
+
+it.effect("does not let cancelled old delivery remove a newer capture", () => {
+  const page = makePage("first text");
+  return Effect.gen(function* () {
+    const enteredUse = yield* Deferred.make<void>();
+    const snapshots = yield* Snapshot.PreviewSnapshot;
+    const fiber = yield* Effect.forkChild(
+      snapshots.withSnapshot({ scope, captureText: true }, () =>
+        Deferred.succeed(enteredUse, undefined).pipe(Effect.andThen(Effect.never)),
+      ),
+    );
+    yield* Deferred.await(enteredUse);
+    page.setText("new text");
+    const captured = yield* captureText();
+    yield* Fiber.interrupt(fiber);
+    expect((yield* readText(captured.captureId)).text).toBe("new text");
+    expect(page.timers.size).toBe(1);
+    yield* readText(captured.captureId, 0, true);
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect("removes the capture when snapshot collection is interrupted", () => {
+  const page = makePage("loaded text");
+  return Effect.gen(function* () {
+    const enteredSnapshot = yield* Deferred.make<void>();
+    page.snapshotGate = Deferred.succeed(enteredSnapshot, undefined).pipe(
+      Effect.andThen(Effect.never),
+    );
+    const fiber = yield* Effect.forkChild(captureText());
+    yield* Deferred.await(enteredSnapshot);
+    yield* Fiber.interrupt(fiber);
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect("does not capture text when the resolved tab is unavailable", () => {
+  const page = makePage("text");
+  page.available = false;
+  return Effect.gen(function* () {
+    expect(yield* Effect.flip(captureText())).toBeInstanceOf(Snapshot.PreviewTextCaptureError);
     expect(page.requests).toHaveLength(1);
     expect(page.reads()).toBe(0);
     assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
-);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
 
 it.effect.each(["status", "evaluate"] as const)(
-  "preserves browser recovery errors during text export %s",
+  "preserves browser recovery errors during text %s",
   (operation) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const config = yield* ServerConfig.ServerConfig;
-      yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
-      const existing = path.join(config.browserArtifactsDir, "existing.txt");
-      yield* fs.writeFileString(existing, "keep this file");
       for (const ErrorClass of [
         PreviewAutomationNoAvailableHostError,
         PreviewAutomationTimeoutError,
         PreviewAutomationRequestQueueClosedError,
       ]) {
+        const page = makePage("loaded text");
         const error = new ErrorClass({
           ...scope,
           operation,
@@ -389,98 +547,109 @@ it.effect.each(["status", "evaluate"] as const)(
           requestId: "text-request",
           timeoutMs: 15_000,
         });
-        const page = makePage("loaded text");
         const original = page.broker!;
         page.broker = PreviewAutomationBroker.of({
           ...original,
           invoke: (request) =>
-            request.operation === operation &&
-            (operation === "status" ||
-              (request.input as { expression: string }).expression.includes("let end"))
-              ? Effect.fail(error)
-              : original.invoke(request),
+            request.operation === operation ? Effect.fail(error) : original.invoke(request),
         });
-
-        const failed = yield* Effect.flip(runExport(page));
-
-        expect(failed).toBe(error);
-        expect(failed.message).toBe(error.message);
-        expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["existing.txt"]);
-        expect(yield* fs.readFileString(existing)).toBe("keep this file");
+        expect(yield* Effect.flip(captureText().pipe(providePage(page)))).toBe(error);
         assertClean(page);
       }
     }).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("removes partial files and the browser capture on cancellation", () =>
-  Effect.gen(function* () {
-    const enteredChunk = yield* Deferred.make<void>();
-    const page = makePage("text ".repeat(2000));
-    page.chunkGate = Deferred.succeed(enteredChunk, undefined).pipe(Effect.andThen(Effect.never));
-    const fiber = yield* Effect.forkChild(runExport(page));
-    yield* Deferred.await(enteredChunk);
-    yield* Fiber.interrupt(fiber);
-    const fs = yield* FileSystem.FileSystem;
-    const config = yield* ServerConfig.ServerConfig;
-    expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
-    assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
-);
-
-it.effect("removes the completed file when cancellation occurs during browser cleanup", () =>
-  Effect.gen(function* () {
-    const enteredDispose = yield* Deferred.make<void>();
-    const releaseDispose = yield* Deferred.make<void>();
-    const page = makePage("completed text");
-    page.disposeGate = Deferred.succeed(enteredDispose, undefined).pipe(
-      Effect.andThen(Deferred.await(releaseDispose)),
+it.effect("preserves opt-in PNG saving without writing a text file", () => {
+  const page = makePage("loaded text");
+  return Effect.gen(function* () {
+    const snapshots = yield* Snapshot.PreviewSnapshot;
+    const result = yield* snapshots.withSnapshot(
+      { scope, captureText: true, save: true },
+      Effect.succeed,
     );
-    const fiber = yield* Effect.forkChild(runExport(page));
-    yield* Deferred.await(enteredDispose);
     const fs = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
+    expect(Buffer.from(yield* fs.readFile(result.screenshotPath!)).toString()).toBe("png");
     expect(yield* fs.readDirectory(config.browserArtifactsDir)).toHaveLength(1);
-    const interruption = yield* Effect.forkChild(Fiber.interrupt(fiber));
-    yield* Effect.yieldNow;
-    yield* Deferred.succeed(releaseDispose, undefined);
-    yield* Fiber.join(interruption);
-    expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
+    expect(result.screenshotPath).toMatch(/browser-screenshot-example-test-.*\.png$/);
+    yield* readText(result.textCapture!.captureId, 0, true);
     assertClean(page);
-  }).pipe(Effect.provide(TestLayer)),
-);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
 
-it.effect.each(["failure", "cancellation"] as const)(
-  "removes its export after snapshot result delivery %s",
-  (outcome) =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const config = yield* ServerConfig.ServerConfig;
-      yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
-      const existing = path.join(config.browserArtifactsDir, "existing.txt");
-      yield* fs.writeFileString(existing, "keep this file");
-      const enteredUse = yield* Deferred.make<void>();
-      const page = makePage("completed text");
-      const delivery = Effect.gen(function* () {
-        const snapshots = yield* Snapshot.PreviewSnapshot;
-        return yield* snapshots.withSnapshot({ scope, saveText: true }, ({ textExport }) =>
-          Effect.gen(function* () {
-            expect(yield* fs.readFileString(textExport!.textPath)).toBe("completed text");
-            yield* Deferred.succeed(enteredUse, undefined);
-            return yield* outcome === "failure" ? Effect.fail("delivery failed") : Effect.never;
-          }),
-        );
-      }).pipe(
-        Effect.provide(Snapshot.layer),
-        Effect.provideService(PreviewAutomationBroker, page.broker!),
-      );
-      const fiber = yield* Effect.forkChild(delivery);
-      yield* Deferred.await(enteredUse);
-      if (outcome === "cancellation") yield* Fiber.interrupt(fiber);
-      const result = yield* Fiber.await(fiber);
-      expect(result._tag).toBe("Failure");
-      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["existing.txt"]);
-      expect(yield* fs.readFileString(existing)).toBe("keep this file");
-      assertClean(page);
-    }).pipe(Effect.provide(TestLayer)),
-);
+it.effect("keeps another owner's live capture when this owner captures or releases text", () => {
+  const page = makePage("first owner's text");
+  return Effect.gen(function* () {
+    const snapshots = yield* Snapshot.PreviewSnapshot;
+    const first = yield* captureText();
+    const otherScope = { ...scope, threadId: ThreadId.make("other-thread") };
+    page.setText("second owner's text");
+    const second = yield* snapshots.withSnapshot(
+      { scope: otherScope, tabId, captureText: true },
+      ({ textCapture }) => Effect.succeed(textCapture!),
+    );
+    expect(page.timers.size).toBe(2);
+    expect((yield* readText(first.captureId)).text).toBe("first owner's text");
+    expect((yield* readText(second.captureId, 0, false, otherScope)).text).toBe(
+      "second owner's text",
+    );
+    yield* readText(first.captureId, 0, true);
+    expect(page.timers.size).toBe(1);
+    expect((yield* readText(second.captureId, 0, false, otherScope)).text).toBe(
+      "second owner's text",
+    );
+    yield* readText(second.captureId, 0, true, otherScope);
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect("allows the same offset to be retried after an interrupted read", () => {
+  const page = makePage("loaded ".repeat(2000));
+  return Effect.gen(function* () {
+    const captured = yield* captureText();
+    const enteredRead = yield* Deferred.make<void>();
+    page.chunkGate = Deferred.succeed(enteredRead, undefined).pipe(Effect.andThen(Effect.never));
+    const fiber = yield* Effect.forkChild(readText(captured.captureId));
+    yield* Deferred.await(enteredRead);
+    yield* Fiber.interrupt(fiber);
+    page.chunkGate = undefined;
+    const retried = yield* readText(captured.captureId);
+    expect(retried.text).toBe("loaded ".repeat(2000).slice(0, 4096));
+    expect(retried.nextOffset).toBe(4096);
+    expect(page.reads()).toBe(1);
+    yield* readText(captured.captureId, 0, true);
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect("releases its memory capture when the requested PNG cannot be saved", () => {
+  const page = makePage("loaded text");
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    yield* fs.makeDirectory(config.stateDir, { recursive: true });
+    yield* fs.writeFileString(config.browserArtifactsDir, "existing file");
+    const snapshots = yield* Snapshot.PreviewSnapshot;
+    const failed = yield* Effect.flip(
+      snapshots.withSnapshot({ scope, captureText: true, save: true }, Effect.succeed),
+    );
+    expect(failed).toBeInstanceOf(Snapshot.PreviewScreenshotSaveError);
+    expect(yield* fs.readFileString(config.browserArtifactsDir)).toBe("existing file");
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect("cleans an installed capture when its initial response is interrupted", () => {
+  const page = makePage("loaded text");
+  return Effect.gen(function* () {
+    const enteredCapture = yield* Deferred.make<void>();
+    page.captureGate = Deferred.succeed(enteredCapture, undefined).pipe(
+      Effect.andThen(Effect.never),
+    );
+    const fiber = yield* Effect.forkChild(captureText());
+    yield* Deferred.await(enteredCapture);
+    expect(page.timers.size).toBe(1);
+    yield* Fiber.interrupt(fiber);
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});

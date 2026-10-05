@@ -16,21 +16,21 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 
-export class PreviewTextExportError extends Schema.TaggedError<PreviewTextExportError>()(
-  "PreviewTextExportError",
+export class PreviewTextCaptureError extends Schema.TaggedError<PreviewTextCaptureError>()(
+  "PreviewTextCaptureError",
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Could not save the loaded page text. The page may have changed or the file could not be written.";
+    return "Could not read the loaded page text. Take another snapshot with captureText=true if the page changed or the capture expired.";
   }
 }
 
 const isPreviewAutomationError = Schema.is(PreviewAutomationError);
-const isPreviewTextExportError = Schema.is(PreviewTextExportError);
-const textExportError = (cause: unknown) =>
-  isPreviewAutomationError(cause) || isPreviewTextExportError(cause)
+const isPreviewTextCaptureError = Schema.is(PreviewTextCaptureError);
+const textCaptureError = (cause: unknown) =>
+  isPreviewAutomationError(cause) || isPreviewTextCaptureError(cause)
     ? cause
-    : new PreviewTextExportError({ cause });
+    : new PreviewTextCaptureError({ cause });
 
 const Capture = Schema.Struct({
   totalChars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -38,7 +38,10 @@ const Capture = Schema.Struct({
 });
 const TextChunk = Schema.Struct({
   text: Schema.String.check(Schema.isMaxLength(4096)),
-  next: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  nextOffset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  totalChars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  done: Schema.Boolean,
+  released: Schema.Boolean,
 });
 const encodePageString = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 const decodeCapture = Schema.decodeUnknownEffect(Capture);
@@ -59,17 +62,16 @@ export class PreviewScreenshotSaveError extends Schema.TaggedError<PreviewScreen
 interface SnapshotInput {
   readonly scope: PreviewAutomationBroker.PreviewAutomationInvokeInput["scope"];
   readonly tabId?: PreviewTabId | undefined;
-  readonly saveText?: boolean | undefined;
+  readonly captureText?: boolean | undefined;
   readonly save?: boolean | undefined;
 }
 
 interface SnapshotCapture {
   readonly snapshot: PreviewAutomationSnapshot;
   readonly png: Uint8Array;
-  readonly textExport?: {
-    readonly textPath: string;
+  readonly textCapture?: {
+    readonly captureId: string;
     readonly totalChars: number;
-    readonly sizeBytes: number;
     readonly url: string;
     readonly tabId: PreviewTabId;
   };
@@ -79,6 +81,13 @@ interface SnapshotCapture {
 export class PreviewSnapshot extends Context.Service<
   PreviewSnapshot,
   {
+    readonly readText: (input: {
+      readonly scope: SnapshotInput["scope"];
+      readonly tabId: PreviewTabId;
+      readonly captureId: string;
+      readonly offset?: number | undefined;
+      readonly release?: boolean | undefined;
+    }) => Effect.Effect<typeof TextChunk.Type, PreviewAutomationError | PreviewTextCaptureError>;
     readonly withSnapshot: <A, E, R>(
       input: SnapshotInput,
       use: (capture: SnapshotCapture) => Effect.Effect<A, E, R>,
@@ -86,7 +95,7 @@ export class PreviewSnapshot extends Context.Service<
       A,
       | E
       | PreviewAutomationError
-      | PreviewTextExportError
+      | PreviewTextCaptureError
       | PreviewScreenshotSaveError
       | Schema.SchemaError,
       R
@@ -114,114 +123,82 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
 
-  const saveText = Effect.fn("PreviewSnapshot.saveText")(function* (
-    scope: SnapshotInput["scope"],
-    requestedTabId?: PreviewTabId,
-  ) {
-    const id = NodeCrypto.randomUUID();
-    let tabId = requestedTabId;
-    if (tabId === undefined) {
-      const status = yield* broker
-        .invoke({ scope, operation: "status", input: {} })
-        .pipe(Effect.flatMap(decodeStatus), Effect.mapError(textExportError));
-      if (!status.available || status.tabId === null) {
-        return yield* new PreviewTextExportError({ cause: "No available preview tab." });
-      }
-      tabId = status.tabId;
+  const captureKey = (scope: SnapshotInput["scope"]) =>
+    `__t3_text_capture_${NodeCrypto.createHash("sha256")
+      .update(
+        JSON.stringify([
+          scope.environmentId,
+          scope.threadId,
+          scope.providerSessionId,
+          scope.providerInstanceId,
+        ]),
+      )
+      .digest("hex")}`;
+  const evaluate = (scope: SnapshotInput["scope"], tabId: PreviewTabId, expression: string) =>
+    broker.invoke({
+      scope,
+      operation: "evaluate",
+      tabId,
+      input: { expression, returnByValue: true },
+      updateCurrentTab: false,
+    });
+
+  const readText = Effect.fn("PreviewSnapshot.readText")(function* (input: {
+    readonly scope: SnapshotInput["scope"];
+    readonly tabId: PreviewTabId;
+    readonly captureId: string;
+    readonly offset?: number | undefined;
+    readonly release?: boolean | undefined;
+  }) {
+    const offset = input.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0 || input.captureId.length > 128) {
+      return yield* new PreviewTextCaptureError({ cause: "Invalid capture or offset." });
     }
-    const key = yield* encodePageString(`__t3_text_export_${id}`).pipe(Effect.orDie);
-    const textPath = path.join(config.browserArtifactsDir, `browser-text-${id}.txt`);
-    const evaluate = (expression: string) =>
-      broker.invoke({
-        scope,
-        operation: "evaluate",
-        tabId,
-        input: { expression, returnByValue: true },
-        updateCurrentTab: false,
-      });
-    yield* Effect.addFinalizer(() =>
-      evaluate(`(() => {
-            const capture = globalThis[${key}];
-            capture?.dispose();
-            return true;
-          })()`).pipe(Effect.interruptible, Effect.timeoutOption(5000), Effect.ignore),
-    );
-    let created = false;
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        const capture = yield* evaluate(`(() => {
-          const text = document.body?.innerText ?? "";
-          let timer;
-          const dispose = () => {
-            clearTimeout(timer);
-            removeEventListener("pagehide", dispose);
-            if (globalThis[${key}] === capture) delete globalThis[${key}];
-          };
-          const refresh = () => {
-            clearTimeout(timer);
-            timer = setTimeout(dispose, 300000);
-          };
-          const capture = Object.freeze({ text, url: location.href, document, dispose, refresh });
-          Object.defineProperty(globalThis, ${key}, { value: capture, configurable: true });
-          addEventListener("pagehide", dispose, { once: true });
-          refresh();
-          return { totalChars: text.length, url: capture.url.slice(0, 2048) };
-      })()`).pipe(Effect.flatMap(decodeCapture));
-        yield* fileSystem.makeDirectory(config.browserArtifactsDir, { recursive: true });
-        const file = yield* Effect.uninterruptible(
-          fileSystem.open(textPath, { flag: "wx", mode: 0o600 }).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                created = true;
-              }),
-            ),
-          ),
-        );
-        let offset = 0;
-        let sizeBytes = 0;
-        while (offset < capture.totalChars) {
-          const chunk = yield* evaluate(`(() => {
-            const capture = globalThis[${key}];
-            if (!capture || capture.document !== document || capture.url !== location.href) throw new Error("Text capture lost.");
-            let end = Math.min(${offset} + 4096, capture.text.length);
-            if (end < capture.text.length) {
-              const last = capture.text.charCodeAt(end - 1);
-              const next = capture.text.charCodeAt(end);
-              if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--;
-            }
-            capture.refresh();
-            return { text: capture.text.slice(${offset}, end), next: end };
-        })()`).pipe(Effect.flatMap(decodeTextChunk));
-          if (
-            chunk.next !== offset + chunk.text.length ||
-            chunk.next <= offset ||
-            chunk.next > capture.totalChars
-          ) {
-            return yield* new PreviewTextExportError({ cause: "Invalid text capture chunk." });
-          }
-          const bytes = new TextEncoder().encode(chunk.text);
-          yield* file.writeAll(bytes);
-          sizeBytes += bytes.byteLength;
-          offset = chunk.next;
-        }
-        yield* file.sync;
-        return {
-          textPath,
-          totalChars: capture.totalChars,
-          sizeBytes,
-          url: capture.url,
-          tabId,
-          captureKey: key,
-        };
-      }),
-    ).pipe(
-      Effect.onExit((exit) =>
-        created && exit._tag === "Failure"
-          ? fileSystem.remove(textPath).pipe(Effect.ignore)
-          : Effect.void,
-      ),
-      Effect.mapError(textExportError),
-    );
+    const key = yield* encodePageString(captureKey(input.scope)).pipe(Effect.orDie);
+    const id = yield* encodePageString(input.captureId).pipe(Effect.orDie);
+    const chunk = yield* evaluate(
+      input.scope,
+      input.tabId,
+      `(() => {
+      const capture = globalThis[${key}];
+      if (!capture || capture.captureId !== ${id}) return null;
+      if (capture.document !== document || capture.url !== location.href) {
+        capture.dispose();
+        return null;
+      }
+      const totalChars = capture.text.length;
+      if (${input.release === true}) {
+        capture.dispose();
+        return { text: "", nextOffset: 0, totalChars, done: true, released: true };
+      }
+      const offset = ${offset};
+      if (offset > totalChars) return null;
+      const first = capture.text.charCodeAt(offset);
+      const previous = capture.text.charCodeAt(offset - 1);
+      if (first >= 0xdc00 && first <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff) return null;
+      let end = Math.min(offset + 4096, totalChars);
+      if (new TextEncoder().encode(JSON.stringify({ text: capture.text.slice(offset, end) })).byteLength > 16000) {
+        end = offset + Math.floor((end - offset) / 2);
+      }
+      if (end < totalChars) {
+        const last = capture.text.charCodeAt(end - 1);
+        const next = capture.text.charCodeAt(end);
+        if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--;
+      }
+      capture.refresh();
+      return { text: capture.text.slice(offset, end), nextOffset: end, totalChars, done: end === totalChars, released: false };
+    })()`,
+    ).pipe(Effect.flatMap(decodeTextChunk), Effect.mapError(textCaptureError));
+    if (
+      !chunk.released &&
+      (chunk.nextOffset !== offset + chunk.text.length ||
+        chunk.nextOffset > chunk.totalChars ||
+        (offset < chunk.totalChars && chunk.nextOffset <= offset) ||
+        chunk.done !== (chunk.nextOffset === chunk.totalChars))
+    ) {
+      return yield* new PreviewTextCaptureError({ cause: "Invalid text capture chunk." });
+    }
+    return chunk;
   });
 
   const saveScreenshot = Effect.fn("PreviewSnapshot.saveScreenshot")(function* (
@@ -242,75 +219,112 @@ const make = Effect.gen(function* () {
     input: SnapshotInput,
     use: (capture: SnapshotCapture) => Effect.Effect<A, E, R>,
   ) {
-    let exportedText: (SnapshotCapture["textExport"] & { readonly captureKey: string }) | undefined;
-    return yield* Effect.scoped(
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          if (input.saveText === true) {
-            exportedText = yield* restore(saveText(input.scope, input.tabId));
+    const captureId = NodeCrypto.randomUUID();
+    const key = yield* encodePageString(captureKey(input.scope)).pipe(Effect.orDie);
+    const id = yield* encodePageString(captureId).pipe(Effect.orDie);
+    let captureTabId: PreviewTabId | undefined;
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        let textCapture: SnapshotCapture["textCapture"];
+        if (input.captureText === true) {
+          let tabId = input.tabId;
+          if (tabId === undefined) {
+            const status = yield* restore(
+              broker
+                .invoke({ scope: input.scope, operation: "status", input: {} })
+                .pipe(Effect.flatMap(decodeStatus), Effect.mapError(textCaptureError)),
+            );
+            if (!status.available || status.tabId === null) {
+              return yield* new PreviewTextCaptureError({ cause: "No available preview tab." });
+            }
+            tabId = status.tabId;
           }
-          const capturedText = exportedText;
-          return yield* restore(
-            Effect.gen(function* () {
-              const tabId = capturedText?.tabId ?? input.tabId;
-              const snapshot = yield* broker
-                .invoke({
-                  scope: input.scope,
-                  operation: "snapshot",
-                  input: {},
-                  ...(tabId === undefined ? {} : { tabId }),
-                })
-                .pipe(Effect.flatMap(decodeSnapshot));
-              let textExport: SnapshotCapture["textExport"];
-              if (capturedText !== undefined) {
-                const { captureKey, ...artifact } = capturedText;
-                for (let offset = 0; offset < Math.max(snapshot.url.length, 1); offset += 4096) {
-                  const urlChunk = yield* encodePageString(
-                    snapshot.url.slice(offset, offset + 4096),
-                  ).pipe(Effect.orDie);
-                  yield* broker
-                    .invoke({
-                      scope: input.scope,
-                      operation: "evaluate",
-                      tabId: capturedText.tabId,
-                      updateCurrentTab: false,
-                      input: {
-                        expression: `(() => {
-                    const capture = globalThis[${captureKey}];
-                    if (!capture || capture.document !== document || capture.url !== location.href) return false;
-                    capture.refresh();
-                    return capture.url.length === ${snapshot.url.length} && capture.url.slice(${offset}, ${offset + 4096}) === ${urlChunk};
-                  })()`,
-                        returnByValue: true,
-                      },
-                    })
-                    .pipe(Effect.flatMap(decodeCaptureMatch), Effect.mapError(textExportError));
-                }
-                textExport = artifact;
-              }
-              const png = new Uint8Array(Buffer.from(snapshot.screenshot.data, "base64"));
-              const screenshotPath =
-                input.save === true ? yield* saveScreenshot(snapshot.url, png) : undefined;
-              return yield* use({
-                snapshot,
-                png,
-                ...(textExport === undefined ? {} : { textExport }),
-                ...(screenshotPath === undefined ? {} : { screenshotPath }),
-              });
-            }),
+          captureTabId = tabId;
+          const capture = yield* restore(
+            evaluate(
+              input.scope,
+              tabId,
+              `(() => {
+            globalThis[${key}]?.dispose();
+            const text = document.body?.innerText ?? "";
+            let timer;
+            const dispose = () => {
+              clearTimeout(timer);
+              removeEventListener("pagehide", dispose);
+              if (globalThis[${key}] === capture) delete globalThis[${key}];
+            };
+            const refresh = () => {
+              clearTimeout(timer);
+              timer = setTimeout(dispose, 300000);
+            };
+            const capture = Object.freeze({ captureId: ${id}, text, url: location.href, document, dispose, refresh });
+            Object.defineProperty(globalThis, ${key}, { value: capture, configurable: true });
+            addEventListener("pagehide", dispose, { once: true });
+            refresh();
+            return { totalChars: text.length, url: capture.url.slice(0, 2048) };
+          })()`,
+            ).pipe(Effect.flatMap(decodeCapture), Effect.mapError(textCaptureError)),
           );
-        }),
-      ),
+          textCapture = { captureId, ...capture, tabId };
+        }
+        return yield* restore(
+          Effect.gen(function* () {
+            const tabId = textCapture?.tabId ?? input.tabId;
+            const snapshot = yield* broker
+              .invoke({
+                scope: input.scope,
+                operation: "snapshot",
+                input: {},
+                ...(tabId === undefined ? {} : { tabId }),
+              })
+              .pipe(Effect.flatMap(decodeSnapshot));
+            if (textCapture !== undefined) {
+              for (let offset = 0; offset < Math.max(snapshot.url.length, 1); offset += 4096) {
+                const urlChunk = yield* encodePageString(
+                  snapshot.url.slice(offset, offset + 4096),
+                ).pipe(Effect.orDie);
+                yield* evaluate(
+                  input.scope,
+                  textCapture.tabId,
+                  `(() => {
+                const capture = globalThis[${key}];
+                if (!capture || capture.captureId !== ${id} || capture.document !== document || capture.url !== location.href) return false;
+                capture.refresh();
+                return capture.url.length === ${snapshot.url.length} && capture.url.slice(${offset}, ${offset + 4096}) === ${urlChunk};
+              })()`,
+                ).pipe(Effect.flatMap(decodeCaptureMatch), Effect.mapError(textCaptureError));
+              }
+            }
+            const png = new Uint8Array(Buffer.from(snapshot.screenshot.data, "base64"));
+            const screenshotPath =
+              input.save === true ? yield* saveScreenshot(snapshot.url, png) : undefined;
+            return yield* use({
+              snapshot,
+              png,
+              ...(textCapture === undefined ? {} : { textCapture }),
+              ...(screenshotPath === undefined ? {} : { screenshotPath }),
+            });
+          }),
+        );
+      }),
     ).pipe(
       Effect.onExit((exit) =>
-        exportedText !== undefined && exit._tag === "Failure"
-          ? fileSystem.remove(exportedText.textPath).pipe(Effect.ignore)
+        captureTabId !== undefined && exit._tag === "Failure"
+          ? evaluate(
+              input.scope,
+              captureTabId,
+              `(() => {
+            const capture = globalThis[${key}];
+            if (capture?.captureId === ${id}) capture.dispose();
+            return true;
+          })()`,
+            ).pipe(Effect.interruptible, Effect.timeoutOption(5000), Effect.ignore)
           : Effect.void,
       ),
     );
   });
 
-  return PreviewSnapshot.of({ withSnapshot });
+  return PreviewSnapshot.of({ withSnapshot, readText });
 });
 
 export const layer = Layer.effect(PreviewSnapshot, make);

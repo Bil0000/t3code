@@ -132,12 +132,22 @@ const callSnapshot = (args: Record<string, unknown>) =>
       );
   });
 
-const serveTextExports = (
+const callReadText = (args: Record<string, unknown>, scope = invocation) =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    return yield* server
+      .callTool({ name: "preview_read_text", arguments: args })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+  });
+
+const serveTextCaptures = (
   clientId: string,
   text: string,
   options: {
     switchTab?: boolean;
-    navigate?: boolean;
     snapshotFailure?: boolean;
     beforeSnapshot?: Effect.Effect<void>;
   } = {},
@@ -150,8 +160,8 @@ const serveTextExports = (
     const timers = new Set<() => void>();
     const listeners = new Map<string, () => void>();
     let textReads = 0;
-    let chunks = 0;
     const context = NodeVM.createContext({
+      TextEncoder,
       document: {
         body: {
           get innerText() {
@@ -206,9 +216,6 @@ const serveTextExports = (
         } else if (request.operation === "evaluate") {
           if (options.switchTab) yield* Deferred.await(switched);
           const expression = (request.input as { expression: string }).expression;
-          if (options.navigate && expression.includes("let end") && ++chunks === 2) {
-            NodeVM.runInContext("location.href = 'https://other.test/'", context);
-          }
           try {
             result = NodeVM.runInContext(expression, context);
           } catch {
@@ -350,7 +357,7 @@ it.effect.each([
   ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect.each([{}, { saveText: true }])(
+it.effect.each([{}, { captureText: true }])(
   "tells the agent how to fall back when no desktop app can run the snapshot %j",
   (args) =>
     Effect.gen(function* () {
@@ -488,7 +495,7 @@ it.effect.each([
   ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect.each(["includeImage", "saveText"])(
+it.effect.each(["includeImage", "captureText"])(
   "rejects non-boolean snapshot %s options before selecting a browser host",
   (option) =>
     Effect.gen(function* () {
@@ -606,85 +613,140 @@ it.effect.each([
   { save: false, includeImage: false },
   { save: true, includeImage: false },
   { save: true, includeImage: true },
-])("exports complete loaded text with snapshot options %j", (options) =>
+])("reads complete loaded text from memory with snapshot options %j", (options) =>
   Effect.scoped(
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const loadedText = "a".repeat(4095) + "😀中文\n".repeat(12_000) + "Offscreen loaded end";
-      const host = yield* serveTextExports("mcp-text-export-client", loadedText, {
+      const host = yield* serveTextCaptures("mcp-text-capture-client", loadedText, {
         switchTab: true,
       });
 
-      const snapshot = yield* callSnapshot({ saveText: true, ...options });
+      const snapshot = yield* callSnapshot({ captureText: true, ...options });
 
       expect(snapshot.isError).toBe(false);
-      const saved = snapshot.structuredContent as {
-        readonly textPath: string;
+      const captured = snapshot.structuredContent as {
+        readonly textCaptureId: string;
+        readonly textTabId: string;
         readonly screenshotPath?: string;
       };
-      expect(saved).toMatchObject({
-        textPath: expect.any(String),
+      expect(captured).toMatchObject({
+        textCaptureId: expect.any(String),
         textChars: loadedText.length,
-        textBytes: Buffer.byteLength(loadedText, "utf8"),
         textUrl: snapshotResult.url,
+        textTabId: tabId,
       });
-      expect(path.dirname(saved.textPath)).toBe(config.browserArtifactsDir);
-      expect(path.basename(saved.textPath)).toMatch(/^browser-text-[0-9a-f-]+\.txt$/);
-      expect(yield* fs.readFileString(saved.textPath)).toBe(loadedText);
+      expect(captured).not.toHaveProperty("textPath");
+      expect(captured).not.toHaveProperty("textBytes");
       expect(host.textReads()).toBe(1);
-      expect(host.requests.filter((request) => request.operation === "status")).toHaveLength(2);
-      const pageRequests = host.requests.filter((request) => request.operation !== "status");
-      expect(pageRequests.length).toBeGreaterThan(10);
+      const beforeRead = [...host.requests];
+      expect(beforeRead.filter((request) => request.operation === "status")).toHaveLength(2);
+      const pageRequests = beforeRead.filter((request) => request.operation !== "status");
       expect(pageRequests.every((request) => request.tabId === tabId)).toBe(true);
       expect(pageRequests.filter((request) => request.operation === "snapshot")).toEqual([
         expect.objectContaining({ operation: "snapshot", input: {} }),
       ]);
+      expect(beforeRead.length).toBeLessThan(8);
       const texts = snapshot.content.filter((content) => content.type === "text");
       const metadata = texts[options.save && !options.includeImage ? 0 : 1];
       expect(metadata?.type === "text" ? decodeJsonText(metadata.text) : null).toMatchObject({
-        textPath: saved.textPath,
+        textCaptureId: captured.textCaptureId,
         textChars: loadedText.length,
-        textBytes: Buffer.byteLength(loadedText, "utf8"),
         textUrl: snapshotResult.url,
+        textTabId: tabId,
       });
       expect(
         metadata?.type === "text" ? Buffer.byteLength(metadata.text, "utf8") : Infinity,
       ).toBeLessThanOrEqual(McpHttpServer.MAX_SNAPSHOT_TEXT_BYTES);
-      expect(encodeJsonText(saved)).not.toContain("Offscreen loaded end");
+      expect(encodeJsonText(captured)).not.toContain("Offscreen loaded end");
       expect(snapshot.content.some((content) => content.type === "image")).toBe(
         options.includeImage,
       );
       if (options.save) {
-        expect(path.dirname(saved.screenshotPath!)).toBe(config.browserArtifactsDir);
-        expect(Buffer.from(yield* fs.readFile(saved.screenshotPath!)).toString()).toBe("png");
-      } else expect(saved).not.toHaveProperty("screenshotPath");
+        expect(path.dirname(captured.screenshotPath!)).toBe(config.browserArtifactsDir);
+        expect(Buffer.from(yield* fs.readFile(captured.screenshotPath!)).toString()).toBe("png");
+        expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([
+          path.basename(captured.screenshotPath!),
+        ]);
+      } else {
+        expect(captured).not.toHaveProperty("screenshotPath");
+        expect(yield* fs.exists(config.browserArtifactsDir)).toBe(false);
+      }
       if (options.save && !options.includeImage) {
-        expect(Object.keys(saved).sort()).toEqual([
+        expect(Object.keys(captured).sort()).toEqual([
           "screenshotPath",
-          "textBytes",
+          "textCaptureId",
           "textChars",
-          "textPath",
+          "textTabId",
           "textUrl",
           "url",
         ]);
         expect(snapshot.content).toHaveLength(1);
       }
-      expect(host.timers.size).toBe(0);
+
+      let offset = 0;
+      let complete = "";
+      while (offset < loadedText.length) {
+        const result = yield* callReadText({
+          captureId: captured.textCaptureId,
+          tabId: captured.textTabId,
+          offset,
+        });
+        expect(result.isError).toBe(false);
+        const chunk = result.structuredContent as {
+          readonly text: string;
+          readonly nextOffset: number;
+          readonly totalChars: number;
+          readonly done: boolean;
+          readonly released: boolean;
+        };
+        expect(chunk.text.length).toBeLessThanOrEqual(4096);
+        expect(chunk.nextOffset).toBe(offset + chunk.text.length);
+        expect(chunk.nextOffset).toBeGreaterThan(offset);
+        expect(chunk.totalChars).toBe(loadedText.length);
+        expect(chunk.done).toBe(chunk.nextOffset === loadedText.length);
+        expect(chunk.released).toBe(false);
+        expect(chunk.text.isWellFormed()).toBe(true);
+        const [content] = result.content;
+        expect(content?.type === "text" ? decodeJsonText(content.text) : null).toEqual(chunk);
+        expect(Buffer.byteLength(encodeJsonText(chunk))).toBeLessThan(25_000);
+        complete += chunk.text;
+        offset = chunk.nextOffset;
+      }
+      expect(complete).toBe(loadedText);
+      expect(host.textReads()).toBe(1);
       expect(
-        Object.getOwnPropertyNames(host.context).filter((key) =>
-          key.startsWith("__t3_text_export_"),
-        ),
-      ).toEqual([]);
+        host.requests
+          .slice(beforeRead.length)
+          .every((request) => request.operation === "evaluate" && request.tabId === tabId),
+      ).toBe(true);
+      expect(host.timers.size).toBe(1);
+
+      const released = yield* callReadText({
+        captureId: captured.textCaptureId,
+        tabId: captured.textTabId,
+        release: true,
+      });
+      expect(released.isError).toBe(false);
+      expect(released.structuredContent).toEqual({
+        text: "",
+        nextOffset: 0,
+        totalChars: loadedText.length,
+        done: true,
+        released: true,
+      });
+      expect(host.timers.size).toBe(0);
+      expect(host.listeners.size).toBe(0);
     }),
   ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect.each([{}, { saveText: false }])("keeps text export opt-in %j", (options) =>
+it.effect.each([{}, { captureText: false }])("keeps full-text capture opt-in %j", (options) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const host = yield* serveTextExports("mcp-text-not-requested-client", "Loaded text");
+      const host = yield* serveTextCaptures("mcp-text-not-requested-client", "Loaded text");
 
       const snapshot = yield* callSnapshot({ ...options, includeImage: false });
 
@@ -692,7 +754,7 @@ it.effect.each([{}, { saveText: false }])("keeps text export opt-in %j", (option
       expect(host.requests).toHaveLength(1);
       expect(host.requests[0]).toMatchObject({ operation: "snapshot", input: {} });
       expect(host.textReads()).toBe(0);
-      expect(snapshot.structuredContent).not.toHaveProperty("textPath");
+      expect(snapshot.structuredContent).not.toHaveProperty("textCaptureId");
       const config = yield* ServerConfig.ServerConfig;
       const fs = yield* FileSystem.FileSystem;
       expect(yield* fs.exists(config.browserArtifactsDir)).toBe(false);
@@ -700,12 +762,12 @@ it.effect.each([{}, { saveText: false }])("keeps text export opt-in %j", (option
   ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("rejects an invalid snapshot before starting a requested text export", () =>
+it.effect("rejects an invalid snapshot before starting a requested text capture", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const host = yield* serveTextExports("mcp-invalid-text-export-client", "Loaded text");
+      const host = yield* serveTextCaptures("mcp-invalid-text-capture-client", "Loaded text");
 
-      const snapshot = yield* callSnapshot({ saveText: true, includeImage: "wrong" });
+      const snapshot = yield* callSnapshot({ captureText: true, includeImage: "wrong" });
 
       expect(snapshot.isError).toBe(true);
       expect(host.requests).toEqual([]);
@@ -717,92 +779,47 @@ it.effect("rejects an invalid snapshot before starting a requested text export",
   ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("reports text export failure without a successful snapshot or partial files", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const host = yield* serveTextExports(
-        "mcp-text-failure-client",
-        "private text ".repeat(10_000),
-        {
-          navigate: true,
-        },
-      );
-
-      const snapshot = yield* callSnapshot({ saveText: true, save: true });
-
-      const message = "Preview automation evaluate failed on client mcp-text-failure-client.";
-      expect(snapshot.isError).toBe(true);
-      expect(snapshot.content).toEqual([
-        { type: "text", text: `Preview snapshot failed: ${message}` },
-      ]);
-      expect(snapshot.structuredContent).toEqual({
-        error: {
-          _tag: "PreviewAutomationExecutionError",
-          operation: "snapshot",
-          failureCount: 1,
-          message,
-        },
-      });
-      expect(host.requests.some((request) => request.operation === "snapshot")).toBe(false);
-      expect(host.timers.size).toBe(0);
-      expect(
-        Object.getOwnPropertyNames(host.context).filter((key) =>
-          key.startsWith("__t3_text_export_"),
-        ),
-      ).toEqual([]);
-      const config = yield* ServerConfig.ServerConfig;
-      const fs = yield* FileSystem.FileSystem;
-      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
-    }),
-  ).pipe(Effect.provide(TestLayer)),
-);
-
 it.effect.each(["navigation", "reload"] as const)(
-  "does not return saved text from the old page after %s before snapshot",
+  "does not return captured text from the old page after %s before snapshot",
   (change) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
-        const fs = yield* FileSystem.FileSystem;
         const options: { beforeSnapshot?: Effect.Effect<void> } = {};
-        const host = yield* serveTextExports(
-          "mcp-export-page-change-client",
+        const host = yield* serveTextCaptures(
+          "mcp-capture-page-change-client",
           "loaded text",
           options,
         );
-        options.beforeSnapshot = Effect.gen(function* () {
-          expect(yield* fs.readDirectory(config.browserArtifactsDir)).toHaveLength(1);
+        options.beforeSnapshot = Effect.sync(() => {
+          expect(host.timers.size).toBe(1);
           if (change === "navigation")
             NodeVM.runInContext("location.href = 'https://other.test/'", host.context);
           else host.listeners.get("pagehide")!();
-        }).pipe(Effect.orDie);
+        });
 
-        const snapshot = yield* callSnapshot({ saveText: true });
+        const snapshot = yield* callSnapshot({ captureText: true });
 
         expect(snapshot.isError).toBe(true);
         expect(snapshot.content.every((content) => content.type === "text")).toBe(true);
-        expect(snapshot.structuredContent).not.toHaveProperty("textPath");
+        expect(snapshot.structuredContent).not.toHaveProperty("textCaptureId");
         expect(host.requests.filter((request) => request.operation === "snapshot")).toHaveLength(1);
-        expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
         expect(host.timers.size).toBe(0);
         expect(host.listeners.size).toBe(0);
-        expect(
-          Object.getOwnPropertyNames(host.context).filter((key) =>
-            key.startsWith("__t3_text_export_"),
-          ),
-        ).toEqual([]);
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(config.browserArtifactsDir)).toBe(false);
       }),
     ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("removes the completed text export when the following snapshot fails", () =>
+it.effect("releases the text capture when the following snapshot fails", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const host = yield* serveTextExports("mcp-export-snapshot-failure-client", "loaded text", {
+      const host = yield* serveTextCaptures("mcp-capture-snapshot-failure-client", "loaded text", {
         snapshotFailure: true,
       });
 
-      const snapshot = yield* callSnapshot({ saveText: true });
+      const snapshot = yield* callSnapshot({ captureText: true });
 
       expect(snapshot.isError).toBe(true);
       expect(snapshot.structuredContent).toMatchObject({
@@ -812,30 +829,23 @@ it.effect("removes the completed text export when the following snapshot fails",
       expect(host.requests.filter((request) => request.operation === "snapshot")).toHaveLength(1);
       expect(host.textReads()).toBe(1);
       expect(host.timers.size).toBe(0);
-      expect(
-        Object.getOwnPropertyNames(host.context).filter((key) =>
-          key.startsWith("__t3_text_export_"),
-        ),
-      ).toEqual([]);
+      expect(host.listeners.size).toBe(0);
       const config = yield* ServerConfig.ServerConfig;
       const fs = yield* FileSystem.FileSystem;
-      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
+      expect(yield* fs.exists(config.browserArtifactsDir)).toBe(false);
     }),
   ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("removes only its completed text export when saving the PNG fails", () =>
+it.effect("releases its text capture when saving the PNG fails", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
-      const existing = path.join(config.browserArtifactsDir, "existing.txt");
-      yield* fs.writeFileString(existing, "keep this file");
-      const host = yield* serveTextExports("mcp-export-png-failure-client", "loaded text");
+      yield* fs.writeFileString(config.browserArtifactsDir, "keep this file");
+      const host = yield* serveTextCaptures("mcp-capture-png-failure-client", "loaded text");
 
-      const snapshot = yield* callSnapshot({ saveText: true, save: true });
+      const snapshot = yield* callSnapshot({ captureText: true, save: true });
 
       expect(snapshot.isError).toBe(true);
       expect(snapshot.structuredContent).toMatchObject({
@@ -844,65 +854,133 @@ it.effect("removes only its completed text export when saving the PNG fails", ()
       expect(snapshot.content.every((content) => content.type === "text")).toBe(true);
       expect(host.textReads()).toBe(1);
       expect(host.timers.size).toBe(0);
-      expect(
-        Object.getOwnPropertyNames(host.context).filter((key) =>
-          key.startsWith("__t3_text_export_"),
-        ),
-      ).toEqual([]);
-      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual(["existing.txt"]);
-      expect(yield* fs.readFileString(existing)).toBe("keep this file");
+      expect(host.listeners.size).toBe(0);
+      expect(yield* fs.readFileString(config.browserArtifactsDir)).toBe("keep this file");
     }),
-  ).pipe(
-    Effect.provide(
-      PreviewTestLayer.pipe(
-        Layer.provideMerge(
-          Layer.effect(
-            FileSystem.FileSystem,
-            Effect.gen(function* () {
-              const fs = yield* FileSystem.FileSystem;
-              const path = yield* Path.Path;
-              return FileSystem.FileSystem.of({
-                ...fs,
-                writeFile: (filePath, bytes, options) =>
-                  filePath.endsWith(".png")
-                    ? fs.writeFileString(path.dirname(filePath), "fails on a directory")
-                    : fs.writeFile(filePath, bytes, options),
-              });
-            }),
-          ),
-        ),
-        Layer.provideMerge(NodeServices.layer),
-      ),
-    ),
-  ),
+  ).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("removes the completed text export when the following snapshot is cancelled", () =>
+it.effect("releases the text capture when the following snapshot is cancelled", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const enteredSnapshot = yield* Deferred.make<void>();
-      const host = yield* serveTextExports("mcp-export-snapshot-cancel-client", "loaded text", {
+      const host = yield* serveTextCaptures("mcp-capture-snapshot-cancel-client", "loaded text", {
         beforeSnapshot: Deferred.succeed(enteredSnapshot, undefined).pipe(
           Effect.andThen(Effect.never),
         ),
       });
-      const fiber = yield* Effect.forkChild(callSnapshot({ saveText: true }));
+      const fiber = yield* Effect.forkChild(callSnapshot({ captureText: true }));
       yield* Deferred.await(enteredSnapshot);
-      const config = yield* ServerConfig.ServerConfig;
-      const fs = yield* FileSystem.FileSystem;
-      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toHaveLength(1);
+      expect(host.timers.size).toBe(1);
 
       yield* Fiber.interrupt(fiber);
 
-      expect(yield* fs.readDirectory(config.browserArtifactsDir)).toEqual([]);
       expect(host.requests.filter((request) => request.operation === "snapshot")).toHaveLength(1);
       expect(host.textReads()).toBe(1);
       expect(host.timers.size).toBe(0);
-      expect(
-        Object.getOwnPropertyNames(host.context).filter((key) =>
-          key.startsWith("__t3_text_export_"),
-        ),
-      ).toEqual([]);
+      expect(host.listeners.size).toBe(0);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each([
+  {},
+  { tabId },
+  { captureId: "capture" },
+  { tabId, captureId: "" },
+  { tabId, captureId: 1 },
+  { tabId, captureId: "capture", offset: -1 },
+  { tabId, captureId: "capture", offset: 0.5 },
+  { tabId, captureId: "capture", offset: "0" },
+  { tabId, captureId: "capture", release: "true" },
+])("rejects invalid read-text parameters before browser dispatch %j", (args) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const host = yield* serveTextCaptures("mcp-invalid-text-read-client", "Loaded text");
+
+      const result = yield* callReadText(args);
+
+      expect(result.isError).toBe(true);
+      expect(host.requests).toEqual([]);
+      expect(encodeJsonText(result)).not.toContain("Loaded text");
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("requires the preview capability before reading captured text", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const host = yield* serveTextCaptures("mcp-denied-text-read-client", "Loaded text");
+      const server = yield* McpServer.McpServer;
+
+      const result = yield* server
+        .callTool({ name: "preview_read_text", arguments: { tabId, captureId: "capture" } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...invocation,
+            capabilities: new Set<McpInvocationContext.McpCapability>(),
+          }),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      expect(result.isError).toBe(true);
+      expect(encodeJsonText(result)).toContain("preview capability");
+      expect(host.requests).toEqual([]);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each(["navigation", "reload", "expiry", "replacement", "release"] as const)(
+  "rejects a stale text capture after %s with useful guidance and no page text",
+  (change) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const host = yield* serveTextCaptures("mcp-stale-text-read-client", "private loaded text");
+        const snapshot = yield* callSnapshot({ captureText: true });
+        const captured = snapshot.structuredContent as { readonly textCaptureId: string };
+        const args = { tabId, captureId: captured.textCaptureId };
+        if (change === "navigation")
+          NodeVM.runInContext("location.href = 'https://other.test/'", host.context);
+        else if (change === "reload") host.listeners.get("pagehide")!();
+        else if (change === "expiry") [...host.timers][0]!();
+        else if (change === "replacement") {
+          const newer = yield* callSnapshot({ captureText: true });
+          expect(newer.isError).toBe(false);
+          expect(host.timers.size).toBe(1);
+        } else yield* callReadText({ ...args, release: true });
+
+        const result = yield* callReadText(args);
+
+        expect(result.isError).toBe(true);
+        expect(encodeJsonText(result)).toContain("captureText");
+        expect(encodeJsonText(result)).not.toContain("private loaded text");
+        if (change !== "replacement") {
+          expect(host.timers.size).toBe(0);
+          expect(host.listeners.size).toBe(0);
+        }
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("does not expose another provider session's text capture", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const host = yield* serveTextCaptures("mcp-isolated-text-read-client", "private loaded text");
+      const snapshot = yield* callSnapshot({ captureText: true });
+      const captured = snapshot.structuredContent as { readonly textCaptureId: string };
+      const args = { tabId, captureId: captured.textCaptureId };
+
+      const foreign = yield* callReadText(args, {
+        ...invocation,
+        providerSessionId: "different-session",
+      });
+
+      expect(foreign.isError).toBe(true);
+      expect(encodeJsonText(foreign)).not.toContain("private loaded text");
+      const own = yield* callReadText(args);
+      expect(own.isError).toBe(false);
+      expect(own.structuredContent).toMatchObject({ text: "private loaded text" });
+      expect(host.timers.size).toBe(1);
     }),
   ).pipe(Effect.provide(TestLayer)),
 );

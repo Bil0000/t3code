@@ -31,7 +31,11 @@ import * as PreviewSnapshot from "../preview/Snapshot.ts";
 import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewStandardToolkitHandlersLive } from "./toolkits/preview/handlers.ts";
-import { PreviewSnapshotTool, PreviewStandardToolkit } from "./toolkits/preview/tools.ts";
+import {
+  PreviewReadTextTool,
+  PreviewSnapshotTool,
+  PreviewStandardToolkit,
+} from "./toolkits/preview/tools.ts";
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
@@ -380,47 +384,55 @@ const boundSnapshotMetadata = (metadata: SnapshotMetadata) => {
 };
 
 const isPreviewAutomationError = Schema.is(PreviewAutomationError);
-const isPreviewTextExportError = Schema.is(PreviewSnapshot.PreviewTextExportError);
+const isPreviewTextCaptureError = Schema.is(PreviewSnapshot.PreviewTextCaptureError);
 const decodePreviewSnapshotInput = Schema.decodeUnknownEffect(PreviewSnapshotTool.parametersSchema);
+const decodePreviewReadTextInput = Schema.decodeUnknownEffect(PreviewReadTextTool.parametersSchema);
 
-const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
-  if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
-    return Effect.failCause(cause).pipe(Effect.orDie);
-  }
-  const failures = cause.reasons.filter(Cause.isFailReason);
-  const firstFailure = failures[0]?.error;
-  const errorTag =
-    typeof firstFailure === "object" &&
-    firstFailure !== null &&
-    "_tag" in firstFailure &&
-    typeof firstFailure._tag === "string"
-      ? firstFailure._tag
-      : "PreviewSnapshotError";
-  // Preview errors build their message on the server, never from page output,
-  // and it tells the agent what to do next, such as falling back to a shell browser.
-  const message =
-    isPreviewAutomationError(firstFailure) || isPreviewTextExportError(firstFailure)
-      ? firstFailure.message
-      : undefined;
-  const result = new McpSchema.CallToolResult({
-    isError: true,
-    structuredContent: {
-      error: {
-        _tag: errorTag,
-        operation: "snapshot",
-        failureCount: failures.length,
-        ...(message === undefined ? {} : { message }),
+const previewFailure =
+  (operation: "snapshot" | "readText") =>
+  <E>(cause: Cause.Cause<E>) => {
+    if (Cause.hasInterrupts(cause) || cause.reasons.some(Cause.isDieReason)) {
+      return Effect.failCause(cause).pipe(Effect.orDie);
+    }
+    const failures = cause.reasons.filter(Cause.isFailReason);
+    const firstFailure = failures[0]?.error;
+    const errorTag =
+      typeof firstFailure === "object" &&
+      firstFailure !== null &&
+      "_tag" in firstFailure &&
+      typeof firstFailure._tag === "string"
+        ? firstFailure._tag
+        : "PreviewSnapshotError";
+    // Preview errors build their message on the server, never from page output,
+    // and it tells the agent what to do next, such as falling back to a shell browser.
+    const message =
+      isPreviewAutomationError(firstFailure) || isPreviewTextCaptureError(firstFailure)
+        ? firstFailure.message
+        : undefined;
+    const result = new McpSchema.CallToolResult({
+      isError: true,
+      structuredContent: {
+        error: {
+          _tag: errorTag,
+          operation,
+          failureCount: failures.length,
+          ...(message === undefined ? {} : { message }),
+        },
       },
-    },
-    // Some clients show only the text content and others only structuredContent, so both carry it.
-    content: [{ type: "text", text: `Preview snapshot failed: ${message ?? `${errorTag}.`}` }],
-  });
-  return Effect.logWarning("preview snapshot failed", {
-    operation: "snapshot",
-    errorTag,
-    failureCount: failures.length,
-  }).pipe(Effect.as(result));
-};
+      // Some clients show only the text content and others only structuredContent, so both carry it.
+      content: [
+        {
+          type: "text",
+          text: `Preview ${operation === "snapshot" ? "snapshot" : "text read"} failed: ${message ?? `${errorTag}.`}`,
+        },
+      ],
+    });
+    return Effect.logWarning(`preview ${operation} failed`, {
+      operation,
+      errorTag,
+      failureCount: failures.length,
+    }).pipe(Effect.as(result));
+  };
 
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
@@ -465,17 +477,17 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
               Effect.flatMap((scope) =>
                 snapshots.withSnapshot(
                   { scope, ...input },
-                  ({ snapshot, png, textExport, screenshotPath }) =>
+                  ({ snapshot, png, textCapture, screenshotPath }) =>
                     Effect.sync(() => {
                       const { screenshot, ...page } = snapshot;
                       const textArtifact =
-                        textExport === undefined
+                        textCapture === undefined
                           ? {}
                           : {
-                              textPath: textExport.textPath,
-                              textChars: textExport.totalChars,
-                              textBytes: textExport.sizeBytes,
-                              textUrl: textExport.url,
+                              textCaptureId: textCapture.captureId,
+                              textChars: textCapture.totalChars,
+                              textUrl: textCapture.url,
+                              textTabId: textCapture.tabId,
                             };
                       if (screenshotPath !== undefined && input.includeImage === false) {
                         // The agent only wants a file to show the user. The url keeps the site icon on the tool row.
@@ -541,7 +553,67 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
             ),
           ),
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.matchCauseEffect({ onFailure: previewSnapshotFailure, onSuccess: Effect.succeed }),
+          Effect.matchCauseEffect({
+            onFailure: previewFailure("snapshot"),
+            onSuccess: Effect.succeed,
+          }),
+        );
+      }),
+  });
+  const readTool = PreviewReadTextTool;
+  yield* server.addTool({
+    tool: new McpSchema.Tool({
+      name: readTool.name,
+      description: Tool.getDescription(readTool),
+      inputSchema: Tool.getJsonSchema(readTool),
+      outputSchema: Tool.getJsonSchemaFromSchema(readTool.successSchema),
+      annotations: {
+        ...Context.getOption(readTool.annotations, Tool.Title).pipe(
+          Option.map((title) => ({ title })),
+          Option.getOrUndefined,
+        ),
+        readOnlyHint: Context.get(readTool.annotations, Tool.Readonly),
+        destructiveHint: Context.get(readTool.annotations, Tool.Destructive),
+        idempotentHint: Context.get(readTool.annotations, Tool.Idempotent),
+        openWorldHint: Context.get(readTool.annotations, Tool.OpenWorld),
+      },
+    }),
+    annotations: readTool.annotations,
+    handle: (payload) =>
+      Effect.withFiber((fiber) => {
+        const invocation = Context.getUnsafe(
+          fiber.context,
+          McpInvocationContext.McpInvocationContext,
+        );
+        return decodePreviewReadTextInput(payload ?? {}).pipe(
+          Effect.mapError((cause) =>
+            AiError.make({
+              module: "Toolkit",
+              method: "preview_read_text.handle",
+              reason: new AiError.ToolParameterValidationError({
+                toolName: "preview_read_text",
+                description: cause.message,
+              }),
+            }),
+          ),
+          Effect.flatMap((input) =>
+            McpInvocationContext.requireMcpCapability("preview").pipe(
+              Effect.flatMap((scope) => snapshots.readText({ scope, ...input })),
+            ),
+          ),
+          Effect.map(
+            (result) =>
+              new McpSchema.CallToolResult({
+                isError: false,
+                structuredContent: result,
+                content: [{ type: "text", text: encodeJsonText(result) }],
+              }),
+          ),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.matchCauseEffect({
+            onFailure: previewFailure("readText"),
+            onSuccess: Effect.succeed,
+          }),
         );
       }),
   });

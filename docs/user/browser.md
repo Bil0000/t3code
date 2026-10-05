@@ -9,10 +9,15 @@ Snapshots have a size limit. Current-view text takes priority over page text and
 logs. The result reports omitted content so the agent can request more detail.
 The screenshot shows the current view.
 
-An agent can set `saveText=true` when taking a snapshot to save all loaded,
-rendered main-page text to a UTF-8 file. The file has no total character cap. The
-snapshot returns `textPath` in the environment so the agent can read the file
-in parts. This export does not scroll or load missing content.
+An agent can set `captureText=true` when taking a snapshot to keep all loaded,
+rendered main-page text in temporary browser memory. The capture has no total
+character cap. The agent uses the returned `textCaptureId` and `textTabId` with
+`preview_read_text` to read small parts, starting at offset zero and following
+`nextOffset` until `done=true`. This does not scroll or load missing content.
+
+No text file is created. Normal chat and tool history can still store text the
+agent reads. The capture expires after five idle minutes, a page change, or a
+replacement capture. The agent can also release it with `release=true`.
 
 Complex CSS clip shapes and transformed clips can cause current-view text and
 controls to be omitted. The result reports these omissions. Use the screenshot
