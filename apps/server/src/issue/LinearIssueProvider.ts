@@ -127,6 +127,7 @@ export const make = Effect.gen(function* () {
       provider: "linear",
       operation,
       reason: error.reason,
+      ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
       detail: error.detail,
       cause: error,
     });
@@ -185,6 +186,24 @@ export const make = Effect.gen(function* () {
             items: issues.map(toIssue),
             truncated,
             continues: input.order !== "asc",
+          })),
+        ),
+    getIssueSummary: (input) =>
+      api
+        .getIssueSummary({
+          identifier: identifier(input.repository, input.number),
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(
+          Effect.mapError(fail("getIssueSummary")),
+          Effect.map((issue) => ({
+            number: issue.number,
+            title: issue.title,
+            url: issue.url,
+            state:
+              issue.state.type === "completed" || issue.state.type === "canceled"
+                ? ("closed" as const)
+                : ("open" as const),
           })),
         ),
     getIssue: (input) =>

@@ -209,6 +209,10 @@ current thread. The thread header's **Linked issues** button opens each issue or
 An issue's **Linked threads** section takes you back to those conversations, where you can follow
 their linked pull requests. These controls are available on web and desktop.
 
+Linked issue titles and status update after you change them in T3 Code. Changes made on the host
+appear after the next background refresh. When the host limits requests, refresh waits until
+requests are allowed again.
+
 ### Link issues and pull requests
 
 Use **Link pull request** in an issue's related work, or **Link issue** in a pull request's related
