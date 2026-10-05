@@ -13,12 +13,14 @@ import type {
   EnvironmentId,
   ProjectContentMatch,
   ProjectEntryKind,
+  ThreadId,
+  TurnItemId,
   VcsListRefsResult,
   VcsRef,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -72,6 +74,8 @@ export function useThreadSearch(
   query: string,
 ): {
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
+  /** The settled query `matches` came from; it only changes when results do. */
+  readonly query: string;
   readonly isPending: boolean;
 } {
   const normalizedQuery = query.trim();
@@ -88,6 +92,7 @@ export function useThreadSearch(
   const isDebouncing = canSearch && normalizedQuery !== debouncedQuery;
   return {
     matches: isDebouncing ? EMPTY_THREAD_SEARCH_MATCHES : result.matches,
+    query: settledQuery ?? "",
     isPending: canSearch && (isDebouncing || result.isLoading),
   };
 }
@@ -347,4 +352,23 @@ export function useCheckpointDiff(
     turnTarget === null ? null : orchestrationEnvironment.turnDiff(turnTarget),
   );
   return fullThreadTarget === null ? turn : fullThread;
+}
+
+/** Full input and output of one timeline item, fetched only while its row is open. */
+export function useTurnItemDetail(
+  target: {
+    readonly environmentId: EnvironmentId;
+    readonly threadId: ThreadId;
+    readonly itemId: TurnItemId;
+    readonly revision: string;
+  } | null,
+) {
+  return useEnvironmentQuery(
+    target === null
+      ? null
+      : orchestrationEnvironment.turnItem({
+          environmentId: target.environmentId,
+          input: { threadId: target.threadId, itemId: target.itemId, revision: target.revision },
+        }),
+  );
 }

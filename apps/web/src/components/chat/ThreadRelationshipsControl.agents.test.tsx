@@ -438,6 +438,37 @@ it("shows readable models and only differing workspace details in agent tooltips
       expect(text()).not.toMatch(/Fast|Ultrafast|Normal|Standard|Flex| · high/);
     }
   }
+  state.configs.set("test", {
+    providers: [
+      {
+        instanceId: "codex",
+        driver: "codex",
+        displayName: "Work account",
+        models: [
+          {
+            slug: "gpt-5.4",
+            name: "My GPT",
+            capabilities: { optionDescriptors: [serviceTier] },
+          },
+        ],
+      },
+      {
+        instanceId: "codex_personal",
+        driver: "codex",
+        displayName: "Personal account",
+        models: [],
+      },
+    ],
+  });
+  child.modelSelection.options = [
+    { id: "reasoningEffort", value: "high" },
+    { id: "serviceTier", value: "priority" },
+  ];
+  state.shells = [{ environmentId: "test", source: { ...child } }];
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text(true)).toContain("My GPT · Work account · high");
+  expect(text()).toContain("My GPT · Work account · Fast mode onhigh");
+  expect(text()).not.toContain("Personal account");
   state.configs.set("test", speedConfig);
   child.modelSelection.options = [{ id: "reasoningEffort", value: "high" }];
   state.shells = [
