@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -14,7 +15,7 @@ import type {
   IssueTrackerAccount,
   IssueTrackerConnection,
 } from "@t3tools/contracts";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";

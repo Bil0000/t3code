@@ -120,6 +120,7 @@ export interface ProviderBatchedIssuePage {
 }
 
 export interface ProviderIssueDetail extends ProviderIssue {
+  readonly viewer?: string;
   readonly repositoryUrl?: string;
   readonly body: string;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
@@ -201,6 +202,11 @@ export interface IssueAdapter {
   readonly tracker?: IssueTracker;
   readonly kind: IssueProviderKind;
   readonly capabilities: IssueCapabilities;
+  readonly candidatePermissionsIncluded?: boolean;
+  readonly withCredential?: <A, E>(
+    host: string,
+    read: (fingerprint: string) => Effect.Effect<A, E>,
+  ) => Effect.Effect<A, E | IssueProviderError>;
 
   /**
    * Optional local project binding for adapters selected outside source control, such as a future

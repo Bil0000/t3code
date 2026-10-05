@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
-import * as HttpServerRespondable from "effect/unstable/http/HttpServerRespondable";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
   CommandId,
@@ -824,8 +824,9 @@ const PROVIDER_REQUIREMENT: Partial<
 > = {
   github: {
     missing:
-      "GitHub CLI (`gh`) is required to browse issues on this host. Install it from https://cli.github.com/ and reload.",
-    unauthenticated: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
+      "No GitHub credential on the server. Save a token in Settings → Source Control → GitHub, set GH_TOKEN, or sign in with `gh auth login`.",
+    unauthenticated:
+      "GitHub is not authenticated. Save a token in Settings → Source Control → GitHub, set GH_TOKEN, or sign in with `gh auth login`.",
   },
   gitlab: {
     missing:

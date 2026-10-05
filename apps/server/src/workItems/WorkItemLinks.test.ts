@@ -10,7 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
 import * as IssueService from "../issue/IssueService.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { WorkItemLinks, layer } from "./WorkItemLinks.ts";
 
@@ -27,7 +27,7 @@ describe("WorkItemLinks", () => {
       const reads = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const guards: unknown[] = [];
       const dependencies = Layer.mergeAll(
-        SqlitePersistenceMemory,
+        SqlitePersistence.layerMemory,
         Layer.mock(IssueService.IssueService)({
           detail: (ref) =>
             Ref.update(reads, (values) => [...values, ref]).pipe(

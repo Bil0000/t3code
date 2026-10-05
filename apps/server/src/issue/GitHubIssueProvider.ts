@@ -1,7 +1,9 @@
 import { IssueListSort } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import type { IssueCapabilities, IssueViewerPermissions, IssueActor } from "@t3tools/contracts";
+import type { IssueCapabilities, IssueViewerPermissions } from "@t3tools/contracts";
 
+import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import type { GitHubIssueViewerAccess } from "./gitHubIssueJson.ts";
 import {
@@ -59,41 +61,33 @@ function gitHubIssueViewerPermissions(access: GitHubIssueViewerAccess): IssueVie
 /** The CLI tags that mean the tool itself is unusable, or that this repository keeps no issues,
  *  rather than one request failing. */
 function reasonFor(error: GitHubIssueCli.GitHubIssueCliError): IssueProviderError["reason"] {
-  if (error._tag === "GitHubCliUnavailableError") return "missing-tool";
-  if (error._tag === "GitHubCliAuthenticationError") return "unauthenticated";
+  if (error._tag === "GitHubCliMissingError") return "missing-tool";
+  if (
+    error._tag === "GitHubApiAuthenticationError" ||
+    error._tag === "GitHubNotSignedInError" ||
+    error._tag === "GitHubHostDisabledError"
+  )
+    return "unauthenticated";
   if (error._tag === "GitHubIssuesDisabledError") return "tracker-disabled";
   if (
-    error._tag === "GitHubCliRateLimitError" ||
+    error._tag === "GitHubApiRateLimitError" ||
     error._tag === "SourceControlRateLimitPausedError"
   )
     return "rate-limited";
   return "failed";
 }
 
-/**
- * `gh issue view --json` reports no avatar for anyone, so the ones the GraphQL read collected are
- * applied here by login. An actor already carrying one keeps it, and a login the read said nothing
- * about keeps its initials rather than a guessed picture.
- */
-function withAvatar(
-  actor: IssueActor | null,
-  avatarsByLogin: ReadonlyMap<string, string>,
-): IssueActor | null {
-  if (actor === null || actor.avatarUrl !== null) return actor;
-  const avatarUrl = avatarsByLogin.get(actor.login);
-  return avatarUrl === undefined ? actor : { ...actor, avatarUrl };
-}
-
 export const make = Effect.gen(function* () {
   const cli = yield* GitHubIssueCli.GitHubIssueCli;
+  const api = yield* GitHubApi.GitHubApi;
 
   const fail = (operation: string) => (error: GitHubIssueCli.GitHubIssueCliError) =>
     new IssueProviderError({
       provider: "github",
       operation,
       reason: reasonFor(error),
-      detail: error.detail,
-      ...((error._tag === "GitHubCliRateLimitError" ||
+      detail: "detail" in error ? error.detail : error.message,
+      ...((error._tag === "GitHubApiRateLimitError" ||
         error._tag === "SourceControlRateLimitPausedError") &&
       error.retryAt !== undefined
         ? { retryAt: error.retryAt }
@@ -104,6 +98,21 @@ export const make = Effect.gen(function* () {
   const provider: IssueAdapter = {
     kind: "github",
     capabilities: CAPABILITIES,
+    candidatePermissionsIncluded: true,
+    withCredential: (host, read) =>
+      api.credential(host).pipe(
+        Effect.mapError(fail("credential")),
+        Effect.flatMap(({ token, fingerprint }) =>
+          read(fingerprint).pipe(
+            Effect.provideService(GitHubApi.PinnedGitHubCredential, {
+              host: host.toLowerCase(),
+              token,
+              credentialFingerprint: fingerprint,
+            }),
+            Effect.provideService(SourceControlRateLimit.CredentialScope, fingerprint),
+          ),
+        ),
+      ),
 
     getViewer: (input) => cli.getViewerLogin(input).pipe(Effect.mapError(fail("getViewer"))),
 
@@ -147,20 +156,13 @@ export const make = Effect.gen(function* () {
       cli.getIssueSummary(input).pipe(Effect.mapError(fail("getIssueSummary"))),
 
     getIssue: (input) =>
-      Effect.all([cli.getIssueDetail(input), cli.getIssueSupplement(input)], {
-        concurrency: 2,
-      }).pipe(
+      cli.getIssueDetail(input).pipe(
         Effect.mapError(fail("getIssue")),
-        Effect.map(([issue, supplement]): ProviderIssueDetail => ({
+        Effect.map((issue): ProviderIssueDetail => ({
           ...issue,
           repositoryUrl: new URL(input.repository, `${new URL(issue.url).origin}/`).toString(),
-          author: withAvatar(issue.author, supplement.avatarsByLogin),
-          assignees: issue.assignees.map(
-            (assignee) => withAvatar(assignee, supplement.avatarsByLogin) ?? assignee,
-          ),
-          commentCount: supplement.commentCount,
-          linkedPullRequests: supplement.linkedPullRequests,
-          viewerPermissions: gitHubIssueViewerPermissions(supplement.viewer),
+          viewer: issue.viewerLogin,
+          viewerPermissions: gitHubIssueViewerPermissions(issue.viewerAccess),
         })),
       ),
 

@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -671,10 +672,7 @@ it.effect("says what a host with an unauthenticated tool needs before it can be 
 
     const enterprise = result.providers.find((summary) => summary.host === "github.acme.dev");
     assert.strictEqual(enterprise?.configured, false);
-    assert.strictEqual(
-      enterprise?.detail,
-      "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
-    );
+    assert.strictEqual(enterprise?.detail, "github is not usable.");
     // Its repositories are named rather than dropped, so "N unavailable" stays honest.
     assert.deepStrictEqual(
       result.errors.map((error) => error.projectId),
@@ -2190,5 +2188,140 @@ it.effect("falls back to issue detail when a provider has no summary read", () =
     });
     assert.equal((yield* service.summary(REFERENCE)).title, "Issue 7");
     assert.equal(reads, 1);
+  }),
+);
+
+it.effect("changes every GitHub cache and viewer when the verified credential changes", () =>
+  Effect.gen(function* () {
+    let fingerprint = "account-a";
+    const reads = { detail: 0, activity: 0, summary: 0, list: 0, templates: 0, viewer: 0 };
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          withCredential: (_host, read) => read(fingerprint),
+          getViewer: () => {
+            reads.viewer++;
+            return Effect.succeed(fingerprint);
+          },
+          getIssue: () => {
+            reads.detail++;
+            return Effect.succeed({ ...issueDetail(7), viewer: fingerprint });
+          },
+          getIssueActivity: () => {
+            reads.activity++;
+            return Effect.succeed({
+              author: null,
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              events: [],
+            });
+          },
+          getIssueSummary: () => {
+            reads.summary++;
+            return Effect.succeed(issue(7, "2026-07-02T00:00:00Z"));
+          },
+          listIssues: () => {
+            reads.list++;
+            return Effect.succeed({
+              items: [issue(7, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: true,
+            });
+          },
+          listIssueTemplates: () => {
+            reads.templates++;
+            return Effect.succeed(TEMPLATES);
+          },
+        }),
+      ],
+    });
+    const readAll = Effect.gen(function* () {
+      const detail = yield* service.detail(REFERENCE);
+      assert.equal(detail.viewer, fingerprint);
+      yield* service.activity(REFERENCE);
+      yield* service.summary(REFERENCE);
+      yield* service.list({ state: "open" });
+      yield* service.templates(REFERENCE);
+    });
+    yield* readAll;
+    yield* readAll;
+    assert.deepEqual(reads, {
+      detail: 1,
+      activity: 1,
+      summary: 1,
+      list: 1,
+      templates: 1,
+      viewer: 1,
+    });
+    fingerprint = "account-b";
+    yield* readAll;
+    assert.deepEqual(reads, {
+      detail: 2,
+      activity: 2,
+      summary: 2,
+      list: 2,
+      templates: 2,
+      viewer: 2,
+    });
+  }),
+);
+
+it.effect("candidate queries with fresh access rights skip a separate permission read", () =>
+  Effect.gen(function* () {
+    let permissionReads = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          candidatePermissionsIncluded: true,
+          getViewerPermissions: () => {
+            permissionReads++;
+            return Effect.succeed(FULL_PERMISSIONS);
+          },
+          listLabelCandidates: () => Effect.succeed({ candidates: [], truncated: false }),
+          listAssigneeCandidates: () => Effect.succeed({ candidates: [], truncated: false }),
+        }),
+      ],
+    });
+    yield* service.labelCandidates(REFERENCE);
+    yield* service.assigneeCandidates(REFERENCE);
+    assert.equal(permissionReads, 0);
+  }),
+);
+
+it.effect("pins list viewers and rows to the same account when settings change", () =>
+  Effect.gen(function* () {
+    const account = Context.Reference<string>("test/issue/account", { defaultValue: () => "" });
+    let selected = "account-a";
+    const observed: string[] = [];
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          withCredential: (_host, read) =>
+            read(selected).pipe(Effect.provideService(account, selected)),
+          getViewer: () =>
+            Effect.map(account, (pinned) => {
+              selected = "account-b";
+              return pinned;
+            }),
+          listIssues: (input) =>
+            Effect.map(account, (pinned) => {
+              observed.push(pinned);
+              assert.equal(input.viewer, pinned);
+              return {
+                items: [issue(7, "2026-07-02T00:00:00Z")],
+                truncated: false,
+                continues: true,
+              };
+            }),
+        }),
+      ],
+    });
+    yield* service.list({ state: "open" });
+    yield* service.list({ state: "open" });
+    assert.deepEqual(observed, ["account-a", "account-b"]);
   }),
 );

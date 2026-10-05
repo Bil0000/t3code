@@ -1,7 +1,7 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { findThreadIssueLink, resolveIssueUrl, useIssueLinking } from "./useIssueLinking";

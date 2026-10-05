@@ -56,7 +56,11 @@ const RawMilestoneSchema = Schema.Struct({
   title: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-/** One row as `gh issue list --json` and `gh issue view --json` both spell it. */
+/**
+ * A search's own answer, which is the listing's row one connection deeper: `gh issue list --json`
+ * flattens assignees and labels, and GraphQL does not. Everything below the row is optional
+ * because a node that is not an issue decodes as an empty object, which is skipped.
+ */
 const RawIssueSchema = Schema.Struct({
   number: Schema.Int,
   title: Schema.String,
@@ -75,11 +79,6 @@ const RawIssueSchema = Schema.Struct({
   body: Schema.optional(Schema.String),
 });
 
-/**
- * A search's own answer, which is the listing's row one connection deeper: `gh issue list --json`
- * flattens assignees and labels, and GraphQL does not. Everything below the row is optional
- * because a node that is not an issue decodes as an empty object, which is skipped.
- */
 const RawSearchItemSchema = Schema.Struct({
   number: Schema.Int,
   title: Schema.String,
@@ -425,16 +424,6 @@ const RawCreatedIssueSchema = Schema.Struct({
   html_url: Schema.String,
 });
 
-/**
- * `comments` is deliberately absent: `gh issue list --json comments` answers with every remark's
- * whole body rather than with a count, which is megabytes for a page of busy issues. A row from
- * this read reports no conversation size; the search below carries GitHub's own count instead.
- */
-export const ISSUE_LIST_JSON_FIELDS =
-  "number,title,url,author,state,stateReason,createdAt,updatedAt,closedAt,assignees,labels,milestone,reactionGroups";
-
-export const ISSUE_DETAIL_JSON_FIELDS = `${ISSUE_LIST_JSON_FIELDS},body`;
-
 /** GitHub's own ceiling on a connection page, which is what every read below asks for. */
 const GRAPHQL_PAGE_SIZE = 100;
 
@@ -492,7 +481,7 @@ export function issueSearchGraphQlQuery(rows: number): string {
         milestone { title }
         comments { totalCount }
         ${GITHUB_REACTION_GROUPS_FIELDS}
-        assignees(first: 20) { nodes { login name avatarUrl } }
+        assignees(first: 100) { nodes { login name avatarUrl } }
         labels(first: 20) { nodes { name color } }
       }
     }
@@ -512,13 +501,18 @@ export function issueSearchGraphQlQuery(rows: number): string {
  * ordinary cross-reference, which is a mention rather than a promise to close it.
  */
 export const ISSUE_SUPPLEMENT_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     viewerPermission
     issue(number: $number) {
+      number title url body state stateReason createdAt updatedAt closedAt
+      labels(first: 100) { nodes { name color } }
+      milestone { title }
+      ${GITHUB_REACTION_GROUPS_FIELDS}
       viewerCanUpdate
       viewerDidAuthor
-      author { login avatarUrl }
-      assignees(first: 20) { nodes { login name avatarUrl } }
+      author { login avatarUrl ... on User { name } }
+      assignees(first: 100) { nodes { login name avatarUrl } }
       comments { totalCount }
       closedByPullRequestsReferences(first: 20, includeClosedPrs: true, userLinkedOnly: false) {
         nodes { number title url state isDraft repository { nameWithOwner } }
@@ -671,11 +665,12 @@ export const UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION = `mutation($commentId: ID!, 
  */
 export const ASSIGNEE_CANDIDATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
+    viewerPermission
     assignableUsers(first: ${GRAPHQL_PAGE_SIZE}) {
       pageInfo { hasNextPage }
       nodes { login name avatarUrl }
     }
-    issue(number: $number) { assignees(first: ${GRAPHQL_PAGE_SIZE}) { nodes { login } } }
+    issue(number: $number) { viewerCanUpdate viewerDidAuthor assignees(first: ${GRAPHQL_PAGE_SIZE}) { nodes { login } } }
   }
 }`;
 
@@ -730,56 +725,11 @@ export const ISSUE_TEMPLATE_FORMS_GRAPHQL_QUERY = `query($owner: String!, $name:
   }
 }`;
 
-/**
- * A GraphQL request as `gh api graphql --input -` takes it. Variables travel in the document
- * rather than as `-f name=value` flags, so a reader's own words never reach argv.
- */
-const GraphQlRequestSchema = Schema.Struct({
-  query: Schema.String,
-  variables: Schema.Record(Schema.String, Schema.String),
-});
-
-const encodeGraphQlRequest = Schema.encodeSync(Schema.fromJsonString(GraphQlRequestSchema));
-
-export function encodeGraphQlRequestJson(input: {
-  readonly query: string;
-  readonly variables: Readonly<Record<string, string>>;
-}): string {
-  return encodeGraphQlRequest({ query: input.query, variables: { ...input.variables } });
-}
-
-/**
- * The body of `POST /repos/{owner}/{repo}/issues` and of the `PATCH` that edits one. Every write
- * takes the same road because a title and a body are the reader's own words either way, and the
- * REST API is the only one of GitHub's that accepts both without putting them in argv —
- * `gh issue create --title` and `gh issue edit --title` cannot.
- *
- * Labels and assignees are the whole set rather than a change to it, which is what this endpoint
- * writes: an empty array takes all of them off.
- */
-const IssueWriteSchema = Schema.Struct({
-  title: Schema.optional(Schema.String),
-  body: Schema.optional(Schema.String),
-  labels: Schema.optional(Schema.Array(Schema.String)),
-  assignees: Schema.optional(Schema.Array(Schema.String)),
-});
-
-const encodeIssueWrite = Schema.encodeSync(Schema.fromJsonString(IssueWriteSchema));
-
 export interface IssueWriteFields {
   readonly title?: string | undefined;
   readonly body?: string | undefined;
   readonly labels?: ReadonlyArray<string> | undefined;
   readonly assignees?: ReadonlyArray<string> | undefined;
-}
-
-export function buildIssueWriteJson(input: IssueWriteFields): string {
-  return encodeIssueWrite({
-    ...(input.title === undefined ? {} : { title: input.title }),
-    ...(input.body === undefined ? {} : { body: input.body }),
-    ...(input.labels === undefined ? {} : { labels: input.labels }),
-    ...(input.assignees === undefined ? {} : { assignees: input.assignees }),
-  });
 }
 
 export interface GitHubIssue {
@@ -1035,9 +985,6 @@ function toIssue(raw: Schema.Schema.Type<typeof RawIssueSchema>): GitHubIssue {
   };
 }
 
-const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
-const decodeIssueEntry = Schema.decodeUnknownExit(RawIssueSchema);
-const decodeIssue = decodeJsonResult(RawIssueSchema);
 const decodeSearch = decodeJsonResult(RawSearchSchema);
 const decodeSearchItem = Schema.decodeUnknownExit(RawSearchItemSchema);
 const decodeTimelineItem = Schema.decodeUnknownExit(RawTimelineItemSchema);
@@ -1046,7 +993,6 @@ const decodeViewerPermissions = decodeJsonResult(RawViewerPermissionsSchema);
 const decodeActivity = decodeJsonResult(RawActivitySchema);
 const decodeCommentPage = decodeJsonResult(RawCommentPageSchema);
 const decodeAssigneeCandidates = decodeJsonResult(RawAssigneeCandidatesSchema);
-const decodeLabelEntry = Schema.decodeUnknownExit(RawLabelSchema);
 const decodeCreatedIssue = decodeJsonResult(RawCreatedIssueSchema);
 const decodeIssueTemplates = decodeJsonResult(RawIssueTemplatesSchema);
 const decodeIssueTemplateEntry = Schema.decodeUnknownExit(RawIssueTemplateSchema);
@@ -1059,38 +1005,6 @@ const decodeIssueTemplateConfig = Schema.decodeUnknownExit(RawIssueTemplateConfi
 const decodeContactLinkEntry = Schema.decodeUnknownExit(RawContactLinkSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
-
-export interface GitHubIssueListBatch {
-  readonly items: ReadonlyArray<GitHubIssue>;
-  /** Rows gh returned, counted before decoding, so a skipped row cannot hide a next page. */
-  readonly rawCount: number;
-}
-
-/** Malformed entries are skipped rather than failing the batch: one unexpected issue must not
- *  blank the whole list. */
-export function decodeIssueListJson(
-  raw: string,
-): Result.Result<GitHubIssueListBatch, DecodeFailure> {
-  const decoded = decodeUnknownList(raw);
-  if (!Result.isSuccess(decoded)) {
-    return Result.fail(decoded.failure);
-  }
-  const items: GitHubIssue[] = [];
-  for (const entry of decoded.success) {
-    const item = decodeIssueEntry(entry);
-    if (Exit.isSuccess(item)) items.push(toIssue(item.value));
-  }
-  return Result.succeed({ items, rawCount: decoded.success.length });
-}
-
-export function decodeIssueDetailJson(
-  raw: string,
-): Result.Result<GitHubIssueDetail, DecodeFailure> {
-  const decoded = decodeIssue(raw);
-  return Result.isSuccess(decoded)
-    ? Result.succeed({ ...toIssue(decoded.success), body: decoded.success.body ?? "" })
-    : Result.fail(decoded.failure);
-}
 
 export function decodeCreatedIssueJson(
   raw: string,
@@ -1308,34 +1222,6 @@ export function decodeIssueCommentsJson(raw: string): Result.Result<
     comments: toComments(comments, viewer),
     nextCursor: previousCursorOf(comments?.pageInfo),
   });
-}
-
-export interface GitHubRepositoryLabels {
-  /** Nothing is marked applied here: which labels the issue has lives on the issue. */
-  readonly labels: ReadonlyArray<Omit<IssueLabelCandidate, "isApplied">>;
-  readonly rawCount: number;
-}
-
-export function decodeRepositoryLabelsJson(
-  raw: string,
-): Result.Result<GitHubRepositoryLabels, DecodeFailure> {
-  const decoded = decodeUnknownList(raw);
-  if (!Result.isSuccess(decoded)) {
-    return Result.fail(decoded.failure);
-  }
-  const labels: Array<Omit<IssueLabelCandidate, "isApplied">> = [];
-  for (const entry of decoded.success) {
-    const label = decodeLabelEntry(entry);
-    if (Exit.isFailure(label)) continue;
-    const name = trimmed(label.value.name);
-    if (name === null) continue;
-    labels.push({
-      name,
-      color: trimmed(label.value.color),
-      description: label.value.description ?? null,
-    });
-  }
-  return Result.succeed({ labels, rawCount: decoded.success.length });
 }
 
 /**
@@ -1666,4 +1552,221 @@ export function decodeIssueTemplateConfigYaml(
   // Only an explicit `false` takes the blank issue away; anything else, including a value that is
   // not a boolean at all, leaves it where GitHub puts it.
   return { contactLinks, blankIssuesEnabled: config.value.blank_issues_enabled !== false };
+}
+
+const encodeApiJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+export interface GitHubIssueCore extends GitHubIssueDetail {
+  readonly viewerAccess: GitHubIssueViewerAccess;
+  readonly viewerLogin: string;
+  readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
+}
+
+const decodeCore = Schema.decodeResult(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        viewer: Schema.Struct({ login: Schema.NonEmptyString }),
+        repository: Schema.Struct({
+          issue: Schema.Struct({ ...RawSearchItemSchema.fields, body: Schema.String }),
+        }),
+      }),
+    }),
+  ),
+);
+
+export function decodeIssueCoreJson(
+  raw: string,
+): Result.Result<GitHubIssueCore, DecodeFailure | Schema.SchemaError> {
+  return Result.flatMap(decodeCore(raw), ({ data }) =>
+    Result.map(decodeIssueSupplementJson(raw), (supplement) => {
+      const issue = data.repository.issue;
+      return {
+        ...toIssue({
+          ...issue,
+          assignees: toActors(issue.assignees?.nodes),
+          labels: (issue.labels?.nodes ?? []).flatMap((label) => (label === null ? [] : [label])),
+        }),
+        body: issue.body,
+        commentCount: supplement.commentCount,
+        viewerAccess: supplement.viewer,
+        viewerLogin: data.viewer.login,
+        linkedPullRequests: supplement.linkedPullRequests,
+      };
+    }),
+  );
+}
+
+const summarySchema = Schema.Struct({
+  number: Schema.Int,
+  title: Schema.String,
+  url: Schema.String,
+  state: Schema.Literals(["OPEN", "CLOSED"]),
+});
+const decodeSummaryBatch = Schema.decodeResult(
+  Schema.fromJsonString(Schema.Struct({ data: Schema.Record(Schema.String, Schema.Unknown) })),
+);
+const decodeSummaryEntries = Schema.decodeUnknownResult(
+  Schema.Array(
+    Schema.Tuple([
+      Schema.String,
+      Schema.NullOr(Schema.Struct({ issue: Schema.NullOr(summarySchema) })),
+    ]),
+  ),
+);
+
+export function buildIssueSummaryQuery(
+  refs: ReadonlyArray<{ readonly repository: string; readonly number: number }>,
+): string {
+  return `query { ${refs
+    .map((ref, index) => {
+      const [owner, name] = ref.repository.split("/");
+      return `issue${index}: repository(owner: ${encodeApiJson(owner)}, name: ${encodeApiJson(name)}) { issue(number: ${Math.trunc(ref.number)}) { number title url state } }`;
+    })
+    .join("\n")} }`;
+}
+
+export function decodeIssueSummaryBatchJson(
+  raw: string,
+): Result.Result<
+  ReadonlyMap<number, Pick<GitHubIssue, "number" | "title" | "url" | "state">>,
+  DecodeFailure | Schema.SchemaError
+> {
+  return Result.flatMap(decodeSummaryBatch(raw), ({ data }) =>
+    Result.map(
+      decodeSummaryEntries(Object.entries(data).filter(([alias]) => /^issue\d+$/.test(alias))),
+      (entries) =>
+        new Map(
+          entries.flatMap(([alias, repository]) => {
+            const match = /^issue(\d+)$/.exec(alias);
+            const issue = repository?.issue;
+            return match === null || issue == null
+              ? []
+              : [
+                  [
+                    Number(match[1]),
+                    {
+                      ...issue,
+                      state: issue.state === "CLOSED" ? ("closed" as const) : ("open" as const),
+                    },
+                  ] as const,
+                ];
+          }),
+        ),
+    ),
+  );
+}
+
+const ISSUE_ROW_GRAPHQL_FIELDS = `number title url state stateReason createdAt updatedAt closedAt
+  author { login avatarUrl ... on User { name } }
+  repository { nameWithOwner }
+  assignees(first: 20) { nodes { login name avatarUrl } }
+  labels(first: 20) { nodes { name color } }
+  milestone { title } comments { totalCount } ${GITHUB_REACTION_GROUPS_FIELDS}`;
+
+export const ISSUE_REPOSITORY_LIST_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $first: Int!, $states: [IssueState!], $assignee: String, $createdBy: String, $mentioned: String, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    hasIssuesEnabled
+    issues(first: $first, after: $cursor, states: $states, filterBy: { assignee: $assignee, createdBy: $createdBy, mentioned: $mentioned }, orderBy: { field: CREATED_AT, direction: DESC }) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ${ISSUE_ROW_GRAPHQL_FIELDS} }
+    }
+  }
+}`;
+
+const decodeRepositoryList = Schema.decodeResult(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        repository: Schema.Struct({
+          hasIssuesEnabled: Schema.Boolean,
+          issues: Schema.NullOr(
+            Schema.Struct({ nodes: Schema.Array(Schema.Unknown), pageInfo: RawPageInfoSchema }),
+          ),
+        }),
+      }),
+    }),
+  ),
+);
+
+export function decodeIssueRepositoryListJson(raw: string): Result.Result<
+  {
+    readonly items: ReadonlyArray<GitHubIssue>;
+    readonly rawCount: number;
+    readonly hasNextPage: boolean;
+    readonly nextCursor: string | null;
+    readonly enabled: boolean;
+  },
+  DecodeFailure | Schema.SchemaError
+> {
+  return Result.flatMap(decodeRepositoryList(raw), ({ data }) =>
+    Result.map(
+      decodeIssueSearchJson(
+        encodeApiJson({
+          data: {
+            search: data.repository.issues ?? { nodes: [], pageInfo: { hasNextPage: false } },
+          },
+        }),
+      ),
+      (batch) => ({
+        items: batch.items,
+        rawCount: batch.rawCount,
+        hasNextPage: batch.hasNextPage,
+        nextCursor: batch.nextCursor,
+        enabled: data.repository.hasIssuesEnabled,
+      }),
+    ),
+  );
+}
+
+export const ISSUE_LABEL_CANDIDATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    viewerPermission
+    labels(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { name color description } }
+    issue(number: $number) { viewerCanUpdate viewerDidAuthor labels(first: 100) { nodes { name } } }
+  }
+}`;
+
+const decodeLabelCandidates = Schema.decodeResult(
+  Schema.fromJsonString(
+    Schema.Struct({
+      data: Schema.Struct({
+        repository: Schema.Struct({
+          viewerPermission: Schema.optional(Schema.NullOr(Schema.String)),
+          labels: Schema.Struct({
+            pageInfo: RawPageInfoSchema,
+            nodes: Schema.Array(RawLabelSchema),
+          }),
+          issue: Schema.Struct({
+            ...RawViewerFieldsSchema.fields,
+            labels: Schema.Struct({ nodes: Schema.Array(Schema.Struct({ name: Schema.String })) }),
+          }),
+        }),
+      }),
+    }),
+  ),
+);
+
+export function decodeIssueLabelCandidatesJson(raw: string): Result.Result<
+  {
+    readonly candidates: ReadonlyArray<IssueLabelCandidate>;
+    readonly nextCursor: string | null;
+    readonly canTriage: boolean;
+  },
+  DecodeFailure | Schema.SchemaError
+> {
+  return Result.map(decodeLabelCandidates(raw), ({ data }) => {
+    const repository = data.repository;
+    const applied = new Set(repository.issue.labels.nodes.map((label) => label.name));
+    return {
+      candidates: repository.labels.nodes.map((label) => ({
+        name: label.name,
+        color: label.color ?? null,
+        description: label.description ?? null,
+        isApplied: applied.has(label.name),
+      })),
+      nextCursor: nextCursorOf(repository.labels.pageInfo),
+      canTriage: toViewerAccess(repository).canTriage,
+    };
+  });
 }

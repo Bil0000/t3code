@@ -13,7 +13,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -21,7 +21,7 @@ import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const decodeClientCommand = Schema.decodeUnknownOption(OrchestrationV2Command);
@@ -33,15 +33,15 @@ const adapter = {
   openSession: () => Effect.die("No provider session needed for issue links"),
 } as ProviderAdapterV2Shape;
 const stores = Layer.mergeAll(EventStore.layer, ProjectionStore.layer).pipe(
-  Layer.provide(SqlitePersistenceMemory),
+  Layer.provide(SqlitePersistence.layerMemory),
 );
 const testLayer = Layer.mergeAll(
   stores,
-  ProjectionMaintenance.layer.pipe(Layer.provide(stores), Layer.provide(SqlitePersistenceMemory)),
-  makeOrchestratorV2ReplayLayerWithRegistry(
+  ProjectionMaintenance.layer.pipe(Layer.provide(stores), Layer.provide(SqlitePersistence.layerMemory)),
+  layerWithRegistry(
     { name: "thread-issues" },
-    ProviderAdapterRegistry.makeLayer([adapter]),
-    { databaseLayer: SqlitePersistenceMemory, runEffectWorker: false },
+    ProviderAdapterRegistry.layerFromAdapters([adapter]),
+    { databaseLayer: SqlitePersistence.layerMemory, runEffectWorker: false },
   ),
 );
 const issue = (number: number, linkId?: string): ThreadIssueLink => ({

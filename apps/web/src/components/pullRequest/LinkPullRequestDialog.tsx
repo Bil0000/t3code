@@ -35,7 +35,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import { Button } from "../ui/button";
 import {
   Dialog,

@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
-import * as Tool from "effect/unstable/ai/Tool";
+import * as Tool from "effect/ai/Tool";
 
 import {
   resolveT3McpToolDefinition,

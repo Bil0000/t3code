@@ -1,1541 +1,766 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as TestClock from "effect/testing/TestClock";
-import * as Clock from "effect/Clock";
 import * as Redacted from "effect/Redacted";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 
-import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
-import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import * as GitHubApi from "../sourceControl/GitHubApi.ts";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
-import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 
-const mockedExecute = vi.fn<GitHubCli.GitHubCli["Service"]["execute"]>();
-
-const layer = it.layer(
-  GitHubIssueCli.layer.pipe(
-    Layer.provide(
-      Layer.mock(GitHubCli.GitHubCli)({
-        execute: mockedExecute,
-      }),
-    ),
-    Layer.provide(GitHubGraphQlBudget.layer),
-    Layer.provide(SourceControlRateLimit.layer),
-  ),
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const graphql = vi.fn<GitHubApi.GitHubApi["Service"]["graphql"]>();
+const rest = vi.fn<GitHubApi.GitHubApi["Service"]["rest"]>();
+const layer = GitHubIssueCli.layer.pipe(
+  Layer.provide(Layer.mock(GitHubApi.GitHubApi)({ graphql, rest })),
 );
-
-function output(stdout: string) {
-  return {
-    exitCode: ChildProcessSpawner.ExitCode(0),
-    stdout,
-    stderr: "",
-    stdoutTruncated: false,
-    stderrTruncated: false,
-    stdoutInvalidUtf8: false,
-  };
-}
-
-/**
- * Instants a minute apart, newest first, which is the order every listing here reads in. Rows share
- * one only where a test hands them one, because sharing one is what a continuation has to work
- * around.
- */
-function instant(step: number): string {
-  return `2026-07-02T00:${String(59 - step).padStart(2, "0")}:00Z`;
-}
-
-/** Rows as `gh issue list --json` answers with them. */
-function issues(count: number, firstNumber: number, updatedAt?: string): string {
-  return JSON.stringify(
-    Array.from({ length: count }, (_, index) => ({
-      number: firstNumber + index,
-      title: `Issue ${firstNumber + index}`,
-      url: `https://github.com/acme/web/issues/${firstNumber + index}`,
-      state: "OPEN",
-      createdAt: "2026-07-01T00:00:00Z",
-      updatedAt: updatedAt ?? instant(index),
-    })),
-  );
-}
-
-/** One issue as `gh issue view --json` answers with it. */
-function issueJson(entry: Record<string, unknown>): string {
-  return JSON.stringify({
-    number: 7,
-    title: "The page never loads",
-    url: "https://github.com/acme/web/issues/7",
-    state: "OPEN",
-    createdAt: "2026-07-01T00:00:00Z",
-    updatedAt: "2026-07-02T00:00:00Z",
-    ...entry,
+const target = { cwd: "/w", host: "enterprise.test", repository: "acme/web", number: 7 };
+const listing = {
+  ...target,
+  state: "open" as const,
+  involvement: "all" as const,
+  viewer: "bilal",
+  limit: 2,
+};
+const instant = "2026-07-02T00:00:00Z";
+const row = (number: number, updatedAt = instant) => ({
+  number,
+  title: `Issue ${number}`,
+  url: `https://enterprise.test/acme/web/issues/${number}`,
+  state: "OPEN",
+  createdAt: "2026-07-01T00:00:00Z",
+  updatedAt,
+  author: { login: "bilal", avatarUrl: "https://avatars/bilal" },
+  repository: { nameWithOwner: "acme/web" },
+  comments: { totalCount: 123 },
+});
+const search = (nodes: ReadonlyArray<unknown>, next: string | null = null) =>
+  encodeJson({
+    data: { search: { nodes, pageInfo: { hasNextPage: next !== null, endCursor: next } } },
   });
-}
-
-/** One row as the cross-repository search answers it. */
-function searchItem(number: number, repository: string, updatedAt?: string) {
-  return {
-    number,
-    title: `Issue ${number}`,
-    url: `https://github.com/${repository}/issues/${number}`,
-    author: { login: "bilal", avatarUrl: "https://avatars/bilal" },
-    state: "OPEN",
-    createdAt: "2026-07-01T00:00:00Z",
-    updatedAt: updatedAt ?? instant(number),
-    repository: { nameWithOwner: repository },
-    comments: { totalCount: 3 },
-  };
-}
-
-function searchPage(nodes: ReadonlyArray<unknown>, hasNextPage = false, endCursor?: string) {
-  return output(
-    JSON.stringify({
-      data: {
-        search: {
-          pageInfo: { hasNextPage, ...(endCursor === undefined ? {} : { endCursor }) },
-          nodes,
-        },
-      },
-    }),
-  );
-}
-
-/** A page of the conversation as the GraphQL reads answer with it, cursor and all. */
-function commentPage(ids: ReadonlyArray<string>, startCursor: string | null, totalCount: number) {
-  return output(
-    JSON.stringify({
-      data: {
-        repository: {
-          issue: {
-            author: { login: "bilal", avatarUrl: "https://avatars/bilal" },
-            comments: {
-              totalCount,
-              pageInfo: { hasPreviousPage: startCursor !== null, startCursor },
-              nodes: ids.map((id) => ({ id, body: id, createdAt: "2026-07-02T00:00:00Z" })),
-            },
-            timelineItems: {
-              nodes: [
-                {
-                  __typename: "ClosedEvent",
-                  id: "CE_1",
-                  createdAt: "2026-07-03T00:00:00Z",
-                  actor: { login: "julius" },
-                },
-                // A kind this page has no words for, dropped rather than guessed at.
-                { __typename: "TransferredEvent", id: "TE_1", createdAt: "2026-07-03T00:00:00Z" },
-              ],
-            },
+const core = (extra: Record<string, unknown> = {}, role = "WRITE") =>
+  encodeJson({
+    data: {
+      viewer: { login: "bilal" },
+      repository: {
+        viewerPermission: role,
+        issue: {
+          ...row(7),
+          body: "The page never loads",
+          viewerCanUpdate: true,
+          viewerDidAuthor: false,
+          labels: { nodes: [{ name: "bug", color: "ff0000" }] },
+          assignees: { nodes: [{ login: "julius", avatarUrl: "https://avatars/julius" }] },
+          closedByPullRequestsReferences: {
+            nodes: [
+              {
+                number: 9,
+                title: "Fix",
+                url: "https://enterprise.test/acme/web/pull/9",
+                state: "MERGED",
+                repository: { nameWithOwner: "acme/web" },
+              },
+            ],
           },
+          timelineItems: { nodes: [] },
+          ...extra,
         },
       },
-    }),
-  );
-}
-
-/** Everything `gh issue view --json` cannot answer about one issue, as GraphQL answers it. */
-function supplementPage(issue: Record<string, unknown> | null, viewerPermission: string) {
-  return output(JSON.stringify({ data: { repository: { viewerPermission, issue } } }));
-}
-
-function assigneeCandidatesPage(input: {
-  readonly assignable: ReadonlyArray<unknown>;
-  readonly assigned: ReadonlyArray<unknown>;
-  readonly hasNextPage: boolean;
-}) {
-  return output(
-    JSON.stringify({
-      data: {
-        repository: {
-          assignableUsers: {
-            pageInfo: { hasNextPage: input.hasNextPage },
-            nodes: input.assignable,
-          },
-          issue: { assignees: { nodes: input.assigned } },
-        },
-      },
-    }),
-  );
-}
-
-/** A full page of a repository's labels, which is what keeps the walk going. */
-function labelPage(count: number): string {
-  return JSON.stringify(Array.from({ length: count }, (_, index) => ({ name: `label-${index}` })));
-}
-
-/** What `gh` answers with when a command it ran was refused. */
-const refused = new GitHubCli.GitHubCliCommandError({
-  command: "gh",
-  cwd: "/w",
-  cause: new Error("HTTP 410: Issues are disabled for this repository"),
+    },
+  });
+const response = (value: unknown): GitHubApi.GitHubRestResponse => ({
+  status: 200,
+  headers: {},
+  body: encodeJson(value),
+  truncated: false,
+  invalidUtf8: false,
 });
-
-/** The whole invocation the nth call made, so both argv and stdin can be asserted. */
-function callAt(index: number) {
-  const call = mockedExecute.mock.calls[index];
-  assert.isDefined(call);
-  return call[0];
-}
-
-function argsOfCall(index: number): ReadonlyArray<string> {
-  return callAt(index).args;
-}
-
-/** The one argument `--search` carries, which is where every listing qualifier ends up. */
-function searchOfCall(index: number): string | undefined {
-  const args = argsOfCall(index);
-  const flag = args.indexOf("--search");
-  // Absent is its own answer: a read carrying no `--search` at all is what the fallback is.
-  return flag === -1 ? undefined : args[flag + 1];
-}
-
-/** The search a batched read sent, which travels in the request body rather than in argv. */
-function searchQueryOfCall(index: number): string | undefined {
-  const body = JSON.parse(callAt(index).stdin ?? "{}") as { variables?: { q?: string } };
-  return body.variables?.q;
-}
-
-/** Where a batched read carries on from, which travels beside the search in the request body. */
-function searchCursorOfCall(index: number): string | undefined {
-  const body = JSON.parse(callAt(index).stdin ?? "{}") as { variables?: { cursor?: string } };
-  return body.variables?.cursor;
-}
-
-/** The page size a listing asked `gh` for. */
-function limitOfCall(index: number): string | undefined {
-  const args = argsOfCall(index);
-  return args[args.indexOf("--limit") + 1];
-}
-
-/** Several fixture arrays as one, which is how a page of rows sharing an instant is written. */
-function rowsOf(...parts: ReadonlyArray<string>): string {
-  return `[${parts.map((part) => part.slice(1, -1)).join(",")}]`;
-}
-
-/** The words a write carried, which every write sends over stdin. */
-function stdinOfCall(index: number): unknown {
-  return JSON.parse(callAt(index).stdin ?? "null");
-}
-
-const repository = { cwd: "/w", repository: "acme/web", host: "github.com" } as const;
-const target = { ...repository, number: 7 } as const;
-
+const refused = new GitHubApi.GitHubApiResponseError({
+  host: target.host,
+  operation: "test",
+  status: 403,
+});
 afterEach(() => {
-  mockedExecute.mockReset();
+  graphql.mockReset();
+  rest.mockReset();
 });
 
-it.effect("shares host and account pauses with issue GraphQL reads until the reported reset", () =>
-  Effect.gen(function* () {
-    let calls = 0;
-    const now = yield* Clock.currentTimeMillis;
-    const retryAt = now + 120_000;
-    const cli = yield* GitHubIssueCli.GitHubIssueCli.pipe(
-      Effect.provide(
-        GitHubIssueCli.layer.pipe(
-          Layer.provide(
-            Layer.mock(GitHubCli.GitHubCli)({
-              execute: () =>
-                Effect.suspend(() => {
-                  calls++;
-                  return calls === 1
-                    ? Effect.fail(
-                        new GitHubCli.GitHubCliRateLimitError({
-                          command: "gh",
-                          cwd: "/w",
-                          cause: undefined,
-                          retryAt,
-                        }),
-                      )
-                    : Effect.succeed(commentPage([], null, 0));
-                }),
-            }),
-          ),
-        ),
-      ),
-    );
-    const read = cli.getIssueActivity(target);
-    const first = yield* read.pipe(Effect.flip);
-    assert.strictEqual(first._tag, "GitHubCliRateLimitError");
-    const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
-    const paused = yield* limits.check({ provider: "github", host: target.host }).pipe(Effect.flip);
-    assert.strictEqual(paused.retryAt, retryAt);
-    const blocked = yield* read.pipe(Effect.flip);
-    assert.strictEqual(blocked._tag, "SourceControlRateLimitPausedError");
-    assert.strictEqual(calls, 1);
-    yield* cli.getIssueActivity({ ...target, host: "enterprise.test" });
-    yield* read.pipe(
-      Effect.provideService(SourceControlRateLimit.CredentialScope, "other-account"),
-    );
-    yield* TestClock.adjust("119 seconds");
-    yield* read.pipe(Effect.flip);
-    assert.strictEqual(calls, 3);
-    yield* TestClock.adjust("1 second");
-    yield* read;
-    assert.strictEqual(calls, 4);
-  }).pipe(Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer))),
-);
-
-it.effect("uses the pinned account scope for issue GraphQL budget and pauses", () =>
-  Effect.gen(function* () {
-    const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
-    yield* limits
-      .recordRateLimit({ provider: "github", host: target.host, lease: 0 })
-      .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, "pinned-account"));
-    let calls = 0;
-    const cli = yield* GitHubIssueCli.GitHubIssueCli.pipe(
-      Effect.provide(
-        GitHubIssueCli.layer.pipe(
-          Layer.provide(
-            Layer.mock(GitHubCli.GitHubCli)({
-              execute: () =>
-                Effect.sync(() => {
-                  calls++;
-                  return commentPage([], null, 0);
-                }),
-            }),
-          ),
-        ),
-      ),
-    );
-    const blocked = yield* cli.getIssueActivity(target).pipe(
-      Effect.provideService(GitHubCli.PinnedGitHubCredential, {
-        host: target.host,
-        token: Redacted.make("fake"),
-        credentialFingerprint: "pinned-account",
-      }),
-      Effect.flip,
-    );
-    assert.strictEqual(blocked._tag, "SourceControlRateLimitPausedError");
-    assert.strictEqual(calls, 0);
-    yield* cli.getIssueActivity(target);
-    assert.strictEqual(calls, 1);
-  }).pipe(Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer))),
-);
-
-layer("GitHubIssueCli.layer", (it) => {
-  it.effect("asks for one row more than the page, against the repository's own host", () =>
+it.layer(layer)("GitHub issue API", (it) => {
+  it.effect("loads the issue, viewer, avatars, permissions and links in one read", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(3, 1))));
+      graphql.mockReturnValue(Effect.succeed(core()));
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      expect(batch.items.map((item) => item.number)).toEqual([1, 2, 3]);
-      assert.isFalse(batch.truncated);
-      assert.isTrue(batch.continues);
-      const args = argsOfCall(0);
-      expect(args.slice(0, 2)).toEqual(["issue", "list"]);
-      // The host is named, so an Enterprise repository resolves to its own install rather than
-      // to a same-named one on github.com.
-      expect(args).toContain("--repo");
-      expect(args).toContain("github.com/acme/web");
-      expect(args).toContain("--state");
-      expect(args).toContain("open");
-      expect(args).toContain("--limit");
-      expect(args).toContain("11");
+      const detail = yield* cli.getIssueDetail(target);
+      assert.equal(detail.body, "The page never loads");
+      assert.equal(detail.commentCount, 123);
+      assert.equal(detail.viewerLogin, "bilal");
+      assert.equal(detail.author?.avatarUrl, "https://avatars/bilal");
+      assert.equal(detail.assignees[0]?.avatarUrl, "https://avatars/julius");
+      assert.equal(detail.viewerAccess.canTriage, true);
+      assert.equal(detail.linkedPullRequests[0]?.number, 9);
+      expect(graphql).toHaveBeenCalledTimes(1);
+      expect(rest).not.toHaveBeenCalled();
+      expect(graphql.mock.calls[0]?.[0].host).toBe(target.host);
+      expect(graphql.mock.calls[0]?.[0].query).not.toContain("comments(last:");
     }),
   );
 
-  it.effect("carries is:issue in the listing search, so a pull request cannot arrive as one", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(1, 1))));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.listIssues({
-        ...repository,
-        state: "all",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      // GitHub's search index holds pull requests as issues, so the qualifier is what keeps them
-      // off the issues page — and it leads every search this module makes.
-      assert.strictEqual(searchOfCall(0), "is:issue sort:updated-desc");
-    }),
-  );
-
-  it.effect("uses GitHub sorting and grows non-recency pages instead of cursoring them", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(1, 1))));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-        sort: "reactions-thumbs-up",
-        order: "desc",
-      });
-
-      assert.strictEqual(searchOfCall(0), "is:issue sort:reactions-+1-desc");
-      assert.isFalse(batch.continues);
-    }),
-  );
-
-  it.effect("preserves GitHub best-match ranking without a sort qualifier", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(1, 1))));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-        sort: "best-match",
-        query: "compiler crash",
-      });
-
-      assert.strictEqual(searchOfCall(0), `is:issue "compiler crash"`);
-    }),
-  );
-
-  it.effect("narrows the listing to the viewer's own work with the flags gh has for it", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-      const read = (involvement: "assigned" | "authored" | "mentioned") =>
-        cli.listIssues({
-          ...repository,
-          state: "open",
-          involvement,
-          viewer: "bilal",
-          limit: 10,
-        });
-
-      yield* read("assigned");
-      yield* read("authored");
-      yield* read("mentioned");
-
-      // Flags rather than qualifiers, which is what lets the search-free fallback narrow the
-      // same way. Each read falls back once, so every second call is the one to look at.
-      expect(argsOfCall(0)).toContain("--assignee");
-      expect(argsOfCall(2)).toContain("--author");
-      expect(argsOfCall(4)).toContain("--mention");
-      for (const index of [0, 2, 4]) expect(argsOfCall(index)).toContain("bilal");
-    }),
-  );
-
-  it.effect("keeps the words a reader typed inside one quoted phrase", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-        query: 'x" is:pr label:wontfix',
-      });
-
-      // Outside the quotes GitHub would read those as qualifiers of their own, and the words a
-      // reader typed to narrow the listing would widen it instead.
-      assert.strictEqual(searchOfCall(0), 'is:issue "x\\" is:pr label:wontfix" sort:updated-desc');
-    }),
-  );
-
-  it.effect("searches for no phrase at all when the reader typed only spaces", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-        query: "   ",
-      });
-
-      // An empty phrase is a phrase GitHub matches nothing against, so there must not be one.
-      assert.strictEqual(searchOfCall(0), "is:issue sort:updated-desc");
-    }),
-  );
-
-  it.effect("carries on from the instant the last slice ended on, inclusively", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(1, 1))));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-        cursor: { updatedBefore: "2026-07-02T00:00:00Z" },
-      });
-
-      // Inclusive, because rows sharing one instant are ordinary: the caller drops the ones it
-      // has already sent, where asking for strictly older would lose them.
-      assert.strictEqual(
-        searchOfCall(0),
-        "is:issue updated:<=2026-07-02T00:00:00Z sort:updated-desc",
-      );
-    }),
-  );
-
-  it.effect("reads again without a search when GitHub will not search the repository", () =>
-    Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(Effect.succeed(output("[]")))
-        .mockReturnValueOnce(Effect.succeed(output(issues(2, 1))));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      // A repository GitHub does not index answers a search with no rows rather than with an
-      // error, so the rows are asked for again in gh's own order — which no `updated:` qualifier
-      // can carry on from, and the batch says so.
-      assert.strictEqual(searchOfCall(1), undefined);
-      expect(batch.items.map((item) => item.number)).toEqual([1, 2]);
-      assert.isFalse(batch.continues);
-    }),
-  );
-
-  it.effect(
-    "never falls back for a slice that carries on, nor for a search that found nothing",
-    () =>
-      Effect.gen(function* () {
-        mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
-        const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-        const continued = yield* cli.listIssues({
-          ...repository,
-          state: "open",
-          involvement: "all",
-          viewer: "bilal",
-          limit: 10,
-          cursor: { updatedBefore: "2026-07-02T00:00:00Z" },
-        });
-        const searched = yield* cli.listIssues({
-          ...repository,
-          state: "open",
-          involvement: "all",
-          viewer: "bilal",
-          limit: 10,
-          query: "never loads",
-        });
-
-        // A repository that answered the search once answers it again, so an empty slice under a
-        // cursor has run out; and falling back on a search would answer it with every issue the
-        // reader did not search for.
-        assert.strictEqual(mockedExecute.mock.calls.length, 2);
-        expect(continued.items).toEqual([]);
-        expect(searched.items).toEqual([]);
-      }),
-  );
-
-  it.effect("reports truncation from the extra row, counted before decoding", () =>
-    Effect.gen(function* () {
-      const rows = `[{"number":"not a number"},${issues(11, 1).slice(1)}`;
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(rows)));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      // Ten rows handed on out of twelve raw ones, and the malformed row still counted: a skipped
-      // row must not end paging.
-      assert.strictEqual(batch.items.length, 10);
-      assert.isTrue(batch.truncated);
-    }),
-  );
-
-  // Half an instant is a slice nothing can carry on from: the read after it asks the same
-  // question, is handed the same rows, and drops every one of them as already sent.
-  it.effect("asks for a larger page rather than ending one inside an instant", () =>
-    Effect.gen(function* () {
-      const tied = "2026-07-02T00:30:00Z";
-      mockedExecute
-        .mockReturnValueOnce(Effect.succeed(output(issues(11, 1, tied))))
-        .mockReturnValueOnce(Effect.succeed(output(rowsOf(issues(11, 1, tied), issues(1, 12)))));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      assert.strictEqual(limitOfCall(0), "11");
-      assert.strictEqual(limitOfCall(1), "22");
-      // The whole instant travels, page or no page, so the slice after it starts on rows that are
-      // strictly older.
-      expect(batch.items.map((item) => item.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-      assert.isTrue(batch.truncated);
-      assert.isTrue(batch.continues);
-    }),
-  );
-
-  it.effect("says a page cannot be continued once one instant fills GitHub's own ceiling", () =>
-    Effect.gen(function* () {
-      const tied = "2026-07-02T00:30:00Z";
-      mockedExecute.mockReturnValue(Effect.succeed(output(issues(1000, 1, tied))));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      // GitHub answers no search past its thousandth result, so there is no larger read left to
-      // finish the instant with — and a cursor would only be answered with these same rows.
-      assert.strictEqual(limitOfCall(mockedExecute.mock.calls.length - 1), "1000");
-      assert.isFalse(batch.continues);
-    }),
-  );
-
-  it.effect("answers with nothing when gh printed nothing at all", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("   ")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.listIssues({
-        ...repository,
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      expect(batch.items).toEqual([]);
-      assert.isFalse(batch.truncated);
-    }),
-  );
-
-  it.effect("says a repository keeps no issues when its tracker is switched off", () =>
-    Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(Effect.fail(refused))
-        .mockReturnValueOnce(Effect.succeed(output("false")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const error = yield* Effect.flip(
-        cli.listIssues({
-          ...repository,
-          state: "open",
-          involvement: "all",
-          viewer: "bilal",
-          limit: 10,
-        }),
-      );
-
-      assert.strictEqual(error._tag, "GitHubIssuesDisabledError");
-      // Asked only once a listing has already been refused, so a repository that answers costs
-      // nothing.
-      expect(argsOfCall(1)).toContain("hasIssuesEnabled");
-    }),
-  );
-
-  it.effect("lets an ordinary refusal stand where the tracker is switched on", () =>
-    Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(Effect.fail(refused))
-        .mockReturnValueOnce(Effect.succeed(output("true")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const error = yield* Effect.flip(
-        cli.listIssues({
-          ...repository,
-          state: "open",
-          involvement: "all",
-          viewer: "bilal",
-          limit: 10,
-        }),
-      );
-
-      assert.strictEqual(error._tag, "GitHubCliCommandError");
-    }),
-  );
-
-  it.effect("carries every repository and every qualifier into one search", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.searchIssues({
-        cwd: "/w",
-        host: "github.com",
-        repositories: ["acme/web", "pingdotgg/t3code"],
-        state: "closed",
-        involvement: "assigned",
-        viewer: "bilal",
-        limit: 10,
-        query: "never loads",
-        cursor: { updatedBefore: "2026-07-02T00:00:00Z" },
-      });
-
-      // One request for both repositories, carrying everything the per-repository read expresses
-      // as a flag — and `is:issue` first, because the index it searches holds pull requests too.
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      assert.strictEqual(
-        searchQueryOfCall(0),
-        'is:issue "never loads" updated:<=2026-07-02T00:00:00Z sort:updated-desc is:closed ' +
-          "assignee:bilal repo:acme/web repo:pingdotgg/t3code",
-      );
-      expect(argsOfCall(0)).toEqual(["api", "graphql", "--hostname", "github.com", "--input", "-"]);
-    }),
-  );
-
-  it.effect("spells each involvement as the qualifier a search has instead of a flag", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-      const search = (involvement: "all" | "authored" | "mentioned") =>
-        cli.searchIssues({
-          cwd: "/w",
-          host: "github.com",
-          repositories: ["acme/web"],
-          state: "open",
-          involvement,
-          viewer: "bilal",
-          limit: 10,
-        });
-
-      yield* search("authored");
-      yield* search("mentioned");
-      yield* search("all");
-
-      assert.strictEqual(
-        searchQueryOfCall(0),
-        "is:issue sort:updated-desc is:open author:bilal repo:acme/web",
-      );
-      assert.strictEqual(
-        searchQueryOfCall(1),
-        "is:issue sort:updated-desc is:open mentions:bilal repo:acme/web",
-      );
-      // Every issue of the repository, which is what the All tab asks for.
-      assert.strictEqual(searchQueryOfCall(2), "is:issue sort:updated-desc is:open repo:acme/web");
-    }),
-  );
-
-  it.effect("keeps a searched-for qualifier inside the phrase, and out of argv", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.searchIssues({
-        cwd: "/w",
-        host: "github.com",
-        repositories: ["acme/web"],
-        state: "all",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-        query: 'x" is:pr repo:evil/repo',
-      });
-
-      // Quoted and escaped, so the words narrow the listing rather than widening it — and the
-      // whole document travels over stdin rather than in a visible argv.
-      assert.strictEqual(
-        searchQueryOfCall(0),
-        'is:issue "x\\" is:pr repo:evil/repo" sort:updated-desc repo:acme/web',
-      );
-      expect(argsOfCall(0)).not.toContain("-f");
-    }),
-  );
-
-  it.effect("refuses to search for a repository GitHub cannot address", () =>
+  it.effect("rejects malformed and missing issue details", () =>
     Effect.gen(function* () {
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const error = yield* Effect.flip(
-        cli.searchIssues({
-          cwd: "/w",
-          host: "github.com",
-          repositories: ["acme/web", "acme/web is:pr"],
-          state: "open",
-          involvement: "all",
-          viewer: "bilal",
-          limit: 10,
-        }),
-      );
-
-      // Nothing is sent: a name that could end its own qualifier is refused rather than escaped.
-      assert.strictEqual(error._tag, "GitHubIssueRepositorySelectorError");
-      assert.strictEqual(mockedExecute.mock.calls.length, 0);
-    }),
-  );
-
-  it.effect("files each searched row under the repository it came from", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(
-        Effect.succeed(
-          searchPage([
-            searchItem(7, "acme/web"),
-            searchItem(9, "pingdotgg/t3code"),
-            // Not an issue, which the decode skips rather than fails on.
-            {},
-          ]),
-        ),
-      );
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.searchIssues({
-        cwd: "/w",
-        host: "github.com",
-        repositories: ["acme/web", "pingdotgg/t3code"],
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 10,
-      });
-
-      expect(batch.items.map((item) => [item.repository, item.number, item.commentCount])).toEqual([
-        ["acme/web", 7, 3],
-        ["pingdotgg/t3code", 9, 3],
-      ]);
-      assert.isFalse(batch.truncated);
-    }),
-  );
-
-  it.effect("reports truncation from the extra row, and from a page GitHub says has more", () =>
-    Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(
-          Effect.succeed(
-            searchPage([
-              searchItem(1, "acme/web"),
-              searchItem(2, "acme/web"),
-              searchItem(3, "acme/web"),
-            ]),
-          ),
-        )
-        .mockReturnValueOnce(Effect.succeed(searchPage([searchItem(1, "acme/web")], true)));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-      const search = () =>
-        cli.searchIssues({
-          cwd: "/w",
-          host: "github.com",
-          repositories: ["acme/web"],
-          state: "open",
-          involvement: "all",
-          viewer: "bilal",
-          limit: 2,
-        });
-
-      const overflowing = yield* search();
-      const capped = yield* search();
-
-      // The extra row is the probe, and it is not handed on.
-      assert.strictEqual(overflowing.items.length, 2);
-      assert.isTrue(overflowing.truncated);
-      // A slice at GitHub's own ceiling has no extra row to probe with, so `hasNextPage` answers.
-      assert.isTrue(capped.truncated);
-    }),
-  );
-
-  // GitHub's ceiling on a search page is a hundred rows, so an instant holding more than the page
-  // is read on past it: a slice ending inside one instant is one the read after it drops whole.
-  it.effect("reads on past the page GitHub cuts a search at to finish an instant", () =>
-    Effect.gen(function* () {
-      const tied = "2026-07-02T00:30:00Z";
-      mockedExecute
-        .mockReturnValueOnce(
-          Effect.succeed(
-            searchPage(
-              [1, 2, 3].map((number) => searchItem(number, "acme/web", tied)),
-              true,
-              "PAGE_2",
-            ),
-          ),
-        )
-        .mockReturnValueOnce(
-          Effect.succeed(
-            searchPage(
-              [searchItem(4, "acme/web", tied), searchItem(5, "acme/web")],
-              true,
-              "PAGE_3",
-            ),
-          ),
+      for (const raw of [
+        "{",
+        core({ number: null }),
+        encodeJson({ data: { repository: { issue: null } } }),
+      ]) {
+        graphql.mockReturnValue(Effect.succeed(raw));
+        assert.equal(
+          (yield* cli.getIssueDetail(target).pipe(Effect.flip))._tag,
+          "GitHubIssueReadError",
         );
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.searchIssues({
-        cwd: "/w",
-        host: "github.com",
-        repositories: ["acme/web"],
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 2,
-      });
-
-      // The second read carries GitHub's own cursor: asking the same question again would answer
-      // with the same first rows for ever.
-      assert.isUndefined(searchCursorOfCall(0));
-      assert.strictEqual(searchCursorOfCall(1), "PAGE_2");
-      expect(batch.items.map((item) => item.number)).toEqual([1, 2, 3, 4]);
-      assert.isTrue(batch.truncated);
+      }
     }),
   );
 
-  it.effect("stops at GitHub's ceiling rather than offering a slice it cannot answer", () =>
+  it.effect("keeps a triage role and an author's update right separate", () =>
     Effect.gen(function* () {
-      const tied = "2026-07-02T00:30:00Z";
-      mockedExecute.mockImplementation((input) => {
-        const first = Number(/type: ISSUE, first: (\d+)/.exec(input.stdin ?? "")?.[1]);
-        return Effect.succeed(
-          searchPage(
-            Array.from({ length: first }, (_, index) => searchItem(index + 1, "acme/web", tied)),
-            true,
-            "MORE",
-          ),
-        ) as ReturnType<GitHubCli.GitHubCli["Service"]["execute"]>;
-      });
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const batch = yield* cli.searchIssues({
-        cwd: "/w",
-        host: "github.com",
-        repositories: ["acme/web"],
-        state: "open",
-        involvement: "all",
-        viewer: "bilal",
-        limit: 2,
-      });
-
-      // GitHub answers no search past its thousandth result, so those rows are everything this
-      // query has: a continuation could only be answered with them again.
-      assert.strictEqual(mockedExecute.mock.calls.length, 11);
-      expect(callAt(10).stdin).toContain("first: 97");
-      assert.isFalse(batch.truncated);
+      graphql.mockReturnValue(
+        Effect.succeed(core({ viewerCanUpdate: true, viewerDidAuthor: true }, "READ")),
+      );
+      const detail = yield* cli.getIssueDetail(target);
+      assert.equal(detail.viewerAccess.canUpdate, true);
+      assert.equal(detail.viewerAccess.canTriage, false);
     }),
   );
 
-  it.effect("reads one issue with its body from gh's own JSON", () =>
+  it.effect("preserves rate-limit reset times", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(output(issueJson({ body: "It 500s.", labels: [{ name: "bug" }] }))),
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      const error = new GitHubApi.GitHubApiRateLimitError({
+        host: target.host,
+        operation: "getIssueDetail",
+        retryAt: 123456,
+      });
+      graphql.mockReturnValue(Effect.fail(error));
+      assert.strictEqual(yield* cli.getIssueDetail(target).pipe(Effect.flip), error);
+    }),
+  );
+
+  it.effect("lists multiple repositories with all filters in one request", () =>
+    Effect.gen(function* () {
+      graphql.mockReturnValue(
+        Effect.succeed(search([row(7), row(8), row(9, "2026-07-01T00:00:00Z")])),
       );
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const issue = yield* cli.getIssueDetail(target);
-
-      expect(argsOfCall(0).slice(0, 5)).toEqual([
-        "issue",
-        "view",
-        "7",
-        "--repo",
-        "github.com/acme/web",
-      ]);
-      expect(issue).toMatchObject({ number: 7, body: "It 500s.", state: "open" });
+      const batch = yield* cli.searchIssues({
+        ...listing,
+        repositories: ["acme/web", "acme/api"],
+        involvement: "assigned",
+        query: 'crash is:closed "x"',
+        cursor: { updatedBefore: instant },
+      });
+      assert.deepEqual(
+        batch.items.map((item) => item.number),
+        [7, 8],
+      );
+      assert.equal(batch.truncated, true);
+      const query = graphql.mock.calls[0]![0].variables!["q"];
+      expect(query).toContain("is:issue");
+      expect(query).toContain("is:open");
+      expect(query).toContain("assignee:bilal");
+      expect(query).toContain("repo:acme/web repo:acme/api");
+      expect(query).toContain(`updated:<=${instant}`);
+      expect(query).toContain('"crash is:closed \\"x\\""');
+      expect(graphql).toHaveBeenCalledTimes(1);
     }),
   );
 
-  it.effect("fails the read when gh answered something unreadable", () =>
+  it.effect("uses each involvement qualifier and preserves host selection", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"message":"Not Found"}')));
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const error = yield* Effect.flip(cli.getIssueDetail(target));
-
-      assert.strictEqual(error._tag, "GitHubIssueReadError");
-      // The failure names the read it came from rather than borrowing another one's words.
-      expect(error.message).toContain("getIssueDetail");
+      graphql.mockReturnValue(Effect.succeed(search([row(7)])));
+      for (const [involvement, qualifier] of [
+        ["assigned", "assignee"],
+        ["authored", "author"],
+        ["mentioned", "mentions"],
+      ] as const) {
+        yield* cli.listIssues({ ...listing, involvement });
+        const input = graphql.mock.calls.at(-1)![0];
+        assert.equal(input.host, target.host);
+        expect(input.variables!["q"]).toContain(`${qualifier}:bilal`);
+      }
     }),
   );
 
-  it.effect("asks GitHub for everything gh cannot answer about one issue", () =>
+  it.effect("keeps non-recency sorting out of timestamp paging", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(Effect.succeed(search([row(7), row(8), row(9)])));
+      const batch = yield* cli.listIssues({
+        ...listing,
+        sort: "reactions-thumbs-up",
+        order: "asc",
+        cursor: { updatedBefore: instant },
+      });
+      assert.equal(batch.continues, false);
+      expect(graphql.mock.calls[0]![0].variables!["q"]).toContain("sort:reactions-+1-asc");
+      expect(graphql.mock.calls[0]![0].variables!["q"]).not.toContain("updated:<=");
+    }),
+  );
+
+  it.effect("keeps best-match ranking without a sort qualifier", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(Effect.succeed(search([row(7)])));
+      yield* cli.listIssues({ ...listing, sort: "best-match" });
+      expect(graphql.mock.calls[0]![0].variables!["q"]).not.toContain("sort:");
+    }),
+  );
+
+  it.effect("does not turn an empty text search or continuation into an unfiltered list", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(Effect.succeed(search([])));
+      for (const extra of [{ query: "missing" }, { cursor: { updatedBefore: instant } }]) {
+        const batch = yield* cli.listIssues({ ...listing, ...extra });
+        assert.equal(batch.items.length, 0);
+      }
+      expect(graphql).toHaveBeenCalledTimes(2);
+    }),
+  );
+
+  it.effect("uses a search-free repository query when its search index is empty", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValueOnce(Effect.succeed(search([]))).mockReturnValueOnce(
         Effect.succeed(
-          supplementPage(
-            {
-              viewerCanUpdate: true,
-              viewerDidAuthor: false,
-              author: { login: "bilal", avatarUrl: "https://avatars/bilal" },
-              comments: { totalCount: 4 },
-              closedByPullRequestsReferences: {
-                nodes: [
-                  {
-                    number: 12,
-                    title: "Fix the page",
-                    url: "https://github.com/acme/web/pull/12",
-                    state: "MERGED",
-                    repository: { nameWithOwner: "acme/web" },
-                  },
-                ],
+          encodeJson({
+            data: {
+              repository: {
+                hasIssuesEnabled: true,
+                issues: { nodes: [row(7)], pageInfo: { hasNextPage: true } },
               },
             },
-            "TRIAGE",
-          ),
-        ),
-      );
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const supplement = yield* cli.getIssueSupplement(target);
-
-      // Owner and name travel as typed variables, and the number as a number.
-      expect(argsOfCall(0).slice(0, 10)).toEqual([
-        "api",
-        "graphql",
-        "--hostname",
-        "github.com",
-        "-f",
-        "owner=acme",
-        "-f",
-        "name=web",
-        "-F",
-        "number=7",
-      ]);
-      assert.isTrue(supplement.viewer.canTriage);
-      assert.strictEqual(supplement.commentCount, 4);
-      expect(supplement.linkedPullRequests.map((link) => [link.number, link.closesIssue])).toEqual([
-        [12, true],
-      ]);
-      expect([...supplement.avatarsByLogin]).toEqual([["bilal", "https://avatars/bilal"]]);
-    }),
-  );
-
-  it.effect("asks what the viewer may do here on its own, before a write", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(supplementPage({ viewerCanUpdate: true, viewerDidAuthor: true }, "READ")),
-      );
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const access = yield* cli.getViewerAccess(target);
-
-      // The author of an issue may still retitle and close it without any access to the code.
-      expect(access).toEqual({ canTriage: false, canUpdate: true, didAuthor: true });
-      expect(argsOfCall(0)).toContain("--hostname");
-    }),
-  );
-
-  it.effect("reads linked issue title and state without supplement or viewer requests", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          supplementPage(
-            {
-              number: 7,
-              title: "The page never loads",
-              url: "https://github.com/acme/web/issues/7",
-              state: "CLOSED",
-            },
-            "READ",
-          ),
-        ),
-      );
-      const provider = yield* GitHubIssueProvider.make;
-      const summary = yield* provider.getIssueSummary!(target);
-      assert.deepStrictEqual(summary, {
-        number: 7,
-        title: "The page never loads",
-        url: "https://github.com/acme/web/issues/7",
-        state: "closed",
-      });
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      assert.deepStrictEqual(argsOfCall(0).slice(0, 4), [
-        "api",
-        "graphql",
-        "--hostname",
-        target.host,
-      ]);
-      const document = argsOfCall(0).at(-1)!;
-      assert.isTrue(document.includes("issue(number: $number) { number title url state }"));
-      assert.isFalse(/body|comments|author|viewer|timelineItems/.test(document));
-    }),
-  );
-
-  it.effect("rejects an unavailable issue summary without inventing state", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(supplementPage(null, "READ")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-      const error = yield* cli.getIssueSummary(target).pipe(Effect.flip);
-      assert.strictEqual(error._tag, "GitHubIssueReadError");
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
-    }),
-  );
-
-  it.effect("preserves a linked issue rate-limit reset for background refresh", () =>
-    Effect.gen(function* () {
-      const retryAt = 120_000;
-      mockedExecute.mockReturnValueOnce(
-        Effect.fail(
-          new GitHubCli.GitHubCliRateLimitError({
-            command: "gh",
-            cwd: "/w",
-            cause: undefined,
-            retryAt,
           }),
         ),
       );
-      const provider = yield* GitHubIssueProvider.make;
-      const error = yield* provider.getIssueSummary!(target).pipe(Effect.flip);
-      assert.strictEqual(error.reason, "rate-limited");
-      assert.strictEqual(error.retryAt, retryAt);
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
-    }).pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, "summary-rate-limit")),
-  );
-
-  it.effect("stops issue GraphQL reads at the protected reserve until reset", () =>
-    Effect.gen(function* () {
-      const page = commentPage(["IC_1"], null, 1);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      const limited = JSON.parse(page.stdout) as { data: Record<string, unknown> };
-      limited.data.rateLimit = {
-        cost: 1,
-        limit: 5_000,
-        remaining: 500,
-        resetAt: "2099-08-13T14:00:00Z",
-      };
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      mockedExecute.mockReturnValue(Effect.succeed(output(JSON.stringify(limited))));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.getIssueActivity(target);
-      expect(argsOfCall(0).at(-1)).toContain("rateLimit { cost limit remaining resetAt }");
-
-      const error = yield* Effect.flip(cli.getIssueActivity(target));
-
-      assert.strictEqual(error._tag, "SourceControlRateLimitPausedError");
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      yield* TestClock.setTime(Date.parse("2100-01-01T00:00:00Z"));
-      mockedExecute.mockReturnValueOnce(Effect.succeed(page));
-      yield* cli.getIssueActivity(target);
-    }),
-  );
-  it.effect("reads the conversation and the history in one request", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(commentPage(["IC_1", "IC_2"], null, 2)));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const activity = yield* cli.getIssueActivity(target);
-
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      // The first page starts at the beginning, which gh can only send as a typed null.
-      expect(argsOfCall(0)).toContain("cursor=null");
-      expect(argsOfCall(0)).toContain("-F");
-      expect(activity.comments.map((comment) => comment.id)).toEqual(["IC_1", "IC_2"]);
-      expect(activity.events.map((event) => [event.id, event.kind])).toEqual([["CE_1", "closed"]]);
-      assert.strictEqual(activity.commentCount, 2);
-      assert.isFalse(activity.commentsTruncated);
-      expect(activity.author).toEqual({
-        login: "bilal",
-        name: null,
-        avatarUrl: "https://avatars/bilal",
-      });
-    }),
-  );
-
-  it.effect("leaves the rest of a long conversation for an explicit page read", () =>
-    Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(Effect.succeed(commentPage(["IC_1"], "Y3Vyc29y", 250)))
-        .mockReturnValueOnce(Effect.succeed(commentPage(["IC_2"], null, 250)));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const activity = yield* cli.getIssueActivity(target);
-
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      expect(activity.comments.map((comment) => comment.id)).toEqual(["IC_1"]);
-      assert.strictEqual(activity.nextCommentsCursor, "Y3Vyc29y");
-      assert.isTrue(activity.commentsTruncated);
-
-      const page = yield* cli.getIssueComments({ ...target, cursor: "Y3Vyc29y" });
-
-      assert.strictEqual(mockedExecute.mock.calls.length, 2);
-      expect(argsOfCall(1)).toContain("cursor=Y3Vyc29y");
-      expect(page.comments.map((comment) => comment.id)).toEqual(["IC_2"]);
-      assert.isNull(page.nextCursor);
-      assert.strictEqual(activity.commentCount, 250);
-      expect(activity.events.map((event) => event.id)).toEqual(["CE_1"]);
-    }),
-  );
-
-  it.effect("closes with each reason GitHub knows, and reopens without one", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.runIssueAction({ ...target, action: "close", reason: "completed" });
-      yield* cli.runIssueAction({ ...target, action: "close", reason: "not-planned" });
-      yield* cli.runIssueAction({ ...target, action: "close" });
-      yield* cli.runIssueAction({ ...target, action: "reopen" });
-
-      expect(argsOfCall(0)).toEqual([
-        "issue",
-        "close",
-        "7",
-        "--repo",
-        "github.com/acme/web",
-        "--reason",
-        "completed",
-      ]);
-      // GitHub spells this one with a space in it, and takes no other words.
-      expect(argsOfCall(1).slice(5)).toEqual(["--reason", "not planned"]);
-      expect(argsOfCall(2)).not.toContain("--reason");
-      expect(argsOfCall(3).slice(0, 3)).toEqual(["issue", "reopen", "7"]);
-      expect(argsOfCall(3)).not.toContain("--reason");
-    }),
-  );
-
-  it.effect("sends a comment body over stdin, never in argv", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.commentOnIssue({ ...target, body: "--body=nice try" });
-
-      expect(argsOfCall(0)).toEqual([
-        "issue",
-        "comment",
-        "7",
-        "--repo",
-        "github.com/acme/web",
-        "--body-file",
-        "-",
-      ]);
-      // argv is visible in process listings and echoed back inside a runner's failure message.
-      assert.strictEqual(callAt(0).stdin, "--body=nice try");
-    }),
-  );
-
-  it.effect("files a new issue with its title and body over stdin, never in argv", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(output('{"number":9,"html_url":"https://github.com/acme/web/issues/9"}')),
+      const batch = yield* cli.listIssues({ ...listing, involvement: "mentioned" });
+      assert.deepEqual(
+        batch.items.map((item) => item.number),
+        [7],
       );
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const created = yield* cli.createIssue({
-        ...repository,
-        title: "The page never loads",
-        body: "Steps to reproduce.",
-        labels: ["bug"],
-        assignees: ["julius"],
-      });
-
-      expect(argsOfCall(0)).toEqual([
-        "api",
-        "--method",
-        "POST",
-        "--hostname",
-        "github.com",
-        "repos/acme/web/issues",
-        "--input",
-        "-",
-      ]);
-      expect(stdinOfCall(0)).toEqual({
-        title: "The page never loads",
-        body: "Steps to reproduce.",
-        labels: ["bug"],
-        assignees: ["julius"],
-      });
-      expect(created).toEqual({ number: 9, url: "https://github.com/acme/web/issues/9" });
+      assert.equal(batch.continues, false);
+      assert.equal(batch.truncated, true);
+      assert.equal(graphql.mock.calls[1]![0].variables!["mentioned"], "bilal");
     }),
   );
 
-  it.effect("rewrites only the fields the edit carried, over stdin", () =>
+  it.effect("reports a disabled tracker", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.updateIssue({ ...target, title: "A better title" });
-      yield* cli.updateIssue({ ...target, body: "It 500s." });
-
-      expect(argsOfCall(0)).toEqual([
-        "api",
-        "--method",
-        "PATCH",
-        "--hostname",
-        "github.com",
-        "repos/acme/web/issues/7",
-        "--input",
-        "-",
-      ]);
-      // The body is absent rather than empty, so a rename cannot blank what somebody wrote.
-      expect(stdinOfCall(0)).toEqual({ title: "A better title" });
-      expect(stdinOfCall(1)).toEqual({ body: "It 500s." });
-    }),
-  );
-
-  it.effect("rewrites a comment only after GitHub confirms it belongs to the issue", () =>
-    Effect.gen(function* () {
-      mockedExecute
+      graphql
+        .mockReturnValueOnce(Effect.succeed(search([])))
         .mockReturnValueOnce(
           Effect.succeed(
-            output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              JSON.stringify({
-                data: {
-                  repository: { issue: { id: "I_7" } },
-                  node: { issue: { id: "I_7" } },
+            encodeJson({ data: { repository: { hasIssuesEnabled: false, issues: null } } }),
+          ),
+        );
+      assert.equal(
+        (yield* cli.listIssues(listing).pipe(Effect.flip))._tag,
+        "GitHubIssuesDisabledError",
+      );
+    }),
+  );
+
+  it.effect("refuses invalid repositories before calling the API", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      assert.equal(
+        (yield* cli
+          .searchIssues({ ...listing, repositories: ["acme/web is:closed"] })
+          .pipe(Effect.flip))._tag,
+        "GitHubIssueRepositorySelectorError",
+      );
+      expect(graphql).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("counts malformed rows when detecting an extra page", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(Effect.succeed(search([row(7), row(8), { number: 9 }])));
+      const batch = yield* cli.listIssues({ ...listing, sort: "created" });
+      assert.equal(batch.items.length, 2);
+      assert.equal(batch.truncated, true);
+    }),
+  );
+
+  it.effect("reads past GitHub's page limit to keep a timestamp group whole", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search(
+              Array.from({ length: 100 }, (_, i) => row(i + 1)),
+              "next",
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(search([row(101), row(102, "2026-07-01T00:00:00Z")])));
+      const batch = yield* cli.listIssues({ ...listing, limit: 99 });
+      assert.equal(batch.items.length, 101);
+      assert.equal(batch.truncated, true);
+      assert.equal(batch.continues, true);
+      assert.equal(graphql.mock.calls[1]![0].variables!["cursor"], "next");
+    }),
+  );
+
+  it.effect("does not offer a cursor when one timestamp fills the search ceiling", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockImplementation(() =>
+        Effect.succeed(
+          search(
+            Array.from({ length: 100 }, (_, i) => row(i + 1)),
+            "next",
+          ),
+        ),
+      );
+      const batch = yield* cli.listIssues({ ...listing, limit: 99 });
+      assert.equal(batch.items.length, 1000);
+      assert.equal(batch.continues, false);
+      assert.equal(batch.truncated, true);
+      expect(graphql).toHaveBeenCalledTimes(10);
+    }),
+  );
+
+  it.effect("reads recent comments and activity separately from the detail", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(
+        Effect.succeed(
+          encodeJson({
+            data: {
+              repository: {
+                issue: {
+                  author: { login: "bilal" },
+                  comments: {
+                    totalCount: 123,
+                    pageInfo: { hasPreviousPage: true, startCursor: "older" },
+                    nodes: [{ id: "C1", body: "Comment", createdAt: instant }],
+                  },
+                  timelineItems: {
+                    nodes: [{ __typename: "ClosedEvent", id: "E1", createdAt: instant }],
+                  },
                 },
-              }),
-            ),
-          ),
-        )
-        .mockReturnValueOnce(Effect.succeed(output("{}")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.updateComment({ ...target, commentId: "IC_1", body: "Second thoughts" });
-
-      expect(argsOfCall(0)).toContain("graphql");
-      expect(argsOfCall(1)).toContain("graphql");
-      expect(stdinOfCall(1)).toMatchObject({
-        variables: { commentId: "IC_1", body: "Second thoughts" },
-      });
-    }),
-  );
-
-  it.effect("reacts to the issue body through its node id", () =>
-    Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(
-          Effect.succeed(
-            output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              JSON.stringify({ data: { repository: { issue: { id: "I_7" } } } }),
-            ),
-          ),
-        )
-        .mockReturnValueOnce(Effect.succeed(output("{}")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.setReaction({ ...target, content: "heart", reacted: true });
-
-      expect(stdinOfCall(1)).toMatchObject({
-        variables: { subjectId: "I_7", content: "HEART" },
-      });
-    }),
-  );
-
-  it.effect("writes the whole label and assignee set, and the empty set to clear it", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      yield* cli.setLabels({ ...target, labels: ["bug", "needs, care"] });
-      yield* cli.setAssignees({ ...target, assignees: [] });
-
-      // The whole set rather than a change to it, which is what this endpoint writes.
-      expect(stdinOfCall(0)).toEqual({ labels: ["bug", "needs, care"] });
-      expect(stdinOfCall(1)).toEqual({ assignees: [] });
-      expect(argsOfCall(1)).toContain("PATCH");
-    }),
-  );
-
-  it.effect("offers the repository's labels and marks the ones the issue has", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockImplementation((input) =>
-        Effect.succeed(
-          output(
-            input.args[0] === "issue"
-              ? issueJson({ labels: [{ name: "bug" }] })
-              : JSON.stringify([
-                  { name: "bug", color: "d73a4a", description: "Something is broken" },
-                  { name: "wontfix" },
-                ]),
-          ),
-        ),
-      );
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const list = yield* cli.listLabelCandidates(target);
-
-      expect(list.candidates.map((candidate) => [candidate.name, candidate.isApplied])).toEqual([
-        ["bug", true],
-        ["wontfix", false],
-      ]);
-      assert.isFalse(list.truncated);
-      const labelCall = mockedExecute.mock.calls.find((call) => call[0].args[0] === "api");
-      assert.isDefined(labelCall);
-      expect(labelCall[0].args).toEqual([
-        "api",
-        "--hostname",
-        "github.com",
-        "repos/acme/web/labels?per_page=100&page=1",
-      ]);
-    }),
-  );
-
-  it.effect("stops the label walk at its bound and says the list is not all of them", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockImplementation((input) =>
-        Effect.succeed(output(input.args[0] === "issue" ? issueJson({}) : labelPage(100))),
-      );
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const list = yield* cli.listLabelCandidates(target);
-
-      // Five pages of a hundred, which is more labels than any repository offers a picker for.
-      assert.strictEqual(list.candidates.length, 500);
-      assert.isTrue(list.truncated);
-      const pages = mockedExecute.mock.calls.filter((call) => call[0].args[0] === "api");
-      assert.strictEqual(pages.length, 5);
-      expect(pages.at(-1)?.[0].args.at(-1)).toContain("page=5");
-    }),
-  );
-
-  it.effect("offers the people GitHub says may be assigned, and marks who already is", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          assigneeCandidatesPage({
-            assignable: [{ login: "hubot" }, { login: "julius" }],
-            assigned: [{ login: "julius", name: "Julius" }],
-            hasNextPage: true,
+              },
+            },
           }),
         ),
       );
-      const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const list = yield* cli.listAssigneeCandidates(target);
-
-      expect(list.candidates.map((candidate) => [candidate.id, candidate.isAssigned])).toEqual([
-        ["julius", true],
-        ["hubot", false],
-      ]);
-      // Bounded: GitHub has more people with access than one page holds.
-      assert.isTrue(list.truncated);
-      expect(argsOfCall(0)).toContain("owner=acme");
+      const activity = yield* cli.getIssueActivity(target);
+      assert.equal(activity.commentCount, 123);
+      assert.equal(activity.comments.length, 1);
+      assert.equal(activity.commentsTruncated, true);
+      assert.equal(activity.nextCommentsCursor, "older");
+      assert.equal(activity.events.length, 1);
+      yield* cli.getIssueComments({ ...target, cursor: "older" });
+      assert.equal(graphql.mock.calls[1]![0].variables!["cursor"], "older");
     }),
   );
 
-  it.effect("reads the login of the signed-in account, and fails where there is none", () =>
+  it.effect("closes with supported reasons and reopens without one", () =>
     Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(Effect.succeed(output("bilal\n")))
-        .mockReturnValueOnce(Effect.succeed(output("")));
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-
-      const viewer = yield* cli.getViewerLogin({
-        cwd: "/w",
-        host: "github.example.com",
-      });
-      const error = yield* Effect.flip(
-        cli.getViewerLogin({ cwd: "/w", host: "github.example.com" }),
-      );
-
-      assert.strictEqual(viewer, "bilal");
-      expect(argsOfCall(0)).toEqual([
-        "api",
-        "user",
-        "--hostname",
-        "github.example.com",
-        "--jq",
-        ".login",
-      ]);
-      assert.strictEqual(error._tag, "GitHubIssueViewerLoginUnavailableError");
+      rest.mockReturnValue(Effect.succeed(response({})));
+      for (const reason of ["completed", "not-planned"] as const) {
+        yield* cli.runIssueAction({ ...target, action: "close", reason });
+        expect(rest.mock.calls.at(-1)![0].body).toEqual({
+          state: "closed",
+          state_reason: reason === "completed" ? "completed" : "not_planned",
+        });
+      }
+      yield* cli.runIssueAction({ ...target, action: "reopen" });
+      expect(rest.mock.calls.at(-1)![0].body).toEqual({ state: "open" });
     }),
   );
 
-  it.effect("combines a repository's templates with its config file into one offering", () =>
+  it.effect("creates an issue and keeps user text in the JSON body", () =>
     Effect.gen(function* () {
-      mockedExecute.mockImplementation((input) =>
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      rest.mockReturnValue(
         Effect.succeed(
-          output(
-            input.args[1] === "graphql"
-              ? JSON.stringify({
-                  data: {
-                    repository: {
-                      issueTemplates: [
-                        {
-                          filename: "bug_report.md",
-                          name: "Bug report",
-                          about: "File a bug",
-                          title: "Bug: ",
-                          body: "### Steps",
-                          assignees: { nodes: [{ login: "julius" }] },
-                          labels: { nodes: [{ name: "bug" }] },
-                        },
-                      ],
-                    },
-                  },
-                })
-              : "blank_issues_enabled: false\ncontact_links:\n  - name: Chat\n    url: https://example.com/chat\n",
-          ),
+          response({ number: 12, html_url: "https://enterprise.test/acme/web/issues/12" }),
         ),
       );
+      const created = yield* cli.createIssue({
+        ...target,
+        title: "Title",
+        body: "Body\nsecond line",
+        labels: ["bug"],
+        assignees: ["bilal"],
+      });
+      assert.equal(created.number, 12);
+      expect(rest.mock.calls[0]![0]).toMatchObject({
+        host: target.host,
+        method: "POST",
+        path: "repos/acme/web/issues",
+        body: { title: "Title", body: "Body\nsecond line", labels: ["bug"], assignees: ["bilal"] },
+      });
+    }),
+  );
+
+  it.effect("writes only edited fields and clears whole label and assignee sets", () =>
+    Effect.gen(function* () {
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      rest.mockReturnValue(Effect.succeed(response({})));
+      yield* cli.updateIssue({ ...target, title: "New title" });
+      expect(rest.mock.calls.at(-1)![0].body).toEqual({ title: "New title" });
+      yield* cli.setLabels({ ...target, labels: [] });
+      expect(rest.mock.calls.at(-1)![0].body).toEqual({ labels: [] });
+      yield* cli.setAssignees({ ...target, assignees: [] });
+      expect(rest.mock.calls.at(-1)![0].body).toEqual({ assignees: [] });
+      yield* cli.commentOnIssue({ ...target, body: "Comment" });
+      expect(rest.mock.calls.at(-1)![0]).toMatchObject({
+        path: "repos/acme/web/issues/7/comments",
+        body: { body: "Comment" },
+      });
+    }),
+  );
 
-      const list = yield* cli.listIssueTemplates(repository);
+  it.effect("rejects comment edits and reactions outside the selected issue", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(
+        Effect.succeed(
+          encodeJson({
+            data: {
+              node: { __typename: "IssueComment", issue: { id: "I8" } },
+              repository: { issue: { id: "I7" } },
+            },
+          }),
+        ),
+      );
+      for (const read of [
+        cli.updateComment({ ...target, commentId: "C1", body: "Edit" }),
+        cli.setReaction({ ...target, subjectId: "C1", content: "thumbs-up", reacted: true }),
+      ]) {
+        assert.equal((yield* read.pipe(Effect.flip))._tag, "GitHubIssueCommentScopeError");
+      }
+      expect(graphql).toHaveBeenCalledTimes(2);
+    }),
+  );
 
-      expect(list.templates).toEqual([
-        {
-          key: "bug_report.md",
-          name: "Bug report",
-          about: "File a bug",
-          title: "Bug: ",
-          body: "### Steps",
-          labels: ["bug"],
-          assignees: ["julius"],
-        },
-      ]);
-      expect(list.blankIssuesEnabled).toBe(false);
-      expect(list.contactLinks).toEqual([
-        { name: "Chat", url: "https://example.com/chat", about: "" },
-      ]);
-      const graphqlCall = mockedExecute.mock.calls.find((call) => call[0].args[1] === "graphql");
-      assert.isDefined(graphqlCall);
-      expect(graphqlCall[0].args).toContain("owner=acme");
-      const configCall = mockedExecute.mock.calls.find((call) => call[0].args[1] === "--hostname");
-      assert.isDefined(configCall);
-      expect(configCall[0].args).toContain(
-        "repos/acme/web/contents/.github/ISSUE_TEMPLATE/config.yml",
+  it.effect("reacts to the body through its node ID", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql
+        .mockReturnValueOnce(
+          Effect.succeed(encodeJson({ data: { repository: { issue: { id: "I7" } } } })),
+        )
+        .mockReturnValueOnce(Effect.succeed("{}"));
+      yield* cli.setReaction({ ...target, content: "thumbs-up", reacted: true });
+      expect(graphql.mock.calls[1]![0].variables).toEqual({
+        subjectId: "I7",
+        content: "THUMBS_UP",
+      });
+    }),
+  );
+
+  it.effect("gets labels with their applied state without reading the body", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(
+        Effect.succeed(
+          encodeJson({
+            data: {
+              repository: {
+                viewerPermission: "WRITE",
+                labels: {
+                  pageInfo: { hasNextPage: false },
+                  nodes: [
+                    { name: "bug", color: "ff0000", description: "Broken" },
+                    { name: "feature" },
+                  ],
+                },
+                issue: { labels: { nodes: [{ name: "bug" }] } },
+              },
+            },
+          }),
+        ),
+      );
+      const labels = yield* cli.listLabelCandidates(target);
+      assert.deepEqual(
+        labels.candidates.map((label) => [label.name, label.isApplied]),
+        [
+          ["bug", true],
+          ["feature", false],
+        ],
+      );
+      expect(graphql).toHaveBeenCalledTimes(1);
+      expect(graphql.mock.calls[0]![0].query).not.toContain("body");
+    }),
+  );
+
+  it.effect("limits label pagination and marks an incomplete picker", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(
+        Effect.succeed(
+          encodeJson({
+            data: {
+              repository: {
+                viewerPermission: "WRITE",
+                labels: {
+                  pageInfo: { hasNextPage: true, endCursor: "more" },
+                  nodes: [{ name: "bug" }],
+                },
+                issue: { labels: { nodes: [] } },
+              },
+            },
+          }),
+        ),
+      );
+      const labels = yield* cli.listLabelCandidates(target);
+      assert.equal(labels.truncated, true);
+      expect(graphql).toHaveBeenCalledTimes(5);
+    }),
+  );
+
+  it.effect("preserves assigned people who are no longer assignable", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(
+        Effect.succeed(
+          encodeJson({
+            data: {
+              repository: {
+                viewerPermission: "WRITE",
+                assignableUsers: { pageInfo: { hasNextPage: true }, nodes: [{ login: "bilal" }] },
+                issue: { assignees: { nodes: [{ login: "former" }] } },
+              },
+            },
+          }),
+        ),
+      );
+      const people = yield* cli.listAssigneeCandidates(target);
+      assert.deepEqual(
+        people.candidates.map((person) => [person.id, person.isAssigned]),
+        [
+          ["former", true],
+          ["bilal", false],
+        ],
+      );
+      assert.equal(people.truncated, true);
+    }),
+  );
+
+  it.effect("reads the viewer and rejects an empty login", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql
+        .mockReturnValueOnce(Effect.succeed('{"data":{"viewer":{"login":"bilal"}}}'))
+        .mockReturnValueOnce(Effect.succeed('{"data":{"viewer":{"login":""}}}'));
+      assert.equal(yield* cli.getViewerLogin(target), "bilal");
+      assert.equal(
+        (yield* cli.getViewerLogin(target).pipe(Effect.flip))._tag,
+        "GitHubIssueReadError",
       );
     }),
   );
 
-  it.effect("offers GitHub's own defaults when the config file cannot be read", () =>
+  it.effect("keeps templates when optional form and config reads fail", () =>
     Effect.gen(function* () {
-      mockedExecute.mockImplementation((input) =>
-        input.args[1] === "graphql"
-          ? Effect.succeed(
-              output(
-                JSON.stringify({
-                  data: {
-                    repository: {
-                      issueTemplates: [{ filename: "bug_report.md" }],
-                    },
-                  },
-                }),
-              ),
-            )
-          : // Most repositories keep no config file, which GitHub answers with a refusal — not a
-            // reason to fail a read whose templates arrived.
-            Effect.fail(refused),
-      );
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql
+        .mockReturnValueOnce(Effect.succeed('{"data":{"repository":{"issueTemplates":[]}}}'))
+        .mockReturnValueOnce(Effect.fail(refused));
+      rest.mockReturnValue(Effect.fail(refused));
+      const templates = yield* cli.listIssueTemplates(target);
+      assert.deepEqual(templates.templates, []);
+      assert.equal(templates.blankIssuesEnabled, true);
+    }),
+  );
 
-      const list = yield* cli.listIssueTemplates(repository);
+  it.effect("batches concurrent status reads while keeping different hosts separate", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockImplementation((input) =>
+        Effect.succeed(
+          encodeJson({
+            data: {
+              rateLimit: { cost: 1, remaining: 5000 },
+              ...Object.fromEntries(
+                [...input.query.matchAll(/issue(\d+): repository[^}]+issue\(number: (\d+)\)/g)].map(
+                  (match) => [`issue${match[1]}`, { issue: row(Number(match[2])) }],
+                ),
+              ),
+            },
+          }),
+        ),
+      );
+      const pending = yield* Effect.all(
+        [
+          cli.getIssueSummary(target),
+          cli.getIssueSummary({ ...target, number: 8 }),
+          cli.getIssueSummary({ ...target, host: "github.com" }),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const results = yield* Fiber.await(pending);
+      expect(results._tag).toBe("Success");
+      expect(graphql).toHaveBeenCalledTimes(2);
+      expect(graphql.mock.calls.some(([input]) => input.query.includes("issue1:"))).toBe(true);
+      for (const [input] of graphql.mock.calls) expect(input.query).not.toContain("body");
+    }),
+  );
 
-      expect(list.templates.map((template) => template.key)).toEqual(["bug_report.md"]);
-      expect(list.blankIssuesEnabled).toBe(true);
-      expect(list.contactLinks).toEqual([]);
+  it.effect("bounds summary batches to 25 issues", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockImplementation((input) =>
+        Effect.succeed(
+          encodeJson({
+            data: Object.fromEntries(
+              [...input.query.matchAll(/issue(\d+): repository[^}]+issue\(number: (\d+)\)/g)].map(
+                (match) => [`issue${match[1]}`, { issue: row(Number(match[2])) }],
+              ),
+            ),
+          }),
+        ),
+      );
+      const pending = yield* Effect.all(
+        Array.from({ length: 26 }, (_, index) =>
+          cli.getIssueSummary({ ...target, number: index + 1 }),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const results = yield* Fiber.join(pending);
+      assert.equal(results.length, 26);
+      expect(graphql).toHaveBeenCalledTimes(2);
+      expect(
+        graphql.mock.calls.every(([input]) => [...input.query.matchAll(/issue\d+:/g)].length <= 25),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect("recovers readable issues when a summary batch is refused", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockImplementation((input) =>
+        input.query.includes("issue1:") || input.query.includes("number: 8")
+          ? Effect.fail(refused)
+          : Effect.succeed(encodeJson({ data: { issue0: { issue: row(7) } } })),
+      );
+      const pending = yield* Effect.all(
+        [
+          cli.getIssueSummary(target).pipe(Effect.exit),
+          cli.getIssueSummary({ ...target, number: 8 }).pipe(Effect.exit),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const results = yield* Fiber.join(pending);
+      assert.equal(results[0]?._tag, "Success");
+      assert.equal(results[1]?._tag, "Failure");
+      expect(graphql).toHaveBeenCalledTimes(3);
+    }),
+  );
+
+  it.effect("does not fan out a rate-limited summary batch", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(
+        Effect.fail(
+          new GitHubApi.GitHubApiRateLimitError({
+            host: target.host,
+            operation: "summary",
+            retryAt: 123456,
+          }),
+        ),
+      );
+      const pending = yield* Effect.all(
+        [
+          cli.getIssueSummary(target).pipe(Effect.flip),
+          cli.getIssueSummary({ ...target, number: 8 }).pipe(Effect.flip),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const results = yield* Fiber.join(pending);
+      assert.equal(
+        results.every(
+          (error) => error._tag === "GitHubApiRateLimitError" && error.retryAt === 123456,
+        ),
+        true,
+      );
+      expect(graphql).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("reads more than one fallback page without a timestamp cursor", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      const repositoryPage = (nodes: ReadonlyArray<unknown>, cursor: string | null) =>
+        encodeJson({
+          data: {
+            repository: {
+              hasIssuesEnabled: true,
+              issues: { nodes, pageInfo: { hasNextPage: cursor !== null, endCursor: cursor } },
+            },
+          },
+        });
+      graphql
+        .mockReturnValueOnce(Effect.succeed(search([])))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            repositoryPage(
+              Array.from({ length: 100 }, (_, index) => row(index + 1)),
+              "next",
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(repositoryPage([row(101), row(102)], null)));
+      const batch = yield* cli.listIssues({ ...listing, limit: 101 });
+      assert.equal(batch.items.length, 101);
+      assert.equal(batch.items.at(-1)?.number, 101);
+      assert.equal(batch.truncated, true);
+      assert.equal(batch.continues, false);
+      assert.equal(graphql.mock.calls[2]?.[0].variables?.["cursor"], "next");
+      assert.equal(graphql.mock.calls[2]?.[0].variables?.["first"], 2);
+    }),
+  );
+
+  it.effect("keeps different pinned credentials in separate summary batches", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      const used: string[] = [];
+      graphql.mockImplementation(() =>
+        Effect.map(GitHubApi.PinnedGitHubCredential, (credential) => {
+          used.push(credential?.credentialFingerprint ?? "missing");
+          return encodeJson({ data: { issue0: { issue: row(7) } } });
+        }),
+      );
+      const read = (fingerprint: string) =>
+        cli.getIssueSummary(target).pipe(
+          Effect.provideService(GitHubApi.PinnedGitHubCredential, {
+            host: target.host,
+            token: Redacted.make("test"),
+            credentialFingerprint: fingerprint,
+          }),
+        );
+      const pending = yield* Effect.all([read("a"), read("b")], { concurrency: "unbounded" }).pipe(
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("10 millis");
+      yield* Fiber.await(pending);
+      expect(graphql).toHaveBeenCalledTimes(2);
+      assert.deepEqual(used.toSorted(), ["a", "b"]);
     }),
   );
 });

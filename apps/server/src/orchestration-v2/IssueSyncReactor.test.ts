@@ -462,10 +462,8 @@ it.effect("backs off a signed-out source without blocking other projects or host
 it.effect("keeps at most four host reads in flight across all sources", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const firstReads = yield* Queue.unbounded<void>();
-      const laterReads = yield* Queue.unbounded<ProjectId>();
-      const firstGate = yield* Deferred.make<void>();
-      const laterGate = yield* Deferred.make<void>();
+      const started = yield* Queue.unbounded<void>();
+      const gate = yield* Deferred.make<void>();
       let active = 0;
       let maximum = 0;
       const fixture = yield* makeHarness(
@@ -483,22 +481,14 @@ it.effect("keeps at most four host reads in flight across all sources", () =>
           Effect.gen(function* () {
             active += 1;
             maximum = Math.max(maximum, active);
-            if (ref.number === 7) {
-              yield* Queue.offer(firstReads, undefined);
-              yield* Deferred.await(firstGate);
-            } else {
-              yield* Queue.offer(laterReads, ref.projectId);
-              yield* Deferred.await(laterGate);
-            }
+            yield* Queue.offer(started, undefined);
+            yield* Deferred.await(gate);
             active -= 1;
             return detail(ref);
           }),
       );
-      for (let source = 0; source < 4; source++) yield* Queue.take(firstReads);
-      yield* Deferred.succeed(firstGate, undefined);
-      const sources = new Set<ProjectId>();
-      while (sources.size < 4) sources.add(yield* Queue.take(laterReads));
-      yield* Deferred.succeed(laterGate, undefined);
+      for (let read = 0; read < 4; read++) yield* Queue.take(started);
+      yield* Deferred.succeed(gate, undefined);
       yield* fixture.reactor.drain;
       assert.equal((yield* Ref.get(fixture.reads)).length, 12);
       assert.equal(maximum, 4);

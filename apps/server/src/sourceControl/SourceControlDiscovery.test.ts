@@ -7,15 +7,17 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/unstable/process";
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { ChildProcessSpawner } from "effect/process";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { VcsProcessSpawnError } from "@t3tools/contracts";
 
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerConfig from "../config.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as BitbucketApi from "./BitbucketApi.ts";
+import * as GitHubApi from "./GitHubApi.ts";
 import * as GitHubCli from "./GitHubCli.ts";
 import * as GitLabCli from "./GitLabCli.ts";
 import * as ForgejoCli from "./ForgejoCli.ts";
@@ -25,7 +27,7 @@ import * as SourceControlDiscovery from "./SourceControlDiscovery.ts";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 import { firstNonEmptyLine } from "./SourceControlProviderDiscovery.ts";
 
-const sourceControlProviderRegistryTestLayer = (input: {
+const layerSourceControlProviderRegistryTest = (input: {
   readonly bitbucket: Partial<BitbucketApi.BitbucketApi["Service"]>;
   readonly process: Partial<VcsProcess.VcsProcess["Service"]>;
 }) =>
@@ -37,7 +39,9 @@ const sourceControlProviderRegistryTestLayer = (input: {
         }).pipe(Layer.provide(NodeServices.layer)),
         Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({}),
         Layer.mock(BitbucketApi.BitbucketApi)(input.bitbucket),
+        ServerSettings.ServerSettingsService.layerTest(),
         Layer.mock(GitHubCli.GitHubCli)({}),
+        Layer.mock(GitHubApi.GitHubApi)({}),
         Layer.mock(GitLabCli.GitLabCli)({}),
         Layer.mock(ForgejoCli.ForgejoCli)({ listLogins: () => Effect.succeed([]) }),
         Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({}),
@@ -548,7 +552,7 @@ it.effect("reports implemented tools separately from locally available executabl
       );
     },
   } satisfies Partial<VcsProcess.VcsProcess["Service"]>;
-  const testLayer = SourceControlDiscovery.layer.pipe(
+  const layerTest = SourceControlDiscovery.layer.pipe(
     Layer.provide(
       ServerConfig.layerTest(process.cwd(), {
         prefix: "t3-source-control-discovery-",
@@ -556,7 +560,7 @@ it.effect("reports implemented tools separately from locally available executabl
     ),
     Layer.provide(Layer.mock(VcsProcess.VcsProcess)(processMock)),
     Layer.provide(
-      sourceControlProviderRegistryTestLayer({
+      layerSourceControlProviderRegistryTest({
         process: processMock,
         bitbucket: {
           probeAuth: Effect.succeed({
@@ -631,7 +635,7 @@ it.effect("reports implemented tools separately from locally available executabl
     const bitbucket = result.sourceControlProviders.find((item) => item.kind === "bitbucket");
     assert.ok(bitbucket);
     assert.strictEqual(bitbucket.executable, undefined);
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect("probes provider authentication without exposing token details", () => {
@@ -699,7 +703,7 @@ Logged in to gitlab.com as gitlab-user
       );
     },
   } satisfies Partial<VcsProcess.VcsProcess["Service"]>;
-  const testLayer = SourceControlDiscovery.layer.pipe(
+  const layerTest = SourceControlDiscovery.layer.pipe(
     Layer.provide(
       ServerConfig.layerTest(process.cwd(), {
         prefix: "t3-source-control-auth-discovery-",
@@ -707,7 +711,7 @@ Logged in to gitlab.com as gitlab-user
     ),
     Layer.provide(Layer.mock(VcsProcess.VcsProcess)(processMock)),
     Layer.provide(
-      sourceControlProviderRegistryTestLayer({
+      layerSourceControlProviderRegistryTest({
         process: processMock,
         bitbucket: {
           probeAuth: Effect.succeed({
@@ -766,7 +770,7 @@ Logged in to gitlab.com as gitlab-user
         },
       ],
     );
-  }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(layerTest));
 });
 
 it.effect("discovers Forgejo accounts and retains the server port", () =>

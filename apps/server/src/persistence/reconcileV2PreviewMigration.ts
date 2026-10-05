@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import AutoSettleDisabledAt from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
@@ -18,6 +18,26 @@ export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigratio
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 53
       `;
+      const rebasedIssuePreview = history.some(
+        (row) => row.migration_id === 57 && row.name === "ProjectionThreadIssues",
+      );
+      if (rebasedIssuePreview) {
+        if (
+          history.some(
+            (row) =>
+              row.migration_id >= 58 && !(row.migration_id === 58 && row.name === "WorkItemLinks"),
+          )
+        ) {
+          return yield* new Migrator.MigrationError({
+            kind: "BadState",
+            message: "Cannot upgrade issue preview with unexpected later migrations.",
+          });
+        }
+        yield* sql`DELETE FROM effect_sql_migrations
+          WHERE (migration_id = 57 AND name = 'ProjectionThreadIssues')
+          OR (migration_id = 58 AND name = 'WorkItemLinks')`;
+        return [];
+      }
       const issuePreview = history.some(
         (row) => row.migration_id === 54 && row.name === "ProjectionThreadIssues",
       );

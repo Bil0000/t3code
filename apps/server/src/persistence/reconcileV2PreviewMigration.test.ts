@@ -2,12 +2,14 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
+import ProjectionThreadIssues from "./Migrations/059_ProjectionThreadIssues.ts";
+import WorkItemLinks from "./Migrations/060_WorkItemLinks.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
 
 // The V2 schema is unchanged from the published September 15–16 previews.
@@ -37,8 +39,10 @@ describe("V2 preview upgrade", () => {
         [53, "PullRequestFilesViewed"],
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [56, "RemoveRedundantProjectionIndexes"],
-        [57, "ProjectionThreadIssues"],
-        [58, "WorkItemLinks"],
+        [57, "ScheduledTaskWebhooks"],
+        [58, "WebhookRelayDeliveries"],
+        [59, "ProjectionThreadIssues"],
+        [60, "WorkItemLinks"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -118,9 +122,37 @@ describe("V2 preview upgrade", () => {
         [53, "PullRequestFilesViewed"],
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
         [56, "RemoveRedundantProjectionIndexes"],
-        [57, "ProjectionThreadIssues"],
-        [58, "WorkItemLinks"],
+        [57, "ScheduledTaskWebhooks"],
+        [58, "WebhookRelayDeliveries"],
+        [59, "ProjectionThreadIssues"],
+        [60, "WorkItemLinks"],
       ]);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("upgrades issue migrations 57 and 58 without losing links", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 56 });
+      yield* Migrator.make({})({
+        loader: Migrator.fromRecord({
+          "57_ProjectionThreadIssues": ProjectionThreadIssues,
+          "58_WorkItemLinks": WorkItemLinks,
+        }),
+      });
+      yield* sql`INSERT INTO work_item_links VALUES ('github', 'https://github.com/a/b/issues/1', 'a/b', 1, 'Issue', 'github', 'https://github.com/a/b/pull/2', 'a/b', 2, 'Fix')`;
+      const links = yield* sql`SELECT * FROM work_item_links`;
+      yield* runMigrations();
+      assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+      const history = yield* sql<{
+        readonly migration_id: number;
+        readonly name: string;
+      }>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
+      assert.deepStrictEqual(
+        history.map((row) => [row.migration_id, row.name] as const),
+        migrationManifest,
+      );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 

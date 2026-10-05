@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as LinearApi from "./LinearApi.ts";

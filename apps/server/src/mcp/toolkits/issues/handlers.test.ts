@@ -20,7 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import type { Tool } from "effect/unstable/ai";
+import type { Tool } from "effect/ai";
 
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";

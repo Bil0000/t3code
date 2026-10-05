@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -58,6 +59,7 @@ export class IssueSyncReactor extends Context.Service<
 >()("t3/orchestration-v2/IssueSyncReactor") {}
 
 const make = Effect.gen(function* () {
+  const summaryReads = yield* Semaphore.make(4);
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const issues = yield* IssueService.IssueService;
@@ -232,10 +234,18 @@ const make = Effect.gen(function* () {
       ([sourceKey, due]) =>
         Effect.gen(function* () {
           if (forced) sourceRetryAt.delete(sourceKey);
-          for (const group of due) {
-            if (now < (sourceRetryAt.get(sourceKey) ?? 0)) return;
-            yield* syncGroup(sourceKey, group);
-          }
+          yield* Effect.forEach(
+            due,
+            (group) =>
+              summaryReads.withPermit(
+                Effect.suspend(() =>
+                  now < (sourceRetryAt.get(sourceKey) ?? 0)
+                    ? Effect.void
+                    : syncGroup(sourceKey, group),
+                ),
+              ),
+            { concurrency: due[0]?.[1][0]?.link.provider === "github" ? 25 : 1, discard: true },
+          );
         }),
       { concurrency: 4, discard: true },
     );

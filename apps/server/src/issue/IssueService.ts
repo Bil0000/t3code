@@ -1,6 +1,7 @@
+import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
-import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -45,6 +46,7 @@ import {
   type IssueProviderKind,
 } from "@t3tools/contracts";
 
+import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import {
@@ -238,7 +240,7 @@ function listCursorKey(project: IssueProviderRegistry.IssueProjectSource): strin
   if (project.credentialId === undefined) {
     return issueRepositoryKey(project.adapter.kind, project.host, project.repository);
   }
-  return JSON.stringify([
+  return encodeCacheKey([
     project.adapter.kind,
     project.host.toLowerCase(),
     project.repository.toLowerCase(),
@@ -311,7 +313,7 @@ function isProviderUnusable(error: IssueProviderError): boolean {
  * printed — "HTTP 401" names the symptom, not the fix.
  */
 function providerDetail(error: IssueProviderError): string {
-  if (!isProviderUnusable(error)) return error.detail;
+  if (!isProviderUnusable(error) || error.provider === "github") return error.detail;
   return (
     issueProviderRequirement(
       error.provider,
@@ -346,6 +348,23 @@ function toIssueError(operation: string): (error: IssueProviderError) => IssueEr
   };
 }
 
+const encodeCacheKey = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const ResolvedProjects = Context.Reference<IssueProviderRegistry.IssueWorkspaceProjects | null>(
+  "t3/issue/ResolvedProjects",
+  { defaultValue: () => null },
+);
+const ResolvedSource = Context.Reference<IssueProviderRegistry.IssueProjectSource | null>(
+  "t3/issue/ResolvedSource",
+  { defaultValue: () => null },
+);
+const CredentialContexts = Context.Reference<ReadonlyMap<string, Context.Context<never>>>(
+  "t3/issue/CredentialContexts",
+  { defaultValue: () => new Map() },
+);
+const CredentialNamespace = Context.Reference<string>("t3/issue/CredentialNamespace", {
+  defaultValue: () => "",
+});
+
 export const make = Effect.gen(function* () {
   const registry = yield* IssueProviderRegistry.IssueProviderRegistry;
   const projects = yield* ProjectService.ProjectService;
@@ -355,29 +374,33 @@ export const make = Effect.gen(function* () {
   const listWorkspaceProjects = (
     filter: Pick<IssueListInput, "projectId" | "host">,
   ): Effect.Effect<IssueProviderRegistry.IssueWorkspaceProjects, IssueError> =>
-    projects.listShells().pipe(
-      Effect.mapError(
-        (error) =>
-          new IssueOperationError({
-            operation: "listProjects",
-            detail: "The project list could not be read.",
-            cause: error,
-          }),
-      ),
-      Effect.flatMap((shells) =>
-        Effect.forEach(
-          shells,
-          (project) =>
-            project.repositoryIdentity != null
-              ? Effect.succeed(project)
-              : repositoryIdentities
-                  .resolve(project.workspaceRoot)
-                  .pipe(Effect.map((repositoryIdentity) => ({ ...project, repositoryIdentity }))),
-          { concurrency: REPOSITORY_CONCURRENCY },
+    Effect.gen(function* () {
+      const resolved = yield* ResolvedProjects;
+      if (resolved !== null) return resolved;
+      return yield* projects.listShells().pipe(
+        Effect.mapError(
+          (error) =>
+            new IssueOperationError({
+              operation: "listProjects",
+              detail: "The project list could not be read.",
+              cause: error,
+            }),
         ),
-      ),
-      Effect.flatMap((shells) => registry.resolveProjects(shells, filter)),
-    );
+        Effect.flatMap((shells) =>
+          Effect.forEach(
+            shells,
+            (project) =>
+              project.repositoryIdentity != null
+                ? Effect.succeed(project)
+                : repositoryIdentities
+                    .resolve(project.workspaceRoot)
+                    .pipe(Effect.map((repositoryIdentity) => ({ ...project, repositoryIdentity }))),
+            { concurrency: REPOSITORY_CONCURRENCY },
+          ),
+        ),
+        Effect.flatMap((shells) => registry.resolveProjects(shells, filter)),
+      );
+    });
 
   /**
    * The project a request names, with the repository it claims checked against the project's own
@@ -386,31 +409,35 @@ export const make = Effect.gen(function* () {
   const requireProject = (
     ref: Pick<IssueRef, "projectId" | "provider" | "repository" | "host">,
   ): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> =>
-    listWorkspaceProjects({ projectId: ref.projectId }).pipe(
-      Effect.flatMap(
-        ({ supported }): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> => {
-          if (supported.length === 0) {
-            return Effect.fail(new IssueUnavailableError({ reason: "provider-unsupported" }));
-          }
-          const repository = ref.repository.trim().toLowerCase();
-          const match = supported.find(
-            (project) =>
-              project.repository.toLowerCase() === repository &&
-              (ref.provider === undefined || project.adapter.kind === ref.provider) &&
-              (ref.host === undefined || project.host.toLowerCase() === ref.host.toLowerCase()),
-          );
-          if (match === undefined) {
-            return Effect.fail(
-              new IssueOperationError({
-                operation: "resolveRepository",
-                detail: "The issue does not belong to the selected project.",
-              }),
+    Effect.gen(function* () {
+      const resolved = yield* ResolvedSource;
+      if (resolved !== null) return resolved;
+      return yield* listWorkspaceProjects({ projectId: ref.projectId }).pipe(
+        Effect.flatMap(
+          ({ supported }): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> => {
+            if (supported.length === 0) {
+              return Effect.fail(new IssueUnavailableError({ reason: "provider-unsupported" }));
+            }
+            const repository = ref.repository.trim().toLowerCase();
+            const match = supported.find(
+              (project) =>
+                project.repository.toLowerCase() === repository &&
+                (ref.provider === undefined || project.adapter.kind === ref.provider) &&
+                (ref.host === undefined || project.host.toLowerCase() === ref.host.toLowerCase()),
             );
-          }
-          return Effect.succeed(match);
-        },
-      ),
-    );
+            if (match === undefined) {
+              return Effect.fail(
+                new IssueOperationError({
+                  operation: "resolveRepository",
+                  detail: "The issue does not belong to the selected project.",
+                }),
+              );
+            }
+            return Effect.succeed(match);
+          },
+        ),
+      );
+    });
 
   /**
    * What the signed-in account may do with this issue, asked of the host itself. Every write goes
@@ -419,6 +446,7 @@ export const make = Effect.gen(function* () {
    * a provider on the client's word. Read freshly for that reason, rather than taken from whatever
    * the detail said when the page loaded.
    */
+
   const viewerPermissionsOf = (
     project: IssueProviderRegistry.IssueProjectSource,
     ref: IssueRef,
@@ -482,54 +510,73 @@ export const make = Effect.gen(function* () {
     { readonly at: number; readonly result: ResolvedViewer }
   >();
 
+  const sourceRead = <A, E>(
+    project: IssueProviderRegistry.IssueProjectSource,
+    read: Effect.Effect<A, E>,
+  ) =>
+    CredentialContexts.pipe(
+      Effect.flatMap((contexts) => {
+        const context = contexts.get(sourceKeyOf(project));
+        return context === undefined ? read : Effect.provide(read, context);
+      }),
+    );
+
   const resolveViewers = (
     projects: ReadonlyArray<IssueProviderRegistry.IssueProjectSource>,
     viewerRoots: IssueProviderRegistry.IssueWorkspaceProjects["viewerRoots"],
   ) =>
-    Effect.forEach(
-      new Map(projects.map((project) => [sourceKeyOf(project), project])),
-      ([key, first]) =>
-        Effect.flatMap(Clock.currentTimeMillis, (now): Effect.Effect<ResolvedViewer> => {
-          const held = viewersBySource.get(key);
-          if (held !== undefined && now - held.at <= Duration.toMillis(VIEWER_CACHE_TTL)) {
-            return Effect.succeed(held.result);
-          }
-          const forSource = projects.filter((project) => sourceKeyOf(project) === key);
-          const adapter = first.adapter;
-          // Every checkout on the host, not just the ones that survived de-duplication: one
-          // unreadable worktree would otherwise report the whole host as signed out.
-          const roots =
-            viewerRoots.get(key) ?? forSource.map(({ project }) => project.workspaceRoot);
-          return Effect.firstSuccessOf(
-            roots.map((cwd) =>
-              adapter.getViewer({ ...providerContextOf(first), cwd, host: first.host }),
-            ),
-          ).pipe(
-            Effect.map((viewer) => ({
-              key,
-              host: first.host,
-              kind: adapter.kind,
-              projectIds: forSource.map(({ project }) => project.id),
-              viewer: viewer as string | null,
-              error: null as IssueProviderError | null,
-            })),
-            Effect.tap((result) =>
-              Effect.map(Clock.currentTimeMillis, (at) => viewersBySource.set(key, { at, result })),
-            ),
-            Effect.catch((error) =>
-              Effect.succeed({
+    Effect.gen(function* () {
+      const credentialNamespace = yield* CredentialNamespace;
+      return yield* Effect.forEach(
+        new Map(projects.map((project) => [sourceKeyOf(project), project])),
+        ([key, first]) =>
+          Effect.flatMap(Clock.currentTimeMillis, (now): Effect.Effect<ResolvedViewer> => {
+            const held = viewersBySource.get(`${key}\0${credentialNamespace}`);
+            if (held !== undefined && now - held.at <= Duration.toMillis(VIEWER_CACHE_TTL)) {
+              return Effect.succeed(held.result);
+            }
+            const forSource = projects.filter((project) => sourceKeyOf(project) === key);
+            const adapter = first.adapter;
+            // Every checkout on the host, not just the ones that survived de-duplication: one
+            // unreadable worktree would otherwise report the whole host as signed out.
+            const roots =
+              viewerRoots.get(key) ?? forSource.map(({ project }) => project.workspaceRoot);
+            return Effect.firstSuccessOf(
+              roots.map((cwd) =>
+                sourceRead(
+                  first,
+                  adapter.getViewer({ ...providerContextOf(first), cwd, host: first.host }),
+                ),
+              ),
+            ).pipe(
+              Effect.map((viewer) => ({
                 key,
                 host: first.host,
                 kind: adapter.kind,
                 projectIds: forSource.map(({ project }) => project.id),
-                viewer: null,
-                error,
-              }),
-            ),
-          );
-        }),
-      { concurrency: REPOSITORY_CONCURRENCY },
-    );
+                viewer: viewer as string | null,
+                error: null as IssueProviderError | null,
+              })),
+              Effect.tap((result) =>
+                Effect.map(Clock.currentTimeMillis, (at) =>
+                  viewersBySource.set(`${key}\0${credentialNamespace}`, { at, result }),
+                ),
+              ),
+              Effect.catch((error) =>
+                Effect.succeed({
+                  key,
+                  host: first.host,
+                  kind: adapter.kind,
+                  projectIds: forSource.map(({ project }) => project.id),
+                  viewer: null,
+                  error,
+                }),
+              ),
+            );
+          }),
+        { concurrency: REPOSITORY_CONCURRENCY },
+      );
+    });
 
   const toEntry = (input: {
     readonly project: IssueProviderRegistry.IssueProjectSource;
@@ -746,8 +793,9 @@ export const make = Effect.gen(function* () {
         const viewer = viewers[sourceKeyOf(project)]!;
         const key = listCursorKey(project);
         const cursor = cursorOf(project);
-        return project.adapter
-          .listIssues({
+        return sourceRead(
+          project,
+          project.adapter.listIssues({
             ...providerContextOf(project),
             cwd: project.project.workspaceRoot,
             repository: project.repository,
@@ -764,46 +812,46 @@ export const make = Effect.gen(function* () {
             ...(cursor === undefined
               ? {}
               : { cursor: { updatedBefore: cursor.updatedBefore, seenAt: cursor.seenAt } }),
-          })
-          .pipe(
-            Effect.map((page): RepositoryBatch => {
-              // The boundary instant was asked for inclusively, so the rows already sent at it
-              // come back with the slice. Dropping them here rather than asking for strictly
-              // older is what keeps their neighbours at the same instant from being skipped.
-              const items =
-                cursor === undefined
-                  ? page.items
-                  : page.items.filter(
-                      (item) =>
-                        item.updatedAt !== cursor.updatedBefore ||
-                        !cursor.seenAt.includes(item.number),
-                    );
-              return {
-                projectId: project.project.id,
-                key,
-                entries: items.map((item) => toEntry({ project, item })),
-                errors: [],
-                truncated: page.truncated,
-                nextCursor:
-                  sort === "updated" && order === "desc" && page.continues && page.truncated
-                    ? nextListCursor(cursor, page.items)
-                    : null,
-              };
+          }),
+        ).pipe(
+          Effect.map((page): RepositoryBatch => {
+            // The boundary instant was asked for inclusively, so the rows already sent at it
+            // come back with the slice. Dropping them here rather than asking for strictly
+            // older is what keeps their neighbours at the same instant from being skipped.
+            const items =
+              cursor === undefined
+                ? page.items
+                : page.items.filter(
+                    (item) =>
+                      item.updatedAt !== cursor.updatedBefore ||
+                      !cursor.seenAt.includes(item.number),
+                  );
+            return {
+              projectId: project.project.id,
+              key,
+              entries: items.map((item) => toEntry({ project, item })),
+              errors: [],
+              truncated: page.truncated,
+              nextCursor:
+                sort === "updated" && order === "desc" && page.continues && page.truncated
+                  ? nextListCursor(cursor, page.items)
+                  : null,
+            };
+          }),
+          // One unreadable repository must not blank the page — including the one whose tracker
+          // is switched off, which is a host-supported repository that simply has no issues to
+          // give rather than a host that cannot be read.
+          Effect.catch((error) =>
+            Effect.succeed<RepositoryBatch>({
+              projectId: project.project.id,
+              key,
+              entries: [],
+              errors: [repositoryFailure(project, error)],
+              truncated: false,
+              nextCursor: null,
             }),
-            // One unreadable repository must not blank the page — including the one whose tracker
-            // is switched off, which is a host-supported repository that simply has no issues to
-            // give rather than a host that cannot be read.
-            Effect.catch((error) =>
-              Effect.succeed<RepositoryBatch>({
-                projectId: project.project.id,
-                key,
-                entries: [],
-                errors: [repositoryFailure(project, error)],
-                truncated: false,
-                nextCursor: null,
-              }),
-            ),
-          );
+          ),
+        );
       };
 
       /**
@@ -825,20 +873,23 @@ export const make = Effect.gen(function* () {
         if (readAcross === undefined) return separately();
         const viewer = viewers[sourceKeyOf(first)]!;
         const cursor = cursorOf(first);
-        return readAcross({
-          ...providerContextOf(first),
-          cwd: first.project.workspaceRoot,
-          host: first.host,
-          repositories: chunk.map((project) => project.repository),
-          state: input.state,
-          involvement,
-          viewer,
-          limit,
-          sort,
-          order,
-          query: input.query,
-          ...(cursor === undefined ? {} : { cursor: { updatedBefore: cursor.updatedBefore } }),
-        }).pipe(
+        return sourceRead(
+          first,
+          readAcross({
+            ...providerContextOf(first),
+            cwd: first.project.workspaceRoot,
+            host: first.host,
+            repositories: chunk.map((project) => project.repository),
+            state: input.state,
+            involvement,
+            viewer,
+            limit,
+            sort,
+            order,
+            query: input.query,
+            ...(cursor === undefined ? {} : { cursor: { updatedBefore: cursor.updatedBefore } }),
+          }),
+        ).pipe(
           Effect.flatMap((page) => {
             const rows = new Map<string, Array<ProviderIssue>>();
             for (const item of page.items) {
@@ -948,58 +999,55 @@ export const make = Effect.gen(function* () {
   const detailUncached: IssueService["Service"]["detail"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
-        Effect.all(
-          [
-            project.adapter.getIssue({
-              ...providerContextOf(project),
-              cwd: project.project.workspaceRoot,
-              repository: project.repository,
-              host: project.host,
-              number: input.number,
-            }),
-            project.adapter.capabilities.editComment === true
-              ? project.adapter
-                  .getViewer({
-                    ...providerContextOf(project),
-                    cwd: project.project.workspaceRoot,
-                    host: project.host,
-                  })
-                  .pipe(
-                    Effect.map((viewer): string | undefined => viewer),
-                    Effect.orElseSucceed(() => undefined),
-                  )
-              : Effect.void,
-          ],
-          { concurrency: 2 },
-        ).pipe(
-          Effect.mapError(toIssueError("detail")),
-          Effect.map(([issue, viewer]): IssueDetail => ({
-            provider: project.adapter.kind,
-            ...(issue.repositoryUrl === undefined ? {} : { repositoryUrl: issue.repositoryUrl }),
-            capabilities: project.adapter.capabilities,
-            viewerPermissions: issue.viewerPermissions,
-            projectId: project.project.id,
-            projectTitle: project.project.title,
-            workspaceRoot: project.project.workspaceRoot,
+        project.adapter
+          .getIssue({
+            ...providerContextOf(project),
+            cwd: project.project.workspaceRoot,
             repository: project.repository,
-            number: issue.number,
-            title: issue.title,
-            body: issue.body,
-            url: issue.url,
-            author: issue.author,
-            state: issue.state,
-            stateReason: issue.stateReason,
-            createdAt: issue.createdAt,
-            updatedAt: issue.updatedAt,
-            closedAt: issue.closedAt,
-            assignees: issue.assignees,
-            labels: issue.labels,
-            milestone: issue.milestone,
-            ...(viewer === undefined ? {} : { viewer }),
-            commentCount: issue.commentCount,
-            linkedPullRequests: issue.linkedPullRequests,
-          })),
-        ),
+            host: project.host,
+            number: input.number,
+          })
+          .pipe(
+            Effect.flatMap((issue) =>
+              (issue.viewer !== undefined || !project.adapter.capabilities.editComment
+                ? Effect.succeed(issue.viewer)
+                : project.adapter
+                    .getViewer({
+                      ...providerContextOf(project),
+                      cwd: project.project.workspaceRoot,
+                      host: project.host,
+                    })
+                    .pipe(Effect.orElseSucceed(() => undefined))
+              ).pipe(Effect.map((viewer) => ({ issue, viewer }))),
+            ),
+            Effect.mapError(toIssueError("detail")),
+            Effect.map(({ issue, viewer }): IssueDetail => ({
+              provider: project.adapter.kind,
+              ...(issue.repositoryUrl === undefined ? {} : { repositoryUrl: issue.repositoryUrl }),
+              capabilities: project.adapter.capabilities,
+              viewerPermissions: issue.viewerPermissions,
+              projectId: project.project.id,
+              projectTitle: project.project.title,
+              workspaceRoot: project.project.workspaceRoot,
+              repository: project.repository,
+              number: issue.number,
+              title: issue.title,
+              body: issue.body,
+              url: issue.url,
+              author: issue.author,
+              state: issue.state,
+              stateReason: issue.stateReason,
+              createdAt: issue.createdAt,
+              updatedAt: issue.updatedAt,
+              closedAt: issue.closedAt,
+              assignees: issue.assignees,
+              labels: issue.labels,
+              milestone: issue.milestone,
+              ...(viewer === undefined ? {} : { viewer }),
+              commentCount: issue.commentCount,
+              linkedPullRequests: issue.linkedPullRequests,
+            })),
+          ),
       ),
     );
 
@@ -1370,9 +1418,14 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return viewerPermissionsOf(project, input, "labelCandidates").pipe(
-          Effect.flatMap((viewer): Effect.Effect<IssueLabelCandidateList, IssueError> =>
-            viewer.labels
+        const access = project.adapter.candidatePermissionsIncluded
+          ? Effect.succeed(true)
+          : viewerPermissionsOf(project, input, "labelCandidates").pipe(
+              Effect.map((viewer) => viewer.labels),
+            );
+        return access.pipe(
+          Effect.flatMap((allowed): Effect.Effect<IssueLabelCandidateList, IssueError> =>
+            allowed
               ? project.adapter
                   .listLabelCandidates({
                     ...providerContextOf(project),
@@ -1404,9 +1457,14 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return viewerPermissionsOf(project, input, "assigneeCandidates").pipe(
-          Effect.flatMap((viewer): Effect.Effect<IssueAssigneeCandidateList, IssueError> =>
-            viewer.assignees
+        const access = project.adapter.candidatePermissionsIncluded
+          ? Effect.succeed(true)
+          : viewerPermissionsOf(project, input, "assigneeCandidates").pipe(
+              Effect.map((viewer) => viewer.assignees),
+            );
+        return access.pipe(
+          Effect.flatMap((allowed): Effect.Effect<IssueAssigneeCandidateList, IssueError> =>
+            allowed
               ? project.adapter
                   .listAssigneeCandidates({
                     ...providerContextOf(project),
@@ -1567,23 +1625,25 @@ export const make = Effect.gen(function* () {
     },
   );
   const staleList = staleWhileRevalidate<IssueListResult>(LIST_STALE_WINDOW, LIST_CACHE_CAPACITY);
-  const list: IssueService["Service"]["list"] = (input) => {
-    const key = JSON.stringify([
-      listingsEpoch,
-      input.state,
-      input.involvement ?? null,
-      input.projectId ?? null,
-      input.host ?? null,
-      input.limit ?? null,
-      input.query ?? null,
-      input.sort ?? null,
-      input.order ?? null,
-      input.cursors === undefined
-        ? null
-        : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
-    ]);
-    return staleList(key, Cache.get(listCache, key));
-  };
+  const list: IssueService["Service"]["list"] = (input) =>
+    Effect.gen(function* () {
+      const key = encodeCacheKey([
+        listingsEpoch,
+        input.state,
+        input.involvement ?? null,
+        input.projectId ?? null,
+        input.host ?? null,
+        input.limit ?? null,
+        input.query ?? null,
+        input.sort ?? null,
+        input.order ?? null,
+        input.cursors === undefined
+          ? null
+          : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
+        yield* CredentialNamespace,
+      ]);
+      return yield* staleList(key, Cache.get(listCache, key));
+    });
 
   const summaryCache = yield* Cache.makeWith(
     (key: string) => {
@@ -1617,19 +1677,22 @@ export const make = Effect.gen(function* () {
     },
   );
   const summary: IssueService["Service"]["summary"] = (input) =>
-    Cache.get(
-      summaryCache,
-      JSON.stringify([
-        refEpoch(input),
-        {
-          projectId: input.projectId,
-          ...(input.provider === undefined ? {} : { provider: input.provider }),
-          repository: input.repository,
-          number: input.number,
-          ...(input.host === undefined ? {} : { host: input.host }),
-        },
-      ]),
-    );
+    Effect.gen(function* () {
+      return yield* Cache.get(
+        summaryCache,
+        encodeCacheKey([
+          refEpoch(input),
+          {
+            projectId: input.projectId,
+            ...(input.provider === undefined ? {} : { provider: input.provider }),
+            repository: input.repository,
+            number: input.number,
+            ...(input.host === undefined ? {} : { host: input.host }),
+          },
+          yield* CredentialNamespace,
+        ]),
+      );
+    });
 
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
@@ -1655,17 +1718,19 @@ export const make = Effect.gen(function* () {
     },
   );
   const staleDetail = staleWhileRevalidate<IssueDetail>(DETAIL_STALE_WINDOW, DETAIL_CACHE_CAPACITY);
-  const detail: IssueService["Service"]["detail"] = (input) => {
-    const key = JSON.stringify([
-      refEpoch(input),
-      input.projectId,
-      input.provider ?? null,
-      input.repository,
-      input.number,
-      input.host?.toLowerCase() ?? null,
-    ]);
-    return staleDetail(key, Cache.get(detailCache, key));
-  };
+  const detail: IssueService["Service"]["detail"] = (input) =>
+    Effect.gen(function* () {
+      const key = encodeCacheKey([
+        refEpoch(input),
+        input.projectId,
+        input.provider ?? null,
+        input.repository,
+        input.number,
+        input.host?.toLowerCase() ?? null,
+        yield* CredentialNamespace,
+      ]);
+      return yield* staleDetail(key, Cache.get(detailCache, key));
+    });
 
   const activityCache = yield* Cache.makeWith(
     (key: string) => {
@@ -1694,17 +1759,19 @@ export const make = Effect.gen(function* () {
     DETAIL_STALE_WINDOW,
     DETAIL_CACHE_CAPACITY,
   );
-  const activity: IssueService["Service"]["activity"] = (input) => {
-    const key = JSON.stringify([
-      refEpoch(input),
-      input.projectId,
-      input.provider ?? null,
-      input.repository,
-      input.number,
-      input.host?.toLowerCase() ?? null,
-    ]);
-    return staleActivity(key, Cache.get(activityCache, key));
-  };
+  const activity: IssueService["Service"]["activity"] = (input) =>
+    Effect.gen(function* () {
+      const key = encodeCacheKey([
+        refEpoch(input),
+        input.projectId,
+        input.provider ?? null,
+        input.repository,
+        input.number,
+        input.host?.toLowerCase() ?? null,
+        yield* CredentialNamespace,
+      ]);
+      return yield* staleActivity(key, Cache.get(activityCache, key));
+    });
 
   const templateCache = yield* Cache.makeWith(
     (key: string) => {
@@ -1717,7 +1784,17 @@ export const make = Effect.gen(function* () {
     },
   );
   const templates: IssueService["Service"]["templates"] = (input) =>
-    Cache.get(templateCache, JSON.stringify([templatesEpoch, input.projectId, input.repository]));
+    Effect.gen(function* () {
+      return yield* Cache.get(
+        templateCache,
+        encodeCacheKey([
+          templatesEpoch,
+          input.projectId,
+          input.repository,
+          yield* CredentialNamespace,
+        ]),
+      );
+    });
 
   const invalidate: IssueService["Service"]["invalidate"] = (input) =>
     Effect.sync(() => {
@@ -1751,32 +1828,116 @@ export const make = Effect.gen(function* () {
         ),
       );
 
+  const credentialScoped =
+    <I extends IssueRepositoryRef, A>(
+      read: (input: I) => Effect.Effect<A, IssueError>,
+      allowReserve = true,
+    ) =>
+    (input: I) =>
+      requireProject(input).pipe(
+        Effect.flatMap((project) =>
+          project.adapter.withCredential === undefined
+            ? read(input).pipe(
+                Effect.provideService(ResolvedSource, project),
+                Effect.provideService(AllowGitHubReserve, allowReserve),
+              )
+            : project.adapter
+                .withCredential(project.host, (fingerprint) =>
+                  read(input).pipe(
+                    Effect.provideService(CredentialNamespace, fingerprint),
+                    Effect.provideService(ResolvedSource, project),
+                    Effect.provideService(AllowGitHubReserve, allowReserve),
+                  ),
+                )
+                .pipe(
+                  Effect.mapError((error) =>
+                    error._tag === "IssueProviderError" ? toIssueError("credential")(error) : error,
+                  ),
+                ),
+        ),
+      );
+
+  const credentialList: IssueService["Service"]["list"] = (input) =>
+    listWorkspaceProjects(input).pipe(
+      Effect.flatMap((resolved) =>
+        Effect.forEach(
+          [
+            ...new Map(
+              resolved.supported
+                .filter((project) => project.adapter.withCredential !== undefined)
+                .map((project) => [sourceKeyOf(project), project]),
+            ).values(),
+          ],
+          (project) =>
+            project.adapter.withCredential!(project.host, (fingerprint) =>
+              Effect.map(Effect.context<never>(), (context) => ({
+                key: sourceKeyOf(project),
+                fingerprint,
+                context,
+              })),
+            ).pipe(
+              Effect.match({
+                onSuccess: (scope) => scope,
+                onFailure: (error) => ({
+                  key: sourceKeyOf(project),
+                  fingerprint: error.reason,
+                  context: undefined,
+                }),
+              }),
+            ),
+          { concurrency: REPOSITORY_CONCURRENCY },
+        ).pipe(
+          Effect.flatMap((scopes) =>
+            list(input).pipe(
+              Effect.provideService(
+                CredentialNamespace,
+                encodeCacheKey(scopes.map(({ key, fingerprint }) => [key, fingerprint])),
+              ),
+              Effect.provideService(
+                CredentialContexts,
+                new Map(
+                  scopes.flatMap(({ key, context }) =>
+                    context === undefined ? [] : [[key, context]],
+                  ),
+                ),
+              ),
+              Effect.provideService(ResolvedProjects, resolved),
+            ),
+          ),
+        ),
+      ),
+    );
+
   return IssueService.of({
     tracker: registry.tracker,
-    list,
-    summary,
-    detail,
-    activity,
+    list: credentialList,
+    summary: credentialScoped(summary, false),
+    detail: credentialScoped(detail),
+    activity: credentialScoped(activity),
     runAction: (input) =>
-      invalidatedByMutation(runAction)(input).pipe(
+      credentialScoped(invalidatedByMutation(runAction))(input).pipe(
         Effect.tap(() => PubSub.publish(refreshes, input)),
       ),
-    commentsPage,
-    comment: invalidatedByMutation(comment),
-    updateComment: invalidatedByMutation(updateComment),
-    setReaction: invalidatedByMutation(setReaction),
+    commentsPage: credentialScoped(commentsPage),
+    comment: credentialScoped(invalidatedByMutation(comment)),
+    updateComment: credentialScoped(invalidatedByMutation(updateComment)),
+    setReaction: credentialScoped(invalidatedByMutation(setReaction)),
     // A new issue belongs on every listing that would hold it, and there is no issue of its own
     // to forget yet.
     create: (input) =>
-      create(input).pipe(Effect.tap(() => Effect.sync(() => (listingsEpoch = ++epochCounter)))),
+      credentialScoped(create)(input).pipe(
+        Effect.tap(() => Effect.sync(() => (listingsEpoch = ++epochCounter))),
+      ),
     update: (input) =>
-      invalidatedByMutation(update)(input).pipe(Effect.tap(() => PubSub.publish(refreshes, input))),
-    setLabels: invalidatedByMutation(setLabels),
-    setAssignees: invalidatedByMutation(setAssignees),
+      credentialScoped(invalidatedByMutation(update))(input).pipe(
+        Effect.tap(() => PubSub.publish(refreshes, input)),
+      ),
+    setLabels: credentialScoped(invalidatedByMutation(setLabels)),
+    setAssignees: credentialScoped(invalidatedByMutation(setAssignees)),
     // The candidate lists are deliberately read fresh per menu-open, so they stay uncached.
-    labelCandidates,
-    assigneeCandidates,
-    templates,
+    labelCandidates: credentialScoped(labelCandidates),
+    assigneeCandidates: credentialScoped(assigneeCandidates),
+    templates: credentialScoped(templates),
     invalidate,
     subscribeRefreshes: Stream.fromPubSub(refreshes),
   });

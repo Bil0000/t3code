@@ -2,47 +2,21 @@ import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  buildIssueWriteJson,
   decodeAssigneeCandidatesJson,
   decodeCreatedIssueJson,
   decodeIssueActivityJson,
   decodeIssueCommentsJson,
-  decodeIssueDetailJson,
   decodeIssueFormYaml,
-  decodeIssueListJson,
   decodeIssueSearchJson,
   decodeIssueSupplementJson,
   decodeIssueTemplateConfigYaml,
   decodeIssueTemplateFormsJson,
   decodeIssueTemplatesJson,
   decodeIssueViewerPermissionsJson,
-  decodeRepositoryLabelsJson,
   DEFAULT_ISSUE_TEMPLATE_CONFIG,
-  encodeGraphQlRequestJson,
   issueSearchGraphQlQuery,
-  ISSUE_DETAIL_JSON_FIELDS,
-  ISSUE_LIST_JSON_FIELDS,
   ISSUE_SEARCH_MAX_ROWS,
 } from "./gitHubIssueJson.ts";
-
-/** One row as `gh issue list --json` spells it, which is the shape `gh issue view` answers in. */
-function issueJson(entry: Record<string, unknown>): string {
-  return JSON.stringify({
-    number: 1,
-    title: "The page never loads",
-    url: "https://github.com/acme/web/issues/1",
-    state: "OPEN",
-    stateReason: "",
-    createdAt: "2026-07-01T00:00:00Z",
-    updatedAt: "2026-07-02T00:00:00Z",
-    closedAt: null,
-    ...entry,
-  });
-}
-
-function listJson(entries: ReadonlyArray<Record<string, unknown>>): string {
-  return `[${entries.map((entry) => issueJson(entry)).join(",")}]`;
-}
 
 /** One row as the cross-repository search answers it: the listing's row one connection deeper. */
 function searchItem(entry: Record<string, unknown>): Record<string, unknown> {
@@ -182,105 +156,6 @@ function expectSuccess<A>(result: Result.Result<A, unknown>): A {
   if (!Result.isSuccess(result)) throw new Error("expected a successful decode");
   return result.success;
 }
-
-describe("issue list decoding", () => {
-  it("reads an issue with its people, labels and milestone", () => {
-    const batch = expectSuccess(
-      decodeIssueListJson(
-        listJson([
-          {
-            number: 42,
-            author: { login: "bilal", name: "Bilal" },
-            assignees: [{ login: "julius", name: "Julius" }, { login: "  " }],
-            labels: [{ name: "bug", color: "d73a4a" }, { name: "   " }],
-            milestone: { title: "v2" },
-          },
-        ]),
-      ),
-    );
-
-    expect(batch.items[0]).toMatchObject({
-      number: 42,
-      state: "open",
-      stateReason: null,
-      // No `gh` JSON field carries an avatar, so a listing row has initials to show and no face.
-      author: { login: "bilal", name: "Bilal", avatarUrl: null },
-      // A person and a label GitHub named nothing for are left out rather than shown blank.
-      assignees: [{ login: "julius", name: "Julius", avatarUrl: null }],
-      labels: [{ name: "bug", color: "d73a4a" }],
-      milestone: "v2",
-      // The listing never asks for the conversation, so a row from it counts none.
-      commentCount: 0,
-    });
-  });
-
-  it("reads reaction totals without loading issue conversations", () => {
-    const batch = expectSuccess(
-      decodeIssueListJson(
-        listJson([
-          {
-            reactionGroups: [{ content: "THUMBS_UP", reactors: { totalCount: 5, nodes: [] } }],
-          },
-        ]),
-      ),
-    );
-
-    expect(batch.items[0]?.reactions).toEqual([
-      { content: "thumbs-up", count: 5, actors: [], viewerHasReacted: false },
-    ]);
-  });
-
-  it("reads why a closed issue was closed, and nothing for one still open", () => {
-    const batch = expectSuccess(
-      decodeIssueListJson(
-        listJson([
-          { state: "CLOSED", stateReason: "COMPLETED", closedAt: "2026-07-03T00:00:00Z" },
-          { state: "CLOSED", stateReason: "NOT_PLANNED" },
-          // GitHub says an issue opened again was reopened, which is not why it was closed.
-          { stateReason: "REOPENED" },
-        ]),
-      ),
-    );
-
-    expect(batch.items.map((item) => [item.state, item.stateReason, item.closedAt])).toEqual([
-      ["closed", "completed", "2026-07-03T00:00:00Z"],
-      ["closed", "not-planned", null],
-      ["open", null, null],
-    ]);
-  });
-
-  it("skips a malformed row but still counts it, so paging does not stop early", () => {
-    const batch = expectSuccess(
-      decodeIssueListJson(`[{"number":"not a number"},${issueJson({ number: 7 })}]`),
-    );
-
-    expect(batch.items.map((item) => item.number)).toEqual([7]);
-    expect(batch.rawCount).toBe(2);
-  });
-
-  it("fails when GitHub answered with something that is not a list of issues", () => {
-    expect(Result.isFailure(decodeIssueListJson('{"message":"Not Found"}'))).toBe(true);
-  });
-
-  it("never asks gh for the conversation, which it answers with in full", () => {
-    // `--json comments` is every remark's whole body rather than a count, which is megabytes a
-    // page. The search carries GitHub's own count instead.
-    expect(ISSUE_LIST_JSON_FIELDS.split(",")).not.toContain("comments");
-    expect(ISSUE_DETAIL_JSON_FIELDS.split(",")).toContain("body");
-  });
-});
-
-describe("issue detail decoding", () => {
-  it("reads the body GitHub answered with", () => {
-    const detail = expectSuccess(decodeIssueDetailJson(issueJson({ body: "It 500s." })));
-
-    expect(detail.body).toBe("It 500s.");
-  });
-
-  it("reads an issue with no body as one with an empty body", () => {
-    expect(expectSuccess(decodeIssueDetailJson(issueJson({}))).body).toBe("");
-  });
-});
 
 describe("created issue decoding", () => {
   it("answers with where the new issue lives", () => {
@@ -726,30 +601,6 @@ describe("issue comment page decoding", () => {
 
     expect(page.comments.map((comment) => comment.id)).toEqual(["IC_2"]);
     expect(page.nextCursor).toBe("bmV4dA==");
-  });
-});
-
-describe("repository label decoding", () => {
-  it("reads the labels a repository offers, and skips one it named nothing", () => {
-    const labels = expectSuccess(
-      decodeRepositoryLabelsJson(
-        JSON.stringify([
-          { name: "bug", color: "d73a4a", description: "Something is broken" },
-          { name: "   " },
-          { color: "ffffff" },
-        ]),
-      ),
-    );
-
-    expect(labels.labels).toEqual([
-      { name: "bug", color: "d73a4a", description: "Something is broken" },
-    ]);
-    // Counted before decoding, so a skipped label cannot end the walk through the pages early.
-    expect(labels.rawCount).toBe(3);
-  });
-
-  it("fails when GitHub answered something that is not a list of labels", () => {
-    expect(Result.isFailure(decodeRepositoryLabelsJson('{"message":"Not Found"}'))).toBe(true);
   });
 });
 
@@ -1231,32 +1082,6 @@ body:
     );
 
     expect(forms.forms).toEqual([]);
-  });
-});
-
-describe("issue write bodies", () => {
-  it("writes only the fields the edit carried, so a rename cannot blank a body", () => {
-    expect(buildIssueWriteJson({ title: "A better title" })).toBe('{"title":"A better title"}');
-  });
-
-  it("writes an empty set, which is how the whole set is taken off", () => {
-    expect(buildIssueWriteJson({ labels: [], assignees: [] })).toBe('{"labels":[],"assignees":[]}');
-  });
-
-  it("keeps a body that reads as JSON as text", () => {
-    expect(buildIssueWriteJson({ body: "true" })).toBe('{"body":"true"}');
-  });
-
-  it("carries the document and the reader's own words in one request body", () => {
-    const raw = encodeGraphQlRequestJson({
-      query: "query($q: String!) { search(query: $q) { nodes { __typename } } }",
-      variables: { q: 'is:issue "a b"' },
-    });
-
-    expect(JSON.parse(raw)).toEqual({
-      query: "query($q: String!) { search(query: $q) { nodes { __typename } } }",
-      variables: { q: 'is:issue "a b"' },
-    });
   });
 });
 
