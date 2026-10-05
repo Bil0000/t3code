@@ -128,9 +128,9 @@ const make = Effect.gen(function* () {
       .update(
         JSON.stringify([
           scope.environmentId,
-          scope.threadId,
-          scope.providerSessionId,
-          scope.providerInstanceId,
+          scope.thread.threadId,
+          scope.thread.providerSessionId,
+          scope.thread.providerInstanceId,
         ]),
       )
       .digest("hex")}`;

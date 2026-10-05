@@ -473,7 +473,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
             }),
           ),
           Effect.flatMap((input) =>
-            McpInvocationContext.requireMcpCapability("preview").pipe(
+            McpInvocationContext.requireThreadMcpCapability("preview").pipe(
               Effect.flatMap((scope) =>
                 snapshots.withSnapshot(
                   { scope, ...input },
@@ -597,7 +597,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
             }),
           ),
           Effect.flatMap((input) =>
-            McpInvocationContext.requireMcpCapability("preview").pipe(
+            McpInvocationContext.requireThreadMcpCapability("preview").pipe(
               Effect.flatMap((scope) => snapshots.readText({ scope, ...input })),
             ),
           ),

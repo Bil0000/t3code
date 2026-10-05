@@ -28,9 +28,13 @@ const tabId = PreviewTabId.make("text-tab");
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const scope = {
   environmentId: EnvironmentId.make("text-environment"),
-  threadId: ThreadId.make("text-thread"),
-  providerSessionId: "text-session",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "text-request-namespace",
+  thread: {
+    threadId: ThreadId.make("text-thread"),
+    providerSessionId: "text-session",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
 };
@@ -100,7 +104,8 @@ const makePage = (initialText: string) => {
       }
       if (request.tabId !== undefined && request.tabId !== tabId) {
         return yield* new PreviewAutomationNoAvailableHostError({
-          ...scope,
+          environmentId: scope.environmentId,
+          ...scope.thread,
           operation: request.operation,
         });
       }
@@ -137,7 +142,12 @@ const makePage = (initialText: string) => {
           expect(Buffer.byteLength(encodeJson(value), "utf8")).toBeLessThan(16_512);
           return value;
         },
-        catch: () => new PreviewAutomationNoAvailableHostError({ ...scope, operation: "evaluate" }),
+        catch: () =>
+          new PreviewAutomationNoAvailableHostError({
+            environmentId: scope.environmentId,
+            ...scope.thread,
+            operation: "evaluate",
+          }),
       });
       if (expression.includes("Object.defineProperty") && page.captureGate) yield* page.captureGate;
       return value;
@@ -387,7 +397,20 @@ it.effect.each(["environmentId", "threadId", "providerSessionId", "providerInsta
     const page = makePage("private text");
     return Effect.gen(function* () {
       const captured = yield* captureText();
-      const otherScope = { ...scope, [field]: "different-owner" };
+      const otherScope = {
+        ...scope,
+        environmentId:
+          field === "environmentId" ? EnvironmentId.make("other-environment") : scope.environmentId,
+        thread: {
+          threadId: field === "threadId" ? ThreadId.make("other-thread") : scope.thread.threadId,
+          providerSessionId:
+            field === "providerSessionId" ? "other-session" : scope.thread.providerSessionId,
+          providerInstanceId:
+            field === "providerInstanceId"
+              ? ProviderInstanceId.make("other-provider")
+              : scope.thread.providerInstanceId,
+        },
+      };
       expect(yield* Effect.flip(readText(captured.captureId, 0, false, otherScope))).toBeInstanceOf(
         Snapshot.PreviewTextCaptureError,
       );
@@ -540,7 +563,8 @@ it.effect.each(["status", "evaluate"] as const)(
       ]) {
         const page = makePage("loaded text");
         const error = new ErrorClass({
-          ...scope,
+          environmentId: scope.environmentId,
+          ...scope.thread,
           operation,
           clientId: "text-client",
           connectionId: "text-connection",
@@ -582,7 +606,10 @@ it.effect("keeps another owner's live capture when this owner captures or releas
   return Effect.gen(function* () {
     const snapshots = yield* Snapshot.PreviewSnapshot;
     const first = yield* captureText();
-    const otherScope = { ...scope, threadId: ThreadId.make("other-thread") };
+    const otherScope = {
+      ...scope,
+      thread: { ...scope.thread, threadId: ThreadId.make("other-thread") },
+    };
     page.setText("second owner's text");
     const second = yield* snapshots.withSnapshot(
       { scope: otherScope, tabId, captureText: true },
@@ -650,6 +677,17 @@ it.effect("cleans an installed capture when its initial response is interrupted"
     yield* Deferred.await(enteredCapture);
     expect(page.timers.size).toBe(1);
     yield* Fiber.interrupt(fiber);
+    assertClean(page);
+  }).pipe(providePage(page), Effect.provide(TestLayer));
+});
+
+it.effect("keeps the same owner's capture when its credential is renewed", () => {
+  const page = makePage("loaded text");
+  return Effect.gen(function* () {
+    const captured = yield* captureText();
+    const renewedScope = { ...scope, issuedAt: 2, requestNamespace: "renewed-request-namespace" };
+    expect((yield* readText(captured.captureId, 0, false, renewedScope)).text).toBe("loaded text");
+    yield* readText(captured.captureId, 0, true, renewedScope);
     assertClean(page);
   }).pipe(providePage(page), Effect.provide(TestLayer));
 });

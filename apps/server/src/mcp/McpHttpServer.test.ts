@@ -45,9 +45,13 @@ const decodeJsonText = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unk
 const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const invocation = {
   environmentId,
-  threadId,
-  providerSessionId: "provider-session-mcp-test",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "provider-session-mcp-test",
+  thread: {
+    threadId,
+    providerSessionId: "provider-session-mcp-test",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
 };
@@ -972,7 +976,7 @@ it.effect("does not expose another provider session's text capture", () =>
 
       const foreign = yield* callReadText(args, {
         ...invocation,
-        providerSessionId: "different-session",
+        thread: { ...invocation.thread, providerSessionId: "different-session" },
       });
 
       expect(foreign.isError).toBe(true);
@@ -981,6 +985,38 @@ it.effect("does not expose another provider session's text capture", () =>
       expect(own.isError).toBe(false);
       expect(own.structuredContent).toMatchObject({ text: "private loaded text" });
       expect(host.timers.size).toBe(1);
+    }),
+  ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect.each([
+  { name: "preview_snapshot", args: { captureText: true } },
+  { name: "preview_read_text", args: { tabId, captureId: "capture" } },
+])("requires a thread caller for $name even with the preview capability", ({ name, args }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const host = yield* serveTextCaptures("mcp-client-text-capture-denied", "Loaded text");
+      const server = yield* McpServer.McpServer;
+
+      const denied = yield* server.callTool({ name, arguments: args }).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, {
+          ...invocation,
+          thread: undefined,
+          client: {
+            sessionId: "outside-thread-session",
+            label: "MCP client",
+            runtimeModeCeiling: "auto",
+          },
+        }),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+      expect(denied.isError).toBe(true);
+      expect(denied.structuredContent).toMatchObject({
+        error: { _tag: "PreviewAutomationUnavailableError" },
+      });
+      expect(host.requests).toEqual([]);
+      expect(host.textReads()).toBe(0);
     }),
   ).pipe(Effect.provide(TestLayer)),
 );
@@ -1533,8 +1569,18 @@ it.effect("registers annotated tools and preserves authenticated request context
 
       const snapshotTool = server.tools.find(({ tool }) => tool.name === "preview_snapshot");
       expect(snapshotTool?.tool.annotations?.readOnlyHint).toBe(true);
-      expect(snapshotTool?.tool.annotations?.idempotentHint).toBe(true);
+      expect(snapshotTool?.tool.annotations?.idempotentHint).toBe(false);
       expect(snapshotTool?.tool.annotations?.openWorldHint).toBe(true);
+
+      const readTextTool = server.tools.find(({ tool }) => tool.name === "preview_read_text");
+      expect(readTextTool?.tool.annotations?.readOnlyHint).toBe(true);
+      expect(readTextTool?.tool.annotations?.idempotentHint).toBe(false);
+      expect(readTextTool?.tool.annotations?.destructiveHint).toBe(false);
+      expect(readTextTool?.tool.annotations?.openWorldHint).toBe(true);
+      expect(readTextTool?.tool.outputSchema).toMatchObject({
+        type: "object",
+        required: expect.arrayContaining(["text", "nextOffset", "totalChars", "done", "released"]),
+      });
 
       const clickTool = server.tools.find(({ tool }) => tool.name === "preview_click");
       expect(clickTool?.tool.annotations?.readOnlyHint).toBe(false);
