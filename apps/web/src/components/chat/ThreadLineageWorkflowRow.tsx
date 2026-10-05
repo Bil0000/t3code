@@ -258,20 +258,3 @@ export function ThreadLineageWorkflowRow({
     </li>
   );
 }
-
-/** Settled phases out of every phase the workflow has declared or started. */
-export function ThreadLineageWorkflowPhases({ group }: { group: AgentPanelWorkflowGroup }) {
-  const done = group.phases.filter((phase) => phase.state === "done").length;
-  return (
-    <span
-      className={cn(
-        "rounded-sm px-1 text-3xs",
-        group.workflow.status === "failed"
-          ? "bg-destructive/12 text-destructive-foreground"
-          : "bg-foreground/6",
-      )}
-    >
-      {done}/{group.phases.length} phases
-    </span>
-  );
-}

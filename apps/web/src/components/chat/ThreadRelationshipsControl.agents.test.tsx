@@ -124,8 +124,8 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   }
   const rendered = JSON.stringify(renderer.toJSON());
   for (const phase of phases) expect(rendered).toContain(phase.title);
-  // Two of three phases settled; only the last phase still has one running.
-  expect(rendered).toContain('"2","/","3"," phases"');
+  // The closed row leaves phase progress to the tree.
+  expect(rendered).not.toContain(" phases");
   expect(rendered).toContain('"1","/","2"," ","agents"');
   expect(rendered).toContain("Running");
   // The phase holding the running member reports itself as the active one.

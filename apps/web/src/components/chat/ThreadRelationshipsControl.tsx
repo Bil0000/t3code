@@ -53,7 +53,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AgentElapsed } from "./AgentElapsed";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
-import { ThreadLineageWorkflowPhases, ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
+import { ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -424,7 +424,6 @@ export function ThreadRelationshipsPanel(props: {
               ) : (
                 relationshipHint
               );
-              const elapsed = agent?.startedAt ? <AgentElapsed agent={agent} /> : null;
               // A workflow reports its own run, which outlives the coordinator thread's turns.
               const rowStatus = workflowGroup?.workflow.status ?? status;
               const relationshipContent = (
@@ -441,12 +440,9 @@ export function ThreadRelationshipsPanel(props: {
                     </span>
                   </span>
                   {agent ? (
-                    workflowGroup || agent.startedAt ? (
-                      <span className="flex shrink-0 items-center gap-1.5 text-2xs font-normal tabular-nums text-muted-foreground">
-                        {workflowGroup ? (
-                          <ThreadLineageWorkflowPhases group={workflowGroup} />
-                        ) : null}
-                        {elapsed}
+                    agent.startedAt ? (
+                      <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
+                        <AgentElapsed agent={agent} />
                       </span>
                     ) : null
                   ) : (
