@@ -3,6 +3,7 @@ import {
   IssueProviderKind,
   IssueUnavailableError,
   McpCapabilityUnavailableError,
+  OrchestratorMcpFailure,
   PositiveInt,
   PullRequestOperationError,
   PullRequestUnavailableError,
@@ -40,6 +41,7 @@ export class IssueThreadLinkFailedError extends Schema.TaggedError<IssueThreadLi
 
 export const IssueToolError = Schema.Union([
   McpCapabilityUnavailableError,
+  OrchestratorMcpFailure,
   IssueUnavailableError,
   IssueOperationError,
   IssueThreadNotFoundError,
