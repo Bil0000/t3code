@@ -20,6 +20,7 @@ export type ClosedViewEntry = ClosedView & { id: string };
 interface ClosedViewStoreState {
   entries: ClosedViewEntry[];
   remember: (view: ClosedView) => string;
+  defer: (id: string) => void;
   remove: (id: string) => void;
 }
 
@@ -52,6 +53,13 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
         }));
         return id;
       },
+      defer: (id) =>
+        set((state) => {
+          const entry = state.entries.find((entry) => entry.id === id);
+          return entry
+            ? { entries: [...state.entries.filter((entry) => entry.id !== id), entry] }
+            : state;
+        }),
       remove: (id) =>
         set((state) => ({ entries: state.entries.filter((entry) => entry.id !== id) })),
     }),

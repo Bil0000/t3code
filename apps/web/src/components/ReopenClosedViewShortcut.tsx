@@ -104,8 +104,10 @@ export function ReopenClosedViewShortcut() {
     const thread = globalPullRequests ? null : readThreadShell(ref);
     const owner = thread ?? drafts.getDraftThreadByRef(ref);
     const project = owner ? readProject(scopeProjectRef(ref.environmentId, owner.projectId)) : null;
-    if (!(await reopenClosedView(restore, { openPreview, workspaceAvailable: project !== null })))
+    if (!(await reopenClosedView(restore, { openPreview, workspaceAvailable: project !== null }))) {
+      useClosedViewStore.getState().defer(restore.id);
       return;
+    }
     if (globalPullRequests) {
       const selected = selectSelectedRightPanelSurface(
         useRightPanelStore.getState().byThreadKey,

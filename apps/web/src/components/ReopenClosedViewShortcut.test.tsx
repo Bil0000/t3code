@@ -1,5 +1,6 @@
 import type { ResolvedKeybindingsConfig, ScopedThreadRef } from "@t3tools/contracts";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
+import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
@@ -9,6 +10,7 @@ const state = vi.hoisted(() => ({
   keybindings: [] as ResolvedKeybindingsConfig,
   params: {} as Record<string, string>,
   paletteOpen: false,
+  workspaceAvailable: true,
   navigate: vi.fn(),
   openPreview: vi.fn(),
   setShortcuts: vi.fn(async () => undefined),
@@ -36,7 +38,7 @@ vi.mock("../rpc/atomRegistry", () => ({
 }));
 vi.mock("../state/entities", () => ({
   readThreadShell: () => ({ projectId: "project-1", worktreePath: null }),
-  readProject: () => ({ workspaceRoot: "/work/project" }),
+  readProject: () => (state.workspaceAvailable ? { workspaceRoot: "/work/project" } : null),
 }));
 vi.mock("../composerDraftStore", () => {
   const store = {
@@ -106,6 +108,7 @@ beforeEach(() => {
     keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
     params: {},
     paletteOpen: false,
+    workspaceAvailable: true,
   });
   state.navigate.mockResolvedValue(undefined);
   state.openPreview.mockReset();
@@ -214,6 +217,65 @@ describe("root reopen shortcut", () => {
     expect(state.navigate).toHaveBeenCalledTimes(2);
     expect(useClosedViewStore.getState().entries).toEqual([]);
   });
+
+  it.each(["files", "file", "browser"] as const)(
+    "keeps a failed %s restore retryable without blocking older history",
+    async (kind) => {
+      const store = useClosedViewStore.getState();
+      const older = store.remember({
+        kind: "panel-tab",
+        threadRef: ref,
+        surface: { kind: "diff", id: "diff" },
+      });
+      const failed = store.remember(
+        kind === "browser"
+          ? { kind: "browser", threadRef: ref, snapshot }
+          : {
+              kind: "panel-tab",
+              threadRef: ref,
+              surface:
+                kind === "files"
+                  ? { kind: "files", id: "files" }
+                  : {
+                      kind: "file",
+                      id: "file:src/app.ts",
+                      relativePath: "src/app.ts",
+                      revealLine: null,
+                      revealRequestId: 0,
+                    },
+            },
+      );
+      state.workspaceAvailable = false;
+      state.openPreview.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("offline"))));
+      await render();
+      await act(() => {
+        press();
+      });
+      expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([
+        older,
+        failed,
+      ]);
+      expect(state.navigate).not.toHaveBeenCalled();
+      await act(() => {
+        menuAction?.("view.reopenClosed");
+      });
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).activeSurfaceId,
+      ).toBe("diff");
+      expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([failed]);
+      state.workspaceAvailable = true;
+      state.openPreview.mockResolvedValue(AsyncResult.success({ ...snapshot, tabId: "new-tab" }));
+      await act(() => {
+        press();
+      });
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).activeSurfaceId,
+      ).toBe(
+        kind === "browser" ? "browser:new-tab" : kind === "file" ? "file:src/app.ts" : "files",
+      );
+      expect(useClosedViewStore.getState().entries).toEqual([]);
+    },
+  );
 
   it("forwards the chord to a focused desktop browser only while history exists", async () => {
     useClosedViewStore
