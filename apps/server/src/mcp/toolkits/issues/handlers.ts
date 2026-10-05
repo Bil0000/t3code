@@ -83,12 +83,13 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
 
   const requireThread = Effect.fn("IssuesToolkit.requireThread")(function* () {
-    const scope = yield* McpInvocationContext.requireMcpCapability("issues");
+    const invocation = yield* McpInvocationContext.requireMcpCapability("issues");
+    const scope = yield* McpInvocationContext.requireThreadScope(invocation, "Issue tools");
     const thread = yield* engine
-      .getThreadShell(scope.threadId)
+      .getThreadShell(scope.thread.threadId)
       .pipe(Effect.mapError((cause) => new IssueThreadLinkFailedError({ cause })));
-    if (thread === null) {
-      return yield* new IssueThreadNotFoundError({ threadId: scope.threadId });
+    if (thread === null || thread.deletedAt !== null) {
+      return yield* new IssueThreadNotFoundError({ threadId: scope.thread.threadId });
     }
     return thread;
   });
