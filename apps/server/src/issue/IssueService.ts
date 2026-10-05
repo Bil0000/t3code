@@ -123,6 +123,15 @@ export class IssueService extends Context.Service<
   {
     readonly tracker: IssueProviderRegistry.IssueProviderRegistry["Service"]["tracker"];
     readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
+    readonly summary: (
+      input: IssueRef,
+    ) => Effect.Effect<
+      Pick<
+        IssueDetail,
+        "projectId" | "provider" | "repository" | "number" | "title" | "url" | "state"
+      >,
+      IssueError
+    >;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
     readonly activity: (input: IssueRef) => Effect.Effect<IssueActivity, IssueError>;
     readonly commentsPage: (
@@ -330,6 +339,7 @@ function toIssueError(operation: string): (error: IssueProviderError) => IssueEr
           provider: error.provider,
           cause: error,
         });
+      case "rate-limited":
       case "failed":
         return new IssueOperationError({ operation, detail: error.detail, cause: error });
     }
@@ -1575,6 +1585,52 @@ export const make = Effect.gen(function* () {
     return staleList(key, Cache.get(listCache, key));
   };
 
+  const summaryCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, input] = JSON.parse(key) as [number, IssueRef];
+      return requireProject(input).pipe(
+        Effect.flatMap((project) =>
+          (project.adapter.getIssueSummary ?? project.adapter.getIssue)({
+            ...providerContextOf(project),
+            cwd: project.project.workspaceRoot,
+            host: project.host,
+            repository: project.repository,
+            number: input.number,
+          }).pipe(
+            Effect.mapError(toIssueError("summary")),
+            Effect.map((issue) => ({
+              projectId: project.project.id,
+              provider: project.adapter.kind,
+              repository: project.repository,
+              number: issue.number,
+              title: issue.title,
+              url: issue.url,
+              state: issue.state,
+            })),
+          ),
+        ),
+      );
+    },
+    {
+      capacity: DETAIL_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
+    },
+  );
+  const summary: IssueService["Service"]["summary"] = (input) =>
+    Cache.get(
+      summaryCache,
+      JSON.stringify([
+        refEpoch(input),
+        {
+          projectId: input.projectId,
+          ...(input.provider === undefined ? {} : { provider: input.provider }),
+          repository: input.repository,
+          number: input.number,
+          ...(input.host === undefined ? {} : { host: input.host }),
+        },
+      ]),
+    );
+
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
       const [, projectId, provider, repository, number, host] = JSON.parse(key) as [
@@ -1698,6 +1754,7 @@ export const make = Effect.gen(function* () {
   return IssueService.of({
     tracker: registry.tracker,
     list,
+    summary,
     detail,
     activity,
     runAction: (input) =>

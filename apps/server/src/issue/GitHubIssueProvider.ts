@@ -62,6 +62,11 @@ function reasonFor(error: GitHubIssueCli.GitHubIssueCliError): IssueProviderErro
   if (error._tag === "GitHubCliUnavailableError") return "missing-tool";
   if (error._tag === "GitHubCliAuthenticationError") return "unauthenticated";
   if (error._tag === "GitHubIssuesDisabledError") return "tracker-disabled";
+  if (
+    error._tag === "GitHubCliRateLimitError" ||
+    error._tag === "SourceControlRateLimitPausedError"
+  )
+    return "rate-limited";
   return "failed";
 }
 
@@ -88,6 +93,11 @@ export const make = Effect.gen(function* () {
       operation,
       reason: reasonFor(error),
       detail: error.detail,
+      ...((error._tag === "GitHubCliRateLimitError" ||
+        error._tag === "SourceControlRateLimitPausedError") &&
+      error.retryAt !== undefined
+        ? { retryAt: error.retryAt }
+        : {}),
       cause: error,
     });
 
@@ -132,6 +142,9 @@ export const make = Effect.gen(function* () {
           cursor: input.cursor,
         })
         .pipe(Effect.mapError(fail("listIssuesAcross"))),
+
+    getIssueSummary: (input) =>
+      cli.getIssueSummary(input).pipe(Effect.mapError(fail("getIssueSummary"))),
 
     getIssue: (input) =>
       Effect.all([cli.getIssueDetail(input), cli.getIssueSupplement(input)], {

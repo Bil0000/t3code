@@ -41,7 +41,14 @@ export class IssueProviderError extends Schema.TaggedError<IssueProviderError>()
   {
     provider: IssueProviderKindSchema,
     operation: Schema.String,
-    reason: Schema.Literals(["missing-tool", "unauthenticated", "tracker-disabled", "failed"]),
+    reason: Schema.Literals([
+      "missing-tool",
+      "unauthenticated",
+      "tracker-disabled",
+      "rate-limited",
+      "failed",
+    ]),
+    retryAt: Schema.optional(Schema.Finite),
     detail: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
@@ -247,6 +254,10 @@ export interface IssueAdapter {
     readonly query?: string | undefined;
     readonly cursor?: ProviderListCursor | undefined;
   }) => Effect.Effect<ProviderBatchedIssuePage, IssueProviderError>;
+
+  readonly getIssueSummary?: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<Pick<ProviderIssue, "number" | "title" | "url" | "state">, IssueProviderError>;
 
   readonly getIssue: (
     input: ProviderRepositoryRef & { readonly number: number },

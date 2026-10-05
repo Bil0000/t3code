@@ -100,6 +100,40 @@ it.effect("reads the GraphQL budget once per window, preserves the reserve, and 
   }).pipe(Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer))),
 );
 
+it.effect("shares the PR reserve with issue list and view reads", () =>
+  Effect.gen(function* () {
+    let readings = 0;
+    const commands: string[] = [];
+    const gh = yield* GitHubCli.make.pipe(
+      Effect.provideService(VcsProcess.VcsProcess, {
+        run: (input) =>
+          Effect.sync(() => {
+            if (isBudgetReading(input)) {
+              readings++;
+              return quotaOutput(502);
+            }
+            commands.push(input.args.slice(0, 2).join(" "));
+            return processOutput("[]");
+          }),
+      }),
+    );
+    const read = (command: string, action: string) =>
+      gh.execute({
+        cwd: "/repo",
+        args: [command, action, "--repo=enterprise.test/acme/web", "--json", "number"],
+      });
+    yield* read("pr", "view");
+    yield* read("issue", "list");
+    const paused = yield* read("issue", "view").pipe(Effect.flip);
+    assert.strictEqual(paused._tag, "GitHubCliRateLimitError");
+    assert.deepStrictEqual(commands, ["pr view", "issue list"]);
+    assert.strictEqual(readings, 1);
+    yield* read("issue", "view").pipe(Effect.provideService(GitHubCli.AllowGitHubReserve, true));
+    yield* read("issue", "close");
+    assert.deepStrictEqual(commands, ["pr view", "issue list", "issue view", "issue close"]);
+  }).pipe(Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer))),
+);
+
 it.effect("reads the budget again at a near reset, and every ten minutes in a long window", () =>
   Effect.gen(function* () {
     let readings = 0;

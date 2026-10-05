@@ -1,3 +1,5 @@
+import * as NodeCrypto from "node:crypto";
+import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -15,6 +17,7 @@ import type {
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const API_URL = "https://api.linear.app/graphql";
@@ -88,7 +91,15 @@ const Issue = Schema.Struct({
   reactions: Schema.optional(Schema.NullOr(Schema.Array(Reaction))),
 });
 
-const Errors = { errors: Schema.optional(Schema.Array(Schema.Struct({ message: Schema.String }))) };
+const GraphQlError = Schema.Struct({
+  message: Schema.String,
+  extensions: Schema.optional(Schema.Struct({ code: Schema.optional(Schema.String) })),
+});
+const Errors = { errors: Schema.optional(Schema.Array(GraphQlError)) };
+const decodeGraphQlErrors = Schema.decodeUnknownEffect(Schema.Struct(Errors));
+const readGraphQlErrors = HttpClientResponse.schemaBodyJson(
+  Schema.Struct({ errors: Schema.Array(GraphQlError) }),
+);
 const ConnectionEnvelope = Schema.Struct({
   ...Errors,
   data: Schema.Struct({
@@ -109,6 +120,16 @@ const ListEnvelope = Schema.Struct({
 const IssueEnvelope = Schema.Struct({
   ...Errors,
   data: Schema.Struct({ issue: Schema.NullOr(Issue) }),
+});
+const SummaryIssue = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  url: Schema.String,
+  state: State,
+});
+const SummaryEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({ issue: Schema.NullOr(SummaryIssue) }),
 });
 const ActivityEnvelope = Schema.Struct({
   ...Errors,
@@ -182,7 +203,8 @@ const COMMENT_REACTIONS_QUERY = `query T3LinearCommentReactions($id: String!) {
 
 export class LinearApiError extends Schema.TaggedError<LinearApiError>()("LinearApiError", {
   operation: Schema.String,
-  reason: Schema.Literals(["unauthenticated", "failed"]),
+  reason: Schema.Literals(["unauthenticated", "rate-limited", "failed"]),
+  retryAt: Schema.optional(Schema.Finite),
   status: Schema.optional(Schema.Int),
   identifier: Schema.optional(Schema.String),
   connectedAccounts: Schema.optional(Schema.Int),
@@ -200,6 +222,8 @@ export class LinearApiError extends Schema.TaggedError<LinearApiError>()("Linear
   cause: Schema.optional(Schema.Defect()),
 }) {
   get detail(): string {
+    if (this.reason === "rate-limited")
+      return "Linear requests are paused until the rate limit resets.";
     if (this.reason === "unauthenticated") {
       return `Linear authentication failed during ${this.operation}.`;
     }
@@ -252,6 +276,10 @@ export class LinearApi extends Context.Service<
       { readonly issues: ReadonlyArray<LinearIssue>; readonly truncated: boolean },
       LinearApiError
     >;
+    readonly getIssueSummary: (input: {
+      readonly identifier: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<typeof SummaryIssue.Type, LinearApiError>;
     readonly getIssue: (input: {
       readonly identifier: string;
       readonly credentialId?: string;
@@ -290,6 +318,8 @@ const make = Effect.gen(function* () {
   const config = yield* ApiConfig;
   const http = yield* HttpClient.HttpClient;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
+  const rateLimitKey = { provider: "linear", host: new URL(config.baseUrl).host };
   const credentialPoolMutex = yield* Semaphore.make(1);
 
   const readSecret = (name: string, operation: string) =>
@@ -347,65 +377,169 @@ const make = Effect.gen(function* () {
     variables: Record<string, unknown>,
     schema: S,
   ): Effect.Effect<S["Type"], LinearApiError> =>
-    http
-      .execute(
-        HttpClientRequest.post(config.baseUrl).pipe(
-          HttpClientRequest.setHeader("authorization", key),
-          HttpClientRequest.acceptJson,
-          HttpClientRequest.bodyJsonUnsafe({ query: document, variables }),
+    Effect.gen(function* () {
+      const lease = yield* rateLimits.check(rateLimitKey).pipe(
+        Effect.mapError(
+          (cause) =>
+            new LinearApiError({
+              operation,
+              reason: "rate-limited",
+              retryAt: cause.retryAt,
+              cause,
+            }),
         ),
-      )
-      .pipe(
-        Effect.mapError((cause) =>
-          isLinearApiError(cause)
-            ? cause
-            : new LinearApiError({
-                operation,
-                reason: "failed",
-                cause,
-              }),
+      );
+      const credentialScope = yield* SourceControlRateLimit.CredentialScope;
+      const endpointScope = `${credentialScope}\0${operation}`;
+      const endpointLease = yield* rateLimits.check(rateLimitKey).pipe(
+        Effect.provideService(SourceControlRateLimit.CredentialScope, endpointScope),
+        Effect.mapError(
+          (cause) =>
+            new LinearApiError({
+              operation,
+              reason: "rate-limited",
+              retryAt: cause.retryAt,
+              cause,
+            }),
         ),
-        Effect.flatMap((response) =>
-          response.status === 401 || response.status === 403
-            ? Effect.fail(
-                new LinearApiError({
-                  operation,
-                  reason: "unauthenticated",
-                }),
-              )
-            : response.status < 200 || response.status >= 300
-              ? Effect.fail(
+      );
+      let endpointOnly = false;
+      return yield* http
+        .execute(
+          HttpClientRequest.post(config.baseUrl).pipe(
+            HttpClientRequest.setHeader("authorization", key),
+            HttpClientRequest.acceptJson,
+            HttpClientRequest.bodyJsonUnsafe({ query: document, variables }),
+          ),
+        )
+        .pipe(
+          Effect.mapError((cause) => new LinearApiError({ operation, reason: "failed", cause })),
+          Effect.flatMap((response) =>
+            Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis;
+              const resets = ["requests", "complexity"].flatMap((kind) => {
+                const remaining = response.headers[`x-ratelimit-${kind}-remaining`];
+                const reset = Number(response.headers[`x-ratelimit-${kind}-reset`]);
+                return remaining !== undefined &&
+                  Number(remaining) <= 0 &&
+                  Number.isFinite(reset) &&
+                  reset > now
+                  ? [reset]
+                  : [];
+              });
+              const endpointRemaining = response.headers["x-ratelimit-endpoint-requests-remaining"];
+              const endpointReset = Number(response.headers["x-ratelimit-endpoint-requests-reset"]);
+              const endpointRetryAt =
+                endpointRemaining !== undefined &&
+                Number(endpointRemaining) <= 0 &&
+                Number.isFinite(endpointReset) &&
+                endpointReset > now
+                  ? endpointReset
+                  : undefined;
+              endpointOnly = resets.length === 0 && endpointRetryAt !== undefined;
+              const retryAt =
+                SourceControlRateLimit.retryAtFromHeader(response.headers["retry-after"], now) ??
+                (resets.length > 0 ? Math.max(...resets) : endpointRetryAt);
+              const limited = () =>
+                Effect.fail(
                   new LinearApiError({
                     operation,
-                    reason: "failed",
+                    reason: "rate-limited",
                     status: response.status,
+                    ...(retryAt === undefined ? {} : { retryAt }),
                   }),
-                )
-              : HttpClientResponse.schemaBodyJson(schema)(response).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new LinearApiError({
-                        operation,
-                        reason: "failed",
-                        cause,
-                      }),
-                  ),
+                );
+              if (response.status === 429) return yield* limited();
+              if (response.status === 401 || response.status === 403)
+                return yield* new LinearApiError({ operation, reason: "unauthenticated" });
+              if (response.status < 200 || response.status >= 300) {
+                if (response.status === 400) {
+                  const errors = yield* readGraphQlErrors(response).pipe(Effect.option);
+                  if (
+                    Option.isSome(errors) &&
+                    errors.value.errors.some((error) => error.extensions?.code === "RATELIMITED")
+                  )
+                    return yield* limited();
+                }
+                return yield* new LinearApiError({
+                  operation,
+                  reason: "failed",
+                  status: response.status,
+                });
+              }
+              const payload = yield* response.json.pipe(
+                Effect.mapError(
+                  (cause) => new LinearApiError({ operation, reason: "failed", cause }),
                 ),
-        ),
-        Effect.flatMap((envelope) => {
-          const errors = (envelope as { errors?: ReadonlyArray<{ message: string }> }).errors;
-          const message = errors?.[0]?.message;
-          return message === undefined
-            ? Effect.succeed(envelope)
-            : Effect.fail(
-                new LinearApiError({
+              );
+              const { errors } = yield* decodeGraphQlErrors(payload).pipe(
+                Effect.mapError(
+                  (cause) => new LinearApiError({ operation, reason: "failed", cause }),
+                ),
+              );
+              if (errors?.some((error) => error.extensions?.code === "RATELIMITED"))
+                return yield* limited();
+              const message = errors?.[0]?.message;
+              if (message !== undefined)
+                return yield* new LinearApiError({
                   operation,
                   reason: isAuthError(message) ? "unauthenticated" : "failed",
                   cause: errors,
-                }),
+                });
+              const envelope = yield* Schema.decodeUnknownEffect(schema)(payload).pipe(
+                Effect.mapError(
+                  (cause) => new LinearApiError({ operation, reason: "failed", cause }),
+                ),
               );
-        }),
-      );
+              if (resets.length > 0)
+                yield* rateLimits.recordRateLimit({
+                  ...rateLimitKey,
+                  lease,
+                  retryAt: Math.max(...resets),
+                });
+              else yield* rateLimits.recordSuccess({ ...rateLimitKey, lease });
+              if (endpointRetryAt !== undefined)
+                yield* rateLimits
+                  .recordRateLimit({
+                    ...rateLimitKey,
+                    lease: endpointLease,
+                    retryAt: endpointRetryAt,
+                  })
+                  .pipe(
+                    Effect.provideService(SourceControlRateLimit.CredentialScope, endpointScope),
+                  );
+              else
+                yield* rateLimits
+                  .recordSuccess({ ...rateLimitKey, lease: endpointLease })
+                  .pipe(
+                    Effect.provideService(SourceControlRateLimit.CredentialScope, endpointScope),
+                  );
+              return envelope;
+            }),
+          ),
+          Effect.tapError((error) =>
+            error.reason === "rate-limited"
+              ? rateLimits
+                  .recordRateLimit({
+                    ...rateLimitKey,
+                    lease: endpointOnly ? endpointLease : lease,
+                    retryAt: error.retryAt,
+                  })
+                  .pipe(
+                    Effect.provideService(
+                      SourceControlRateLimit.CredentialScope,
+                      endpointOnly ? endpointScope : credentialScope,
+                    ),
+                  )
+              : Effect.void,
+          ),
+        );
+    }).pipe(
+      Effect.provideService(
+        SourceControlRateLimit.CredentialScope,
+        NodeCrypto.createHash("sha256").update(key).digest("hex"),
+      ),
+    );
 
   const credentialToken = (credentialId?: string) =>
     storedCredentials.pipe(
@@ -646,6 +780,24 @@ const make = Effect.gen(function* () {
         })),
       );
     },
+    getIssueSummary: ({ identifier, credentialId }) =>
+      request(
+        credentialId,
+        "issue summary",
+        `query T3LinearIssueSummary($id: String!) {
+        issue(id: $id) { number title url state { name type } }
+      }`,
+        { id: identifier },
+        SummaryEnvelope,
+      ).pipe(
+        Effect.flatMap(({ data }) =>
+          data.issue === null
+            ? Effect.fail(
+                new LinearApiError({ operation: "getIssueSummary", reason: "failed", identifier }),
+              )
+            : Effect.succeed(data.issue),
+        ),
+      ),
     getIssue: ({ identifier, credentialId }) =>
       request(credentialId, "issue", ISSUE_QUERY, { id: identifier }, IssueEnvelope).pipe(
         Effect.flatMap(({ data }) => issueOrFail(identifier, data.issue)),
@@ -709,4 +861,6 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(LinearApi, make);
+export const layer = Layer.effect(LinearApi, make).pipe(
+  Layer.provideMerge(SourceControlRateLimit.layer),
+);

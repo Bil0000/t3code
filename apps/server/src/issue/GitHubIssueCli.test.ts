@@ -2,11 +2,15 @@ import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
+import * as Clock from "effect/Clock";
+import * as Redacted from "effect/Redacted";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
+import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 
 const mockedExecute = vi.fn<GitHubCli.GitHubCli["Service"]["execute"]>();
 
@@ -18,6 +22,7 @@ const layer = it.layer(
       }),
     ),
     Layer.provide(GitHubGraphQlBudget.layer),
+    Layer.provide(SourceControlRateLimit.layer),
   ),
 );
 
@@ -218,6 +223,94 @@ const target = { ...repository, number: 7 } as const;
 afterEach(() => {
   mockedExecute.mockReset();
 });
+
+it.effect("shares host and account pauses with issue GraphQL reads until the reported reset", () =>
+  Effect.gen(function* () {
+    let calls = 0;
+    const now = yield* Clock.currentTimeMillis;
+    const retryAt = now + 120_000;
+    const cli = yield* GitHubIssueCli.GitHubIssueCli.pipe(
+      Effect.provide(
+        GitHubIssueCli.layer.pipe(
+          Layer.provide(
+            Layer.mock(GitHubCli.GitHubCli)({
+              execute: () =>
+                Effect.suspend(() => {
+                  calls++;
+                  return calls === 1
+                    ? Effect.fail(
+                        new GitHubCli.GitHubCliRateLimitError({
+                          command: "gh",
+                          cwd: "/w",
+                          cause: undefined,
+                          retryAt,
+                        }),
+                      )
+                    : Effect.succeed(commentPage([], null, 0));
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const read = cli.getIssueActivity(target);
+    const first = yield* read.pipe(Effect.flip);
+    assert.strictEqual(first._tag, "GitHubCliRateLimitError");
+    const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
+    const paused = yield* limits.check({ provider: "github", host: target.host }).pipe(Effect.flip);
+    assert.strictEqual(paused.retryAt, retryAt);
+    const blocked = yield* read.pipe(Effect.flip);
+    assert.strictEqual(blocked._tag, "SourceControlRateLimitPausedError");
+    assert.strictEqual(calls, 1);
+    yield* cli.getIssueActivity({ ...target, host: "enterprise.test" });
+    yield* read.pipe(
+      Effect.provideService(SourceControlRateLimit.CredentialScope, "other-account"),
+    );
+    yield* TestClock.adjust("119 seconds");
+    yield* read.pipe(Effect.flip);
+    assert.strictEqual(calls, 3);
+    yield* TestClock.adjust("1 second");
+    yield* read;
+    assert.strictEqual(calls, 4);
+  }).pipe(Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer))),
+);
+
+it.effect("uses the pinned account scope for issue GraphQL budget and pauses", () =>
+  Effect.gen(function* () {
+    const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
+    yield* limits
+      .recordRateLimit({ provider: "github", host: target.host, lease: 0 })
+      .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, "pinned-account"));
+    let calls = 0;
+    const cli = yield* GitHubIssueCli.GitHubIssueCli.pipe(
+      Effect.provide(
+        GitHubIssueCli.layer.pipe(
+          Layer.provide(
+            Layer.mock(GitHubCli.GitHubCli)({
+              execute: () =>
+                Effect.sync(() => {
+                  calls++;
+                  return commentPage([], null, 0);
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const blocked = yield* cli.getIssueActivity(target).pipe(
+      Effect.provideService(GitHubCli.PinnedGitHubCredential, {
+        host: target.host,
+        token: Redacted.make("fake"),
+        credentialFingerprint: "pinned-account",
+      }),
+      Effect.flip,
+    );
+    assert.strictEqual(blocked._tag, "SourceControlRateLimitPausedError");
+    assert.strictEqual(calls, 0);
+    yield* cli.getIssueActivity(target);
+    assert.strictEqual(calls, 1);
+  }).pipe(Effect.provide(Layer.merge(GitHubGraphQlBudget.layer, SourceControlRateLimit.layer))),
+);
 
 layer("GitHubIssueCli.layer", (it) => {
   it.effect("asks for one row more than the page, against the repository's own host", () =>
@@ -938,6 +1031,73 @@ layer("GitHubIssueCli.layer", (it) => {
       expect(access).toEqual({ canTriage: false, canUpdate: true, didAuthor: true });
       expect(argsOfCall(0)).toContain("--hostname");
     }),
+  );
+
+  it.effect("reads linked issue title and state without supplement or viewer requests", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          supplementPage(
+            {
+              number: 7,
+              title: "The page never loads",
+              url: "https://github.com/acme/web/issues/7",
+              state: "CLOSED",
+            },
+            "READ",
+          ),
+        ),
+      );
+      const provider = yield* GitHubIssueProvider.make;
+      const summary = yield* provider.getIssueSummary!(target);
+      assert.deepStrictEqual(summary, {
+        number: 7,
+        title: "The page never loads",
+        url: "https://github.com/acme/web/issues/7",
+        state: "closed",
+      });
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      assert.deepStrictEqual(argsOfCall(0).slice(0, 4), [
+        "api",
+        "graphql",
+        "--hostname",
+        target.host,
+      ]);
+      const document = argsOfCall(0).at(-1)!;
+      assert.isTrue(document.includes("issue(number: $number) { number title url state }"));
+      assert.isFalse(/body|comments|author|viewer|timelineItems/.test(document));
+    }),
+  );
+
+  it.effect("rejects an unavailable issue summary without inventing state", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(supplementPage(null, "READ")));
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      const error = yield* cli.getIssueSummary(target).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "GitHubIssueReadError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("preserves a linked issue rate-limit reset for background refresh", () =>
+    Effect.gen(function* () {
+      const retryAt = 120_000;
+      mockedExecute.mockReturnValueOnce(
+        Effect.fail(
+          new GitHubCli.GitHubCliRateLimitError({
+            command: "gh",
+            cwd: "/w",
+            cause: undefined,
+            retryAt,
+          }),
+        ),
+      );
+      const provider = yield* GitHubIssueProvider.make;
+      const error = yield* provider.getIssueSummary!(target).pipe(Effect.flip);
+      assert.strictEqual(error.reason, "rate-limited");
+      assert.strictEqual(error.retryAt, retryAt);
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+    }).pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, "summary-rate-limit")),
   );
 
   it.effect("stops issue GraphQL reads at the protected reserve until reset", () =>

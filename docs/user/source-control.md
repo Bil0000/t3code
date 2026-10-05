@@ -214,6 +214,10 @@ In the **Link** dialog, paste a full issue URL or enter `owner/repo#N` for a rep
 current project’s host. GitLab work item URLs are accepted. Check the issue title and state in
 the preview before linking. A pull request cannot be added as an issue.
 
+Linked issue titles and status update after you change them in T3 Code. Changes made on the host
+appear after the next background refresh. When the host limits requests, refresh waits until
+requests are allowed again.
+
 ### Link issues and pull requests
 
 Use **Link pull request** in an issue's related work, or **Link issue** in a pull request's related
