@@ -8,6 +8,7 @@ on:
       - apps/server/src/mcp/**
       - apps/server/src/preview/Snapshot*.ts
       - packages/contracts/src/preview*.ts
+      - packages/shared/src/t3McpToolPresentation*.ts
   workflow_dispatch:
 
 permissions:
@@ -42,7 +43,9 @@ jobs:
           apps/desktop/src/preview/Manager.test.ts
           apps/server/src/mcp/McpHttpServer.test.ts
           apps/server/src/mcp/PreviewAutomationBroker.test.ts
+          apps/server/src/mcp/toolkits/core.test.ts
           apps/server/src/preview/Snapshot.test.ts
           apps/server/src/mcp/toolkits/preview/tools.test.ts
           packages/contracts/src/previewAutomationSnapshot.test.ts
           packages/contracts/src/preview.test.ts
+          packages/shared/src/t3McpToolPresentation.test.ts
