@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -88,8 +89,12 @@ function makeLayer(input: {
     const body = JSON.parse(new TextDecoder().decode(raw)) as Record<string, unknown>;
     const authorization = request.headers.authorization;
     requests.push({ body, authorization });
+    const response = input.response(body, authorization);
     return Effect.succeed(
-      HttpClientResponse.fromWeb(request, Response.json(input.response(body, authorization))),
+      HttpClientResponse.fromWeb(
+        request,
+        response instanceof Response ? response : Response.json(response),
+      ),
     );
   });
   const layer = LinearApi.layer.pipe(
@@ -660,3 +665,144 @@ it.effect(
     );
   },
 );
+
+it.effect("shares Linear pauses across requests, isolates tokens, and resumes at the reset", () => {
+  let limited = true;
+  const { layer, requests } = makeLayer({
+    envToken: "environment-key",
+    credentials: pool(["other", "other-key"]),
+    response: (_, authorization) =>
+      authorization === "environment-key" && limited
+        ? Response.json({}, { status: 429, headers: { "Retry-After": "60" } })
+        : { data: { viewer: { id: "user" } } },
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    const first = yield* api.getViewer({}).pipe(Effect.flip);
+    assert.equal(first.reason, "rate-limited");
+    assert.equal(first.retryAt, 61000);
+    assert.equal((yield* api.getViewer({}).pipe(Effect.flip)).retryAt, 61000);
+    assert.equal(requests.length, 1);
+    yield* api.getViewer({ credentialId: "other" });
+    assert.equal(requests.length, 2);
+    limited = false;
+    yield* TestClock.adjust("1 minute");
+    yield* api.getViewer({});
+    assert.equal(requests.length, 3);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([400, 200])(
+  "recognizes Linear RATELIMITED errors at HTTP %s without retrying the host",
+  (status) => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: () =>
+        Response.json(
+          { errors: [{ message: "Too many requests", extensions: { code: "RATELIMITED" } }] },
+          {
+            status,
+            headers: {
+              "X-RateLimit-Complexity-Remaining": "0",
+              "X-RateLimit-Complexity-Reset": "121000",
+            },
+          },
+        ),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      assert.equal((yield* api.getViewer({}).pipe(Effect.flip)).retryAt, 121000);
+      assert.equal((yield* api.getViewer({}).pipe(Effect.flip)).reason, "rate-limited");
+      assert.equal(requests.length, 1);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect(
+  "keeps a successful Linear response and pauses further calls when its budget is empty",
+  () => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: () =>
+        Response.json(
+          { data: { viewer: { id: "user" } } },
+          {
+            headers: {
+              "X-RateLimit-Requests-Remaining": "0",
+              "X-RateLimit-Requests-Reset": "61000",
+            },
+          },
+        ),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      assert.equal((yield* api.getViewer({})).id, "user");
+      assert.equal((yield* api.getViewer({}).pipe(Effect.flip)).retryAt, 61000);
+      assert.equal(requests.length, 1);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("reads a Linear issue summary without its body, labels, or comments", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: () => ({
+      data: {
+        issue: {
+          number: 7,
+          title: "Bug",
+          url: "https://linear.app/test/issue/DEV-7",
+          state: { name: "Done", type: "completed" },
+        },
+      },
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    assert.equal((yield* api.getIssueSummary({ identifier: "DEV-7" })).number, 7);
+    assert.equal(requests.length, 1);
+    const query = String(requests[0]?.body.query);
+    assert.ok(query.includes("number title url state"));
+    assert.ok(!/description|labels|comments|viewer/.test(query));
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("an endpoint pause does not block other Linear operations", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) =>
+      String(body.query).includes("T3LinearViewer")
+        ? Response.json(
+            {},
+            {
+              status: 429,
+              headers: {
+                "X-RateLimit-Endpoint-Requests-Remaining": "0",
+                "X-RateLimit-Endpoint-Requests-Reset": "61000",
+              },
+            },
+          )
+        : {
+            data: {
+              issue: {
+                number: 7,
+                title: "Bug",
+                url: "https://linear.app/test/issue/DEV-7",
+                state: { name: "Done", type: "completed" },
+              },
+            },
+          },
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({}).pipe(Effect.flip);
+    yield* api.getViewer({}).pipe(Effect.flip);
+    assert.equal(requests.length, 1);
+    yield* api.getIssueSummary({ identifier: "DEV-7" });
+    assert.equal(requests.length, 2);
+  }).pipe(Effect.provide(layer));
+});

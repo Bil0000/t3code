@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import {
   issueProjectSourceKey,
   issueSourceKey,
@@ -10,6 +12,7 @@ import {
   type IssueViewerPermissions,
   type OrchestrationProjectShell,
   type ProjectId,
+  type IssueRef,
 } from "@t3tools/contracts";
 
 import * as ProjectService from "../project/ProjectService.ts";
@@ -201,6 +204,38 @@ const REFERENCE = { projectId: "p1" as ProjectId, repository: "acme/web", number
 const ONE_PROJECT = [
   project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
 ];
+
+it.effect("keeps a cached read from bypassing the requested host", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: ({ host }) => {
+            assert.equal(host, "github.com");
+            reads += 1;
+            return Effect.succeed(issueDetail(7));
+          },
+        }),
+      ],
+    });
+    yield* service.detail(REFERENCE);
+    const error = yield* service
+      .detail({
+        ...REFERENCE,
+        provider: "github",
+        host: "github.enterprise.test",
+      })
+      .pipe(Effect.flip);
+    assert.equal(error._tag, "IssueOperationError");
+    assert.equal(reads, 1);
+    yield* service.detail({ ...REFERENCE, provider: "github", host: "GITHUB.COM" });
+    assert.equal(reads, 2);
+    yield* service.detail({ ...REFERENCE, provider: "github", host: "github.com" });
+    assert.equal(reads, 2);
+  }),
+);
 
 /** The two writes whose capability and permission refusals are checked as a pair. */
 const labelling = (service: IssueService.IssueService["Service"]) =>
@@ -1784,6 +1819,36 @@ it.effect("a write forgets the listings and the issue it touched, with no client
   }),
 );
 
+it.effect(
+  "publishes refreshes after successful close, reopen and edit, but not failed writes",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* makeService({
+          projects: ONE_PROJECT,
+          providers: [fakeProvider("github")],
+        });
+        const refreshes = yield* Queue.unbounded<IssueRef>();
+        yield* service.subscribeRefreshes.pipe(
+          Stream.runForEach((ref) => Queue.offer(refreshes, ref)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+        const ref = { ...REFERENCE, provider: "github", host: "github.com" };
+        for (const action of ["close", "reopen"] as const) {
+          const input = { ...ref, action };
+          yield* service.runAction(input);
+          assert.deepEqual(yield* Queue.take(refreshes), input);
+        }
+        const error = yield* Effect.flip(service.update({ ...ref, title: "   " }));
+        assert.equal(error._tag, "IssueOperationError");
+        const input = { ...ref, title: "Edited title" };
+        yield* service.update(input);
+        assert.deepEqual(yield* Queue.take(refreshes), input);
+        assert.equal(yield* Queue.size(refreshes), 0);
+      }),
+    ),
+);
+
 it.effect("a new issue forgets the listings that would hold it", () =>
   Effect.gen(function* () {
     let listCalls = 0;
@@ -2075,5 +2140,55 @@ it.effect("passes a reaction through with its subject id", () =>
       content: "heart",
       reacted: true,
     });
+  }),
+);
+
+it.effect(
+  "shares issue summaries and refreshes them after writes without reading full detail",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("github", {
+            getIssueSummary: () =>
+              Effect.sync(() => {
+                reads++;
+                return issue(7, "2026-07-02T00:00:00Z");
+              }),
+            getIssue: () => Effect.die("full detail must not be read"),
+            getViewer: () => Effect.die("viewer must not be read"),
+          }),
+        ],
+      });
+      yield* Effect.all([service.summary(REFERENCE), service.summary(REFERENCE)], {
+        concurrency: 2,
+      });
+      yield* service.summary(REFERENCE);
+      assert.equal(reads, 1);
+      yield* service.invalidate({ reference: REFERENCE });
+      yield* service.summary(REFERENCE);
+      assert.equal(reads, 2);
+    }),
+);
+
+it.effect("falls back to issue detail when a provider has no summary read", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () =>
+            Effect.sync(() => {
+              reads++;
+              return issueDetail(7);
+            }),
+        }),
+      ],
+    });
+    assert.equal((yield* service.summary(REFERENCE)).title, "Issue 7");
+    assert.equal(reads, 1);
   }),
 );

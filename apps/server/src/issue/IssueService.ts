@@ -5,6 +5,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import {
   IssueOperationError,
   IssueUnavailableError,
@@ -121,6 +123,15 @@ export class IssueService extends Context.Service<
   {
     readonly tracker: IssueProviderRegistry.IssueProviderRegistry["Service"]["tracker"];
     readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
+    readonly summary: (
+      input: IssueRef,
+    ) => Effect.Effect<
+      Pick<
+        IssueDetail,
+        "projectId" | "provider" | "repository" | "number" | "title" | "url" | "state"
+      >,
+      IssueError
+    >;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
     readonly activity: (input: IssueRef) => Effect.Effect<IssueActivity, IssueError>;
     readonly commentsPage: (
@@ -142,6 +153,7 @@ export class IssueService extends Context.Service<
     ) => Effect.Effect<IssueAssigneeCandidateList, IssueError>;
     readonly templates: (input: IssueRepositoryRef) => Effect.Effect<IssueTemplateList, IssueError>;
     readonly invalidate: (input: IssueInvalidateInput) => Effect.Effect<void>;
+    readonly subscribeRefreshes: Stream.Stream<IssueRef>;
   }
 >()("t3/issue/IssueService") {}
 
@@ -327,6 +339,7 @@ function toIssueError(operation: string): (error: IssueProviderError) => IssueEr
           provider: error.provider,
           cause: error,
         });
+      case "rate-limited":
       case "failed":
         return new IssueOperationError({ operation, detail: error.detail, cause: error });
     }
@@ -337,6 +350,7 @@ export const make = Effect.gen(function* () {
   const registry = yield* IssueProviderRegistry.IssueProviderRegistry;
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  const refreshes = yield* PubSub.unbounded<IssueRef>();
 
   const listWorkspaceProjects = (
     filter: Pick<IssueListInput, "projectId" | "host">,
@@ -370,7 +384,7 @@ export const make = Effect.gen(function* () {
    * remote: that field travels through the client, so it is never handed to a provider verbatim.
    */
   const requireProject = (
-    ref: Pick<IssueRef, "projectId" | "provider" | "repository">,
+    ref: Pick<IssueRef, "projectId" | "provider" | "repository" | "host">,
   ): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
       Effect.flatMap(
@@ -382,7 +396,8 @@ export const make = Effect.gen(function* () {
           const match = supported.find(
             (project) =>
               project.repository.toLowerCase() === repository &&
-              (ref.provider === undefined || project.adapter.kind === ref.provider),
+              (ref.provider === undefined || project.adapter.kind === ref.provider) &&
+              (ref.host === undefined || project.host.toLowerCase() === ref.host.toLowerCase()),
           );
           if (match === undefined) {
             return Effect.fail(
@@ -1570,18 +1585,66 @@ export const make = Effect.gen(function* () {
     return staleList(key, Cache.get(listCache, key));
   };
 
+  const summaryCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, input] = JSON.parse(key) as [number, IssueRef];
+      return requireProject(input).pipe(
+        Effect.flatMap((project) =>
+          (project.adapter.getIssueSummary ?? project.adapter.getIssue)({
+            ...providerContextOf(project),
+            cwd: project.project.workspaceRoot,
+            host: project.host,
+            repository: project.repository,
+            number: input.number,
+          }).pipe(
+            Effect.mapError(toIssueError("summary")),
+            Effect.map((issue) => ({
+              projectId: project.project.id,
+              provider: project.adapter.kind,
+              repository: project.repository,
+              number: issue.number,
+              title: issue.title,
+              url: issue.url,
+              state: issue.state,
+            })),
+          ),
+        ),
+      );
+    },
+    {
+      capacity: DETAIL_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
+    },
+  );
+  const summary: IssueService["Service"]["summary"] = (input) =>
+    Cache.get(
+      summaryCache,
+      JSON.stringify([
+        refEpoch(input),
+        {
+          projectId: input.projectId,
+          ...(input.provider === undefined ? {} : { provider: input.provider }),
+          repository: input.repository,
+          number: input.number,
+          ...(input.host === undefined ? {} : { host: input.host }),
+        },
+      ]),
+    );
+
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, provider, repository, number] = JSON.parse(key) as [
+      const [, projectId, provider, repository, number, host] = JSON.parse(key) as [
         number,
         string,
         string | null,
         string,
         number,
+        string | null,
       ];
       return detailUncached({
         projectId,
         ...(provider === null ? {} : { provider }),
+        ...(host === null ? {} : { host }),
         repository,
         number,
       } as IssueRef);
@@ -1599,22 +1662,25 @@ export const make = Effect.gen(function* () {
       input.provider ?? null,
       input.repository,
       input.number,
+      input.host?.toLowerCase() ?? null,
     ]);
     return staleDetail(key, Cache.get(detailCache, key));
   };
 
   const activityCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, provider, repository, number] = JSON.parse(key) as [
+      const [, projectId, provider, repository, number, host] = JSON.parse(key) as [
         number,
         string,
         string | null,
         string,
         number,
+        string | null,
       ];
       return activityUncached({
         projectId,
         ...(provider === null ? {} : { provider }),
+        ...(host === null ? {} : { host }),
         repository,
         number,
       } as IssueRef);
@@ -1635,6 +1701,7 @@ export const make = Effect.gen(function* () {
       input.provider ?? null,
       input.repository,
       input.number,
+      input.host?.toLowerCase() ?? null,
     ]);
     return staleActivity(key, Cache.get(activityCache, key));
   };
@@ -1687,9 +1754,13 @@ export const make = Effect.gen(function* () {
   return IssueService.of({
     tracker: registry.tracker,
     list,
+    summary,
     detail,
     activity,
-    runAction: invalidatedByMutation(runAction),
+    runAction: (input) =>
+      invalidatedByMutation(runAction)(input).pipe(
+        Effect.tap(() => PubSub.publish(refreshes, input)),
+      ),
     commentsPage,
     comment: invalidatedByMutation(comment),
     updateComment: invalidatedByMutation(updateComment),
@@ -1698,7 +1769,8 @@ export const make = Effect.gen(function* () {
     // to forget yet.
     create: (input) =>
       create(input).pipe(Effect.tap(() => Effect.sync(() => (listingsEpoch = ++epochCounter)))),
-    update: invalidatedByMutation(update),
+    update: (input) =>
+      invalidatedByMutation(update)(input).pipe(Effect.tap(() => PubSub.publish(refreshes, input))),
     setLabels: invalidatedByMutation(setLabels),
     setAssignees: invalidatedByMutation(setAssignees),
     // The candidate lists are deliberately read fresh per menu-open, so they stay uncached.
@@ -1706,6 +1778,7 @@ export const make = Effect.gen(function* () {
     assigneeCandidates,
     templates,
     invalidate,
+    subscribeRefreshes: Stream.fromPubSub(refreshes),
   });
 });
 

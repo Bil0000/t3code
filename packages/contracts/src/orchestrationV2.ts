@@ -1,4 +1,4 @@
-import { ThreadIssueKey, ThreadIssueLink, ThreadIssueLinks } from "./issue.ts";
+import { IssueState, ThreadIssueKey, ThreadIssueLink, ThreadIssueLinks } from "./issue.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -2935,6 +2935,14 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("thread.issue-link.sync"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    projectId: ProjectId,
+    issue: Schema.Struct({ ...ThreadIssueLink.fields, state: IssueState }),
+    expectedIssue: ThreadIssueLink,
+  }),
   /**
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is

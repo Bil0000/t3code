@@ -57,6 +57,28 @@ const dependencies = [
   IssueService.IssueService,
 ];
 
+const ReadIssueTool = Tool.make("read_issue", {
+  description:
+    "Read an issue body and a bounded page of comments as Markdown. Linked issues use their saved project and host; unlinked references use this thread's project. Pass repository, number, and provider when needed. Pass url to choose between linked issues with the same repository and number on different hosts. If nextCommentsCursor is present, pass it as commentsCursor to read the next page without reloading the issue body. commentsTruncated=true with a null cursor means this host cannot return the rest through T3.",
+  parameters: Schema.Struct({
+    ...IssueTargetInput.fields,
+    url: Schema.optional(TrimmedNonEmptyString),
+    commentsCursor: Schema.optional(TrimmedNonEmptyString),
+  }),
+  success: Schema.Struct({
+    markdown: Schema.String,
+    commentsTruncated: Schema.Boolean,
+    nextCommentsCursor: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+  failure: IssueToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Read issue")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, false);
+
 const LinkIssueTool = Tool.make("link_issue", {
   description:
     "Link an issue in this thread's project to this thread. Use after taking work on an issue. The link appears with the thread and its pull requests. Linking the same issue again succeeds with alreadyLinked=true.",
@@ -168,6 +190,7 @@ const ListIssuePullRequestLinksTool = Tool.make("list_issue_pull_request_links",
   .annotate(Tool.OpenWorld, false);
 
 export const IssuesToolkit = Toolkit.make(
+  ReadIssueTool,
   LinkIssueTool,
   UnlinkIssueTool,
   ListThreadIssuesTool,

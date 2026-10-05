@@ -209,9 +209,18 @@ The agent fetches the details when you send the prompt. **Find matches** uses yo
 model to suggest related work or possible duplicates.
 
 Agents can use `link_issue`, `list_thread_issues`, and `unlink_issue` to keep issues with their
-current thread. The thread header's **Linked issues** button opens each issue or removes its link.
+current thread. The thread header's **Linked issues** button opens the **Linked items** panel, which
+lists them below the thread's pull requests. Click an issue to open it, or unlink it from its row menu.
 An issue's **Linked threads** section takes you back to those conversations, where you can follow
 their linked pull requests. These controls are available on web and desktop.
+
+In the **Link** dialog, paste a full issue URL or enter `owner/repo#N` for a repository on the
+current project’s host. GitLab work item URLs are accepted. Check the issue title and state in
+the preview before linking. A pull request cannot be added as an issue.
+
+Linked issue titles and status update after you change them in T3 Code. Changes made on the host
+appear after the next background refresh. When the host limits requests, refresh waits until
+requests are allowed again.
 
 ### Link issues and pull requests
 
@@ -229,8 +238,10 @@ through the host; the UI can remove a saved link without a host request.
 ## Linked pull requests
 
 A thread can hold several pull requests, including reviews from another repository on the same host.
-Use **Link pull request** in the command palette or **Linked pull requests** panel, or right-click a
-pull request link in the conversation. Creating a pull request from Git actions links it automatically.
+Use **Link issue or PR** in the command palette or the thread header's right-click menu, **Link**
+in the **Linked items** panel, or right-click an issue or pull request URL in the conversation.
+Use **Link to thread** to attach it, or **Unlink from thread** to remove its saved link.
+Creating a pull request from Git actions links it automatically.
 Agents can link their pull requests with the `link_pull_request` tool.
 
 Use **Link this PR** in a branch-detected badge's tooltip to keep it with the thread. From a review
@@ -238,10 +249,10 @@ on the Pull Requests page, **Link to thread** lets you search for an active thre
 also lists the threads that link to it, including archived threads, so you can return to their context.
 
 Thread badges show a stack's layer count or the current review number with a count of additional
-links. Clicking a badge with more than one review opens the **Linked pull requests** panel. On mobile, the Git overview lists linked reviews and their stacks; tap a review to open it.
+links. Clicking a badge with more than one review opens the **Linked items** panel. On mobile, the Git overview lists linked reviews and their stacks; tap a review to open it.
 Linking and unlinking are available in the web and desktop clients.
 
-The **Linked pull requests** panel lists every review and groups stacks. Unlink a review from its
+The **Linked items** panel lists every review and groups stacks, followed by linked issues. Unlink a review from its
 row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;
 closed reviews refresh periodically so reopening one on the host is detected. Merged reviews refresh
 when requested. With **Auto-settle merged threads** enabled, a thread can settle after every linked
@@ -252,7 +263,7 @@ the thread is active, the server checks the pull request every minute and wakes 
 fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict.
 Comments from your own account do not wake it. Watching ends when the pull request merges or closes,
 after 10 wakes in a row that bring only comments, or when the server cannot read the pull request for
-15 minutes. To start or stop it yourself, use the row menu in the **Linked pull requests** panel.
+15 minutes. To start or stop it yourself, use the row menu in the **Linked items** panel.
 
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.

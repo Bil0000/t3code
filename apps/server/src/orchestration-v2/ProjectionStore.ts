@@ -153,6 +153,11 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "snoozedUntil"
 >;
 
+export type ProjectionThreadIssues = Pick<
+  OrchestrationV2AppThread,
+  "id" | "projectId" | "settledOverride" | "settledAt" | "issues"
+>;
+
 /** The thread fields pull request sync reads, for a thread with at least one link. */
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
@@ -363,6 +368,9 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
+  readonly getThreadsWithIssues: (
+    threadId?: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<ProjectionThreadIssues>, ProjectionStoreV2Error>;
   readonly getTurnStartContext: (
     threadId: ThreadId,
     runId: RunId,
@@ -5216,6 +5224,29 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
+    const getThreadsWithIssues: ProjectionStoreV2Shape["getThreadsWithIssues"] = (threadId) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<PayloadRow>`
+          SELECT payload_json
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND thread_id = ${threadId}`}
+            AND json_extract(payload_json, '$.archivedAt') IS NULL
+            AND json_array_length(payload_json, '$.issues') > 0
+          ORDER BY updated_at ASC, thread_id ASC
+        `;
+        return yield* Effect.forEach(rows, (row) =>
+          decodeThreadPayload(row.payload_json).pipe(
+            Effect.map((thread): ProjectionThreadIssues => ({
+              id: thread.id,
+              projectId: thread.projectId,
+              settledOverride: thread.settledOverride,
+              settledAt: thread.settledAt,
+              issues: thread.issues ?? [],
+            })),
+          ),
+        );
+      }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+
     const getThreadsWithPullRequests: ProjectionStoreV2Shape["getThreadsWithPullRequests"] = (
       threadId,
     ) =>
@@ -5543,6 +5574,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThread,
       getSettlementCandidates,
       getThreadsWithPullRequests,
+      getThreadsWithIssues,
       getThreadProjection,
       getTurnStartContext,
       getTurnStartHistory,
@@ -5679,6 +5711,27 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 left.id.localeCompare(right.id),
             );
         }),
+      getThreadsWithIssues: (threadId) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map(({ thread }) => thread)
+              .filter(
+                (thread) =>
+                  (threadId === undefined || thread.id === threadId) &&
+                  thread.deletedAt === null &&
+                  thread.archivedAt === null &&
+                  (thread.issues ?? []).length > 0,
+              )
+              .map((thread): ProjectionThreadIssues => ({
+                id: thread.id,
+                projectId: thread.projectId,
+                settledOverride: thread.settledOverride,
+                settledAt: thread.settledAt,
+                issues: thread.issues ?? [],
+              })),
+          ),
+        ),
       getThreadsWithPullRequests: (threadId) =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>

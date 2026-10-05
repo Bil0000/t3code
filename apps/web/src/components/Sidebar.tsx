@@ -4488,6 +4488,7 @@ export default function Sidebar() {
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                workItemLinking: false,
               },
               snoozePresets,
             }),

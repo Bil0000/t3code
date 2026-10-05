@@ -3,6 +3,7 @@ import * as HttpServerRespondable from "effect/unstable/http/HttpServerRespondab
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import {
+  CommandId,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -355,6 +356,7 @@ export type IssueListResult = typeof IssueListResult.Type;
 
 export const IssueRef = Schema.Struct({
   projectId: ProjectId,
+  host: Schema.optionalKey(TrimmedNonEmptyString),
   provider: Schema.optionalKey(IssueProviderKind),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
@@ -928,8 +930,11 @@ export type ThreadIssueKey = typeof ThreadIssueKey.Type;
 
 export const ThreadIssueLink = Schema.Struct({
   ...ThreadIssueKey.fields,
+  projectId: Schema.optionalKey(ProjectId),
   url: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
+  state: Schema.optionalKey(IssueState),
+  linkId: Schema.optionalKey(CommandId),
 });
 export type ThreadIssueLink = typeof ThreadIssueLink.Type;
 

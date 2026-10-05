@@ -5294,10 +5294,13 @@ export default function ChatView(props: ChatViewProps) {
   const visiblePullRequestCount = visiblePullRequests.length;
   const pullRequestsSurfaceAvailable =
     isServerThread && supportsThreadPullRequests && visiblePullRequestCount > 0;
+  const linkedItemsSurfaceAvailable =
+    pullRequestsSurfaceAvailable ||
+    (isServerThread && supportsIssues && (activeThreadShell?.issues?.length ?? 0) > 0);
   const addPullRequestsSurface = useCallback(() => {
-    if (!activeThreadRef || !pullRequestsSurfaceAvailable) return;
+    if (!activeThreadRef || !linkedItemsSurfaceAvailable) return;
     useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
-  }, [activeThreadRef, pullRequestsSurfaceAvailable]);
+  }, [activeThreadRef, linkedItemsSurfaceAvailable]);
   const { state: deviceState, loaded: deviceStateLoaded } = useDeviceState(
     activeThreadRef?.environmentId ?? null,
   );
@@ -11650,7 +11653,7 @@ export default function ChatView(props: ChatViewProps) {
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           issueAvailable={issueSurfaceAvailable}
-          pullRequestsAvailable={pullRequestsSurfaceAvailable}
+          pullRequestsAvailable={linkedItemsSurfaceAvailable}
           issueStatuses={issueTabStatuses}
           deviceAvailable={activeThreadRef !== null}
         >
@@ -11708,7 +11711,7 @@ export default function ChatView(props: ChatViewProps) {
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             issueAvailable={issueSurfaceAvailable}
-            pullRequestsAvailable={pullRequestsSurfaceAvailable}
+            pullRequestsAvailable={linkedItemsSurfaceAvailable}
             issueStatuses={issueTabStatuses}
             deviceAvailable={activeThreadRef !== null}
           >

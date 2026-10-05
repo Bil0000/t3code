@@ -58,7 +58,7 @@ describe("v2 thread shell lists", () => {
     }
   });
 
-  it("imports issue links from the snapshot and applies link and unlink updates", () => {
+  it("imports issue links from the snapshot and applies link, state, and unlink updates", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const issues: ReadonlyArray<ThreadIssueLink> = [
       {
@@ -85,7 +85,17 @@ describe("v2 thread shell lists", () => {
         ...issues,
         { ...issues[0]!, number: 43, url: "https://gitlab.example.test/team/project/-/issues/43" },
       ];
-      for (const [index, nextIssues] of [linkedIssues, [linkedIssues[1]!], []].entries()) {
+      const syncedIssues = linkedIssues.map((issue) => ({
+        ...issue,
+        title: "Updated title",
+        state: "closed" as const,
+      }));
+      for (const [index, nextIssues] of [
+        linkedIssues,
+        syncedIssues,
+        [syncedIssues[1]!],
+        [],
+      ].entries()) {
         snapshot = applyShellStreamEvent(snapshot, {
           kind: "thread.updated",
           location: "active",
