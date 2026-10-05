@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -66,11 +67,17 @@ const thread = (issues: ReadonlyArray<ThreadIssueLink> = []): OrchestrationV2Thr
   issues,
 });
 
-const invocation = (capabilities: ReadonlyArray<McpInvocationContext.McpCapability>) => ({
+const invocation = (
+  capabilities: ReadonlyArray<McpInvocationContext.McpCapability>,
+): McpInvocationContext.McpInvocationScope => ({
   environmentId: EnvironmentId.make("environment-1"),
-  threadId,
-  providerSessionId: "session-1",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "session-1",
+  thread: {
+    threadId,
+    providerSessionId: "session-1",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
   capabilities: new Set(capabilities),
   issuedAt: 1,
 });
@@ -139,6 +146,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     name: Name,
     params: Parameters<typeof toolkit.handle<Name>>[1],
     capabilities: ReadonlyArray<McpInvocationContext.McpCapability> = ["issues"],
+    scope = invocation(capabilities),
   ) =>
     toolkit.handle(name, params).pipe(
       Stream.unwrap,
@@ -146,7 +154,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       Effect.map(
         (chunk) => chunk.at(-1)!.result as Tool.Success<(typeof IssuesToolkit.tools)[Name]>,
       ),
-      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
+      Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
       Effect.provide(dependencies),
     );
   return {
@@ -160,6 +168,37 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect("rejects callers without a thread and deleted threads before reading host data", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const input = { repository: issue.repository, number: issue.number };
+      const scope = {
+        ...invocation(["issues"]),
+        thread: undefined,
+        client: {
+          sessionId: "client-1",
+          label: "Client",
+          runtimeModeCeiling: "full-access" as const,
+        },
+      };
+      expect(
+        yield* harness.call("link_issue", input, ["issues"], scope).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "OrchestratorMcpFailure", code: "thread_credential_required" });
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([]);
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+      const deleted = yield* makeHarness({
+        ...thread(),
+        deletedAt: DateTime.makeUnsafe("2026-01-02T00:00:00Z"),
+      });
+      expect(yield* deleted.call("link_issue", input).pipe(Effect.flip)).toMatchObject({
+        _tag: "IssueThreadNotFoundError",
+        threadId,
+      });
+      expect(yield* Ref.get(deleted.detailRequests)).toEqual([]);
+      expect(yield* Ref.get(deleted.commands)).toEqual([]);
+    }),
+  );
+
   it.effect("links the canonical issue to the credential's thread", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
