@@ -109,35 +109,34 @@ export const disconnectLinearAccount = (input: { readonly credentialId: string }
       const { credentialId } = input;
 
       const settings = yield* ServerSettings.ServerSettingsService;
-      const current = yield* settings.getSettings;
-
-      const removals = clearCredentialBindings(
-        current.issueTracking.connections.linear?.projectBindings ?? {},
-        credentialId,
-      );
-      const restorations = Object.fromEntries(
-        Object.keys(removals).flatMap((projectId) => {
-          const binding =
-            current.issueTracking.connections.linear?.projectBindings[projectId as ProjectId];
-          return binding === undefined ? [] : [[projectId, binding]];
-        }),
-      );
-      if (Object.keys(removals).length > 0) {
-        yield* settings.updateSettings({
-          issueTracking: {
-            connections: {
-              linear: { projectBindings: removals },
-            },
-          },
-        });
-      }
+      let restorations: Record<string, IssueTrackerProjectBinding> = {};
+      const cleared = yield* settings.modifySettings((current) => {
+        const bindings = current.issueTracking.connections.linear?.projectBindings ?? {};
+        const removals = clearCredentialBindings(bindings, credentialId);
+        restorations = Object.fromEntries(
+          Object.keys(removals).flatMap((projectId) => {
+            const binding = bindings[projectId as ProjectId];
+            return binding == null ? [] : [[projectId, binding]];
+          }),
+        );
+        return Object.keys(removals).length === 0
+          ? undefined
+          : { issueTracking: { connections: { linear: { projectBindings: removals } } } };
+      });
+      const clearedBindings = cleared.issueTracking.connections.linear?.projectBindings;
       return yield* linear.disconnect({ credentialId }).pipe(
         Effect.tapError(() =>
           Object.keys(restorations).length === 0
             ? Effect.void
-            : settings.updateSettings({
-                issueTracking: { connections: { linear: { projectBindings: restorations } } },
-              }),
+            : settings.modifySettings((current) =>
+                current.issueTracking.connections.linear?.projectBindings === clearedBindings
+                  ? {
+                      issueTracking: {
+                        connections: { linear: { projectBindings: restorations } },
+                      },
+                    }
+                  : undefined,
+              ),
         ),
       );
     }),

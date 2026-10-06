@@ -470,6 +470,30 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("applies concurrent settings modifiers to the latest stored value", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* settings.updateSettings({ automaticGitFetchInterval: Duration.seconds(30) });
+      yield* Effect.forEach(
+        [1, 2],
+        () =>
+          settings.modifySettings((current) => ({
+            automaticGitFetchInterval: Duration.millis(
+              Duration.toMillis(current.automaticGitFetchInterval) + 1000,
+            ),
+          })),
+        { concurrency: "unbounded", discard: true },
+      );
+      assert.equal(
+        Duration.toMillis((yield* settings.getSettings).automaticGitFetchInterval),
+        32_000,
+      );
+      const snapshot = yield* settings.getSettings;
+      yield* settings.modifySettings(() => undefined);
+      assert.strictEqual((yield* settings.getSettings).issueTracking, snapshot.issueTracking);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("pauses provider-instance mutations while a settings snapshot is in use", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

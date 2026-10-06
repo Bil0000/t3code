@@ -406,7 +406,13 @@ it.effect("serializes project binding writes with account disconnect", () =>
       } as unknown as ServerSettings.ServerSettingsService["Service"]);
       const layer = Layer.mergeAll(
         Layer.succeed(LinearApi.LinearApi, api),
-        Layer.succeed(ServerSettings.ServerSettingsService, settings),
+        Layer.succeed(ServerSettings.ServerSettingsService, {
+          ...settings,
+          modifySettings: (patchOf) => {
+            const patch = patchOf(current);
+            return patch === undefined ? Effect.succeed(current) : settings.updateSettings(patch);
+          },
+        }),
       );
       const binding = yield* setLinearProjectBinding({
         projectId: PROJECT_ID,
@@ -452,7 +458,7 @@ it.effect("keeps a key when clearing its project bindings fails", () => {
         },
       },
     }),
-    updateSettings: () =>
+    modifySettings: () =>
       Effect.fail(
         new ServerSettingsError({ settingsPath: "test", operation: "write-file", cause: "test" }),
       ),
@@ -514,3 +520,62 @@ it.effect("restores project bindings when credential deletion fails", () => {
     ),
   );
 });
+
+it.effect.each([{ credentialId: "user-2", repository: "API" }, null])(
+  "keeps a newer direct settings edit when credential deletion fails: %s",
+  (newBinding) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const api = Layer.mock(LinearApi.LinearApi)({
+        disconnect: () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(
+              Effect.fail(
+                new LinearApi.LinearApiError({ operation: "disconnect", reason: "failed" }),
+              ),
+            ),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const disconnect = yield* disconnectLinearAccount({ credentialId: "user-1" }).pipe(
+          Effect.result,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(started);
+        yield* settings.updateSettings({
+          issueTracking: {
+            connections: { linear: { projectBindings: { [PROJECT_ID]: newBinding } } },
+          },
+        });
+        yield* Deferred.succeed(release, undefined);
+        const result = yield* Fiber.join(disconnect);
+        assert.strictEqual(result._tag, "Failure");
+        assert.deepStrictEqual(
+          (yield* settings.getSettings).issueTracking.connections.linear?.projectBindings[
+            PROJECT_ID
+          ],
+          newBinding,
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            api,
+            ServerSettings.layerTest({
+              issueTracking: {
+                connections: {
+                  linear: {
+                    projectBindings: {
+                      [PROJECT_ID]: { credentialId: "user-1", repository: "ENG" },
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+        ),
+      );
+    }),
+);
