@@ -276,7 +276,10 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           expect(yield* Queue.take(reads)).toBe(thread.id);
           yield* service.drain;
           expect(yield* Queue.size(reads)).toBe(0);
-          for (const changes of [{ branch: "new-branch" }, { projectId: ProjectId.make("new-project") }]) {
+          for (const changes of [
+            { branch: "new-branch" },
+            { projectId: ProjectId.make("new-project") },
+          ]) {
             yield* PubSub.publish(events, { ...event, payload: { ...event.payload, ...changes } });
             expect(yield* Queue.take(reads)).toBe(thread.id);
             yield* service.drain;

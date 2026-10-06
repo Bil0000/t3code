@@ -37,7 +37,10 @@ const stores = Layer.mergeAll(EventStore.layer, ProjectionStore.layer).pipe(
 );
 const testLayer = Layer.mergeAll(
   stores,
-  ProjectionMaintenance.layer.pipe(Layer.provide(stores), Layer.provide(SqlitePersistence.layerMemory)),
+  ProjectionMaintenance.layer.pipe(
+    Layer.provide(stores),
+    Layer.provide(SqlitePersistence.layerMemory),
+  ),
   layerWithRegistry(
     { name: "thread-issues" },
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
