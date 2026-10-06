@@ -1,5 +1,5 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeCrypto from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2";
+import * as Hex from "effect/encoding/Hex";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -539,7 +539,7 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.provideService(
         SourceControlRateLimit.CredentialScope,
-        NodeCrypto.createHash("sha256").update(key).digest("hex"),
+        Hex.encode(sha256(new TextEncoder().encode(key))),
       ),
     );
 
