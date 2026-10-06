@@ -200,10 +200,7 @@ export const make = Effect.gen(function* () {
             number: issue.number,
             title: issue.title,
             url: issue.url,
-            state:
-              issue.state.type === "completed" || issue.state.type === "canceled"
-                ? ("closed" as const)
-                : ("open" as const),
+            state: linearIssueState(issue.state.type),
           })),
         ),
     getIssue: (input) =>

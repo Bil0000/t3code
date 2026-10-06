@@ -337,6 +337,40 @@ layer((it) => {
     }),
   );
 
+  it.effect("offers continuation only for newest-first updated work items", () =>
+    Effect.gen(function* () {
+      listing([workItem(1)]);
+      const provider = yield* AzureDevOpsIssueProvider.make;
+      for (const [sort, order, continues] of [
+        [undefined, undefined, true],
+        [undefined, "asc", false],
+        [undefined, "desc", true],
+        ["updated", undefined, true],
+        ["updated", "asc", false],
+        ["updated", "desc", true],
+        ["created", undefined, false],
+        ["created", "asc", false],
+        ["created", "desc", false],
+        ["comments", undefined, false],
+        ["comments", "asc", false],
+        ["comments", "desc", false],
+      ] as const) {
+        const page = yield* provider.listIssues({
+          cwd: "/w",
+          host: "dev.azure.com",
+          repository: "acme/web",
+          state: "all",
+          involvement: "all",
+          viewer: "viewer",
+          limit: 1,
+          sort,
+          order,
+        });
+        assert.strictEqual(page.continues, continues);
+      }
+    }),
+  );
+
   it.effect("narrows by state and by who a work item belongs to", () =>
     Effect.gen(function* () {
       listing([]);

@@ -691,22 +691,21 @@ const make = Effect.gen(function* () {
       ]),
     resolver: (entries) => {
       const first = entries[0]!.request;
+      const emptySummaries = () =>
+        Effect.succeed(
+          new Map<number, Pick<GitHubIssueDetail, "number" | "title" | "url" | "state">>(),
+        );
       return graphqlRead({
         ...first,
         operation: "getIssueSummary",
         query: buildIssueSummaryQuery(entries.map(({ request }) => request)),
         decode: decodeIssueSummaryBatchJson,
       }).pipe(
-        Effect.catchIf(
-          (error) =>
-            error._tag === "GitHubApiResponseError" ||
-            error._tag === "GitHubApiNotFoundError" ||
-            error._tag === "GitHubIssueReadError",
-          () =>
-            Effect.succeed(
-              new Map<number, Pick<GitHubIssueDetail, "number" | "title" | "url" | "state">>(),
-            ),
-        ),
+        Effect.catchTags({
+          GitHubApiResponseError: emptySummaries,
+          GitHubApiNotFoundError: emptySummaries,
+          GitHubIssueReadError: emptySummaries,
+        }),
         Effect.flatMap((summaries) =>
           Effect.forEach(
             entries,

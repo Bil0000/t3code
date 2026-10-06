@@ -1199,6 +1199,29 @@ describe("getChangeRequest linked issues", () => {
     ),
   );
 
+  it.effect("reports host links as incomplete when their read fails", () =>
+    read.pipe(
+      Effect.map((detail) => {
+        expect(detail.linkedIssues).toEqual([]);
+        expect(detail.linkedIssuesTruncated).toBe(true);
+      }),
+      Effect.provide(
+        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+          getPullRequestDetail: () => Effect.succeed(detailWith("")),
+          listLinkedIssues: () =>
+            Effect.fail(
+              new GitHubPullRequestCli.GitHubPullRequestReadError({
+                command: "gh",
+                cwd: "/w",
+                operation: "listLinkedIssues",
+                cause: "unavailable",
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
   it.effect("keeps the host's own links when the lookup fails", () =>
     read.pipe(
       Effect.map((detail) => expect(detail.linkedIssues).toEqual([issue(12, true)])),

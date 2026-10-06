@@ -13,6 +13,7 @@ import {
   connectLinearAccount,
   disconnectLinearAccount,
   linearConnectionStatus,
+  make,
   setLinearProjectBinding,
 } from "./LinearConnection.ts";
 
@@ -44,6 +45,50 @@ it.effect("reads status without acquiring settings or changing bindings", () =>
       }),
     ),
   ),
+);
+
+it.effect("keeps settings paths out of tracker errors", () =>
+  Effect.gen(function* () {
+    const settingsCause = new ServerSettingsError({
+      settingsPath: "/private/settings.json",
+      operation: "write-file",
+    });
+    const tracker = yield* make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(LinearApi.LinearApi)({ connection: Effect.succeed(connection()) }),
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            updateSettings: () => Effect.fail(settingsCause),
+          }),
+        ),
+      ),
+    );
+    const bindError = yield* tracker
+      .bind({ provider: "linear", projectId: PROJECT_ID, binding: null })
+      .pipe(Effect.flip);
+    assert.strictEqual(bindError.detail, "Linear bind could not be completed.");
+    assert.strictEqual(bindError.cause, settingsCause);
+  }),
+);
+
+it.effect("preserves safe Linear details and their underlying cause", () =>
+  Effect.gen(function* () {
+    const cause = new LinearApi.LinearApiError({
+      operation: "connection",
+      reason: "unauthenticated",
+    });
+    const tracker = yield* make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(LinearApi.LinearApi)({ connection: Effect.fail(cause) }),
+          Layer.mock(ServerSettings.ServerSettingsService)({}),
+        ),
+      ),
+    );
+    const error = yield* tracker.status.pipe(Effect.flip);
+    assert.strictEqual(error.detail, cause.detail);
+    assert.strictEqual(error.cause, cause);
+  }),
 );
 
 it.effect("adds an account without remapping existing projects", () =>

@@ -425,7 +425,7 @@ export const make = Effect.gen(function* () {
           pullRequest: readChecks(input),
           linkedIssues: cli
             .listLinkedIssues(input)
-            .pipe(Effect.orElseSucceed(() => ({ links: [], truncated: false }))),
+            .pipe(Effect.orElseSucceed(() => ({ links: [], truncated: true }))),
         },
         { concurrency: 2 },
       ).pipe(

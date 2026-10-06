@@ -270,6 +270,25 @@ it.effect("keeps Linear GraphQL error text out of caller-visible failures", () =
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("distinguishes GraphQL authentication errors from author and permission errors", () =>
+  Effect.gen(function* () {
+    for (const [errors, reason] of [
+      [[{ message: "Unknown field author" }], "failed"],
+      [[{ message: "Authorization denied", extensions: { code: "FORBIDDEN" } }], "failed"],
+      [[{ message: "Sign in", extensions: { code: "AUTHENTICATION_ERROR" } }], "unauthenticated"],
+      [[{ message: "Authentication required" }], "unauthenticated"],
+      [[{ message: "Unknown author" }, { message: "Invalid access token" }], "unauthenticated"],
+    ] as const) {
+      const { layer } = makeLayer({ envToken: "lin_api_test", response: () => ({ errors }) });
+      const error = yield* Effect.gen(function* () {
+        const api = yield* LinearApi.LinearApi;
+        return yield* api.getViewer({}).pipe(Effect.flip);
+      }).pipe(Effect.provide(layer));
+      assert.strictEqual(error.reason, reason);
+    }
+  }),
+);
+
 it.effect("probes a new key before appending a second saved account", () => {
   let values: Map<string, Uint8Array>;
   let newKeyProbed = false;

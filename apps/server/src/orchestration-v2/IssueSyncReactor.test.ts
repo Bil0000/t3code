@@ -713,7 +713,7 @@ it.effect("uses linked source projects for reads while keeping writes in the thr
             detail(ref, {
               title: `Title from ${ref.projectId}`,
               ...(ref.provider === "linear"
-                ? { url: "https://linear.app/team/issue/ENG-7/title" }
+                ? { url: "https://linear.app/team/issue/ENG-7/updated-title" }
                 : {}),
             }),
           ),

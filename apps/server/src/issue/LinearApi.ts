@@ -313,7 +313,9 @@ export class LinearApi extends Context.Service<
 >()("t3/issue/LinearApi") {}
 
 const clean = (value: string | null | undefined) => value?.trim() || null;
-const isAuthError = (message: string) => /auth|api key|access token/i.test(message);
+const isAuthError = (error: typeof GraphQlError.Type) =>
+  error.extensions?.code === "AUTHENTICATION_ERROR" ||
+  /\b(authentication|unauthenticated|api key|access token)\b/i.test(error.message);
 
 const make = Effect.gen(function* () {
   const config = yield* ApiConfig;
@@ -480,11 +482,10 @@ const make = Effect.gen(function* () {
               );
               if (errors?.some((error) => error.extensions?.code === "RATELIMITED"))
                 return yield* limited();
-              const message = errors?.[0]?.message;
-              if (message !== undefined)
+              if (errors !== undefined && errors.length > 0)
                 return yield* new LinearApiError({
                   operation,
-                  reason: isAuthError(message) ? "unauthenticated" : "failed",
+                  reason: errors.some(isAuthError) ? "unauthenticated" : "failed",
                   cause: errors,
                 });
               const envelope = yield* Schema.decodeUnknownEffect(schema)(payload).pipe(

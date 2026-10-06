@@ -42,6 +42,34 @@ it("groups supported Linear emoji reactions and marks the viewer", () => {
   );
 });
 
+it.effect("reports duplicate issues as closed in linked summaries", () =>
+  Effect.gen(function* () {
+    const adapter = yield* make;
+    const summary = yield* adapter.getIssueSummary!({
+      cwd: PROJECT.workspaceRoot,
+      host: "linear.app",
+      repository: "ENG",
+      number: 7,
+    });
+    assert.strictEqual(summary.state, "closed");
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(LinearApi.LinearApi)({
+          getIssueSummary: () =>
+            Effect.succeed({
+              number: 7,
+              title: "Duplicate",
+              url: "https://linear.app/acme/issue/ENG-7",
+              state: { name: "Duplicate", type: "duplicate" },
+            }),
+        }),
+        ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
+      ),
+    ),
+  ),
+);
+
 it.effect("uses Linear user ids for viewer-comparable issue actors", () => {
   const api = {
     listIssues: () =>

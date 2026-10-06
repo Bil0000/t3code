@@ -147,18 +147,21 @@ export const make = Effect.gen(function* () {
   const context = yield* Effect.context<
     LinearApi.LinearApi | ServerSettings.ServerSettingsService
   >();
-  const wrap = <
-    A,
-    E extends { readonly message: string },
-    R extends LinearApi.LinearApi | ServerSettings.ServerSettingsService,
-  >(
+  const wrap = <A, E, R extends LinearApi.LinearApi | ServerSettings.ServerSettingsService>(
     operation: IssueTrackingError["operation"],
     effect: Effect.Effect<A, E, R>,
   ) =>
     effect.pipe(
       Effect.provideContext(context),
       Effect.mapError(
-        (cause) => new IssueTrackingError({ operation, detail: cause.message, cause }),
+        (cause) =>
+          new IssueTrackingError({
+            operation,
+            detail: LinearApi.isLinearApiError(cause)
+              ? cause.detail
+              : `Linear ${operation} could not be completed.`,
+            cause,
+          }),
       ),
     );
   return {

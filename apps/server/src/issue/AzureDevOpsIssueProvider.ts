@@ -154,9 +154,8 @@ export const make = Effect.gen(function* () {
               Effect.map((page) => ({
                 items: page.items.map(toIssue),
                 truncated: page.truncated,
-                // The query orders by the same date the cursor carries, so a further slice means
-                // exactly what it does on every other host here.
-                continues: true,
+                continues:
+                  (input.sort === undefined || input.sort === "updated") && input.order !== "asc",
               })),
             ),
 
