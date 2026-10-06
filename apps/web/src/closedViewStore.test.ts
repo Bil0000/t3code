@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { useClosedViewStore } from "./closedViewStore";
+import { type ClosedViewEntry, useClosedViewStore } from "./closedViewStore";
 
 const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"));
 const refB = scopeThreadRef("env-2" as EnvironmentId, ThreadId.make("thread-A"));
@@ -29,6 +29,22 @@ const snapshot: PreviewSessionSnapshot = {
 };
 
 describe("closedViewStore", () => {
+  it.each([null, {}, { entries: null }, { entries: {} }, { entries: "invalid" }])(
+    "rehydrates malformed older history %j as empty history",
+    async (state) => {
+      useClosedViewStore.getState().remember(diff(refA));
+      const { storage, name } = useClosedViewStore.persist.getOptions();
+      await storage!.setItem(name!, {
+        state: state as { entries: ClosedViewEntry[] },
+        version: 0,
+      });
+      await useClosedViewStore.persist.rehydrate();
+      expect(useClosedViewStore.persist.hasHydrated()).toBe(true);
+      expect(useClosedViewStore.getState().entries).toEqual([]);
+      expect(await storage!.getItem(name!)).toEqual({ state: { entries: [] }, version: 1 });
+    },
+  );
+
   it("keeps private tabs available in memory without saving their metadata", async () => {
     const store = useClosedViewStore.getState();
     const publicId = store.remember(diff(refA));
@@ -45,17 +61,39 @@ describe("closedViewStore", () => {
     expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([publicId]);
   });
 
-  it("removes private metadata from history saved by earlier versions", async () => {
+  it("removes private metadata and malformed entries from history saved by earlier versions", async () => {
     const store = useClosedViewStore.getState();
     const publicId = store.remember(diff(refA));
+    const browserId = store.remember({
+      kind: "browser",
+      threadRef: refA,
+      snapshot: {
+        ...snapshot,
+        tabId: "public-tab",
+        profileId: "default",
+        navStatus: { _tag: "Success", url: "https://public.example", title: "Public page" },
+      },
+    });
     store.remember({ kind: "browser", threadRef: refA, snapshot });
     const { storage, name } = useClosedViewStore.persist.getOptions();
     await storage!.setItem(name!, {
-      state: { entries: useClosedViewStore.getState().entries },
+      state: {
+        entries: [
+          null,
+          {},
+          { kind: "browser" },
+          { kind: "browser", snapshot: null },
+          ...useClosedViewStore.getState().entries,
+        ] as ClosedViewEntry[],
+      },
       version: 0,
     });
     await useClosedViewStore.persist.rehydrate();
-    expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([publicId]);
+    expect(useClosedViewStore.persist.hasHydrated()).toBe(true);
+    expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([
+      browserId,
+      publicId,
+    ]);
     const saved = JSON.stringify(await storage!.getItem(name!));
     expect(saved).not.toContain("private.example");
     expect(saved).not.toContain("Private page");

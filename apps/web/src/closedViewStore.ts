@@ -77,8 +77,18 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
       ),
       version: 1,
       migrate: (persisted) => {
-        const { entries } = persisted as Pick<ClosedViewStoreState, "entries">;
-        return { entries: entries.filter(isPersistentView) };
+        const entries = (persisted as Partial<Pick<ClosedViewStoreState, "entries">> | null)
+          ?.entries;
+        return {
+          entries: Array.isArray(entries)
+            ? entries.filter(
+                (entry) =>
+                  (entry?.kind === "panel-tab" ||
+                    (entry?.kind === "browser" && entry.snapshot != null)) &&
+                  isPersistentView(entry),
+              )
+            : [],
+        };
       },
       partialize: ({ entries }) => ({ entries: entries.filter(isPersistentView) }),
     },
