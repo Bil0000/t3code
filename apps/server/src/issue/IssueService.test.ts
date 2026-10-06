@@ -4,6 +4,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 import {
   issueProjectSourceKey,
   issueSourceKey,
@@ -14,6 +18,7 @@ import {
   type OrchestrationProjectShell,
   type ProjectId,
   type IssueRef,
+  IssueTrackingError,
 } from "@t3tools/contracts";
 
 import * as ProjectService from "../project/ProjectService.ts";
@@ -205,6 +210,58 @@ const REFERENCE = { projectId: "p1" as ProjectId, repository: "acme/web", number
 const ONE_PROJECT = [
   project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
 ];
+
+it.effect("routes tracker operations through the requested adapter and preserves failures", () =>
+  Effect.gen(function* () {
+    const calls: unknown[] = [];
+    const failure = new IssueTrackingError({ operation: "disconnect", detail: "Unavailable" });
+    const connection = {
+      status: "unauthenticated" as const,
+      hasStoredToken: false,
+      accountName: null,
+      accountEmail: null,
+      projects: [],
+      accounts: [],
+    };
+    const service = yield* makeService({
+      projects: [],
+      providers: [
+        fakeProvider("jira", {
+          tracker: {
+            status: Effect.succeed(connection),
+            connect: (token) =>
+              Effect.sync(() => {
+                calls.push(token);
+                return connection;
+              }),
+            disconnect: () => Effect.fail(failure),
+            bind: (input) =>
+              Effect.sync(() => {
+                calls.push(input);
+              }),
+          },
+        }),
+      ],
+    });
+    assert.deepStrictEqual(yield* service.trackerStatus({ provider: "jira" }), connection);
+    assert.deepStrictEqual(
+      yield* service.trackerConnect({ provider: "jira", token: "test-token" }),
+      connection,
+    );
+    const binding = { provider: "jira", projectId: REFERENCE.projectId, binding: null };
+    yield* service.trackerBind(binding);
+    assert.deepStrictEqual(calls, ["test-token", binding]);
+    assert.strictEqual(
+      yield* service.trackerDisconnect({ provider: "jira", credentialId: "id" }).pipe(Effect.flip),
+      failure,
+    );
+    const unsupported = yield* service
+      .trackerConnect({ provider: "github", token: "test-token" })
+      .pipe(Effect.flip);
+    assert.strictEqual(unsupported.operation, "connect");
+    assert.include(unsupported.detail, "not supported");
+  }),
+);
 
 it.effect("keeps a cached read from bypassing the requested host", () =>
   Effect.gen(function* () {
@@ -2323,5 +2380,39 @@ it.effect("pins list viewers and rows to the same account when settings change",
     yield* service.list({ state: "open" });
     yield* service.list({ state: "open" });
     assert.deepEqual(observed, ["account-a", "account-b"]);
+  }),
+);
+
+it.effect("stops a stale detail refresh when the service scope closes", () =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const started = yield* Deferred.make<void>();
+    const finished = yield* Deferred.make<Exit.Exit<never>>();
+    let reads = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () => {
+            reads += 1;
+            return reads === 1
+              ? Effect.succeed(issueDetail(7))
+              : Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.onExit((exit) => Deferred.succeed(finished, exit)),
+                );
+          },
+        }),
+      ],
+    }).pipe(Effect.provideService(Scope.Scope, scope));
+    const first = yield* service.detail(REFERENCE);
+    yield* TestClock.adjust("16 seconds");
+    assert.deepEqual(yield* service.detail(REFERENCE), first);
+    yield* Deferred.await(started);
+    yield* Effect.yieldNow;
+    yield* Scope.close(scope, Exit.void);
+    assert.isTrue(yield* Deferred.isDone(finished));
+    assert.isTrue(Exit.hasInterrupts(yield* Deferred.await(finished)));
+    assert.equal(reads, 2);
   }),
 );

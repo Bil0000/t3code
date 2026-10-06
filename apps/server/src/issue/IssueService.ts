@@ -8,6 +8,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
+import * as Scope from "effect/Scope";
 import {
   IssueOperationError,
   IssueUnavailableError,
@@ -42,6 +43,12 @@ import {
   type IssueRef,
   type IssueRepositoryRef,
   type IssueTemplateList,
+  type IssueTrackerConnection,
+  type IssueTrackerStatusInput,
+  type IssueTrackerConnectInput,
+  type IssueTrackerDisconnectInput,
+  type IssueTrackerBindInput,
+  type IssueTrackingError,
   type IssueUpdateInput,
   type IssueProviderKind,
 } from "@t3tools/contracts";
@@ -123,7 +130,16 @@ export type IssueError = IssueUnavailableError | IssueOperationError;
 export class IssueService extends Context.Service<
   IssueService,
   {
-    readonly tracker: IssueProviderRegistry.IssueProviderRegistry["Service"]["tracker"];
+    readonly trackerStatus: (
+      input: IssueTrackerStatusInput,
+    ) => Effect.Effect<IssueTrackerConnection, IssueTrackingError>;
+    readonly trackerConnect: (
+      input: IssueTrackerConnectInput,
+    ) => Effect.Effect<IssueTrackerConnection, IssueTrackingError>;
+    readonly trackerDisconnect: (
+      input: IssueTrackerDisconnectInput,
+    ) => Effect.Effect<IssueTrackerConnection, IssueTrackingError>;
+    readonly trackerBind: (input: IssueTrackerBindInput) => Effect.Effect<void, IssueTrackingError>;
     readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
     readonly summary: (
       input: IssueRef,
@@ -1520,8 +1536,7 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const context = yield* Effect.context<never>();
-  const runFork = Effect.runForkWith(context);
+  const scope = yield* Scope.Scope;
 
   /**
    * Stale answers served while a fresh one is fetched behind them. Every read here leaves the
@@ -1551,10 +1566,7 @@ export const make = Effect.gen(function* () {
       return Effect.flatMap(Clock.currentTimeMillis, (now) => {
         const snapshot = held.get(key);
         if (snapshot === undefined || now - snapshot.at > staleMs) return recorded;
-        // Run as its own fiber rather than a child: the caller is answered and gone before the
-        // refresh lands. The read still coalesces on the cache key, so ten stale reads in one
-        // window cost one host request — and a failed refresh costs nothing but the retry.
-        return Effect.sync(() => runFork(Effect.ignore(recorded))).pipe(Effect.as(snapshot.value));
+        return Effect.ignore(recorded).pipe(Effect.forkIn(scope), Effect.as(snapshot.value));
       });
     };
   };
@@ -1909,7 +1921,20 @@ export const make = Effect.gen(function* () {
     );
 
   return IssueService.of({
-    tracker: registry.tracker,
+    trackerStatus: (input) =>
+      registry.tracker(input.provider, "status").pipe(Effect.flatMap((tracker) => tracker.status)),
+    trackerConnect: (input) =>
+      registry
+        .tracker(input.provider, "connect")
+        .pipe(Effect.flatMap((tracker) => tracker.connect(input.token))),
+    trackerDisconnect: (input) =>
+      registry
+        .tracker(input.provider, "disconnect")
+        .pipe(Effect.flatMap((tracker) => tracker.disconnect(input.credentialId))),
+    trackerBind: (input) =>
+      registry
+        .tracker(input.provider, "bind")
+        .pipe(Effect.flatMap((tracker) => tracker.bind(input))),
     list: credentialList,
     summary: credentialScoped(summary, false),
     detail: credentialScoped(detail),

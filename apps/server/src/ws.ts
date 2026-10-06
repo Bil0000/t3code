@@ -88,7 +88,6 @@ import {
   PersistChatAttachmentsError,
   RpcClientId,
   EnvironmentAuthorizationError,
-  WorkItemMatchError,
   type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -225,11 +224,7 @@ import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as IssueService from "./issue/IssueService.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as WorkItemLinks from "./workItems/WorkItemLinks.ts";
-import {
-  resolveWorkItemMatches,
-  shortlistWorkItemCandidates,
-  workItemIdentityKey,
-} from "./workItems/WorkItemMatching.ts";
+import * as WorkItemMatches from "./workItems/WorkItemMatches.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
@@ -1322,7 +1317,7 @@ const layerWsRpc = (
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const issues = yield* IssueService.IssueService;
       const workItemLinks = yield* WorkItemLinks.WorkItemLinks;
-      const textGeneration = yield* TextGeneration.TextGeneration;
+      const workItemMatches = yield* WorkItemMatches.WorkItemMatches;
       const withPullRequestViewer = pullRequests.withRoutingCredential;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
@@ -2996,36 +2991,22 @@ const layerWsRpc = (
           observeRpcEffect(WS_METHODS.issuesInvalidate, issues.invalidate(input), {
             "rpc.aggregate": "issues",
           }),
-        [WS_METHODS.issueTrackersStatus]: ({ provider }) =>
-          observeRpcEffect(
-            WS_METHODS.issueTrackersStatus,
-            issues.tracker(provider, "status").pipe(Effect.flatMap((tracker) => tracker.status)),
-            { "rpc.aggregate": "issues" },
-          ),
-        [WS_METHODS.issueTrackersConnect]: ({ provider, token }) =>
-          observeRpcEffect(
-            WS_METHODS.issueTrackersConnect,
-            issues
-              .tracker(provider, "connect")
-              .pipe(Effect.flatMap((tracker) => tracker.connect(token))),
-            { "rpc.aggregate": "issues" },
-          ),
-        [WS_METHODS.issueTrackersDisconnect]: ({ provider, credentialId }) =>
-          observeRpcEffect(
-            WS_METHODS.issueTrackersDisconnect,
-            issues
-              .tracker(provider, "disconnect")
-              .pipe(Effect.flatMap((tracker) => tracker.disconnect(credentialId))),
-            { "rpc.aggregate": "issues" },
-          ),
+        [WS_METHODS.issueTrackersStatus]: (input) =>
+          observeRpcEffect(WS_METHODS.issueTrackersStatus, issues.trackerStatus(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issueTrackersConnect]: (input) =>
+          observeRpcEffect(WS_METHODS.issueTrackersConnect, issues.trackerConnect(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [WS_METHODS.issueTrackersDisconnect]: (input) =>
+          observeRpcEffect(WS_METHODS.issueTrackersDisconnect, issues.trackerDisconnect(input), {
+            "rpc.aggregate": "issues",
+          }),
         [WS_METHODS.issueTrackersBind]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.issueTrackersBind,
-            issues
-              .tracker(input.provider, "bind")
-              .pipe(Effect.flatMap((tracker) => tracker.bind(input))),
-            { "rpc.aggregate": "issues" },
-          ),
+          observeRpcEffect(WS_METHODS.issueTrackersBind, issues.trackerBind(input), {
+            "rpc.aggregate": "issues",
+          }),
         [WS_METHODS.workItemsListLinks]: (input) =>
           observeRpcEffect(WS_METHODS.workItemsListLinks, workItemLinks.list(input), {
             "rpc.aggregate": "issues",
@@ -3039,210 +3020,9 @@ const layerWsRpc = (
             "rpc.aggregate": "issues",
           }),
         [WS_METHODS.workItemsFindMatches]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.workItemsFindMatches,
-            Effect.gen(function* () {
-              const reference = {
-                projectId: input.projectId,
-                ...(input.source.provider === undefined ? {} : { provider: input.source.provider }),
-                repository: input.source.repository,
-                number: input.source.number,
-              };
-              const sourceRead =
-                input.source.kind === "issue"
-                  ? issues.detail(reference).pipe(
-                      Effect.map((detail) => ({
-                        detail,
-                        referenceStyle: detail.capabilities.referenceStyle,
-                        known:
-                          input.relationship === "related"
-                            ? detail.linkedPullRequests.map((link) =>
-                                workItemIdentityKey({
-                                  kind: "pull-request",
-                                  provider: detail.provider,
-                                  repository: link.repository,
-                                  number: link.number,
-                                }),
-                              )
-                            : [],
-                      })),
-                      Effect.mapError(
-                        (cause) =>
-                          new WorkItemMatchError({
-                            operation: "read-source",
-                            source: input.source,
-                            detail: "Could not read the source work item.",
-                            cause,
-                          }),
-                      ),
-                    )
-                  : pullRequests.detail(reference).pipe(
-                      Effect.map((detail) => ({
-                        detail,
-                        referenceStyle: "hash" as const,
-                        known:
-                          input.relationship === "related"
-                            ? (detail.linkedIssues ?? []).map((link) =>
-                                workItemIdentityKey({
-                                  kind: "issue",
-                                  provider: detail.provider,
-                                  repository: link.repository,
-                                  number: link.number,
-                                }),
-                              )
-                            : [],
-                      })),
-                      Effect.mapError(
-                        (cause) =>
-                          new WorkItemMatchError({
-                            operation: "read-source",
-                            source: input.source,
-                            detail: "Could not read the source work item.",
-                            cause,
-                          }),
-                      ),
-                    );
-              const { detail: sourceDetail, referenceStyle, known } = yield* sourceRead;
-              const source = {
-                kind: input.source.kind,
-                referenceStyle,
-                provider: sourceDetail.provider,
-                repository: sourceDetail.repository,
-                number: sourceDetail.number,
-                title: sourceDetail.title,
-                url: sourceDetail.url,
-                body: sourceDetail.body,
-              };
-              const candidateKind =
-                input.relationship === "duplicate"
-                  ? input.source.kind
-                  : input.source.kind === "issue"
-                    ? "pull-request"
-                    : "issue";
-              const listed =
-                candidateKind === "issue"
-                  ? yield* issues
-                      .list({
-                        state: input.relationship === "duplicate" ? "all" : "open",
-                        projectId: input.projectId,
-                        limit: 50,
-                      })
-                      .pipe(
-                        Effect.mapError(
-                          (cause) =>
-                            new WorkItemMatchError({
-                              operation: "list-candidates",
-                              source: input.source,
-                              detail: "Could not list candidate work items.",
-                              cause,
-                            }),
-                        ),
-                      )
-                  : yield* pullRequests
-                      .list({
-                        state: input.relationship === "duplicate" ? "all" : "open",
-                        projectId: input.projectId,
-                        limit: 50,
-                      })
-                      .pipe(
-                        Effect.mapError(
-                          (cause) =>
-                            new WorkItemMatchError({
-                              operation: "list-candidates",
-                              source: input.source,
-                              detail: "Could not list candidate work items.",
-                              cause,
-                            }),
-                        ),
-                      );
-              const knownItems = new Set(known);
-              const candidates = shortlistWorkItemCandidates(
-                source,
-                listed.entries
-                  .slice(0, 50)
-                  .filter(
-                    (entry) =>
-                      !knownItems.has(workItemIdentityKey({ ...entry, kind: candidateKind })),
-                  )
-                  .map((entry) => ({ ...entry, kind: candidateKind })),
-              );
-              const candidateDetails = yield* Effect.forEach(
-                candidates,
-                (candidate) =>
-                  Effect.gen(function* () {
-                    const candidateReference = {
-                      projectId: candidate.projectId,
-                      provider: candidate.provider,
-                      repository: candidate.repository,
-                      number: candidate.number,
-                    };
-                    if (candidateKind === "issue") {
-                      const detail = yield* issues.detail(candidateReference);
-                      return {
-                        kind: "issue" as const,
-                        referenceStyle: detail.capabilities.referenceStyle,
-                        closesViaPullRequest: detail.capabilities.closesViaPullRequest,
-                        provider: detail.provider,
-                        repository: detail.repository,
-                        number: detail.number,
-                        title: detail.title,
-                        url: detail.url,
-                        body: detail.body,
-                      };
-                    }
-                    const detail = yield* pullRequests.detail(candidateReference);
-                    return {
-                      kind: "pull-request" as const,
-                      provider: detail.provider,
-                      repository: detail.repository,
-                      number: detail.number,
-                      title: detail.title,
-                      url: detail.url,
-                      body: detail.body,
-                    };
-                  }).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new WorkItemMatchError({
-                          operation: "read-candidate",
-                          source: {
-                            kind: candidateKind,
-                            provider: candidate.provider,
-                            repository: candidate.repository,
-                            number: candidate.number,
-                          },
-                          detail: "Could not read a candidate work item.",
-                          cause,
-                        }),
-                    ),
-                  ),
-                { concurrency: 4 },
-              );
-              if (candidateDetails.length === 0) return { matches: [] };
-              const generated = yield* Effect.gen(function* () {
-                const settings = yield* serverSettings.getSettings;
-                return yield* textGeneration.findWorkItemMatches({
-                  cwd: sourceDetail.workspaceRoot,
-                  relationship: input.relationship,
-                  source,
-                  candidates: candidateDetails,
-                  modelSelection: settings.textGenerationModelSelection,
-                });
-              }).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new WorkItemMatchError({
-                      operation: "generate",
-                      source: input.source,
-                      detail: "Could not generate work item matches.",
-                      cause,
-                    }),
-                ),
-              );
-              return { matches: resolveWorkItemMatches(candidateDetails, generated.matches) };
-            }),
-            { "rpc.aggregate": "issues" },
-          ),
+          observeRpcEffect(WS_METHODS.workItemsFindMatches, workItemMatches.find(input), {
+            "rpc.aggregate": "issues",
+          }),
         [WS_METHODS.pullRequestsLabelCandidates]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsLabelCandidates,
@@ -4177,6 +3957,7 @@ export const layer = Layer.unwrap(
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               Layer.provide(WorkItemLinks.layer),
+              Layer.provide(WorkItemMatches.layer),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
