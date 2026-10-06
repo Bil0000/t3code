@@ -1,5 +1,3 @@
-import * as NodeCrypto from "node:crypto";
-
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import {
   dynamicToolTitle,
@@ -10,6 +8,7 @@ import { field, text } from "../unknownField.ts";
 import { readWorkflowAgentAnswers } from "../workflowAgentAnswers.ts";
 import {
   CLAUDE_WORKFLOW_TASK_TYPE,
+  hasClaudeWorkflowSnapshot,
   mergeClaudeWorkflowProgress,
   parseClaudeWorkflowRunHandles,
 } from "./claudeWorkflowProgress.ts";
@@ -84,6 +83,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Hex from "effect/encoding/Hex";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -117,13 +117,13 @@ import {
   boundProviderEventForLogging,
   type EventNdjsonLogger,
   shouldPersistProviderEvent,
-} from "../../provider/Layers/EventNdjsonLogger.ts";
-import * as ProviderEventLoggers from "../../provider/Layers/ProviderEventLoggers.ts";
+} from "../../provider/EventNdjsonLogger.ts";
+import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
 import {
   claudeRateLimitEventToUpdate,
   type ClaudeScopedLimitNames,
-} from "../../provider/Layers/claudeUsageLimits.ts";
-import type { ServerProviderShape } from "../../provider/Services/ServerProvider.ts";
+} from "../../provider/claudeUsageLimits.ts";
+import type { ServerProviderShape } from "../../provider/ServerProvider.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "../../provider/T3OrchestrationInstructions.ts";
 import { buildRuntimeInstructions } from "../../provider/RuntimeInstructions.ts";
@@ -1429,13 +1429,24 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   } satisfies SDKUserMessage;
 });
 
+const sha256Hex = Effect.fnUntraced(function* (crypto: Crypto.Crypto, value: string) {
+  return Hex.encode(
+    yield* crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(Effect.orDie),
+  );
+});
+
 // Stable per run attempt, so a replayed prompt offer matches its recording.
 // Claude echoes it back as user_message_uuid on the turn that answers it.
-export function claudePromptUuid(attemptId: string): NonNullable<SDKUserMessage["uuid"]> {
-  const hex = NodeCrypto.createHash("sha256").update(`t3-claude-prompt:${attemptId}`).digest("hex");
+export const claudePromptUuid = Effect.fn("claudePromptUuid")(function* (
+  crypto: Crypto.Crypto,
+  attemptId: string,
+) {
+  const hex = yield* sha256Hex(crypto, `t3-claude-prompt:${attemptId}`);
   const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}` satisfies NonNullable<
+    SDKUserMessage["uuid"]
+  >;
+});
 
 type ClaudeAssistantContentBlock = SDKAssistantMessage["message"]["content"][number];
 type ClaudeToolUseContentBlock = Extract<
@@ -3015,6 +3026,7 @@ export interface ClaudeAdapterV2Options {
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
+  readonly crypto: Crypto.Crypto;
   readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
@@ -3030,7 +3042,7 @@ export interface ClaudeAdapterV2Options {
 export function makeClaudeAdapterV2(
   adapterOptions: ClaudeAdapterV2Options,
 ): ProviderAdapter.ProviderAdapterV2Shape {
-  const { attachmentsDir, fileSystem, path, idAllocator, queryRunner } = adapterOptions;
+  const { attachmentsDir, fileSystem, path, crypto, idAllocator, queryRunner } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests ?? {
     offer: () => Effect.void,
   };
@@ -4159,7 +4171,6 @@ export function makeClaudeAdapterV2(
           readonly rootNodeId: OrchestrationV2ExecutionNode["id"];
           readonly role: "user" | "assistant";
           readonly text: string;
-          readonly ordinal: number;
           readonly now: DateTime.Utc;
         }) {
           const artifacts = makeSubagentConversationArtifacts({
@@ -4182,7 +4193,7 @@ export function makeClaudeAdapterV2(
             },
             role: input.role,
             text: input.text,
-            ordinal: input.ordinal,
+            ordinal: input.role === "user" ? 100 : 200,
             now: input.now,
           });
           yield* emitProviderEvent({
@@ -4216,6 +4227,7 @@ export function makeClaudeAdapterV2(
           if (parentThread === null) return;
           const now = yield* DateTime.now;
           const seen = yield* Ref.get(workflowMemberStates);
+          const transcriptDir = input.workflow.runHandles?.transcriptDir;
 
           for (const member of input.workflow.agents) {
             // Extends the coordinator node id; provider-thread scope lives on
@@ -4240,12 +4252,11 @@ export function makeClaudeAdapterV2(
               previous?.label !== member.label ||
               previous?.prompt !== prompt ||
               previous?.model !== model;
-            const canReadTranscript =
-              input.workflow.runHandles?.transcriptDir !== undefined &&
-              member.agentId !== undefined;
+            const agentId = member.agentId;
             const readTranscript =
               settled &&
-              canReadTranscript &&
+              transcriptDir !== undefined &&
+              agentId !== undefined &&
               (input.coordinator.task.status === "running"
                 ? (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) < 3
                 : restarted || previous?.finalTranscriptRead !== true);
@@ -4292,7 +4303,6 @@ export function makeClaudeAdapterV2(
                 rootNodeId: childRootNodeId,
                 role: "user",
                 text: prompt,
-                ordinal: 100,
                 now,
               });
             }
@@ -4303,7 +4313,6 @@ export function makeClaudeAdapterV2(
                 rootNodeId: childRootNodeId,
                 role: "assistant",
                 text: "Retry in progress.",
-                ordinal: 200,
                 now,
               });
             }
@@ -4380,27 +4389,25 @@ export function makeClaudeAdapterV2(
               // The member's own transcript, when the run left one: a missing or
               // unreadable file is expected (a run predating run-handle capture,
               // a member that never started) and falls back to the excerpt.
-              const transcriptDir = input.workflow.runHandles?.transcriptDir;
-              transcript =
-                !readTranscript || transcriptDir === undefined || member.agentId === undefined
-                  ? []
-                  : yield* readWorkflowAgentAnswers({
-                      transcriptDir,
-                      agentId: member.agentId,
-                      ...(adapterOptions.environment.CLAUDE_CONFIG_DIR === undefined
-                        ? {}
-                        : {
-                            configDir: path.resolve(
-                              session.cwd,
-                              adapterOptions.environment.CLAUDE_CONFIG_DIR,
-                            ),
-                          }),
-                    }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+              transcript = readTranscript
+                ? yield* readWorkflowAgentAnswers({
+                    transcriptDir,
+                    agentId,
+                    ...(adapterOptions.environment.CLAUDE_CONFIG_DIR === undefined
+                      ? {}
+                      : {
+                          configDir: path.resolve(
+                            session.cwd,
+                            adapterOptions.environment.CLAUDE_CONFIG_DIR,
+                          ),
+                        }),
+                  }).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
+                : [];
               const transcriptAnswer = transcript.length > 0 ? transcript.join("\n\n") : undefined;
               const answerDigest =
                 transcriptAnswer === undefined
                   ? undefined
-                  : NodeCrypto.createHash("sha256").update(transcriptAnswer).digest("hex");
+                  : yield* sha256Hex(crypto, transcriptAnswer);
               const previousDigest = transcriptAnswerDigest;
               if (answerDigest !== undefined) transcriptAnswerDigest = answerDigest;
               const answer =
@@ -4420,7 +4427,6 @@ export function makeClaudeAdapterV2(
                   rootNodeId: childRootNodeId,
                   role: "assistant",
                   text: answer,
-                  ordinal: 200,
                   now,
                 });
               }
@@ -5633,8 +5639,7 @@ export function makeClaudeAdapterV2(
          */
         const applyWorkflowProgressWithoutTurn = Effect.fnUntraced(function* (message: SDKMessage) {
           if (message.type !== "system" || message.subtype !== "task_progress") return;
-          const roster = field(message, "workflow_progress");
-          if (!Array.isArray(roster) || roster.length === 0) return;
+          if (!hasClaudeWorkflowSnapshot(message)) return;
           const taskId = message.task_id;
           const registered = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
           if (
@@ -6528,9 +6533,7 @@ export function makeClaudeAdapterV2(
               const isWorkflow =
                 claudeTaskTypeFromSdkMessage(message) === CLAUDE_WORKFLOW_TASK_TYPE;
               // `meta.name` from the workflow script; only workflow tasks carry it.
-              const workflowName = isWorkflow
-                ? text(Reflect.get(message, "workflow_name"))
-                : undefined;
+              const workflowName = isWorkflow ? text(field(message, "workflow_name")) : undefined;
 
               yield* updateClaudeSubagentNode({
                 context,
@@ -6561,15 +6564,12 @@ export function makeClaudeAdapterV2(
             );
             // A workflow frame is worth an update even with an empty description:
             // it carries the phase plan, the member roster and the run's usage.
-            const workflowProgress = field(message, "workflow_progress");
-            const carriesWorkflowTelemetry =
-              Array.isArray(workflowProgress) && workflowProgress.length > 0;
+            const carriesWorkflowTelemetry = hasClaudeWorkflowSnapshot(message);
             const isWorkflowCoordinator =
               (yield* Ref.get(sessionSubagentsByTaskId)).get(message.task_id)?.task.workflow !==
               undefined;
             if (
-              (progress.length > 0 || carriesWorkflowTelemetry) &&
-              (!isWorkflowCoordinator || carriesWorkflowTelemetry) &&
+              (carriesWorkflowTelemetry || (progress.length > 0 && !isWorkflowCoordinator)) &&
               !context.ignoredTaskIds.has(message.task_id) &&
               !isBackgroundTask
             ) {
@@ -7765,6 +7765,9 @@ export function makeClaudeAdapterV2(
             const startedAt = yield* DateTime.now;
             const nativeThreadId = yield* getNativeThreadId(turnInput.providerThread);
             const nativeTurnId = `turn:${turnInput.attemptId}`;
+            const promptUuid = isClaudeProviderContinuationTurn(turnInput)
+              ? null
+              : yield* claudePromptUuid(crypto, turnInput.attemptId);
             const providerTurnId = idAllocator.derive.providerTurn({
               driver: CLAUDE_PROVIDER,
               nativeTurnId,
@@ -7821,9 +7824,7 @@ export function makeClaudeAdapterV2(
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),
               pendingSubagentLaunchesByToolUseId: new Map(),
-              promptUuid: isClaudeProviderContinuationTurn(turnInput)
-                ? null
-                : claudePromptUuid(turnInput.attemptId),
+              promptUuid,
               promptEcho: isClaudeProviderContinuationTurn(turnInput) ? "confirmed" : "pending",
               gatedFramesBeforeEcho: 0,
               heldRootFrames: [],
@@ -7832,20 +7833,20 @@ export function makeClaudeAdapterV2(
             // produced instead of prompting it again: drain the buffered wake
             // messages into this turn and let any still-streaming messages
             // follow live. The continuation prompt text never reaches the CLI.
-            const isContinuationTurn = context.promptUuid === null;
-            const userMessage = isContinuationTurn
-              ? null
-              : yield* makeClaudeUserMessageWithAttachments({
-                  text: applyClaudePromptEffortPrefix(
-                    turnInput.message.text,
-                    compileClaudeModelSelection(turnInput.modelSelection).promptEffort,
-                  ),
-                  attachments: turnInput.message.attachments,
-                  attachmentsDir,
-                  fileSystem,
-                  skillNames: yield* userInvocableSkillNames(turnInput.runtimePolicy.cwd),
-                  uuid: claudePromptUuid(turnInput.attemptId),
-                });
+            const userMessage =
+              promptUuid === null
+                ? null
+                : yield* makeClaudeUserMessageWithAttachments({
+                    text: applyClaudePromptEffortPrefix(
+                      turnInput.message.text,
+                      compileClaudeModelSelection(turnInput.modelSelection).promptEffort,
+                    ),
+                    attachments: turnInput.message.attachments,
+                    attachmentsDir,
+                    fileSystem,
+                    skillNames: yield* userInvocableSkillNames(turnInput.runtimePolicy.cwd),
+                    uuid: promptUuid,
+                  });
             const querySession = yield* openQuery(turnInput, nativeThreadId);
             yield* Ref.set(activeTurn, context);
             yield* emitProviderEvent({
@@ -8429,6 +8430,7 @@ export function makeClaudeAdapterV2(
 
 export type ClaudeAdapterV2DriverEnv =
   | ClaudeAgentSdkQueryRunner
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path
@@ -8449,6 +8451,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
     const baseEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment);
     const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
     const path = yield* Path.Path;
+    const crypto = yield* Crypto.Crypto;
     const binaryPath = yield* resolveClaudeSdkExecutablePath(
       expandHomePath(config.binaryPath),
       claudeEnvironment,
@@ -8460,6 +8463,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       attachmentsDir: serverConfig.attachmentsDir,
       fileSystem,
       path,
+      crypto,
       idAllocator,
       queryRunner,
       continuationRequests,
@@ -8493,6 +8497,7 @@ export const ClaudeAdapterV2Driver: ProviderAdapterDriver<
 const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
   const hostEnvironment = yield* HostProcessEnvironment;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const queryRunner = yield* ClaudeAgentSdkQueryRunner;
@@ -8506,6 +8511,7 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
     attachmentsDir: serverConfig.attachmentsDir,
     fileSystem,
     path,
+    crypto,
     idAllocator,
     queryRunner,
     continuationRequests,
@@ -8516,6 +8522,7 @@ const layer: Layer.Layer<
   ProviderAdapter.ProviderAdapterV2,
   never,
   | ClaudeAgentSdkQueryRunner
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path

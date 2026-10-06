@@ -6,7 +6,7 @@ import { SubagentTooltipContent } from "./SubagentTooltipContent";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
-  deriveAgentPanelModel,
+  deriveWorkflowGroups,
   projectedSubagentsToRuntime,
   type RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -216,6 +216,7 @@ export function ThreadRelationshipsPanel(props: {
             ...byId.get(subagent.id)!,
             driver: subagent.driver,
             providerInstanceId: subagent.providerInstanceId,
+            origin: subagent.origin,
           },
         ]),
     );
@@ -224,12 +225,7 @@ export function ThreadRelationshipsPanel(props: {
   // is what lets that row unfold into the phases and members it ran.
   const workflowGroupsById = useMemo(
     () =>
-      new Map(
-        deriveAgentPanelModel({
-          agents: [],
-          v2Projection: runtimeSubagents,
-        }).workflows.map((group) => [group.workflow.id, group]),
-      ),
+      new Map(deriveWorkflowGroups(runtimeSubagents).map((group) => [group.workflow.id, group])),
     [runtimeSubagents],
   );
   const threadShells = useThreadShells();
@@ -409,6 +405,8 @@ export function ThreadRelationshipsPanel(props: {
                 <SubagentTooltipContent
                   title={threadTitle}
                   model={agent.model}
+                  providerInstanceId={agent.providerInstanceId}
+                  origin={agent.origin}
                   provider={provider}
                   providers={providers}
                   driver={providerDriver}
@@ -481,12 +479,14 @@ export function ThreadRelationshipsPanel(props: {
                   <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
                 </Tooltip>
               );
-              if (workflowGroup) {
+              if (workflowGroup && agent) {
                 return (
                   <ThreadLineageWorkflowRow
                     key={threadId}
                     group={workflowGroup}
+                    providerInstanceId={agent.providerInstanceId}
                     provider={provider}
+                    providers={providers}
                     driver={providerDriver}
                     onOpenThread={(memberThreadId) => openThread(memberThreadId as ThreadId)}
                     header={relationshipLink}

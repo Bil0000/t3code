@@ -20,6 +20,13 @@ import { field, text } from "../unknownField.ts";
 
 export const CLAUDE_WORKFLOW_TASK_TYPE = "local_workflow";
 
+export function hasClaudeWorkflowSnapshot(
+  message: unknown,
+): message is { readonly workflow_progress: ReadonlyArray<unknown> } {
+  const entries = field(message, "workflow_progress");
+  return Array.isArray(entries) && entries.length > 0;
+}
+
 const AGENT_STATES: Record<string, OrchestrationV2WorkflowAgent["state"] | undefined> = {
   queued: "queued",
   start: "running",
@@ -89,11 +96,10 @@ function parseClaudeWorkflowProgress(message: unknown): {
   readonly phases: ReadonlyArray<OrchestrationV2WorkflowPhase>;
   readonly agents: ReadonlyArray<OrchestrationV2WorkflowAgent>;
 } | null {
-  const entries = field(message, "workflow_progress");
-  if (!Array.isArray(entries) || entries.length === 0) return null;
+  if (!hasClaudeWorkflowSnapshot(message)) return null;
   const phases: OrchestrationV2WorkflowPhase[] = [];
   const agents: OrchestrationV2WorkflowAgent[] = [];
-  for (const entry of entries) {
+  for (const entry of message.workflow_progress) {
     const type = text(field(entry, "type"));
     if (type === "workflow_phase") {
       const phase = parsePhase(entry);

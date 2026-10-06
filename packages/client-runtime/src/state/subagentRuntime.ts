@@ -2,6 +2,7 @@
  * Subagent status helpers shared by web and mobile, and the runtime shape the
  * web agent rows render.
  */
+import { groupBy } from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import type { OrchestrationV2Subagent, OrchestrationV2SubagentWorkflow } from "@t3tools/contracts";
 
@@ -106,36 +107,11 @@ export interface AgentPanelWorkflowGroup {
     readonly members: ReadonlyArray<RuntimeSubagent>;
     /** done = every member settled (success or error); running = any active. */
     readonly state: "pending" | "running" | "done";
-    readonly activeCount: number;
     readonly settledCount: number;
   }>;
   /** Members with no resolvable phase (orphans render under the workflow). */
   readonly unphasedMembers: ReadonlyArray<RuntimeSubagent>;
 }
-
-export interface AgentPanelModel {
-  readonly workflows: ReadonlyArray<AgentPanelWorkflowGroup>;
-  readonly directAgents: ReadonlyArray<RuntimeSubagent>;
-  readonly runningCount: number;
-  readonly waitingCount: number;
-  readonly idleCount: number;
-  readonly settledCount: number;
-  readonly totalTokens: number;
-  readonly hasAgents: boolean;
-  readonly liveCount: number;
-}
-
-const EMPTY_PANEL_MODEL: AgentPanelModel = {
-  workflows: [],
-  directAgents: [],
-  runningCount: 0,
-  waitingCount: 0,
-  idleCount: 0,
-  settledCount: 0,
-  totalTokens: 0,
-  hasAgents: false,
-  liveCount: 0,
-};
 
 function workflowUsage(source: {
   readonly totalTokens?: number | undefined;
@@ -226,7 +202,6 @@ function workflowMembersToRuntime(input: {
 
 /**
  * Projects subagents and workflow members into the runtime roster.
-
  */
 export function projectedSubagentsToRuntime(
   subagents: ReadonlyArray<{
@@ -298,48 +273,19 @@ export function projectedSubagentsToRuntime(
   });
 }
 
-/**
- * Source-neutral view model. When the orchestration-v2 subagent projection
- * exists for the thread, pass it as v2Projection and it wins outright — the
- * two sources are never merged (duplicate-agents failure mode). Until v2
- * lands, callers pass null and the native fold output is used.
- */
-export function deriveAgentPanelModel({
-  agents,
-  v2Projection,
-}: {
-  readonly agents: ReadonlyArray<RuntimeSubagent>;
-  readonly v2Projection?: ReadonlyArray<RuntimeSubagent> | null;
-}): AgentPanelModel {
-  const source = v2Projection ?? agents;
-  if (source.length === 0) {
-    return EMPTY_PANEL_MODEL;
-  }
-
-  const workflows = source
+export function deriveWorkflowGroups(
+  agents: ReadonlyArray<RuntimeSubagent>,
+): ReadonlyArray<AgentPanelWorkflowGroup> {
+  const workflows = agents
     .filter((agent) => agent.kind === "workflow")
-    .slice()
     .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
-  const workflowIds = new Set(workflows.map((workflow) => workflow.id));
-  const members = new Map<string, RuntimeSubagent[]>();
-  const direct: RuntimeSubagent[] = [];
+  const members = groupBy(
+    agents.filter((agent) => agent.kind !== "workflow" && agent.parentAgentId !== null),
+    (agent) => agent.parentAgentId!,
+  );
 
-  for (const agent of source) {
-    if (agent.kind === "workflow") {
-      continue;
-    }
-    if (agent.parentAgentId !== null && workflowIds.has(agent.parentAgentId)) {
-      const list = members.get(agent.parentAgentId) ?? [];
-      list.push(agent);
-      members.set(agent.parentAgentId, list);
-    } else {
-      // Orphaned members (coordinator aged out) fall back to the direct list.
-      direct.push(agent);
-    }
-  }
-
-  const workflowGroups: AgentPanelWorkflowGroup[] = workflows.map((workflow) => {
-    const workflowMembers = members.get(workflow.id) ?? [];
+  return workflows.map((workflow) => {
+    const workflowMembers = Object.hasOwn(members, workflow.id) ? members[workflow.id]! : [];
     // Union, not either/or: the declared plan lags the members, because the
     // provider only admits a phase once something in it starts. Members seed
     // the map; the declared titles then overwrite whatever they guessed.
@@ -356,24 +302,22 @@ export function deriveAgentPanelModel({
       .map(([index, title]) => ({ index, title }))
       .sort((a, b) => a.index - b.index);
 
-    const knownPhaseIndices = new Set(knownPhases.map((phase) => phase.index));
     const phases = knownPhases.map((phase) => {
       const phaseMembers = workflowMembers
         .filter((member) => member.phaseIndex === phase.index)
-        .slice()
         .sort((a, b) => (a.agentIndex ?? 0) - (b.agentIndex ?? 0));
-      const activeCount = phaseMembers.filter(
+      const hasActiveMember = phaseMembers.some(
         // Idle members count as active for phase-liveness: a resumable Codex
         // member has not finished the phase.
         (member) => isActiveSubagentStatus(member.status) || member.status === "idle",
-      ).length;
+      );
       const settledCount = phaseMembers.filter((member) =>
         isTerminalSubagentStatus(member.status),
       ).length;
       const state: "pending" | "running" | "done" =
         phaseMembers.length === 0
           ? "pending"
-          : activeCount > 0
+          : hasActiveMember
             ? "running"
             : settledCount === phaseMembers.length
               ? "done"
@@ -383,52 +327,14 @@ export function deriveAgentPanelModel({
         title: phase.title,
         members: phaseMembers,
         state,
-        activeCount,
         settledCount,
       };
     });
 
-    // Unknown phase indices land here too — a member must never vanish just
-    // because its phase row was lost (review finding).
     const unphasedMembers = workflowMembers
-      .filter((member) => member.phaseIndex === null || !knownPhaseIndices.has(member.phaseIndex))
-      .slice()
+      .filter((member) => member.phaseIndex === null)
       .sort((a, b) => (a.agentIndex ?? 0) - (b.agentIndex ?? 0));
 
     return { workflow, phases, unphasedMembers };
   });
-
-  let runningCount = 0;
-  let waitingCount = 0;
-  let idleCount = 0;
-  let settledCount = 0;
-  let totalTokens = 0;
-  for (const agent of source) {
-    // A workflow coordinator with members is a container for those members, not
-    // work of its own: it reports running for the whole run and aggregates their
-    // usage upstream in some providers. Counting it would report one more agent
-    // working than there are, and double count tokens.
-    if (agent.kind === "workflow" && (members.get(agent.id) ?? []).length > 0) continue;
-    if (agent.status === "running" || agent.status === "pending") runningCount += 1;
-    else if (agent.status === "waiting") waitingCount += 1;
-    else if (agent.status === "idle") idleCount += 1;
-    else settledCount += 1;
-    totalTokens += agent.usage?.totalTokens ?? 0;
-  }
-
-  return {
-    workflows: workflowGroups,
-    // Updates and the >100-agent retention ranking must never reshuffle rows
-    // that remain visible.
-    directAgents: direct
-      .slice()
-      .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id)),
-    runningCount,
-    waitingCount,
-    idleCount,
-    settledCount,
-    totalTokens,
-    hasAgents: true,
-    liveCount: runningCount + waitingCount,
-  };
 }

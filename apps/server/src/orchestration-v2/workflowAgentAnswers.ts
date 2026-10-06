@@ -78,9 +78,10 @@ export const readWorkflowAgentAnswers = Effect.fn("orchestration.readWorkflowAge
     readonly configDir?: string;
   }) {
     if (!AGENT_ID_PATTERN.test(input.agentId)) {
-      return yield* Effect.fail(
-        new OrchestrationWorkflowFileError({ reason: "invalid-path", path: input.agentId }),
-      );
+      return yield* new OrchestrationWorkflowFileError({
+        reason: "invalid-path",
+        path: input.agentId,
+      });
     }
     const file = yield* readContainedWorkflowFile({
       path: NodePath.join(input.transcriptDir, `agent-${input.agentId}.jsonl`),

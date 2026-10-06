@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { OrchestrationV2Subagent, OrchestrationV2SubagentWorkflow } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { deriveAgentPanelModel, projectedSubagentsToRuntime } from "./subagentRuntime.ts";
+import { deriveWorkflowGroups, projectedSubagentsToRuntime } from "./subagentRuntime.ts";
 
 const at = (iso: string) => DateTime.makeUnsafe(iso);
 
@@ -34,8 +34,8 @@ const member = (
   ...overrides,
 });
 
-const panelOf = (subagents: ReadonlyArray<ProjectedSubagent>) =>
-  deriveAgentPanelModel({ agents: [], v2Projection: projectedSubagentsToRuntime(subagents) });
+const groupsOf = (subagents: ReadonlyArray<ProjectedSubagent>) =>
+  deriveWorkflowGroups(projectedSubagentsToRuntime(subagents));
 
 describe("projectedSubagentsToRuntime workflow expansion", () => {
   it("leaves a plain subagent flat", () => {
@@ -105,7 +105,7 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
   it.each(["completed", "cancelled", "failed"] as const)(
     "settles unfinished members when the coordinator is %s",
     (status) => {
-      const model = panelOf([
+      const groups = groupsOf([
         subagent({
           status,
           completedAt: at("2026-08-01T10:00:09.000Z"),
@@ -119,10 +119,9 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
           },
         }),
       ]);
-      const members = model.workflows[0]?.phases.flatMap((phase) => phase.members);
+      const members = groups[0]?.phases.flatMap((phase) => phase.members);
       expect(members?.map((agent) => agent.status)).toEqual([status, status, "completed"]);
       expect(members?.[0]?.completedAt).toBe("2026-08-01T10:00:09.000Z");
-      expect(model.runningCount + model.waitingCount).toBe(0);
     },
   );
 
@@ -135,9 +134,9 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
   });
 });
 
-describe("deriveAgentPanelModel over a dynamic workflow", () => {
+describe("deriveWorkflowGroups over a dynamic workflow", () => {
   it("groups members under their phases and counts the run", () => {
-    const model = panelOf([
+    const groups = groupsOf([
       subagent({
         workflow: {
           name: "probe-wf",
@@ -160,21 +159,18 @@ describe("deriveAgentPanelModel over a dynamic workflow", () => {
         },
       }),
     ]);
-    const group = model.workflows[0];
+    const group = groups[0];
     expect(group?.phases.map((phase) => [phase.title, phase.state])).toEqual([
       ["Alpha", "done"],
       ["Beta", "running"],
     ]);
-    expect(group?.phases.map((phase) => [phase.activeCount, phase.settledCount])).toEqual([
-      [0, 2],
-      [2, 0],
-    ]);
+    expect(group?.phases.map((phase) => phase.settledCount)).toEqual([2, 0]);
     expect(group?.phases.flatMap((phase) => phase.members)).toHaveLength(4);
     expect(group?.unphasedMembers).toEqual([]);
   });
 
   it("shows a phase the script only reached at runtime", () => {
-    const model = panelOf([
+    const groups = groupsOf([
       subagent({
         workflow: {
           // The declared plan has not caught up with the member's phase yet.
@@ -186,44 +182,52 @@ describe("deriveAgentPanelModel over a dynamic workflow", () => {
         },
       }),
     ]);
-    const group = model.workflows[0];
+    const group = groups[0];
     expect(group?.phases.map((phase) => phase.title)).toEqual(["Alpha", "Gamma"]);
     expect(group?.unphasedMembers).toEqual([]);
   });
 
   it.each([false, true])("keeps a reported phase title, missing title first=%s", (missingFirst) => {
     const agents = [member({ phaseTitle: "Review" }), member({ index: 2, phaseTitle: undefined })];
-    const model = panelOf([
+    const groups = groupsOf([
       subagent({ workflow: { phases: [], agents: missingFirst ? agents.toReversed() : agents } }),
     ]);
-    expect(model.workflows[0]?.phases[0]?.title).toBe("Review");
+    expect(groups[0]?.phases[0]?.title).toBe("Review");
   });
 
   it("keeps a settled run's members reachable under the coordinator", () => {
-    const model = panelOf([
+    const groups = groupsOf([
       subagent({
         status: "completed",
         completedAt: at("2026-08-01T10:00:09.000Z"),
         workflow: { phases: [], agents: [member({ state: "completed" })] },
       }),
     ]);
-    const group = model.workflows[0];
+    const group = groups[0];
     expect(group?.workflow.status).toBe("completed");
     expect(group?.phases.flatMap((phase) => phase.members).map((agent) => agent.title)).toEqual([
       "alpha:one",
     ]);
   });
 
-  it("does not count a coordinator's aggregate tokens on top of its members", () => {
-    const model = panelOf([
+  it("keeps unphased members with their workflow and excludes unrelated agents", () => {
+    const runtime = projectedSubagentsToRuntime([
+      subagent({ id: "ordinary" }),
       subagent({
+        id: "__proto__",
         workflow: {
           phases: [],
-          agents: [member({ state: "completed", totalTokens: 400 })],
-          totalTokens: 400,
+          agents: [member({ phaseIndex: undefined, phaseTitle: undefined })],
         },
       }),
+      subagent({ id: "constructor", workflow: { phases: [], agents: [] } }),
+      subagent({ id: "orphan", workflow: { phases: [], agents: [member()] } }),
     ]);
-    expect(model.totalTokens).toBe(400);
+    const groups = deriveWorkflowGroups(runtime.filter((agent) => agent.id !== "orphan"));
+    expect(groups.map((group) => group.workflow.id)).toEqual(["__proto__", "constructor"]);
+    expect(groups[0]?.phases).toEqual([]);
+    expect(groups[0]?.unphasedMembers.map((agent) => agent.title)).toEqual(["alpha:one"]);
+    expect(groups[1]?.phases).toEqual([]);
+    expect(groups[1]?.unphasedMembers).toEqual([]);
   });
 });

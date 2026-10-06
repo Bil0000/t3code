@@ -33,13 +33,11 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
     readonly tail?: boolean;
     readonly configDir?: string;
   }) {
-    const { byteCap } = input;
-    const requested = input.path;
-
-    if (!NodePath.isAbsolute(requested) || NodePath.extname(requested) !== input.extension) {
-      return yield* Effect.fail(
-        new OrchestrationWorkflowFileError({ reason: "invalid-path", path: requested }),
-      );
+    if (!NodePath.isAbsolute(input.path) || NodePath.extname(input.path) !== input.extension) {
+      return yield* new OrchestrationWorkflowFileError({
+        reason: "invalid-path",
+        path: input.path,
+      });
     }
 
     const root = yield* Effect.tryPromise({
@@ -47,7 +45,7 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
       catch: (cause) =>
         new OrchestrationWorkflowFileError({
           reason: "root-unavailable",
-          path: requested,
+          path: input.path,
           cause,
         }),
     });
@@ -55,20 +53,19 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
     // Realpath the FILE itself (not just its directory): a symlink named
     // like a transcript inside a contained directory must not escape.
     const resolved = yield* Effect.tryPromise({
-      try: () => NodeFSP.realpath(requested),
+      try: () => NodeFSP.realpath(input.path),
       catch: (cause) =>
-        new OrchestrationWorkflowFileError({ reason: "not-found", path: requested, cause }),
+        new OrchestrationWorkflowFileError({ reason: "not-found", path: input.path, cause }),
     });
 
     if (resolved !== root && !resolved.startsWith(`${root}${NodePath.sep}`)) {
-      return yield* Effect.fail(
-        new OrchestrationWorkflowFileError({ reason: "outside-root", path: resolved }),
-      );
+      return yield* new OrchestrationWorkflowFileError({ reason: "outside-root", path: resolved });
     }
     if (NodePath.extname(resolved) !== input.extension) {
-      return yield* Effect.fail(
-        new OrchestrationWorkflowFileError({ reason: "wrong-extension", path: resolved }),
-      );
+      return yield* new OrchestrationWorkflowFileError({
+        reason: "wrong-extension",
+        path: resolved,
+      });
     }
 
     // fd inode vs path inode catches a swapped leaf, not a swapped intermediate
@@ -90,7 +87,7 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
           if (stat.ino !== pathStat.ino || stat.dev !== pathStat.dev) {
             return { failure: "changed-during-read" as const };
           }
-          const buffer = Buffer.alloc(Math.min(stat.size, byteCap + (input.tail ? 1 : 0)));
+          const buffer = Buffer.alloc(Math.min(stat.size, input.byteCap + (input.tail ? 1 : 0)));
           const truncated = stat.size > buffer.length;
           const offset = input.tail ? stat.size - buffer.length : 0;
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);

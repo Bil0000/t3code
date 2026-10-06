@@ -2,7 +2,7 @@ import type {
   AgentPanelWorkflowGroup,
   RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
+import type { ProviderDriverKind, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
 import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -82,13 +82,17 @@ function branchClass(active: boolean) {
 /** Members run under the coordinator's provider, so they share its glyph. */
 function WorkflowMemberRow({
   member,
+  providerInstanceId,
   provider,
+  providers,
   driver,
   onOpen,
   branchActive,
 }: {
   member: RuntimeSubagent;
+  providerInstanceId: ProviderInstanceId;
   provider: ServerProvider | undefined;
+  providers: ReadonlyArray<ServerProvider> | undefined;
   driver: ProviderDriverKind | undefined;
   onOpen: (threadId: string) => void;
   branchActive: boolean;
@@ -130,7 +134,10 @@ function WorkflowMemberRow({
           <SubagentTooltipContent
             title={member.title}
             model={member.model}
+            providerInstanceId={providerInstanceId}
+            origin="provider_native"
             provider={provider}
+            providers={providers}
             driver={driver}
             elapsed={<AgentElapsed agent={member} />}
             status={member.status}
@@ -146,13 +153,17 @@ function WorkflowMemberRow({
 export function ThreadLineageWorkflowRow({
   group,
   header,
+  providerInstanceId,
   provider,
+  providers,
   driver,
   onOpenThread,
 }: {
   readonly group: AgentPanelWorkflowGroup;
   readonly header: ReactNode;
+  readonly providerInstanceId: ProviderInstanceId;
   readonly provider: ServerProvider | undefined;
+  readonly providers: ReadonlyArray<ServerProvider> | undefined;
   readonly driver: ProviderDriverKind | undefined;
   readonly onOpenThread: (threadId: string) => void;
 }) {
@@ -229,7 +240,9 @@ export function ThreadLineageWorkflowRow({
                       <WorkflowMemberRow
                         key={member.id}
                         member={member}
+                        providerInstanceId={providerInstanceId}
                         provider={provider}
+                        providers={providers}
                         driver={driver}
                         onOpen={onOpenThread}
                         branchActive={running}
@@ -244,7 +257,9 @@ export function ThreadLineageWorkflowRow({
             <WorkflowMemberRow
               key={member.id}
               member={member}
+              providerInstanceId={providerInstanceId}
               provider={provider}
+              providers={providers}
               driver={driver}
               onOpen={onOpenThread}
               branchActive={false}
