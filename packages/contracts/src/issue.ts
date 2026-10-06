@@ -10,7 +10,13 @@ import {
   ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ChangeRequestState } from "./sourceControl.ts";
+import {
+  ChangeRequestState,
+  SourceControlActor,
+  SourceControlLabel,
+  SourceControlListCursors,
+  SourceControlListProjectError,
+} from "./sourceControl.ts";
 
 /** Stable adapter id carried through the neutral T3 issue format. */
 export const IssueProviderKind = TrimmedNonEmptyString;
@@ -39,17 +45,10 @@ export function issueRepositoryKey(
   return JSON.stringify([provider, host.toLowerCase(), repository.toLowerCase()]);
 }
 
-export const IssueActor = Schema.Struct({
-  login: TrimmedNonEmptyString,
-  name: Schema.NullOr(Schema.String),
-  avatarUrl: Schema.NullOr(Schema.String),
-});
+export const IssueActor = SourceControlActor;
 export type IssueActor = typeof IssueActor.Type;
 
-export const IssueLabel = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  color: Schema.NullOr(Schema.String),
-});
+export const IssueLabel = SourceControlLabel;
 export type IssueLabel = typeof IssueLabel.Type;
 
 export const IssueInvolvement = Schema.Literals(["all", "assigned", "authored", "mentioned"]);
@@ -282,10 +281,7 @@ export const IssueListEntry = Schema.Struct({
 });
 export type IssueListEntry = typeof IssueListEntry.Type;
 
-export const IssueListCursors = Schema.Record(
-  TrimmedNonEmptyString,
-  TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
-);
+export const IssueListCursors = SourceControlListCursors;
 export type IssueListCursors = typeof IssueListCursors.Type;
 
 export const IssueListInput = Schema.Struct({
@@ -334,11 +330,7 @@ export const IssueProviderSummary = Schema.Struct({
 });
 export type IssueProviderSummary = typeof IssueProviderSummary.Type;
 
-export const IssueListProjectError = Schema.Struct({
-  projectId: ProjectId,
-  projectTitle: TrimmedNonEmptyString,
-  message: TrimmedNonEmptyString,
-});
+export const IssueListProjectError = SourceControlListProjectError;
 export type IssueListProjectError = typeof IssueListProjectError.Type;
 
 export const IssueListResult = Schema.Struct({
