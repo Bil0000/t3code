@@ -54,6 +54,7 @@ describe("closedViewStore", () => {
       snapshot: { ...snapshot, profileId: "default", navStatus: null },
     },
     { id: "bad", kind: "panel-tab", surface: { kind: "diff", id: "diff" } },
+    { id: "bad", kind: "panel-tab", threadRef: refA },
     { id: "bad", kind: "panel-tab", threadRef: {}, surface: { kind: "diff", id: "diff" } },
     { id: "bad", kind: "panel-tab", threadRef: refA, surface: {} },
     { id: "bad", kind: "panel-tab", threadRef: refA, surface: { kind: "file", id: "file:x" } },
