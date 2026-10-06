@@ -185,6 +185,69 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   expect(state.navigate).toHaveBeenCalledTimes(7);
 });
 
+it("groups and counts a workflow by its run status instead of its coordinator chat", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const coordinator = {
+    id: "workflow",
+    driver: "claudeAgent",
+    providerInstanceId: "claudeAgent",
+    childThreadId: "workflow-chat",
+    title: "Checkout review",
+    status: "running",
+    startedAt: null,
+    completedAt: null,
+    updatedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+    workflow: {
+      name: "Checkout review",
+      phases: [{ index: 0, title: "Inspect" }],
+      agents: [{ index: 0, label: "Checker", state: "running", phaseIndex: 0 }],
+    },
+  };
+  const projection = {
+    thread: { id: "parent", lineage: { relationshipToParent: null } },
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [coordinator],
+  };
+  const child = {
+    id: "workflow-chat",
+    title: "Coordinator chat",
+    lineage: { parentThreadId: "parent", relationshipToParent: "subagent" },
+    status: "completed",
+    activityRunStatus: null,
+  };
+  state.projection = projection;
+  state.shells = [{ environmentId: "test", source: child }];
+  const panel = (
+    <ThreadRelationshipsPanel
+      environmentId={EnvironmentId.make("test")}
+      threadId={ThreadId.make("parent")}
+    />
+  );
+  await act(async () => {
+    renderer = create(panel);
+  });
+  expect(renderer.root.findByType("h3").children).toEqual(["Lineage · 1 running"]);
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Expand Checkout review" }).props.onClick(),
+  );
+  expect(renderer.root.findByProps({ "aria-label": "Open Checker chat" })).toBeDefined();
+  state.shells = [{ environmentId: "test", source: { ...child, activityRunStatus: "waiting" } }];
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(renderer.root.findByType("h3").children).toEqual(["Lineage · 1 running"]);
+  state.projection = { ...projection, subagents: [{ ...coordinator, status: "completed" }] };
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(renderer.root.findByType("h3").children).toEqual(["Lineage"]);
+  expect(JSON.stringify(renderer.toJSON())).toContain("Previous agents");
+  expect(renderer.root.findAllByProps({ "aria-label": "Open Checker chat" })).toHaveLength(0);
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
+  );
+  expect(renderer.root.findByProps({ "aria-label": "Expand Checkout review" })).toBeDefined();
+});
+
 it("shows the matching child agent details and refreshes them when the agent settles", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const agent = {

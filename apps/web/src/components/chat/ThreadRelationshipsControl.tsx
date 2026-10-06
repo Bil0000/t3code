@@ -258,8 +258,17 @@ export function ThreadRelationshipsPanel(props: {
         rows: immediateThreadRelationships(graph, props.threadId),
         currentThreadId: props.threadId,
         mergeTargetThreadId,
+      }).map((row) => {
+        const agent =
+          row.edge.kind === "subagent" && !isParentThreadRelationship(row.edge, props.threadId)
+            ? subagentsByThreadId.get(row.threadId)
+            : undefined;
+        const workflowGroup = agent === undefined ? undefined : workflowGroupsById.get(agent.id);
+        return workflowGroup === undefined
+          ? row
+          : { ...row, edge: { ...row.edge, status: workflowGroup.workflow.status } };
       }),
-    [graph, mergeTargetThreadId, props.threadId],
+    [graph, mergeTargetThreadId, props.threadId, subagentsByThreadId, workflowGroupsById],
   );
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
@@ -368,7 +377,7 @@ export function ThreadRelationshipsPanel(props: {
               const isSubagent = edge.kind === "subagent";
               const isMergeTarget = threadId === mergeTargetThreadId;
               const isParent = isParentThreadRelationship(edge, props.threadId);
-              const status = threadRelationshipRowStatus(graph, { threadId, edge });
+              const rowStatus = threadRelationshipRowStatus(graph, { threadId, edge });
               const RelationshipIcon = isParent
                 ? CornerLeftUpIcon
                 : isSubagent
@@ -422,8 +431,6 @@ export function ThreadRelationshipsPanel(props: {
               ) : (
                 relationshipHint
               );
-              // A workflow reports its own run, which outlives the coordinator thread's turns.
-              const rowStatus = workflowGroup?.workflow.status ?? status;
               const relationshipContent = (
                 <>
                   <ThreadRelationshipIcon
@@ -505,7 +512,7 @@ export function ThreadRelationshipsPanel(props: {
                               size="sm"
                               variant="ghost"
                               part="link-primary"
-                              aria-label={`${threadTitle} ${threadRelationshipStatusLabel(status)}`}
+                              aria-label={`${threadTitle} ${threadRelationshipStatusLabel(rowStatus)}`}
                               disabled={node?.missing === true}
                               onClick={() => openThread(threadId)}
                             />
@@ -551,7 +558,7 @@ export function ThreadRelationshipsPanel(props: {
                         </TooltipPopup>
                       </Tooltip>
                       <span className="shrink-0 border border-transparent ps-1 pe-2.5 text-2xs font-medium text-muted-foreground">
-                        {threadRelationshipStatusLabel(status)}
+                        {threadRelationshipStatusLabel(rowStatus)}
                       </span>
                     </div>
                   ) : (
