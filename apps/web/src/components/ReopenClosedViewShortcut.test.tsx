@@ -218,6 +218,37 @@ describe("root reopen shortcut", () => {
     expect(useClosedViewStore.getState().entries).toEqual([]);
   });
 
+  it("does not create a second browser when navigation fails after restoring it", async () => {
+    const store = useClosedViewStore.getState();
+    const older = store.remember({
+      kind: "panel-tab",
+      threadRef: ref,
+      surface: { kind: "diff", id: "diff" },
+    });
+    store.remember({ kind: "browser", threadRef: ref, snapshot });
+    state.openPreview.mockResolvedValue(AsyncResult.success({ tabId: "new-tab" }));
+    state.navigate.mockRejectedValueOnce(new Error("navigation failed"));
+    await render();
+    await act(() => {
+      press();
+    });
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).activeSurfaceId,
+    ).toBe("browser:new-tab");
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Could not reopen view" }),
+    );
+    expect(useClosedViewStore.getState().entries.map((entry) => entry.id)).toEqual([older]);
+    await act(() => {
+      menuAction?.("view.reopenClosed");
+    });
+    expect(state.openPreview).toHaveBeenCalledOnce();
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).activeSurfaceId,
+    ).toBe("diff");
+    expect(useClosedViewStore.getState().entries).toEqual([]);
+  });
+
   it.each(["files", "file", "browser"] as const)(
     "keeps a failed %s restore retryable without blocking older history",
     async (kind) => {

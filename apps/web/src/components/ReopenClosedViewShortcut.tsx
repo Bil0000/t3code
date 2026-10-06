@@ -108,6 +108,7 @@ export function ReopenClosedViewShortcut() {
       useClosedViewStore.getState().defer(restore.id);
       return;
     }
+    useClosedViewStore.getState().remove(restore.id);
     if (globalPullRequests) {
       const selected = selectSelectedRightPanelSurface(
         useRightPanelStore.getState().byThreadKey,
@@ -123,7 +124,6 @@ export function ReopenClosedViewShortcut() {
         await navigate({ to: "/draft/$draftId", params: buildDraftThreadRouteParams(draftId) });
       else await navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
     }
-    useClosedViewStore.getState().remove(restore.id);
   });
 
   const enqueueReopen = useEffectEvent(() => {
