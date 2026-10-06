@@ -1151,6 +1151,7 @@ describe("getChangeRequest linked issues", () => {
           [12, true],
           [34, false],
         ]);
+        expect(detail.linkedIssuesTruncated).toBe(false);
         // The one GitHub already reported is not asked about again.
         expect(listCitedIssues.mock.calls[0]?.[0].references).toEqual([
           { repository: "acme/web", number: 34 },
@@ -1173,6 +1174,7 @@ describe("getChangeRequest linked issues", () => {
     return read.pipe(
       Effect.map((detail) => {
         expect(listCitedIssues).not.toHaveBeenCalled();
+        expect(detail.linkedIssuesTruncated).toBe(false);
         // The host's own claim survives: only it can say what merging closes.
         expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
           [12, true],
@@ -1222,24 +1224,29 @@ describe("getChangeRequest linked issues", () => {
     ),
   );
 
-  it.effect("keeps the host's own links when the lookup fails", () =>
-    read.pipe(
-      Effect.map((detail) => expect(detail.linkedIssues).toEqual([issue(12, true)])),
-      Effect.provide(
-        layerWith({
-          body: "Part of #34.",
-          linked: [issue(12, true)],
-          listCitedIssues: () =>
-            Effect.fail(
-              new GitHubPullRequestCli.GitHubPullRequestReadError({
-                command: "gh",
-                cwd: "/w",
-                operation: "listCitedIssues",
-                cause: new Error("GraphQL: Could not resolve to an issue"),
-              }),
-            ),
+  it.effect.each([[], [issue(12, true)]])(
+    "keeps host links and reports failed cited lookups as incomplete (%j)",
+    (linked) =>
+      read.pipe(
+        Effect.map((detail) => {
+          expect(detail.linkedIssues).toEqual(linked);
+          expect(detail.linkedIssuesTruncated).toBe(true);
         }),
+        Effect.provide(
+          layerWith({
+            body: "Part of #34.",
+            linked,
+            listCitedIssues: () =>
+              Effect.fail(
+                new GitHubPullRequestCli.GitHubPullRequestReadError({
+                  command: "gh",
+                  cwd: "/w",
+                  operation: "listCitedIssues",
+                  cause: new Error("GraphQL: Could not resolve to an issue"),
+                }),
+              ),
+          }),
+        ),
       ),
-    ),
   );
 });

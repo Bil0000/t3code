@@ -897,7 +897,11 @@ export function PullRequestSummaryTab({
         {detail.linkedIssues === undefined ? (
           <p className="text-xs text-muted-foreground">This host does not report issue links.</p>
         ) : detail.linkedIssues.length === 0 ? (
-          <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
+          <p className="text-xs text-muted-foreground">
+            {detail.linkedIssuesTruncated === true
+              ? "Linked issues could not be read from the host."
+              : "This change mentions no issue."}
+          </p>
         ) : (
           <div className="space-y-0.5">
             {detail.linkedIssues.map((link) => (
@@ -925,7 +929,7 @@ export function PullRequestSummaryTab({
             ))}
             {detail.linkedIssuesTruncated === true ? (
               <p className="px-2 pt-1 text-xs text-muted-foreground">
-                More linked issues exist on the host.
+                The linked issue list may be incomplete.
               </p>
             ) : null}
           </div>

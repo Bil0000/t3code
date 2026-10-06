@@ -227,7 +227,7 @@ export const make = Effect.gen(function* () {
     input: { readonly cwd: string; readonly repository: string; readonly host: string },
     pullRequest: { readonly title: string; readonly body: string },
     hostLinks: ReadonlyArray<IssueLink>,
-  ): Effect.Effect<ReadonlyArray<IssueLink>> => {
+  ): Effect.Effect<{ readonly links: ReadonlyArray<IssueLink>; readonly truncated: boolean }> => {
     const references = unlinkedIssueReferences(
       parseIssueReferences({
         kind: "github",
@@ -239,10 +239,11 @@ export const make = Effect.gen(function* () {
       hostLinks,
     );
     return references.length === 0
-      ? Effect.succeed([])
-      : cli
-          .listCitedIssues({ cwd: input.cwd, host: input.host, references })
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => []));
+      ? Effect.succeed({ links: [], truncated: false })
+      : cli.listCitedIssues({ cwd: input.cwd, host: input.host, references }).pipe(
+          Effect.map((links) => ({ links, truncated: false })),
+          Effect.orElseSucceed(() => ({ links: [], truncated: true })),
+        );
   };
 
   const readChecks = (input: ProviderRepositoryRef & { readonly number: number }) =>
@@ -443,8 +444,8 @@ export const make = Effect.gen(function* () {
                 ...pullRequest.viewerAccess,
                 canUpdateBranch: pullRequest.comparison?.viewerCanUpdate === true,
               }),
-              linkedIssues: mergeIssueLinks(linkedIssues.links, cited),
-              linkedIssuesTruncated: linkedIssues.truncated,
+              linkedIssues: mergeIssueLinks(linkedIssues.links, cited.links),
+              linkedIssuesTruncated: linkedIssues.truncated || cited.truncated,
               baseComparison:
                 pullRequest.comparison === null || pullRequest.comparison.behindBy === null
                   ? "unknown"
