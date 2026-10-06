@@ -1,5 +1,9 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { type PreviewSessionSnapshot, type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  INCOGNITO_BROWSER_PROFILE_ID,
+  type PreviewSessionSnapshot,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -39,6 +43,9 @@ const sameTarget = (entry: ClosedViewEntry, view: ClosedView): boolean => {
   }
 };
 
+const isPersistentView = (entry: ClosedViewEntry) =>
+  entry.kind !== "browser" || entry.snapshot.profileId !== INCOGNITO_BROWSER_PROFILE_ID;
+
 export const useClosedViewStore = create<ClosedViewStoreState>()(
   persist(
     (set) => ({
@@ -68,7 +75,12 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
-      partialize: ({ entries }) => ({ entries }),
+      version: 1,
+      migrate: (persisted) => {
+        const { entries } = persisted as Pick<ClosedViewStoreState, "entries">;
+        return { entries: entries.filter(isPersistentView) };
+      },
+      partialize: ({ entries }) => ({ entries: entries.filter(isPersistentView) }),
     },
   ),
 );
