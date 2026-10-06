@@ -132,6 +132,7 @@ function ThreadLineageGroup(props: {
     <div>
       {props.label ? (
         <CollapsibleSectionHeader
+          variant="panel"
           expanded={expanded}
           onClick={() => setExpanded(!expanded)}
           accessory={
