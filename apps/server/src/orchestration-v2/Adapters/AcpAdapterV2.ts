@@ -2709,7 +2709,7 @@ export function makeAcpAdapterV2(
                 providerInstanceId: context.input.modelSelection.instanceId,
                 modelSelection: {
                   ...context.input.modelSelection,
-                  model: update.model ?? context.input.modelSelection.model,
+                  model: task.model ?? context.input.modelSelection.model,
                 },
                 title: subagentThreadTitle({
                   parentTitle: context.input.appThread.title,

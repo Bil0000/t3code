@@ -1046,6 +1046,7 @@ describe("AcpAdapterV2", () => {
                           agentId: "child-a",
                           title: "Map orchestration",
                           task: "Run pwd, then reply ONE.",
+                          model: " \t ",
                         },
                       },
                     },
@@ -1194,6 +1195,16 @@ describe("AcpAdapterV2", () => {
       );
       const task = tasks.at(-1);
       assert.isNull(tasks[0]?.model);
+      const childThread = events.find(
+        (event) =>
+          event.type === "app_thread.created" && event.appThread.id === task?.childThreadId,
+      );
+      assert.equal(
+        childThread?.type === "app_thread.created"
+          ? childThread.appThread.modelSelection.model
+          : undefined,
+        modelSelection.model,
+      );
       assert.equal(task?.model, "SWE-1.7 Medium");
       assert.equal(task?.status, "completed");
       assert.equal(task?.result, "Final report: ONE");

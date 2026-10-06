@@ -2673,15 +2673,21 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 .request("thread/read", { threadId: input.nativeThreadId, includeTurns: false })
                 .pipe(
                   Effect.flatMap(decodeCodexChildThread),
+                  Effect.map((response) =>
+                    response.thread.id === input.nativeThreadId && response.thread.model?.trim()
+                      ? { thread: response.thread, model: response.thread.model }
+                      : null,
+                  ),
+                  Effect.catch(() => Effect.succeed(null)),
                   Effect.flatMap((response) =>
-                    response.thread.model?.trim()
-                      ? Effect.succeed({ thread: response.thread, model: response.thread.model })
-                      : client.raw
+                    response === null
+                      ? client.raw
                           .request("thread/resume", {
                             threadId: input.nativeThreadId,
                             excludeTurns: true,
                           })
-                          .pipe(Effect.flatMap(decodeCodexChildModel)),
+                          .pipe(Effect.flatMap(decodeCodexChildModel))
+                      : Effect.succeed(response),
                   ),
                   Effect.timeout("5 seconds"),
                   Effect.flatMap((response) =>
