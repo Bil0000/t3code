@@ -18,7 +18,7 @@ import {
   PlusIcon,
 } from "lucide-react";
 import * as Schema from "effect/Schema";
-import { useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { findProjectForLink, openLinkInBrowser } from "~/lib/openIssueLink";
@@ -81,7 +81,42 @@ function ChecksGlyph({
   );
 }
 
-function RowMenu({ label, children }: { label: string; children: ReactNode }) {
+function useRowMenu() {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const anchor = useMemo(
+    () =>
+      position
+        ? { getBoundingClientRect: () => new DOMRect(position.x, position.y, 0, 0) }
+        : undefined,
+    [position],
+  );
+  return {
+    open,
+    position,
+    anchor,
+    onOpenChange: (next: boolean) => {
+      setOpen(next);
+      if (!next) setPosition(null);
+    },
+    onContextMenu: (event: MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setPosition({ x: event.clientX, y: event.clientY });
+      setOpen(true);
+    },
+  };
+}
+
+function RowMenu({
+  label,
+  children,
+  menu,
+}: {
+  label: string;
+  children: ReactNode;
+  menu: ReturnType<typeof useRowMenu>;
+}) {
   return (
     // Out of the row's flow, so no row reserves a column for a button only the hovered one
     // shows. It sits over the right end of the second line on the row's own hover color,
@@ -98,7 +133,7 @@ function RowMenu({ label, children }: { label: string; children: ReactNode }) {
       )}
     >
       <span aria-hidden className="absolute inset-0 bg-accent/60" />
-      <Menu>
+      <Menu open={menu.open} onOpenChange={menu.onOpenChange}>
         <MenuTrigger
           render={
             <Button variant="ghost" size="icon-micro" aria-label={label} className="relative">
@@ -106,7 +141,12 @@ function RowMenu({ label, children }: { label: string; children: ReactNode }) {
             </Button>
           }
         />
-        <MenuPopup align="end" side="bottom">
+        <MenuPopup
+          anchor={menu.anchor}
+          align={menu.position ? "start" : "end"}
+          side="bottom"
+          sideOffset={menu.position ? 0 : 4}
+        >
           {children}
         </MenuPopup>
       </Menu>
@@ -125,6 +165,7 @@ function IssueRow({
   onOpen: (issue: ThreadIssueLink) => void;
   onUnlink: (issue: ThreadIssueLink) => void;
 }) {
+  const menu = useRowMenu();
   const presentation =
     issue.state === undefined ? null : resolveIssueState({ state: issue.state, stateReason: null });
   const Icon = presentation?.Icon ?? CircleDotIcon;
@@ -134,7 +175,10 @@ function IssueRow({
     onOpen(issue);
   };
   return (
-    <div className={cn(PULL_REQUEST_ROW_CLASS, "relative pl-2 hover:bg-accent/60")}>
+    <div
+      className={cn(PULL_REQUEST_ROW_CLASS, "relative pl-2 hover:bg-accent/60")}
+      onContextMenu={menu.onContextMenu}
+    >
       <Icon
         role="img"
         aria-label={presentation?.label ?? "Issue"}
@@ -151,7 +195,7 @@ function IssueRow({
           }
         />
       </a>
-      <RowMenu label={`Actions for issue #${issue.number}`}>
+      <RowMenu label={`Actions for issue #${issue.number}`} menu={menu}>
         <MenuItem onClick={() => void writeTextToClipboard(issue.url, "link")}>
           <LinkIcon className="size-3.5" />
           Copy link
@@ -182,6 +226,7 @@ function LinkRow({
   onSetWatching: ((link: ThreadPullRequestLink, watching: boolean) => void) | null;
 }) {
   const openPrLink = useOpenPrLink(threadRef);
+  const menu = useRowMenu();
   const { link, depth, stack } = line;
   const snapshot = link.snapshot;
   const open = snapshot === null || snapshot.state === "open";
@@ -189,6 +234,7 @@ function LinkRow({
   return (
     <div
       className={cn(PULL_REQUEST_ROW_CLASS, "relative hover:bg-accent/60")}
+      onContextMenu={menu.onContextMenu}
       // Each layer steps in under the one it targets. The step is capped: beyond a few layers
       // the indent only says "still in the stack", which the connector line already does, and
       // a sixteen-layer stack would otherwise stair-step off the right edge.
@@ -304,7 +350,7 @@ function LinkRow({
           updatedAt={snapshot?.updatedAt}
         />
       </a>
-      <RowMenu label={`Actions for #${link.number}`}>
+      <RowMenu label={`Actions for #${link.number}`} menu={menu}>
         <MenuItem onClick={() => void writeTextToClipboard(link.url, "link")}>
           <LinkIcon className="size-3.5" />
           Copy link

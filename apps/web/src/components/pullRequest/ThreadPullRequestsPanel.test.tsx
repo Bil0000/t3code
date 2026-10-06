@@ -1,6 +1,6 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { ThreadPullRequestsPanel } from "./ThreadPullRequestsPanel";
 
@@ -40,11 +40,13 @@ vi.mock("~/lib/openPullRequestLink", () => ({
   useOpenPrLink: () => vi.fn(),
 }));
 vi.mock("../ui/menu", () => ({
-  Menu: "div",
+  Menu: ({ open, children }: { open?: boolean; children: ReactNode }) =>
+    open === false ? null : children,
   MenuItem: "button",
   MenuPopup: "div",
   MenuTrigger: () => null,
 }));
+vi.mock("../ui/tooltip", () => ({ Tooltip: "div", TooltipTrigger: "span", TooltipPopup: "span" }));
 vi.mock("../ui/scroll-area", () => ({ ScrollArea: "div" }));
 vi.mock("../ui/middle-truncate", () => ({ MiddleTruncate: () => null }));
 const ref = { environmentId: "remote", threadId: "thread-1" } as ScopedThreadRef;
@@ -168,16 +170,67 @@ it("opens issues in the browser when the server cannot read them", async () => {
 
 it("unlinks an issue by its host identity", async () => {
   await render([issue, enterprise]);
-  const unlinkButtons = renderer.root.findAll(
+  expect(
+    renderer.root
+      .findAllByType("button")
+      .some((node) => node.children.includes("Unlink from thread")),
+  ).toBe(false);
+  const row = renderer.root.find(
+    (node) => node.type === "a" && node.props.href === enterprise.url,
+  ).parent!;
+  await act(() =>
+    row.props.onContextMenu({
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      clientX: 50,
+      clientY: 80,
+    }),
+  );
+  const unlink = renderer.root.find(
     (node) => node.type === "button" && node.children.includes("Unlink from thread"),
   );
-  expect(unlinkButtons).toHaveLength(2);
-  await act(() => unlinkButtons[1]!.props.onClick());
+  await act(() => unlink.props.onClick());
   expect(update).toHaveBeenCalledExactlyOnceWith({
     environmentId: "remote",
     input: {
       threadId: "thread-1",
       issueUnlink: { provider: "github", repository: "acme/app", number: 12, url: enterprise.url },
     },
+  });
+});
+
+it("opens PR row actions on right-click and keeps PR unlinking", async () => {
+  const pullRequest = {
+    host: "github.com",
+    repository: "acme/app",
+    number: 24,
+    url: "https://github.com/acme/app/pull/24",
+    source: "manual",
+    linkedAt: "2026-10-07T00:00:00Z",
+    snapshot: null,
+    stack: null,
+  } satisfies ThreadPullRequestLink;
+  shell.mockReturnValue({ projectId: "project-1", pullRequests: [pullRequest], issues: [issue] });
+  await act(() => {
+    renderer = create(<ThreadPullRequestsPanel threadRef={ref} />);
+  });
+  expect(
+    renderer.root
+      .findAllByType("button")
+      .some((node) => node.children.includes("Unlink from thread")),
+  ).toBe(false);
+  const row = renderer.root.find(
+    (node) => node.type === "a" && node.props.href === pullRequest.url,
+  ).parent!;
+  const event = { preventDefault: vi.fn(), stopPropagation: vi.fn(), clientX: 40, clientY: 60 };
+  await act(() => row.props.onContextMenu(event));
+  expect(event.preventDefault).toHaveBeenCalledOnce();
+  const unlink = renderer.root.find(
+    (node) => node.type === "button" && node.children.includes("Unlink from thread"),
+  );
+  await act(() => unlink.props.onClick());
+  expect(update).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "remote",
+    input: { threadId: "thread-1", host: "github.com", repository: "acme/app", number: 24 },
   });
 });
