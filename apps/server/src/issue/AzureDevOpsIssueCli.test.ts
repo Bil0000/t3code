@@ -215,7 +215,6 @@ layer((it) => {
 
   it.effect("detects the checkout when reading one work item", () =>
     Effect.gen(function* () {
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       mockedExecute.mockReturnValue(Effect.succeed(output(JSON.stringify(workItem(7)))));
       const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
       assert.strictEqual((yield* cli.getWorkItem({ cwd: "/w", number: 7 })).number, 7);

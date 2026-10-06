@@ -416,10 +416,8 @@ layer("GitLabIssueCli.layer", (it) => {
 
   it.effect("advances the cursor through malformed raw rows", () =>
     Effect.gen(function* () {
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const rows = JSON.parse(issues(2, 1)) as ReadonlyArray<unknown>;
       mockedExecute.mockReturnValueOnce(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         Effect.succeed(output(JSON.stringify([{ iid: "malformed" }, ...rows]))),
       );
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
@@ -442,7 +440,6 @@ layer("GitLabIssueCli.layer", (it) => {
 
   it.effect("stops walking when every row on a page fails to decode", () =>
     Effect.gen(function* () {
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const unusable = JSON.stringify(Array.from({ length: 100 }, () => ({ iid: "nope" })));
       mockedExecute.mockReturnValue(Effect.succeed(output(unusable)));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
@@ -509,7 +506,6 @@ layer("GitLabIssueCli.layer", (it) => {
 
   it.effect("fails when the authenticated account has no username", () =>
     Effect.gen(function* () {
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(JSON.stringify({ username: "" }))));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
@@ -529,11 +525,9 @@ layer("GitLabIssueCli.layer", (it) => {
         references: { full: `acme/web!${iid}` },
       });
       mockedExecute
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         .mockReturnValueOnce(Effect.succeed(output(JSON.stringify([mergeRequest(12, "merged")]))))
         .mockReturnValueOnce(
           Effect.succeed(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             output(JSON.stringify([mergeRequest(12, "merged"), mergeRequest(13, "opened")])),
           ),
         );
@@ -609,7 +603,6 @@ layer("GitLabIssueCli.layer", (it) => {
         .mockReturnValueOnce(
           Effect.succeed(
             output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify([
                 {
                   id: 1,
@@ -625,7 +618,6 @@ layer("GitLabIssueCli.layer", (it) => {
         .mockReturnValueOnce(
           Effect.succeed(
             output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify([
                 {
                   id: 4,
@@ -757,7 +749,6 @@ layer("GitLabIssueCli.layer", (it) => {
         "--header",
         "Content-Type: application/json",
       ]);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({
         title: "true",
         description: "Steps to reproduce.",
@@ -792,7 +783,6 @@ layer("GitLabIssueCli.layer", (it) => {
         "Content-Type: application/json",
       ]);
       // The description is absent rather than empty, so a rename cannot blank a body.
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ title: "A better title" });
     }),
   );
@@ -806,9 +796,7 @@ layer("GitLabIssueCli.layer", (it) => {
       yield* cli.runIssueAction({ ...target, action: "close" });
       yield* cli.runIssueAction({ ...target, action: "reopen" });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ state_event: "close" });
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({ state_event: "reopen" });
       expect(argsOfCall(1)).toContain("PUT");
     }),
@@ -903,10 +891,8 @@ layer("GitLabIssueCli.layer", (it) => {
       yield* cli.setLabels({ ...target, labels: [] });
 
       // An array, which no label name can break with a comma of its own.
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ labels: ["backend", "needs, care"] });
       // GitLab documents the empty string, and only the empty string, as "take them all off".
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({ labels: "" });
     }),
   );
@@ -924,7 +910,6 @@ layer("GitLabIssueCli.layer", (it) => {
       });
 
       // Sending a handle as a number would write the assignee set around somebody nobody chose.
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ assignee_ids: [5] });
     }),
   );
@@ -935,7 +920,6 @@ layer("GitLabIssueCli.layer", (it) => {
         .mockReturnValueOnce(Effect.succeed(output(issueJson({ labels: ["backend"] }))))
         .mockReturnValueOnce(
           Effect.succeed(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             output(JSON.stringify([{ name: "backend" }, { name: "frontend", color: "#00ff00" }])),
           ),
         );
@@ -958,14 +942,15 @@ layer("GitLabIssueCli.layer", (it) => {
 
   it.effect("says the label list is not all of them when the host filled the page", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issueJson({})))).mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            JSON.stringify(Array.from({ length: 100 }, (_, index) => ({ name: `l${index}` }))),
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(issueJson({}))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              JSON.stringify(Array.from({ length: 100 }, (_, index) => ({ name: `l${index}` }))),
+            ),
           ),
-        ),
-      );
+        );
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
       const list = yield* cli.listLabelCandidates({
@@ -987,7 +972,6 @@ layer("GitLabIssueCli.layer", (it) => {
         .mockReturnValueOnce(
           Effect.succeed(
             output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify([
                 { id: 5, username: "julius" },
                 { id: 9, username: "hubot" },
@@ -1026,7 +1010,6 @@ layer("GitLabIssueCli.layer", (it) => {
             output(
               // A full page of somebody else: GitLab caps it at a hundred, and this project has
               // more members than that, so the assignee is nowhere in what came back.
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify(
                 Array.from({ length: 100 }, (_, index) => ({
                   id: index + 1,
@@ -1051,7 +1034,6 @@ layer("GitLabIssueCli.layer", (it) => {
       // one the write keeps rather than one it drops on the floor.
       yield* cli.setAssignees({ ...target, assignees: [assignee.id] });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(2).stdin ?? "")).toEqual({ assignee_ids: [42] });
     }),
   );

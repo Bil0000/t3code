@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as WorkItemLinks from "../../../workItems/WorkItemLinks.ts";
@@ -53,6 +54,7 @@ export const IssueToolError = Schema.Union([
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
+  ThreadManagementService.ThreadManagementService,
   Orchestrator.OrchestratorV2,
   IssueService.IssueService,
 ];

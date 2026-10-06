@@ -487,7 +487,6 @@ layer("BitbucketIssueApi.layer", (it) => {
 
       assert.strictEqual(created.number, 7);
       expect(callAt(0)).toMatchObject({ method: "POST", url: "/repositories/acme/web/issues" });
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({
         title: "Bug",
         content: { raw: "It broke." },
@@ -503,7 +502,6 @@ layer("BitbucketIssueApi.layer", (it) => {
 
       yield* api.createIssue({ repository: "acme/web", title: "Bug", body: "", assignee: null });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({ title: "Bug", content: { raw: "" } });
     }),
   );
@@ -516,7 +514,6 @@ layer("BitbucketIssueApi.layer", (it) => {
       yield* api.updateIssue({ repository: "acme/web", number: 7, title: "New title" });
 
       expect(callAt(0)).toMatchObject({ method: "PUT", url: "/repositories/acme/web/issues/7" });
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({ title: "New title" });
     }),
   );
@@ -537,7 +534,6 @@ layer("BitbucketIssueApi.layer", (it) => {
         method: "PUT",
         url: "/repositories/acme/web/issues/7/comments/42",
       });
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({ content: { raw: "Second thoughts" } });
     }),
   );
@@ -549,7 +545,6 @@ layer("BitbucketIssueApi.layer", (it) => {
 
       yield* api.runAction({ repository: "acme/web", number: 7, action: "close" });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({ state: "closed" });
     }),
   );
@@ -561,7 +556,6 @@ layer("BitbucketIssueApi.layer", (it) => {
 
       yield* api.runAction({ repository: "acme/web", number: 7, action: "reopen" });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({ state: "open" });
     }),
   );
@@ -588,7 +582,6 @@ layer("BitbucketIssueApi.layer", (it) => {
 
       yield* api.setAssignee({ repository: "acme/web", number: 7, assignee: "hubot" });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({ assignee: { nickname: "hubot" } });
     }),
   );
@@ -600,7 +593,6 @@ layer("BitbucketIssueApi.layer", (it) => {
 
       yield* api.setAssignee({ repository: "acme/web", number: 7, assignee: null });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       expect(JSON.parse(callAt(0).body ?? "")).toEqual({ assignee: null });
     }),
   );
@@ -661,7 +653,6 @@ layer("BitbucketIssueApi.layer", (it) => {
       mockedRequest.mockReturnValue(
         Effect.succeed(
           response(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({ values: [{ type: "repository_permission", permission: "read" }] }),
           ),
         ),
@@ -692,7 +683,6 @@ layer("BitbucketIssueApi.layer", (it) => {
   it.effect("fails the read when Bitbucket answers with something unreadable", () =>
     Effect.gen(function* () {
       mockedRequest.mockReturnValueOnce(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         Effect.succeed(response(JSON.stringify({ error: "nope" }))),
       );
       const api = yield* BitbucketIssueApi.BitbucketIssueApi;
@@ -729,7 +719,6 @@ layer("BitbucketIssueApi.layer", (it) => {
 
   it.effect("fails when the credentials belong to no named account", () =>
     Effect.gen(function* () {
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       mockedRequest.mockReturnValueOnce(Effect.succeed(response(JSON.stringify({}))));
       const api = yield* BitbucketIssueApi.BitbucketIssueApi;
 

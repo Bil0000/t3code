@@ -17,6 +17,7 @@ import * as IssueService from "../../../issue/IssueService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
 import * as WorkItemLinks from "../../../workItems/WorkItemLinks.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import {
   IssueTargetInput,
@@ -105,8 +106,8 @@ const make = Effect.gen(function* () {
       ? Effect.failCause(cause as Cause.Cause<never>)
       : Effect.fail(new IssueThreadLinkFailedError({ cause }));
 
-  return IssuesToolkit.of({
-    read_issue: (input) =>
+  return {
+    read_issue: McpToolAccess.readsAsCaller((input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread();
         const matches = (thread.issues ?? []).filter(
@@ -169,96 +170,106 @@ const make = Effect.gen(function* () {
           nextCommentsCursor: activity.nextCommentsCursor ?? null,
         };
       }),
-    link_issue: (input) =>
-      Effect.gen(function* () {
-        const thread = yield* requireThread();
-        const detail = yield* issues.detail({
-          projectId: thread.projectId,
-          repository: input.repository,
-          number: input.number,
-          ...(input.provider === undefined ? {} : { provider: input.provider }),
-        });
-        const issue: ThreadIssueLink = {
-          provider: detail.provider,
-          repository: detail.repository,
-          number: detail.number,
-          url: detail.url,
-          title: detail.title,
-        };
-        if (
-          (thread.issues ?? []).some(
-            (link) =>
-              link.provider === issue.provider &&
-              link.repository.toLowerCase() === issue.repository.toLowerCase() &&
-              link.number === issue.number &&
-              normalizeWorkItemLinkKey(link).url === normalizeWorkItemLinkKey(issue).url,
-          )
-        )
-          return { issue, alreadyLinked: true };
-        const alreadyLinked = yield* engine
-          .dispatch({
-            type: "thread.metadata.update",
-            commandId: yield* commandId(thread.id),
-            threadId: thread.id,
-            issueLink: issue,
-          })
-          .pipe(
-            Effect.as(false),
-            Effect.catchTag("OrchestratorDispatchError", (error) =>
-              typeof error.cause === "string" && error.cause.includes("already linked")
-                ? Effect.succeed(true)
-                : Effect.fail(error),
-            ),
-            Effect.catchCause(dispatchFailure),
-          );
-        return { issue, alreadyLinked };
-      }),
-    unlink_issue: (input) =>
-      Effect.gen(function* () {
-        const thread = yield* requireThread();
-        const matches = (thread.issues ?? []).filter(
-          (issue) =>
-            issue.repository.toLowerCase() === input.repository.toLowerCase() &&
-            issue.number === input.number &&
-            (input.provider === undefined || issue.provider === input.provider) &&
-            (input.url === undefined ||
-              normalizeWorkItemLinkKey(issue).url ===
-                normalizeWorkItemLinkKey({ provider: issue.provider, url: input.url }).url),
-        );
-        if (matches.length > 1) {
-          return yield* new IssueOperationError({
-            operation: "unlink",
-            detail: "More than one issue matches this repository and number. Pass url.",
+    ),
+    link_issue: McpToolAccess.writesThreads(
+      () => [undefined],
+      (input) =>
+        Effect.gen(function* () {
+          const thread = yield* requireThread();
+          const detail = yield* issues.detail({
+            projectId: thread.projectId,
+            repository: input.repository,
+            number: input.number,
+            ...(input.provider === undefined ? {} : { provider: input.provider }),
           });
-        }
-        const issue = matches[0];
-        if (!issue) return { wasLinked: false };
-        const wasLinked = yield* engine
-          .dispatch({
-            type: "thread.metadata.update",
-            commandId: yield* commandId(thread.id),
-            threadId: thread.id,
-            issueUnlink: {
-              provider: issue.provider,
-              repository: issue.repository,
-              number: issue.number,
-              url: issue.url,
-            },
-          })
-          .pipe(
-            Effect.as(true),
-            Effect.catchTag("OrchestratorDispatchError", (error) =>
-              typeof error.cause === "string" && error.cause.includes("not linked")
-                ? Effect.succeed(false)
-                : Effect.fail(error),
-            ),
-            Effect.catchCause(dispatchFailure),
+          const issue: ThreadIssueLink = {
+            provider: detail.provider,
+            repository: detail.repository,
+            number: detail.number,
+            url: detail.url,
+            title: detail.title,
+          };
+          if (
+            (thread.issues ?? []).some(
+              (link) =>
+                link.provider === issue.provider &&
+                link.repository.toLowerCase() === issue.repository.toLowerCase() &&
+                link.number === issue.number &&
+                normalizeWorkItemLinkKey(link).url === normalizeWorkItemLinkKey(issue).url,
+            )
+          )
+            return { issue, alreadyLinked: true };
+          const alreadyLinked = yield* engine
+            .dispatch({
+              type: "thread.metadata.update",
+              commandId: yield* commandId(thread.id),
+              threadId: thread.id,
+              issueLink: issue,
+            })
+            .pipe(
+              Effect.as(false),
+              Effect.catchTags({
+                OrchestratorDispatchError: (error) =>
+                  typeof error.cause === "string" && error.cause.includes("already linked")
+                    ? Effect.succeed(true)
+                    : Effect.fail(error),
+              }),
+              Effect.catchCause(dispatchFailure),
+            );
+          return { issue, alreadyLinked };
+        }),
+    ),
+    unlink_issue: McpToolAccess.writesThreads(
+      () => [undefined],
+      (input) =>
+        Effect.gen(function* () {
+          const thread = yield* requireThread();
+          const matches = (thread.issues ?? []).filter(
+            (issue) =>
+              issue.repository.toLowerCase() === input.repository.toLowerCase() &&
+              issue.number === input.number &&
+              (input.provider === undefined || issue.provider === input.provider) &&
+              (input.url === undefined ||
+                normalizeWorkItemLinkKey(issue).url ===
+                  normalizeWorkItemLinkKey({ provider: issue.provider, url: input.url }).url),
           );
-        return { wasLinked };
-      }),
-    list_thread_issues: () =>
+          if (matches.length > 1) {
+            return yield* new IssueOperationError({
+              operation: "unlink",
+              detail: "More than one issue matches this repository and number. Pass url.",
+            });
+          }
+          const issue = matches[0];
+          if (!issue) return { wasLinked: false };
+          const wasLinked = yield* engine
+            .dispatch({
+              type: "thread.metadata.update",
+              commandId: yield* commandId(thread.id),
+              threadId: thread.id,
+              issueUnlink: {
+                provider: issue.provider,
+                repository: issue.repository,
+                number: issue.number,
+                url: issue.url,
+              },
+            })
+            .pipe(
+              Effect.as(true),
+              Effect.catchTags({
+                OrchestratorDispatchError: (error) =>
+                  typeof error.cause === "string" && error.cause.includes("not linked")
+                    ? Effect.succeed(false)
+                    : Effect.fail(error),
+              }),
+              Effect.catchCause(dispatchFailure),
+            );
+          return { wasLinked };
+        }),
+    ),
+    list_thread_issues: McpToolAccess.readsAsCaller(() =>
       requireThread().pipe(Effect.map((thread) => ({ issues: thread.issues ?? [] }))),
-    link_issue_to_pull_request: (input) =>
+    ),
+    link_issue_to_pull_request: McpToolAccess.actsAsCaller((input) =>
       requireThread().pipe(
         Effect.flatMap((thread) =>
           workItemLinks.link({
@@ -267,7 +278,8 @@ const make = Effect.gen(function* () {
           }),
         ),
       ),
-    unlink_issue_from_pull_request: (input) =>
+    ),
+    unlink_issue_from_pull_request: McpToolAccess.actsAsCaller((input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread();
         const pullRequestRef = { projectId: thread.projectId, ...input.pullRequest };
@@ -283,7 +295,8 @@ const make = Effect.gen(function* () {
           }),
         });
       }),
-    list_issue_pull_request_links: (input) =>
+    ),
+    list_issue_pull_request_links: McpToolAccess.readsAsCaller((input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread();
         const { kind, ...reference } = input.source;
@@ -299,7 +312,8 @@ const make = Effect.gen(function* () {
           source: normalizeWorkItemLinkKey({ provider: detail.provider, url: detail.url }),
         });
       }),
-  });
+    ),
+  } satisfies McpToolAccess.Handlers<typeof IssuesToolkit.tools>;
 });
 
-export const IssuesToolkitHandlersLive = IssuesToolkit.toLayer(make);
+export const layer = McpToolAccess.toLayer(IssuesToolkit, make);

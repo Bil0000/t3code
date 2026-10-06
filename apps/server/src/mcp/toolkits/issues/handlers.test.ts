@@ -28,7 +28,10 @@ import * as WorkItemLinks from "../../../workItems/WorkItemLinks.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import { v2PullRequestThread } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { IssuesToolkitHandlersLive } from "./handlers.ts";
+import * as IssuesHandlers from "./handlers.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
+import { liveThreadsLayer, liveThreadShell } from "../../McpToolAccess.testkit.ts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import { IssuesToolkit } from "./tools.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -152,6 +155,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     activity?: IssueActivity;
     page?: IssueCommentsPageResult;
     readError?: IssueOperationError;
+    callerActive?: boolean;
   } = {},
 ) {
   const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
@@ -162,6 +166,11 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   const routingRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const savedLinkRequests = yield* Ref.make<ReadonlyArray<unknown>>([]);
   const dependencies = Layer.mergeAll(
+    content.callerActive === false
+      ? Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: (id) => Effect.succeed(liveThreadShell(id, { activeRunId: null })),
+        })
+      : liveThreadsLayer,
     Layer.mock(Orchestrator.OrchestratorV2)({
       getThreadShell: (id) => Effect.succeed(id === threadId ? current : null),
       dispatch: (command) =>
@@ -227,7 +236,9 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     ),
   );
   const toolkit = yield* IssuesToolkit.pipe(
-    Effect.provide(IssuesToolkitHandlersLive.pipe(Layer.provide(dependencies))),
+    Effect.provide(
+      McpToolAccess.HandlersLayer.layer(IssuesHandlers.layer).pipe(Layer.provide(dependencies)),
+    ),
   );
   const call = <Name extends keyof typeof IssuesToolkit.tools>(
     name: Name,
@@ -477,6 +488,52 @@ describe("issue toolkit handlers", () => {
     }),
   );
 
+  it.effect("refuses writes after the calling run ends and still permits reads", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(thread(), undefined, { callerActive: false });
+      expect(
+        yield* harness
+          .call("link_issue", { repository: issue.repository, number: issue.number })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "OrchestratorMcpFailure", code: "parent_not_active" });
+      expect(
+        yield* harness
+          .call("link_issue_to_pull_request", {
+            issue: { repository: issue.repository, number: issue.number },
+            pullRequest: { repository: pullRequest.repository, number: pullRequest.number },
+          })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "OrchestratorMcpFailure", code: "parent_not_active" });
+      expect(yield* harness.call("list_thread_issues", {})).toEqual({ issues: [] });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([]);
+      expect(yield* Ref.get(harness.savedLinkRequests)).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses read-only outside clients before reading the tracker", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const scope = {
+        ...invocation(["issues"]),
+        thread: undefined,
+        client: { sessionId: "read-only", label: "Client", access: "read-only" as const },
+      };
+      expect(
+        yield* harness
+          .call(
+            "link_issue",
+            { repository: issue.repository, number: issue.number },
+            ["issues"],
+            scope,
+          )
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "OrchestratorMcpFailure", code: "capability_denied" });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([]);
+    }),
+  );
+
   it.effect("rejects callers without a thread and deleted threads before reading host data", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -487,7 +544,7 @@ describe("issue toolkit handlers", () => {
         client: {
           sessionId: "client-1",
           label: "Client",
-          runtimeModeCeiling: "full-access" as const,
+          access: "full-access" as const,
         },
       };
       expect(
