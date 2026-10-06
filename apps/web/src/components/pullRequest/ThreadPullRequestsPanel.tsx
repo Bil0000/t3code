@@ -334,7 +334,7 @@ export function ThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     return (
       <PullRequestsUnavailableState
         title="Linked items unavailable"
-        error="This environment does not support multiple linked pull requests."
+        error="This environment does not support linked pull requests or issues."
       />
     );
   }

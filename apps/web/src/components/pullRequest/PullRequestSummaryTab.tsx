@@ -275,12 +275,14 @@ function CollapsedComment({
 
 function Section({
   title,
+  count,
   defaultOpen = true,
   keepMounted = false,
   actions,
   children,
 }: {
   title: string;
+  count?: number | undefined;
   defaultOpen?: boolean;
   keepMounted?: boolean;
   /** Heading controls stay separate from the collapse trigger so they remain independently usable. */
@@ -324,6 +326,7 @@ function Section({
       >
         <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-xs font-medium text-muted-foreground hover:text-foreground">
           <span>{title}</span>
+          {count === undefined ? null : <span>{count}</span>}
           <ChevronRightIcon
             aria-hidden
             className={cn(
@@ -881,7 +884,7 @@ export function PullRequestSummaryTab({
 
       <Section
         title="Related issues"
-        {...(detail.linkedIssues === undefined ? {} : { count: detail.linkedIssues.length })}
+        count={detail.linkedIssues?.length}
         actions={
           <WorkItemMatchButton
             busy={aiMatches.pending === "related"}

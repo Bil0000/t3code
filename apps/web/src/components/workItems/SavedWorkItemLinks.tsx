@@ -30,6 +30,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 
 type Source =
   | {
@@ -285,27 +286,31 @@ function EnabledSavedWorkItemLinks({
           </DialogHeader>
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
             <DialogPanel>
-              <label className="block text-xs">
-                Project
-                <select
-                  className="mt-1 w-full rounded-md border bg-background p-2"
+              <div className="flex flex-col gap-1 text-xs">
+                <span>Project</span>
+                <Select
                   value={projectId}
                   disabled={pending}
-                  onChange={(event) => {
-                    const project = projects.find((entry) => entry.id === event.target.value);
+                  onValueChange={(value) => {
+                    const project = projects.find((entry) => entry.id === value);
                     if (project) {
                       setProjectId(project.id);
                       setRepository(repositoryOf(project));
                     }
                   }}
                 >
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <SelectTrigger aria-label="Project">
+                    <SelectValue>{selectedProject?.title}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {projects.map((project) => (
+                      <SelectItem key={project.id} value={project.id}>
+                        {project.title}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
               {targetKind === "issue" ? (
                 <label className="block text-xs">
                   Provider

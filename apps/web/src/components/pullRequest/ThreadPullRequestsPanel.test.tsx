@@ -114,6 +114,18 @@ it("opens each issue in the project its URL names, and Linear in the thread's pr
   expect(openInBrowser).not.toHaveBeenCalled();
 });
 
+it("explains that both kinds of linked items are unavailable", async () => {
+  capabilities.mockReturnValue({ threadPullRequests: false, issues: false });
+  await render([]);
+  expect(
+    renderer.root
+      .findAll((node) => typeof node.type === "string")
+      .some((node) =>
+        node.children.includes("This environment does not support linked pull requests or issues."),
+      ),
+  ).toBe(true);
+});
+
 it("keeps the saved source project for Linear", async () => {
   await render([{ ...linear, projectId: "project-2" }]);
   await click(linear.url);

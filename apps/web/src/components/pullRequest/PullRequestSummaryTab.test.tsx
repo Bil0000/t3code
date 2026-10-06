@@ -128,6 +128,37 @@ it("toggles checks from their heading and resets sections for another pull reque
   expect(heading("Description").props["aria-expanded"]).toBe(true);
 });
 
+it("shows the related issue count while its section is open or closed", () => {
+  act(() => {
+    renderer = create(
+      render({
+        ...detail,
+        linkedIssues: [
+          {
+            repository: "owner/repo",
+            number: 12,
+            title: "Linked issue",
+            url: "https://github.com/owner/repo/issues/12",
+            state: "open",
+            closesIssue: false,
+          },
+        ],
+      }),
+    );
+  });
+  expect(
+    heading("Related issues")
+      .findAllByType("span")
+      .some((span) => span.children.includes("1")),
+  ).toBe(true);
+  click("Related issues");
+  expect(
+    heading("Related issues")
+      .findAllByType("span")
+      .some((span) => span.children.includes("1")),
+  ).toBe(true);
+});
+
 it("keeps an unsaved description when collapsed and reopened", () => {
   act(() => {
     renderer = create(render());

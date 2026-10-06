@@ -59,6 +59,15 @@ vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: { refresh: state.refresh
 vi.mock("~/lib/openIssueLink", () => ({ openLinkInBrowser: state.openLink }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
 vi.mock("../ui/input", () => ({ Input: "input" }));
+vi.mock("../ui/select", () => ({
+  Select: ({ onValueChange, ...props }: { onValueChange: (value: string) => void }) => (
+    <select {...props} onChange={(event) => onValueChange(event.target.value)} />
+  ),
+  SelectTrigger: "div",
+  SelectValue: "span",
+  SelectPopup: "div",
+  SelectItem: "option",
+}));
 vi.mock("../ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? children : null),
   DialogPopup: "div",
