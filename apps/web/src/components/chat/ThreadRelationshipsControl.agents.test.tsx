@@ -49,8 +49,206 @@ afterEach(async () => {
   state.projects = [];
   state.configs.clear();
   state.showTooltips = false;
+  state.navigate.mockClear();
   state.command.mockClear();
   state.projection = null;
+});
+
+it("opens the correct chat for every workflow phase and unphased member", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.showTooltips = true;
+  state.configs.set("remote", {
+    providers: [
+      {
+        instanceId: "claude-personal",
+        driver: "claudeAgent",
+        displayName: "Personal account",
+        models: [],
+      },
+      {
+        instanceId: "claude-work",
+        driver: "claudeAgent",
+        displayName: "Work account",
+        models: [{ slug: "claude-sonnet-4-6", name: "Sonnet" }],
+      },
+    ],
+  });
+  const phases = ["Inspect", "Improve", "Verify"].map((title, index) => ({ index, title }));
+  const agents = Array.from({ length: 7 }, (_, index) => ({
+    index,
+    label: `Member ${index}`,
+    state:
+      index === 2 ? "cancelled" : index === 4 ? "failed" : index === 5 ? "running" : "completed",
+    ...(index < 6 ? { phaseIndex: Math.floor(index / 2) } : {}),
+    childThreadId: `member-chat-${index}`,
+    model: "claude-sonnet-4-6",
+    result: `Result ${index}`,
+    totalTokens: 1200,
+    // Staggered starts, so a phase spans longer than either member's own run.
+    startedAt: 1_700_000_000_000 + index * 1000,
+    durationMs: 5000,
+  }));
+  const project = (members: typeof agents) => ({
+    thread: { id: "parent", lineage: { relationshipToParent: null } },
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [
+      {
+        id: "workflow",
+        driver: "claudeAgent",
+        providerInstanceId: "claude-work",
+        childThreadId: "workflow-chat",
+        title: "Checkout review",
+        status: "running",
+        startedAt: null,
+        completedAt: null,
+        updatedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+        workflow: { name: "Checkout review", phases, agents: members },
+      },
+    ],
+  });
+  state.projection = project(agents);
+  const panel = (
+    <ThreadRelationshipsPanel
+      environmentId={EnvironmentId.make("remote")}
+      threadId={ThreadId.make("parent")}
+    />
+  );
+  await act(async () => {
+    renderer = create(panel);
+  });
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Expand Checkout review" }).props.onClick(),
+  );
+  const memberButtons = () =>
+    renderer.root.findAll(
+      (node) =>
+        node.type === "button" && String(node.props["aria-label"]).startsWith("Open Member"),
+    );
+  const phaseButtons = () =>
+    renderer.root.findAll(
+      (node) =>
+        node.type === "button" &&
+        typeof node.props["aria-expanded"] === "boolean" &&
+        !node.props["aria-label"],
+    );
+  // Only the running phase starts open, beside the unphased member.
+  expect(memberButtons()).toHaveLength(3);
+  expect(phaseButtons()).toHaveLength(3);
+  for (const phase of phaseButtons().slice(0, 2)) await act(async () => phase.props.onClick());
+  expect(memberButtons()).toHaveLength(7);
+  for (const agent of agents) {
+    await act(async () =>
+      renderer.root.findByProps({ "aria-label": `Open ${agent.label} chat` }).props.onClick(),
+    );
+    expect(state.navigate).toHaveBeenLastCalledWith({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: "remote", threadId: agent.childThreadId },
+    });
+  }
+  const rendered = JSON.stringify(renderer.toJSON());
+  expect(rendered.match(/Sonnet · Work account/g)).toHaveLength(7);
+  expect(rendered).not.toContain("Personal account");
+  for (const phase of phases) expect(rendered).toContain(phase.title);
+  // The closed row leaves phase progress to the tree.
+  expect(rendered).not.toContain(" phases");
+  expect(rendered).toContain('"1","/","2"," ","agents"');
+  expect(rendered).toContain("Running");
+  // The phase holding the running member reports itself as the active one.
+  expect(rendered).toContain("running");
+  expect(rendered).toContain("done");
+  expect(rendered).toContain("stopped");
+  // Members 0 and 1 start a second apart and run 5s each, so Inspect took 6s.
+  expect(rendered).toContain('"6s"');
+  for (const phase of phaseButtons()) {
+    await act(async () => phase.props.onClick());
+    expect(memberButtons()).toHaveLength(5);
+    await act(async () => phase.props.onClick());
+    expect(memberButtons()).toHaveLength(7);
+  }
+  // A phase the user closed stays closed once it starts running, and stays
+  // closed after it settles.
+  await act(async () => phaseButtons()[0]!.props.onClick());
+  expect(memberButtons()).toHaveLength(5);
+  const restarted = agents.map((agent) =>
+    agent.index === 0 ? { ...agent, state: "running" } : agent,
+  );
+  state.projection = project(restarted);
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(memberButtons()).toHaveLength(5);
+  state.projection = project(agents);
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(memberButtons()).toHaveLength(5);
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Collapse Checkout review" }).props.onClick(),
+  );
+  expect(memberButtons()).toHaveLength(0);
+  expect(state.navigate).toHaveBeenCalledTimes(7);
+});
+
+it("groups and counts a workflow by its run status instead of its coordinator chat", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const coordinator = {
+    id: "workflow",
+    driver: "claudeAgent",
+    providerInstanceId: "claudeAgent",
+    childThreadId: "workflow-chat",
+    title: "Checkout review",
+    status: "running",
+    startedAt: null,
+    completedAt: null,
+    updatedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+    workflow: {
+      name: "Checkout review",
+      phases: [{ index: 0, title: "Inspect" }],
+      agents: [{ index: 0, label: "Checker", state: "running", phaseIndex: 0 }],
+    },
+  };
+  const projection = {
+    thread: { id: "parent", lineage: { relationshipToParent: null } },
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [coordinator],
+  };
+  const child = {
+    id: "workflow-chat",
+    title: "Coordinator chat",
+    lineage: { parentThreadId: "parent", relationshipToParent: "subagent" },
+    status: "completed",
+    activityRunStatus: null,
+  };
+  state.projection = projection;
+  state.shells = [{ environmentId: "test", source: child }];
+  const panel = (
+    <ThreadRelationshipsPanel
+      environmentId={EnvironmentId.make("test")}
+      threadId={ThreadId.make("parent")}
+    />
+  );
+  await act(async () => {
+    renderer = create(panel);
+  });
+  expect(renderer.root.findByType("h3").children).toEqual(["Lineage · 1 running"]);
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Expand Checkout review" }).props.onClick(),
+  );
+  expect(renderer.root.findByProps({ "aria-label": "Open Checker chat" })).toBeDefined();
+  state.shells = [{ environmentId: "test", source: { ...child, activityRunStatus: "waiting" } }];
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(renderer.root.findByType("h3").children).toEqual(["Lineage · 1 running"]);
+  state.projection = { ...projection, subagents: [{ ...coordinator, status: "completed" }] };
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(renderer.root.findByType("h3").children).toEqual(["Lineage"]);
+  expect(JSON.stringify(renderer.toJSON())).toContain("Previous agents");
+  expect(renderer.root.findAllByProps({ "aria-label": "Open Checker chat" })).toHaveLength(0);
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
+  );
+  expect(renderer.root.findByProps({ "aria-label": "Expand Checkout review" })).toBeDefined();
 });
 
 it.each(["codex", "claudeAgent"])(
@@ -381,11 +579,16 @@ it("shows readable models and only differing workspace details in agent tooltips
     };
     return read(renderer.root);
   };
-  expect(text()).toContain("My GPT · high");
-  state.projection = {
+  const rerender = async (source = child) => {
+    state.shells = [{ environmentId: "test", source: { ...source } }];
+    await act(async () => renderer.update(cloneElement(panel)));
+  };
+  const nativeProjection = {
     ...projection,
     subagents: [{ ...projection.subagents[0], origin: "provider_native" }],
   };
+  expect(text()).toContain("My GPT · high");
+  state.projection = nativeProjection;
   await act(async () => renderer.update(cloneElement(panel)));
   expect(text()).toContain("My GPT");
   expect(text()).not.toContain("My GPT · high");
@@ -451,8 +654,7 @@ it("shows readable models and only differing workspace details in agent tooltips
     [undefined, ""],
   ] as const) {
     child.modelSelection.options = options;
-    state.shells = [{ environmentId: "test", source: { ...child } }];
-    await act(async () => renderer.update(cloneElement(panel)));
+    await rerender();
     expect(text()).toContain(`My GPT${expected}`);
     if (!expected) expect(text()).not.toContain("My GPT ·");
   }
@@ -516,8 +718,7 @@ it("shows readable models and only differing workspace details in agent tooltips
       { id: "reasoningEffort", value: "high" },
       ...(value === undefined ? [] : [{ id: descriptor.id, value }]),
     ];
-    state.shells = [{ environmentId: "test", source: { ...child } }];
-    await act(async () => renderer.update(cloneElement(panel)));
+    await rerender();
     expect(text(true)).toContain("My GPT · high");
     expect(text(true)).not.toMatch(/Fast|Ultrafast|Normal|Standard|Flex/);
     expect(text()).toContain(`My GPT · ${iconLabel}high`);
@@ -525,27 +726,11 @@ it("shows readable models and only differing workspace details in agent tooltips
     child.modelSelection.options = child.modelSelection.options.filter(
       ({ id }) => id !== "reasoningEffort",
     );
-    state.shells = [{ environmentId: "test", source: { ...child } }];
-    await act(async () => renderer.update(cloneElement(panel)));
+    await rerender();
     expect(text()).not.toContain(" · high");
     expect(text(true)).not.toMatch(/Fast|Ultrafast|Normal|Standard|Flex/);
     if (iconLabel) expect(text()).toContain(iconLabel);
     else expect(text()).not.toContain("mode on");
-    state.projection = {
-      ...projection,
-      subagents: [{ ...projection.subagents[0], origin: "provider_native" }],
-    };
-    await act(async () => renderer.update(cloneElement(panel)));
-    expect(text()).not.toMatch(/Fast|Ultrafast|Normal|Standard|Flex| · high/);
-    state.projection = projection;
-    for (const modelSelection of [
-      { ...child.modelSelection, instanceId: "other" },
-      { ...child.modelSelection, model: "gpt-5.5" },
-    ]) {
-      state.shells = [{ environmentId: "test", source: { ...child, modelSelection } }];
-      await act(async () => renderer.update(cloneElement(panel)));
-      expect(text()).not.toMatch(/Fast|Ultrafast|Normal|Standard|Flex| · high/);
-    }
   }
   state.configs.set("test", {
     providers: [
@@ -573,28 +758,31 @@ it("shows readable models and only differing workspace details in agent tooltips
     { id: "reasoningEffort", value: "high" },
     { id: "serviceTier", value: "priority" },
   ];
-  state.shells = [{ environmentId: "test", source: { ...child } }];
-  await act(async () => renderer.update(cloneElement(panel)));
+  await rerender();
   expect(text(true)).toContain("My GPT · Work account · high");
   expect(text()).toContain("My GPT · Work account · Fast mode onhigh");
   expect(text()).not.toContain("Personal account");
+  state.projection = nativeProjection;
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(text()).not.toMatch(/Fast|Ultrafast|Normal|Standard|Flex| · high/);
+  state.projection = projection;
+  for (const modelSelection of [
+    { ...child.modelSelection, instanceId: "other" },
+    { ...child.modelSelection, model: "gpt-5.5" },
+  ]) {
+    await rerender({ ...child, modelSelection });
+    expect(text()).not.toMatch(/Fast|Ultrafast|Normal|Standard|Flex| · high/);
+  }
   state.configs.set("test", speedConfig);
   child.modelSelection.options = [{ id: "reasoningEffort", value: "high" }];
-  state.shells = [
-    {
-      environmentId: "test",
-      source: { ...child, modelSelection: { ...child.modelSelection, instanceId: "other" } },
-    },
-  ];
-  await act(async () => renderer.update(cloneElement(panel)));
+  await rerender({ ...child, modelSelection: { ...child.modelSelection, instanceId: "other" } });
   expect(text()).not.toContain("My GPT ·");
   const config = state.configs.get("test");
   state.configs.clear();
   await act(async () => renderer.update(cloneElement(panel)));
   expect(text()).toContain("GPT-5.4");
   expect(text()).not.toContain("GPT-5.4 ·");
-  state.shells = [{ environmentId: "test", source: { ...child } }];
-  await act(async () => renderer.update(cloneElement(panel)));
+  await rerender();
   expect(text()).toContain("GPT-5.4 · high");
   state.configs.set("test", config);
   for (const model of ["custom/model-v1", "custom/model-v2"]) {
@@ -602,13 +790,10 @@ it("shows readable models and only differing workspace details in agent tooltips
       ...projection,
       subagents: [{ ...projection.subagents[0], model }],
     };
-    state.shells = [
-      {
-        environmentId: "test",
-        source: { ...child, modelSelection: { ...child.modelSelection, model: "custom/model-v1" } },
-      },
-    ];
-    await act(async () => renderer.update(cloneElement(panel)));
+    await rerender({
+      ...child,
+      modelSelection: { ...child.modelSelection, model: "custom/model-v1" },
+    });
     expect(text().includes(`${model} · high`)).toBe(model === "custom/model-v1");
   }
 
@@ -643,16 +828,14 @@ it("shows readable models and only differing workspace details in agent tooltips
   state.projection = projection;
 
   child.worktreePath = "/main/worktrees/checker";
-  state.shells = [{ environmentId: "test", source: { ...child } }];
-  await act(async () => renderer.update(cloneElement(panel)));
+  await rerender();
   expect(text()).toContain("Worktree");
   expect(text()).toContain("checker");
   expect(text()).not.toContain("/main/worktrees");
   expect(text()).not.toContain("Project");
 
   child.branch = "fix/checker";
-  state.shells = [{ environmentId: "test", source: { ...child } }];
-  await act(async () => renderer.update(cloneElement(panel)));
+  await rerender();
   expect(text()).toContain("Branch");
   expect(text()).toContain("fix/checker");
   expect(text()).not.toContain("Worktree");
@@ -661,8 +844,7 @@ it("shows readable models and only differing workspace details in agent tooltips
   child.projectId = "other";
   child.worktreePath = null;
   child.branch = null;
-  state.shells = [{ environmentId: "test", source: { ...child } }];
-  await act(async () => renderer.update(cloneElement(panel)));
+  await rerender();
   expect(text()).toContain("Other project");
   expect(text()).toContain("Workspace");
   expect(text()).toContain("other");

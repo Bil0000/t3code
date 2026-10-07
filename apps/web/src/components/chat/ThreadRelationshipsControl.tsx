@@ -6,6 +6,7 @@ import { SubagentTooltipContent } from "./SubagentTooltipContent";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  deriveWorkflowGroups,
   projectedSubagentsToRuntime,
   type RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -53,6 +54,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AgentElapsed } from "./AgentElapsed";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
+import { ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -91,11 +93,13 @@ export function ThreadLineageRowList(props: {
         component: this sits inside an already scrolling panel, where a
         max-height-only virtual viewport measures badly. Every row is a focusable
         button, so keyboard users reach and scroll the region through the rows
-        themselves and the container needs no extra tab stop of its own.
+        themselves and the container needs no extra tab stop of its own. An
+        expanded workflow asks for a taller window, so it raises the bound while
+        its tree is open.
       */}
       <ul
         aria-label="Related threads"
-        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0"
+        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0 has-data-workflow-expanded:max-h-[min(28rem,55dvh)]"
       >
         {props.children}
       </ul>
@@ -130,6 +134,7 @@ function ThreadLineageGroup(props: {
     <div>
       {props.label ? (
         <CollapsibleSectionHeader
+          variant="panel"
           expanded={expanded}
           onClick={() => setExpanded(!expanded)}
           accessory={
@@ -199,22 +204,32 @@ export function ThreadRelationshipsPanel(props: {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
   const providers = useServerConfigs().get(props.environmentId)?.providers;
-  const subagentsByThreadId = useMemo(
-    () =>
-      new Map(
-        (projection?.subagents ?? [])
-          .filter((subagent) => subagent.childThreadId !== null)
-          .map((subagent) => [
-            subagent.childThreadId,
-            {
-              ...projectedSubagentsToRuntime([subagent])[0]!,
-              driver: subagent.driver,
-              providerInstanceId: subagent.providerInstanceId,
-              origin: subagent.origin,
-            },
-          ]),
-      ),
+  const runtimeSubagents = useMemo(
+    () => projectedSubagentsToRuntime(projection?.subagents ?? []),
     [projection?.subagents],
+  );
+  const subagentsByThreadId = useMemo(() => {
+    const byId = new Map(runtimeSubagents.map((agent) => [agent.id, agent]));
+    return new Map(
+      (projection?.subagents ?? [])
+        .filter((subagent) => subagent.childThreadId !== null)
+        .map((subagent) => [
+          subagent.childThreadId,
+          {
+            ...byId.get(subagent.id)!,
+            driver: subagent.driver,
+            providerInstanceId: subagent.providerInstanceId,
+            origin: subagent.origin,
+          },
+        ]),
+    );
+  }, [projection?.subagents, runtimeSubagents]);
+  // A workflow coordinator is already a subagent row here; the grouped model
+  // is what lets that row unfold into the phases and members it ran.
+  const workflowGroupsById = useMemo(
+    () =>
+      new Map(deriveWorkflowGroups(runtimeSubagents).map((group) => [group.workflow.id, group])),
+    [runtimeSubagents],
   );
   const threadShells = useThreadShells();
   const projects = useProjects().filter((project) => project.environmentId === props.environmentId);
@@ -248,8 +263,17 @@ export function ThreadRelationshipsPanel(props: {
         rows: immediateThreadRelationships(graph, props.threadId),
         currentThreadId: props.threadId,
         mergeTargetThreadId,
+      }).map((row) => {
+        const agent =
+          row.edge.kind === "subagent" && !isParentThreadRelationship(row.edge, props.threadId)
+            ? subagentsByThreadId.get(row.threadId)
+            : undefined;
+        const workflowGroup = agent === undefined ? undefined : workflowGroupsById.get(agent.id);
+        return workflowGroup === undefined
+          ? row
+          : { ...row, edge: { ...row.edge, status: workflowGroup.workflow.status } };
       }),
-    [graph, mergeTargetThreadId, props.threadId],
+    [graph, mergeTargetThreadId, props.threadId, subagentsByThreadId, workflowGroupsById],
   );
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
@@ -371,7 +395,7 @@ export function ThreadRelationshipsPanel(props: {
               const isSubagent = edge.kind === "subagent";
               const isMergeTarget = threadId === mergeTargetThreadId;
               const isParent = isParentThreadRelationship(edge, props.threadId);
-              const status = threadRelationshipRowStatus(graph, { threadId, edge });
+              const rowStatus = threadRelationshipRowStatus(graph, { threadId, edge });
               const RelationshipIcon = isParent
                 ? CornerLeftUpIcon
                 : isSubagent
@@ -382,12 +406,19 @@ export function ThreadRelationshipsPanel(props: {
                 isSubagent && !isParent ? subagentsByThreadId.get(threadId) : undefined,
                 node?.thread,
               );
+              const workflowGroup =
+                agent === undefined ? undefined : workflowGroupsById.get(agent.id);
               const canStop =
                 agent?.origin === "app_owned" &&
                 agent.startedAt &&
                 ["pending", "running", "waiting"].includes(agent.status);
               const threadTitle = relationshipThreadTitle({
-                title: node?.thread?.title ?? agent?.title ?? threadId,
+                // A workflow's name is shorter than its child thread's title.
+                title:
+                  workflowGroup?.workflow.workflowName ??
+                  node?.thread?.title ??
+                  agent?.title ??
+                  threadId,
                 isSubagent,
               });
               const provider = providers?.find(
@@ -428,7 +459,7 @@ export function ThreadRelationshipsPanel(props: {
                     driver={isSubagent && !isParent ? providerDriver : undefined}
                     provider={provider}
                     fallbackIcon={RelationshipIcon}
-                    status={status}
+                    status={rowStatus}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
@@ -447,12 +478,52 @@ export function ThreadRelationshipsPanel(props: {
                     <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                   )}
                   {!isMergeTarget ? (
-                    <span className="shrink-0 text-2xs text-muted-foreground">
-                      {threadRelationshipStatusLabel(status)}
+                    // A workflow's badge carries its state; the row has no room for the word.
+                    <span
+                      className={
+                        workflowGroup ? "sr-only" : "shrink-0 text-2xs text-muted-foreground"
+                      }
+                    >
+                      {threadRelationshipStatusLabel(rowStatus)}
                     </span>
                   ) : null}
                 </>
               );
+              // A workflow pairs this row with a disclosure, so it renders as the
+              // leading half of a split row; everything else renders it directly.
+              const relationshipLink = (
+                <Tooltip>
+                  <TooltipTrigger
+                    delay={200}
+                    render={
+                      <ThreadDetailsControl
+                        size="sm"
+                        variant="ghost"
+                        part={workflowGroup ? "link-primary" : "row"}
+                        disabled={node?.missing === true}
+                        onClick={() => openThread(threadId)}
+                      />
+                    }
+                  >
+                    {relationshipContent}
+                  </TooltipTrigger>
+                  <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
+                </Tooltip>
+              );
+              if (workflowGroup && agent) {
+                return (
+                  <ThreadLineageWorkflowRow
+                    key={threadId}
+                    group={workflowGroup}
+                    providerInstanceId={agent.providerInstanceId}
+                    provider={provider}
+                    providers={providers}
+                    driver={providerDriver}
+                    onOpenThread={(memberThreadId) => openThread(memberThreadId as ThreadId)}
+                    header={relationshipLink}
+                  />
+                );
+              }
               return (
                 <li key={threadId} className="group relative flex h-8 items-center rounded-lg">
                   {isMergeTarget ? (
@@ -465,7 +536,7 @@ export function ThreadRelationshipsPanel(props: {
                               size="sm"
                               variant="ghost"
                               part="link-primary"
-                              aria-label={`${threadTitle} ${threadRelationshipStatusLabel(status)}`}
+                              aria-label={`${threadTitle} ${threadRelationshipStatusLabel(rowStatus)}`}
                               disabled={node?.missing === true}
                               onClick={() => openThread(threadId)}
                             />
@@ -511,27 +582,11 @@ export function ThreadRelationshipsPanel(props: {
                         </TooltipPopup>
                       </Tooltip>
                       <span className="shrink-0 border border-transparent ps-1 pe-2.5 text-2xs font-medium text-muted-foreground">
-                        {threadRelationshipStatusLabel(status)}
+                        {threadRelationshipStatusLabel(rowStatus)}
                       </span>
                     </div>
                   ) : (
-                    <Tooltip>
-                      <TooltipTrigger
-                        delay={200}
-                        render={
-                          <ThreadDetailsControl
-                            size="sm"
-                            variant="ghost"
-                            disabled={node?.missing === true}
-                            onClick={() => openThread(threadId)}
-                            part="row"
-                          />
-                        }
-                      >
-                        {relationshipContent}
-                      </TooltipTrigger>
-                      <RelationshipPopup side="left">{relationshipTooltip}</RelationshipPopup>
-                    </Tooltip>
+                    relationshipLink
                   )}
                   {canStop && agent ? (
                     <div className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
