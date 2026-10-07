@@ -299,11 +299,14 @@ it("opens the correct chat for every workflow phase and unphased member", async 
       (node) =>
         node.type === "button" &&
         typeof node.props["aria-expanded"] === "boolean" &&
-        !node.props["aria-label"],
+        String(node.props["aria-label"]).endsWith(" phase"),
     );
   // Only the running phase starts open, beside the unphased member.
   expect(memberButtons()).toHaveLength(3);
   expect(phaseButtons()).toHaveLength(3);
+  expect(renderer.root.findByProps({ "aria-label": "Expand Inspect phase" })).toBeDefined();
+  expect(renderer.root.findByProps({ "aria-label": "Expand Improve phase" })).toBeDefined();
+  expect(renderer.root.findByProps({ "aria-label": "Collapse Verify phase" })).toBeDefined();
   for (const phase of phaseButtons().slice(0, 2)) await act(async () => phase.props.onClick());
   expect(memberButtons()).toHaveLength(7);
   for (const agent of agents) {
@@ -330,9 +333,12 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   // Members 0 and 1 start a second apart and run 5s each, so Inspect took 6s.
   expect(rendered).toContain('"6s"');
   for (const phase of phaseButtons()) {
+    const label = String(phase.props["aria-label"]).slice("Collapse ".length);
     await act(async () => phase.props.onClick());
     expect(memberButtons()).toHaveLength(5);
-    await act(async () => phase.props.onClick());
+    await act(async () =>
+      renderer.root.findByProps({ "aria-label": `Expand ${label}` }).props.onClick(),
+    );
     expect(memberButtons()).toHaveLength(7);
   }
   // A phase the user closed stays closed once it starts running, and stays

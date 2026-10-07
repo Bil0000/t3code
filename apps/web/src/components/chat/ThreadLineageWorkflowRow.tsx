@@ -238,8 +238,9 @@ export function ThreadLineageWorkflowRow({
                 <button
                   type="button"
                   aria-expanded={open}
+                  aria-label={`${open ? "Collapse" : "Expand"} ${phase.title} phase`}
                   onClick={() => setPhaseOpen((phases) => new Map(phases).set(phase.index, !open))}
-                  className="flex h-8 w-full cursor-pointer items-center gap-1.5 rounded-lg pe-2.5 text-left text-xs hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]"
+                  className="flex h-8 w-full cursor-pointer items-center gap-1 rounded-lg pe-2.5 text-left text-xs hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 dark:hover:bg-white/[0.075]"
                 >
                   <span aria-hidden className="flex w-4 shrink-0 justify-center">
                     {status.glyph}
@@ -254,7 +255,7 @@ export function ThreadLineageWorkflowRow({
                   </span>
                   <span
                     className={cn(
-                      "w-18 shrink-0 text-end font-mono text-2xs tabular-nums",
+                      "w-16 shrink-0 text-end font-mono text-2xs tabular-nums",
                       running ? "text-info" : "text-muted-foreground/70",
                     )}
                   >
@@ -264,6 +265,10 @@ export function ThreadLineageWorkflowRow({
                   <span className="w-14 shrink-0 text-end font-mono text-2xs text-muted-foreground/70">
                     <AgentElapsed agent={phaseElapsed(phase)} />
                   </span>
+                  <ChevronDownIcon
+                    aria-hidden
+                    className={cn("size-3.5 shrink-0 text-muted-foreground", open && "rotate-180")}
+                  />
                   <span className="sr-only">{status.label}</span>
                 </button>
                 {open ? (
