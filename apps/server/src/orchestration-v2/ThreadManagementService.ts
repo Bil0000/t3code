@@ -33,11 +33,14 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 
@@ -403,6 +406,7 @@ function latestSteerableRun(
 }
 
 const make = Effect.gen(function* () {
+  const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
@@ -774,6 +778,32 @@ const make = Effect.gen(function* () {
 
   const stopWorkflow: ThreadManagementServiceShape["stopWorkflow"] = (input) =>
     Effect.gen(function* () {
+      const limit = yield* DispatchModeLimit;
+      if (limit !== undefined) {
+        const thread = yield* orchestrator
+          .getThreadShell(input.threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable", cause }),
+            ),
+          );
+        if (thread === null || thread.deletedAt !== null) {
+          return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
+        }
+        const mode = exceededDispatchModeLimit(limit, thread);
+        if (mode !== undefined) {
+          if (limit.refused !== undefined) {
+            yield* Ref.set(limit.refused, {
+              threadId: input.threadId,
+              runtimeMode: thread.runtimeMode,
+              interactionMode: thread.interactionMode,
+              mode,
+            });
+          }
+          return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
+        }
+      }
       const records = yield* orchestrator
         .getThreadRecords(input.threadId, ["subagents", "runs", "providerThreads"])
         .pipe(
@@ -838,7 +868,7 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-    });
+    }).pipe((effect) => threadDispatch.withLock(input.threadId, effect));
 
   const stopDelegatedTasks: ThreadManagementServiceShape["stopDelegatedTasks"] = (input) =>
     Effect.gen(function* () {
@@ -925,6 +955,7 @@ export const layer: Layer.Layer<
   Orchestrator.OrchestratorV2 | ProviderSessionManager.ProviderSessionManagerV2
 > = Layer.effect(ThreadManagementService, make).pipe(
   Layer.provide(layerLegacyV1ThreadImporterNoop),
+  Layer.provide(ThreadCommandExecutor.layer),
 );
 
 export const layerWithLegacyImporter: Layer.Layer<
@@ -933,4 +964,4 @@ export const layerWithLegacyImporter: Layer.Layer<
   | LegacyV1ThreadImporter.LegacyV1ThreadImporter
   | Orchestrator.OrchestratorV2
   | ProviderSessionManager.ProviderSessionManagerV2
-> = Layer.effect(ThreadManagementService, make);
+> = Layer.effect(ThreadManagementService, make).pipe(Layer.provide(ThreadCommandExecutor.layer));

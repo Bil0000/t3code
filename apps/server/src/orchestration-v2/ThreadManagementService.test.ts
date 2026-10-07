@@ -12,6 +12,7 @@ import {
   ProviderSessionId,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -25,6 +26,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -36,6 +38,8 @@ import {
   type ProviderAdapterV2SessionRuntime,
 } from "./ProviderAdapter.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { DispatchModeLimit, type DispatchModeRefusal } from "./DispatchModeLimit.ts";
 
 it("stamps authoritative provenance on commands that create threads or messages", () => {
   const command: OrchestrationV2Command = {
@@ -501,6 +505,9 @@ it.effect.each([
   "no-session",
   "unsupported-runtime",
   "provider-failed",
+  "within-limit",
+  "runtime-raised",
+  "interaction-raised",
 ] as const)("stops a persisted workflow with state %s", (state) =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("thread:workflow-stop");
@@ -511,6 +518,10 @@ it.effect.each([
     const driver = ProviderDriverKind.make("claudeAgent");
     const instanceId = ProviderInstanceId.make("claudeAgent");
     const now = yield* DateTime.now;
+    let targetModes: Pick<OrchestrationV2ThreadShell, "runtimeMode" | "interactionMode"> = {
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    };
     const task: OrchestrationV2Subagent = {
       id: subagentId,
       threadId,
@@ -583,6 +594,15 @@ it.effect.each([
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(Orchestrator.OrchestratorV2)({
+            getThreadShell: () =>
+              Effect.sync(
+                () =>
+                  ({
+                    id: threadId,
+                    deletedAt: null,
+                    ...targetModes,
+                  }) as OrchestrationV2ThreadShell,
+              ),
             getThreadRecords: () =>
               Effect.succeed({
                 subagents: state === "missing" ? [] : [task],
@@ -601,8 +621,42 @@ it.effect.each([
     );
     yield* Effect.gen(function* () {
       const service = yield* ThreadManagementService.ThreadManagementService;
-      const result = yield* Effect.result(service.stopWorkflow({ threadId, subagentId }));
-      if (state === "running") {
+      const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
+      const stop = service
+        .stopWorkflow({ threadId, subagentId })
+        .pipe(
+          Effect.provideService(
+            DispatchModeLimit,
+            state === "within-limit" || state === "runtime-raised" || state === "interaction-raised"
+              ? { runtimeMode: "approval-required", interactionMode: "plan", refused }
+              : undefined,
+          ),
+          Effect.result,
+        );
+      const executor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+      const result =
+        state === "runtime-raised" || state === "interaction-raised"
+          ? yield* Effect.gen(function* () {
+              const started = yield* Deferred.make<void>();
+              const pending = yield* executor.withLock(
+                threadId,
+                Effect.gen(function* () {
+                  const fiber = yield* Deferred.succeed(started, undefined).pipe(
+                    Effect.andThen(stop),
+                    Effect.forkChild,
+                  );
+                  yield* Deferred.await(started);
+                  targetModes =
+                    state === "runtime-raised"
+                      ? { ...targetModes, runtimeMode: "full-access" }
+                      : { ...targetModes, interactionMode: "default" };
+                  return fiber;
+                }),
+              );
+              return yield* Fiber.join(pending);
+            })
+          : yield* stop;
+      if (state === "running" || state === "within-limit") {
         expect(result).toMatchObject({ _tag: "Success" });
         expect(calls).toEqual([{ taskId: "native-workflow-id", providerThread }]);
         expect(task.status).toBe("running");
@@ -624,7 +678,14 @@ it.effect.each([
           },
         });
         expect(calls).toEqual([]);
+        if (state === "runtime-raised" || state === "interaction-raised") {
+          expect(yield* Ref.get(refused)).toEqual({
+            threadId,
+            ...targetModes,
+            mode: state === "runtime-raised" ? "runtime" : "interaction",
+          });
+        }
       }
-    }).pipe(Effect.provide(layerTest));
+    }).pipe(Effect.provide(Layer.merge(layerTest, ThreadCommandExecutor.layer)));
   }),
 );
