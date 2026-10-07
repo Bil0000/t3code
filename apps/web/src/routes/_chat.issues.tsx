@@ -1561,6 +1561,8 @@ function IssuesRouteView() {
           <RightPanelTabs
             mode="inline"
             open={rightPanelState.isOpen}
+            keybindings={keybindings}
+            getShortcutContext={getShortcutContext}
             widthStorageKey="t3code:issue-panel-width"
             // Default to roughly half the viewport: an issue's conversation needs more room
             // than a chat, so the 540px chat-preview default squashes it. SSR has no window,
