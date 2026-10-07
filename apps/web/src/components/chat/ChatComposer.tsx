@@ -3178,19 +3178,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             )
             .filter((key) => key !== questionAttachmentTarget)
         : [];
+    const draft = getComposerDraft(attachmentDraftTarget);
     return (
-      composerImagesRef.current.length +
-      composerFilesRef.current.length +
+      (draft?.images.length ?? 0) +
+      (draft?.files.length ?? 0) +
       (pendingImageCompressionsRef.current.get(attachmentTargetKey) ?? 0) +
       (pendingThreadImportsRef.current.get(attachmentTargetKey) ?? 0) +
       countQuestionAttachments(otherQuestionKeys)
     );
   }, [
     activeThreadId,
+    attachmentDraftTarget,
     attachmentTargetKey,
-    composerFilesRef,
-    composerImagesRef,
     environmentId,
+    getComposerDraft,
     pendingUserInputs,
     questionAttachmentTarget,
   ]);

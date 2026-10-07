@@ -1,6 +1,7 @@
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { importComposerThreadAttachment } from "./composerThreadImport";
 
 function deferredFile() {
@@ -14,6 +15,53 @@ function deferredFile() {
 }
 
 describe("importComposerThreadAttachment", () => {
+  it("rejects the next drop before loading when the draft takes the final slot", async () => {
+    const targetKey = DraftId.make("thread-import-synchronous-admission");
+    const store = useComposerDraftStore.getState();
+    const pendingImports = new Map<string, number>();
+    const files = Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1 }, (_, index) => ({
+      type: "file" as const,
+      id: `existing-${index}`,
+      name: `existing-${index}.txt`,
+      mimeType: "text/plain",
+      sizeBytes: 1,
+      file: new File(["x"], `existing-${index}.txt`, { type: "text/plain" }),
+    }));
+    store.addFiles(targetKey, files);
+    const load = vi.fn(async () => new File(["transcript"], "thread.jsonl"));
+    const onLimitReached = vi.fn();
+    const input = {
+      targetKey,
+      pendingImports,
+      countReservedAttachments: () =>
+        (store.getComposerDraft(targetKey)?.files.length ?? 0) +
+        (pendingImports.get(targetKey) ?? 0),
+      load,
+      isActive: () => true,
+      attach: async (file: File) =>
+        store.addFiles(targetKey, [
+          {
+            type: "file",
+            id: "transcript",
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            file,
+          },
+        ]).length > 0,
+      onLimitReached,
+    };
+
+    await importComposerThreadAttachment(input);
+    await importComposerThreadAttachment(input);
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(onLimitReached).toHaveBeenCalledTimes(1);
+    expect(store.getComposerDraft(targetKey)?.files.at(-1)?.name).toBe("thread.jsonl");
+    expect(pendingImports.size).toBe(0);
+    store.clearComposerContent(targetKey);
+  });
+
   it.each(["file", "image"])(
     "reserves the final slot during an overlapping %s attachment",
     async (kind) => {
