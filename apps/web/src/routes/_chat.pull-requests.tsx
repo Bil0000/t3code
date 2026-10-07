@@ -2307,6 +2307,21 @@ function PullRequestsRouteView() {
                   void refreshFromHost();
                 }}
                 onStateChange={handleIssueTabStatusChange}
+                onOpenRelatedIssue={({ number, url }) => {
+                  if (rightPanelRef === null) {
+                    openLinkInBrowser(url);
+                    return;
+                  }
+                  useRightPanelStore.getState().openIssue(rightPanelRef, {
+                    environmentId: panelEnvironmentId,
+                    projectId: renderedPullRequestSurface.projectId,
+                    ...(renderedPullRequestSurface.provider === undefined
+                      ? {}
+                      : { provider: renderedPullRequestSurface.provider }),
+                    repository: renderedPullRequestSurface.repository,
+                    number,
+                  });
+                }}
                 onOpenLinkedPullRequest={(link) => {
                   const project = findProjectForLink(
                     projects.filter((candidate) => candidate.environmentId === panelEnvironmentId),

@@ -178,6 +178,26 @@ export const IssueLinkedPullRequest = Schema.Struct({
 });
 export type IssueLinkedPullRequest = typeof IssueLinkedPullRequest.Type;
 
+/** A parent or sub-issue in the same tracker project as the issue that carries it. */
+export const IssueRelative = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  state: IssueState,
+  /** Where the tracker reports them; absent when it was not asked. */
+  linkedPullRequests: Schema.optional(Schema.Array(IssueLinkedPullRequest)),
+});
+export type IssueRelative = typeof IssueRelative.Type;
+
+export interface IssueRelativeNode extends IssueRelative {
+  readonly subIssues: ReadonlyArray<IssueRelativeNode>;
+}
+/** A sub-issue with its own sub-issues, as deep as the tracker read them. */
+export const IssueRelativeNode: Schema.Codec<IssueRelativeNode> = Schema.Struct({
+  ...IssueRelative.fields,
+  subIssues: Schema.Array(Schema.suspend((): Schema.Codec<IssueRelativeNode> => IssueRelativeNode)),
+});
+
 /**
  * The other direction of the same relationship, carried on a change request. Lives here rather
  * than beside the change request schemas so the two link shapes stay in one file and neither
@@ -397,6 +417,10 @@ export const IssueDetail = Schema.Struct({
   viewer: Schema.optional(TrimmedNonEmptyString),
   commentCount: NonNegativeInt,
   linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
+  /** Absent when the tracker has no issue hierarchy. */
+  /** Root first, ending with the direct parent. */
+  ancestors: Schema.optional(Schema.Array(IssueRelative)),
+  subIssues: Schema.optional(Schema.Array(IssueRelativeNode)),
 });
 export type IssueDetail = typeof IssueDetail.Type;
 

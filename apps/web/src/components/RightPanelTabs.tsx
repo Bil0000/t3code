@@ -630,11 +630,12 @@ function surfaceTitle(
         getTerminalLabel(surface.activeTerminalId)
       );
     case "pull-request":
-    case "issue":
       return `#${surface.number}`;
+    case "issue":
+      return issueTabReference(surface);
     // The strip says what the tab is showing, which for the browser is either of two things.
     case "issues":
-      return surface.selected ? `#${surface.selected.number}` : "Issues";
+      return surface.selected ? issueTabReference(surface.selected) : "Issues";
     case "pull-requests":
       return "Linked items";
     case "device":
@@ -1512,4 +1513,13 @@ function DeviceTabTooltip(props: {
       ) : null}
     </div>
   );
+}
+
+/** `ENG-12` for a tracker that keys issues by team, `#12` for a repository's numbering. */
+function issueTabReference(issue: {
+  readonly provider?: string | undefined;
+  readonly repository: string;
+  readonly number: number;
+}) {
+  return issue.provider === "linear" ? `${issue.repository}-${issue.number}` : `#${issue.number}`;
 }

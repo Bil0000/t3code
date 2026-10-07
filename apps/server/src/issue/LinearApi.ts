@@ -66,6 +66,41 @@ const Comment = Schema.Struct({
   user: Schema.optional(Schema.NullOr(User)),
   reactions: Schema.optional(Schema.NullOr(Schema.Array(Reaction))),
 });
+
+// Links Linear's GitHub/GitLab integrations record on an issue; `metadata` is integration-defined.
+const Attachment = Schema.Struct({
+  url: Schema.String,
+  title: Schema.String,
+  sourceType: Schema.optional(Schema.NullOr(Schema.String)),
+  metadata: Schema.optional(Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown))),
+});
+interface Relative {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly state: typeof State.Type;
+  readonly attachments?:
+    | { readonly nodes: ReadonlyArray<typeof Attachment.Type> }
+    | null
+    | undefined;
+  readonly parent?: Relative | null | undefined;
+  readonly children?: { readonly nodes: ReadonlyArray<Relative> } | null | undefined;
+}
+const Relative: Schema.Codec<Relative> = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  url: Schema.String,
+  state: State,
+  attachments: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Attachment) }))),
+  parent: Schema.optional(Schema.NullOr(Schema.suspend((): Schema.Codec<Relative> => Relative))),
+  children: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.Array(Schema.suspend((): Schema.Codec<Relative> => Relative)),
+      }),
+    ),
+  ),
+});
 const Issue = Schema.Struct({
   id: Schema.String,
   identifier: Schema.String,
@@ -90,6 +125,9 @@ const Issue = Schema.Struct({
     ),
   ),
   reactions: Schema.optional(Schema.NullOr(Schema.Array(Reaction))),
+  attachments: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Attachment) }))),
+  parent: Schema.optional(Schema.NullOr(Relative)),
+  children: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Relative) }))),
 });
 
 const GraphQlError = Schema.Struct({
@@ -151,6 +189,10 @@ const MutationEnvelope = Schema.Struct({
 
 const USER_FIELDS = "id name email avatarUrl";
 const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
+// Three levels each way bounds the query's complexity; deeper relatives open from the tree.
+const RELATIVE_FIELDS = "number title url state { name type }";
+// Pull requests only on the levels nearest the issue, which keeps the query under Linear's cost limit.
+const RELATIVE_WITH_PULL_REQUESTS = `${RELATIVE_FIELDS} attachments(first: 5) { nodes { url title sourceType metadata } }`;
 const ISSUE_FIELDS = `
   id identifier number title url description createdAt updatedAt completedAt canceledAt
   state { name type }
@@ -171,7 +213,19 @@ const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $filter: Issue
   }
 }`;
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
-  issue(id: $id) { ${ISSUE_FIELDS} }
+  issue(id: $id) {
+    ${ISSUE_FIELDS}
+    attachments { nodes { url title sourceType metadata } }
+    parent { ${RELATIVE_WITH_PULL_REQUESTS} parent { ${RELATIVE_FIELDS} parent { ${RELATIVE_FIELDS} } } }
+    children(first: 50) {
+      nodes {
+        ${RELATIVE_WITH_PULL_REQUESTS}
+        children(first: 20) {
+          nodes { ${RELATIVE_FIELDS} children(first: 10) { nodes { ${RELATIVE_FIELDS} } } }
+        }
+      }
+    }
+  }
 }`;
 const ACTIVITY_QUERY = `query T3LinearIssueActivity($id: String!, $comments: Int!) {
   viewer { id name email avatarUrl }
@@ -250,6 +304,8 @@ export const isLinearApiError = Schema.is(LinearApiError);
 
 export type LinearUser = typeof User.Type;
 export type LinearIssue = typeof Issue.Type;
+export type LinearAttachment = typeof Attachment.Type;
+export type LinearRelative = Relative;
 export type LinearComment = typeof Comment.Type;
 export type LinearReaction = typeof Reaction.Type;
 export class LinearApi extends Context.Service<
@@ -759,6 +815,14 @@ const make = Effect.gen(function* () {
           { title: { containsIgnoreCase: input.query } },
           { description: { containsIgnoreCase: input.query } },
         ];
+        // `ENG-12`, `#12` or `12` asks for one issue of this team by its number.
+        const reference = /^(?:([a-z][a-z0-9]*)-|#)?(\d+)$/iu.exec(input.query.trim());
+        if (
+          reference !== null &&
+          (reference[1] === undefined || reference[1].toUpperCase() === input.teamKey.toUpperCase())
+        ) {
+          filter.or = [...(filter.or as Array<unknown>), { number: { eq: Number(reference[2]) } }];
+        }
       }
       if (input.cursor !== undefined) filter.updatedAt = { lte: input.cursor.updatedBefore };
       if (input.cursor?.seenAt?.length) filter.number = { nin: input.cursor.seenAt };

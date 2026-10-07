@@ -10873,6 +10873,20 @@ export default function ChatView(props: ChatViewProps) {
           repository: renderedRightPanelSurface.repository,
           number: renderedRightPanelSurface.number,
         }}
+        onOpenRelatedIssue={({ number, url }) => {
+          if (activeThreadRef === null) {
+            openLinkInBrowser(url);
+            return;
+          }
+          useRightPanelStore.getState().openIssue(activeThreadRef, {
+            projectId: renderedRightPanelSurface.projectId,
+            ...(renderedRightPanelSurface.provider === undefined
+              ? {}
+              : { provider: renderedRightPanelSurface.provider }),
+            repository: renderedRightPanelSurface.repository,
+            number,
+          });
+        }}
         chromeVariant="collapse"
         handoffTarget={{
           kind: "existing-thread",

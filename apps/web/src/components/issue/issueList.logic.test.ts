@@ -212,6 +212,15 @@ describe("issue search", () => {
     expect(matchesIssueQuery(target, "4711")).toBe(true);
   });
 
+  it("matches a tracker key such as a Linear identifier", () => {
+    const linear = entry({ number: 63, title: "Picker", repository: "NSI" });
+    expect(matchesIssueQuery(linear, "nsi-63")).toBe(true);
+    expect(scoreIssueMatch(linear, "NSI-63")).toBe(100);
+    expect(
+      scoreIssueMatch(entry({ number: 64, title: "Other", repository: "NSI" }), "NSI-63"),
+    ).not.toBe(100);
+  });
+
   it("matches title, author, assignee and label case-insensitively", () => {
     expect(matchesIssueQuery(target, "SIDEBAR")).toBe(true);
     expect(matchesIssueQuery(target, "octocat")).toBe(true);

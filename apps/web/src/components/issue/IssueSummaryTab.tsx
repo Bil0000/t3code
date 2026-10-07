@@ -4,6 +4,7 @@ import type {
   IssueDetailView,
   IssueLinkedPullRequest,
   IssueRef,
+  IssueRelative,
   WorkItemMatch,
 } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -17,7 +18,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { issueEnvironment } from "~/state/issues";
@@ -40,6 +41,12 @@ import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { IssueLabelChips } from "./issuePresentation";
+import {
+  countIssueNodes,
+  flattenIssueTree,
+  IssueTreePullRequestRows,
+  IssueTreeRow,
+} from "./IssueTree";
 import { toastManager } from "../ui/toast";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
@@ -224,6 +231,7 @@ export function IssueSummaryTab({
   pendingHandoff,
   onLinkPullRequests,
   onOpenLinkedPullRequest,
+  onOpenRelatedIssue,
   onOpenAiMatch,
   onLoadMoreComments,
   loadingMoreComments,
@@ -252,6 +260,7 @@ export function IssueSummaryTab({
    */
   onLinkPullRequests?: (match: WorkItemMatch) => void;
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
+  onOpenRelatedIssue: (issue: IssueRelative) => void;
   onOpenAiMatch: (match: WorkItemMatch) => void;
   onRefresh: () => void;
   onLoadMoreComments: () => void;
@@ -458,6 +467,38 @@ export function IssueSummaryTab({
           />
         </div>
       </SummarySection>
+
+      {(detail.ancestors?.length ?? 0) > 0 || (detail.subIssues?.length ?? 0) > 0 ? (
+        <SummarySection
+          title="Linked issues"
+          count={(detail.ancestors?.length ?? 0) + countIssueNodes(detail.subIssues ?? [])}
+        >
+          {detail.subIssues?.length ? (
+            <p className="mb-1 px-2 text-xs text-muted-foreground">
+              {detail.subIssues.filter((issue) => issue.state === "closed").length} of{" "}
+              {detail.subIssues.length} sub-issues done
+            </p>
+          ) : null}
+          <div role="tree" aria-label="Linked issues" className="space-y-0.5">
+            {flattenIssueTree(detail).map((row) => (
+              <Fragment key={`${row.depth}:${row.issue.number}`}>
+                <IssueTreeRow
+                  row={row}
+                  repository={detail.repository}
+                  onOpen={onOpenRelatedIssue}
+                />
+                {row.current ? null : (
+                  <IssueTreePullRequestRows
+                    links={row.issue.linkedPullRequests}
+                    depth={row.depth}
+                    onOpen={onOpenLinkedPullRequest}
+                  />
+                )}
+              </Fragment>
+            ))}
+          </div>
+        </SummarySection>
+      ) : null}
 
       <SummarySection
         title="Related pull requests"

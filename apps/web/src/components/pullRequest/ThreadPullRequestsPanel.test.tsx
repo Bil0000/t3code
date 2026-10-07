@@ -38,6 +38,11 @@ vi.mock("~/state/entities", () => ({
   ],
   useServerConfigs: () => new Map([["remote", { environment: { capabilities: capabilities() } }]]),
 }));
+// No tree is read here, so each issue shows as its plain linked row.
+vi.mock("~/state/query", () => ({
+  useEnvironmentQuery: () => ({ data: null, isPending: false, error: null, refresh: () => {} }),
+}));
+vi.mock("~/state/issues", () => ({ issueEnvironment: { detail: () => null, invalidate: null } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => update }));
 vi.mock("~/rightPanelStore", () => ({ useRightPanelStore: { getState: () => ({ openIssue }) } }));
 vi.mock("~/lib/openIssueLink", async (importOriginal) => ({

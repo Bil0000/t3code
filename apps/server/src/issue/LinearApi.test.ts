@@ -240,6 +240,41 @@ it.effect("keeps Linear list continuation when the API page cap is reached", () 
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("searches an issue key as that team's issue number", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "lin_api_test",
+    response: () => ({
+      data: { issues: { nodes: [], pageInfo: { hasNextPage: false, hasPreviousPage: false } } },
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const base = {
+      teamKey: "ENG",
+      state: "all",
+      involvement: "all",
+      viewer: "u",
+      limit: 5,
+    } as const;
+    for (const query of ["eng-12", "#12", "12", "OPS-12", "crash"]) {
+      yield* api.listIssues({ ...base, query });
+    }
+    const numberClauses = requests.map(({ body }) =>
+      ((body.variables as { filter: { or: Array<Record<string, unknown>> } }).filter.or ?? []).find(
+        (clause) => "number" in clause,
+      ),
+    );
+
+    assert.deepStrictEqual(numberClauses, [
+      { number: { eq: 12 } },
+      { number: { eq: 12 } },
+      { number: { eq: 12 } },
+      undefined,
+      undefined,
+    ]);
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("surfaces malformed saved credential storage", () => {
   const { layer } = makeLayer({ credentials: "not-json", response: () => ({}) });
   return Effect.gen(function* () {

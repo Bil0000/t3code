@@ -1,5 +1,6 @@
 import {
   SourceControlProviderKind,
+  type IssueLinkedPullRequest,
   type ProjectId,
   type ScopedThreadRef,
   type ThreadIssueLink,
@@ -23,7 +24,11 @@ import * as Schema from "effect/Schema";
 import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { findProjectForLink, openLinkInBrowser } from "~/lib/openIssueLink";
+import {
+  findProjectForLink,
+  linkedPullRequestTarget,
+  openLinkInBrowser,
+} from "~/lib/openIssueLink";
 import {
   findProjectForChangeRequest,
   shouldOpenPullRequestExternally,
@@ -43,6 +48,7 @@ import { MiddleTruncate } from "../ui/middle-truncate";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { openLinkPullRequestDialog } from "./LinkPullRequestDialog";
+import { ThreadIssueTrees } from "../issue/ThreadIssueTrees";
 import { pullRequestListLines, type PullRequestListLine } from "./pullRequestListLines";
 import {
   PULL_REQUEST_ROW_CLASS,
@@ -222,6 +228,44 @@ function IssueRow({
         </MenuItem>
       </RowMenu>
     </div>
+  );
+}
+
+function IssueTreeActions({
+  issue,
+  onUnlink,
+}: {
+  issue: ThreadIssueLink;
+  onUnlink: (issue: ThreadIssueLink) => void;
+}) {
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-micro"
+            aria-label={`Actions for issue ${issue.repository}-${issue.number}`}
+          >
+            <MoreHorizontalIcon className="size-3.5" />
+          </Button>
+        }
+      />
+      <MenuPopup align="end" side="bottom" sideOffset={4}>
+        <MenuItem onClick={() => void writeTextToClipboard(issue.url, "link")}>
+          <LinkIcon className="size-3.5" />
+          Copy link
+        </MenuItem>
+        <MenuItem onClick={() => openLinkInBrowser(issue.url)}>
+          <ArrowUpRightIcon className="size-3.5" />
+          Open on host
+        </MenuItem>
+        <MenuItem onClick={() => onUnlink(issue)}>
+          <PullRequestGlyph.unlink className="size-3.5" />
+          Unlink from thread
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
   );
 }
 
@@ -455,8 +499,11 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
   );
   const lines = useMemo(() => pullRequestListLines(resolveThreadPullRequestChains(links)), [links]);
   const issues = useMemo(() => thread?.issues ?? [], [thread]);
-  const handleOpenIssue = useCallback(
-    (issue: ThreadIssueLink) => {
+  // The project an issue is read through, by its saved project, its host URL, or — for a
+  // tracker with no repository of its own — the thread's project.
+  const issueProjectId = useCallback(
+    (issue: ThreadIssueLink): ProjectId | null => {
+      if (!supportsIssues) return null;
       const environmentProjects = projects.filter(
         (candidate) => candidate.environmentId === threadRef.environmentId,
       );
@@ -466,18 +513,45 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
           : isSourceControlProvider(issue.provider)
             ? findProjectForLink(environmentProjects, issue)
             : environmentProjects.find((candidate) => candidate.id === thread?.projectId);
-      if (!supportsIssues || project === undefined) {
+      return project?.id ?? null;
+    },
+    [projects, supportsIssues, thread?.projectId, threadRef.environmentId],
+  );
+  const openThreadIssue = useCallback(
+    (issue: ThreadIssueLink, number: number) => {
+      const projectId = issueProjectId(issue);
+      if (projectId === null) {
         openLinkInBrowser(issue.url);
         return;
       }
       useRightPanelStore.getState().openIssue(threadRef, {
-        projectId: project.id,
+        projectId,
         provider: issue.provider,
         repository: issue.repository,
-        number: issue.number,
+        number,
       });
     },
-    [projects, supportsIssues, thread?.projectId, threadRef],
+    [issueProjectId, threadRef],
+  );
+  const openTreePullRequest = useCallback(
+    (link: IssueLinkedPullRequest) => {
+      const project = findProjectForLink(
+        projects.filter((candidate) => candidate.environmentId === threadRef.environmentId),
+        link,
+      );
+      if (!supportsPullRequests || project === undefined) {
+        openLinkInBrowser(link.url);
+        return;
+      }
+      useRightPanelStore
+        .getState()
+        .openPullRequest(threadRef, linkedPullRequestTarget(project, link));
+    },
+    [projects, supportsPullRequests, threadRef],
+  );
+  const handleOpenIssue = useCallback(
+    (issue: ThreadIssueLink) => openThreadIssue(issue, issue.number),
+    [openThreadIssue],
   );
   const handleUnlink = useCallback(
     (link: ThreadPullRequestLink) => {
@@ -578,14 +652,23 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               onSetWatching={supportsWatch ? handleSetWatching : null}
             />
           ))}
-          {issues.map((issue) => (
-            <IssueRow
-              key={issue.url}
-              issue={issue}
-              onOpen={handleOpenIssue}
-              onUnlink={handleUnlinkIssue}
+          {issues.length > 0 ? (
+            <ThreadIssueTrees
+              className={lines.length > 0 ? "mt-1.5" : undefined}
+              environmentId={threadRef.environmentId}
+              threadRef={threadRef}
+              linked={issues}
+              projectFor={issueProjectId}
+              onOpen={openThreadIssue}
+              onOpenPullRequest={openTreePullRequest}
+              renderFallback={(issue) => (
+                <IssueRow issue={issue} onOpen={handleOpenIssue} onUnlink={handleUnlinkIssue} />
+              )}
+              renderActions={(issue) => (
+                <IssueTreeActions issue={issue} onUnlink={handleUnlinkIssue} />
+              )}
             />
-          ))}
+          ) : null}
         </div>
       </ScrollArea>
       <footer className="flex items-center justify-between border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">

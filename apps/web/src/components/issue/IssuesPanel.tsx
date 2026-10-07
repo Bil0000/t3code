@@ -157,6 +157,7 @@ function ProjectIssues({
             handoffTarget={handoffTarget}
             onStateChange={onStateChange}
             onOpenLinkedPullRequest={onOpenLinkedPullRequest}
+            onOpenRelatedIssue={({ number }) => onSelect({ ...selected, number })}
             // The panel is the narrowest place this reads, so the metadata folds into the top row
             // once the content scrolls — the same bargain the issues page makes.
             chromeVariant="collapse"
