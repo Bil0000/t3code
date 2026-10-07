@@ -1425,6 +1425,154 @@ it.effect("routes projects on one host through distinct credential viewers", () 
   }),
 );
 
+it.effect.each(["assigned", "authored"] as const)(
+  "rebuilds project viewers after a selected-project %s listing",
+  (involvement) =>
+    Effect.gen(function* () {
+      const asked: Array<[string, string]> = [];
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/web" }),
+          project({ id: "p2", title: "api", workspaceRoot: "/api" }),
+          project({ id: "p3", title: "mobile", workspaceRoot: "/mobile" }),
+        ],
+        providers: [
+          fakeProvider("linear", {
+            resolveSource: (candidate) =>
+              Effect.succeed({
+                host: "linear.app",
+                repository: candidate.id.toUpperCase(),
+                credentialId: candidate.id === "p2" ? "user-2" : "user-1",
+              }),
+            getViewer: ({ credentialId }) => Effect.succeed(credentialId!),
+            listIssues: ({ repository, viewer }) => {
+              asked.push([repository, viewer]);
+              return Effect.succeed({
+                items: [
+                  {
+                    ...issue(7, "2026-07-02T00:00:00Z"),
+                    author: { login: viewer, name: null, avatarUrl: null },
+                    assignees: [{ login: viewer, name: null, avatarUrl: null }],
+                  },
+                ],
+                truncated: false,
+                continues: true,
+              });
+            },
+          }),
+        ],
+      });
+      yield* service.list({ state: "open", involvement, projectId: "p1" as ProjectId });
+      const otherProject = yield* service.list({
+        state: "open",
+        involvement,
+        projectId: "p3" as ProjectId,
+      });
+      assert.strictEqual(
+        otherProject.viewers[issueProjectSourceKey("linear", "linear.app", "p3" as ProjectId)],
+        "user-1",
+      );
+      const result = yield* service.list({ state: "open", involvement });
+      assert.deepStrictEqual(result.entries.map(({ projectId }) => projectId).toSorted(), [
+        "p1",
+        "p2",
+        "p3",
+      ]);
+      for (const [projectId, viewer] of [
+        ["p1", "user-1"],
+        ["p2", "user-2"],
+        ["p3", "user-1"],
+      ] as const) {
+        assert.strictEqual(
+          result.viewers[issueProjectSourceKey("linear", "linear.app", projectId as ProjectId)],
+          viewer,
+        );
+      }
+      assert.deepStrictEqual(asked.slice(2).toSorted(), [
+        ["P1", "user-1"],
+        ["P2", "user-2"],
+        ["P3", "user-1"],
+      ]);
+    }),
+);
+
+it.effect.each([false, true])(
+  "separates cached Linear reads after a same-team account switch, tracker mutation: %s",
+  (throughTracker) =>
+    Effect.gen(function* () {
+      let credentialId = "user-1";
+      const reads: string[] = [];
+      const connected = {
+        status: "authenticated" as const,
+        hasStoredToken: true,
+        accountName: null,
+        accountEmail: null,
+        projects: [],
+        accounts: [],
+      };
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("linear", {
+            resolveSource: () =>
+              Effect.succeed({ host: "linear.app", repository: "ENG", credentialId }),
+            getViewer: ({ credentialId }) => Effect.succeed(credentialId!),
+            getIssue: ({ credentialId }) => {
+              reads.push(`detail:${credentialId}`);
+              return Effect.succeed(
+                issueDetail(7, { title: credentialId!, viewer: credentialId! }),
+              );
+            },
+            listIssues: ({ credentialId }) => {
+              reads.push(`list:${credentialId}`);
+              return Effect.succeed({
+                items: [{ ...issue(7, "2026-07-02T00:00:00Z"), title: credentialId! }],
+                truncated: false,
+                continues: true,
+              });
+            },
+            tracker: {
+              status: Effect.succeed(connected),
+              connect: () => Effect.succeed(connected),
+              disconnect: () => Effect.succeed(connected),
+              bind: (input) =>
+                Effect.sync(() => {
+                  credentialId = input.binding!.credentialId!;
+                }),
+            },
+          }),
+        ],
+      });
+      const reference = { ...REFERENCE, provider: "linear", repository: "ENG" };
+      for (const next of ["user-1", "user-2", "user-1"]) {
+        if (throughTracker) {
+          yield* service.trackerBind({
+            provider: "linear",
+            projectId: REFERENCE.projectId,
+            binding: { repository: "ENG", credentialId: next },
+          });
+        } else {
+          credentialId = next;
+        }
+        assert.strictEqual((yield* service.detail(reference)).title, next);
+        assert.strictEqual((yield* service.list({ state: "open" })).entries[0]?.title, next);
+      }
+      assert.deepStrictEqual(
+        reads,
+        throughTracker
+          ? [
+              "detail:user-1",
+              "list:user-1",
+              "detail:user-2",
+              "list:user-2",
+              "detail:user-1",
+              "list:user-1",
+            ]
+          : ["detail:user-1", "list:user-1", "detail:user-2", "list:user-2"],
+      );
+    }),
+);
+
 it.effect("pauses GitLab detail reads after a template quota failure", () =>
   Effect.gen(function* () {
     const provider = yield* GitLabIssueProvider.make.pipe(

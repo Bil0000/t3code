@@ -638,11 +638,12 @@ export const make = Effect.gen(function* () {
         new Map(projects.map((project) => [sourceKeyOf(project), project])),
         ([key, first]) =>
           Effect.flatMap(Clock.currentTimeMillis, (now): Effect.Effect<ResolvedViewer> => {
+            const forSource = projects.filter((project) => sourceKeyOf(project) === key);
+            const projectIds = forSource.map(({ project }) => project.id);
             const held = viewersBySource.get(`${key}\0${credentialNamespace}`);
             if (held !== undefined && now - held.at <= Duration.toMillis(VIEWER_CACHE_TTL)) {
-              return Effect.succeed(held.result);
+              return Effect.succeed({ ...held.result, projectIds });
             }
-            const forSource = projects.filter((project) => sourceKeyOf(project) === key);
             const adapter = first.adapter;
             // Every checkout on the host, not just the ones that survived de-duplication: one
             // unreadable worktree would otherwise report the whole host as signed out.
@@ -660,7 +661,7 @@ export const make = Effect.gen(function* () {
                 key,
                 host: first.host,
                 kind: adapter.kind,
-                projectIds: forSource.map(({ project }) => project.id),
+                projectIds,
                 viewer: viewer as string | null,
                 error: null as IssueProviderError | null,
               })),
@@ -674,7 +675,7 @@ export const make = Effect.gen(function* () {
                   key,
                   host: first.host,
                   kind: adapter.kind,
-                  projectIds: forSource.map(({ project }) => project.id),
+                  projectIds,
                   viewer: null,
                   error,
                 }),
@@ -1955,6 +1956,7 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((project) =>
           project.adapter.withCredential === undefined
             ? read(input).pipe(
+                Effect.provideService(CredentialNamespace, sourceKeyOf(project)),
                 Effect.provideService(ResolvedSource, project),
                 Effect.provideService(AllowGitHubReserve, allowReserve),
               )
@@ -2008,7 +2010,14 @@ export const make = Effect.gen(function* () {
             list(input).pipe(
               Effect.provideService(
                 CredentialNamespace,
-                encodeCacheKey(scopes.map(({ key, fingerprint }) => [key, fingerprint])),
+                encodeCacheKey([
+                  ...scopes.map(({ key, fingerprint }) => [key, fingerprint]),
+                  ...new Set(
+                    resolved.supported
+                      .filter((project) => project.adapter.withCredential === undefined)
+                      .map(sourceKeyOf),
+                  ),
+                ]),
               ),
               Effect.provideService(
                 CredentialContexts,
@@ -2029,17 +2038,20 @@ export const make = Effect.gen(function* () {
     trackerStatus: (input) =>
       registry.tracker(input.provider, "status").pipe(Effect.flatMap((tracker) => tracker.status)),
     trackerConnect: (input) =>
-      registry
-        .tracker(input.provider, "connect")
-        .pipe(Effect.flatMap((tracker) => tracker.connect(input.token))),
+      registry.tracker(input.provider, "connect").pipe(
+        Effect.flatMap((tracker) => tracker.connect(input.token)),
+        Effect.tap(() => invalidate({})),
+      ),
     trackerDisconnect: (input) =>
-      registry
-        .tracker(input.provider, "disconnect")
-        .pipe(Effect.flatMap((tracker) => tracker.disconnect(input.credentialId))),
+      registry.tracker(input.provider, "disconnect").pipe(
+        Effect.flatMap((tracker) => tracker.disconnect(input.credentialId)),
+        Effect.tap(() => invalidate({})),
+      ),
     trackerBind: (input) =>
-      registry
-        .tracker(input.provider, "bind")
-        .pipe(Effect.flatMap((tracker) => tracker.bind(input))),
+      registry.tracker(input.provider, "bind").pipe(
+        Effect.flatMap((tracker) => tracker.bind(input)),
+        Effect.tap(() => invalidate({})),
+      ),
     list: credentialList,
     summary: credentialScoped(summary, false),
     detail: credentialScoped(detail, false),

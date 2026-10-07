@@ -30,6 +30,8 @@ import * as ServerConfig from "./config.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import { writeFileStringAtomically } from "./atomicWrite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
+import * as LinearApi from "./issue/LinearApi.ts";
+import { disconnectLinearAccount } from "./issue/LinearConnection.ts";
 import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.ts";
 
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
@@ -97,6 +99,76 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect.each([false, true])(
+    "restores failed Linear disconnect bindings after a watcher reload, unrelated edit: %s",
+    (unrelatedEdit) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const fs = yield* FileSystem.FileSystem;
+          const service = yield* ServerSettingsModule.ServerSettingsService;
+          yield* fs.writeFileString(
+            config.settingsPath,
+            JSON.stringify({
+              issueTracking: {
+                connections: {
+                  linear: {
+                    projectBindings: {
+                      project_1: { credentialId: "user-1", repository: "ENG" },
+                    },
+                  },
+                },
+              },
+            }),
+          );
+          yield* service.start;
+          const started = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const disconnect = yield* disconnectLinearAccount({ credentialId: "user-1" }).pipe(
+            Effect.provide(
+              Layer.mock(LinearApi.LinearApi)({
+                disconnect: () =>
+                  Deferred.succeed(started, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(
+                      Effect.fail(
+                        new LinearApi.LinearApiError({ operation: "disconnect", reason: "failed" }),
+                      ),
+                    ),
+                  ),
+              }),
+            ),
+            Effect.result,
+            Effect.forkChild,
+          );
+          yield* Deferred.await(started);
+          const cleared = yield* service.getSettings;
+          const changes = yield* service.subscribeChanges;
+          const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
+          yield* writeFileStringAtomically({
+            filePath: config.settingsPath,
+            contents: JSON.stringify({
+              ...persisted,
+              ...(unrelatedEdit ? { enableAgentBrowserAccess: false } : {}),
+            }),
+          });
+          const reloaded = yield* changes.pipe(Stream.runHead);
+          assert.strictEqual(
+            Option.getOrThrow(reloaded).issueTracking.connections.linear?.projectBindings,
+            cleared.issueTracking.connections.linear?.projectBindings,
+          );
+          yield* Deferred.succeed(release, undefined);
+          assert.strictEqual((yield* Fiber.join(disconnect))._tag, "Failure");
+          assert.deepStrictEqual(
+            (yield* service.getSettings).issueTracking.connections.linear?.projectBindings,
+            {
+              [ProjectId.make("project_1")]: { credentialId: "user-1", repository: "ENG" },
+            },
+          );
+        }),
+      ).pipe(TestClock.withLive, Effect.provide(layerServerSettings())),
+  );
+
   it.effect("migrates saved token delivery to paragraph buffering without resetting settings", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
