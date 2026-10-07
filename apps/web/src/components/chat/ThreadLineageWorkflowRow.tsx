@@ -3,7 +3,7 @@ import type {
   RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { ProviderDriverKind, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
-import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { AgentElapsed } from "./AgentElapsed";
@@ -12,7 +12,7 @@ import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadRelationshipIcon } from "./ThreadRelationshipIcon";
 import { cn } from "../../lib/utils";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
-import { Tooltip, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
@@ -158,6 +158,9 @@ export function ThreadLineageWorkflowRow({
   providers,
   driver,
   onOpenThread,
+  onStop,
+  stopping,
+  stopDisabled,
 }: {
   readonly group: AgentPanelWorkflowGroup;
   readonly header: ReactNode;
@@ -166,6 +169,9 @@ export function ThreadLineageWorkflowRow({
   readonly providers: ReadonlyArray<ServerProvider> | undefined;
   readonly driver: ProviderDriverKind | undefined;
   readonly onOpenThread: (threadId: string) => void;
+  readonly onStop?: (() => void) | undefined;
+  readonly stopping: boolean;
+  readonly stopDisabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   // The running phase opens itself until the user picks a side for it.
@@ -175,8 +181,34 @@ export function ThreadLineageWorkflowRow({
   return (
     // The flag lets the lineage list trade its compact height for the open tree.
     <li className="group" data-workflow-expanded={expanded ? "" : undefined}>
-      <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+      <div className={cn("relative", THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS)}>
         {header}
+        {onStop ? (
+          <div className="pointer-events-none absolute right-9 top-1/2 -translate-y-1/2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <ThreadDetailsControl
+                    size="icon-xs"
+                    variant="ghost"
+                    part="icon"
+                    tone="destructive"
+                    aria-label={`Stop workflow ${label}`}
+                    disabled={stopDisabled}
+                    onClick={onStop}
+                  />
+                }
+              >
+                {stopping ? (
+                  <LoaderCircleIcon aria-hidden className="size-3 animate-spin" />
+                ) : (
+                  <SquareIcon aria-hidden className="size-3 fill-current" />
+                )}
+              </TooltipTrigger>
+              <TooltipPopup side="left">Stop entire workflow</TooltipPopup>
+            </Tooltip>
+          </div>
+        ) : null}
         <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
         <ThreadDetailsControl
           size="sm"

@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
   configs: new Map<string, unknown>(),
   showTooltips: false,
   command: vi.fn().mockResolvedValue({ _tag: "Success" }),
+  workflowCommand: vi.fn().mockResolvedValue({ _tag: "Success" }),
+  toast: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
@@ -30,7 +32,13 @@ vi.mock("../../state/entities", () => ({
 vi.mock("../../lib/archivedThreadsState", () => ({
   useArchivedThreadSnapshots: () => ({ snapshots: [] }),
 }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.command }));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: (command: { label: string }) =>
+    command.label === "environment-data:orchestration:stop-workflow"
+      ? state.workflowCommand
+      : state.command,
+}));
+vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("../ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => children,
   TooltipTrigger: ({ render, children }: { render: ReactElement; children: ReactNode }) =>
@@ -51,7 +59,166 @@ afterEach(async () => {
   state.showTooltips = false;
   state.navigate.mockClear();
   state.command.mockClear();
+  state.workflowCommand.mockReset().mockResolvedValue({ _tag: "Success" });
+  state.toast.mockClear();
   state.projection = null;
+});
+
+it("stops the entire native workflow through its parent without changing state before acknowledgement", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const coordinator = {
+    id: "workflow",
+    origin: "provider_native",
+    driver: "claudeAgent",
+    providerInstanceId: "claude-work",
+    childThreadId: "workflow-chat",
+    title: "Checkout review",
+    status: "running",
+    startedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+    completedAt: null,
+    updatedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+    workflow: {
+      name: "Checkout review",
+      phases: [{ index: 0, title: "Inspect" }],
+      agents: [{ index: 0, label: "Checker", state: "running", phaseIndex: 0 }],
+    },
+  };
+  state.projection = {
+    thread: { id: "parent", lineage: { relationshipToParent: null } },
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [
+      coordinator,
+      {
+        ...coordinator,
+        id: "worker",
+        childThreadId: "worker-chat",
+        origin: "app_owned",
+        title: "Worker",
+        workflow: undefined,
+      },
+    ],
+  };
+  state.shells = [
+    {
+      environmentId: "remote",
+      source: {
+        id: "workflow-chat",
+        title: "Coordinator chat",
+        lineage: { parentThreadId: "parent", relationshipToParent: "subagent" },
+        activityRunStatus: "waiting",
+      },
+    },
+  ];
+  await act(async () => {
+    renderer = create(
+      <ThreadRelationshipsPanel
+        environmentId={EnvironmentId.make("remote")}
+        threadId={ThreadId.make("parent")}
+      />,
+    );
+  });
+  await act(async () =>
+    renderer.root.findByProps({ "aria-label": "Expand Checkout review" }).props.onClick(),
+  );
+  const stopButton = () =>
+    renderer.root.findByProps({ "aria-label": "Stop workflow Checkout review" });
+  expect(
+    renderer.root.findAll(
+      (node) => node.type === "button" && String(node.props["aria-label"]).startsWith("Stop "),
+    ),
+  ).toHaveLength(2);
+  let acknowledge!: (result: { _tag: string }) => void;
+  state.workflowCommand.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        acknowledge = resolve;
+      }),
+  );
+  await act(async () => {
+    stopButton().props.onClick();
+  });
+  expect(state.workflowCommand).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "remote",
+    input: { threadId: "parent", subagentId: "workflow" },
+  });
+  expect(state.command).not.toHaveBeenCalled();
+  expect(state.navigate).not.toHaveBeenCalled();
+  expect(stopButton().props.disabled).toBe(true);
+  expect(renderer.root.findByProps({ "aria-label": "Stop subagent Worker" }).props.disabled).toBe(
+    true,
+  );
+  expect(renderer.root.findByProps({ "aria-label": "Open Checker chat" })).toBeDefined();
+  expect(renderer.root.findByType("h3").children).toEqual(["Lineage · 2 running"]);
+  await act(async () => {
+    acknowledge({ _tag: "Success" });
+  });
+  expect(stopButton().props.disabled).toBe(false);
+  expect(renderer.root.findByType("h3").children).toEqual(["Lineage · 2 running"]);
+  state.workflowCommand.mockResolvedValueOnce({ _tag: "Failure" });
+  await act(async () => {
+    stopButton().props.onClick();
+  });
+  expect(state.toast).toHaveBeenCalledExactlyOnceWith({
+    type: "error",
+    title: "Could not stop workflow",
+  });
+  expect(stopButton().props.disabled).toBe(false);
+  expect(state.command).not.toHaveBeenCalled();
+  expect(state.navigate).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["claudeAgent", "provider_native", "completed"],
+  ["claudeAgent", "provider_native", "failed"],
+  ["claudeAgent", "provider_native", "interrupted"],
+  ["claudeAgent", "provider_native", "waiting"],
+  ["codex", "provider_native", "running"],
+  ["claudeAgent", "app_owned", "running"],
+])("does not offer workflow stop for %s %s %s", async (driver, origin, status) => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.projection = {
+    thread: { id: "parent", lineage: { relationshipToParent: null } },
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [
+      {
+        id: "workflow",
+        driver,
+        origin,
+        status,
+        providerInstanceId: "claude-work",
+        childThreadId: "workflow-chat",
+        title: "Checkout review",
+        startedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+        completedAt: null,
+        updatedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+        workflow: { name: "Checkout review", phases: [], agents: [] },
+      },
+    ],
+  };
+  await act(async () => {
+    renderer = create(
+      <ThreadRelationshipsPanel
+        environmentId={EnvironmentId.make("remote")}
+        threadId={ThreadId.make("parent")}
+      />,
+    );
+  });
+  const previousAgents = renderer.root.findAll(
+    (node) =>
+      node.type === "button" && node.props["aria-expanded"] === false && !node.props["aria-label"],
+  );
+  if (previousAgents.length > 0) await act(async () => previousAgents[0]!.props.onClick());
+  expect(renderer.root.findByProps({ "aria-label": "Expand Checkout review" })).toBeDefined();
+  expect(
+    renderer.root.findAllByProps({ "aria-label": "Stop workflow Checkout review" }),
+  ).toHaveLength(0);
+  expect(state.workflowCommand).not.toHaveBeenCalled();
 });
 
 it("opens the correct chat for every workflow phase and unphased member", async () => {

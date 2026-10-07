@@ -1857,6 +1857,12 @@ const layerWsRpc = (
                 : {}),
             },
           ),
+        [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.stopWorkflow,
+            threadManagement.stopWorkflow(input),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,

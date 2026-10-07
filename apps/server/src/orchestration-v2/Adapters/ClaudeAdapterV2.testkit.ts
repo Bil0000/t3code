@@ -242,6 +242,7 @@ interface ClaudeSubagentFoundFrame {
 }
 
 type ClaudeOutboundFrame =
+  | { readonly type: "query.stop_task"; readonly taskId: string }
   | ClaudeQueryOpenFrame
   | ClaudePromptOfferFrame
   | ClaudeQuerySetModelFrame
@@ -824,6 +825,10 @@ function makeReplayQueryRunner(
               type: "query.set_permission_mode",
               mode,
             });
+          }),
+        stopTask: (taskId) =>
+          replayEffect(() => {
+            assertNextOutboundFrame({ type: "query.stop_task", taskId });
           }),
         interrupt: replayEffect(() => {
           assertNextOutboundFrame({ type: "query.interrupt" });

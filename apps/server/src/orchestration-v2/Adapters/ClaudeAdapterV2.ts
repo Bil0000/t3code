@@ -343,6 +343,7 @@ export interface ClaudeAgentSdkQuerySession {
   readonly setPermissionMode: (
     mode: PermissionMode,
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  readonly stopTask: (taskId: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
 }
@@ -710,6 +711,11 @@ export const layerQueryRunner: Layer.Layer<
                 }),
               ),
             ),
+          stopTask: (taskId) =>
+            Effect.tryPromise({
+              try: () => queryRuntime.stopTask(taskId),
+              catch: (cause) => queryRunnerError(cause, "stopTask"),
+            }),
           interrupt: Effect.tryPromise({
             try: () => queryRuntime.interrupt(),
             catch: (cause) => queryRunnerError(cause, "interrupt"),
@@ -8225,6 +8231,36 @@ export function makeClaudeAdapterV2(
               message: { ...turnInput.message, text: "/compact" },
             }),
           steerTurn,
+          stopTask: ({ providerThread, taskId }) =>
+            Effect.gen(function* () {
+              const liveQuery = yield* Ref.get(queryContext);
+              const task = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
+              if (
+                liveQuery === null ||
+                liveQuery.stopping ||
+                liveQuery.nativeThreadId !== providerThread.nativeThreadRef?.nativeId ||
+                task === undefined ||
+                task.task.threadId !== providerThread.appThreadId ||
+                task.task.workflow === undefined ||
+                task.task.status !== "running" ||
+                liveQuery.subagentsFromEarlierProcesses.has(task)
+              ) {
+                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                  driver: CLAUDE_PROVIDER,
+                  detail: "No running workflow task belongs to this provider thread",
+                });
+              }
+              yield* liveQuery.query.stopTask(taskId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterProtocolError({
+                      driver: CLAUDE_PROVIDER,
+                      detail: "Workflow stop request failed",
+                      cause,
+                    }),
+                ),
+              );
+            }),
           interruptTurn,
           respondToRuntimeRequest: Effect.fn("ClaudeAdapterV2.respondToRuntimeRequest")(
             function* (requestInput) {
