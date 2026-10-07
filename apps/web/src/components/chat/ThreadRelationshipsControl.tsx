@@ -443,9 +443,7 @@ export function ThreadRelationshipsPanel(props: {
                   {/* One trailing item keeps room for the title: the icon dot already
                       carries status, so an agent with a known time shows only that. */}
                   {agent && !failed && deriveSubagentElapsedMs(agent, 0) !== null ? (
-                    <span
-                      className={`shrink-0 text-2xs font-normal tabular-nums text-muted-foreground ${canStop ? "group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0 [@media(hover:none)]:opacity-0" : ""}`}
-                    >
+                    <span className="shrink-0 text-2xs font-normal tabular-nums text-muted-foreground">
                       <AgentElapsed agent={agent} compact />
                     </span>
                   ) : !isMergeTarget ? (
@@ -529,6 +527,7 @@ export function ThreadRelationshipsPanel(props: {
                             disabled={node?.missing === true}
                             onClick={() => openThread(threadId)}
                             part="row"
+                            className={canStop ? "w-auto flex-1" : undefined}
                           />
                         }
                       >
@@ -538,7 +537,7 @@ export function ThreadRelationshipsPanel(props: {
                     </Tooltip>
                   )}
                   {canStop && agent ? (
-                    <div className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+                    <div className="pointer-events-none mr-1 shrink-0 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
                       <Tooltip>
                         <TooltipTrigger
                           render={
