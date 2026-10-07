@@ -43,6 +43,7 @@ const connectionState = vi.hoisted(() => ({
   error: "Linear status failed" as string | null,
 }));
 const primary = vi.hoisted(() => vi.fn());
+const permission = vi.hoisted(() => ({ allowed: true }));
 const commands = vi.hoisted(() => ({
   binding: vi.fn(),
   invalidate: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => permission.allowed }));
 vi.mock("../../hooks/useSettings", () => ({
   usePrimarySettings: (select: (settings: unknown) => unknown) =>
     select({
@@ -87,9 +89,9 @@ vi.mock("../../state/entities", () => ({ useProjects: () => projectsState.projec
 vi.mock("../../state/issueTracking", () => ({
   issueTrackingEnvironment: {
     status: vi.fn(),
-    connect: "connect",
-    disconnect: "disconnect",
-    bind: "binding",
+    connect: { key: "connect", permissionAtom: () => null },
+    disconnect: { key: "disconnect", permissionAtom: () => null },
+    bind: { key: "binding", permissionAtom: () => null },
   },
 }));
 vi.mock("../../state/query", async (importOriginal) => {
@@ -106,7 +108,8 @@ vi.mock("../../state/query", async (importOriginal) => {
 });
 vi.mock("../../state/issues", () => ({ issueEnvironment: { invalidate: "invalidate" } }));
 vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: (command: keyof typeof commands) => commands[command],
+  useAtomCommand: (command: keyof typeof commands | { key: keyof typeof commands }) =>
+    commands[typeof command === "string" ? command : command.key],
 }));
 import { issueTrackingEnvironment } from "../../state/issueTracking";
 import { AlertDialog, AlertDialogDescription, AlertDialogPopup } from "../ui/alert-dialog";
@@ -156,6 +159,28 @@ describe("Linear integration settings", () => {
     connectionState.error = "Linear status failed";
     settingsState.projectBindings = {};
     projectsState.projects = [];
+    permission.allowed = true;
+  });
+
+  it("keeps Linear connections readable but not editable without write permission", () => {
+    permission.allowed = false;
+    connectionState.error = null;
+    projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
+    hooks.beginRender();
+    const settings = LinearIntegrationSettings();
+    expect(textContent(settings)).toContain("Ada");
+    for (const label of ["Add account", "Disconnect"]) {
+      const button = visitElements(
+        settings,
+        (element) =>
+          element.type === Button &&
+          textContent(element.props.children as ReactNode).includes(label),
+      );
+      expect(button?.props.disabled).toBe(true);
+    }
+    expect(visitElements(settings, (element) => element.type === Select)?.props.disabled).toBe(
+      true,
+    );
   });
 
   it("lists saved accounts, teams, and connection controls", () => {
@@ -211,6 +236,41 @@ describe("Linear integration settings", () => {
       input: { provider: "linear", credentialId: "user-1" },
     });
     expect(commands.invalidate).toHaveBeenCalledWith({ environmentId: "primary", input: {} });
+  });
+
+  it("blocks the open disconnect confirmation while disconnect access is revoked", async () => {
+    connectionState.error = null;
+    commands.disconnect.mockResolvedValue(AsyncResult.success(undefined));
+    const confirmButton = (settings: ReturnType<typeof LinearIntegrationSettings>) =>
+      visitElements(
+        settings,
+        (element) => element.type === Button && element.props.children === "Disconnect account",
+      );
+
+    hooks.beginRender();
+    const disconnectAda = visitElements(
+      LinearIntegrationSettings(),
+      (element) =>
+        element.type === Button && element.props["aria-label"] === "Disconnect Ada from Linear",
+    );
+    (disconnectAda!.props.onClick as () => void)();
+
+    permission.allowed = false;
+    hooks.beginRender();
+    let confirm = confirmButton(LinearIntegrationSettings());
+    expect(confirm?.props.disabled).toBe(true);
+    await (confirm!.props.onClick as () => Promise<void> | undefined)();
+    expect(commands.disconnect).not.toHaveBeenCalled();
+
+    permission.allowed = true;
+    hooks.beginRender();
+    confirm = confirmButton(LinearIntegrationSettings());
+    expect(confirm?.props.disabled).toBe(false);
+    await (confirm!.props.onClick as () => Promise<void>)();
+    expect(commands.disconnect).toHaveBeenCalledWith({
+      environmentId: "primary",
+      input: { provider: "linear", credentialId: "user-1" },
+    });
   });
 
   it("shows a disconnect failure inside the open confirmation dialog", async () => {
@@ -303,6 +363,64 @@ describe("Linear integration settings", () => {
       input: { provider: "linear", projectId: "project_1", binding: null },
     });
     expect(commands.invalidate).toHaveBeenCalledWith({ environmentId: "primary", input: {} });
+  });
+
+  it("blocks an open team choice while bind access is revoked", async () => {
+    connectionState.error = null;
+    projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
+    commands.binding.mockResolvedValue(AsyncResult.success(undefined));
+    const render = () => {
+      hooks.beginRender();
+      const settings = LinearIntegrationSettings();
+      return {
+        settings,
+        select: visitElements(
+          settings,
+          (element) => element.type === Select && element.props.value !== undefined,
+        )!,
+        items: [
+          visitElements(
+            settings,
+            (element) => element.type === SelectItem && element.props.children === "Not connected",
+          )!,
+          visitElements(
+            settings,
+            (element) =>
+              element.type === SelectItem && textContent(element).includes("Operations (OPS)"),
+          )!,
+        ],
+      };
+    };
+    const opened = render();
+
+    permission.allowed = false;
+    const revoked = render();
+    expect(revoked.items.map((item) => item.props.disabled)).toEqual([true, true]);
+    (revoked.select.props.onValueChange as (value: string) => void)(
+      opened.items[1]!.props.value as string,
+    );
+    await Promise.resolve();
+    expect(commands.binding).not.toHaveBeenCalled();
+    expect(
+      visitElements(render().settings, (element) => element.props.role === "alert"),
+    ).toBeNull();
+
+    permission.allowed = true;
+    const restored = render();
+    expect(restored.items.map((item) => item.props.disabled)).toEqual([false, false]);
+    (restored.select.props.onValueChange as (value: string) => void)(
+      restored.items[1]!.props.value as string,
+    );
+    await commands.binding.mock.results[0]?.value;
+    expect(commands.binding).toHaveBeenCalledTimes(1);
+    expect(commands.binding).toHaveBeenCalledWith({
+      environmentId: "primary",
+      input: {
+        provider: "linear",
+        projectId: "project_1",
+        binding: { credentialId: "user-2", repository: "OPS" },
+      },
+    });
   });
 
   it("shows a stored binding as needing attention when its account or team is unavailable", () => {

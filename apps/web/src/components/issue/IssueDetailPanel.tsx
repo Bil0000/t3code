@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
@@ -280,6 +281,7 @@ export function IssueDetailPanel({
   );
   const coreDetail = detailQuery.data;
   const activity = activityQuery.data;
+  const canWrite = useAtomValue(issueEnvironment.update.permissionAtom(environmentId));
   const commentsKey = `${issueKey}:${coreDetail?.updatedAt}`;
   const loadedPage = loadedComments?.key === commentsKey ? loadedComments : null;
   const detail = useMemo(
@@ -288,6 +290,23 @@ export function IssueDetailPanel({
         ? null
         : {
             ...coreDetail,
+            ...(canWrite
+              ? {}
+              : {
+                  capabilities: {
+                    ...coreDetail.capabilities,
+                    reactions: false,
+                    editComment: false,
+                  },
+                  viewerPermissions: {
+                    actions: [],
+                    comment: false,
+                    edit: false,
+                    labels: false,
+                    assignees: false,
+                    create: false,
+                  },
+                }),
             author: activity?.author ?? coreDetail.author,
             comments: mergeIssueComments(activity?.comments ?? [], loadedPage?.comments ?? []),
             // The host's own count, which the core read already carries: the conversation being
@@ -302,7 +321,7 @@ export function IssueDetailPanel({
             events: activity?.events ?? [],
             ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
           },
-    [activity, coreDetail, loadedPage],
+    [activity, canWrite, coreDetail, loadedPage],
   );
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
@@ -399,7 +418,7 @@ export function IssueDetailPanel({
     reason?: IssueCloseReason,
     body?: string,
   ) => {
-    if (actionPending) return { commentPosted: false };
+    if (actionPending || !canWrite) return { commentPosted: false };
     setActionPending(true);
     if (body !== undefined) {
       const commentResult = await postComment({ environmentId, input: { ...target, body } });
@@ -1124,7 +1143,7 @@ export function IssueDetailPanel({
         ) : null}
       </div>
 
-      {detail && detail.capabilities.comment && detail.viewerPermissions.comment ? (
+      {detail && coreDetail?.capabilities.comment && coreDetail.viewerPermissions.comment ? (
         <div className="absolute right-4 bottom-3 z-20">
           <CommentComposer
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
@@ -1132,7 +1151,7 @@ export function IssueDetailPanel({
             detail={detail}
             label="Comment on this issue"
             command={issueEnvironment.comment}
-            actionPending={actionPending}
+            actionPending={actionPending || !canWrite}
             followUpAction={
               detail.state === "open" && can("close")
                 ? "close"
@@ -1166,10 +1185,10 @@ export function IssueDetailPanel({
             <Button
               size="sm"
               variant="outline"
-              disabled={actionPending}
+              disabled={actionPending || !canWrite}
               onClick={() => {
                 const pending = confirmClose;
-                if (!pending) return;
+                if (!pending || !canWrite) return;
                 setConfirmClose(null);
                 void perform("close", pending.reference, pending.reason ?? undefined);
               }}

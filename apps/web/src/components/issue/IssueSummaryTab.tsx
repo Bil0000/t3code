@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
@@ -86,6 +87,7 @@ export function IssueEditor({
   const editorRef = useRef<ComposerPromptEditorHandle>(null);
   const [saving, setSaving] = useState(false);
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
+  const canWrite = useAtomValue(issueEnvironment.update.permissionAtom(environmentId));
 
   useEffect(() => {
     if (field === "description") editorRef.current?.focusAtEnd();
@@ -93,7 +95,7 @@ export function IssueEditor({
 
   const save = async (value: string) => {
     const next = field === "title" ? value.trim() : value;
-    if (saving) return;
+    if (saving || !canWrite) return;
     if (field === "title" && next.length === 0) {
       toastManager.add({ type: "error", title: "Enter an issue title" });
       return;
@@ -151,7 +153,12 @@ export function IssueEditor({
             }
           }}
         />
-        <Button size="xs" variant="outline" disabled={saving} onClick={() => void save(draft)}>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={saving || !canWrite}
+          onClick={() => void save(draft)}
+        >
           {saving ? "Saving..." : "Save"}
         </Button>
         <Button size="xs" variant="ghost" disabled={saving} onClick={onDone}>
@@ -204,7 +211,12 @@ export function IssueEditor({
         <Button size="xs" variant="ghost" disabled={saving} onClick={onDone}>
           Cancel
         </Button>
-        <Button size="xs" variant="outline" disabled={saving} onClick={() => void save(draft)}>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={saving || !canWrite}
+          onClick={() => void save(draft)}
+        >
           {saving ? "Saving..." : "Save"}
         </Button>
       </div>
@@ -509,7 +521,7 @@ export function IssueSummaryTab({
         actions={
           <WorkItemMatchButton
             busy={aiMatches.pending === "related"}
-            disabled={aiMatches.pending !== null}
+            disabled={!aiMatches.allowed || aiMatches.pending !== null}
             loaded={aiMatches.related !== undefined}
             onClick={() => void aiMatches.find("related")}
           />
@@ -612,7 +624,7 @@ export function IssueSummaryTab({
         actions={
           <WorkItemMatchButton
             busy={aiMatches.pending === "duplicate"}
-            disabled={aiMatches.pending !== null}
+            disabled={!aiMatches.allowed || aiMatches.pending !== null}
             loaded={aiMatches.duplicate !== undefined}
             onClick={() => void aiMatches.find("duplicate")}
           />

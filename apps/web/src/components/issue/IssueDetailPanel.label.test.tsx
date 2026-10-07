@@ -15,8 +15,10 @@ const commands = vi.hoisted(() => ({
   commentsPage: vi.fn(),
   newThread: vi.fn(),
 }));
+const permission = vi.hoisted(() => ({ allowed: true }));
 afterEach(() => {
   vi.clearAllMocks();
+  permission.allowed = true;
   currentDetail = detail;
   currentActivity = activity;
 });
@@ -39,6 +41,7 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => permission.allowed }));
 vi.mock("~/composerDraftStore", () => ({
   useComposerDraftStore: { getState: () => ({}) },
 }));
@@ -54,6 +57,7 @@ vi.mock("~/state/issues", () => ({
     invalidate: "invalidate",
     runAction: "runAction",
     comment: "comment",
+    update: { permissionAtom: () => null },
   },
 }));
 vi.mock("~/state/query", () => ({
@@ -158,6 +162,7 @@ import { IssuesPanel } from "./IssuesPanel";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { CommentComposer } from "../sourceControl/CommentComposer";
 import { IssueSummaryTab } from "./IssueSummaryTab";
+import { AlertDialog } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Menu, MenuItem } from "../ui/menu";
 import { TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -368,6 +373,42 @@ it.each(["comment-failed", "action-failed", "success"])(
   },
 );
 
+it.each([true, false])("offers issue writes only with write permission (%s)", (allowed) => {
+  hooks.reset();
+  permission.allowed = allowed;
+  currentDetail = {
+    ...detail,
+    capabilities: { ...detail.capabilities, comment: true, edit: true, reactions: true },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true, edit: true, labels: true },
+  };
+  const panel = renderPanel();
+  const summary = visitElements(panel, (element) => element.type === IssueSummaryTab)!;
+  const shown = summary.props.detail as IssueDetail;
+  expect(shown.title).toBe(detail.title);
+  expect(shown.capabilities.reactions).toBe(allowed);
+  expect(shown.viewerPermissions.edit).toBe(allowed);
+  expect(shown.viewerPermissions.labels).toBe(allowed);
+});
+
+it("keeps the comment composer mounted while write access is withdrawn and restored", () => {
+  hooks.reset();
+  currentDetail = {
+    ...detail,
+    capabilities: { ...detail.capabilities, comment: true },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+  const composer = () =>
+    visitElements(renderPanel(), (element) => element.type === CommentComposer)!;
+  const mounted = composer();
+  expect(mounted.props.actionPending).toBe(false);
+  permission.allowed = false;
+  const revoked = composer();
+  expect(revoked.key).toBe(mounted.key);
+  expect(revoked.props.actionPending).toBe(true);
+  permission.allowed = true;
+  expect(composer().props.actionPending).toBe(false);
+});
+
 it("opens a related pull request through the thread issues panel handler", () => {
   hooks.reset();
   const onOpenLinkedPullRequest = vi.fn();
@@ -396,4 +437,47 @@ it("opens a related pull request through the thread issues panel handler", () =>
   };
   (summary.props.onOpenLinkedPullRequest as (value: typeof link) => void)(link);
   expect(onOpenLinkedPullRequest).toHaveBeenCalledWith(link);
+});
+
+it("blocks an open close confirmation while write access is revoked", async () => {
+  hooks.reset();
+  commands.action.mockResolvedValue({ _tag: "Success" });
+  currentDetail = {
+    ...detail,
+    capabilities: { ...detail.capabilities, actions: ["close"], comment: true },
+    viewerPermissions: { ...detail.viewerPermissions, actions: ["close"], comment: true },
+  };
+  const confirmButton = (panel: ReturnType<typeof IssueDetailPanel>) =>
+    visitElements(
+      panel,
+      (element) => element.type === Button && element.props.children === "Close issue",
+    )!;
+  const closeItem = visitElements(
+    renderPanel(),
+    (element) => element.type === MenuItem && textContent(element.props.children) === "Close issue",
+  );
+  (closeItem!.props.onClick as () => void)();
+
+  permission.allowed = false;
+  let panel = renderPanel();
+  expect(confirmButton(panel).props.disabled).toBe(true);
+  (confirmButton(panel).props.onClick as () => void)();
+  const composer = visitElements(panel, (element) => element.type === CommentComposer)!;
+  expect(
+    await (composer.props.onCommentAction as (body: string, action: "close") => Promise<unknown>)(
+      "Done",
+      "close",
+    ),
+  ).toEqual({ commentPosted: false });
+  expect(commands.comment).not.toHaveBeenCalled();
+  expect(commands.action).not.toHaveBeenCalled();
+  panel = renderPanel();
+  expect(visitElements(panel, (element) => element.type === AlertDialog)!.props.open).toBe(true);
+
+  permission.allowed = true;
+  panel = renderPanel();
+  expect(confirmButton(panel).props.disabled).toBe(false);
+  (confirmButton(panel).props.onClick as () => void)();
+  await Promise.resolve();
+  expect(commands.action).toHaveBeenCalledTimes(1);
 });

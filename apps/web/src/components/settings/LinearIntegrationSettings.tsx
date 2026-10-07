@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import type { IssueTrackerProjectBinding } from "@t3tools/contracts";
 import { ChevronRightIcon, PlusIcon } from "lucide-react";
@@ -53,6 +54,11 @@ export function LinearIntegrationSettings() {
   const saveProjectBinding = useAtomCommand(issueTrackingEnvironment.bind, {
     reportFailure: false,
   });
+  const canConnect = useAtomValue(issueTrackingEnvironment.connect.permissionAtom(environmentId));
+  const canDisconnect = useAtomValue(
+    issueTrackingEnvironment.disconnect.permissionAtom(environmentId),
+  );
+  const canBind = useAtomValue(issueTrackingEnvironment.bind.permissionAtom(environmentId));
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const invalidate = useAtomCommand(issueEnvironment.invalidate);
   const refreshIssues = () => {
@@ -99,7 +105,7 @@ export function LinearIntegrationSettings() {
     projectId: (typeof projects)[number]["id"],
     binding: IssueTrackerProjectBinding | null,
   ) => {
-    if (environmentId === null) return;
+    if (environmentId === null || !canBind) return;
     void runCommand(
       () =>
         saveProjectBinding({
@@ -129,7 +135,7 @@ export function LinearIntegrationSettings() {
             <Button
               size="sm"
               variant="outline"
-              disabled={!supported || busy || connection.isPending}
+              disabled={!supported || !canConnect || busy || connection.isPending}
               onClick={() => setAddAccountOpen(true)}
             >
               <PlusIcon />
@@ -179,7 +185,7 @@ export function LinearIntegrationSettings() {
                   <Button
                     size="xs"
                     variant="destructive-outline"
-                    disabled={busy}
+                    disabled={!canDisconnect || busy}
                     aria-label={`Disconnect ${account.accountName} from Linear`}
                     onClick={() =>
                       setPendingDisconnect({
@@ -258,7 +264,7 @@ export function LinearIntegrationSettings() {
                         <span className="min-w-0 truncate text-sm">{project.title}</span>
                         <Select
                           value={value}
-                          disabled={busy}
+                          disabled={!canBind || busy}
                           onValueChange={(next) => {
                             if (!next) return;
                             if (next === UNMAPPED) {
@@ -284,14 +290,20 @@ export function LinearIntegrationSettings() {
                             <SelectValue>{selectedLabel}</SelectValue>
                           </SelectTrigger>
                           <SelectPopup align="end" alignItemWithTrigger={false}>
-                            <SelectItem value={UNMAPPED}>Not connected</SelectItem>
+                            <SelectItem value={UNMAPPED} disabled={!canBind}>
+                              Not connected
+                            </SelectItem>
                             {bindingUnavailable ? (
                               <SelectItem value={value} disabled>
                                 Unavailable account or team
                               </SelectItem>
                             ) : null}
                             {options.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
+                              <SelectItem
+                                key={option.value}
+                                value={option.value}
+                                disabled={!canBind}
+                              >
                                 {option.label}
                               </SelectItem>
                             ))}
@@ -351,9 +363,11 @@ export function LinearIntegrationSettings() {
             </AlertDialogClose>
             <Button
               variant="destructive"
-              disabled={busy || environmentId === null || pendingDisconnect === null}
+              disabled={
+                busy || !canDisconnect || environmentId === null || pendingDisconnect === null
+              }
               onClick={() => {
-                if (environmentId === null || pendingDisconnect === null) return;
+                if (!canDisconnect || environmentId === null || pendingDisconnect === null) return;
                 const { credentialId } = pendingDisconnect;
                 return runCommand(
                   () =>

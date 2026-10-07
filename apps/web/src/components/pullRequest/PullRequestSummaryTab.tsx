@@ -1,3 +1,4 @@
+import { useAtomCommand } from "~/state/use-atom-command";
 import type {
   EnvironmentId,
   IssueLink,
@@ -18,7 +19,6 @@ import {
 } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 
-import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { cn } from "~/lib/utils";
 import { useOpenLink } from "~/browser/useOpenLink";
@@ -888,7 +888,7 @@ export function PullRequestSummaryTab({
         actions={
           <WorkItemMatchButton
             busy={aiMatches.pending === "related"}
-            disabled={aiMatches.pending !== null}
+            disabled={!aiMatches.allowed || aiMatches.pending !== null}
             loaded={aiMatches.related !== undefined}
             onClick={() => void aiMatches.find("related")}
           />
