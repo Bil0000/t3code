@@ -219,11 +219,11 @@ const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
     ${ISSUE_FIELDS}
     attachments { nodes { url title sourceType metadata } }
     parent { ${RELATIVE_WITH_PULL_REQUESTS} parent { ${RELATIVE_FIELDS} parent { ${RELATIVE_FIELDS} } } }
-    children(first: 50) {
+    children(first: 20) {
       nodes {
         ${RELATIVE_WITH_PULL_REQUESTS}
-        children(first: 20) {
-          nodes { ${RELATIVE_FIELDS} children(first: 10) { nodes { ${RELATIVE_FIELDS} } } }
+        children(first: 10) {
+          nodes { ${RELATIVE_FIELDS} children(first: 5) { nodes { ${RELATIVE_FIELDS} } } }
         }
       }
     }

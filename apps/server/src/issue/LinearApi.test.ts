@@ -824,6 +824,42 @@ it.effect("reads a Linear issue summary without its body, labels, or comments", 
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("keeps the three-level Linear detail query below the complexity limit", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: () => ({ data: { issue: null } }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* Effect.flip(api.getIssue({ identifier: "ENG-1" }));
+    const query = String(requests[0]?.body.query);
+    const childLimits = [...query.matchAll(/children\(first: (\d+)\)/g)].map((match) =>
+      Number(match[1]),
+    );
+    assert.lengthOf(childLimits, 3);
+    const attachmentLimits = [...query.matchAll(/attachments(?:\(first: (\d+)\))?/g)].map((match) =>
+      Number(match[1] ?? 50),
+    );
+    assert.lengthOf(attachmentLimits, 3);
+    const [children, grandchildren, greatGrandchildren] = childLimits;
+    const [issueAttachments, parentAttachments, childAttachments] = attachmentLimits;
+    const attachmentCost = 1 + 4 * 0.1;
+    const relativeCost = 1 + 3 * 0.1 + (1 + 0.1) + (1 + 2 * 0.1);
+    const issueCost = 1 + 10 * 0.1 + (1 + 2 * 0.1) + 2 * (1 + 4 * 0.1) + 50 * (1 + 2 * 0.1);
+    const complexity = Math.ceil(
+      issueCost +
+        issueAttachments! * attachmentCost +
+        3 * relativeCost +
+        parentAttachments! * attachmentCost +
+        children! *
+          (relativeCost +
+            childAttachments! * attachmentCost +
+            grandchildren! * (relativeCost + greatGrandchildren! * relativeCost)),
+    );
+    assert.isBelow(complexity, 10_000);
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("queries and decodes team keys on Linear issue relatives", () => {
   const { layer, requests } = makeLayer({
     envToken: "test-key",
