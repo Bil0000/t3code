@@ -2,8 +2,8 @@ import { ORCHESTRATION_V2_WS_METHODS, type ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { HttpClient } from "effect/unstable/http";
-import { Atom } from "effect/unstable/reactivity";
+import type { HttpClient } from "effect/http";
+import { Atom } from "effect/reactivity";
 
 import {
   createEnvironmentRpcCommand,
@@ -75,6 +75,13 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       // Scripts are immutable per run: cache generously.
       staleTimeMs: 300_000,
       idleTtlMs: 300_000,
+    }),
+    // Keyed by the item revision, so a live row refetches as its output grows.
+    turnItem: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:orchestration:turn-item",
+      tag: ORCHESTRATION_V2_WS_METHODS.getTurnItem,
+      staleTimeMs: 60_000,
+      idleTtlMs: 60_000,
     }),
     fullThreadDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:full-thread-diff",

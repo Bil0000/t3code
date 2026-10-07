@@ -21,23 +21,23 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
-import * as Etag from "effect/unstable/http/Etag";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpPlatform from "effect/http/HttpPlatform";
+import * as Etag from "effect/http/Etag";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as HttpApi from "effect/unstable/httpapi/HttpApi";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as HttpApi from "effect/http-api/HttpApi";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 
-import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
+import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import { ProjectEnrichmentService } from "../project/ProjectEnrichmentService.ts";
-import { orchestrationHttpApiLayer } from "./http.ts";
+import * as OrchestrationHttp from "./http.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
 class TranscriptTestApi extends HttpApi.make("environment").add(
   EnvironmentHttpApi.groups.orchestration,
@@ -97,18 +97,18 @@ const items = Schema.decodeUnknownSync(Schema.Array(OrchestrationV2TurnItem))(
 it.effect("exports full history with size, scope, and missing-thread checks", () =>
   Effect.gen(function* () {
     let allowed = true;
-    const runtime = makeOrchestratorV2ReplayLayerWithRegistry(
+    const runtime = ProviderReplayHarness.layerWithRegistry(
       { name: "thread-transcript" },
-      ProviderAdapterRegistry.makeLayer([]),
+      ProviderAdapterRegistry.layerFromAdapters([]),
       { runEffectWorker: false },
     );
     const services = yield* Layer.build(
       Layer.mergeAll(
         runtime,
         ThreadManagementService.layer.pipe(Layer.provide(runtime)),
-        OrchestrationEventStoreLive,
+        OrchestrationEventStore.layer,
         ProjectStore.layer,
-      ).pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ).pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
     );
     const eventSink = Context.get(services, EventSinkV2);
     yield* eventSink.write({
@@ -123,7 +123,7 @@ it.effect("exports full history with size, scope, and missing-thread checks", ()
       ],
     });
     const routes = HttpApiBuilder.layer(TranscriptTestApi).pipe(
-      Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(OrchestrationHttp.layer),
       Layer.provide(
         Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
           getEnvironmentId: Effect.succeed(environmentId),
