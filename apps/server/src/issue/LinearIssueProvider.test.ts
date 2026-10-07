@@ -5,7 +5,12 @@ import type { OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as LinearApi from "./LinearApi.ts";
-import { linearIssueState, linearReactions, make } from "./LinearIssueProvider.ts";
+import {
+  linearIssueState,
+  linearLinkedPullRequests,
+  linearReactions,
+  make,
+} from "./LinearIssueProvider.ts";
 
 const PROJECT: OrchestrationProjectShell = {
   id: "project-1" as ProjectId,
@@ -22,6 +27,79 @@ it("maps Linear workflow states onto the neutral open/closed states", () => {
   assert.strictEqual(linearIssueState("completed"), "closed");
   assert.strictEqual(linearIssueState("canceled"), "closed");
   assert.strictEqual(linearIssueState("duplicate"), "closed");
+});
+
+it("reads pull requests from Linear's GitHub and GitLab attachments", () => {
+  assert.deepStrictEqual(
+    linearLinkedPullRequests([
+      {
+        url: "https://github.com/acme/web/pull/102",
+        title: "feat: picker (ENG-63)",
+        sourceType: "github",
+        metadata: { status: "inReview", number: 102 },
+      },
+      {
+        url: "https://gitlab.com/acme/group/api/-/merge_requests/7",
+        title: "fix: api",
+        sourceType: "gitlab",
+        metadata: { status: "merged" },
+      },
+      { url: "https://github.com/acme/web/pull/9", title: "wip", metadata: { status: "draft" } },
+      { url: "https://figma.com/file/abc", title: "Design", sourceType: "figma", metadata: {} },
+    ]),
+    [
+      {
+        repository: "acme/web",
+        number: 102,
+        title: "feat: picker (ENG-63)",
+        url: "https://github.com/acme/web/pull/102",
+        state: "open",
+        isDraft: false,
+        closesIssue: false,
+      },
+      {
+        repository: "acme/group/api",
+        number: 7,
+        title: "fix: api",
+        url: "https://gitlab.com/acme/group/api/-/merge_requests/7",
+        state: "merged",
+        isDraft: false,
+        closesIssue: false,
+      },
+      {
+        repository: "acme/web",
+        number: 9,
+        title: "wip",
+        url: "https://github.com/acme/web/pull/9",
+        state: "open",
+        isDraft: true,
+        closesIssue: false,
+      },
+    ],
+  );
+});
+
+it("keeps reference-only Linear pull request attachments non-closing", () => {
+  const links = linearLinkedPullRequests([
+    {
+      url: "https://github.com/acme/web/pull/12",
+      title: "Refs ENG-63",
+      sourceType: "github",
+      metadata: { status: "merged", number: 12 },
+    },
+    {
+      url: "https://github.com/acme/web/pull/13",
+      title: "Related to ENG-63",
+      sourceType: "github",
+    },
+  ]);
+  assert.deepStrictEqual(
+    links.map((link) => [link.number, link.closesIssue]),
+    [
+      [12, false],
+      [13, false],
+    ],
+  );
 });
 
 it("groups supported Linear emoji reactions and marks the viewer", () => {
@@ -263,6 +341,118 @@ it.effect("does not resolve a cleared project binding", () =>
             },
           },
         }),
+      ),
+    ),
+  ),
+);
+
+it.effect("carries mixed-team ancestors and same-number sub-issues on a Linear detail", () =>
+  Effect.gen(function* () {
+    const adapter = yield* make;
+    const detail = yield* adapter.getIssue({
+      cwd: PROJECT.workspaceRoot,
+      host: "linear.app",
+      repository: "ENG",
+      number: 2,
+    });
+    assert.deepStrictEqual(
+      detail.ancestors?.map((issue) => [issue.repository, issue.number]),
+      [
+        ["OPS", 0],
+        ["ENG", 1],
+      ],
+    );
+    assert.deepStrictEqual(
+      detail.subIssues?.map((issue) => [
+        issue.repository,
+        issue.number,
+        issue.state,
+        issue.subIssues.length,
+      ]),
+      [
+        ["ENG", 3, "closed", 1],
+        ["OPS", 3, "open", 0],
+      ],
+    );
+    assert.strictEqual(detail.subIssues?.[0]?.subIssues[0]?.number, 5);
+    assert.strictEqual(detail.subIssues?.[0]?.subIssues[0]?.repository, "OPS");
+    assert.strictEqual(detail.subIssues?.[1]?.url, "https://linear.app/acme/issue/OPS-3");
+    assert.deepStrictEqual(
+      detail.subIssues?.[0]?.linkedPullRequests?.map((link) => [link.number, link.state]),
+      [[31, "merged"]],
+    );
+    assert.strictEqual(detail.subIssues?.[1]?.linkedPullRequests, undefined);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(LinearApi.LinearApi)({
+          getIssue: () =>
+            Effect.succeed({
+              id: "issue-2",
+              identifier: "ENG-2",
+              number: 2,
+              title: "Slice",
+              url: "https://linear.app/acme/issue/ENG-2",
+              description: null,
+              createdAt: "2026-08-17T00:00:00.000Z",
+              updatedAt: "2026-08-17T00:00:00.000Z",
+              state: { name: "Todo", type: "unstarted" },
+              parent: {
+                number: 1,
+                team: { key: "ENG" },
+                title: "Epic",
+                url: "https://linear.app/acme/issue/ENG-1",
+                state: { name: "In Progress", type: "started" },
+                parent: {
+                  number: 0,
+                  team: { key: "OPS" },
+                  title: "Initiative",
+                  url: "https://linear.app/acme/issue/OPS-0",
+                  state: { name: "In Progress", type: "started" },
+                },
+              },
+              children: {
+                nodes: [
+                  {
+                    number: 3,
+                    team: { key: "ENG" },
+                    title: "Done part",
+                    url: "https://linear.app/acme/issue/ENG-3",
+                    state: { name: "Done", type: "completed" },
+                    attachments: {
+                      nodes: [
+                        {
+                          url: "https://github.com/acme/web/pull/31",
+                          title: "Done part",
+                          sourceType: "github",
+                          metadata: { status: "merged" },
+                        },
+                      ],
+                    },
+                    children: {
+                      nodes: [
+                        {
+                          number: 5,
+                          team: { key: "OPS" },
+                          title: "Leaf",
+                          url: "https://linear.app/acme/issue/OPS-5",
+                          state: { name: "Todo", type: "unstarted" },
+                        },
+                      ],
+                    },
+                  },
+                  {
+                    number: 3,
+                    team: { key: "OPS" },
+                    title: "Open part",
+                    url: "https://linear.app/acme/issue/OPS-3",
+                    state: { name: "Todo", type: "unstarted" },
+                  },
+                ],
+              },
+            }),
+        }),
+        ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
       ),
     ),
   ),

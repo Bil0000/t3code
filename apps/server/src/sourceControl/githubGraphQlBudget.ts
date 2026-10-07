@@ -23,7 +23,7 @@ export class GitHubGraphQlBudget extends Context.Service<
     readonly query: (
       host: string,
       document: string,
-      options?: { readonly allowReserve: boolean },
+      options?: { readonly allowReserve?: boolean; readonly minimumCost?: number },
     ) => Effect.Effect<string, SourceControlRateLimit.SourceControlRateLimitPausedError>;
     readonly observe: (host: string, raw: string) => Effect.Effect<void>;
   }
@@ -113,7 +113,8 @@ export const make = Effect.gen(function* () {
           next.delete(key);
           return [null, next] as const;
         }
-        const remaining = snapshot.remaining - Math.max(1, snapshot.cost);
+        const remaining =
+          snapshot.remaining - Math.max(1, snapshot.cost, options?.minimumCost ?? 0);
         if (
           remaining < 0 ||
           (options?.allowReserve !== true && remaining < snapshot.limit * GRAPHQL_RESERVE_RATIO)

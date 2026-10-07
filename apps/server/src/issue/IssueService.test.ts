@@ -6,6 +6,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import {
@@ -31,6 +32,14 @@ import {
   type IssueAdapter,
 } from "./IssueProvider.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as PullRequestProviderRegistry from "../pullRequest/PullRequestProviderRegistry.ts";
+import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
+import * as PullRequestReadCache from "../pullRequest/PullRequestReadCache.ts";
+import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { IssueProviderRegistry, fromProviders } from "./IssueProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
 
@@ -177,11 +186,15 @@ function fakeProvider(
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<IssueAdapter>;
+  readonly rateLimits?: SourceControlRateLimit.SourceControlRateLimit["Service"];
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
   return IssueService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
+        input.rateLimits === undefined
+          ? SourceControlRateLimit.layer
+          : Layer.succeed(SourceControlRateLimit.SourceControlRateLimit, input.rateLimits),
         Layer.effect(IssueProviderRegistry, fromProviders(input.providers)).pipe(
           Layer.provide(
             Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
@@ -210,6 +223,376 @@ const REFERENCE = { projectId: "p1" as ProjectId, repository: "acme/web", number
 const ONE_PROJECT = [
   project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
 ];
+
+it.effect.each(["gitlab", "azure-devops", "bitbucket", "jira"] as const)(
+  "shares %s cooldown across reads and writes while keeping cached answers",
+  (kind) =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(0);
+      const calls = { detail: 0, activity: 0, viewer: 0, list: 0, write: 0 };
+      let limited = true;
+      const provider = fakeProvider(kind, {
+        getIssue: ({ number }) => {
+          calls.detail++;
+          return limited && number === 8
+            ? Effect.fail(
+                new IssueProviderError({
+                  provider: kind,
+                  operation: "getIssue",
+                  reason: "rate-limited",
+                  detail: "Quota exhausted.",
+                  retryAt: 60_000,
+                }),
+              )
+            : Effect.succeed(issueDetail(number, { viewer: "bilal" }));
+        },
+        getIssueActivity: () => {
+          calls.activity++;
+          return Effect.succeed({
+            comments: [],
+            commentCount: 0,
+            commentsTruncated: false,
+            events: [],
+          });
+        },
+        getViewer: () => {
+          calls.viewer++;
+          return Effect.succeed("bilal");
+        },
+        listIssues: () => {
+          calls.list++;
+          return Effect.succeed({ items: [], truncated: false, continues: false });
+        },
+        create: () => {
+          calls.write++;
+          return Effect.succeed({ number: 9, url: "https://host/issues/9" });
+        },
+      });
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "web",
+            workspaceRoot: "/a",
+            repository: REFERENCE.repository,
+            provider: kind,
+            host: "tracker.test",
+          }),
+        ],
+        providers: [provider],
+      });
+      const detail = yield* service.detail(REFERENCE);
+      const activity = yield* service.activity(REFERENCE);
+      const list = yield* service.list({ state: "open" });
+      const failed = yield* service.detail({ ...REFERENCE, number: 8 }).pipe(Effect.flip);
+      assert.instanceOf(failed.cause, IssueProviderError);
+      assert.equal((failed.cause as IssueProviderError).retryAt, 60_000);
+      assert.deepEqual(yield* service.detail(REFERENCE), detail);
+      assert.deepEqual(yield* service.activity(REFERENCE), activity);
+      assert.deepEqual(yield* service.list({ state: "open" }), list);
+      for (const read of [
+        service.detail({ ...REFERENCE, number: 9 }).pipe(Effect.asVoid),
+        service.activity({ ...REFERENCE, number: 9 }).pipe(Effect.asVoid),
+        service.summary({ ...REFERENCE, number: 9 }).pipe(Effect.asVoid),
+      ]) {
+        const error = yield* read.pipe(Effect.flip);
+        assert.instanceOf(error.cause, IssueProviderError);
+        assert.equal((error.cause as IssueProviderError).reason, "rate-limited");
+        assert.equal((error.cause as IssueProviderError).retryAt, 60_000);
+      }
+      const blockedList = yield* service.list({ state: "closed" });
+      assert.equal(blockedList.errors.length, 1);
+      yield* service
+        .create({ ...REFERENCE, title: "New issue", body: "", labels: [], assignees: [] })
+        .pipe(Effect.flip);
+      yield* TestClock.adjust("16 seconds");
+      assert.deepEqual(yield* service.activity({ ...REFERENCE, number: 7 }), activity);
+      yield* service.invalidate({ reference: REFERENCE });
+      yield* service.detail(REFERENCE).pipe(Effect.flip);
+      yield* service.invalidate({});
+      const blockedViewer = yield* service.list({ state: "open" }).pipe(Effect.flip);
+      assert.equal((blockedViewer.cause as IssueProviderError).operation, "getViewer");
+      assert.deepEqual(calls, { detail: 2, activity: 1, viewer: 1, list: 1, write: 0 });
+      yield* TestClock.adjust("44 seconds");
+      limited = false;
+      assert.equal((yield* service.detail({ ...REFERENCE, number: 8 })).number, 8);
+      yield* service.list({ state: "open" });
+      assert.deepEqual(calls, { detail: 3, activity: 1, viewer: 2, list: 2, write: 0 });
+    }),
+);
+
+it.effect("isolates custom issue cooldowns by host and saved credential", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const service = yield* makeService({
+      projects: ["p1", "p2", "p3"].map((id) => project({ id, title: id, workspaceRoot: `/${id}` })),
+      providers: [
+        fakeProvider("jira", {
+          resolveSource: ({ id }) =>
+            Effect.succeed({
+              host: id === "p3" ? "other.test" : "jira.test",
+              repository: "ENG",
+              credentialId: id === "p2" ? "second" : "first",
+            }),
+          getIssue: ({ host, credentialId }) => {
+            calls.push(`${host}:${credentialId}`);
+            return host === "jira.test" && credentialId === "first"
+              ? Effect.fail(
+                  new IssueProviderError({
+                    provider: "jira",
+                    operation: "getIssue",
+                    reason: "rate-limited",
+                    detail: "Quota exhausted.",
+                  }),
+                )
+              : Effect.succeed(issueDetail(7, { viewer: "bilal" }));
+          },
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, repository: "ENG", provider: "jira" };
+    yield* service.detail(ref).pipe(Effect.flip);
+    yield* service.detail({ ...ref, projectId: "p2" as ProjectId });
+    yield* service.detail({ ...ref, projectId: "p3" as ProjectId });
+    yield* service.activity(ref).pipe(Effect.flip);
+    assert.deepEqual(calls, ["jira.test:first", "jira.test:second", "other.test:first"]);
+  }),
+);
+
+it.effect("shares cooldowns in both directions with the pull request service", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(0);
+    const limits = yield* SourceControlRateLimit.make;
+    const shells = [
+      project({
+        id: "p1",
+        title: "web",
+        workspaceRoot: "/a",
+        provider: "gitlab",
+        repository: REFERENCE.repository,
+      }),
+    ];
+    const calls = { issue: 0, pr: 0 };
+    const issues = yield* makeService({
+      projects: shells,
+      rateLimits: limits,
+      providers: [
+        fakeProvider("gitlab", {
+          getIssue: () => {
+            calls.issue++;
+            return Effect.fail(
+              new IssueProviderError({
+                provider: "gitlab",
+                operation: "getIssue",
+                reason: "rate-limited",
+                detail: "Quota exhausted.",
+              }),
+            );
+          },
+        }),
+      ],
+    });
+    const unused = () => Effect.die("unused");
+    const prs = yield* PullRequestService.make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(SourceControlRateLimit.SourceControlRateLimit, limits),
+          Layer.mock(ProjectService.ProjectService)({
+            listShells: () => Effect.succeed(shells),
+            getShell: () => Effect.succeedSome(shells[0]!),
+          }),
+          Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+          Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+            resolveLink: unused,
+          }),
+          Layer.mock(ServerSettings.ServerSettingsService)({}),
+          Layer.mock(PullRequestFilesViewed.PullRequestFilesViewedRepository)({}),
+          Layer.mock(PullRequestReadCache.PullRequestReadCache)({ get: (_key, read) => read }),
+          Layer.mock(PullRequestProviderRegistry.PullRequestProviderRegistry)({
+            kinds: ["gitlab"],
+            get: () => ({
+              kind: "gitlab",
+              capabilities: {
+                diff: false,
+                comment: false,
+                actions: [],
+                mergeMethods: [],
+                search: false,
+                review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
+                reviewers: { request: false, listCandidates: false },
+              },
+              getViewer: unused,
+              listChangeRequests: unused,
+              getChangeRequest: () =>
+                Effect.suspend(() => {
+                  calls.pr++;
+                  return Effect.fail(
+                    new PullRequestProviderError({
+                      provider: "gitlab",
+                      operation: "getChangeRequest",
+                      reason: "rate-limited",
+                      detail: "Quota exhausted.",
+                    }),
+                  );
+                }),
+              getChangeRequestActivity: unused,
+              getViewerPermissions: unused,
+              getDiff: unused,
+              runAction: unused,
+              comment: unused,
+              submitReview: unused,
+              listReviewerCandidates: unused,
+              setReviewerRequest: unused,
+              replyToThread: unused,
+              setReaction: unused,
+              setThreadResolution: unused,
+            }),
+          }),
+        ),
+      ),
+    );
+    yield* prs.summary(REFERENCE).pipe(Effect.flip);
+    assert.deepEqual(calls, { issue: 0, pr: 1 });
+    const sharedPause = yield* limits
+      .check({ provider: "gitlab", host: "gitlab.com" })
+      .pipe(Effect.flip);
+    const issuePause = yield* issues.detail(REFERENCE).pipe(Effect.flip);
+    assert.equal((issuePause.cause as IssueProviderError).retryAt, sharedPause.retryAt);
+    assert.deepEqual(calls, { issue: 0, pr: 1 });
+    yield* TestClock.setTime(sharedPause.retryAt);
+    yield* issues.detail(REFERENCE).pipe(Effect.flip);
+    const nextPause = yield* limits
+      .check({ provider: "gitlab", host: "gitlab.com" })
+      .pipe(Effect.flip);
+    const prPause = yield* prs.summary({ ...REFERENCE, number: 8 }).pipe(Effect.flip);
+    assert.equal((prPause.cause as PullRequestProviderError).retryAt, nextPause.retryAt);
+    assert.isAbove(nextPause.retryAt, sharedPause.retryAt);
+    assert.deepEqual(calls, { issue: 1, pr: 1 });
+  }),
+);
+
+it.effect("records a rate-limited issue write and blocks later reads", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("jira", {
+          resolveSource: () =>
+            Effect.succeed({ host: "jira.test", repository: REFERENCE.repository }),
+          updateComment: () => {
+            calls.push("write");
+            return Effect.fail(
+              new IssueProviderError({
+                provider: "jira",
+                operation: "updateComment",
+                reason: "rate-limited",
+                detail: "Quota exhausted.",
+              }),
+            );
+          },
+          getIssue: () => {
+            calls.push("read");
+            return Effect.succeed(issueDetail(7));
+          },
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, provider: "jira" };
+    yield* service.updateComment({ ...ref, commentId: "1", body: "Updated" }).pipe(Effect.flip);
+    yield* service.detail(ref).pipe(Effect.flip);
+    yield* service.updateComment({ ...ref, commentId: "2", body: "Updated" }).pipe(Effect.flip);
+    assert.deepEqual(calls, ["write"]);
+  }),
+);
+
+it.effect("pins custom adapter cooldowns to each verified credential in list reads", () =>
+  Effect.gen(function* () {
+    let fingerprint = "first";
+    const calls: string[] = [];
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a" })],
+      providers: [
+        fakeProvider("jira", {
+          resolveSource: () => Effect.succeed({ host: "jira.test", repository: "ENG" }),
+          withCredential: (_host, read) => read(fingerprint),
+          getIssue: () => {
+            calls.push(`detail:${fingerprint}`);
+            return fingerprint === "first"
+              ? Effect.fail(
+                  new IssueProviderError({
+                    provider: "jira",
+                    operation: "getIssue",
+                    reason: "rate-limited",
+                    detail: "Quota exhausted.",
+                  }),
+                )
+              : Effect.succeed(issueDetail(7, { viewer: "bilal" }));
+          },
+          getViewer: () => {
+            calls.push(`viewer:${fingerprint}`);
+            return Effect.succeed("bilal");
+          },
+          listIssues: () => {
+            calls.push(`list:${fingerprint}`);
+            return Effect.succeed({ items: [], truncated: false, continues: false });
+          },
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, repository: "ENG", provider: "jira" };
+    yield* service.detail(ref).pipe(Effect.flip);
+    yield* service.list({ state: "open" }).pipe(Effect.flip);
+    fingerprint = "second";
+    yield* service.detail(ref);
+    yield* service.list({ state: "open" });
+    fingerprint = "first";
+    yield* service.detail({ ...ref, number: 8 }).pipe(Effect.flip);
+    yield* service.list({ state: "closed" }).pipe(Effect.flip);
+    assert.deepEqual(calls, ["detail:first", "detail:second", "viewer:second", "list:second"]);
+  }),
+);
+
+it.effect("keeps a concurrent issue success from clearing an active cooldown", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let calls = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("jira", {
+          resolveSource: () =>
+            Effect.succeed({ host: "jira.test", repository: REFERENCE.repository }),
+          getIssue: ({ number }) => {
+            calls++;
+            return number === 7
+              ? Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as(issueDetail(7, { viewer: "bilal" })),
+                )
+              : Effect.fail(
+                  new IssueProviderError({
+                    provider: "jira",
+                    operation: "getIssue",
+                    reason: "rate-limited",
+                    detail: "Quota exhausted.",
+                  }),
+                );
+          },
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, provider: "jira" };
+    const pending = yield* service.detail(ref).pipe(Effect.forkChild());
+    yield* Deferred.await(started);
+    yield* service.detail({ ...ref, number: 8 }).pipe(Effect.flip);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(pending);
+    yield* service.detail({ ...ref, number: 9 }).pipe(Effect.flip);
+    assert.equal(calls, 2);
+  }),
+);
 
 it.effect("routes tracker operations through the requested adapter and preserves failures", () =>
   Effect.gen(function* () {
@@ -1784,6 +2167,79 @@ it.effect("an explicit invalidation makes the next listing ask the host again", 
     yield* service.invalidate({ reference: REFERENCE });
     yield* service.list({ state: "open" });
     assert.strictEqual(hostCalls, 2);
+  }),
+);
+
+it.effect.each(["github", "linear", "gitlab", "azure-devops", "bitbucket", "forgejo"])(
+  "shares repeated and concurrent %s detail reads without spending extra host calls",
+  (provider) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "web",
+            workspaceRoot: "/a",
+            repository: "acme/web",
+            provider,
+          }),
+        ],
+        providers: [
+          fakeProvider(provider, {
+            getIssue: () =>
+              Effect.sync(() => {
+                calls += 1;
+                return issueDetail(7);
+              }),
+          }),
+        ],
+      });
+      const reads = yield* Effect.all(
+        Array.from({ length: 20 }, () => service.detail(REFERENCE)),
+        { concurrency: "unbounded" },
+      );
+      assert.isTrue(reads.every((read) => read.number === 7));
+      yield* service.detail(REFERENCE);
+      assert.equal(calls, 1);
+    }),
+);
+
+it.effect("keeps issue reads out of GitHub's reserve while allowing writes to use it", () =>
+  Effect.gen(function* () {
+    const read = AllowGitHubReserve.pipe(
+      Effect.flatMap((allowed) =>
+        allowed
+          ? Effect.succeed(issueDetail(7))
+          : Effect.fail(
+              new IssueProviderError({
+                provider: "github",
+                operation: "getIssue",
+                reason: "rate-limited",
+                detail: "Reserved quota",
+              }),
+            ),
+      ),
+    );
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () => read,
+          getIssueActivity: () =>
+            read.pipe(
+              Effect.as({ comments: [], commentCount: 0, commentsTruncated: false, events: [] }),
+            ),
+          comment: () => read.pipe(Effect.asVoid),
+        }),
+      ],
+    });
+    assert.equal((yield* service.detail(REFERENCE).pipe(Effect.flip))._tag, "IssueOperationError");
+    assert.equal(
+      (yield* service.activity(REFERENCE).pipe(Effect.flip))._tag,
+      "IssueOperationError",
+    );
+    yield* service.comment({ ...REFERENCE, body: "Keep writes available" });
   }),
 );
 

@@ -45,6 +45,7 @@ vi.mock("~/composerDraftStore", () => ({
 vi.mock("~/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => commands.newThread }));
 vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => undefined }));
 vi.mock("~/localApi", () => ({ readLocalApi: () => null }));
+vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
 vi.mock("~/state/issues", () => ({
   issueEnvironment: {
     detail: () => "detail",

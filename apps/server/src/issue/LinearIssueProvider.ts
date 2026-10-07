@@ -1,6 +1,9 @@
 import * as Effect from "effect/Effect";
 import type {
   IssueCapabilities,
+  IssueLinkedPullRequest,
+  IssueRelative,
+  IssueRelativeNode,
   IssueReaction,
   IssueReactionContent,
   IssueState,
@@ -29,7 +32,7 @@ const CAPABILITIES: IssueCapabilities = {
   listLabelCandidates: false,
   listAssigneeCandidates: false,
   search: true,
-  linkedPullRequests: false,
+  linkedPullRequests: true,
   timelineEvents: false,
 };
 
@@ -92,6 +95,56 @@ function actor(user: LinearApi.LinearUser | null | undefined) {
         name: user.name?.trim() || null,
         avatarUrl: user.avatarUrl?.trim() || null,
       };
+}
+
+const PULL_REQUEST_URL =
+  /^https:\/\/(?:github\.com\/([^/]+\/[^/]+)\/pull|gitlab\.com\/(.+?)\/-\/merge_requests)\/(\d+)/;
+
+export function linearLinkedPullRequests(
+  attachments: ReadonlyArray<LinearApi.LinearAttachment>,
+): Array<IssueLinkedPullRequest> {
+  return attachments.flatMap((attachment) => {
+    const match = PULL_REQUEST_URL.exec(attachment.url);
+    if (match === null) return [];
+    const status = attachment.metadata?.status;
+    return [
+      {
+        repository: match[1] ?? match[2]!,
+        number: Number(match[3]),
+        title: attachment.title.trim() || attachment.url,
+        url: attachment.url,
+        state: status === "merged" ? "merged" : status === "closed" ? "closed" : "open",
+        isDraft: status === "draft" || attachment.metadata?.draft === true,
+        closesIssue: false,
+      },
+    ];
+  });
+}
+
+function toRelative(issue: LinearApi.LinearRelative): IssueRelative {
+  return {
+    repository: issue.team.key,
+    number: issue.number,
+    title: issue.title,
+    url: issue.url,
+    state: linearIssueState(issue.state.type),
+    ...(issue.attachments
+      ? { linkedPullRequests: linearLinkedPullRequests(issue.attachments.nodes) }
+      : {}),
+  };
+}
+
+function toRelativeNode(issue: LinearApi.LinearRelative): IssueRelativeNode {
+  return { ...toRelative(issue), subIssues: (issue.children?.nodes ?? []).map(toRelativeNode) };
+}
+
+/** Root first, ending with the direct parent. */
+function linearAncestors(issue: LinearApi.LinearIssue): Array<IssueRelative> {
+  const ancestors: Array<IssueRelative> = [];
+  for (let parent = issue.parent; parent; parent = parent.parent) {
+    ancestors.unshift(toRelative(parent));
+  }
+  return ancestors;
 }
 
 function toIssue(issue: LinearApi.LinearIssue): ProviderIssue {
@@ -214,7 +267,9 @@ export const make = Effect.gen(function* () {
           Effect.map((issue) => ({
             ...toIssue(issue),
             body: issue.description ?? "",
-            linkedPullRequests: [],
+            linkedPullRequests: linearLinkedPullRequests(issue.attachments?.nodes ?? []),
+            ancestors: linearAncestors(issue),
+            subIssues: (issue.children?.nodes ?? []).map(toRelativeNode),
             viewerPermissions: PERMISSIONS,
           })),
         ),

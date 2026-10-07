@@ -10,6 +10,7 @@ import {
   IssueListInput,
   IssueListResult,
   IssueRef,
+  IssueRelativeNode,
   IssueTemplateList,
   issueTemplateAnswersComplete,
   IssueUpdateInput,
@@ -241,6 +242,28 @@ describe("IssueUpdateInput", () => {
 });
 
 describe("IssueDetail", () => {
+  it("round-trips cross-repository sub-issues and accepts relatives without a repository", () => {
+    const legacy = {
+      number: 7,
+      title: "Slice",
+      url: "https://linear.app/acme/issue/ENG-7",
+      state: "open",
+      subIssues: [],
+    };
+    const tree = {
+      ...legacy,
+      repository: "acme/web",
+      url: "https://github.com/acme/web/issues/7",
+      subIssues: [
+        { ...legacy, repository: "acme/api", url: "https://github.com/acme/api/issues/7" },
+      ],
+    };
+    const codec = Schema.toCodecJson(IssueRelativeNode);
+    for (const node of [legacy, tree]) {
+      expect(Schema.decodeSync(codec)(Schema.encodeUnknownSync(codec)(node))).toEqual(node);
+    }
+  });
+
   it("carries the change requests that reference it, marking the ones that close it", () => {
     const detail = decodeDetail({
       provider: "github",

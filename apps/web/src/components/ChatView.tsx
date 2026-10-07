@@ -397,6 +397,7 @@ import {
   findProjectForLink,
   linkedPullRequestTarget,
   openLinkInBrowser,
+  relatedIssueTarget,
   repositoryForProjectLink,
 } from "../lib/openIssueLink";
 import { environmentCatalog } from "../connection/catalog";
@@ -10872,6 +10873,25 @@ export default function ChatView(props: ChatViewProps) {
             : { provider: renderedRightPanelSurface.provider }),
           repository: renderedRightPanelSurface.repository,
           number: renderedRightPanelSurface.number,
+        }}
+        onOpenRelatedIssue={(relative) => {
+          const target = relatedIssueTarget(
+            allProjects.filter(
+              (candidate) => candidate.environmentId === activeThread.environmentId,
+            ),
+            renderedRightPanelSurface,
+            relative,
+          );
+          if (activeThreadRef === null || target === null) {
+            openLinkInBrowser(relative.url);
+            return;
+          }
+          useRightPanelStore.getState().openIssue(activeThreadRef, {
+            ...target,
+            ...(renderedRightPanelSurface.provider === undefined
+              ? {}
+              : { provider: renderedRightPanelSurface.provider }),
+          });
         }}
         chromeVariant="collapse"
         handoffTarget={{

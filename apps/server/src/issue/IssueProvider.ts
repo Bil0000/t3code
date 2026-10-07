@@ -15,6 +15,8 @@ import type {
   IssueListSort,
   IssueLabelCandidateList,
   IssueLinkedPullRequest,
+  IssueRelative,
+  IssueRelativeNode,
   IssueReaction,
   IssueReactionContent,
   IssueListState,
@@ -124,6 +126,8 @@ export interface ProviderIssueDetail extends ProviderIssue {
   readonly repositoryUrl?: string;
   readonly body: string;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
+  readonly ancestors?: ReadonlyArray<IssueRelative>;
+  readonly subIssues?: ReadonlyArray<IssueRelativeNode>;
   readonly viewerPermissions: IssueViewerPermissions;
 }
 

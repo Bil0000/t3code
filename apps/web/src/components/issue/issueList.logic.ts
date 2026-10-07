@@ -60,13 +60,13 @@ function isAuthoredByViewer(entry: IssueListEntry, viewers: IssueViewers): boole
   return viewer !== null && normalizeLogin(entry.author?.login) === viewer;
 }
 
-/** Free-text filter over the fields a row actually shows, plus `#123` / `123`. */
+/** Free-text filter over the fields a row actually shows, plus `#123` / `123` / `ENG-123`. */
 export function matchesIssueQuery(entry: IssueListEntry, query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0) return true;
   const assignees = entry.assignees.map((assignee) => assignee.login).join(" ");
   const labels = entry.labels.map((label) => label.name).join(" ");
-  return `#${entry.number} ${entry.title} ${entry.repository} ${entry.author?.login ?? ""} ${assignees} ${labels}`
+  return `#${entry.number} ${entry.repository}-${entry.number} ${entry.title} ${entry.repository} ${entry.author?.login ?? ""} ${assignees} ${labels}`
     .toLowerCase()
     .includes(normalizedQuery);
 }
@@ -290,6 +290,7 @@ export function scoreIssueMatch(entry: IssueListEntry, query: string): number {
   const number = needle.replace(/^#/u, "");
   // Asking for a number is asking for one issue, and it is the answer or it is not.
   if (/^\d+$/u.test(number)) return String(entry.number) === number ? 100 : 0;
+  if (needle === `${entry.repository}-${entry.number}`.toLowerCase()) return 100;
 
   const title = entry.title.toLowerCase();
   const terms = needle.split(/\s+/u).filter((term) => term.length > 0);

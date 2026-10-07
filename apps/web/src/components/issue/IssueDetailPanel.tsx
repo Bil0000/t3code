@@ -70,6 +70,7 @@ import {
   buildExplainIssueHandoff,
   buildLinkPullRequestsHandoff,
   buildSolveIssueHandoff,
+  sameProjectIssueNumber,
   issueHandoffReviewComments,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
   mergeIssueComments,
@@ -162,6 +163,7 @@ export function IssueDetailPanel({
   onActed,
   onStateChange,
   onOpenLinkedPullRequest,
+  onOpenRelatedIssue,
   chromeVariant = "full",
 }: {
   environmentId: EnvironmentId;
@@ -194,6 +196,12 @@ export function IssueDetailPanel({
    * one the row opens it on the host instead, which is never a dead control.
    */
   onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
+  /** Opens another issue of this tracker project in place; without it, on the tracker. */
+  onOpenRelatedIssue?: (issue: {
+    readonly repository?: string | undefined;
+    readonly number: number;
+    readonly url: string;
+  }) => void;
   /**
    * How the metadata above the content behaves: `full` keeps every row pinned; `collapse`
    * folds the whole of it into the top row once the active tab scrolls, and unfolds at the
@@ -356,7 +364,7 @@ export function IssueDetailPanel({
   // Core detail is cheap enough to re-read while this stays open. Activity is heavier, so the
   // revision effect above reads it only after this same issue reports a change.
   useLiveRefresh(detailQuery.refresh, {
-    key: `issue:${issueKey}`,
+    key: `issue:${environmentId}:${issueKey}`,
   });
   // The button, on the other hand, goes around the server's cache rather than through it: it is
   // the answer for a reader who can see that what they are looking at is behind. The
@@ -476,6 +484,7 @@ export function IssueDetailPanel({
       url: detail.url,
       body: detail.body,
       comments: detail.comments,
+      ...(detail.ancestors?.length ? { parent: detail.ancestors.at(-1)! } : {}),
     });
     // "Ask" and "Add to composer" leave the composer empty on purpose, so saying the question is
     // in it would send the reader looking for something that is not there. The chips are what
@@ -538,9 +547,40 @@ export function IssueDetailPanel({
       ? handoffTarget.draftId
       : null;
   const markdownRepositoryUrl = detail?.repositoryUrl ?? null;
+  const openRelatedIssue = useCallback(
+    (issue: {
+      readonly repository?: string | undefined;
+      readonly number: number;
+      readonly url: string;
+    }) =>
+      onOpenRelatedIssue === undefined ? openLinkInBrowser(issue.url) : onOpenRelatedIssue(issue),
+    [onOpenRelatedIssue],
+  );
+  const issueUrl = detail?.url ?? null;
+  const issueRepository = detail?.repository ?? null;
   const markdownContext = useMemo(
-    () => ({ repositoryUrl: markdownRepositoryUrl, threadRef: markdownThreadRef, panelRef }),
-    [markdownRepositoryUrl, markdownThreadRef, panelRef],
+    () => ({
+      repositoryUrl: markdownRepositoryUrl,
+      threadRef: markdownThreadRef,
+      panelRef,
+      onOpenUrl: (url: string) => {
+        if (onOpenRelatedIssue === undefined || issueUrl === null || issueRepository === null) {
+          return false;
+        }
+        const number = sameProjectIssueNumber(issueUrl, issueRepository, url);
+        if (number === null) return false;
+        onOpenRelatedIssue({ number, url });
+        return true;
+      },
+    }),
+    [
+      markdownRepositoryUrl,
+      markdownThreadRef,
+      panelRef,
+      onOpenRelatedIssue,
+      issueUrl,
+      issueRepository,
+    ],
   );
 
   return (
@@ -1048,6 +1088,7 @@ export function IssueDetailPanel({
                       ? openLinkInBrowser(link.url)
                       : onOpenLinkedPullRequest(link)
                   }
+                  onOpenRelatedIssue={openRelatedIssue}
                   onOpenAiMatch={(match) => openLinkInBrowser(match.url)}
                   onRefresh={refreshDetail}
                 />

@@ -82,6 +82,33 @@ export function findProjectForLink(
   return findProjectForIssue(projects, { host, repository: link.repository });
 }
 
+export function relatedIssueTarget(
+  projects: ReadonlyArray<EnvironmentProject>,
+  current: { readonly projectId: string; readonly repository: string },
+  relative: {
+    readonly repository?: string | undefined;
+    readonly number: number;
+    readonly url: string;
+  },
+): { projectId: string; repository: string; number: number } | null {
+  const repository = relative.repository;
+  if (repository === undefined || repository.toLowerCase() === current.repository.toLowerCase()) {
+    return {
+      projectId: current.projectId,
+      repository: current.repository,
+      number: relative.number,
+    };
+  }
+  const project = findProjectForLink(projects, { ...relative, repository });
+  return project === undefined
+    ? null
+    : {
+        projectId: project.id,
+        repository: repositoryForProjectLink(project, repository),
+        number: relative.number,
+      };
+}
+
 /**
  * Hands a link to the system browser, which is where one this workspace cannot place belongs, and
  * says so when the desktop bridge is missing rather than swallowing the press.

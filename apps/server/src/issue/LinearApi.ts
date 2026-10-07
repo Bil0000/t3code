@@ -23,6 +23,7 @@ import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const API_URL = "https://api.linear.app/graphql";
 const MAX_PAGE = 250;
+const ISSUE_COMPLEXITY = 5_000;
 
 const LINEAR_CREDENTIALS_SECRET = "issue-trackers.linear.credentials";
 
@@ -66,6 +67,43 @@ const Comment = Schema.Struct({
   user: Schema.optional(Schema.NullOr(User)),
   reactions: Schema.optional(Schema.NullOr(Schema.Array(Reaction))),
 });
+
+// Links Linear's GitHub/GitLab integrations record on an issue; `metadata` is integration-defined.
+const Attachment = Schema.Struct({
+  url: Schema.String,
+  title: Schema.String,
+  sourceType: Schema.optional(Schema.NullOr(Schema.String)),
+  metadata: Schema.optional(Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown))),
+});
+interface Relative {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly team: { readonly key: string };
+  readonly state: typeof State.Type;
+  readonly attachments?:
+    | { readonly nodes: ReadonlyArray<typeof Attachment.Type> }
+    | null
+    | undefined;
+  readonly parent?: Relative | null | undefined;
+  readonly children?: { readonly nodes: ReadonlyArray<Relative> } | null | undefined;
+}
+const Relative: Schema.Codec<Relative> = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  url: Schema.String,
+  team: Schema.Struct({ key: Schema.String }),
+  state: State,
+  attachments: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Attachment) }))),
+  parent: Schema.optional(Schema.NullOr(Schema.suspend((): Schema.Codec<Relative> => Relative))),
+  children: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.Array(Schema.suspend((): Schema.Codec<Relative> => Relative)),
+      }),
+    ),
+  ),
+});
 const Issue = Schema.Struct({
   id: Schema.String,
   identifier: Schema.String,
@@ -90,6 +128,9 @@ const Issue = Schema.Struct({
     ),
   ),
   reactions: Schema.optional(Schema.NullOr(Schema.Array(Reaction))),
+  attachments: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Attachment) }))),
+  parent: Schema.optional(Schema.NullOr(Relative)),
+  children: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Relative) }))),
 });
 
 const GraphQlError = Schema.Struct({
@@ -151,6 +192,10 @@ const MutationEnvelope = Schema.Struct({
 
 const USER_FIELDS = "id name email avatarUrl";
 const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
+// Three levels each way bounds the query's complexity; deeper relatives open from the tree.
+const RELATIVE_FIELDS = "number title url team { key } state { name type }";
+// Pull requests only on the levels nearest the issue, which keeps the query under Linear's cost limit.
+const RELATIVE_WITH_PULL_REQUESTS = `${RELATIVE_FIELDS} attachments(first: 5) { nodes { url title sourceType metadata } }`;
 const ISSUE_FIELDS = `
   id identifier number title url description createdAt updatedAt completedAt canceledAt
   state { name type }
@@ -171,7 +216,19 @@ const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $filter: Issue
   }
 }`;
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
-  issue(id: $id) { ${ISSUE_FIELDS} }
+  issue(id: $id) {
+    ${ISSUE_FIELDS}
+    attachments(first: 50) { nodes { url title sourceType metadata } }
+    parent { ${RELATIVE_WITH_PULL_REQUESTS} parent { ${RELATIVE_FIELDS} parent { ${RELATIVE_FIELDS} } } }
+    children(first: 20) {
+      nodes {
+        ${RELATIVE_WITH_PULL_REQUESTS}
+        children(first: 10) {
+          nodes { ${RELATIVE_FIELDS} children(first: 5) { nodes { ${RELATIVE_FIELDS} } } }
+        }
+      }
+    }
+  }
 }`;
 const ACTIVITY_QUERY = `query T3LinearIssueActivity($id: String!, $comments: Int!) {
   viewer { id name email avatarUrl }
@@ -250,6 +307,8 @@ export const isLinearApiError = Schema.is(LinearApiError);
 
 export type LinearUser = typeof User.Type;
 export type LinearIssue = typeof Issue.Type;
+export type LinearAttachment = typeof Attachment.Type;
+export type LinearRelative = Relative;
 export type LinearComment = typeof Comment.Type;
 export type LinearReaction = typeof Reaction.Type;
 export class LinearApi extends Context.Service<
@@ -324,6 +383,10 @@ const make = Effect.gen(function* () {
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const rateLimitKey = { provider: "linear", host: new URL(config.baseUrl).host };
   const credentialPoolMutex = yield* Semaphore.make(1);
+  // ponytail: one shared request slot; use per-account slots if throughput becomes a constraint.
+  const requestGate = yield* Semaphore.make(1);
+  const complexityBudgets = new Map<string, { remaining: number; reset: number }>();
+  const documentCosts = new Map<string, number>();
 
   const readSecret = (name: string, operation: string) =>
     secrets.get(name).pipe(
@@ -406,6 +469,20 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
+      const now = yield* Clock.currentTimeMillis;
+      const costKey = [document, variables.first, variables.last].join("\0");
+      const cost = document === ISSUE_QUERY ? ISSUE_COMPLEXITY : (documentCosts.get(costKey) ?? 0);
+      const budget = complexityBudgets.get(credentialScope);
+      if (budget !== undefined && budget.reset <= now) complexityBudgets.delete(credentialScope);
+      if (budget !== undefined && budget.reset > now) {
+        if (budget.remaining < cost)
+          return yield* new LinearApiError({
+            operation,
+            reason: "rate-limited",
+            retryAt: budget.reset,
+          });
+        budget.remaining = Math.max(0, budget.remaining - cost);
+      }
       let endpointOnly = false;
       return yield* http
         .execute(
@@ -420,6 +497,26 @@ const make = Effect.gen(function* () {
           Effect.flatMap((response) =>
             Effect.gen(function* () {
               const now = yield* Clock.currentTimeMillis;
+              const reportedCost = Number(response.headers["x-complexity"]);
+              if (Number.isFinite(reportedCost) && reportedCost >= 0) {
+                documentCosts.set(costKey, reportedCost);
+                if (budget !== undefined && budget.reset > now)
+                  budget.remaining = Math.max(
+                    0,
+                    budget.remaining - Math.max(0, reportedCost - cost),
+                  );
+              }
+              const remaining = Number(response.headers["x-ratelimit-complexity-remaining"]);
+              const reset = Number(
+                response.headers["x-ratelimit-complexity-reset"] ?? budget?.reset,
+              );
+              if (
+                Number.isFinite(remaining) &&
+                remaining >= 0 &&
+                Number.isFinite(reset) &&
+                reset > now
+              )
+                complexityBudgets.set(credentialScope, { remaining, reset });
               const resets = ["requests", "complexity"].flatMap((kind) => {
                 const remaining = response.headers[`x-ratelimit-${kind}-remaining`];
                 const reset = Number(response.headers[`x-ratelimit-${kind}-reset`]);
@@ -537,6 +634,7 @@ const make = Effect.gen(function* () {
           ),
         );
     }).pipe(
+      requestGate.withPermits(1),
       Effect.provideService(
         SourceControlRateLimit.CredentialScope,
         Hex.encode(sha256(new TextEncoder().encode(key))),
@@ -759,6 +857,14 @@ const make = Effect.gen(function* () {
           { title: { containsIgnoreCase: input.query } },
           { description: { containsIgnoreCase: input.query } },
         ];
+        // `ENG-12`, `#12` or `12` asks for one issue of this team by its number.
+        const reference = /^(?:([a-z][a-z0-9]*)-|#)?(\d+)$/iu.exec(input.query.trim());
+        if (
+          reference !== null &&
+          (reference[1] === undefined || reference[1].toUpperCase() === input.teamKey.toUpperCase())
+        ) {
+          filter.or = [...(filter.or as Array<unknown>), { number: { eq: Number(reference[2]) } }];
+        }
       }
       if (input.cursor !== undefined) filter.updatedAt = { lte: input.cursor.updatedBefore };
       if (input.cursor?.seenAt?.length) filter.number = { nin: input.cursor.seenAt };

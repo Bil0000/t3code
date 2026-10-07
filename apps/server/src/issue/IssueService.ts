@@ -54,11 +54,13 @@ import {
 } from "@t3tools/contracts";
 
 import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import {
   issueProviderContextKey,
-  type IssueProviderError,
+  IssueProviderError,
+  type IssueAdapter,
   type ProviderIssue,
   type ProviderListCursor,
 } from "./IssueProvider.ts";
@@ -381,10 +383,87 @@ const CredentialNamespace = Context.Reference<string>("t3/issue/CredentialNamesp
   defaultValue: () => "",
 });
 
+function withRateLimitBackoff(
+  api: IssueAdapter,
+  host: string,
+  limits: SourceControlRateLimit.SourceControlRateLimit["Service"],
+  credentialId?: string,
+): IssueAdapter {
+  if (api.kind === "github" || api.kind === "linear") return api;
+  const key = { provider: api.kind, host };
+  const wrap =
+    <I, A>(operation: string, call: (input: I) => Effect.Effect<A, IssueProviderError>) =>
+    (input: I) =>
+      Effect.gen(function* () {
+        const scope = yield* SourceControlRateLimit.CredentialScope;
+        const credential =
+          scope ||
+          credentialId ||
+          (api.withCredential === undefined ? "" : yield* CredentialNamespace);
+        return yield* limits.check(key).pipe(
+          Effect.mapError(
+            (error) =>
+              new IssueProviderError({
+                provider: api.kind,
+                operation,
+                reason: "rate-limited",
+                detail: error.detail,
+                retryAt: error.retryAt,
+                cause: error,
+              }),
+          ),
+          Effect.flatMap((lease) =>
+            Effect.suspend(() => call(input)).pipe(
+              Effect.tap(() => limits.recordSuccess({ ...key, lease })),
+              Effect.tapError((error) =>
+                error.reason === "rate-limited"
+                  ? limits.recordRateLimit({ ...key, lease, retryAt: error.retryAt })
+                  : Effect.void,
+              ),
+            ),
+          ),
+          Effect.provideService(SourceControlRateLimit.CredentialScope, credential),
+        );
+      });
+  return {
+    ...api,
+    getViewer: wrap("getViewer", api.getViewer),
+    listIssues: wrap("listIssues", api.listIssues),
+    ...(api.listIssuesAcross === undefined
+      ? {}
+      : { listIssuesAcross: wrap("listIssuesAcross", api.listIssuesAcross) }),
+    ...(api.getIssueSummary === undefined
+      ? {}
+      : { getIssueSummary: wrap("getIssueSummary", api.getIssueSummary) }),
+    getIssue: wrap("getIssue", api.getIssue),
+    getIssueActivity: wrap("getIssueActivity", api.getIssueActivity),
+    ...(api.getIssueComments === undefined
+      ? {}
+      : { getIssueComments: wrap("getIssueComments", api.getIssueComments) }),
+    getViewerPermissions: wrap("getViewerPermissions", api.getViewerPermissions),
+    runAction: wrap("runAction", api.runAction),
+    comment: wrap("comment", api.comment),
+    ...(api.updateComment === undefined
+      ? {}
+      : { updateComment: wrap("updateComment", api.updateComment) }),
+    ...(api.setReaction === undefined ? {} : { setReaction: wrap("setReaction", api.setReaction) }),
+    create: wrap("create", api.create),
+    update: wrap("update", api.update),
+    setLabels: wrap("setLabels", api.setLabels),
+    setAssignees: wrap("setAssignees", api.setAssignees),
+    listLabelCandidates: wrap("listLabelCandidates", api.listLabelCandidates),
+    listAssigneeCandidates: wrap("listAssigneeCandidates", api.listAssigneeCandidates),
+    ...(api.listIssueTemplates === undefined
+      ? {}
+      : { listIssueTemplates: wrap("listIssueTemplates", api.listIssueTemplates) }),
+  };
+}
+
 export const make = Effect.gen(function* () {
   const registry = yield* IssueProviderRegistry.IssueProviderRegistry;
   const projects = yield* ProjectService.ProjectService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const refreshes = yield* PubSub.unbounded<IssueRef>();
 
   const listWorkspaceProjects = (
@@ -415,6 +494,18 @@ export const make = Effect.gen(function* () {
           ),
         ),
         Effect.flatMap((shells) => registry.resolveProjects(shells, filter)),
+        Effect.map((resolved) => ({
+          ...resolved,
+          supported: resolved.supported.map((project) => ({
+            ...project,
+            adapter: withRateLimitBackoff(
+              project.adapter,
+              project.host,
+              rateLimits,
+              project.credentialId,
+            ),
+          })),
+        })),
       );
     });
 
@@ -1062,6 +1153,8 @@ export const make = Effect.gen(function* () {
               ...(viewer === undefined ? {} : { viewer }),
               commentCount: issue.commentCount,
               linkedPullRequests: issue.linkedPullRequests,
+              ...(issue.ancestors === undefined ? {} : { ancestors: issue.ancestors }),
+              ...(issue.subIssues === undefined ? {} : { subIssues: issue.subIssues }),
             })),
           ),
       ),
@@ -1886,7 +1979,7 @@ export const make = Effect.gen(function* () {
                 key: sourceKeyOf(project),
                 fingerprint,
                 context,
-              })),
+              })).pipe(Effect.provideService(CredentialNamespace, fingerprint)),
             ).pipe(
               Effect.match({
                 onSuccess: (scope) => scope,
@@ -1937,8 +2030,8 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.flatMap((tracker) => tracker.bind(input))),
     list: credentialList,
     summary: credentialScoped(summary, false),
-    detail: credentialScoped(detail),
-    activity: credentialScoped(activity),
+    detail: credentialScoped(detail, false),
+    activity: credentialScoped(activity, false),
     runAction: (input) =>
       credentialScoped(invalidatedByMutation(runAction))(input).pipe(
         Effect.tap(() => PubSub.publish(refreshes, input)),

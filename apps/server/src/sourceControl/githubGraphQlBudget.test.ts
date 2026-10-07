@@ -20,6 +20,21 @@ function rateLimit(remaining: number, limit = 5_000, resetAt = RESET_AT, cost = 
 }
 
 describe("GitHub GraphQL budget", () => {
+  it.effect("reserves a larger read's minimum cost after a cheap response", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(502, 5_000, RESET_AT, 1));
+      const query = "query { viewer { login } }";
+      const error = yield* Effect.flip(budget.query("github.com", query, { minimumCost: 3 }));
+      expect(error._tag).toBe("SourceControlRateLimitPausedError");
+      yield* budget.query("github.com", query);
+      expect(
+        (yield* Effect.flip(budget.query("github.com", query, { minimumCost: 3 }))).retryAt,
+      ).toBe(Date.parse(RESET_AT));
+      yield* budget.query("github.com", query, { allowReserve: true, minimumCost: 3 });
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
   it.effect("adds rate metadata to a read query", () =>
     Effect.gen(function* () {
       const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;

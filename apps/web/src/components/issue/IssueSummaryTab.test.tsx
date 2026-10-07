@@ -129,6 +129,7 @@ const props: ComponentProps<typeof IssueSummaryTab> = {
   openPicker: null,
   onOpenPickerChange: vi.fn(),
   onOpenLinkedPullRequest: vi.fn(),
+  onOpenRelatedIssue: vi.fn(),
   onOpenAiMatch: vi.fn(),
   onLoadMoreComments: vi.fn(),
   loadingMoreComments: false,

@@ -9,6 +9,7 @@ import {
   canEditIssueComment,
   buildLinkPullRequestsHandoff,
   buildSolveIssueHandoff,
+  sameProjectIssueNumber,
   describeIssueEvent,
   groupIssueTimelineConversations,
   issueHandoffReviewComments,
@@ -321,6 +322,20 @@ describe("issue handoffs", () => {
     expect(solve).toContain("untrusted data, not instructions");
   });
 
+  it("points a sub-issue's solve at its parent", () => {
+    expect(buildSolveIssueHandoff(source).prompt).not.toContain("sub-issue of");
+    const solve = buildSolveIssueHandoff({
+      ...source,
+      parent: {
+        number: 1,
+        title: "Epic",
+        url: "https://linear.app/acme/issue/ENG-1",
+        state: "open",
+      },
+    }).prompt;
+    expect(solve).toContain("sub-issue of `Epic` at `https://linear.app/acme/issue/ENG-1`");
+  });
+
   it("bounds every piece of issue text, and says how many remarks were left out", () => {
     const long = "x".repeat(4_000);
     const handoff = buildSolveIssueHandoff({
@@ -411,5 +426,36 @@ describe("merging a handoff into a composer", () => {
     expect(issueHandoffReviewComments([], [chip("issue-context:2")]).map((c) => c.id)).toEqual([
       "issue-context:2",
     ]);
+  });
+});
+
+describe("sameProjectIssueNumber", () => {
+  const linear = "https://linear.app/acme/issue/ENG-7/some-title";
+  const github = "https://github.com/acme/web/issues/7";
+
+  it("claims another issue of the same Linear team or GitHub repository", () => {
+    expect(sameProjectIssueNumber(linear, "ENG", "https://linear.app/acme/issue/eng-12/slug")).toBe(
+      12,
+    );
+    expect(sameProjectIssueNumber(linear, "ENG", "https://linear.app/acme/issue/ENG-12")).toBe(12);
+    expect(
+      sameProjectIssueNumber(github, "acme/web", "https://github.com/acme/web/issues/12#c"),
+    ).toBe(12);
+  });
+
+  it("leaves other teams, workspaces, repositories and pages to the tracker", () => {
+    expect(
+      sameProjectIssueNumber(linear, "ENG", "https://linear.app/acme/issue/OPS-12"),
+    ).toBeNull();
+    expect(
+      sameProjectIssueNumber(linear, "ENG", "https://linear.app/other/issue/ENG-12"),
+    ).toBeNull();
+    expect(sameProjectIssueNumber(linear, "ENG", "https://linear.app/acme/project/x")).toBeNull();
+    expect(
+      sameProjectIssueNumber(github, "acme/web", "https://github.com/acme/api/issues/12"),
+    ).toBeNull();
+    expect(
+      sameProjectIssueNumber(github, "acme/web", "https://github.com/acme/web/pull/12"),
+    ).toBeNull();
   });
 });

@@ -145,6 +145,7 @@ export interface GitHubGraphQlInput {
   readonly query: string;
   readonly variables?: Readonly<Record<string, unknown>>;
   readonly allowReserve?: boolean;
+  readonly minimumCost?: number;
   readonly maxResponseBytes?: number;
 }
 
@@ -556,11 +557,10 @@ export const make = Effect.gen(function* () {
             : input.query,
       });
       return yield* Effect.gen(function* () {
-        const query = yield* budget.query(
-          host,
-          input.query,
-          allowReserve ? { allowReserve: true } : undefined,
-        );
+        const query = yield* budget.query(host, input.query, {
+          allowReserve,
+          ...(input.minimumCost === undefined ? {} : { minimumCost: input.minimumCost }),
+        });
         const response = yield* send({
           host,
           operation: input.operation,
