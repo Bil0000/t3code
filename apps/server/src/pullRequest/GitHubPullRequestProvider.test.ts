@@ -8,6 +8,7 @@ import type { IssueLink, PullRequestReaction } from "@t3tools/contracts";
 import { decodePullRequestDetailJson } from "./gitHubPullRequestJson.ts";
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import type { GitHubPullRequestCore } from "./gitHubPullRequestJson.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
@@ -536,6 +537,112 @@ const openDetail = {
   comments: [],
   commits: [],
 };
+
+it.effect.each([
+  {
+    operation: "listCitedIssues",
+    read: "getChangeRequest",
+    partial: { linkedIssuesTruncated: true },
+  },
+  {
+    operation: "listLinkedIssues",
+    read: "getChangeRequest",
+    partial: { linkedIssuesTruncated: true },
+  },
+  {
+    operation: "listActorAvatars",
+    read: "listChangeRequests",
+    partial: {
+      items: [{ number: 7, author: { avatarUrl: "https://github.com/octocat.png?size=80" } }],
+    },
+  },
+  {
+    operation: "listReviewThreadComments",
+    read: "getChangeRequestActivity",
+    partial: { commentsTruncated: true, reviewThreadsTruncated: true },
+  },
+] as const)("preserves quota errors from $operation and keeps ordinary fallback", (test) =>
+  Effect.gen(function* () {
+    for (const error of [
+      new GitHubApi.GitHubApiRateLimitError({
+        host: "github.com",
+        operation: test.operation,
+        retryAt: 123_000,
+      }),
+      new SourceControlRateLimit.SourceControlRateLimitPausedError({
+        provider: "github",
+        host: "github.com",
+        retryAt: 123_000,
+      }),
+      new GitHubPullRequestCli.GitHubPullRequestReadError({
+        command: "gh",
+        cwd: "/w",
+        operation: test.operation,
+        cause: "unavailable",
+      }),
+    ]) {
+      const provider = yield* make.pipe(
+        Effect.provide(
+          Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+            getPullRequestDetail: () =>
+              Effect.succeed({ ...openDetail, isCrossRepository: false, body: "Part of #34." }),
+            getPullRequestActivity: () => Effect.succeed(openDetail),
+            listPullRequests: () =>
+              Effect.succeed({
+                items: [
+                  {
+                    ...openDetail,
+                    authorId: "actor-id",
+                    author: { login: "octocat", name: null, avatarUrl: null },
+                  },
+                ],
+                truncated: false,
+                continues: true,
+              }),
+            listCitedIssues: () =>
+              test.operation === "listCitedIssues" ? Effect.fail(error) : Effect.succeed([]),
+            listLinkedIssues: () =>
+              test.operation === "listLinkedIssues"
+                ? Effect.fail(error)
+                : Effect.succeed({ links: [], truncated: false }),
+            listActorAvatars: () => Effect.fail(error),
+            listReviewThreadComments: () => Effect.fail(error),
+          }),
+        ),
+      );
+      const input = {
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        state: "open",
+        involvement: "all",
+        viewer: "viewer",
+        limit: 20,
+      } as const;
+      const result =
+        test.read === "listChangeRequests"
+          ? yield* provider.listChangeRequests(input).pipe(Effect.result)
+          : test.read === "getChangeRequestActivity"
+            ? yield* provider.getChangeRequestActivity(input).pipe(Effect.result)
+            : yield* provider.getChangeRequest(input).pipe(Effect.result);
+      if (error._tag === "GitHubPullRequestReadError") {
+        expect(result).toMatchObject({ _tag: "Success", success: test.partial });
+      } else {
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: "PullRequestProviderError",
+            operation: test.read,
+            reason: "rate-limited",
+            retryAt: 123_000,
+            cause: error,
+          },
+        });
+      }
+    }
+  }),
+);
 
 it.effect(
   "uses the core comparison and permissions while preserving workflow approval checks",

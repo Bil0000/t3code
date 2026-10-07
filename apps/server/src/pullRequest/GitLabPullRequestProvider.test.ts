@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { IssueLink } from "@t3tools/contracts";
 
+import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import { gitLabViewerPermissions, make } from "./GitLabPullRequestProvider.ts";
 
@@ -382,6 +383,47 @@ describe("getChangeRequest linked issues", () => {
     ),
   );
 
+  it.effect.each(["listLinkedIssues", "listCitedIssues"] as const)(
+    "propagates a rate limit from %s and stops later citation reads",
+    (operation) =>
+      Effect.gen(function* () {
+        const rateLimit = new GitLabCli.GitLabCliRateLimitError({
+          operation: "execute",
+          command: "glab",
+          cwd: "/w",
+          cause: new Error("429 Too Many Requests"),
+        });
+        const listCitedIssues = vi.fn<
+          GitLabPullRequestCli.GitLabPullRequestCli["Service"]["listCitedIssues"]
+        >(() => Effect.fail(rateLimit));
+        const provider = yield* make.pipe(
+          Effect.provide(
+            Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({
+              getMergeRequestDetail: () => Effect.succeed(detailWith("Part of #34.")),
+              getProjectMergeCapabilities: () =>
+                Effect.succeed({ merge: true, squash: true, rebase: false }),
+              listLinkedIssues: () =>
+                operation === "listLinkedIssues"
+                  ? Effect.fail(rateLimit)
+                  : Effect.succeed({ links: [], truncated: false }),
+              listCitedIssues,
+            }),
+          ),
+        );
+        const result = yield* provider
+          .getChangeRequest({ cwd: "/w", repository: "acme/web", host: "gitlab.com", number: 7 })
+          .pipe(Effect.result);
+
+        assert.strictEqual(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          assert.strictEqual(result.failure.reason, "rate-limited");
+          assert.strictEqual(result.failure.operation, "getChangeRequest");
+          assert.strictEqual(result.failure.cause, rateLimit);
+        }
+        expect(listCitedIssues).toHaveBeenCalledTimes(operation === "listLinkedIssues" ? 0 : 1);
+      }),
+  );
+
   it.effect("keeps the host's own links when the lookup fails", () =>
     read.pipe(
       Effect.map((detail) => {
@@ -404,5 +446,88 @@ describe("getChangeRequest linked issues", () => {
         }),
       ),
     ),
+  );
+
+  it.effect("keeps citation links when the host link read fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* make.pipe(
+        Effect.provide(
+          Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({
+            getMergeRequestDetail: () => Effect.succeed(detailWith("Part of #34.")),
+            getProjectMergeCapabilities: () =>
+              Effect.succeed({ merge: true, squash: true, rebase: false }),
+            listLinkedIssues: () =>
+              Effect.fail(
+                new GitLabCli.GitLabCliCommandError({
+                  operation: "execute",
+                  command: "glab",
+                  cwd: "/w",
+                  cause: new Error("404 Project Not Found"),
+                }),
+              ),
+            listCitedIssues: () => Effect.succeed([issue(34, false)]),
+          }),
+        ),
+      );
+      const detail = yield* provider.getChangeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "gitlab.com",
+        number: 7,
+      });
+
+      expect(detail.linkedIssues).toEqual([issue(34, false)]);
+      expect(detail.linkedIssuesTruncated).toBe(true);
+    }),
+  );
+});
+
+describe("getChangeRequestActivity fallback errors", () => {
+  it.effect.each(["listNotes", "listCommits", "listDiscussions", "listReactions"] as const)(
+    "propagates a rate limit from %s and keeps ordinary failures partial",
+    (operation) =>
+      Effect.gen(function* () {
+        for (const ErrorType of [
+          GitLabCli.GitLabCliRateLimitError,
+          GitLabCli.GitLabCliCommandError,
+        ]) {
+          const error = new ErrorType({
+            operation: "execute",
+            command: "glab",
+            cwd: "/w",
+            cause: new Error("request failed"),
+          });
+          const provider = yield* make.pipe(
+            Effect.provide(
+              Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({
+                listNotes: () => Effect.succeed({ comments: [], truncated: false }),
+                listCommits: () => Effect.succeed([]),
+                listDiscussions: () => Effect.succeed({ threads: [], truncated: false }),
+                listReactions: () =>
+                  Effect.succeed({ reactions: [], reactionsByNoteId: new Map() }),
+                [operation]: () => Effect.fail(error),
+              }),
+            ),
+          );
+          const result = yield* provider
+            .getChangeRequestActivity({
+              cwd: "/w",
+              repository: "acme/web",
+              host: "gitlab.com",
+              number: 7,
+            })
+            .pipe(Effect.result);
+
+          assert.strictEqual(
+            result._tag,
+            ErrorType === GitLabCli.GitLabCliRateLimitError ? "Failure" : "Success",
+          );
+          if (result._tag === "Failure") {
+            assert.strictEqual(result.failure.reason, "rate-limited");
+            assert.strictEqual(result.failure.operation, "getChangeRequestActivity");
+            assert.strictEqual(result.failure.cause, error);
+          }
+        }
+      }),
   );
 });

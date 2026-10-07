@@ -40,6 +40,9 @@ import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts"
 import * as PullRequestReadCache from "../pullRequest/PullRequestReadCache.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as GitLabCli from "../sourceControl/GitLabCli.ts";
+import * as GitLabIssueCli from "./GitLabIssueCli.ts";
+import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
 import { IssueProviderRegistry, fromProviders } from "./IssueProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
 
@@ -1419,6 +1422,43 @@ it.effect("routes projects on one host through distinct credential viewers", () 
     );
     assert.strictEqual(result.providers.length, 1);
     assert.strictEqual(result.providers[0]?.projectCount, 2);
+  }),
+);
+
+it.effect("pauses GitLab detail reads after a template quota failure", () =>
+  Effect.gen(function* () {
+    const provider = yield* GitLabIssueProvider.make.pipe(
+      Effect.provide(
+        Layer.mock(GitLabIssueCli.GitLabIssueCli)({
+          listIssueTemplates: () =>
+            Effect.fail(
+              new GitLabCli.GitLabCliRateLimitError({
+                operation: "execute",
+                command: "glab",
+                cwd: "/web",
+                cause: "429",
+              }),
+            ),
+          getIssueDetail: () => Effect.die("detail must not reach the CLI during cooldown"),
+        }),
+      ),
+    );
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/web",
+          provider: "gitlab",
+          repository: REFERENCE.repository,
+        }),
+      ],
+      providers: [provider],
+    });
+    const templateError = yield* service.templates(REFERENCE).pipe(Effect.flip);
+    const detailError = yield* service.detail(REFERENCE).pipe(Effect.flip);
+    assert.strictEqual((templateError.cause as IssueProviderError).reason, "rate-limited");
+    assert.strictEqual((detailError.cause as IssueProviderError).reason, "rate-limited");
   }),
 );
 

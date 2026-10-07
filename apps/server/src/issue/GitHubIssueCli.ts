@@ -1191,10 +1191,15 @@ const make = Effect.gen(function* () {
           }).pipe(
             // A repository whose tree this account may not walk still has templates worth showing,
             // so the questions are lost rather than the chooser.
-            Effect.orElseSucceed(() => ({
-              forms: [] as ReadonlyArray<IssueTemplate>,
-              contributingGuidelinesUrl: undefined,
-            })),
+            Effect.catch((error) =>
+              error._tag === "GitHubApiRateLimitError" ||
+              error._tag === "SourceControlRateLimitPausedError"
+                ? Effect.fail(error)
+                : Effect.succeed({
+                    forms: [] as ReadonlyArray<IssueTemplate>,
+                    contributingGuidelinesUrl: undefined,
+                  }),
+            ),
           ),
           api
             .rest({
@@ -1205,7 +1210,12 @@ const make = Effect.gen(function* () {
             })
             .pipe(
               Effect.map((response) => decodeIssueTemplateConfigYaml(response.body)),
-              Effect.orElseSucceed(() => DEFAULT_ISSUE_TEMPLATE_CONFIG),
+              Effect.catch((error) =>
+                error._tag === "GitHubApiRateLimitError" ||
+                error._tag === "SourceControlRateLimitPausedError"
+                  ? Effect.fail(error)
+                  : Effect.succeed(DEFAULT_ISSUE_TEMPLATE_CONFIG),
+              ),
             ),
         ],
         { concurrency: 3 },

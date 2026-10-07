@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 
@@ -969,6 +970,34 @@ it.layer(layer)("GitHub issue API", (it) => {
       const templates = yield* cli.listIssueTemplates(target);
       assert.deepEqual(templates.templates, []);
       assert.equal(templates.blankIssuesEnabled, true);
+    }),
+  );
+
+  it.effect("preserves rate-limit errors from optional template reads", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      for (const error of [
+        new GitHubApi.GitHubApiRateLimitError({
+          host: target.host,
+          operation: "listIssueTemplates",
+          retryAt: 123456,
+        }),
+        new SourceControlRateLimit.SourceControlRateLimitPausedError({
+          provider: "github",
+          host: target.host,
+          retryAt: 123456,
+        }),
+      ]) {
+        for (const stage of ["forms", "config"] as const) {
+          graphql.mockImplementation((input) =>
+            input.operation === "listIssueTemplates"
+              ? Effect.succeed(encodeJson({ data: { repository: { issueTemplates: [] } } }))
+              : Effect.fail(stage === "forms" ? error : refused),
+          );
+          rest.mockReturnValue(Effect.fail(stage === "config" ? error : refused));
+          assert.strictEqual(yield* cli.listIssueTemplates(target).pipe(Effect.flip), error);
+        }
+      }
     }),
   );
 
