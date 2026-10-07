@@ -1,15 +1,24 @@
-import { act, type ReactNode } from "react";
+import { act, cloneElement, type ReactElement, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { ThreadPullRequestsPanel } from "./ThreadPullRequestsPanel";
 
-const { shell, capabilities, update, openIssue, openInBrowser } = vi.hoisted(() => ({
-  shell: vi.fn(),
-  capabilities: vi.fn(() => ({ threadPullRequests: true, issues: true })),
-  update: vi.fn(async () => ({ _tag: "Success" })),
-  openIssue: vi.fn(),
-  openInBrowser: vi.fn(),
+const { shell, capabilities, update, openIssue, openInBrowser, modifiers, perform } = vi.hoisted(
+  () => ({
+    shell: vi.fn(),
+    capabilities: vi.fn(() => ({ threadPullRequests: true, issues: true })),
+    update: vi.fn(async () => ({ _tag: "Success" })),
+    openIssue: vi.fn(),
+    openInBrowser: vi.fn(),
+    modifiers: vi.fn(() => ({ shiftKey: false, metaKey: false, ctrlKey: false, altKey: false })),
+    perform: vi.fn(),
+  }),
+);
+vi.mock("~/shortcutModifierState", () => ({ useShortcutModifierState: modifiers }));
+vi.mock("./usePullRequestActions", () => ({
+  usePullRequestActionRunner: () => ({ actionPending: false, perform }),
+  usePullRequestDefaultMergeMethodResolver: () => () => undefined,
 }));
 const project = (id: string, environmentId: string, host: string, repository: string) => ({
   id,
@@ -35,7 +44,8 @@ vi.mock("~/lib/openIssueLink", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/openIssueLink")>()),
   openLinkInBrowser: openInBrowser,
 }));
-vi.mock("~/lib/openPullRequestLink", () => ({
+vi.mock("~/lib/openPullRequestLink", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/openPullRequestLink")>()),
   shouldOpenPullRequestExternally: () => false,
   useOpenPrLink: () => vi.fn(),
 }));
@@ -46,7 +56,12 @@ vi.mock("../ui/menu", () => ({
   MenuPopup: "div",
   MenuTrigger: () => null,
 }));
-vi.mock("../ui/tooltip", () => ({ Tooltip: "div", TooltipTrigger: "span", TooltipPopup: "span" }));
+vi.mock("../ui/tooltip", () => ({
+  Tooltip: "div",
+  TooltipTrigger: ({ render, children }: { render?: ReactElement; children: ReactNode }) =>
+    render ? cloneElement(render, undefined, children) : <span>{children}</span>,
+  TooltipPopup: "span",
+}));
 vi.mock("../ui/scroll-area", () => ({ ScrollArea: "div" }));
 vi.mock("../ui/middle-truncate", () => ({ MiddleTruncate: () => null }));
 const ref = { environmentId: "remote", threadId: "thread-1" } as ScopedThreadRef;
@@ -63,6 +78,16 @@ const otherProject = {
   number: 3,
   url: "https://github.com/acme/api/issues/3",
 };
+const pullRequest = {
+  host: "github.com",
+  repository: "acme/app",
+  number: 24,
+  url: "https://github.com/acme/app/pull/24",
+  source: "manual",
+  linkedAt: "2026-10-07T00:00:00Z",
+  snapshot: null,
+  stack: null,
+} satisfies ThreadPullRequestLink;
 const enterprise = { ...issue, url: "https://github.acme.test/acme/app/issues/12" };
 const linear = {
   ...issue,
@@ -75,6 +100,7 @@ afterEach(async () => {
   await act(() => renderer?.unmount());
   vi.clearAllMocks();
   capabilities.mockReturnValue({ threadPullRequests: true, issues: true });
+  modifiers.mockReturnValue({ shiftKey: false, metaKey: false, ctrlKey: false, altKey: false });
 });
 
 async function render(issues: ReadonlyArray<typeof issue & { projectId?: string }>) {
@@ -200,16 +226,6 @@ it("unlinks an issue by its host identity", async () => {
 });
 
 it("opens PR row actions on right-click and keeps PR unlinking", async () => {
-  const pullRequest = {
-    host: "github.com",
-    repository: "acme/app",
-    number: 24,
-    url: "https://github.com/acme/app/pull/24",
-    source: "manual",
-    linkedAt: "2026-10-07T00:00:00Z",
-    snapshot: null,
-    stack: null,
-  } satisfies ThreadPullRequestLink;
   shell.mockReturnValue({ projectId: "project-1", pullRequests: [pullRequest], issues: [issue] });
   await act(() => {
     renderer = create(<ThreadPullRequestsPanel threadRef={ref} />);
@@ -234,3 +250,57 @@ it("opens PR row actions on right-click and keeps PR unlinking", async () => {
     input: { threadId: "thread-1", host: "github.com", repository: "acme/app", number: 24 },
   });
 });
+
+it.each([
+  ["open", false, ["Close", "Merge"], "close"],
+  ["open", true, ["Close", "Ready for review"], "close"],
+  ["closed", false, ["Reopen"], "reopen"],
+  ["merged", false, [], null],
+] as const)(
+  "keeps fast PR actions beside issue links (%s, draft %s)",
+  async (state, isDraft, labels, action) => {
+    capabilities.mockImplementation(() => ({
+      threadPullRequests: true,
+      issues: true,
+      pullRequests: true,
+    }));
+    modifiers.mockReturnValue({ shiftKey: true, metaKey: false, ctrlKey: false, altKey: false });
+    const linked = {
+      ...pullRequest,
+      snapshot: {
+        state,
+        title: "Fix the app",
+        headBranch: "feature",
+        baseBranch: "main",
+        isDraft,
+        updatedAt: null,
+        syncedAt: "2026-10-07T00:00:00Z",
+      },
+    } satisfies ThreadPullRequestLink;
+    shell.mockReturnValue({ projectId: "project-1", pullRequests: [linked], issues: [issue] });
+    await act(() => {
+      renderer = create(<ThreadPullRequestsPanel threadRef={ref} />);
+    });
+    const buttons = renderer.root
+      .findAllByType("button")
+      .filter((button) =>
+        ["Close #24", "Merge #24", "Ready for review #24", "Reopen #24"].includes(
+          button.props["aria-label"],
+        ),
+      );
+    expect(buttons.map((button) => button.props["aria-label"])).toEqual(
+      labels.map((label) => `${label} #24`),
+    );
+    if (action !== null) {
+      await act(() => buttons[0]!.props.onClick());
+      expect(perform).toHaveBeenCalledExactlyOnceWith(action);
+    }
+    await click(issue.url);
+    expect(openIssue).toHaveBeenCalledWith(ref, {
+      projectId: "project-1",
+      provider: "github",
+      repository: "acme/app",
+      number: 12,
+    });
+  },
+);
