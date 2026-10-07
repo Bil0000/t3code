@@ -60,6 +60,7 @@ import {
   ISSUE_SEARCH_MAX_RESULTS,
   ISSUE_SEARCH_MAX_ROWS,
   ISSUE_SUPPLEMENT_GRAPHQL_QUERY,
+  ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY,
   ISSUE_TEMPLATES_GRAPHQL_QUERY,
   ISSUE_TEMPLATE_FORMS_GRAPHQL_QUERY,
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
@@ -672,13 +673,29 @@ const make = Effect.gen(function* () {
 
   const issueDetail: GitHubIssueCli["Service"]["getIssueDetail"] = (input) => {
     const { owner, name } = parseRepositorySelector(input.repository);
-    return graphqlRead({
-      ...input,
-      operation: "getIssueDetail",
-      variables: { owner, name, number: input.number },
-      query: ISSUE_SUPPLEMENT_GRAPHQL_QUERY,
-      decode: decodeIssueCoreJson,
-    });
+    const read = (query: string) =>
+      graphqlRead({
+        ...input,
+        operation: "getIssueDetail",
+        variables: { owner, name, number: input.number },
+        query,
+        decode: decodeIssueCoreJson,
+      });
+    return read(ISSUE_SUPPLEMENT_GRAPHQL_QUERY).pipe(
+      Effect.catchTags({
+        GitHubApiResponseError: (error) =>
+          error.status === 200 &&
+          error.githubErrors !== undefined &&
+          error.githubErrors.length > 0 &&
+          error.githubErrors.every((message) =>
+            /^Field [\x27"](?:parent|subIssues)[\x27"] (?:doesn\x27t|does not) exist on type [\x27"]Issue[\x27"]$/.test(
+              message,
+            ),
+          )
+            ? read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY)
+            : Effect.fail(error),
+      }),
+    );
   };
 
   const summaryResolver = RequestResolver.makeGrouped<IssueSummaryRead, string>({

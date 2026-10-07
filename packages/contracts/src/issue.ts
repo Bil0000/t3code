@@ -178,8 +178,8 @@ export const IssueLinkedPullRequest = Schema.Struct({
 });
 export type IssueLinkedPullRequest = typeof IssueLinkedPullRequest.Type;
 
-/** A parent or sub-issue in the same tracker project as the issue that carries it. */
 export const IssueRelative = Schema.Struct({
+  repository: Schema.optional(TrimmedNonEmptyString),
   number: PositiveInt,
   title: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,

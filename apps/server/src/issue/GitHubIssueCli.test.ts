@@ -8,12 +8,13 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as GitHubApi from "../sourceControl/GitHubApi.ts";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
+import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const graphql = vi.fn<GitHubApi.GitHubApi["Service"]["graphql"]>();
 const rest = vi.fn<GitHubApi.GitHubApi["Service"]["rest"]>();
 const layer = GitHubIssueCli.layer.pipe(
-  Layer.provide(Layer.mock(GitHubApi.GitHubApi)({ graphql, rest })),
+  Layer.provideMerge(Layer.mock(GitHubApi.GitHubApi)({ graphql, rest })),
 );
 const target = { cwd: "/w", host: "enterprise.test", repository: "acme/web", number: 7 };
 const listing = {
@@ -64,6 +65,8 @@ const core = (extra: Record<string, unknown> = {}, role = "WRITE") =>
             ],
           },
           timelineItems: { nodes: [] },
+          parent: null,
+          subIssues: { nodes: [] },
           ...extra,
         },
       },
@@ -99,10 +102,173 @@ it.layer(layer)("GitHub issue API", (it) => {
       assert.equal(detail.assignees[0]?.avatarUrl, "https://avatars/julius");
       assert.equal(detail.viewerAccess.canTriage, true);
       assert.equal(detail.linkedPullRequests[0]?.number, 9);
+      assert.deepEqual(detail.ancestors, []);
+      assert.deepEqual(detail.subIssues, []);
       expect(graphql).toHaveBeenCalledTimes(1);
       expect(rest).not.toHaveBeenCalled();
       expect(graphql.mock.calls[0]?.[0].host).toBe(target.host);
       expect(graphql.mock.calls[0]?.[0].query).not.toContain("comments(last:");
+    }),
+  );
+
+  it.effect("exposes cross-repository ancestors, nested children and their pull requests", () =>
+    Effect.gen(function* () {
+      const relative = (
+        repository: string,
+        number: number,
+        extra: Record<string, unknown> = {},
+      ) => ({
+        number,
+        title: `${repository}#${number}`,
+        url: `https://enterprise.test/${repository}/issues/${number}`,
+        repository: { nameWithOwner: repository },
+        state: "CLOSED",
+        ...extra,
+      });
+      graphql.mockReturnValue(
+        Effect.succeed(
+          core({
+            parent: relative("acme/api", 7, {
+              parent: relative("acme/root", 7, { parent: relative("acme/top", 1) }),
+              closedByPullRequestsReferences: {
+                nodes: [
+                  {
+                    number: 9,
+                    title: "Parent fix",
+                    url: "https://enterprise.test/acme/api/pull/9",
+                    state: "MERGED",
+                    repository: { nameWithOwner: "acme/api" },
+                  },
+                ],
+              },
+            }),
+            subIssues: {
+              nodes: [
+                relative("acme/web", 8, {
+                  state: "OPEN",
+                  subIssues: {
+                    nodes: [
+                      relative("acme/api", 8, {
+                        subIssues: { nodes: [relative("acme/deep", 8)] },
+                      }),
+                    ],
+                  },
+                  timelineItems: {
+                    nodes: [
+                      {
+                        __typename: "CrossReferencedEvent",
+                        source: {
+                          __typename: "PullRequest",
+                          number: 9,
+                          title: "Child fix",
+                          url: "https://enterprise.test/acme/web/pull/9",
+                          state: "OPEN",
+                          isDraft: true,
+                          repository: { nameWithOwner: "acme/web" },
+                        },
+                      },
+                    ],
+                  },
+                }),
+                relative("acme/api", 8),
+              ],
+            },
+          }),
+        ),
+      );
+      const provider = yield* GitHubIssueProvider.make;
+      const detail = yield* provider.getIssue(target);
+      assert.deepEqual(
+        detail.ancestors?.map((issue) => [issue.repository, issue.number, issue.state]),
+        [
+          ["acme/top", 1, "closed"],
+          ["acme/root", 7, "closed"],
+          ["acme/api", 7, "closed"],
+        ],
+      );
+      assert.equal(detail.ancestors?.[2]?.linkedPullRequests?.[0]?.state, "merged");
+      assert.deepEqual(
+        detail.subIssues?.map((issue) => [issue.repository, issue.number, issue.url]),
+        [
+          ["acme/web", 8, "https://enterprise.test/acme/web/issues/8"],
+          ["acme/api", 8, "https://enterprise.test/acme/api/issues/8"],
+        ],
+      );
+      const child = detail.subIssues?.[0];
+      assert.equal(child?.state, "open");
+      assert.equal(child?.linkedPullRequests?.[0]?.closesIssue, false);
+      assert.equal(child?.linkedPullRequests?.[0]?.isDraft, true);
+      assert.equal(child?.subIssues[0]?.subIssues[0]?.repository, "acme/deep");
+      assert.deepEqual(child?.subIssues[0]?.subIssues[0]?.subIssues, []);
+      assert.equal(child?.subIssues[0]?.linkedPullRequests, undefined);
+      expect(graphql).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("retries only unsupported hierarchy fields with the legacy query", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      for (const message of [
+        "Field 'parent' doesn't exist on type 'Issue'",
+        "Field 'subIssues' doesn't exist on type 'Issue'",
+      ]) {
+        graphql.mockReset();
+        graphql
+          .mockReturnValueOnce(
+            Effect.fail(
+              new GitHubApi.GitHubApiResponseError({
+                host: target.host,
+                operation: "getIssueDetail",
+                status: 200,
+                githubErrors: [message],
+              }),
+            ),
+          )
+          .mockReturnValueOnce(Effect.succeed(core({ parent: undefined, subIssues: undefined })));
+        const detail = yield* cli.getIssueDetail(target);
+        assert.deepEqual(detail.ancestors, []);
+        assert.deepEqual(detail.subIssues, []);
+        assert.equal(detail.linkedPullRequests[0]?.number, 9);
+        expect(graphql).toHaveBeenCalledTimes(2);
+        const fallback = graphql.mock.calls[1]![0];
+        expect(fallback.query).not.toContain("subIssues(");
+        expect(fallback.query).not.toContain("parent {");
+        assert.deepEqual(fallback.variables, { owner: "acme", name: "web", number: 7 });
+        assert.equal(fallback.host, target.host);
+      }
+    }),
+  );
+
+  it.effect("does not retry authentication or unrelated schema failures", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      for (const error of [
+        new GitHubApi.GitHubApiAuthenticationError({
+          host: target.host,
+          operation: "getIssueDetail",
+        }),
+        refused,
+        new GitHubApi.GitHubApiResponseError({
+          host: target.host,
+          operation: "getIssueDetail",
+          status: 200,
+          githubErrors: [
+            'Field "parent" does not exist on type "Issue"',
+            "Resource not accessible by integration",
+          ],
+        }),
+        new GitHubApi.GitHubApiResponseError({
+          host: target.host,
+          operation: "getIssueDetail",
+          status: 200,
+          githubErrors: ['Field "body" does not exist on type "Issue"'],
+        }),
+      ]) {
+        graphql.mockReset();
+        graphql.mockReturnValue(Effect.fail(error));
+        assert.strictEqual(yield* cli.getIssueDetail(target).pipe(Effect.flip), error);
+        expect(graphql).toHaveBeenCalledTimes(1);
+      }
     }),
   );
 
@@ -112,13 +278,17 @@ it.layer(layer)("GitHub issue API", (it) => {
       for (const raw of [
         "{",
         core({ number: null }),
+        core({ parent: { number: 1 } }),
+        core({ subIssues: { nodes: [{ number: 8 }] } }),
         encodeJson({ data: { repository: { issue: null } } }),
       ]) {
+        graphql.mockReset();
         graphql.mockReturnValue(Effect.succeed(raw));
         assert.equal(
           (yield* cli.getIssueDetail(target).pipe(Effect.flip))._tag,
           "GitHubIssueReadError",
         );
+        expect(graphql).toHaveBeenCalledTimes(1);
       }
     }),
   );
@@ -145,6 +315,22 @@ it.layer(layer)("GitHub issue API", (it) => {
       });
       graphql.mockReturnValue(Effect.fail(error));
       assert.strictEqual(yield* cli.getIssueDetail(target).pipe(Effect.flip), error);
+      expect(graphql).toHaveBeenCalledTimes(1);
+      graphql.mockReset();
+      graphql
+        .mockReturnValueOnce(
+          Effect.fail(
+            new GitHubApi.GitHubApiResponseError({
+              host: target.host,
+              operation: "getIssueDetail",
+              status: 200,
+              githubErrors: ["Field 'parent' doesn't exist on type 'Issue'"],
+            }),
+          ),
+        )
+        .mockReturnValue(Effect.fail(error));
+      assert.strictEqual(yield* cli.getIssueDetail(target).pipe(Effect.flip), error);
+      expect(graphql).toHaveBeenCalledTimes(2);
     }),
   );
 

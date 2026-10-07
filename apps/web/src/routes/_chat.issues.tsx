@@ -110,6 +110,7 @@ import {
   findProjectForLink,
   linkedPullRequestTarget,
   openLinkInBrowser,
+  relatedIssueTarget,
   repositoryForProjectLink,
 } from "../lib/openIssueLink";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
@@ -1662,15 +1663,18 @@ function IssuesRouteView() {
                 // The change request that closes an issue is read beside it, as a peer tab in
                 // this page's own panel: leaving for the pull requests page would take the issue
                 // it answers off the screen.
-                onOpenRelatedIssue={({ number }) => {
-                  if (rightPanelRef === null) return;
+                onOpenRelatedIssue={(relative) => {
+                  const related = relatedIssueTarget(projects, renderedSurface, relative);
+                  if (rightPanelRef === null || related === null) {
+                    openLinkInBrowser(relative.url);
+                    return;
+                  }
                   const target = {
-                    projectId: renderedSurface.projectId as ProjectId,
+                    ...related,
+                    projectId: related.projectId as ProjectId,
                     ...(renderedSurface.provider === undefined
                       ? {}
                       : { provider: renderedSurface.provider }),
-                    repository: renderedSurface.repository,
-                    number,
                   };
                   useRightPanelStore.getState().openIssue(rightPanelRef, target);
                   updateSearch(issueSelectionSearchPatch(target));

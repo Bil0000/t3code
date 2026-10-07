@@ -20,6 +20,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { IssuesSurface } from "~/rightPanelStore";
+import { openLinkInBrowser, relatedIssueTarget } from "~/lib/openIssueLink";
+import { useProjects } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { useDebouncedValue } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
@@ -121,6 +123,7 @@ function ProjectIssues({
   onStateChange,
   onOpenLinkedPullRequest,
 }: IssuesPanelProps) {
+  const projects = useProjects();
   // Held here rather than in the list, so reading an issue and coming back does not throw away
   // the search that found it — the list is unmounted while the issue is open.
   const [query, setQuery] = useState("");
@@ -157,7 +160,15 @@ function ProjectIssues({
             handoffTarget={handoffTarget}
             onStateChange={onStateChange}
             onOpenLinkedPullRequest={onOpenLinkedPullRequest}
-            onOpenRelatedIssue={({ number }) => onSelect({ ...selected, number })}
+            onOpenRelatedIssue={(relative) => {
+              const target = relatedIssueTarget(
+                projects.filter((candidate) => candidate.environmentId === environmentId),
+                selected,
+                relative,
+              );
+              if (target === null) openLinkInBrowser(relative.url);
+              else onSelect({ ...selected, ...target });
+            }}
             // The panel is the narrowest place this reads, so the metadata folds into the top row
             // once the content scrolls — the same bargain the issues page makes.
             chromeVariant="collapse"

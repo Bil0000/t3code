@@ -159,6 +159,7 @@ import {
   findProjectForLink,
   linkedPullRequestTarget,
   openLinkInBrowser,
+  relatedIssueTarget,
   repositoryForProjectLink,
 } from "../lib/openIssueLink";
 import { useDebouncedValue } from "../state/queries";
@@ -2307,19 +2308,22 @@ function PullRequestsRouteView() {
                   void refreshFromHost();
                 }}
                 onStateChange={handleIssueTabStatusChange}
-                onOpenRelatedIssue={({ number, url }) => {
-                  if (rightPanelRef === null) {
-                    openLinkInBrowser(url);
+                onOpenRelatedIssue={(relative) => {
+                  const target = relatedIssueTarget(
+                    projects.filter((candidate) => candidate.environmentId === panelEnvironmentId),
+                    renderedPullRequestSurface,
+                    relative,
+                  );
+                  if (rightPanelRef === null || target === null) {
+                    openLinkInBrowser(relative.url);
                     return;
                   }
                   useRightPanelStore.getState().openIssue(rightPanelRef, {
                     environmentId: panelEnvironmentId,
-                    projectId: renderedPullRequestSurface.projectId,
+                    ...target,
                     ...(renderedPullRequestSurface.provider === undefined
                       ? {}
                       : { provider: renderedPullRequestSurface.provider }),
-                    repository: renderedPullRequestSurface.repository,
-                    number,
                   });
                 }}
                 onOpenLinkedPullRequest={(link) => {

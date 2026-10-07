@@ -1,7 +1,7 @@
 import type { IssueRelativeNode } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { flattenIssueTree, mergeIssueTrees } from "./IssueTree";
+import { flattenIssueTree, issueTreeLabel, mergeIssueTrees } from "./IssueTree";
 
 function issue(number: number, subIssues: Array<IssueRelativeNode> = []): IssueRelativeNode {
   return {
@@ -34,7 +34,7 @@ describe("issue tree", () => {
 });
 
 describe("merged issue trees", () => {
-  const scope = "linear:ENG";
+  const repository = "ENG";
   const epic = { ...issue(94, [issue(96), issue(95)]), ancestors: [issue(97)] };
   const sibling = {
     ...issue(101),
@@ -55,9 +55,9 @@ describe("merged issue trees", () => {
 
   it("puts linked issues under a shared ancestor in one tree, each where it sits", () => {
     const [tree, ...rest] = mergeIssueTrees([
-      { scope, linkKey: "a", detail: epic },
-      { scope, linkKey: "b", detail: sibling },
-      { scope, linkKey: "c", detail: child },
+      { repository, linkKey: "a", detail: epic },
+      { repository, linkKey: "b", detail: sibling },
+      { repository, linkKey: "c", detail: child },
     ]);
     expect(rest).toEqual([]);
     expect(tree!.rows.map((row) => [row.issue.number, row.depth, row.linkKey])).toEqual([
@@ -73,9 +73,63 @@ describe("merged issue trees", () => {
   it("keeps trees of different tracker projects apart", () => {
     expect(
       mergeIssueTrees([
-        { scope, linkKey: "a", detail: epic },
-        { scope: "linear:OPS", linkKey: "b", detail: sibling },
+        { repository, linkKey: "a", detail: epic },
+        { repository: "OPS", linkKey: "b", detail: sibling },
       ]),
     ).toHaveLength(2);
+  });
+
+  const github = (repo: string, number: number, host = "github.com"): IssueRelativeNode => ({
+    repository: repo,
+    number,
+    title: `${repo} ${number}`,
+    url: `https://${host}/${repo}/issues/${number}`,
+    state: "open",
+    subIssues: [],
+  });
+
+  it("keeps same-number issues of different repositories and hosts apart", () => {
+    const [tree, ...rest] = mergeIssueTrees([
+      {
+        repository: "acme/web",
+        linkKey: "a",
+        detail: { ...github("acme/web", 1), subIssues: [github("acme/api", 1)] },
+      },
+      { repository: "acme/web", linkKey: "b", detail: github("acme/web", 1, "github.acme.test") },
+    ]);
+    expect(rest).toHaveLength(1);
+    expect(tree!.rows.map((row) => row.issue.repository)).toEqual(["acme/web", "acme/api"]);
+  });
+
+  it("merges linked siblings from different repositories beneath their common parent", () => {
+    const parent = github("acme/epics", 7);
+    const [tree, ...rest] = mergeIssueTrees([
+      {
+        repository: "acme/web",
+        linkKey: "a",
+        detail: { ...github("acme/web", 3), ancestors: [parent] },
+      },
+      {
+        repository: "acme/api",
+        linkKey: "b",
+        detail: { ...github("acme/api", 3), ancestors: [parent] },
+      },
+    ]);
+    expect(rest).toEqual([]);
+    expect(tree!.rows.map((row) => [row.issue.repository, row.depth, row.linkKey])).toEqual([
+      ["acme/epics", 0, null],
+      ["acme/web", 1, "a"],
+      ["acme/api", 1, "b"],
+    ]);
+  });
+});
+
+describe("issue tree labels", () => {
+  it("names other repositories and keeps Linear keys", () => {
+    expect(issueTreeLabel({ ...issue(4), repository: "acme/web" }, "acme/web", "hash")).toBe("#4");
+    expect(issueTreeLabel({ ...issue(4), repository: "acme/api" }, "acme/web", "hash")).toBe(
+      "acme/api#4",
+    );
+    expect(issueTreeLabel(issue(4), "ENG", "key-number")).toBe("ENG-4");
   });
 });

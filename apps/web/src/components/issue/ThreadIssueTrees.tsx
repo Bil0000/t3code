@@ -1,9 +1,11 @@
-import type {
-  EnvironmentId,
-  IssueLinkedPullRequest,
-  ProjectId,
-  ScopedThreadRef,
-  ThreadIssueLink,
+import {
+  type EnvironmentId,
+  formatIssueReference,
+  type IssueLinkedPullRequest,
+  type IssueRelative,
+  type ProjectId,
+  type ScopedThreadRef,
+  type ThreadIssueLink,
 } from "@t3tools/contracts";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,8 +32,10 @@ interface ThreadIssueTreesProps {
   linked: ReadonlyArray<ThreadIssueLink>;
   /** The project an issue is read through; null when none here can read it. */
   projectFor: (issue: ThreadIssueLink) => ProjectId | null;
-  /** Opens `number`, an issue in the same tracker project as the linked `issue`. */
-  onOpen: (issue: ThreadIssueLink, number: number) => void;
+  onOpen: (
+    issue: ThreadIssueLink,
+    relative: Pick<IssueRelative, "repository" | "number" | "url">,
+  ) => void;
   /** Opens a pull request the tracker reports for an issue in a tree. */
   onOpenPullRequest: (link: IssueLinkedPullRequest) => void;
   /** Shown for an issue whose tree cannot be read; defaults to a plain row. */
@@ -94,7 +98,7 @@ export function ThreadIssueTrees({
           return detail && projectFor(issue) !== null
             ? [
                 {
-                  scope: `${issue.provider}:${issue.repository}`,
+                  repository: issue.repository,
                   linkKey: threadIssueKey(issue),
                   detail,
                 },
@@ -132,7 +136,7 @@ export function ThreadIssueTrees({
             {tree.rows.map((row) => {
               const linkedIssue = row.linkKey === null ? undefined : byKey.get(row.linkKey);
               return (
-                <Fragment key={`${row.depth}:${row.issue.number}`}>
+                <Fragment key={`${row.depth}:${row.issue.url}`}>
                   <div className="group relative">
                     <IssueTreeRow
                       row={{
@@ -141,8 +145,11 @@ export function ThreadIssueTrees({
                         current: linkedIssue !== undefined,
                       }}
                       repository={scopeIssue.repository}
-                      onOpen={(relative) => onOpen(scopeIssue, relative.number)}
-                      onOpenCurrent={() => onOpen(scopeIssue, row.issue.number)}
+                      referenceStyle={referenceStyleOf(scopeIssue)}
+                      onOpen={(relative) => onOpen(scopeIssue, relative)}
+                      onOpenCurrent={() =>
+                        onOpen(linkedIssue ?? scopeIssue, linkedIssue ?? row.issue)
+                      }
                     />
                     {linkedIssue && renderActions ? (
                       <div className="absolute top-1/2 right-1 -translate-y-1/2 rounded-md bg-background opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 has-[[data-popup-open]]:opacity-100">
@@ -177,7 +184,7 @@ export function ThreadIssueTrees({
         return (
           <div key={key}>
             {renderFallback?.(issue) ?? (
-              <PlainIssueRow issue={issue} onOpen={() => onOpen(issue, issue.number)} />
+              <PlainIssueRow issue={issue} onOpen={() => onOpen(issue, issue)} />
             )}
           </div>
         );
@@ -194,6 +201,10 @@ function threadIssueKey(issue: {
   return `${issue.provider}:${issue.repository}#${issue.number}`;
 }
 
+function referenceStyleOf(issue: ThreadIssueLink) {
+  return issue.provider === "linear" ? ("key-number" as const) : ("hash" as const);
+}
+
 function PlainIssueRow({ issue, onOpen }: { issue: ThreadIssueLink; onOpen: () => void }) {
   return (
     <button
@@ -203,7 +214,7 @@ function PlainIssueRow({ issue, onOpen }: { issue: ThreadIssueLink; onOpen: () =
     >
       <span className="min-w-0 flex-1 truncate">{issue.title}</span>
       <span className="shrink-0 text-muted-foreground tabular-nums">
-        {issue.repository}-{issue.number}
+        {formatIssueReference({ ...issue, referenceStyle: referenceStyleOf(issue) })}
       </span>
     </button>
   );

@@ -481,10 +481,11 @@ export function IssueSummaryTab({
           ) : null}
           <div role="tree" aria-label="Linked issues" className="space-y-0.5">
             {flattenIssueTree(detail).map((row) => (
-              <Fragment key={`${row.depth}:${row.issue.number}`}>
+              <Fragment key={`${row.depth}:${row.issue.url}`}>
                 <IssueTreeRow
                   row={row}
                   repository={detail.repository}
+                  referenceStyle={detail.capabilities.referenceStyle}
                   onOpen={onOpenRelatedIssue}
                 />
                 {row.current ? null : (

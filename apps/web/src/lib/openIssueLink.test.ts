@@ -12,6 +12,7 @@ import {
   findProjectForLink,
   linkedPullRequestTarget,
   openLinkInBrowser,
+  relatedIssueTarget,
   repositoryForProjectLink,
 } from "./openIssueLink";
 
@@ -184,5 +185,56 @@ describe("linkedPullRequestTarget", () => {
         number: 7,
       }),
     );
+  });
+});
+
+describe("relatedIssueTarget", () => {
+  const projects = [
+    {
+      id: "api",
+      repositoryIdentity: {
+        canonicalKey: "github.com/acme/api",
+        provider: "github",
+        displayName: "Acme/API",
+      },
+    },
+  ] as never;
+  const current = { projectId: "web", repository: "acme/web" };
+
+  it("keeps the current project for same-repository and Linear relatives", () => {
+    expect(
+      relatedIssueTarget(projects, current, {
+        repository: "Acme/Web",
+        number: 2,
+        url: "https://github.com/acme/web/issues/2",
+      }),
+    ).toEqual({ projectId: "web", repository: "acme/web", number: 2 });
+    expect(
+      relatedIssueTarget(
+        projects,
+        { projectId: "web", repository: "ENG" },
+        {
+          number: 3,
+          url: "https://linear.app/acme/issue/ENG-3",
+        },
+      ),
+    ).toEqual({ projectId: "web", repository: "ENG", number: 3 });
+  });
+
+  it("opens another repository through its own project, or not at all", () => {
+    expect(
+      relatedIssueTarget(projects, current, {
+        repository: "acme/api",
+        number: 9,
+        url: "https://github.com/acme/api/issues/9",
+      }),
+    ).toEqual({ projectId: "api", repository: "Acme/API", number: 9 });
+    expect(
+      relatedIssueTarget(projects, current, {
+        repository: "acme/docs",
+        number: 9,
+        url: "https://github.com/acme/docs/issues/9",
+      }),
+    ).toBeNull();
   });
 });

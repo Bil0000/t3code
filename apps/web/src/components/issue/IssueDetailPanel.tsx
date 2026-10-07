@@ -197,7 +197,11 @@ export function IssueDetailPanel({
    */
   onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
   /** Opens another issue of this tracker project in place; without it, on the tracker. */
-  onOpenRelatedIssue?: (issue: { readonly number: number; readonly url: string }) => void;
+  onOpenRelatedIssue?: (issue: {
+    readonly repository?: string | undefined;
+    readonly number: number;
+    readonly url: string;
+  }) => void;
   /**
    * How the metadata above the content behaves: `full` keeps every row pinned; `collapse`
    * folds the whole of it into the top row once the active tab scrolls, and unfolds at the
@@ -544,7 +548,11 @@ export function IssueDetailPanel({
       : null;
   const markdownRepositoryUrl = detail?.repositoryUrl ?? null;
   const openRelatedIssue = useCallback(
-    (issue: { readonly number: number; readonly url: string }) =>
+    (issue: {
+      readonly repository?: string | undefined;
+      readonly number: number;
+      readonly url: string;
+    }) =>
       onOpenRelatedIssue === undefined ? openLinkInBrowser(issue.url) : onOpenRelatedIssue(issue),
     [onOpenRelatedIssue],
   );

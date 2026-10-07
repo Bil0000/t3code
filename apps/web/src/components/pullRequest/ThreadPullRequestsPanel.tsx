@@ -1,6 +1,8 @@
 import {
+  formatIssueReference,
   SourceControlProviderKind,
   type IssueLinkedPullRequest,
+  type IssueRelative,
   type ProjectId,
   type ScopedThreadRef,
   type ThreadIssueLink,
@@ -28,6 +30,7 @@ import {
   findProjectForLink,
   linkedPullRequestTarget,
   openLinkInBrowser,
+  relatedIssueTarget,
 } from "~/lib/openIssueLink";
 import {
   findProjectForChangeRequest,
@@ -245,7 +248,10 @@ function IssueTreeActions({
           <Button
             variant="ghost"
             size="icon-micro"
-            aria-label={`Actions for issue ${issue.repository}-${issue.number}`}
+            aria-label={`Actions for issue ${formatIssueReference({
+              ...issue,
+              referenceStyle: issue.provider === "linear" ? "key-number" : "hash",
+            })}`}
           >
             <MoreHorizontalIcon className="size-3.5" />
           </Button>
@@ -518,20 +524,23 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     [projects, supportsIssues, thread?.projectId, threadRef.environmentId],
   );
   const openThreadIssue = useCallback(
-    (issue: ThreadIssueLink, number: number) => {
+    (issue: ThreadIssueLink, relative: Pick<IssueRelative, "repository" | "number" | "url">) => {
       const projectId = issueProjectId(issue);
-      if (projectId === null) {
-        openLinkInBrowser(issue.url);
+      const target =
+        projectId === null
+          ? null
+          : relatedIssueTarget(
+              environmentProjects,
+              { projectId, repository: issue.repository },
+              relative,
+            );
+      if (target === null) {
+        openLinkInBrowser(relative.url);
         return;
       }
-      useRightPanelStore.getState().openIssue(threadRef, {
-        projectId,
-        provider: issue.provider,
-        repository: issue.repository,
-        number,
-      });
+      useRightPanelStore.getState().openIssue(threadRef, { ...target, provider: issue.provider });
     },
-    [issueProjectId, threadRef],
+    [environmentProjects, issueProjectId, threadRef],
   );
   const openTreePullRequest = useCallback(
     (link: IssueLinkedPullRequest) => {
@@ -550,7 +559,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     [projects, supportsPullRequests, threadRef],
   );
   const handleOpenIssue = useCallback(
-    (issue: ThreadIssueLink) => openThreadIssue(issue, issue.number),
+    (issue: ThreadIssueLink) => openThreadIssue(issue, issue),
     [openThreadIssue],
   );
   const handleUnlink = useCallback(
