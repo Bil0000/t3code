@@ -104,13 +104,16 @@ describe("mergeClaudeWorkflowProgress", () => {
     expect(workflow?.agents[1]?.state).toBe("queued");
   });
 
-  it("treats an unrecognised state as still running rather than settled", () => {
-    const workflow = mergeClaudeWorkflowProgress({
-      previous: undefined,
-      message: snapshotFrame([agent({ state: "something-new" })]),
-    });
-    expect(workflow?.agents[0]?.state).toBe("running");
-  });
+  it.each(["something-new", "toString", "constructor", "__proto__"])(
+    "treats unrecognised state %s as still running rather than settled",
+    (state) => {
+      const workflow = mergeClaudeWorkflowProgress({
+        previous: undefined,
+        message: snapshotFrame([agent({ state })]),
+      });
+      expect(workflow?.agents[0]?.state).toBe("running");
+    },
+  );
 
   it("keeps the roster through a usage-only frame", () => {
     const first = mergeClaudeWorkflowProgress({

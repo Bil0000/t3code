@@ -54,7 +54,10 @@ function parseAgent(entry: unknown): OrchestrationV2WorkflowAgent | null {
   if (index === undefined || label === undefined) return null;
   // An unknown state is in-flight, not settled: guessing "completed" would
   // freeze a live row, while guessing "running" self-corrects on the next frame.
-  const state = AGENT_STATES[text(field(entry, "state")) ?? ""] ?? "running";
+  const reportedState = text(field(entry, "state")) ?? "";
+  const state = Object.hasOwn(AGENT_STATES, reportedState)
+    ? (AGENT_STATES[reportedState] ?? "running")
+    : "running";
   return {
     index,
     label,
