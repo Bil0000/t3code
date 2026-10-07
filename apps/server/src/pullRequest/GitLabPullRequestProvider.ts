@@ -8,6 +8,7 @@ import type {
 
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import {
+  CITED_ISSUE_REFERENCES_MAX,
   mergeIssueLinks,
   parseIssueReferences,
   unlinkedIssueReferences,
@@ -137,7 +138,7 @@ export const make = Effect.gen(function* () {
     input: { readonly cwd: string; readonly repository: string; readonly host: string },
     mergeRequest: { readonly title: string; readonly body: string },
     hostLinks: ReadonlyArray<IssueLink>,
-  ): Effect.Effect<ReadonlyArray<IssueLink>> => {
+  ): Effect.Effect<{ readonly links: ReadonlyArray<IssueLink>; readonly truncated: boolean }> => {
     const project = input.repository.trim().toLowerCase();
     const numbers = unlinkedIssueReferences(
       parseIssueReferences(
@@ -153,10 +154,20 @@ export const make = Effect.gen(function* () {
       hostLinks,
     ).map((reference) => reference.number);
     return numbers.length === 0
-      ? Effect.succeed([])
+      ? Effect.succeed({ links: [], truncated: false })
       : cli
-          .listCitedIssues({ cwd: input.cwd, repository: input.repository, numbers })
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => []));
+          .listCitedIssues({
+            cwd: input.cwd,
+            repository: input.repository,
+            numbers: numbers.slice(0, CITED_ISSUE_REFERENCES_MAX),
+          })
+          .pipe(
+            Effect.map((links) => ({
+              links,
+              truncated: numbers.length > CITED_ISSUE_REFERENCES_MAX,
+            })),
+            Effect.orElseSucceed(() => ({ links: [], truncated: true })),
+          );
   };
 
   const provider: PullRequestProviderApi = {
@@ -214,8 +225,8 @@ export const make = Effect.gen(function* () {
               ...mergeRequest,
               mergeCapabilities,
               viewerPermissions: gitLabViewerPermissions(mergeRequest),
-              linkedIssues: mergeIssueLinks(linkedIssues.links, cited),
-              linkedIssuesTruncated: linkedIssues.truncated,
+              linkedIssues: mergeIssueLinks(linkedIssues.links, cited.links),
+              linkedIssuesTruncated: linkedIssues.truncated || cited.truncated,
               // A GitLab too old to count the divergence says nothing here rather than "up to
               // date": the banner is worth missing, and a wrong all-clear is not worth showing.
               baseComparison:

@@ -20,6 +20,7 @@ import {
 } from "./PullRequestProvider.ts";
 import type { GitHubViewerAccess, GitHubWorkflowRunApproval } from "./gitHubPullRequestJson.ts";
 import {
+  CITED_ISSUE_REFERENCES_MAX,
   mergeIssueLinks,
   parseIssueReferences,
   unlinkedIssueReferences,
@@ -240,10 +241,19 @@ export const make = Effect.gen(function* () {
     );
     return references.length === 0
       ? Effect.succeed({ links: [], truncated: false })
-      : cli.listCitedIssues({ cwd: input.cwd, host: input.host, references }).pipe(
-          Effect.map((links) => ({ links, truncated: false })),
-          Effect.orElseSucceed(() => ({ links: [], truncated: true })),
-        );
+      : cli
+          .listCitedIssues({
+            cwd: input.cwd,
+            host: input.host,
+            references: references.slice(0, CITED_ISSUE_REFERENCES_MAX),
+          })
+          .pipe(
+            Effect.map((links) => ({
+              links,
+              truncated: references.length > CITED_ISSUE_REFERENCES_MAX,
+            })),
+            Effect.orElseSucceed(() => ({ links: [], truncated: true })),
+          );
   };
 
   const readChecks = (input: ProviderRepositoryRef & { readonly number: number }) =>

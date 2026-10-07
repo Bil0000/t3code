@@ -114,7 +114,7 @@ export function parseIssueReferences(
       add(toReference(source, match[1], Number(match[2])));
     }
   }
-  return [...found.values()].filter(include).slice(0, CITED_ISSUE_REFERENCES_MAX);
+  return [...found.values()].filter(include);
 }
 
 /** The references the host said nothing about, which are the only ones worth a lookup. */

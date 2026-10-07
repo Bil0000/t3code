@@ -1167,7 +1167,40 @@ describe("getChangeRequest linked issues", () => {
     );
   });
 
-  it.effect("asks nothing when the words name only what the host already reported", () => {
+  it.effect.each([
+    { count: 10, linkedCount: 0 },
+    { count: 11, linkedCount: 0 },
+    { count: 20, linkedCount: 10 },
+  ])("caps only unlinked citations and reports overflow (%j)", ({ count, linkedCount }) => {
+    const numbers = Array.from({ length: count }, (_, index) => index + 1);
+    const linked = numbers.slice(0, linkedCount).map((number) => issue(number, true));
+    const citedNumbers = numbers.slice(linkedCount, linkedCount + 10);
+    const listCitedIssues = vi.fn<
+      GitHubPullRequestCli.GitHubPullRequestCli["Service"]["listCitedIssues"]
+    >(() => Effect.succeed(citedNumbers.map((number) => issue(number, false))));
+    return read.pipe(
+      Effect.map((detail) => {
+        expect(listCitedIssues).toHaveBeenCalledTimes(1);
+        expect(listCitedIssues.mock.calls[0]?.[0].references).toEqual(
+          citedNumbers.map((number) => ({ repository: "acme/web", number })),
+        );
+        expect(detail.linkedIssues.map((link) => link.number)).toEqual(
+          numbers.slice(0, linkedCount + 10),
+        );
+        expect(detail.linkedIssuesTruncated).toBe(count - linkedCount > 10);
+      }),
+      Effect.provide(
+        layerWith({
+          body: numbers.map((number) => "#" + number).join(" "),
+          linked,
+          listCitedIssues,
+        }),
+      ),
+    );
+  });
+
+  it.effect("asks nothing when more than ten citations are already host links", () => {
+    const linked = Array.from({ length: 11 }, (_, index) => issue(index + 1, true));
     const listCitedIssues = vi.fn<
       GitHubPullRequestCli.GitHubPullRequestCli["Service"]["listCitedIssues"]
     >(() => Effect.succeed([]));
@@ -1176,12 +1209,14 @@ describe("getChangeRequest linked issues", () => {
         expect(listCitedIssues).not.toHaveBeenCalled();
         expect(detail.linkedIssuesTruncated).toBe(false);
         // The host's own claim survives: only it can say what merging closes.
-        expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
-          [12, true],
-        ]);
+        expect(detail.linkedIssues).toEqual(linked);
       }),
       Effect.provide(
-        layerWith({ body: "Closes #12.", linked: [issue(12, true)], listCitedIssues }),
+        layerWith({
+          body: linked.map((link) => "#" + link.number).join(" "),
+          linked,
+          listCitedIssues,
+        }),
       ),
     );
   });

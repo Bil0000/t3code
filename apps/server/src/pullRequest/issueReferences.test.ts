@@ -2,7 +2,6 @@ import type { IssueLink } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  CITED_ISSUE_REFERENCES_MAX,
   mergeIssueLinks,
   parseIssueReferences,
   unlinkedIssueReferences,
@@ -109,9 +108,9 @@ describe("parseIssueReferences", () => {
     ).toEqual(["acme/web#12"]);
   });
 
-  it("stops at the bound, so a body listing fifty numbers is not fifty lookups", () => {
+  it("keeps every unique reference so providers can detect lookup overflow", () => {
     const body = Array.from({ length: 50 }, (_, index) => `#${index + 1}`).join(", ");
-    expect(parsed({ body })).toHaveLength(CITED_ISSUE_REFERENCES_MAX);
+    expect(parsed({ body })).toHaveLength(50);
   });
 });
 
