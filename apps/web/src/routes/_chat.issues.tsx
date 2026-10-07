@@ -1237,7 +1237,6 @@ function IssuesRouteView() {
       threadPanelOpen={false}
       threadPanelPresentation="inline"
       threadPanelShortcutLabel={null}
-      threadPanelHasAttention={false}
       onToggleThreadPanel={() => undefined}
       rightPanelAvailable={rightPanelAvailable}
       rightPanelOpen={rightPanelState.isOpen}

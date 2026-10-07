@@ -16,6 +16,7 @@ const { shell, capabilities, update, openIssue, openInBrowser, modifiers, perfor
   }),
 );
 vi.mock("~/shortcutModifierState", () => ({ useShortcutModifierState: modifiers }));
+vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => {} }));
 vi.mock("./usePullRequestActions", () => ({
   usePullRequestActionRunner: () => ({ actionPending: false, perform }),
   usePullRequestDefaultMergeMethodResolver: () => () => undefined,
