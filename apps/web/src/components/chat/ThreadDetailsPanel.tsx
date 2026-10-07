@@ -8,13 +8,8 @@ import type {
 
 import type { DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
-import {
-  shouldShowEnvironmentIndicator,
-  type EnvMode,
-  type EnvironmentOption,
-} from "../BranchToolbar.logic";
+import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
-import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
 import GitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
@@ -72,14 +67,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     props.environmentId,
     props.activeProjectScripts ? props.gitCwd : null,
   );
-  // Same rule as the composer strip: a lone remote machine still gets a row,
-  // shown as a static label because there is nothing to pick.
-  const canPickEnvironment = props.availableEnvironments.length > 1;
-  const showEnvironment = shouldShowEnvironmentIndicator({
-    activeEnvironment:
-      props.availableEnvironments.find((env) => env.environmentId === props.environmentId) ?? null,
-    canPickEnvironment,
-  });
   const branchToolbarProps = {
     showGitControls: props.isGitRepo,
     environmentId: props.environmentId,
@@ -119,22 +106,16 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             showHeading={false}
           >
             <div className="flex flex-col">
-              {density === "full" && showEnvironment ? (
-                <BranchToolbarEnvironmentSelector
-                  displayMode="panel"
+              {density === "full" ? (
+                <BranchToolbar
+                  layout="panel"
+                  panelSection="workspace"
+                  availableEnvironments={props.availableEnvironments}
+                  onEnvironmentChange={props.onEnvironmentChange}
                   autoEnvironmentLabel={props.autoEnvironmentLabel}
                   onAutoEnvironment={props.onAutoEnvironment}
-                  envLocked={props.envLocked}
-                  environmentId={props.environmentId}
-                  availableEnvironments={props.availableEnvironments}
-                  {...(canPickEnvironment
-                    ? { onEnvironmentChange: props.onEnvironmentChange }
-                    : {})}
+                  {...branchToolbarProps}
                 />
-              ) : null}
-
-              {density === "full" ? (
-                <BranchToolbar layout="panel" panelSection="workspace" {...branchToolbarProps} />
               ) : null}
 
               {density !== "essential" && props.showOpenInPicker ? (
