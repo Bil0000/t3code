@@ -332,6 +332,29 @@ const EMPTY_PREVIEW_DESKTOP_STATE = {};
 const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
 
+export function patchIssuesSearch(
+  previous: IssuesSearch,
+  patch: { [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined },
+): IssuesSearch {
+  // Rebuilt rather than spread so a cleared field leaves the URL instead of
+  // lingering as an explicit `undefined`.
+  const next = { ...previous, ...patch };
+  return {
+    involvement: next.involvement ?? previous.involvement,
+    state: next.state ?? previous.state,
+    ...(next.repository ? { repository: next.repository } : {}),
+    ...(next.number ? { number: next.number } : {}),
+    ...(next.projectId ? { projectId: next.projectId } : {}),
+    ...(next.host ? { host: next.host } : {}),
+    ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+    ...(next.selectedProvider ? { selectedProvider: next.selectedProvider } : {}),
+    ...(next.label ? { label: next.label } : {}),
+    ...(next.q ? { q: next.q } : {}),
+    ...(next.sort ? { sort: next.sort } : {}),
+    ...(next.order ? { order: next.order } : {}),
+  };
+}
+
 export const Route = createFileRoute("/_chat/issues")({
   validateSearch: (raw: Record<string, unknown>): IssuesSearch => {
     const sort = issueListSort(raw.sort);
@@ -501,24 +524,7 @@ function IssuesRouteView() {
       [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
     }) =>
       void navigate({
-        // Rebuilt rather than spread so a cleared field leaves the URL instead of
-        // lingering as an explicit `undefined`.
-        search: (previous: IssuesSearch): IssuesSearch => {
-          const next = { ...previous, ...patch };
-          return {
-            involvement: next.involvement ?? previous.involvement,
-            state: next.state ?? previous.state,
-            ...(next.repository ? { repository: next.repository } : {}),
-            ...(next.number ? { number: next.number } : {}),
-            ...(next.projectId ? { projectId: next.projectId } : {}),
-            ...(next.host ? { host: next.host } : {}),
-            ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
-            ...(next.selectedProvider ? { selectedProvider: next.selectedProvider } : {}),
-            ...(next.q ? { q: next.q } : {}),
-            ...(next.sort ? { sort: next.sort } : {}),
-            ...(next.order ? { order: next.order } : {}),
-          };
-        },
+        search: (previous: IssuesSearch) => patchIssuesSearch(previous, patch),
         replace: true,
       }),
     [navigate],
