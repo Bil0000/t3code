@@ -1,5 +1,12 @@
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 
+export function remainingComposerAttachmentSlots(
+  attachmentCount: number,
+  pendingThreadImports: number,
+) {
+  return Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - attachmentCount - pendingThreadImports);
+}
+
 export async function importComposerThreadAttachment(input: {
   readonly targetKey: string;
   readonly pendingImports: Map<string, number>;

@@ -331,7 +331,10 @@ import {
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { pendingDraftWork } from "./pendingDraftWork";
-import { importComposerThreadAttachment } from "./composerThreadImport";
+import {
+  importComposerThreadAttachment,
+  remainingComposerAttachmentSlots,
+} from "./composerThreadImport";
 import { isTimelineScrollTarget } from "./timelineScrollTarget";
 import {
   createComposerScrollGestureState,
@@ -4746,11 +4749,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           appendedFiles.push(restored);
         }
-        const capacity = Math.max(
-          0,
-          PROVIDER_SEND_TURN_MAX_ATTACHMENTS -
-            composerImagesRef.current.length -
-            composerFilesNow.length,
+        const capacity = remainingComposerAttachmentSlots(
+          composerImagesRef.current.length + composerFilesNow.length,
+          pendingThreadImportsRef.current.get(composerTargetKey(composerDraftTarget)) ?? 0,
         );
         // Marker replacements reuse their marker's slot; only appended files
         // consume capacity.
@@ -4805,12 +4806,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             (image) => `${image.mimeType}\0${image.sizeBytes}\0${image.name}`,
           ),
         );
-        const capacity = Math.max(
-          0,
-          PROVIDER_SEND_TURN_MAX_ATTACHMENTS -
-            composerImagesRef.current.length -
-            composerFilesRef.current.length -
-            restoredFileCount,
+        const capacity = remainingComposerAttachmentSlots(
+          composerImagesRef.current.length + composerFilesRef.current.length + restoredFileCount,
+          pendingThreadImportsRef.current.get(composerTargetKey(composerDraftTarget)) ?? 0,
         );
         const pending = entry.attachments.filter(
           (attachment) =>

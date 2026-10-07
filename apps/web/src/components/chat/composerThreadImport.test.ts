@@ -2,7 +2,10 @@ import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
-import { importComposerThreadAttachment } from "./composerThreadImport";
+import {
+  importComposerThreadAttachment,
+  remainingComposerAttachmentSlots,
+} from "./composerThreadImport";
 
 function deferredFile() {
   let resolve!: (file: File) => void;
@@ -63,7 +66,7 @@ describe("importComposerThreadAttachment", () => {
   });
 
   it.each(["file", "image"])(
-    "reserves the final slot during an overlapping %s attachment",
+    "reserves the final slot while restoring a stashed %s",
     async (kind) => {
       const pendingImports = new Map<string, number>();
       const targetKey = "draft";
@@ -73,7 +76,12 @@ describe("importComposerThreadAttachment", () => {
       );
       const countReservedAttachments = () => attached.length + (pendingImports.get(targetKey) ?? 0);
       const attach = async (file: File) => {
-        if (countReservedAttachments() >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) return false;
+        if (
+          remainingComposerAttachmentSlots(attached.length, pendingImports.get(targetKey) ?? 0) ===
+          0
+        ) {
+          return false;
+        }
         attached.push(file.name);
         return true;
       };
