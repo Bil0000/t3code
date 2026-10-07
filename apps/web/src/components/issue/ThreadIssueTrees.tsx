@@ -11,11 +11,11 @@ import {
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
-import { useAtomCommand } from "~/state/use-atom-command";
 import { Spinner } from "../ui/spinner";
 import {
   type IssueTreeRoot,
@@ -23,9 +23,6 @@ import {
   IssueTreeRow,
   mergeIssueTrees,
 } from "./IssueTree";
-
-/** How often an open panel re-reads its trees, for sub-issues filed outside this thread. */
-const TREE_REFRESH_MS = 60_000;
 
 interface ThreadIssueTreesProps {
   environmentId: EnvironmentId;
@@ -72,10 +69,6 @@ export function ThreadIssueTrees({
     if (wasRunning.current && !running) setRefreshToken((token) => token + 1);
     wasRunning.current = running;
   }, [running]);
-  useEffect(() => {
-    const timer = setInterval(() => setRefreshToken((token) => token + 1), TREE_REFRESH_MS);
-    return () => clearInterval(timer);
-  }, []);
 
   const [reads, setReads] = useState<Record<string, TreeRead>>({});
   const report = useCallback((key: string, read: TreeRead) => {
@@ -244,15 +237,16 @@ function LinkedIssueRead({
   const detailQuery = useEnvironmentQuery(
     issueEnvironment.detail({ environmentId, input: reference }),
   );
-  const invalidate = useAtomCommand(issueEnvironment.invalidate, { reportFailure: false });
   const { refresh } = detailQuery;
+  useLiveRefresh(detailQuery.isPending ? null : refresh, {
+    key: `issue:${environmentId}:${projectId}:${issue.repository}#${issue.number}`,
+  });
   const applied = useRef(refreshToken);
   useEffect(() => {
     if (applied.current === refreshToken) return;
     applied.current = refreshToken;
-    // Around the server's cache, so a sub-issue filed a moment ago is in the answer.
-    void Promise.resolve(invalidate({ environmentId, input: { reference } })).finally(refresh);
-  }, [environmentId, invalidate, reference, refresh, refreshToken]);
+    refresh();
+  }, [refresh, refreshToken]);
 
   const detail = detailQuery.data ?? null;
   const pending = detail === null && detailQuery.isPending;

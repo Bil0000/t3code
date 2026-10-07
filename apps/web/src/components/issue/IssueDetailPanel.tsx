@@ -364,7 +364,7 @@ export function IssueDetailPanel({
   // Core detail is cheap enough to re-read while this stays open. Activity is heavier, so the
   // revision effect above reads it only after this same issue reports a change.
   useLiveRefresh(detailQuery.refresh, {
-    key: `issue:${issueKey}`,
+    key: `issue:${environmentId}:${issueKey}`,
   });
   // The button, on the other hand, goes around the server's cache rather than through it: it is
   // the answer for a reader who can see that what they are looking at is behind. The
