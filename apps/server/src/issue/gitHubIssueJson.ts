@@ -543,11 +543,11 @@ const RELATIVE_FIELDS = "number title url state repository { nameWithOwner }";
 const RELATIVE_WITH_PULL_REQUESTS = `${RELATIVE_FIELDS} ${linkedPullRequestFields(5, 5)}`;
 const ISSUE_HIERARCHY_FIELDS = `
   parent { ${RELATIVE_WITH_PULL_REQUESTS} parent { ${RELATIVE_FIELDS} parent { ${RELATIVE_FIELDS} } } }
-  subIssues(first: 50) {
+  subIssues(first: 20) {
     nodes {
       ${RELATIVE_WITH_PULL_REQUESTS}
-      subIssues(first: 20) {
-        nodes { ${RELATIVE_FIELDS} subIssues(first: 10) { nodes { ${RELATIVE_FIELDS} } } }
+      subIssues(first: 10) {
+        nodes { ${RELATIVE_FIELDS} subIssues(first: 5) { nodes { ${RELATIVE_FIELDS} } } }
       }
     }
   }

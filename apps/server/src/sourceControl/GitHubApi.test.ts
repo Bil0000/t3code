@@ -97,6 +97,28 @@ describe("environmentToken", () => {
 });
 
 describe("GitHubApi", () => {
+  it.effect(
+    "stops a larger hierarchy request before HTTP when a cheap read leaves too few points",
+    () => {
+      const resetAt = "2026-10-05T12:01:00.000Z";
+      const { layer, requests } = harness(() =>
+        json({ data: { rateLimit: { cost: 1, limit: 5_000, remaining: 502, resetAt } } }),
+      );
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(NOW);
+        const api = yield* GitHubApi.GitHubApi;
+        const read = {
+          host: "github.com",
+          operation: "detail",
+          query: "query { viewer { login } }",
+        };
+        yield* api.graphql(read);
+        const error = yield* Effect.flip(api.graphql({ ...read, minimumCost: 3 }));
+        expect(error._tag).toBe("SourceControlRateLimitPausedError");
+        expect(requests).toHaveLength(1);
+      }).pipe(Effect.provide(layer));
+    },
+  );
   it.effect("sends GraphQL with the token and records the reported budget", () => {
     const { layer, requests } = harness(() =>
       json({

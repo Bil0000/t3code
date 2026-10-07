@@ -23,6 +23,7 @@ import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const API_URL = "https://api.linear.app/graphql";
 const MAX_PAGE = 250;
+const ISSUE_COMPLEXITY = 5_000;
 
 const LINEAR_CREDENTIALS_SECRET = "issue-trackers.linear.credentials";
 
@@ -217,7 +218,7 @@ const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $filter: Issue
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
   issue(id: $id) {
     ${ISSUE_FIELDS}
-    attachments { nodes { url title sourceType metadata } }
+    attachments(first: 50) { nodes { url title sourceType metadata } }
     parent { ${RELATIVE_WITH_PULL_REQUESTS} parent { ${RELATIVE_FIELDS} parent { ${RELATIVE_FIELDS} } } }
     children(first: 20) {
       nodes {
@@ -382,6 +383,10 @@ const make = Effect.gen(function* () {
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const rateLimitKey = { provider: "linear", host: new URL(config.baseUrl).host };
   const credentialPoolMutex = yield* Semaphore.make(1);
+  // ponytail: one shared request slot; use per-account slots if throughput becomes a constraint.
+  const requestGate = yield* Semaphore.make(1);
+  const complexityBudgets = new Map<string, { remaining: number; reset: number }>();
+  const documentCosts = new Map<string, number>();
 
   const readSecret = (name: string, operation: string) =>
     secrets.get(name).pipe(
@@ -464,6 +469,20 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
+      const now = yield* Clock.currentTimeMillis;
+      const costKey = [document, variables.first, variables.last].join("\0");
+      const cost = document === ISSUE_QUERY ? ISSUE_COMPLEXITY : (documentCosts.get(costKey) ?? 0);
+      const budget = complexityBudgets.get(credentialScope);
+      if (budget !== undefined && budget.reset <= now) complexityBudgets.delete(credentialScope);
+      if (budget !== undefined && budget.reset > now) {
+        if (budget.remaining < cost)
+          return yield* new LinearApiError({
+            operation,
+            reason: "rate-limited",
+            retryAt: budget.reset,
+          });
+        budget.remaining = Math.max(0, budget.remaining - cost);
+      }
       let endpointOnly = false;
       return yield* http
         .execute(
@@ -478,6 +497,26 @@ const make = Effect.gen(function* () {
           Effect.flatMap((response) =>
             Effect.gen(function* () {
               const now = yield* Clock.currentTimeMillis;
+              const reportedCost = Number(response.headers["x-complexity"]);
+              if (Number.isFinite(reportedCost) && reportedCost >= 0) {
+                documentCosts.set(costKey, reportedCost);
+                if (budget !== undefined && budget.reset > now)
+                  budget.remaining = Math.max(
+                    0,
+                    budget.remaining - Math.max(0, reportedCost - cost),
+                  );
+              }
+              const remaining = Number(response.headers["x-ratelimit-complexity-remaining"]);
+              const reset = Number(
+                response.headers["x-ratelimit-complexity-reset"] ?? budget?.reset,
+              );
+              if (
+                Number.isFinite(remaining) &&
+                remaining >= 0 &&
+                Number.isFinite(reset) &&
+                reset > now
+              )
+                complexityBudgets.set(credentialScope, { remaining, reset });
               const resets = ["requests", "complexity"].flatMap((kind) => {
                 const remaining = response.headers[`x-ratelimit-${kind}-remaining`];
                 const reset = Number(response.headers[`x-ratelimit-${kind}-reset`]);
@@ -595,6 +634,7 @@ const make = Effect.gen(function* () {
           ),
         );
     }).pipe(
+      requestGate.withPermits(1),
       Effect.provideService(
         SourceControlRateLimit.CredentialScope,
         Hex.encode(sha256(new TextEncoder().encode(key))),

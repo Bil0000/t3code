@@ -108,6 +108,14 @@ it.layer(layer)("GitHub issue API", (it) => {
       expect(rest).not.toHaveBeenCalled();
       expect(graphql.mock.calls[0]?.[0].host).toBe(target.host);
       expect(graphql.mock.calls[0]?.[0].query).not.toContain("comments(last:");
+      expect(graphql.mock.calls[0]?.[0].minimumCost).toBe(3);
+      const limits = [
+        ...graphql.mock.calls[0]![0].query.matchAll(/subIssues\(first: (\d+)\)/g),
+      ].map((match) => Number(match[1]));
+      assert.lengthOf(limits, 3);
+      const [children, grandchildren, greatGrandchildren] = limits;
+      const descendants = children! * (1 + grandchildren! * (1 + greatGrandchildren!));
+      assert.isAtMost(descendants, 1_220);
     }),
   );
 
@@ -208,10 +216,10 @@ it.layer(layer)("GitHub issue API", (it) => {
   it.effect("retries only unsupported hierarchy fields with the legacy query", () =>
     Effect.gen(function* () {
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-      for (const message of [
+      for (const [index, message] of [
         "Field 'parent' doesn't exist on type 'Issue'",
         "Field 'subIssues' doesn't exist on type 'Issue'",
-      ]) {
+      ].entries()) {
         graphql.mockReset();
         graphql
           .mockReturnValueOnce(
@@ -225,7 +233,8 @@ it.layer(layer)("GitHub issue API", (it) => {
             ),
           )
           .mockReturnValueOnce(Effect.succeed(core({ parent: undefined, subIssues: undefined })));
-        const detail = yield* cli.getIssueDetail(target);
+        const host = `${index}.${target.host}`;
+        const detail = yield* cli.getIssueDetail({ ...target, host });
         assert.deepEqual(detail.ancestors, []);
         assert.deepEqual(detail.subIssues, []);
         assert.equal(detail.linkedPullRequests[0]?.number, 9);
@@ -234,8 +243,37 @@ it.layer(layer)("GitHub issue API", (it) => {
         expect(fallback.query).not.toContain("subIssues(");
         expect(fallback.query).not.toContain("parent {");
         assert.deepEqual(fallback.variables, { owner: "acme", name: "web", number: 7 });
-        assert.equal(fallback.host, target.host);
+        assert.equal(fallback.host, host);
       }
+    }),
+  );
+
+  it.effect("remembers unsupported hierarchy per host and probes again after expiry", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      const input = { ...target, host: "old.github.test" };
+      graphql
+        .mockReturnValueOnce(
+          Effect.fail(
+            new GitHubApi.GitHubApiResponseError({
+              host: input.host,
+              operation: "getIssueDetail",
+              status: 200,
+              githubErrors: ["Field 'parent' doesn't exist on type 'Issue'"],
+            }),
+          ),
+        )
+        .mockReturnValue(Effect.succeed(core()));
+      yield* cli.getIssueDetail(input);
+      expect(graphql).toHaveBeenCalledTimes(2);
+      yield* cli.getIssueDetail({ ...input, number: 8 });
+      expect(graphql).toHaveBeenCalledTimes(3);
+      expect(graphql.mock.calls[2]![0].query).not.toContain("subIssues(");
+      yield* cli.getIssueDetail({ ...input, host: "new.github.test" });
+      expect(graphql.mock.calls[3]![0].query).toContain("subIssues(");
+      yield* TestClock.adjust("10 minutes");
+      yield* cli.getIssueDetail(input);
+      expect(graphql.mock.calls[4]![0].query).toContain("subIssues(");
     }),
   );
 

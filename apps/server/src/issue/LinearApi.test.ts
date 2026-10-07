@@ -800,6 +800,178 @@ it.effect(
   },
 );
 
+it.effect(
+  "blocks details with a positive low balance while allowing cheap calls and other tokens",
+  () => {
+    const { layer, requests } = makeLayer({
+      envToken: "environment-key",
+      credentials: pool(["other", "other-key"]),
+      response: (body) => {
+        const query = String(body.query);
+        if (query.includes("T3LinearIssue(")) return { data: { issue: null } };
+        if (query.includes("T3LinearComment"))
+          return { data: { commentCreate: { success: true } } };
+        return Response.json(
+          { data: { viewer: { id: "user" } } },
+          {
+            headers: {
+              "X-Complexity": "2",
+              "X-RateLimit-Complexity-Remaining": "4000",
+              "X-RateLimit-Complexity-Reset": "61000",
+            },
+          },
+        );
+      },
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      yield* api.getViewer({});
+      const error = yield* Effect.flip(api.getIssue({ identifier: "ENG-1" }));
+      assert.equal(error.reason, "rate-limited");
+      assert.equal(error.retryAt, 61000);
+      assert.equal(requests.length, 1);
+      assert.equal((yield* api.getViewer({})).id, "user");
+      yield* api.comment({ issueId: "issue-1", body: "Hello" });
+      assert.equal(requests.length, 3);
+      assert.equal(
+        (yield* Effect.flip(api.getIssue({ identifier: "ENG-1", credentialId: "other" }))).reason,
+        "failed",
+      );
+      assert.equal(requests.length, 4);
+      yield* TestClock.setTime(61000);
+      assert.equal((yield* Effect.flip(api.getIssue({ identifier: "ENG-2" }))).reason, "failed");
+      assert.equal(requests.length, 5);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("stops queued distinct detail reads after the first low-budget response", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: () =>
+      Response.json(
+        { data: { issue: null } },
+        {
+          headers: {
+            "X-RateLimit-Complexity-Remaining": "4000",
+            "X-RateLimit-Complexity-Reset": "61000",
+          },
+        },
+      ),
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    const errors = yield* Effect.all(
+      Array.from({ length: 20 }, (_, index) =>
+        Effect.flip(api.getIssue({ identifier: `ENG-${index + 1}` })),
+      ),
+      { concurrency: "unbounded" },
+    );
+    assert.equal(requests.length, 1);
+    assert.equal(errors.filter((error) => error.reason === "failed").length, 1);
+    assert.equal(errors.filter((error) => error.reason === "rate-limited").length, 19);
+    assert.ok(
+      errors
+        .filter((error) => error.reason === "rate-limited")
+        .every((error) => error.retryAt === 61000),
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([200, 500])(
+  "deducts detail cost without headers even on HTTP %s failure",
+  (status) => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: (body) => {
+        if (String(body.query).includes("T3LinearIssue("))
+          return Response.json({ data: { issue: null } }, { status });
+        return requests.length === 1
+          ? Response.json(
+              { data: { viewer: { id: "user" } } },
+              {
+                headers: {
+                  "X-Complexity": "2",
+                  "X-RateLimit-Complexity-Remaining": "9000",
+                  "X-RateLimit-Complexity-Reset": "61000",
+                },
+              },
+            )
+          : { data: { viewer: { id: "user" } } };
+      },
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      yield* api.getViewer({});
+      assert.equal((yield* Effect.flip(api.getIssue({ identifier: "ENG-1" }))).reason, "failed");
+      assert.equal(
+        (yield* Effect.flip(api.getIssue({ identifier: "ENG-2" }))).reason,
+        "rate-limited",
+      );
+      assert.equal(requests.length, 2);
+      yield* api.getViewer({});
+      assert.equal(
+        (yield* Effect.flip(api.getIssue({ identifier: "ENG-3" }))).reason,
+        "rate-limited",
+      );
+      assert.equal(requests.length, 3);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("uses observed document costs and refreshes positive balances", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) => {
+      const query = String(body.query);
+      if (query.includes("T3LinearIssue(")) return { data: { issue: null } };
+      if (query.includes("T3LinearViewer"))
+        return requests.length === 1
+          ? Response.json(
+              { data: { viewer: { id: "user" } } },
+              {
+                headers: {
+                  "X-Complexity": "7",
+                  "X-RateLimit-Complexity-Remaining": "6",
+                  "X-RateLimit-Complexity-Reset": "61000",
+                },
+              },
+            )
+          : { data: { viewer: { id: "user" } } };
+      return Response.json(
+        { data: { commentCreate: { success: true } } },
+        {
+          headers: {
+            "X-Complexity": "1",
+            ...(requests.length === 2
+              ? {}
+              : {
+                  "X-RateLimit-Complexity-Remaining": "5500",
+                  "X-RateLimit-Complexity-Reset": "121000",
+                }),
+          },
+        },
+      );
+    },
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({});
+    assert.equal((yield* Effect.flip(api.getViewer({}))).retryAt, 61000);
+    assert.equal(requests.length, 1);
+    yield* api.comment({ issueId: "issue-1", body: "Hello" });
+    yield* api.comment({ issueId: "issue-1", body: "Again" });
+    assert.equal((yield* Effect.flip(api.getIssue({ identifier: "ENG-1" }))).reason, "failed");
+    assert.equal((yield* Effect.flip(api.getIssue({ identifier: "ENG-2" }))).retryAt, 121000);
+    yield* api.getViewer({});
+    assert.equal(requests.length, 5);
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("reads a Linear issue summary without its body, labels, or comments", () => {
   const { layer, requests } = makeLayer({
     envToken: "test-key",
@@ -833,6 +1005,7 @@ it.effect("keeps the three-level Linear detail query below the complexity limit"
     const api = yield* LinearApi.LinearApi;
     yield* Effect.flip(api.getIssue({ identifier: "ENG-1" }));
     const query = String(requests[0]?.body.query);
+    assert.include(query, "attachments(first: 50)");
     const childLimits = [...query.matchAll(/children\(first: (\d+)\)/g)].map((match) =>
       Number(match[1]),
     );
@@ -856,7 +1029,7 @@ it.effect("keeps the three-level Linear detail query below the complexity limit"
             childAttachments! * attachmentCost +
             grandchildren! * (relativeCost + greatGrandchildren! * relativeCost)),
     );
-    assert.isBelow(complexity, 10_000);
+    assert.isBelow(complexity, 5_000);
   }).pipe(Effect.provide(layer));
 });
 

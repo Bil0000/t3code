@@ -1,4 +1,6 @@
 import * as Context from "effect/Context";
+import * as Cache from "effect/Cache";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
@@ -573,6 +575,11 @@ function instantRunsOn(
 
 const make = Effect.gen(function* () {
   const api = yield* GitHubApi.GitHubApi;
+  const unsupportedHierarchy = yield* Cache.make({
+    lookup: (host: string) => Effect.succeed(host),
+    capacity: 64,
+    timeToLive: Duration.minutes(10),
+  });
 
   const readError =
     (input: { readonly cwd: string; readonly operation: string }) => (cause: unknown) =>
@@ -587,6 +594,7 @@ const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly host: string;
     readonly operation: string;
+    readonly minimumCost?: number;
     readonly variables?: Readonly<Record<string, unknown>>;
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
@@ -671,32 +679,39 @@ const make = Effect.gen(function* () {
       .pipe(Effect.asVoid);
   };
 
-  const issueDetail: GitHubIssueCli["Service"]["getIssueDetail"] = (input) => {
-    const { owner, name } = parseRepositorySelector(input.repository);
-    const read = (query: string) =>
-      graphqlRead({
-        ...input,
-        operation: "getIssueDetail",
-        variables: { owner, name, number: input.number },
-        query,
-        decode: decodeIssueCoreJson,
-      });
-    return read(ISSUE_SUPPLEMENT_GRAPHQL_QUERY).pipe(
-      Effect.catchTags({
-        GitHubApiResponseError: (error) =>
-          error.status === 200 &&
-          error.githubErrors !== undefined &&
-          error.githubErrors.length > 0 &&
-          error.githubErrors.every((message) =>
-            /^Field [\x27"](?:parent|subIssues)[\x27"] (?:doesn\x27t|does not) exist on type [\x27"]Issue[\x27"]$/.test(
-              message,
-            ),
-          )
-            ? read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY)
-            : Effect.fail(error),
-      }),
-    );
-  };
+  const issueDetail: GitHubIssueCli["Service"]["getIssueDetail"] = (input) =>
+    Effect.gen(function* () {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      const host = input.host.trim().toLowerCase();
+      const read = (query: string) =>
+        graphqlRead({
+          ...input,
+          operation: "getIssueDetail",
+          variables: { owner, name, number: input.number },
+          query,
+          minimumCost: query === ISSUE_SUPPLEMENT_GRAPHQL_QUERY ? 3 : 1,
+          decode: decodeIssueCoreJson,
+        });
+      if (yield* Cache.has(unsupportedHierarchy, host))
+        return yield* read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY);
+      return yield* read(ISSUE_SUPPLEMENT_GRAPHQL_QUERY).pipe(
+        Effect.catchTags({
+          GitHubApiResponseError: (error) =>
+            error.status === 200 &&
+            error.githubErrors !== undefined &&
+            error.githubErrors.length > 0 &&
+            error.githubErrors.every((message) =>
+              /^Field [\x27"](?:parent|subIssues)[\x27"] (?:doesn\x27t|does not) exist on type [\x27"]Issue[\x27"]$/.test(
+                message,
+              ),
+            )
+              ? Cache.set(unsupportedHierarchy, host, host).pipe(
+                  Effect.andThen(read(ISSUE_SUPPLEMENT_LEGACY_GRAPHQL_QUERY)),
+                )
+              : Effect.fail(error),
+        }),
+      );
+    });
 
   const summaryResolver = RequestResolver.makeGrouped<IssueSummaryRead, string>({
     key: ({ request, context }) =>
