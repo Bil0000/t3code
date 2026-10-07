@@ -55,7 +55,7 @@ it("reads pull requests from Linear's GitHub and GitLab attachments", () => {
         url: "https://github.com/acme/web/pull/102",
         state: "open",
         isDraft: false,
-        closesIssue: true,
+        closesIssue: false,
       },
       {
         repository: "acme/group/api",
@@ -64,7 +64,7 @@ it("reads pull requests from Linear's GitHub and GitLab attachments", () => {
         url: "https://gitlab.com/acme/group/api/-/merge_requests/7",
         state: "merged",
         isDraft: false,
-        closesIssue: true,
+        closesIssue: false,
       },
       {
         repository: "acme/web",
@@ -73,8 +73,31 @@ it("reads pull requests from Linear's GitHub and GitLab attachments", () => {
         url: "https://github.com/acme/web/pull/9",
         state: "open",
         isDraft: true,
-        closesIssue: true,
+        closesIssue: false,
       },
+    ],
+  );
+});
+
+it("keeps reference-only Linear pull request attachments non-closing", () => {
+  const links = linearLinkedPullRequests([
+    {
+      url: "https://github.com/acme/web/pull/12",
+      title: "Refs ENG-63",
+      sourceType: "github",
+      metadata: { status: "merged", number: 12 },
+    },
+    {
+      url: "https://github.com/acme/web/pull/13",
+      title: "Related to ENG-63",
+      sourceType: "github",
+    },
+  ]);
+  assert.deepStrictEqual(
+    links.map((link) => [link.number, link.closesIssue]),
+    [
+      [12, false],
+      [13, false],
     ],
   );
 });

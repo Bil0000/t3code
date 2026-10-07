@@ -100,7 +100,6 @@ function actor(user: LinearApi.LinearUser | null | undefined) {
 const PULL_REQUEST_URL =
   /^https:\/\/(?:github\.com\/([^/]+\/[^/]+)\/pull|gitlab\.com\/(.+?)\/-\/merge_requests)\/(\d+)/;
 
-/** Pull requests Linear's Git integrations attached to the issue, which merging closes by default. */
 export function linearLinkedPullRequests(
   attachments: ReadonlyArray<LinearApi.LinearAttachment>,
 ): Array<IssueLinkedPullRequest> {
@@ -116,7 +115,7 @@ export function linearLinkedPullRequests(
         url: attachment.url,
         state: status === "merged" ? "merged" : status === "closed" ? "closed" : "open",
         isDraft: status === "draft" || attachment.metadata?.draft === true,
-        closesIssue: true,
+        closesIssue: false,
       },
     ];
   });
