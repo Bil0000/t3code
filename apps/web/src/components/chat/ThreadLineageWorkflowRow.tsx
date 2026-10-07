@@ -255,14 +255,14 @@ export function ThreadLineageWorkflowRow({
                   </span>
                   <span
                     className={cn(
-                      "w-16 shrink-0 text-end font-mono text-2xs tabular-nums",
+                      "w-18 shrink-0 whitespace-nowrap text-end font-mono text-2xs tabular-nums",
                       running ? "text-info" : "text-muted-foreground/70",
                     )}
                   >
                     {phase.settledCount}/{phase.members.length}{" "}
                     {phase.members.length === 1 ? "agent" : "agents"}
                   </span>
-                  <span className="w-14 shrink-0 text-end font-mono text-2xs text-muted-foreground/70">
+                  <span className="w-13 shrink-0 text-end font-mono text-2xs text-muted-foreground/70">
                     <AgentElapsed agent={phaseElapsed(phase)} />
                   </span>
                   <ChevronDownIcon
