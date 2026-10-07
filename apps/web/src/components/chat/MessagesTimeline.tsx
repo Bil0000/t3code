@@ -210,6 +210,7 @@ import {
   shouldPreserveAssistantLineBreaks,
   threadReadLabelPrefix,
   threadReadTargetId,
+  threadReadTargetTitle,
   toolGroupAction,
   workEntryDisplayLabel,
   workEntryReadOutput,
@@ -3728,9 +3729,8 @@ function LiveActivityContent({
 function useThreadReadTarget(entry: TimelineWorkEntry, environmentId: EnvironmentId) {
   const rawThreadId = threadReadTargetId(entry);
   const threadId = rawThreadId === null ? null : ThreadId.make(rawThreadId);
-  const title = useThreadShell(
-    threadId ? scopeThreadRef(environmentId, threadId) : null,
-  )?.title.trim();
+  const shell = useThreadShell(threadId ? scopeThreadRef(environmentId, threadId) : null);
+  const title = threadReadTargetTitle(shell);
   return threadId && title ? { threadId, title } : null;
 }
 

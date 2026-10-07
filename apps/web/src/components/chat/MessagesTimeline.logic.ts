@@ -34,7 +34,12 @@ import {
   type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
-import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import {
+  type ChatMessage,
+  type ProposedPlan,
+  type ThreadShell,
+  type TurnDiffSummary,
+} from "../../types";
 import {
   type MessageId,
   type WorktreeSetupSnapshot,
@@ -181,6 +186,13 @@ export function threadReadTargetId(entry: Pick<WorkLogEntry, "structuredPayload"
 }
 
 const THREAD_READ_OBJECT = " a T3 thread";
+
+export function threadReadTargetTitle(
+  shell: Pick<ThreadShell, "title" | "archivedAt" | "deletedAt"> | null,
+) {
+  if (!shell || shell.archivedAt !== null || shell.deletedAt !== null) return null;
+  return shell.title.trim() || null;
+}
 
 /**
  * Names the read thread in place of the generic object ("Read a T3 thread" becomes
