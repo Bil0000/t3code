@@ -221,6 +221,16 @@ describe("relatedIssueTarget", () => {
     ).toEqual({ projectId: "web", repository: "ENG", number: 3 });
   });
 
+  it("does not open another Linear team's issue through this team's project", () => {
+    expect(
+      relatedIssueTarget(
+        projects,
+        { projectId: "web", repository: "ENG" },
+        { repository: "OPS", number: 42, url: "https://linear.app/acme/issue/OPS-42" },
+      ),
+    ).toBeNull();
+  });
+
   it("opens another repository through its own project, or not at all", () => {
     expect(
       relatedIssueTarget(projects, current, {

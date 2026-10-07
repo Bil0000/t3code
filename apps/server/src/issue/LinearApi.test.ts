@@ -824,6 +824,64 @@ it.effect("reads a Linear issue summary without its body, labels, or comments", 
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("queries and decodes team keys on Linear issue relatives", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: () => ({
+      data: {
+        issue: {
+          id: "issue-1",
+          identifier: "ENG-1",
+          number: 1,
+          title: "Epic",
+          url: "https://linear.app/acme/issue/ENG-1",
+          createdAt: "2026-08-17T00:00:00.000Z",
+          updatedAt: "2026-08-17T00:00:00.000Z",
+          state: { name: "Todo", type: "unstarted" },
+          parent: {
+            number: 7,
+            title: "Initiative",
+            url: "https://linear.app/acme/issue/OPS-7",
+            team: { key: "OPS" },
+            state: { name: "Todo", type: "unstarted" },
+          },
+          children: {
+            nodes: [
+              {
+                number: 42,
+                title: "Engineering part",
+                url: "https://linear.app/acme/issue/ENG-42",
+                team: { key: "ENG" },
+                state: { name: "Todo", type: "unstarted" },
+              },
+              {
+                number: 42,
+                title: "Operations part",
+                url: "https://linear.app/acme/issue/OPS-42",
+                team: { key: "OPS" },
+                state: { name: "Todo", type: "unstarted" },
+              },
+            ],
+          },
+        },
+      },
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const issue = yield* api.getIssue({ identifier: "ENG-1" });
+    assert.deepStrictEqual(issue.parent?.team, { key: "OPS" });
+    assert.deepStrictEqual(
+      issue.children?.nodes.map((child) => [child.team.key, child.number]),
+      [
+        ["ENG", 42],
+        ["OPS", 42],
+      ],
+    );
+    assert.include(String(requests[0]?.body.query), "team { key }");
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("an endpoint pause does not block other Linear operations", () => {
   const { layer, requests } = makeLayer({
     envToken: "test-key",

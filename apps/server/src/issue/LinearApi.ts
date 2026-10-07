@@ -78,6 +78,7 @@ interface Relative {
   readonly number: number;
   readonly title: string;
   readonly url: string;
+  readonly team: { readonly key: string };
   readonly state: typeof State.Type;
   readonly attachments?:
     | { readonly nodes: ReadonlyArray<typeof Attachment.Type> }
@@ -90,6 +91,7 @@ const Relative: Schema.Codec<Relative> = Schema.Struct({
   number: Schema.Number,
   title: Schema.String,
   url: Schema.String,
+  team: Schema.Struct({ key: Schema.String }),
   state: State,
   attachments: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Attachment) }))),
   parent: Schema.optional(Schema.NullOr(Schema.suspend((): Schema.Codec<Relative> => Relative))),
@@ -190,7 +192,7 @@ const MutationEnvelope = Schema.Struct({
 const USER_FIELDS = "id name email avatarUrl";
 const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
 // Three levels each way bounds the query's complexity; deeper relatives open from the tree.
-const RELATIVE_FIELDS = "number title url state { name type }";
+const RELATIVE_FIELDS = "number title url team { key } state { name type }";
 // Pull requests only on the levels nearest the issue, which keeps the query under Linear's cost limit.
 const RELATIVE_WITH_PULL_REQUESTS = `${RELATIVE_FIELDS} attachments(first: 5) { nodes { url title sourceType metadata } }`;
 const ISSUE_FIELDS = `

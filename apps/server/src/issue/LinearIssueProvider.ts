@@ -124,6 +124,7 @@ export function linearLinkedPullRequests(
 
 function toRelative(issue: LinearApi.LinearRelative): IssueRelative {
   return {
+    repository: issue.team.key,
     number: issue.number,
     title: issue.title,
     url: issue.url,

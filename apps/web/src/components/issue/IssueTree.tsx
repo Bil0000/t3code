@@ -4,6 +4,7 @@ import {
   type IssueReferenceStyle,
   type IssueRelative,
   type IssueRelativeNode,
+  normalizeWorkItemLinkKey,
 } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
@@ -47,7 +48,7 @@ export function flattenIssueTree(detail: IssueTreeRoot): Array<IssueTreeRowData>
 
 /** A linked issue's tree as read from its tracker, keyed for merging with the others. */
 export interface LinkedIssueTreeSource {
-  readonly repository: string;
+  readonly provider: string;
   readonly linkKey: string;
   readonly detail: IssueTreeRoot;
 }
@@ -65,9 +66,8 @@ interface MergeNode {
   readonly children: Map<string, MergeNode>;
 }
 
-function issueIdentity(issue: IssueRelative, repository: string): string {
-  const host = URL.canParse(issue.url) ? new URL(issue.url).host.toLowerCase() : "";
-  return `${host}/${(issue.repository ?? repository).toLowerCase()}#${issue.number}`;
+function issueIdentity(issue: IssueRelative, provider: string): string {
+  return normalizeWorkItemLinkKey({ provider, url: issue.url }).url.toLowerCase();
 }
 
 export function issueTreeLabel(
@@ -75,10 +75,10 @@ export function issueTreeLabel(
   repository: string,
   referenceStyle: IssueReferenceStyle,
 ): string {
-  if (referenceStyle === "key-number") {
-    return formatIssueReference({ repository, number: issue.number, referenceStyle });
-  }
   const own = issue.repository ?? repository;
+  if (referenceStyle === "key-number") {
+    return formatIssueReference({ repository: own, number: issue.number, referenceStyle });
+  }
   return own.toLowerCase() === repository.toLowerCase()
     ? `#${issue.number}`
     : formatIssueReference({ repository: own, number: issue.number });
@@ -95,9 +95,9 @@ export function mergeIssueTrees(
   const place = (
     container: Map<string, MergeNode>,
     issue: IssueRelative,
-    repository: string,
+    provider: string,
   ): MergeNode => {
-    const key = issueIdentity(issue, repository);
+    const key = issueIdentity(issue, provider);
     const existing = container.get(key);
     if (existing === undefined) {
       const created: MergeNode = { issue, linkKey: null, children: new Map() };
@@ -113,16 +113,16 @@ export function mergeIssueTrees(
   const graft = (
     node: MergeNode,
     subIssues: ReadonlyArray<IssueRelativeNode>,
-    repository: string,
+    provider: string,
   ) => {
     for (const sub of subIssues) {
-      graft(place(node.children, sub, repository), sub.subIssues, repository);
+      graft(place(node.children, sub, provider), sub.subIssues, provider);
     }
   };
-  for (const { repository, linkKey, detail } of sources) {
+  for (const { provider, linkKey, detail } of sources) {
     const chain = [...(detail.ancestors ?? []), detail];
     const top = chain[0]!;
-    const rootKey = issueIdentity(top, repository);
+    const rootKey = issueIdentity(top, provider);
     let node = roots.get(rootKey);
     if (node === undefined) {
       node = { issue: top, linkKey: null, children: new Map() };
@@ -133,10 +133,10 @@ export function mergeIssueTrees(
     ) {
       node.issue = top;
     }
-    for (const issue of chain.slice(1)) node = place(node.children, issue, repository);
+    for (const issue of chain.slice(1)) node = place(node.children, issue, provider);
     node.issue = detail;
     node.linkKey = linkKey;
-    graft(node, detail.subIssues ?? [], repository);
+    graft(node, detail.subIssues ?? [], provider);
   }
   return [...roots].map(([key, root]) => {
     const rows: Array<MergedIssueTreeRow> = [];

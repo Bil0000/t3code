@@ -3,6 +3,7 @@ import {
   formatIssueReference,
   type IssueLinkedPullRequest,
   type IssueRelative,
+  normalizeWorkItemLinkKey,
   type ProjectId,
   type ScopedThreadRef,
   type ThreadIssueLink,
@@ -98,7 +99,7 @@ export function ThreadIssueTrees({
           return detail && projectFor(issue) !== null
             ? [
                 {
-                  repository: issue.repository,
+                  provider: issue.provider,
                   linkKey: threadIssueKey(issue),
                   detail,
                 },
@@ -193,12 +194,9 @@ export function ThreadIssueTrees({
   );
 }
 
-function threadIssueKey(issue: {
-  readonly provider: string;
-  readonly repository: string;
-  readonly number: number;
-}) {
-  return `${issue.provider}:${issue.repository}#${issue.number}`;
+function threadIssueKey(issue: ThreadIssueLink) {
+  const key = normalizeWorkItemLinkKey(issue);
+  return `${key.provider}:${key.url}`;
 }
 
 function referenceStyleOf(issue: ThreadIssueLink) {

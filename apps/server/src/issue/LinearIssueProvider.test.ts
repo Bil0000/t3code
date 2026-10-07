@@ -323,7 +323,7 @@ it.effect("does not resolve a cleared project binding", () =>
   ),
 );
 
-it.effect("carries a Linear issue's ancestors and nested sub-issues on its detail", () =>
+it.effect("carries mixed-team ancestors and same-number sub-issues on a Linear detail", () =>
   Effect.gen(function* () {
     const adapter = yield* make;
     const detail = yield* adapter.getIssue({
@@ -333,17 +333,27 @@ it.effect("carries a Linear issue's ancestors and nested sub-issues on its detai
       number: 2,
     });
     assert.deepStrictEqual(
-      detail.ancestors?.map((issue) => issue.number),
-      [0, 1],
+      detail.ancestors?.map((issue) => [issue.repository, issue.number]),
+      [
+        ["OPS", 0],
+        ["ENG", 1],
+      ],
     );
     assert.deepStrictEqual(
-      detail.subIssues?.map((issue) => [issue.number, issue.state, issue.subIssues.length]),
+      detail.subIssues?.map((issue) => [
+        issue.repository,
+        issue.number,
+        issue.state,
+        issue.subIssues.length,
+      ]),
       [
-        [3, "closed", 1],
-        [4, "open", 0],
+        ["ENG", 3, "closed", 1],
+        ["OPS", 3, "open", 0],
       ],
     );
     assert.strictEqual(detail.subIssues?.[0]?.subIssues[0]?.number, 5);
+    assert.strictEqual(detail.subIssues?.[0]?.subIssues[0]?.repository, "OPS");
+    assert.strictEqual(detail.subIssues?.[1]?.url, "https://linear.app/acme/issue/OPS-3");
     assert.deepStrictEqual(
       detail.subIssues?.[0]?.linkedPullRequests?.map((link) => [link.number, link.state]),
       [[31, "merged"]],
@@ -366,13 +376,15 @@ it.effect("carries a Linear issue's ancestors and nested sub-issues on its detai
               state: { name: "Todo", type: "unstarted" },
               parent: {
                 number: 1,
+                team: { key: "ENG" },
                 title: "Epic",
                 url: "https://linear.app/acme/issue/ENG-1",
                 state: { name: "In Progress", type: "started" },
                 parent: {
                   number: 0,
+                  team: { key: "OPS" },
                   title: "Initiative",
-                  url: "https://linear.app/acme/issue/ENG-0",
+                  url: "https://linear.app/acme/issue/OPS-0",
                   state: { name: "In Progress", type: "started" },
                 },
               },
@@ -380,6 +392,7 @@ it.effect("carries a Linear issue's ancestors and nested sub-issues on its detai
                 nodes: [
                   {
                     number: 3,
+                    team: { key: "ENG" },
                     title: "Done part",
                     url: "https://linear.app/acme/issue/ENG-3",
                     state: { name: "Done", type: "completed" },
@@ -397,17 +410,19 @@ it.effect("carries a Linear issue's ancestors and nested sub-issues on its detai
                       nodes: [
                         {
                           number: 5,
+                          team: { key: "OPS" },
                           title: "Leaf",
-                          url: "https://linear.app/acme/issue/ENG-5",
+                          url: "https://linear.app/acme/issue/OPS-5",
                           state: { name: "Todo", type: "unstarted" },
                         },
                       ],
                     },
                   },
                   {
-                    number: 4,
+                    number: 3,
+                    team: { key: "OPS" },
                     title: "Open part",
-                    url: "https://linear.app/acme/issue/ENG-4",
+                    url: "https://linear.app/acme/issue/OPS-3",
                     state: { name: "Todo", type: "unstarted" },
                   },
                 ],
