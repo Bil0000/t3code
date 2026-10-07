@@ -363,6 +363,7 @@ it("opens the correct chat for every workflow phase and unphased member", async 
 
 it("groups and counts a workflow by its run status instead of its coordinator chat", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.showTooltips = true;
   const coordinator = {
     id: "workflow",
     driver: "claudeAgent",
@@ -370,7 +371,9 @@ it("groups and counts a workflow by its run status instead of its coordinator ch
     childThreadId: "workflow-chat",
     title: "Checkout review",
     status: "running",
-    startedAt: null,
+    startedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
+    progress: "Inspecting the checkout workflow",
+    result: "Workflow checks complete",
     completedAt: null,
     updatedAt: DateTime.makeUnsafe("2026-09-21T12:00:00Z"),
     workflow: {
@@ -405,6 +408,11 @@ it("groups and counts a workflow by its run status instead of its coordinator ch
   await act(async () => {
     renderer = create(panel);
   });
+  const text = () =>
+    renderer.root
+      .findAll((node) => typeof node.type === "string")
+      .flatMap((node) => node.children.filter((child) => typeof child === "string"))
+      .join("");
   expect(renderer.root.findByType("h3").children).toEqual(["Lineage · 1 running"]);
   await act(async () =>
     renderer.root.findByProps({ "aria-label": "Expand Checkout review" }).props.onClick(),
@@ -413,15 +421,27 @@ it("groups and counts a workflow by its run status instead of its coordinator ch
   state.shells = [{ environmentId: "test", source: { ...child, activityRunStatus: "waiting" } }];
   await act(async () => renderer.update(cloneElement(panel)));
   expect(renderer.root.findByType("h3").children).toEqual(["Lineage · 1 running"]);
-  state.projection = { ...projection, subagents: [{ ...coordinator, status: "completed" }] };
+  expect(text()).toContain("Inspecting the checkout workflow");
+  state.projection = {
+    ...projection,
+    subagents: [
+      {
+        ...coordinator,
+        status: "completed",
+        completedAt: DateTime.makeUnsafe("2026-09-21T12:10:00Z"),
+      },
+    ],
+  };
   await act(async () => renderer.update(cloneElement(panel)));
   expect(renderer.root.findByType("h3").children).toEqual(["Lineage"]);
-  expect(JSON.stringify(renderer.toJSON())).toContain("Previous agents");
+  expect(text()).toContain("Previous agents");
   expect(renderer.root.findAllByProps({ "aria-label": "Open Checker chat" })).toHaveLength(0);
   await act(async () =>
     renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
   );
   expect(renderer.root.findByProps({ "aria-label": "Expand Checkout review" })).toBeDefined();
+  expect(text()).toContain("Workflow checks complete");
+  expect(text()).toContain("10m");
 });
 
 it.each(["codex", "claudeAgent"])(

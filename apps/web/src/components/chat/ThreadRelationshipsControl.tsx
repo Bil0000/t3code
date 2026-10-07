@@ -423,12 +423,15 @@ export function ThreadRelationshipsPanel(props: {
                   ? BotIcon
                   : GitForkIcon;
               const relationship = relationshipLabel(edge, props.threadId);
-              const agent = liveSubagent(
-                isSubagent && !isParent ? subagentsByThreadId.get(threadId) : undefined,
-                node?.thread,
-              );
+              const projectedAgent =
+                isSubagent && !isParent ? subagentsByThreadId.get(threadId) : undefined;
               const workflowGroup =
-                agent === undefined ? undefined : workflowGroupsById.get(agent.id);
+                projectedAgent === undefined
+                  ? undefined
+                  : workflowGroupsById.get(projectedAgent.id);
+              const agent = workflowGroup
+                ? projectedAgent
+                : liveSubagent(projectedAgent, node?.thread);
               const failed = rowStatus === "failed" || rowStatus === "error";
               const canStop =
                 agent?.origin === "app_owned" &&
