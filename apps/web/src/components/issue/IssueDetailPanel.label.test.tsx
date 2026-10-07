@@ -42,9 +42,6 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => permission.allowed }));
-vi.mock("~/composerDraftStore", () => ({
-  useComposerDraftStore: { getState: () => ({}) },
-}));
 vi.mock("~/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => commands.newThread }));
 vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => undefined }));
 vi.mock("~/localApi", () => ({ readLocalApi: () => null }));
@@ -158,6 +155,21 @@ let currentDetail = detail;
 let currentActivity = activity;
 
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import type { ReviewCommentContext } from "~/reviewCommentContext";
+import { writeHandoffToComposer } from "../sourceControl/handoff";
+
+const handoffChip = (id: string): ReviewCommentContext => ({
+  id,
+  sectionId: id,
+  sectionTitle: id,
+  filePath: id,
+  startIndex: 0,
+  endIndex: 0,
+  rangeLabel: id,
+  text: "",
+  diff: "",
+});
 import { IssuesPanel } from "./IssuesPanel";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { CommentComposer } from "../sourceControl/CommentComposer";
@@ -480,4 +492,35 @@ it("blocks an open close confirmation while write access is revoked", async () =
   (confirmButton(panel).props.onClick as () => void)();
   await Promise.resolve();
   expect(commands.action).toHaveBeenCalledTimes(1);
+});
+
+it("replaces a pull request hand-off's prompt and chip when the issue is explained", async () => {
+  hooks.reset();
+  const target = "existing-draft" as DraftId;
+  const own = { ...handoffChip("review-comment:own"), text: "mine" };
+  useComposerDraftStore.getState().setPrompt(target, "Keep my draft");
+  useComposerDraftStore.getState().setReviewComments(target, [own]);
+  writeHandoffToComposer(target, {
+    prompt: "Explain this pull request.",
+    reviewComments: [handoffChip("pull-request-context:9")],
+  });
+  const panel = renderPanel(undefined, {
+    kind: "existing-thread",
+    projectRef: { environmentId: "environment-1" as EnvironmentId, projectId: detail.projectId },
+    draftId: target,
+  });
+  const explain = visitElements(
+    panel,
+    (element) =>
+      element.type === MenuItem && textContent(element.props.children).includes("Explain"),
+  );
+  await (explain!.props.onClick as () => Promise<void>)();
+  const draft = useComposerDraftStore.getState().getComposerDraft(target);
+  expect(draft?.reviewComments.map((comment) => comment.id)).toEqual([
+    "review-comment:own",
+    "issue-context:42",
+  ]);
+  expect(draft?.prompt).toContain("Keep my draft");
+  expect(draft?.prompt).toContain("Explain this issue.");
+  expect(draft?.prompt).not.toContain("Explain this pull request.");
 });

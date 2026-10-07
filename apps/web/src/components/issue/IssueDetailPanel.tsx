@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import type { DraftId } from "~/composerDraftStore";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
@@ -48,7 +48,7 @@ import { PULL_REQUEST_STATE_PRESENTATION } from "../pullRequest/pullRequestIcons
 import { PullRequestMarkdownContext } from "../pullRequest/PullRequestMarkdown";
 import { PullRequestActorLabel, PullRequestMetaLine } from "../pullRequest/pullRequestPresentation";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
-import { handoffPrompt, readableFailure } from "../sourceControl/handoff";
+import { readableFailure, writeHandoffToComposer } from "../sourceControl/handoff";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -72,7 +72,6 @@ import {
   buildLinkPullRequestsHandoff,
   buildSolveIssueHandoff,
   sameProjectIssueNumber,
-  issueHandoffReviewComments,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
   mergeIssueComments,
   shouldRefreshIssueActivity,
@@ -143,17 +142,6 @@ export type IssueHandoffTarget =
       /** The composer to write into: a live thread, or the draft one that has yet to become one. */
       readonly draftId: ScopedThreadRef | DraftId;
     };
-
-/**
- * What the last hand-off wrote into each composer, kept outside React because the panel that wrote
- * it is closed by the time the next one opens. It is how a prompt the reader has since edited is
- * told apart from the one they were handed: only the sentence still exactly as written may be
- * replaced.
- */
-const lastHandoffPromptByDraft = new Map<string, string>();
-
-const draftKey = (target: ScopedThreadRef | DraftId): string =>
-  typeof target === "string" ? target : scopedThreadKey(target);
 
 export function IssueDetailPanel({
   environmentId,
@@ -469,34 +457,14 @@ export function IssueDetailPanel({
       ? handoffTarget.draftId
       : null;
 
-  const writeHandoff = (target: ScopedThreadRef | DraftId, task: IssueHandoff) => {
-    const store = useComposerDraftStore.getState();
-    // The latest press is the ask: it takes over what an earlier hand-off left, prompt and chips
-    // both, rather than stacking a second one under the first. What the reader typed themselves
-    // survives — the composer they are handed is not always a fresh one, and a prompt they have
-    // since edited is theirs rather than the hand-off's.
-    const draft = store.getComposerDraft(target);
-    const key = draftKey(target);
-    const prompt = handoffPrompt(
-      { prompt: draft?.prompt ?? "", lastHandoffPrompt: lastHandoffPromptByDraft.get(key) },
-      task.prompt,
-    );
-    // Remember the hand-off's own contribution, not the merged prompt: only that sentence is
-    // this panel's to take back next time, and the reader's text around it is not.
-    lastHandoffPromptByDraft.set(key, task.prompt);
-    store.setPrompt(target, prompt);
-    store.setReviewComments(
-      target,
-      issueHandoffReviewComments(draft?.reviewComments ?? [], task.reviewComments),
-    );
-  };
-
   const startHandoff = async (
     kind: string,
     build: (source: IssueHandoffSource) => IssueHandoff,
   ) => {
     if (!detail || handoff !== null || activityPending) return;
     const task = build({
+      provider: detail.provider,
+      closesViaPullRequest: detail.capabilities.closesViaPullRequest,
       number: detail.number,
       repository: detail.repository,
       title: detail.title,
@@ -513,7 +481,7 @@ export function IssueDetailPanel({
         ? "The task is in the composer — read it over, then send."
         : "The issue is in the composer — type your message, then send.";
     if (kind !== "solve" && inPlaceDraft !== null) {
-      writeHandoff(inPlaceDraft, task);
+      writeHandoffToComposer(inPlaceDraft, task);
       toastManager.add({ type: "success", title: "Added to this thread", description });
       return;
     }
@@ -534,7 +502,7 @@ export function IssueDetailPanel({
       });
       return;
     }
-    writeHandoff(opened.draftId, task);
+    writeHandoffToComposer(opened.draftId, task);
     toastManager.add({ type: "success", title: "Opened in a thread", description });
   };
 
