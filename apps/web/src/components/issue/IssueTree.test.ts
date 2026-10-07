@@ -95,6 +95,31 @@ describe("merged issue trees", () => {
     ]);
   });
 
+  it("joins linked issues whose bounded reads overlap on one chain", () => {
+    const b = { ...issue(2, [issue(3, [issue(4, [issue(5)])])]), ancestors: [issue(1)] };
+    const e = {
+      ...issue(5),
+      ancestors: [issue(2), issue(3), issue(4)],
+      linkedPullRequests: sibling.linkedPullRequests,
+    };
+    const sources = [
+      { provider, linkKey: "b", detail: b },
+      { provider, linkKey: "e", detail: e },
+    ];
+    for (const order of [sources, sources.toReversed()]) {
+      const [tree, ...rest] = mergeIssueTrees(order);
+      expect(rest).toEqual([]);
+      expect(tree!.rows.map((row) => [row.issue.number, row.depth, row.linkKey])).toEqual([
+        [1, 0, null],
+        [2, 1, "b"],
+        [3, 2, null],
+        [4, 3, null],
+        [5, 4, "e"],
+      ]);
+      expect(tree!.rows.at(-1)!.issue.linkedPullRequests?.[0]?.number).toBe(751);
+    }
+  });
+
   const github = (repo: string, number: number, host = "github.com"): IssueRelativeNode => ({
     repository: repo,
     number,

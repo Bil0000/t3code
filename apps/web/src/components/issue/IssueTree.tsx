@@ -119,8 +119,23 @@ export function mergeIssueTrees(
       graft(place(node.children, sub, provider), sub.subIssues, provider);
     }
   };
+  const parents = new Map<string, IssueRelative>();
+  for (const { provider, detail } of sources) {
+    const path: Array<IssueRelative> = [];
+    for (const row of flattenIssueTree(detail)) {
+      path[row.depth] = row.issue;
+      if (row.depth > 0) parents.set(issueIdentity(row.issue, provider), path[row.depth - 1]!);
+    }
+  }
   for (const { provider, linkKey, detail } of sources) {
     const chain = [...(detail.ancestors ?? []), detail];
+    const seen = new Set(chain.map((issue) => issueIdentity(issue, provider)));
+    let parent = parents.get(issueIdentity(chain[0]!, provider));
+    while (parent !== undefined && !seen.has(issueIdentity(parent, provider))) {
+      seen.add(issueIdentity(parent, provider));
+      chain.unshift(parent);
+      parent = parents.get(issueIdentity(parent, provider));
+    }
     const top = chain[0]!;
     const rootKey = issueIdentity(top, provider);
     let node = roots.get(rootKey);
