@@ -4,8 +4,7 @@ import type { IssueTrackerProjectBinding } from "@t3tools/contracts";
 import { ChevronRightIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 
-import { usePrimarySettings } from "../../hooks/useSettings";
-import { usePrimaryEnvironment } from "../../state/environments";
+import type { EnvironmentPresentation } from "../../state/environments";
 import { useProjects } from "../../state/entities";
 import { issueTrackingEnvironment } from "../../state/issueTracking";
 import { issueEnvironment } from "../../state/issues";
@@ -27,6 +26,8 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { useSettingsScope } from "./SettingsScopeContext";
+import { useScopedSettings } from "./useScopedSettings";
 
 const UNMAPPED = "__unmapped__";
 
@@ -35,12 +36,20 @@ const EMPTY_TRACKER_SETTINGS: {
 } = { projectBindings: {} };
 
 export function LinearIntegrationSettings() {
-  const environment = usePrimaryEnvironment();
+  const { environment } = useSettingsScope();
+  return <LinearIntegrationSection key={environment?.environmentId} environment={environment} />;
+}
+
+function LinearIntegrationSection({
+  environment,
+}: {
+  environment: EnvironmentPresentation | null;
+}) {
   const supported = environment?.serverConfig?.environment.capabilities.issues === true;
   const environmentId = supported ? environment.environmentId : null;
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const linearSettings =
-    usePrimarySettings((settings) => settings.issueTracking.connections.linear) ??
+    useScopedSettings((settings) => settings.issueTracking.connections.linear) ??
     EMPTY_TRACKER_SETTINGS;
   const projectBindings = linearSettings.projectBindings;
   const connection = useEnvironmentQuery(

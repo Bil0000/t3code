@@ -42,7 +42,15 @@ const connectionState = vi.hoisted(() => ({
   },
   error: "Linear status failed" as string | null,
 }));
-const primary = vi.hoisted(() => vi.fn());
+const scopeState = vi.hoisted(() => ({
+  environment: null as {
+    environmentId: string;
+    serverConfig: { environment: { capabilities: { issues: boolean } } };
+  } | null,
+}));
+const primaryState = vi.hoisted(() => ({
+  environment: null as { environmentId: string } | null,
+}));
 const permission = vi.hoisted(() => ({ allowed: true }));
 const commands = vi.hoisted(() => ({
   binding: vi.fn(),
@@ -68,8 +76,17 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => permission.allowed }));
+vi.mock("../../state/environments", () => ({
+  usePrimaryEnvironment: () => primaryState.environment,
+}));
 vi.mock("../../hooks/useSettings", () => ({
-  usePrimarySettings: (select: (settings: unknown) => unknown) =>
+  usePrimarySettings: () => ({ projectBindings: {} }),
+}));
+vi.mock("./SettingsScopeContext", () => ({
+  useSettingsScope: () => ({ environment: scopeState.environment }),
+}));
+vi.mock("./useScopedSettings", () => ({
+  useScopedSettings: (select: (settings: unknown) => unknown) =>
     select({
       issueTracking: {
         connections: {
@@ -81,17 +98,13 @@ vi.mock("../../hooks/useSettings", () => ({
     }),
 }));
 
-vi.mock("../../state/environments", () => ({
-  usePrimaryEnvironment: primary,
-}));
-
 vi.mock("../../state/entities", () => ({ useProjects: () => projectsState.projects }));
 vi.mock("../../state/issueTracking", () => ({
   issueTrackingEnvironment: {
     status: vi.fn(),
-    connect: { key: "connect", permissionAtom: () => null },
-    disconnect: { key: "disconnect", permissionAtom: () => null },
-    bind: { key: "binding", permissionAtom: () => null },
+    connect: { key: "connect", permissionAtom: vi.fn() },
+    disconnect: { key: "disconnect", permissionAtom: vi.fn() },
+    bind: { key: "binding", permissionAtom: vi.fn() },
   },
 }));
 vi.mock("../../state/query", async (importOriginal) => {
@@ -116,7 +129,7 @@ import { AlertDialog, AlertDialogDescription, AlertDialogPopup } from "../ui/ale
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { LinearConnectionDialog } from "../issue/LinearConnectionDialog";
-import { LinearIntegrationSettings } from "./LinearIntegrationSettings";
+import { LinearIntegrationSettings as LinearIntegrationScope } from "./LinearIntegrationSettings";
 
 const ada = {
   credentialId: "user-1",
@@ -133,6 +146,16 @@ const grace = {
   projects: [{ id: "team-2", key: "OPS", name: "Operations" }],
 };
 
+let mountedKey: unknown;
+function LinearIntegrationSettings() {
+  const section = LinearIntegrationScope();
+  if (section.key !== mountedKey) hooks.reset();
+  mountedKey = section.key;
+  return (section.type as (props: unknown) => ReturnType<typeof LinearIntegrationScope>)(
+    section.props,
+  );
+}
+
 function textContent(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(textContent).join("");
@@ -143,11 +166,13 @@ function textContent(node: ReactNode): string {
 describe("Linear integration settings", () => {
   beforeEach(() => {
     hooks.reset();
+    mountedKey = undefined;
     vi.clearAllMocks();
-    primary.mockReturnValue({
+    scopeState.environment = {
       environmentId: "primary",
       serverConfig: { environment: { capabilities: { issues: true } } },
-    });
+    };
+    primaryState.environment = { environmentId: "primary" };
     connectionState.data = {
       status: "authenticated",
       hasStoredToken: true,
@@ -634,13 +659,132 @@ describe("Linear integration settings", () => {
   });
 
   it("does not load accounts without a supported environment", () => {
-    primary.mockReturnValue(null);
+    scopeState.environment = null;
     hooks.beginRender();
     const settings = LinearIntegrationSettings();
     expect(visitElements(settings, (element) => element.type === Button)?.props.disabled).toBe(
       true,
     );
     expect(issueTrackingEnvironment.status).not.toHaveBeenCalled();
+    expect(
+      visitElements(settings, (element) => element.type === LinearConnectionDialog),
+    ).toBeNull();
+  });
+  it.each([
+    ["a different primary environment", { environmentId: "primary" }],
+    ["no primary environment", null],
+  ])("configures the selected environment with %s", async (_, primaryEnvironment) => {
+    primaryState.environment = primaryEnvironment;
+    scopeState.environment = {
+      environmentId: "remote",
+      serverConfig: { environment: { capabilities: { issues: true } } },
+    };
+    connectionState.error = null;
+    projectsState.projects = [
+      { id: "project_primary", title: "Primary project", environmentId: "primary" },
+      { id: "project_remote", title: "Remote project", environmentId: "remote" },
+    ];
+    commands.binding.mockResolvedValue(AsyncResult.success(undefined));
+    commands.disconnect.mockResolvedValue(AsyncResult.success(undefined));
+    const button = (settings: ReturnType<typeof LinearIntegrationSettings>, label: string) =>
+      visitElements(
+        settings,
+        (element) =>
+          element.type === Button &&
+          (element.props["aria-label"] === label || element.props.children === label),
+      )!;
+
+    hooks.beginRender();
+    let settings = LinearIntegrationSettings();
+    expect(issueTrackingEnvironment.status).toHaveBeenCalledWith({
+      environmentId: "remote",
+      input: { provider: "linear" },
+    });
+    for (const command of ["connect", "disconnect", "bind"] as const) {
+      expect(issueTrackingEnvironment[command].permissionAtom).toHaveBeenCalledWith("remote");
+    }
+    expect(textContent(settings)).toContain("Remote project");
+    expect(textContent(settings)).not.toContain("Primary project");
+
+    const addAccount = visitElements(
+      settings,
+      (element) => element.type === Button && textContent(element).includes("Add account"),
+    )!;
+    expect(addAccount.props.disabled).toBe(false);
+    (addAccount.props.onClick as () => void)();
+    hooks.beginRender();
+    settings = LinearIntegrationSettings();
+    expect(
+      visitElements(settings, (element) => element.type === LinearConnectionDialog)?.props
+        .environmentId,
+    ).toBe("remote");
+
+    const operations = visitElements(
+      settings,
+      (element) => element.type === SelectItem && textContent(element).includes("Operations (OPS)"),
+    )!;
+    (
+      visitElements(settings, (element) => element.type === Select)!.props.onValueChange as (
+        value: string,
+      ) => void
+    )(operations.props.value as string);
+    await commands.binding.mock.results[0]?.value;
+    expect(commands.binding).toHaveBeenCalledWith({
+      environmentId: "remote",
+      input: {
+        provider: "linear",
+        projectId: "project_remote",
+        binding: { credentialId: "user-2", repository: "OPS" },
+      },
+    });
+
+    hooks.beginRender();
+    (
+      button(LinearIntegrationSettings(), "Disconnect Ada from Linear").props.onClick as () => void
+    )();
+    hooks.beginRender();
+    await (
+      button(LinearIntegrationSettings(), "Disconnect account").props.onClick as () => Promise<void>
+    )();
+    expect(commands.disconnect).toHaveBeenCalledWith({
+      environmentId: "remote",
+      input: { provider: "linear", credentialId: "user-1" },
+    });
+    expect(commands.invalidate).toHaveBeenCalledWith({ environmentId: "remote", input: {} });
+  });
+
+  it("drops an open account action when the selected environment changes", () => {
+    connectionState.error = null;
+    hooks.beginRender();
+    let settings = LinearIntegrationSettings();
+    (
+      visitElements(
+        settings,
+        (element) =>
+          element.type === Button && element.props["aria-label"] === "Disconnect Ada from Linear",
+      )!.props.onClick as () => void
+    )();
+    (
+      visitElements(
+        settings,
+        (element) => element.type === Button && textContent(element).includes("Add account"),
+      )!.props.onClick as () => void
+    )();
+    hooks.beginRender();
+    settings = LinearIntegrationSettings();
+    expect(visitElements(settings, (element) => element.type === AlertDialog)?.props.open).toBe(
+      true,
+    );
+
+    scopeState.environment = {
+      environmentId: "remote",
+      serverConfig: { environment: { capabilities: { issues: true } } },
+    };
+    hooks.beginRender();
+    settings = LinearIntegrationSettings();
+    expect(visitElements(settings, (element) => element.type === AlertDialog)?.props.open).toBe(
+      false,
+    );
     expect(
       visitElements(settings, (element) => element.type === LinearConnectionDialog),
     ).toBeNull();
