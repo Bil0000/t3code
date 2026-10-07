@@ -654,16 +654,84 @@ function scheduledTask(id: string, runtimeMode: "auto" | "full-access"): never {
   } as never;
 }
 
-it.effect("a caller cannot interrupt a thread that runs above its own modes", () =>
-  Effect.gen(function* () {
+it.effect.each(["t3_thread_interrupt", "t3_workflow_stop"])(
+  "a caller cannot use %s on a thread that runs above its own modes",
+  (toolName) =>
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: toolName,
+          arguments: {
+            threadId: "full-access-thread",
+            ...(toolName === "t3_workflow_stop" ? { subagentId: "workflow-coordinator" } : {}),
+          },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(declaredFailure(result)).toMatchObject({ code: "runtime_mode_escalation_denied" });
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.layerOrchestratorToolkit.pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: () =>
+                Effect.succeed({
+                  projectId: "project-a",
+                  deletedAt: null,
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                } as never),
+              getProjectThreadRecords: () =>
+                Effect.succeed({
+                  thread: {
+                    id: ThreadId.make("full-access-thread"),
+                    projectId: "project-a",
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    deletedAt: null,
+                  },
+                  runs: [],
+                } as never),
+              stopWorkflow: () => Effect.die("workflow stop must not dispatch above the ceiling"),
+              interruptThread: () => Effect.die("interrupt must not dispatch above the ceiling"),
+            }),
+          ),
+          Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+          Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
+          Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+          Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+          Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+        ),
+      ),
+    ),
+);
+
+it.effect("workflow stop needs orchestration capability even when the target is allowed", () => {
+  const stopped: Array<{ readonly threadId: ThreadId; readonly subagentId: string }> = [];
+  return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    const result = yield* server
-      .callTool({ name: "t3_thread_interrupt", arguments: { threadId: "full-access-thread" } })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
-        Effect.provideService(McpSchema.McpServerClient, client),
-      );
-    expect(declaredFailure(result)).toMatchObject({ code: "runtime_mode_escalation_denied" });
+    const call = (scope: McpInvocationContext.McpInvocationScope) =>
+      server
+        .callTool({
+          name: "t3_workflow_stop",
+          arguments: { threadId: "workflow-parent", subagentId: "workflow-coordinator" },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const scope = clientScope("full-access");
+    const denied = yield* call({ ...scope, capabilities: new Set(["worktree"]) });
+    expect(declaredFailure(denied)).toMatchObject({ code: "capability_denied" });
+    expect(stopped).toEqual([]);
+    const allowed = yield* call(scope);
+    expect(allowed.isError).toBe(false);
+    expect(stopped).toEqual([{ threadId: "workflow-parent", subagentId: "workflow-coordinator" }]);
   }).pipe(
     Effect.provide(
       McpHttpServer.layerOrchestratorToolkit.pipe(
@@ -671,20 +739,11 @@ it.effect("a caller cannot interrupt a thread that runs above its own modes", ()
         Layer.provide(NodeCrypto.layer),
         Layer.provide(
           Layer.mock(ThreadManagement.ThreadManagementService)({
-            getThreadShell: () =>
-              Effect.succeed({ projectId: "project-a", deletedAt: null } as never),
-            getProjectThreadRecords: () =>
-              Effect.succeed({
-                thread: {
-                  id: ThreadId.make("full-access-thread"),
-                  projectId: "project-a",
-                  runtimeMode: "full-access",
-                  interactionMode: "default",
-                  deletedAt: null,
-                },
-                runs: [],
-              } as never),
-            interruptThread: () => Effect.die("interrupt must not dispatch above the ceiling"),
+            getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+            stopWorkflow: (input) =>
+              Effect.sync(() => {
+                stopped.push(input);
+              }),
           }),
         ),
         Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
@@ -694,5 +753,5 @@ it.effect("a caller cannot interrupt a thread that runs above its own modes", ()
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
       ),
     ),
-  ),
-);
+  );
+});

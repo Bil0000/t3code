@@ -57,6 +57,7 @@ import { threadShellFromProjection } from "../orchestration-v2/ProjectionStore.t
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import {
   type ProviderAdapterV2Event,
   ProviderAdapterProtocolError,
@@ -612,7 +613,10 @@ describe("orchestrator MCP toolkit", () => {
           ).pipe(Layer.provide(layerContinuationProbe));
           const layerOrchestration = Layer.merge(
             layerOrchestrator,
-            ThreadManagementService.layer.pipe(Layer.provide(layerOrchestrator)),
+            ThreadManagementService.layer.pipe(
+              Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+              Layer.provide(layerOrchestrator),
+            ),
           );
           const layerProviderRegistry = ProviderRegistryMock.layer([
             makeProviderSnapshot({
@@ -3793,7 +3797,10 @@ describe("orchestrator MCP toolkit", () => {
         );
         const layerOrchestration = Layer.merge(
           layerOrchestrator,
-          ThreadManagementService.layer.pipe(Layer.provide(layerOrchestrator)),
+          ThreadManagementService.layer.pipe(
+            Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+            Layer.provide(layerOrchestrator),
+          ),
         );
         const layerProviderRegistry = ProviderRegistryMock.layer([
           makeProviderSnapshot({

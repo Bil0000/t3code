@@ -172,7 +172,7 @@ it.effect("routes shared-runtime events only to their owning root run", () =>
   }),
 );
 
-it("leaves a child thread created after the root turn ended to the run that is live then", () => {
+it("keeps late descendants with their owned child while leaving new root children to the live run", () => {
   const threadId = ThreadId.make("thread:late-child");
   const rootProviderTurnId = ProviderTurnId.make("provider-turn:late-child");
   const identity: RunExecutionService.ProviderEventRouteIdentity = {
@@ -181,14 +181,17 @@ it("leaves a child thread created after the root turn ended to the run that is l
     attemptId: RunAttemptId.make("attempt:late-child"),
     providerThreadId: ProviderThreadId.make("provider-thread:late-child"),
   };
-  const childCreated = (childThreadId: ThreadId): ProviderAdapterV2Event =>
+  const childCreated = (
+    childThreadId: ThreadId,
+    parentThreadId = threadId,
+  ): ProviderAdapterV2Event =>
     ({
       type: "app_thread.created",
       driver,
       appThread: {
         id: childThreadId,
         lineage: {
-          parentThreadId: threadId,
+          parentThreadId,
           relationshipToParent: "subagent",
           rootThreadId: threadId,
         },
@@ -231,6 +234,21 @@ it("leaves a child thread created after the root turn ended to the run that is l
   );
   assert.isFalse(lateAccepted);
   assert.isFalse(afterLate.ownedThreadIds.has(lateChild));
+  const memberThreadId = ThreadId.make("thread:late-child:workflow-member");
+  const [memberAccepted, afterMember] = RunExecutionService.routeProviderEvent(
+    childCreated(memberThreadId, earlyChild),
+    identity,
+    ended,
+  );
+  assert.isTrue(memberAccepted);
+  assert.isTrue(afterMember.ownedThreadIds.has(memberThreadId));
+  assert.isFalse(
+    RunExecutionService.routeProviderEvent(
+      childCreated(memberThreadId, ThreadId.make("thread:unrelated-coordinator")),
+      identity,
+      ended,
+    )[0],
+  );
 });
 
 it("does not route a superseded attempt through a reused provider thread", () => {
@@ -1231,10 +1249,11 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
     }),
 );
 
-it.effect("keeps ingesting owned child events after the root turn terminalizes", () =>
+it.effect("ingests new member threads of an owned child after the root turn terminalizes", () =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("thread:run-execution-late-child");
     const childThreadId = ThreadId.make("thread:run-execution-late-child:child");
+    const memberThreadId = ThreadId.make("thread:run-execution-late-child:member");
     const runId = RunId.make("run:run-execution-late-child");
     const attemptId = RunAttemptId.make("attempt:run-execution-late-child");
     const providerInstanceId = ProviderInstanceId.make("codex");
@@ -1275,8 +1294,14 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
             ingestNormalized: (input) =>
               Effect.gen(function* () {
                 if (
+                  input.event.type === "app_thread.created" &&
+                  input.event.appThread.id === memberThreadId
+                ) {
+                  yield* Ref.update(order, (current) => [...current, "member-thread"]);
+                }
+                if (
                   input.event.type === "message.updated" &&
-                  input.event.message.threadId === childThreadId
+                  input.event.message.threadId === memberThreadId
                 ) {
                   yield* Ref.update(order, (current) => [...current, "child-message"]);
                   yield* Deferred.succeed(childMessageIngested, undefined).pipe(Effect.ignore);
@@ -1342,11 +1367,23 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
         threadDisposition: "reusable",
       },
       {
+        type: "app_thread.created",
+        driver,
+        appThread: {
+          id: memberThreadId,
+          lineage: {
+            parentThreadId: childThreadId,
+            relationshipToParent: "subagent",
+            rootThreadId: threadId,
+          },
+        },
+      } as ProviderAdapterV2Event,
+      {
         type: "message.updated",
         driver,
         message: {
           id: MessageId.make("message:run-execution-late-child:child"),
-          threadId: childThreadId,
+          threadId: memberThreadId,
           runId: null,
           nodeId: childNodeId,
           role: "assistant",
@@ -1434,7 +1471,7 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
       Effect.timeoutOption("2 seconds"),
     );
     assert.isTrue(Option.isSome(observed), "child message was not ingested after root terminal");
-    assert.deepEqual(yield* Ref.get(order), ["root-finalized", "child-message"]);
+    assert.deepEqual(yield* Ref.get(order), ["root-finalized", "member-thread", "child-message"]);
   }),
 );
 
@@ -3555,7 +3592,6 @@ function captureRootRunTermination(input: {
               }),
             writeWithEffects: (payload) =>
               Effect.gen(function* () {
-                yield* Ref.update(submittedEffects, (current) => [...current, ...payload.effects]);
                 yield* Ref.update(committedEffects, (current) => [...current, ...payload.effects]);
                 yield* captureFinalEvents(payload.events);
                 return [];
