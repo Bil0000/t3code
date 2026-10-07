@@ -495,6 +495,14 @@ export type ClaudeAgentSdkProtocolLogEvent =
       readonly direction: "outgoing";
       readonly stage: "decoded";
       readonly payload: {
+        readonly type: "query.stop_task";
+        readonly taskId: string;
+      };
+    }
+  | {
+      readonly direction: "outgoing";
+      readonly stage: "decoded";
+      readonly payload: {
         readonly type: "query.interrupt";
       };
     }
@@ -715,7 +723,15 @@ export const layerQueryRunner: Layer.Layer<
             Effect.tryPromise({
               try: () => queryRuntime.stopTask(taskId),
               catch: (cause) => queryRunnerError(cause, "stopTask"),
-            }),
+            }).pipe(
+              Effect.tap(() =>
+                logProtocolEvent({
+                  direction: "outgoing",
+                  stage: "decoded",
+                  payload: { type: "query.stop_task", taskId },
+                }),
+              ),
+            ),
           interrupt: Effect.tryPromise({
             try: () => queryRuntime.interrupt(),
             catch: (cause) => queryRunnerError(cause, "interrupt"),
