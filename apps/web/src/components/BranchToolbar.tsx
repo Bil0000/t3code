@@ -198,7 +198,10 @@ const RunContextSelector = memo(function RunContextSelector({
         : resolveCurrentWorkspaceLabel(activeWorktreePath);
   const isPanel = displayMode === "panel";
   const isLocked = envLocked || (envModeLocked && (!isPanel || !showEnvironmentPicker));
-  const workspacePath = forceNewWorktree ? null : (activeWorktreePath ?? workspaceRoot);
+  const workspacePath =
+    forceNewWorktree || (effectiveEnvMode === "worktree" && !activeWorktreePath)
+      ? null
+      : (activeWorktreePath ?? workspaceRoot);
   const handleContextMenu = (event: ReactMouseEvent) => {
     if (isPanel && workspacePath) {
       showWorkspaceContextMenu(event, workspacePath);
