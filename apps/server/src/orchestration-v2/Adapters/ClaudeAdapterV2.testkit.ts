@@ -1582,13 +1582,16 @@ async function recordClaudeStreamingQuery(input: {
     return "wake";
   };
   try {
-    const crypto = await Effect.runPromise(Crypto.Crypto.pipe(Effect.provide(NodeServices.layer)));
     for (const [index, prompt] of input.prompts.entries()) {
-      // Like the adapter, give each prompt a uuid Claude echoes on its turn.
+      // Like the adapter, give each prompt a fresh uuid Claude echoes on its turn.
       const message = ClaudeAdapterV2.makeClaudeUserMessage({
         text: prompt,
         uuid: await Effect.runPromise(
-          ClaudeAdapterV2.claudePromptUuid(crypto, `${input.sessionId}:prompt:${index + 1}`),
+          Crypto.Crypto.pipe(
+            Effect.flatMap((crypto) => crypto.randomUUIDv4),
+            Effect.filterOrFail(ClaudeAdapterV2.isClaudePromptUuid),
+            Effect.provide(NodeServices.layer),
+          ),
         ),
       });
       input.entries.push({
