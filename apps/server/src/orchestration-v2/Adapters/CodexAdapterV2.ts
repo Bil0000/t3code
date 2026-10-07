@@ -2680,7 +2680,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           const model = value?.trim();
           if (!model) return;
           const previous = subagentSelections.get(nativeThreadId);
-          const previousOptions = previous?.model === model ? previous.options : undefined;
+          const previousOptions = previous?.options;
           const options =
             effort === undefined && tier === undefined
               ? previousOptions

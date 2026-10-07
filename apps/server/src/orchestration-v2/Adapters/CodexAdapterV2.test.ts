@@ -7164,12 +7164,32 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     },
             },
           };
+          const initialSettings: CodexReplay.CodexAppServerReplayEntry = {
+            type: "emit_inbound",
+            frame: {
+              method: "thread/settings/updated",
+              params: {
+                threadId: RESUME_CHILD_THREAD,
+                threadSettings: {
+                  model: "gpt-6-astra",
+                  effort: "low",
+                  serviceTier: "ultrafast",
+                  modelProvider: "openai",
+                  cwd: "/workspace",
+                  approvalPolicy: "never",
+                  approvalsReviewer: "auto_review",
+                  collaborationMode: { mode: "default", settings: { model: "gpt-6-astra" } },
+                  sandboxPolicy: { type: "dangerFullAccess" },
+                },
+              },
+            },
+          };
           const harness = yield* makeCodexReplayHarness(
             {
               ...resumeSubagentTranscript,
               entries: resumeSubagentTranscript.entries.flatMap((entry) =>
                 entry.type === "emit_inbound" && entry.label === "turn/completed/root"
-                  ? [entry, notification]
+                  ? [entry, initialSettings, notification]
                   : [entry],
               ),
             },
@@ -7198,12 +7218,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           yield* Deferred.succeed(releaseMetadata, undefined);
           yield* TestClock.adjust("30 seconds");
           assert.equal(harness.subagentUpdates().at(-1)?.subagent.model, model);
-          if (method === "thread/settings/updated") {
-            assert.deepEqual(harness.subagentUpdates().at(-1)?.subagent.modelSelection?.options, [
-              { id: "reasoningEffort", value: "low" },
-              { id: "serviceTier", value: "ultrafast" },
-            ]);
-          }
+          assert.deepEqual(harness.subagentUpdates().at(-1)?.subagent.modelSelection?.options, [
+            { id: "reasoningEffort", value: "low" },
+            { id: "serviceTier", value: "ultrafast" },
+          ]);
         }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
       ),
   );
