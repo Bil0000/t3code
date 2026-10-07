@@ -710,3 +710,48 @@ it.effect.each(["t3_thread_interrupt", "t3_workflow_stop"])(
       ),
     ),
 );
+
+it.effect("workflow stop needs orchestration capability even when the target is allowed", () => {
+  const stopped: Array<{ readonly threadId: ThreadId; readonly subagentId: string }> = [];
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const call = (scope: McpInvocationContext.McpInvocationScope) =>
+      server
+        .callTool({
+          name: "t3_workflow_stop",
+          arguments: { threadId: "workflow-parent", subagentId: "workflow-coordinator" },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const scope = clientScope("full-access");
+    const denied = yield* call({ ...scope, capabilities: new Set(["worktree"]) });
+    expect(declaredFailure(denied)).toMatchObject({ code: "capability_denied" });
+    expect(stopped).toEqual([]);
+    const allowed = yield* call(scope);
+    expect(allowed.isError).toBe(false);
+    expect(stopped).toEqual([{ threadId: "workflow-parent", subagentId: "workflow-coordinator" }]);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerOrchestratorToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+            stopWorkflow: (input) =>
+              Effect.sync(() => {
+                stopped.push(input);
+              }),
+          }),
+        ),
+        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+        Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
+        Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+        Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+        Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+      ),
+    ),
+  );
+});

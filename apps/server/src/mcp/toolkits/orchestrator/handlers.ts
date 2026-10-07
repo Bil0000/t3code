@@ -2,7 +2,7 @@ import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
 
-import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import { readCaller } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
@@ -41,7 +41,7 @@ const handlers = {
     (input) => [input.threadId],
     (input) =>
       Effect.gen(function* () {
-        const threads = yield* ThreadManagementService.ThreadManagementService;
+        const { threads } = yield* readCaller();
         return yield* threads.stopWorkflow(input).pipe(
           Effect.as({}),
           Effect.mapError(
