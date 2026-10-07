@@ -2512,6 +2512,53 @@ it.effect("reads a host's repositories in one search, and files the rows back un
   }),
 );
 
+it.effect(
+  "carries on grouped listings without counting another repository's seen issue number",
+  () =>
+    Effect.gen(function* () {
+      const boundary = "2026-07-02T00:00:00Z";
+      const firstRows = [
+        batchedIssue(7, "acme/web", boundary),
+        batchedIssue(8, "acme/api", boundary),
+      ];
+      const service = yield* makeService({
+        projects: TWO_PROJECTS,
+        providers: [
+          fakeProvider("github", {
+            listIssues: () => Effect.die("must use grouped continuation"),
+            listIssuesAcross: ({ cursor, limit }) => {
+              const rows =
+                cursor === undefined
+                  ? firstRows
+                  : [
+                      ...firstRows,
+                      batchedIssue(7, "acme/api", boundary),
+                      batchedIssue(8, "acme/web", "2026-07-01T00:00:00Z"),
+                    ].filter(
+                      (row) =>
+                        row.updatedAt !== cursor.updatedBefore ||
+                        !cursor.seenAtByRepository?.[row.repository]?.includes(row.number),
+                    );
+              return Effect.succeed({
+                items: rows.slice(0, limit),
+                truncated: cursor === undefined,
+              });
+            },
+          }),
+        ],
+      });
+      const first = yield* service.list({ state: "open", limit: 2 });
+      const second = yield* service.list({ state: "open", limit: 2, cursors: first.nextCursors });
+      assert.deepStrictEqual(
+        second.entries.map(({ repository, number }) => [repository, number]),
+        [
+          ["acme/api", 7],
+          ["acme/web", 8],
+        ],
+      );
+    }),
+);
+
 it.effect("asks on its own for a repository the search said nothing at all about", () =>
   Effect.gen(function* () {
     const separately: string[] = [];

@@ -103,6 +103,7 @@ export interface ProviderListCursor {
    */
   readonly updatedBefore: string;
   readonly seenAt?: ReadonlyArray<number> | undefined;
+  readonly seenAtByRepository?: Readonly<Record<string, ReadonlyArray<number>>> | undefined;
 }
 
 /** One repository's row inside an answer that spans several of them. */

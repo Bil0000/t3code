@@ -785,6 +785,18 @@ const make = Effect.gen(function* () {
     // per-repository read does — up to GitHub's own ceiling on a search page, past which
     // `hasNextPage` is what says there is more.
     const rows = Math.min(input.limit + 1, ISSUE_SEARCH_MAX_ROWS);
+    const seenAt = new Map(
+      input.repositories.map((repository) => {
+        const key = repository.trim().toLowerCase();
+        return [
+          key,
+          new Set(
+            input.cursor?.seenAtByRepository?.[key] ??
+              (input.repositories.length === 1 ? input.cursor?.seenAt : undefined),
+          ),
+        ] as const;
+      }),
+    );
     const searchPage = (
       cursor: string | null,
       first: number,
@@ -802,28 +814,35 @@ const make = Effect.gen(function* () {
     return Effect.gen(function* () {
       const items: Array<GitHubIssueSearchItem> = [];
       let read = 0;
+      let skipped = 0;
       let cursor: string | null = null;
       let hasNextPage = false;
       let handed = 0;
       do {
-        // The pages after the first are only there to finish an instant, so they are asked for
-        // as wide as GitHub allows rather than as narrow as the page.
         const batch: GitHubSearchPage = yield* searchPage(
           cursor,
           read === 0 ? rows : Math.min(ISSUE_SEARCH_MAX_RESULTS - read, ISSUE_SEARCH_MAX_ROWS),
         );
-        items.push(...batch.items);
+        const unseen = batch.items.filter(
+          (item) =>
+            !supportsIssueCursor(input) ||
+            item.updatedAt !== input.cursor?.updatedBefore ||
+            !seenAt.get(item.repository.toLowerCase())?.has(item.number),
+        );
+        skipped += batch.items.length - unseen.length;
+        items.push(...unseen);
         read += batch.rawCount;
         hasNextPage = batch.hasNextPage;
         cursor = batch.nextCursor;
         handed = supportsIssueCursor(input)
           ? wholeInstantRows(items, input.limit)
           : Math.min(items.length, input.limit);
+        if (batch.rawCount === 0) break;
       } while (
         cursor !== null &&
         read < ISSUE_SEARCH_MAX_RESULTS &&
-        supportsIssueCursor(input) &&
-        instantRunsOn(items, input.limit, handed)
+        (items.length < input.limit ||
+          (supportsIssueCursor(input) && instantRunsOn(items, input.limit, handed)))
       );
       return {
         items: items.slice(0, handed),
@@ -831,12 +850,13 @@ const make = Effect.gen(function* () {
         // search may be paged, so this is every row the host will answer this query with:
         // offering a continuation would hand back a cursor answered with these same rows.
         ceilingReached:
-          read >= ISSUE_SEARCH_MAX_RESULTS && instantRunsOn(items, input.limit, handed),
+          read >= ISSUE_SEARCH_MAX_RESULTS &&
+          (items.length < input.limit || instantRunsOn(items, input.limit, handed)),
         truncated: supportsIssueCursor(input)
           ? instantRunsOn(items, input.limit, handed)
             ? false
-            : read > Math.max(input.limit, handed) || hasNextPage
-          : read > input.limit || hasNextPage,
+            : read - skipped > Math.max(input.limit, handed) || hasNextPage
+          : read - skipped > input.limit || hasNextPage,
       };
     });
   };

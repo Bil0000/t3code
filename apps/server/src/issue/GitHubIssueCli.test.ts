@@ -542,6 +542,70 @@ it.layer(layer)("GitHub issue API", (it) => {
     }),
   );
 
+  it.effect("fills search slices larger than GitHub's page limit in every sort", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      for (const sort of ["updated", "created", "best-match"] as const) {
+        graphql.mockReset();
+        graphql
+          .mockReturnValueOnce(
+            Effect.succeed(
+              search(
+                Array.from({ length: 100 }, (_, i) => row(i + 1)),
+                "next",
+              ),
+            ),
+          )
+          .mockReturnValueOnce(
+            Effect.succeed(
+              search([row(101, "2026-07-01T00:00:00Z"), row(102, "2026-06-30T00:00:00Z")]),
+            ),
+          );
+        const batch = yield* cli.searchIssues({
+          ...listing,
+          repositories: [target.repository],
+          limit: 101,
+          sort,
+        });
+        assert.equal(batch.items.length, 101);
+        assert.equal(batch.items.at(-1)?.number, 101);
+        assert.equal(batch.truncated, true);
+        assert.equal(graphql.mock.calls[1]?.[0].variables?.["cursor"], "next");
+        expect(graphql).toHaveBeenCalledTimes(2);
+      }
+    }),
+  );
+
+  it.effect("finishes a timestamp group when the requested slice exceeds one search page", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search(
+              Array.from({ length: 100 }, (_, i) => row(i + 1)),
+              "next",
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search([
+              ...Array.from({ length: 21 }, (_, i) => row(i + 101)),
+              row(122, "2026-07-01T00:00:00Z"),
+            ]),
+          ),
+        );
+      const batch = yield* cli.listIssues({ ...listing, limit: 101 });
+      assert.equal(batch.items.length, 121);
+      assert.equal(batch.items.at(-1)?.number, 121);
+      assert.equal(batch.truncated, true);
+      assert.equal(batch.continues, true);
+      assert.equal(graphql.mock.calls[1]?.[0].variables?.["cursor"], "next");
+      expect(graphql).toHaveBeenCalledTimes(2);
+    }),
+  );
+
   it.effect("does not offer a cursor when one timestamp fills the search ceiling", () =>
     Effect.gen(function* () {
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
@@ -558,6 +622,105 @@ it.layer(layer)("GitHub issue API", (it) => {
       assert.equal(batch.continues, false);
       assert.equal(batch.truncated, true);
       expect(graphql).toHaveBeenCalledTimes(10);
+    }),
+  );
+
+  it.effect("reads older issues after skipping a sent timestamp group larger than one page", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search(
+              Array.from({ length: 100 }, (_, i) => row(i + 1)),
+              "next",
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            search([
+              ...Array.from({ length: 21 }, (_, i) => row(i + 101)),
+              row(122, "2026-07-01T00:00:00Z"),
+            ]),
+          ),
+        );
+      const batch = yield* cli.listIssues({
+        ...listing,
+        limit: 101,
+        cursor: { updatedBefore: instant, seenAt: Array.from({ length: 121 }, (_, i) => i + 1) },
+      });
+      assert.deepEqual(
+        batch.items.map((item) => item.number),
+        [122],
+      );
+      assert.equal(batch.truncated, false);
+      expect(graphql).toHaveBeenCalledTimes(2);
+    }),
+  );
+
+  it.effect("skips sent timestamp rows by repository in a grouped search", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(
+        Effect.succeed(
+          search([
+            row(7),
+            {
+              ...row(7),
+              repository: { nameWithOwner: "acme/api" },
+              url: "https://enterprise.test/acme/api/issues/7",
+            },
+            row(8, "2026-07-01T00:00:00Z"),
+          ]),
+        ),
+      );
+      const batch = yield* cli.searchIssues({
+        ...listing,
+        repositories: ["acme/web", "acme/api"],
+        cursor: { updatedBefore: instant, seenAtByRepository: { "acme/web": [7] } },
+      });
+      assert.deepEqual(
+        batch.items.map((item) => [item.repository, item.number]),
+        [
+          ["acme/api", 7],
+          ["acme/web", 8],
+        ],
+      );
+      assert.equal(batch.truncated, false);
+    }),
+  );
+
+  it.effect("keeps sent-row continuation inside the search ceiling", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockImplementation(() =>
+        Effect.succeed(
+          search(
+            Array.from({ length: 100 }, (_, i) => row(i + 1)),
+            "next",
+          ),
+        ),
+      );
+      const batch = yield* cli.listIssues({
+        ...listing,
+        limit: 99,
+        cursor: { updatedBefore: instant, seenAt: Array.from({ length: 100 }, (_, i) => i + 1) },
+      });
+      assert.equal(batch.items.length, 0);
+      assert.equal(batch.continues, false);
+      assert.equal(batch.truncated, true);
+      expect(graphql).toHaveBeenCalledTimes(10);
+    }),
+  );
+
+  it.effect("stops an empty search page even when the host advertises a cursor", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+      graphql.mockReturnValue(Effect.succeed(search([], "next")));
+      const batch = yield* cli.searchIssues({ ...listing, repositories: [target.repository] });
+      assert.deepEqual(batch.items, []);
+      expect(graphql).toHaveBeenCalledTimes(1);
     }),
   );
 

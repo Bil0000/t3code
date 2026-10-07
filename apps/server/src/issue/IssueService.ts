@@ -994,7 +994,19 @@ export const make = Effect.gen(function* () {
             sort,
             order,
             query: input.query,
-            ...(cursor === undefined ? {} : { cursor: { updatedBefore: cursor.updatedBefore } }),
+            ...(cursor === undefined
+              ? {}
+              : {
+                  cursor: {
+                    updatedBefore: cursor.updatedBefore,
+                    seenAtByRepository: Object.fromEntries(
+                      chunk.map((project) => [
+                        project.repository.toLowerCase(),
+                        cursorOf(project)?.seenAt ?? [],
+                      ]),
+                    ),
+                  },
+                }),
           }),
         ).pipe(
           Effect.flatMap((page) => {
