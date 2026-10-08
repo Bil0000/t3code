@@ -12,7 +12,7 @@ import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/h
 
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
-import * as GitHubGraphQlBudget from "./githubGraphQlBudget.ts";
+import * as GitHubQuota from "./githubQuota.ts";
 import * as SourceControlRateLimit from "./SourceControlRateLimit.ts";
 
 const DEFAULT_TIMEOUT = Duration.seconds(30);
@@ -219,16 +219,6 @@ function rateLimitAttributes(
   return attributes;
 }
 
-const decodeGraphQlCost = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      data: Schema.Struct({
-        rateLimit: Schema.Struct({ cost: Schema.Number, remaining: Schema.Number }),
-      }),
-    }),
-  ),
-);
-
 /** The pause GitHub asked for, from `retry-after` or the primary limit's reset. */
 function retryAtFrom(
   headers: Readonly<Record<string, string | undefined>>,
@@ -355,7 +345,7 @@ function classify(input: {
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const credentials = yield* GitHubCredentials.GitHubCredentials;
-  const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+  const quota = yield* GitHubQuota.GitHubQuota;
   const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const gate = yield* Semaphore.make(CONCURRENCY);
 
@@ -389,6 +379,7 @@ export const make = Effect.gen(function* () {
     readonly maxResponseBytes: number;
     readonly timeout?: Duration.Input | undefined;
     readonly allowReserve: boolean;
+    readonly minimumCost?: number;
     readonly acceptNotModified: boolean;
     /** Reads the body for GraphQL `errors`, which GitHub sends with HTTP 200. */
     readonly graphql?: boolean;
@@ -404,10 +395,20 @@ export const make = Effect.gen(function* () {
     });
     const { token, fingerprint } = yield* credential(host);
     const scope = yield* SourceControlRateLimit.CredentialScope;
+    // REST spends `core` and GraphQL its own quota, each with its own reserve. Every REST path
+    // this reads today is `core`; a `search/` read would need its own resource here. A refusal
+    // still pauses the whole host, the key PullRequestService records its own backoff under.
+    const resource = input.graphql === true ? "graphql" : "core";
     const key = { provider: "github" as const, host };
     const run = Effect.gen(function* () {
-      const lease = yield* limits
-        .check(key, input.allowReserve ? { allowPaused: true } : undefined)
+      const lease = yield* quota
+        .admit(host, resource, {
+          allowReserve: input.allowReserve,
+          ...(input.minimumCost === undefined ? {} : { minimumCost: input.minimumCost }),
+        })
+        .pipe(
+          Effect.andThen(limits.check(key, input.allowReserve ? { allowPaused: true } : undefined)),
+        )
         .pipe(
           Effect.tapError((paused) =>
             Effect.annotateCurrentSpan({
@@ -453,6 +454,7 @@ export const make = Effect.gen(function* () {
       );
       const headers = response.headers;
       const status = response.status;
+      yield* quota.observe(host, headers);
       yield* Effect.annotateCurrentSpan({
         "http.response.status_code": status,
         ...rateLimitAttributes(headers),
@@ -557,19 +559,19 @@ export const make = Effect.gen(function* () {
             : input.query,
       });
       return yield* Effect.gen(function* () {
-        const query = yield* budget.query(host, input.query, {
-          allowReserve,
-          ...(input.minimumCost === undefined ? {} : { minimumCost: input.minimumCost }),
-        });
         const response = yield* send({
           host,
           operation: input.operation,
           request: HttpClientRequest.post(gitHubApiUrls(host).graphql).pipe(
             HttpClientRequest.acceptJson,
-            HttpClientRequest.bodyJsonUnsafe({ query, variables: input.variables ?? {} }),
+            HttpClientRequest.bodyJsonUnsafe({
+              query: input.query,
+              variables: input.variables ?? {},
+            }),
           ),
           maxResponseBytes: input.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
           allowReserve,
+          ...(input.minimumCost === undefined ? {} : { minimumCost: input.minimumCost }),
           acceptNotModified: false,
           graphql: true,
         });
@@ -581,14 +583,6 @@ export const make = Effect.gen(function* () {
             status: response.status,
           });
         }
-        yield* budget.observe(host, response.body);
-        const cost = Option.getOrUndefined(decodeGraphQlCost(response.body));
-        if (cost !== undefined) {
-          yield* Effect.annotateCurrentSpan({
-            "github.graphql.cost": cost.data.rateLimit.cost,
-            "github.graphql.remaining": cost.data.rateLimit.remaining,
-          });
-        }
         return response.body;
       }).pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, scope));
     },
@@ -598,3 +592,13 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(GitHubApi, make);
+
+/**
+ * The transport with the credential, quota reserve and rate-limit pause it reads through. An
+ * application builds this once so every GitHub reader shares one view of each quota per host.
+ */
+export const layerWithDependencies = layer.pipe(
+  Layer.provideMerge(GitHubCredentials.layer),
+  Layer.provideMerge(GitHubQuota.layer),
+  Layer.provideMerge(SourceControlRateLimit.layer),
+);

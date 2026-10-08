@@ -54,8 +54,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
-import * as GitHubCli from "./sourceControl/GitHubCli.ts";
-import * as GitHubGraphQlBudget from "./sourceControl/githubGraphQlBudget.ts";
+import * as GitHubApi from "./sourceControl/GitHubApi.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
@@ -276,7 +275,7 @@ const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.p
     Layer.mergeAll(
       AzureDevOpsCli.layer,
       BitbucketApi.layer,
-      GitHubCli.layer,
+      GitHubApi.layerWithDependencies,
       GitLabCli.layer,
       ForgejoCli.layer,
     ),
@@ -485,7 +484,6 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
       Layer.provide(layerPullRequestService),
       Layer.provide(IssueServiceLive),
       Layer.provide(LinearApiLive),
-      Layer.provide(GitHubGraphQlBudget.layer),
       Layer.provide(RuntimeLayer.layerProjectService),
     ),
   ),
@@ -566,7 +564,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(layerPullRequestService),
     Layer.provide(IssueServiceLive),
     Layer.provide(LinearApiLive),
-    Layer.provide(GitHubGraphQlBudget.layer),
     Layer.provide(ProjectionStoreV2.layer),
   ),
   Layer.effectDiscard(
@@ -579,7 +576,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(layerPullRequestService),
     Layer.provide(IssueServiceLive),
     Layer.provide(LinearApiLive),
-    Layer.provide(GitHubGraphQlBudget.layer),
     Layer.provide(ProjectionStoreV2.layer),
   ),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
@@ -595,8 +591,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerServerSettings),
   // The asset route uses the registry's GitHub credential for private PR media.
   Layer.provideMerge(layerSourceControlProviderRegistry),
-  Layer.provideMerge(GitHubCli.layer),
-  Layer.provideMerge(GitHubGraphQlBudget.layer),
+  Layer.provideMerge(GitHubApi.layerWithDependencies),
   Layer.provideMerge(layerGit),
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
@@ -719,7 +714,6 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerPullRequestService),
   Layer.provide(IssueServiceLive),
   Layer.provide(LinearApiLive),
-  Layer.provide(GitHubGraphQlBudget.layer),
   // The stream route and the WebSocket RPCs share one browser.
   Layer.provide(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
   // Server browser tabs and HTML render previews install and run the same headless browser.
