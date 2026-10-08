@@ -230,6 +230,25 @@ export function linkIssuePreviewMatchesReference(
   );
 }
 
+export function linearProjectForTeam(input: {
+  readonly team: string;
+  readonly projects: ReadonlyArray<{ readonly id: ProjectId }>;
+  readonly currentProjectId: string | null;
+  readonly bindings:
+    | Readonly<Record<ProjectId, { readonly repository: string } | null>>
+    | undefined;
+}): ProjectId | undefined {
+  const bound = input.projects.filter(
+    (project) =>
+      input.bindings?.[project.id]?.repository.toLowerCase() === input.team.toLowerCase(),
+  );
+  return (
+    bound.find((project) => project.id === input.currentProjectId) ??
+    bound[0] ??
+    input.projects.find((project) => project.id === input.currentProjectId)
+  )?.id;
+}
+
 export function resolveLinkIssueInput(input: {
   readonly reference: string;
   readonly project: (IssueProject & { readonly host: string }) | null;
@@ -373,12 +392,12 @@ function LinkPullRequestDialog({
                   };
             },
             linearProjectId: (team) =>
-              (
-                environmentProjects.find(
-                  (project) =>
-                    linearBindings?.[project.id]?.repository.toLowerCase() === team.toLowerCase(),
-                ) ?? environmentProjects.find((project) => project.id === projectId)
-              )?.id,
+              linearProjectForTeam({
+                team,
+                projects: environmentProjects,
+                currentProjectId: projectId,
+                bindings: linearBindings,
+              }),
           })
         : null,
     [environmentProjects, kind, linearBindings, ownProject, projectId, reference],
