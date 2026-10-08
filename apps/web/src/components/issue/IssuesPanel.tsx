@@ -125,8 +125,7 @@ function ProjectIssues({
   onOpenLinkedPullRequest,
 }: IssuesPanelProps) {
   const projects = useProjects();
-  // Held here rather than in the list, so reading an issue and coming back does not throw away
-  // the search that found it — the list is unmounted while the issue is open.
+  const [actedAt, setActedAt] = useState(0);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState<PanelPage>({ key: "", size: PAGE_SIZE, cursors: null });
   const [filters, setFilters] = useState<{
@@ -137,65 +136,70 @@ function ProjectIssues({
     readonly order: IssueListOrder;
   }>({ state: "open", involvement: "all", label: undefined, sort: "updated", order: "desc" });
 
-  if (selected) {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        <div className="flex items-center border-b border-border/50 px-1.5 py-1">
-          <Button variant="ghost-muted" size="xs" onClick={() => onSelect(null)}>
-            <ArrowLeftIcon className="size-3.5" />
-            All issues
-          </Button>
-        </div>
-        <div className="min-h-0 flex-1">
-          {/* Hand-offs land in the thread this panel sits beside, so reading an issue and acting
-              on it stay one conversation. */}
-          <IssueDetailPanel
-            key={`${selected.provider ?? ""}:${selected.repository}#${selected.number}`}
-            environmentId={environmentId}
-            reference={{
-              projectId: selected.projectId as ProjectId,
-              ...(selected.provider === undefined ? {} : { provider: selected.provider }),
-              repository: selected.repository,
-              number: selected.number,
-            }}
-            handoffTarget={handoffTarget}
-            onStateChange={onStateChange}
-            onOpenLinkedPullRequest={onOpenLinkedPullRequest}
-            onOpenRelatedIssue={(relative) => {
-              const target = relatedIssueTarget(
-                projects.filter((candidate) => candidate.environmentId === environmentId),
-                selected,
-                relative,
-              );
-              if (target === null) openLinkInBrowser(relative.url);
-              else onSelect({ ...selected, ...target });
-            }}
-            // The panel is the narrowest place this reads, so the metadata folds into the top row
-            // once the content scrolls — the same bargain the issues page makes.
-            chromeVariant="collapse"
-          />
-        </div>
-      </div>
-    );
-  }
   return (
-    <IssueBrowserList
-      environmentId={environmentId}
-      projectId={projectId}
-      onSelect={onSelect}
-      query={query}
-      onQuery={setQuery}
-      page={page}
-      onPage={setPage}
-      filters={filters}
-      onFilters={setFilters}
-    />
+    <>
+      <IssueBrowserList
+        environmentId={environmentId}
+        projectId={projectId}
+        hidden={selected !== null}
+        actedAt={actedAt}
+        onSelect={onSelect}
+        query={query}
+        onQuery={setQuery}
+        page={page}
+        onPage={setPage}
+        filters={filters}
+        onFilters={setFilters}
+      />
+      {selected ? (
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex items-center border-b border-border/50 px-1.5 py-1">
+            <Button variant="ghost-muted" size="xs" onClick={() => onSelect(null)}>
+              <ArrowLeftIcon className="size-3.5" />
+              All issues
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1">
+            {/* Hand-offs land in the thread this panel sits beside, so reading an issue and acting
+              on it stay one conversation. */}
+            <IssueDetailPanel
+              key={`${selected.provider ?? ""}:${selected.repository}#${selected.number}`}
+              environmentId={environmentId}
+              reference={{
+                projectId: selected.projectId as ProjectId,
+                ...(selected.provider === undefined ? {} : { provider: selected.provider }),
+                repository: selected.repository,
+                number: selected.number,
+              }}
+              handoffTarget={handoffTarget}
+              onActed={() => setActedAt(Date.now())}
+              onStateChange={onStateChange}
+              onOpenLinkedPullRequest={onOpenLinkedPullRequest}
+              onOpenRelatedIssue={(relative) => {
+                const target = relatedIssueTarget(
+                  projects.filter((candidate) => candidate.environmentId === environmentId),
+                  selected,
+                  relative,
+                );
+                if (target === null) openLinkInBrowser(relative.url);
+                else onSelect({ ...selected, ...target });
+              }}
+              // The panel is the narrowest place this reads, so the metadata folds into the top row
+              // once the content scrolls — the same bargain the issues page makes.
+              chromeVariant="collapse"
+            />
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
 function IssueBrowserList({
   environmentId,
   projectId,
+  hidden,
+  actedAt,
   onSelect,
   query,
   onQuery,
@@ -206,6 +210,8 @@ function IssueBrowserList({
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  hidden: boolean;
+  actedAt: number;
   onSelect: (target: NonNullable<IssuesSurface["selected"]>) => void;
   query: string;
   onQuery: (query: string) => void;
@@ -374,6 +380,25 @@ function IssueBrowserList({
     onPage({ key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_LIMIT), cursors: null });
   };
 
+  const appliedActedAt = useRef(actedAt);
+  useEffect(() => {
+    if (appliedActedAt.current === actedAt) return;
+    if (sentCursors !== null) {
+      onPage({
+        key: filterKey,
+        size: Math.min(
+          Math.max(pageSize, Math.ceil(heldEntries.length / PAGE_SIZE) * PAGE_SIZE),
+          MAX_LIMIT,
+        ),
+        cursors: null,
+      });
+      return;
+    }
+    if (listQuery.isPending) return;
+    appliedActedAt.current = actedAt;
+    listQuery.refresh();
+  }, [actedAt, sentCursors, listQuery.isPending]);
+
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -383,6 +408,7 @@ function IssueBrowserList({
     // the rows stay, so re-arming would ask again forever.
     if (
       !sentinel ||
+      hidden ||
       entries.length === 0 ||
       !truncated ||
       listQuery.isPending ||
@@ -404,6 +430,7 @@ function IssueBrowserList({
     return () => observer.disconnect();
     // `loadMore` is rebuilt every render and reads only what is listed here.
   }, [
+    hidden,
     truncated,
     canContinue,
     canGrow,
@@ -439,7 +466,7 @@ function IssueBrowserList({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col" hidden={hidden}>
       <div className="flex items-center gap-2 px-2 py-2">
         <ListSearchInput
           label="Search issues"

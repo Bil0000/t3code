@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   EnvironmentId,
@@ -21,7 +21,14 @@ const mocks = vi.hoisted(() => ({
   refreshes: [] as Array<IssueListInput["cursors"] | null>,
 }));
 
-vi.mock("./IssueDetailPanel", () => ({ IssueDetailPanel: () => null }));
+vi.mock("./IssueDetailPanel", () => ({
+  IssueDetailPanel: ({ onActed }: { onActed?: () => void }) => (
+    <>
+      <button onClick={onActed}>Closed on host</button>
+      <button>Refused by host</button>
+    </>
+  ),
+}));
 vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
 vi.mock("~/state/issues", () => ({
   issueEnvironment: {
@@ -40,7 +47,7 @@ vi.mock("~/state/query", async () => {
       return {
         data: answers.get(key)!.data,
         error: null,
-        isPending: false,
+        isPending: answers.get(key)!.pending === true,
         refresh: () => {
           mocks.refreshes.push(input.cursors ?? null);
           answers.set(key, { data: mocks.list(input) });
@@ -51,7 +58,7 @@ vi.mock("~/state/query", async () => {
   };
 });
 
-const answers = new Map<string, { data: IssueListResult }>();
+const answers = new Map<string, { data: IssueListResult; pending?: boolean }>();
 const requests = () => [...answers.keys()].map((key) => JSON.parse(key) as IssueListInput);
 
 function issue(number: number, repository = "acme/web"): IssueListEntry {
@@ -105,6 +112,7 @@ const button = (label: string) =>
   [...document.querySelectorAll("button")].find((candidate) =>
     candidate.textContent?.includes(label),
   );
+const click = (label: string) => act(async () => button(label)!.click());
 const reachEnd = () =>
   act(async () => {
     for (const observer of observers.filter((candidate) => candidate.active)) observer.reach();
@@ -130,11 +138,17 @@ async function renderPanel() {
         observers.push(this.observer);
       }
       observe() {}
+      unobserve() {}
       disconnect() {
         this.observer.active = false;
       }
     },
   );
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  }));
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -148,19 +162,21 @@ async function renderPanel() {
     value: () => [],
   });
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  await act(async () =>
-    root.render(
+  function Panel() {
+    const [selected, setSelected] = useState<Parameters<typeof IssuesPanel>[0]["selected"]>(null);
+    return (
       <IssuesPanel
         environmentId={EnvironmentId.make("local")}
         projectId={ProjectId.make("p1")}
-        selected={null}
-        onSelect={() => undefined}
+        selected={selected}
+        onSelect={setSelected}
         handoffTarget={{ kind: "new-thread" } as never}
         onStateChange={() => undefined}
         onOpenLinkedPullRequest={() => undefined}
-      />,
-    ),
-  );
+      />
+    );
+  }
+  await act(async () => root.render(<Panel />));
   return { unmount: () => act(async () => root.unmount()) };
 }
 
@@ -258,6 +274,128 @@ describe("IssuesPanel", () => {
     expect(text()).toContain("Issue 1");
     expect(text()).toContain("Issue 2");
     expect(text()).not.toContain("could not be read");
+    await unmount();
+  });
+
+  it("keeps paged rows across reading an issue without reading the list again", async () => {
+    const pages: Record<string, IssueListResult> = {
+      null: result([issue(1), issue(2)], { truncated: true, nextCursors: { web: "web-1" } }),
+      [JSON.stringify({ web: "web-1" })]: result([issue(3)], {
+        truncated: true,
+        nextCursors: { web: "web-2" },
+      }),
+      [JSON.stringify({ web: "web-2" })]: result([issue(4)]),
+    };
+    mocks.list = (input) => pages[JSON.stringify(input.cursors ?? null)]!;
+    const { unmount } = await renderPanel();
+    await reachEnd();
+    const requested = requests();
+
+    await click("Issue 3");
+    expect(text()).toContain("Closed on host");
+    await reachEnd();
+    await click("All issues");
+
+    for (const number of [1, 2, 3]) expect(text()).toContain(`Issue ${number}`);
+    expect(requests()).toEqual(requested);
+    expect(mocks.refreshes).toEqual([]);
+
+    await reachEnd();
+    expect(text()).toContain("Issue 4");
+    expect(requests().map((input) => input.cursors ?? null)).toEqual([
+      null,
+      { web: "web-1" },
+      { web: "web-2" },
+    ]);
+    await unmount();
+  });
+
+  it("reads the list again after an action succeeds, and not after one fails", async () => {
+    let closed = false;
+    mocks.list = (input) =>
+      input.cursors !== undefined
+        ? result([issue(3)])
+        : input.limit === 30
+          ? result([issue(1), issue(2)], { truncated: true, nextCursors: { web: "web-1" } })
+          : result(closed ? [issue(1), issue(2)] : [issue(1), issue(2), issue(3)]);
+    const { unmount } = await renderPanel();
+    await reachEnd();
+
+    await click("Issue 3");
+    await click("Refused by host");
+    await click("All issues");
+    for (const number of [1, 2, 3]) expect(text()).toContain(`Issue ${number}`);
+    expect(requests()).toHaveLength(2);
+
+    await click("Issue 3");
+    closed = true;
+    await click("Closed on host");
+    await click("All issues");
+    expect(text()).toContain("Issue 1");
+    expect(text()).toContain("Issue 2");
+    expect(text()).not.toContain("Issue 3");
+    expect(requests()).toHaveLength(2);
+    expect(mocks.refreshes).toEqual([null]);
+    await unmount();
+  });
+
+  it("reads the first page again after an action on an unpaged list", async () => {
+    let closed = false;
+    mocks.list = () => result(closed ? [issue(1)] : [issue(1), issue(2)]);
+    const { unmount } = await renderPanel();
+
+    await click("Issue 2");
+    closed = true;
+    await click("Closed on host");
+    await click("All issues");
+    expect(text()).toContain("Issue 1");
+    expect(text()).not.toContain("Issue 2");
+    expect(mocks.refreshes).toEqual([null]);
+    await unmount();
+  });
+
+  it("reads the list again when a read in flight at an action answers after it", async () => {
+    let closed = false;
+    mocks.list = () => result(closed ? [issue(1)] : [issue(1), issue(2)]);
+    const { unmount } = await renderPanel();
+    const [key] = [...answers.keys()];
+    const before = answers.get(key!)!;
+    answers.set(key!, { ...before, pending: true });
+
+    await click("Issue 2");
+    closed = true;
+    await click("Closed on host");
+    answers.set(key!, { data: before.data });
+    await click("All issues");
+    expect(text()).toContain("Issue 1");
+    expect(text()).not.toContain("Issue 2");
+    expect(mocks.refreshes).toEqual([null]);
+    await unmount();
+  });
+
+  it("reads the list again when a paged read in flight at an action answers after it", async () => {
+    let closed = false;
+    mocks.list = (input) =>
+      input.cursors !== undefined
+        ? result([issue(3)])
+        : result(closed ? [issue(1), issue(2)] : [issue(1), issue(2), issue(3)], {
+            truncated: !closed,
+            nextCursors: closed ? {} : { web: "web-1" },
+          });
+    const { unmount } = await renderPanel();
+    await reachEnd();
+    const [key] = [...answers.keys()];
+    const before = answers.get(key!)!;
+    answers.set(key!, { ...before, pending: true });
+
+    await click("Issue 3");
+    closed = true;
+    await click("Closed on host");
+    answers.set(key!, { data: before.data });
+    await click("All issues");
+    expect(text()).toContain("Issue 1");
+    expect(text()).not.toContain("Issue 3");
+    expect(mocks.refreshes).toEqual([null]);
     await unmount();
   });
 });
