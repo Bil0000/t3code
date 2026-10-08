@@ -32,6 +32,10 @@ import * as IssuesHandlers from "./handlers.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { liveThreadsLayer, liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
+import * as IssueProviderRegistry from "../../../issue/IssueProviderRegistry.ts";
+import * as SourceControlRateLimit from "../../../sourceControl/SourceControlRateLimit.ts";
 import { IssuesToolkit } from "./tools.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -155,6 +159,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     activity?: IssueActivity;
     page?: IssueCommentsPageResult;
     readError?: IssueOperationError;
+    detailRead?: IssueService.IssueService["Service"]["detail"];
     callerActive?: boolean;
   } = {},
 ) {
@@ -186,12 +191,14 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       detail: (ref) =>
         Ref.update(detailRequests, (recorded) => [...recorded, ref]).pipe(
           Effect.andThen(
-            content.readError
-              ? Effect.fail(content.readError)
-              : Effect.succeed({
-                  ...(content.detail ?? issueDetail),
-                  provider: ref.provider ?? content.detail?.provider ?? issue.provider,
-                }),
+            content.detailRead
+              ? content.detailRead(ref)
+              : content.readError
+                ? Effect.fail(content.readError)
+                : Effect.succeed({
+                    ...(content.detail ?? issueDetail),
+                    provider: ref.provider ?? content.detail?.provider ?? issue.provider,
+                  }),
           ),
         ),
       activity: (ref) =>
@@ -768,6 +775,91 @@ describe("issue toolkit handlers", () => {
         capability: "issues",
         threadId,
       });
+    }),
+  );
+
+  it.effect("lists saved issue links only for a host in the thread project", () =>
+    Effect.gen(function* () {
+      const project = {
+        id: projectId,
+        title: "T3 Code",
+        workspaceRoot: "/tmp/project",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      };
+      const service = yield* IssueService.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            SourceControlRateLimit.layer,
+            Layer.mock(ProjectService.ProjectService)({
+              listShells: () => Effect.succeed([project]),
+            }),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+              resolve: () => Effect.succeed(null),
+            }),
+            Layer.mock(IssueProviderRegistry.IssueProviderRegistry)({
+              resolveProjects: () =>
+                Effect.succeed({
+                  supported: [
+                    {
+                      project,
+                      repository: issue.repository,
+                      host: "github.com",
+                      adapter: {
+                        kind: "github" as const,
+                        capabilities: issueDetail.capabilities,
+                        getViewer: () => Effect.succeed("reporter"),
+                        getViewerPermissions: () => Effect.succeed(issueDetail.viewerPermissions),
+                        getIssue: () =>
+                          Effect.succeed({
+                            ...issueDetail,
+                            viewer: "reporter",
+                            reactions: [],
+                            ancestors: [],
+                            subIssues: [],
+                          }),
+                        getIssueActivity: () => Effect.die("unused"),
+                        listIssues: () =>
+                          Effect.succeed({ items: [], truncated: false, continues: false }),
+                        runAction: () => Effect.void,
+                        comment: () => Effect.void,
+                        create: () => Effect.die("unused"),
+                        update: () => Effect.void,
+                        setLabels: () => Effect.void,
+                        setAssignees: () => Effect.void,
+                        listLabelCandidates: () =>
+                          Effect.succeed({ candidates: [], truncated: false }),
+                        listAssigneeCandidates: () =>
+                          Effect.succeed({ candidates: [], truncated: false }),
+                      },
+                    },
+                  ],
+                  unimplemented: new Map(),
+                  viewerRoots: new Map(),
+                }),
+            }),
+          ),
+        ),
+      );
+      const harness = yield* makeHarness(thread(), undefined, { detailRead: service.detail });
+      const source = { kind: "issue" as const, ...issue, host: "github.com" };
+      expect(yield* harness.call("list_issue_pull_request_links", { source })).toEqual({
+        links: [savedLink],
+        truncated: false,
+      });
+      expect(
+        yield* harness
+          .call("list_issue_pull_request_links", {
+            source: { ...source, host: "github.example.com" },
+          })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "IssueOperationError", operation: "resolveRepository" });
+      expect(yield* Ref.get(harness.savedLinkRequests)).toEqual([
+        { list: { source: { provider: "github", url: issue.url } } },
+      ]);
     }),
   );
 

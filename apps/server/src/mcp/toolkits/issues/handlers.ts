@@ -315,7 +315,10 @@ const make = Effect.gen(function* () {
         const pullRequestRef = { projectId: thread.projectId, ...reference };
         const detail =
           kind === "issue"
-            ? yield* issues.detail(issueRef(thread.projectId, reference))
+            ? yield* issues.detail({
+                ...issueRef(thread.projectId, reference),
+                ...(reference.host === undefined ? {} : { host: reference.host }),
+              })
             : yield* pullRequests.withRoutingCredential(
                 pullRequestRef,
                 pullRequests.detail(pullRequestRef),
