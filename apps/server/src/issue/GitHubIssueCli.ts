@@ -193,6 +193,7 @@ export interface GitHubIssueListBatch {
 export interface GitHubIssueSearchBatch {
   readonly items: ReadonlyArray<GitHubIssueSearchItem>;
   readonly truncated: boolean;
+  readonly ceilingReached: boolean;
 }
 
 export interface GitHubIssueActivity {
@@ -850,6 +851,7 @@ const make = Effect.gen(function* () {
         // search may be paged, so this is every row the host will answer this query with:
         // offering a continuation would hand back a cursor answered with these same rows.
         ceilingReached:
+          hasNextPage &&
           read >= ISSUE_SEARCH_MAX_RESULTS &&
           (items.length < input.limit || instantRunsOn(items, input.limit, handed)),
         truncated: supportsIssueCursor(input)

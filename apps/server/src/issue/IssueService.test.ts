@@ -9,6 +9,8 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import * as Schema from "effect/Schema";
+import * as Redacted from "effect/Redacted";
 import {
   issueProjectSourceKey,
   issueSourceKey,
@@ -33,6 +35,9 @@ import {
 } from "./IssueProvider.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
+import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import * as GitHubIssueCli from "./GitHubIssueCli.ts";
+import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as PullRequestProviderRegistry from "../pullRequest/PullRequestProviderRegistry.ts";
@@ -2697,6 +2702,91 @@ it.effect("reads a host's repositories in one search, and files the rows back un
         ["p1", 2],
       ],
     );
+  }),
+);
+
+it.effect(
+  "reports the GitHub search ceiling across grouped repositories without a stalled cursor",
+  () =>
+    Effect.gen(function* () {
+      const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+      for (const total of [1000, 1001]) {
+        let searches = 0;
+        const provider = yield* GitHubIssueProvider.make.pipe(
+          Effect.provide(
+            GitHubIssueCli.layer.pipe(
+              Layer.provideMerge(
+                Layer.mock(GitHubApi.GitHubApi)({
+                  credential: () =>
+                    Effect.succeed({ token: Redacted.make("test-token"), fingerprint: "test" }),
+                  graphql: ({ operation, variables }) =>
+                    Effect.gen(function* () {
+                      if (operation === "getViewerLogin") {
+                        return yield* encodeJson({ data: { viewer: { login: "bilal" } } });
+                      }
+                      searches += 1;
+                      const start = Number(variables?.["cursor"] ?? 0);
+                      const end = Math.min(start + 100, total);
+                      return yield* encodeJson({
+                        data: {
+                          search: {
+                            nodes: Array.from({ length: end - start }, (_, index) => {
+                              const number = start + index + 1;
+                              return {
+                                number,
+                                title: `Issue ${number}`,
+                                url: `https://github.com/acme/web/issues/${number}`,
+                                createdAt: "2026-07-01T00:00:00Z",
+                                updatedAt: "2026-07-02T00:00:00Z",
+                                repository: { nameWithOwner: number % 2 ? "acme/web" : "acme/api" },
+                              };
+                            }),
+                            pageInfo: { hasNextPage: end < total, endCursor: String(end) },
+                          },
+                        },
+                      });
+                    }).pipe(Effect.orDie),
+                }),
+              ),
+            ),
+          ),
+        );
+        const service = yield* makeService({ projects: TWO_PROJECTS, providers: [provider] });
+        const result = yield* service.list({ state: "open", limit: 99 });
+        assert.strictEqual(result.entries.length, 1000);
+        assert.strictEqual(result.truncated, total > 1000);
+        assert.deepStrictEqual(result.nextCursors, {});
+        assert.strictEqual(searches, 10);
+      }
+    }),
+);
+
+it.effect("does not repeat a grouped cursor after the provider reaches its ceiling", () =>
+  Effect.gen(function* () {
+    const boundary = "2026-07-02T00:00:00Z";
+    const service = yield* makeService({
+      projects: TWO_PROJECTS,
+      providers: [
+        fakeProvider("github", {
+          listIssuesAcross: () =>
+            Effect.succeed({
+              items: [batchedIssue(7, "acme/web", boundary), batchedIssue(8, "acme/api", boundary)],
+              truncated: true,
+              ceilingReached: true,
+            }),
+        }),
+      ],
+    });
+    const result = yield* service.list({
+      state: "open",
+      cursors: {
+        [cursorKey("acme/web")]: `${boundary}|0|7`,
+        [cursorKey("acme/api")]: `${boundary}|0|8`,
+      },
+    });
+    assert.deepStrictEqual(result.entries, []);
+    assert.isTrue(result.truncated);
+    assert.deepStrictEqual(result.nextCursors, {});
   }),
 );
 

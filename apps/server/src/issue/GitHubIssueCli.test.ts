@@ -607,22 +607,30 @@ it.layer(layer)("GitHub issue API", (it) => {
     }),
   );
 
-  it.effect("does not offer a cursor when one timestamp fills the search ceiling", () =>
+  it.effect.each([1000, 1001])("reports whether %i tied rows exceed the search ceiling", (total) =>
     Effect.gen(function* () {
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
-      graphql.mockImplementation(() =>
-        Effect.succeed(
+      graphql.mockImplementation(({ variables }) => {
+        const start = Number(variables?.["cursor"] ?? 0);
+        const end = Math.min(start + 100, total);
+        return Effect.succeed(
           search(
-            Array.from({ length: 100 }, (_, i) => row(i + 1)),
-            "next",
+            Array.from({ length: end - start }, (_, i) => row(start + i + 1)),
+            end < total ? String(end) : null,
           ),
-        ),
-      );
+        );
+      });
+      const searched = yield* cli.searchIssues({
+        ...listing,
+        repositories: [target.repository],
+        limit: 99,
+      });
+      assert.equal(searched.ceilingReached, total > 1000);
       const batch = yield* cli.listIssues({ ...listing, limit: 99 });
       assert.equal(batch.items.length, 1000);
-      assert.equal(batch.continues, false);
-      assert.equal(batch.truncated, true);
-      expect(graphql).toHaveBeenCalledTimes(10);
+      assert.equal(batch.continues, total === 1000);
+      assert.equal(batch.truncated, total > 1000);
+      expect(graphql).toHaveBeenCalledTimes(20);
     }),
   );
 

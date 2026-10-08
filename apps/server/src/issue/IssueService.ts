@@ -1052,9 +1052,13 @@ export const make = Effect.gen(function* () {
                   key: listCursorKey(project),
                   entries: items.map((item) => toEntry({ project, item })),
                   errors: [],
-                  truncated: page.truncated,
+                  truncated: page.truncated || page.ceilingReached === true,
                   nextCursor:
-                    sort === "updated" && order === "desc" && page.truncated && boundary !== null
+                    sort === "updated" &&
+                    order === "desc" &&
+                    page.truncated &&
+                    !page.ceilingReached &&
+                    boundary !== null
                       ? listCursorAt(cursorHere, boundary, fetched)
                       : null,
                 });

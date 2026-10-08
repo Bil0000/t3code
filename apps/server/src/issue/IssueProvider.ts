@@ -120,6 +120,7 @@ export interface ProviderBatchedIssue extends ProviderIssue {
 export interface ProviderBatchedIssuePage {
   readonly items: ReadonlyArray<ProviderBatchedIssue>;
   readonly truncated: boolean;
+  readonly ceilingReached?: boolean;
 }
 
 export interface ProviderIssueDetail extends ProviderIssue {
