@@ -27,6 +27,7 @@ import {
   LayersIcon,
   PenLineIcon,
   Plug2Icon,
+  PlusIcon,
   UserCheckIcon,
   UsersIcon,
   type LucideIcon,
@@ -1223,7 +1224,6 @@ function IssuesRouteView() {
     [issueEnvironmentId, toggleWorkItem],
   );
 
-  const [creating, setCreating] = useState(false);
   const openLinearSettings = () => void navigate({ to: "/settings/integrations", hash: "linear" });
   const searchInput = (
     <ListSearchInput
@@ -1448,6 +1448,26 @@ function IssuesRouteView() {
       updateListScope({ host, sort: undefined, order: undefined }),
     searchInput,
     filtersMenu,
+    newIssueControl:
+      issueEnvironmentId === null ? null : (
+        <NewIssueControl
+          environmentId={issueEnvironmentId}
+          projects={scopedProjects}
+          projectId={scopedProjectId}
+          // Filed and then read: the new issue opens in the panel, and the list it was filed
+          // from is a row out of date until the hosts are asked again.
+          onCreated={(created) => {
+            if (rightPanelRef !== null) {
+              useRightPanelStore.getState().openIssue(rightPanelRef, created);
+            }
+            updateSearch(issueSelectionSearchPatch(created));
+            refreshList();
+            baselineQuery.refresh();
+            authoredQuery.refresh();
+            assignedQuery.refresh();
+          }}
+        />
+      ),
     rightPanelControl: !issuesSupported ? null : (
       <span
         aria-hidden
@@ -1710,31 +1730,23 @@ function IssuesRouteView() {
           </RightPanelTabs>
         ) : null}
       </div>
-
-      {issueEnvironmentId === null ? null : (
-        <>
-          <IssueCreateDialog
-            open={creating}
-            onOpenChange={setCreating}
-            environmentId={issueEnvironmentId}
-            projects={scopedProjects}
-            projectId={scopedProjectId}
-            // Filed and then read: the new issue opens in the panel, and the list it was filed
-            // from is a row out of date until the hosts are asked again.
-            onCreated={(created) => {
-              if (rightPanelRef !== null) {
-                useRightPanelStore.getState().openIssue(rightPanelRef, created);
-              }
-              updateSearch(issueSelectionSearchPatch(created));
-              refreshList();
-              baselineQuery.refresh();
-              authoredQuery.refresh();
-              assignedQuery.refresh();
-            }}
-          />
-        </>
-      )}
     </SidebarInset>
+  );
+}
+
+export function NewIssueControl(
+  props: Omit<ComponentProps<typeof IssueCreateDialog>, "open" | "onOpenChange">,
+) {
+  const [open, setOpen] = useState(false);
+  const allowed = useAtomValue(issueEnvironment.create.permissionAtom(props.environmentId));
+  return (
+    <>
+      <Button variant="outline" disabled={!allowed} onClick={() => setOpen(true)}>
+        <PlusIcon aria-hidden className="size-4" />
+        New issue
+      </Button>
+      <IssueCreateDialog {...props} open={open} onOpenChange={setOpen} />
+    </>
   );
 }
 
@@ -1786,6 +1798,7 @@ export function IssuesColumn({
   onHost,
   searchInput,
   filtersMenu,
+  newIssueControl = null,
   rightPanelControl,
   titlebarControls = null,
   rightPanelOpen,
@@ -1804,6 +1817,7 @@ export function IssuesColumn({
   onHost: (host: string | undefined) => void;
   searchInput: ReactNode;
   filtersMenu: ReactNode;
+  newIssueControl?: ReactNode;
   rightPanelControl: ReactNode;
   titlebarControls?: ReactNode;
   rightPanelOpen: boolean;
@@ -1957,6 +1971,7 @@ export function IssuesColumn({
                   onRefresh={onRefresh}
                 />
               ) : null}
+              {newIssueControl}
             </div>
             {/* Scrolled past this marker, the controls are gone and the title takes over. */}
             <div ref={markerRef} aria-hidden className="-mt-3 h-px w-full" />
