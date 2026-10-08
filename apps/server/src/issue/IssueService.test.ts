@@ -2564,6 +2564,38 @@ it.effect("an explicit invalidation makes the next listing ask the host again", 
   }),
 );
 
+it.effect("keeps a refreshed viewer when an older lookup finishes", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let viewerCalls = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          withCredential: (_host, read) => read("account"),
+          getViewer: () =>
+            ++viewerCalls === 1
+              ? Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as("alice"),
+                )
+              : Effect.succeed("bob"),
+        }),
+      ],
+    });
+    const pending = yield* service.list({ state: "open" }).pipe(Effect.forkChild());
+    yield* Deferred.await(started);
+    yield* service.invalidate({});
+    const key = issueSourceKey("github", "github.com");
+    assert.equal((yield* service.list({ state: "open" })).viewers[key], "bob");
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(pending);
+    assert.equal((yield* service.list({ state: "all" })).viewers[key], "bob");
+    assert.equal(viewerCalls, 2);
+  }),
+);
+
 it.effect.each(["github", "linear", "gitlab", "azure-devops", "bitbucket", "forgejo"])(
   "shares repeated and concurrent %s detail reads without spending extra host calls",
   (provider) =>
@@ -2721,6 +2753,52 @@ it.effect("a write forgets the listings and the issue it touched, with no client
     yield* service.list({ state: "open" });
     yield* service.detail(REFERENCE);
     assert.deepStrictEqual([listCalls, detailCalls], [2, 2]);
+  }),
+);
+
+it.effect.each([
+  { provider: "github" as const, repository: "acme/web", alternate: " Acme/Web " },
+  { provider: "linear" as const, repository: "ENG", alternate: " eng " },
+])("invalidates $provider issue caches across repository case and spaces", (input) =>
+  Effect.gen(function* () {
+    let state: "open" | "closed" = "open";
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider(input.provider, {
+          resolveSource: () => Effect.succeed({ host: "host.test", repository: input.repository }),
+          getIssue: ({ repository }) => {
+            assert.equal(repository, input.repository);
+            return Effect.succeed(issueDetail(7, { state }));
+          },
+          getIssueActivity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: state === "open" ? 0 : 1,
+              commentsTruncated: false,
+              events: [],
+            }),
+          runAction: ({ repository }) =>
+            Effect.sync(() => {
+              assert.equal(repository, input.repository);
+              state = "closed";
+            }),
+        }),
+      ],
+    });
+    const ref = { ...REFERENCE, provider: input.provider, repository: input.repository };
+    assert.equal((yield* service.detail(ref)).state, "open");
+    assert.equal((yield* service.summary(ref)).state, "open");
+    assert.equal((yield* service.activity(ref)).commentCount, 0);
+    yield* service.runAction({ ...ref, repository: input.alternate, action: "close" });
+    assert.equal((yield* service.detail(ref)).state, "closed");
+    assert.equal((yield* service.summary(ref)).state, "closed");
+    assert.equal((yield* service.activity(ref)).commentCount, 1);
+    state = "open";
+    yield* service.invalidate({ reference: { ...ref, repository: input.alternate } });
+    assert.equal((yield* service.detail(ref)).state, "open");
+    assert.equal((yield* service.summary(ref)).state, "open");
+    assert.equal((yield* service.activity(ref)).commentCount, 0);
   }),
 );
 

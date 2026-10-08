@@ -653,6 +653,7 @@ export const make = Effect.gen(function* () {
             // unreadable worktree would otherwise report the whole host as signed out.
             const roots =
               viewerRoots.get(key) ?? forSource.map(({ project }) => project.workspaceRoot);
+            const epoch = listingsEpoch;
             return Effect.firstSuccessOf(
               roots.map((cwd) =>
                 sourceRead(
@@ -670,9 +671,11 @@ export const make = Effect.gen(function* () {
                 error: null as IssueProviderError | null,
               })),
               Effect.tap((result) =>
-                Effect.map(Clock.currentTimeMillis, (at) =>
-                  viewersBySource.set(`${key}\0${credentialNamespace}`, { at, result }),
-                ),
+                Effect.map(Clock.currentTimeMillis, (at) => {
+                  if (epoch === listingsEpoch) {
+                    viewersBySource.set(`${key}\0${credentialNamespace}`, { at, result });
+                  }
+                }),
               ),
               Effect.catch((error) =>
                 Effect.succeed({
@@ -1703,7 +1706,8 @@ export const make = Effect.gen(function* () {
   let templatesEpoch = 0;
   const refEpochs = new Map<string, number>();
   const REF_EPOCH_CAPACITY = 2_048;
-  const refScope = (ref: IssueRef) => `${ref.projectId} ${ref.repository} ${ref.number}`;
+  const refScope = (ref: IssueRef) =>
+    `${ref.projectId} ${ref.repository.trim().toLowerCase()} ${ref.number}`;
   const refEpoch = (ref: IssueRef) => refEpochs.get(refScope(ref)) ?? allRefsEpoch;
   const bumpRefEpoch = (ref: IssueRef) => {
     const scope = refScope(ref);
