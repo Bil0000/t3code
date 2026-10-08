@@ -99,9 +99,15 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
-  it.effect.each([false, true])(
-    "restores failed Linear disconnect bindings after a watcher reload, unrelated edit: %s",
-    (unrelatedEdit) =>
+  it.effect.each([
+    "watcher reload",
+    "watcher edit",
+    "settings save",
+    "binding edit",
+    "binding removal",
+  ])(
+    "preserves the correct Linear project bindings after a failed disconnect with a concurrent %s",
+    (change) =>
       Effect.scoped(
         Effect.gen(function* () {
           const config = yield* ServerConfig.ServerConfig;
@@ -143,28 +149,56 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           );
           yield* Deferred.await(started);
           const cleared = yield* service.getSettings;
-          const changes = yield* service.subscribeChanges;
-          const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
-          yield* writeFileStringAtomically({
-            filePath: config.settingsPath,
-            contents: JSON.stringify({
-              ...persisted,
-              ...(unrelatedEdit ? { enableAgentBrowserAccess: false } : {}),
-            }),
-          });
-          const reloaded = yield* changes.pipe(Stream.runHead);
-          assert.strictEqual(
-            Option.getOrThrow(reloaded).issueTracking.connections.linear?.projectBindings,
-            cleared.issueTracking.connections.linear?.projectBindings,
-          );
+          const newBinding = { credentialId: "user-2", repository: "API" };
+          if (change === "watcher reload" || change === "watcher edit") {
+            const changes = yield* service.subscribeChanges;
+            const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
+            yield* writeFileStringAtomically({
+              filePath: config.settingsPath,
+              contents: JSON.stringify({
+                ...persisted,
+                ...(change === "watcher edit" ? { enableAgentBrowserAccess: false } : {}),
+              }),
+            });
+            const reloaded = yield* changes.pipe(Stream.runHead);
+            assert.strictEqual(
+              Option.getOrThrow(reloaded).issueTracking.connections.linear?.projectBindings,
+              cleared.issueTracking.connections.linear?.projectBindings,
+            );
+          } else {
+            yield* service.updateSettings(
+              change === "settings save"
+                ? { enableAgentBrowserAccess: false }
+                : {
+                    issueTracking: {
+                      connections: {
+                        linear: {
+                          projectBindings: {
+                            [ProjectId.make("project_1")]:
+                              change === "binding edit" ? newBinding : null,
+                          },
+                        },
+                      },
+                    },
+                  },
+            );
+          }
           yield* Deferred.succeed(release, undefined);
           assert.strictEqual((yield* Fiber.join(disconnect))._tag, "Failure");
           assert.deepStrictEqual(
             (yield* service.getSettings).issueTracking.connections.linear?.projectBindings,
             {
-              [ProjectId.make("project_1")]: { credentialId: "user-1", repository: "ENG" },
+              [ProjectId.make("project_1")]:
+                change === "binding edit"
+                  ? newBinding
+                  : change === "binding removal"
+                    ? null
+                    : { credentialId: "user-1", repository: "ENG" },
             },
           );
+          if (change === "settings save" || change === "watcher edit") {
+            assert.isFalse((yield* service.getSettings).enableAgentBrowserAccess);
+          }
         }),
       ).pipe(TestClock.withLive, Effect.provide(layerServerSettings())),
   );

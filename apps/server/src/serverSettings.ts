@@ -127,7 +127,13 @@ const normalizeServerSettings = (
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
-    Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
+    Effect.map((next) => ({
+      ...next,
+      ...deriveLegacyProjectOverrides(next),
+      issueTracking: NodeUtil.isDeepStrictEqual(next.issueTracking, settings.issueTracking)
+        ? settings.issueTracking
+        : next.issueTracking,
+    })),
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
