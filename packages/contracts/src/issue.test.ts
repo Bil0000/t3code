@@ -8,6 +8,7 @@ import {
   IssueCreateInput,
   IssueDetail,
   IssueListInput,
+  ISSUE_LIST_CURSOR_MAX_LENGTH,
   IssueListResult,
   IssueRef,
   IssueRelativeNode,
@@ -115,6 +116,14 @@ describe("IssueListResult", () => {
     expect(decoded).toStrictEqual(LIST_RESULT);
   });
 
+  it("round-trips a stopped continuation through the JSON codec", () => {
+    const codec = Schema.toCodecJson(IssueListResult);
+    const result = { ...LIST_RESULT, truncated: true, cursorLimitReached: true, nextCursors: {} };
+    expect(Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(result))).toStrictEqual(
+      result,
+    );
+  });
+
   it("keys a viewer by adapter and host, so accounts never cross", () => {
     const enterprise = issueSourceKey("github", "github.acme.dev");
     const jira = issueSourceKey("jira", "github.com");
@@ -200,8 +209,12 @@ describe("IssueListInput", () => {
 
   it("bounds a continuation, because it comes back from the page and goes into a filter", () => {
     const long = (length: number) => ({ "github.com acme/web": "c".repeat(length) });
-    expect(decodeListInput({ state: "open", cursors: long(4096) })).toBeDefined();
-    expect(() => decodeListInput({ state: "open", cursors: long(4097) })).toThrow();
+    expect(
+      decodeListInput({ state: "open", cursors: long(ISSUE_LIST_CURSOR_MAX_LENGTH) }),
+    ).toBeDefined();
+    expect(() =>
+      decodeListInput({ state: "open", cursors: long(ISSUE_LIST_CURSOR_MAX_LENGTH + 1) }),
+    ).toThrow();
   });
 });
 

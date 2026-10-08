@@ -834,6 +834,7 @@ function IssuesRouteView() {
   const [ordered, setOrdered] = useState<{
     key: string;
     entries: ReadonlyArray<IssueListEntry>;
+    cursorLimitReached: boolean;
   } | null>(null);
   useEffect(() => {
     if (!answered) return;
@@ -847,6 +848,7 @@ function IssuesRouteView() {
         return {
           key: filterKey,
           entries: hostOrdered,
+          cursorLimitReached: answered.cursorLimitReached === true,
         };
       }
       if (sentCursors !== null) {
@@ -856,7 +858,11 @@ function IssuesRouteView() {
         // next rows can be newer than another's last — lands under it.
         const held = new Set(previous.entries.map(issueEntryKey));
         const arrived = answered.entries.filter((entry) => !held.has(issueEntryKey(entry)));
-        return { key: filterKey, entries: [...previous.entries, ...arrived] };
+        return {
+          key: filterKey,
+          entries: [...previous.entries, ...arrived],
+          cursorLimitReached: previous.cursorLimitReached || answered.cursorLimitReached === true,
+        };
       }
       // A whole-page answer replaces the order outright: the host answers in the order the page
       // reads, so its order stands, and an issue opened since the last read belongs at the top
@@ -864,6 +870,7 @@ function IssuesRouteView() {
       return {
         key: filterKey,
         entries: hostOrdered,
+        cursorLimitReached: answered.cursorLimitReached === true,
       };
     });
   }, [answered, filterKey, order, sentCursors, sentQuery, sort]);
@@ -875,11 +882,17 @@ function IssuesRouteView() {
   // new question to start where the old one stopped — skipping its newest matches entirely.
   const nextCursors = answered?.nextCursors ?? {};
   const canContinue = !showingCarried && Object.keys(nextCursors).length > 0;
+  const cursorLimitReached =
+    (ordered?.key === filterKey && ordered.cursorLimitReached) ||
+    answered?.cursorLimitReached === true;
+  const truncated = listData?.truncated === true || cursorLimitReached;
+  const canGrow = !cursorLimitReached && pageSize < MAX_PAGE_SIZE;
   const loadMore = () => {
     if (canContinue) {
       setPage({ key: filterKey, size: pageSize, cursors: nextCursors });
       return;
     }
+    if (!canGrow) return;
     setPage({
       key: filterKey,
       size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
@@ -975,55 +988,6 @@ function IssuesRouteView() {
     return [...names].sort((left, right) => left.localeCompare(right));
   }, [filterKey, listData, ordered, search.label]);
 
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    // A failed page must stop the observer. Retained rows keep the sentinel on screen, so
-    // re-arming it after a failure would ask for the next page again, forever.
-    //
-    // Rows on screen are also what makes reaching the sentinel mean anything: with none, it
-    // sits directly below the empty state and is always in view, so a search that matches
-    // nothing would page through the whole host on its own — one listing of every repository
-    // per step — while the reader looks at an empty page. With nothing to scroll past, the
-    // next page is asked for rather than assumed.
-    if (
-      !sentinel ||
-      entries.length === 0 ||
-      listData?.truncated !== true ||
-      listQuery.isPending ||
-      listQuery.error !== null ||
-      // The rows on screen belong to the previous question, so nothing about them says where
-      // this one carries on from. Growing the page under them would answer neither.
-      showingCarried ||
-      // Asking past the cap is refused, which would strand the list on an error the retry
-      // could never clear, so growth stops here and the rest stays on the host. A continuation
-      // does not grow the page at all, so the cap does not apply to it.
-      (!canContinue && pageSize >= MAX_PAGE_SIZE)
-    ) {
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (observed) => {
-        if (observed.some((entry) => entry.isIntersecting)) {
-          loadMore();
-        }
-      },
-      // Start the next page slightly before the sentinel is on screen.
-      { rootMargin: "240px" },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [
-    entries.length,
-    filterKey,
-    canContinue,
-    listData?.truncated,
-    listQuery.error,
-    listQuery.isPending,
-    pageSize,
-    showingCarried,
-  ]);
-
   const groups = useMemo(() => {
     if (
       search.involvement !== "all" ||
@@ -1069,6 +1033,58 @@ function IssuesRouteView() {
     sort,
     typedQuery.length,
     viewers,
+  ]);
+
+  const visibleRowCount = groups.reduce((count, group) => count + group.entries.length, 0);
+
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    // A failed page must stop the observer. Retained rows keep the sentinel on screen, so
+    // re-arming it after a failure would ask for the next page again, forever.
+    //
+    // Rows on screen are also what makes reaching the sentinel mean anything: with none, it
+    // sits directly below the empty state and is always in view, so a search that matches
+    // nothing would page through the whole host on its own — one listing of every repository
+    // per step — while the reader looks at an empty page. With nothing to scroll past, the
+    // next page is asked for rather than assumed.
+    if (
+      !sentinel ||
+      visibleRowCount === 0 ||
+      !truncated ||
+      listQuery.isPending ||
+      listQuery.error !== null ||
+      // The rows on screen belong to the previous question, so nothing about them says where
+      // this one carries on from. Growing the page under them would answer neither.
+      showingCarried ||
+      // Asking past the cap is refused, which would strand the list on an error the retry
+      // could never clear, so growth stops here and the rest stays on the host. A continuation
+      // does not grow the page at all, so the cap does not apply to it.
+      (!canContinue && !canGrow)
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (observed) => {
+        if (observed.some((entry) => entry.isIntersecting)) {
+          loadMore();
+        }
+      },
+      // Start the next page slightly before the sentinel is on screen.
+      { rootMargin: "240px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [
+    visibleRowCount,
+    filterKey,
+    canContinue,
+    canGrow,
+    truncated,
+    listQuery.error,
+    listQuery.isPending,
+    pageSize,
+    showingCarried,
   ]);
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
@@ -1266,7 +1282,7 @@ function IssuesRouteView() {
   // so that case waits with the skeletons rather than answering for the hosts. A search says so
   // in its own words and is left to.
   const carriedToNothing =
-    showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
+    showingCarried && listQuery.isPending && visibleRowCount === 0 && typedQuery.length === 0;
   const listBody = (
     <>
       {!capabilityKnown ? (
@@ -1286,7 +1302,7 @@ function IssuesRouteView() {
         />
       ) : carriedToNothing ? (
         <ListGhost rows={7} label="Loading issues" />
-      ) : entries.length === 0 ? (
+      ) : visibleRowCount === 0 ? (
         <IssueListEmptyState
           hasProjects={!projectsKnown || projects.length > 0}
           refreshing={refreshing}
@@ -1299,7 +1315,7 @@ function IssuesRouteView() {
             search.host !== undefined
           }
           searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
-          canLoadMore={listData?.truncated === true && (canContinue || pageSize < MAX_PAGE_SIZE)}
+          canLoadMore={truncated && (canContinue || canGrow)}
           loadingMore={loadingMore}
           onClearQuery={() => updateSearch({ q: undefined })}
           onLoadMore={loadMore}
@@ -1353,13 +1369,15 @@ function IssuesRouteView() {
           </Button>
         </div>
       ) : null}
-      {listData?.truncated && entries.length > 0 ? (
+      {truncated && (visibleRowCount > 0 || (cursorLimitReached && !canContinue)) ? (
         <div ref={sentinelRef} className="flex justify-center py-3 text-xs text-muted-foreground">
           {loadingMore ? (
             <span className="flex items-center gap-2">
               <Spinner aria-hidden size="sm" />
               {sentCursors === null ? "Updating issues" : "Loading more"}
             </span>
+          ) : cursorLimitReached && !canContinue ? (
+            "More issues remain on the host."
           ) : null}
         </div>
       ) : null}

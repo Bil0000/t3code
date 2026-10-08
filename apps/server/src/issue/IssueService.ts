@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 import * as Scope from "effect/Scope";
 import {
   IssueOperationError,
+  ISSUE_LIST_CURSOR_MAX_LENGTH,
   IssueUnavailableError,
   issueProjectSourceKey,
   issueRepositoryKey,
@@ -203,6 +204,7 @@ interface RepositoryBatch {
   readonly errors: ReadonlyArray<IssueListProjectError>;
   readonly truncated: boolean;
   readonly nextCursor: string | null;
+  readonly cursorLimitReached?: boolean;
 }
 
 /** What the providers are told, plus the part only the service acts on. */
@@ -279,10 +281,10 @@ function nextListCursor(
   previous: ListCursor | undefined,
   /** What the host handed over, before the rows already sent were dropped from it. */
   fetched: ReadonlyArray<ProviderIssue>,
-): string | null {
+) {
   // The host had nothing at all, so there is no row to carry on from — and repeating the cursor
   // that produced the empty slice would ask the same question forever.
-  if (fetched.length === 0) return null;
+  if (fetched.length === 0) return { cursor: null, limitReached: false };
   // Taken from what the host answered rather than from what survived de-duplication: a slice can
   // be entirely rows already sent — a hundred issues touched in the same second is one triage
   // afternoon — and reading "nothing new" as "nothing left" would end the walk on the instant it
@@ -303,7 +305,7 @@ function listCursorAt(
   boundary: string,
   /** This repository's own rows in the slice, before the ones already sent were dropped. */
   fetched: ReadonlyArray<ProviderIssue>,
-): string {
+) {
   // De-duplicated because the boundary instant is asked for inclusively: the rows already named
   // here come back with the next slice and would otherwise be named a second time, growing the
   // cursor by one number per round trip until it outgrows what the page may send back.
@@ -313,7 +315,9 @@ function listCursorAt(
       ...fetched.filter((item) => item.updatedAt === boundary).map((item) => item.number),
     ]),
   ];
-  return `${boundary}|${RETIRED_DELIVERED_COUNT}|${seenAt.join(",")}`;
+  const cursor = `${boundary}|${RETIRED_DELIVERED_COUNT}|${seenAt.join(",")}`;
+  const limitReached = cursor.length > ISSUE_LIST_CURSOR_MAX_LENGTH;
+  return { cursor: limitReached ? null : cursor, limitReached };
 }
 
 /**
@@ -934,16 +938,18 @@ export const make = Effect.gen(function* () {
                       item.updatedAt !== cursor.updatedBefore ||
                       !cursor.seenAt.includes(item.number),
                   );
+            const continuation =
+              sort === "updated" && order === "desc" && page.continues && page.truncated
+                ? nextListCursor(cursor, page.items)
+                : null;
             return {
               projectId: project.project.id,
               key,
               entries: items.map((item) => toEntry({ project, item })),
               errors: [],
               truncated: page.truncated,
-              nextCursor:
-                sort === "updated" && order === "desc" && page.continues && page.truncated
-                  ? nextListCursor(cursor, page.items)
-                  : null,
+              nextCursor: continuation?.cursor ?? null,
+              ...(continuation?.limitReached ? { cursorLimitReached: true } : {}),
             };
           }),
           // One unreadable repository must not blank the page — including the one whose tracker
@@ -1047,20 +1053,22 @@ export const make = Effect.gen(function* () {
                           item.updatedAt !== cursorHere.updatedBefore ||
                           !cursorHere.seenAt.includes(item.number),
                       );
+                const continuation =
+                  sort === "updated" &&
+                  order === "desc" &&
+                  page.truncated &&
+                  !page.ceilingReached &&
+                  boundary !== null
+                    ? listCursorAt(cursorHere, boundary, fetched)
+                    : null;
                 return Effect.succeed({
                   projectId: project.project.id,
                   key: listCursorKey(project),
                   entries: items.map((item) => toEntry({ project, item })),
                   errors: [],
                   truncated: page.truncated || page.ceilingReached === true,
-                  nextCursor:
-                    sort === "updated" &&
-                    order === "desc" &&
-                    page.truncated &&
-                    !page.ceilingReached &&
-                    boundary !== null
-                      ? listCursorAt(cursorHere, boundary, fetched)
-                      : null,
+                  nextCursor: continuation?.cursor ?? null,
+                  ...(continuation?.limitReached ? { cursorLimitReached: true } : {}),
                 });
               },
               { concurrency: REPOSITORY_CONCURRENCY },
@@ -1117,6 +1125,7 @@ export const make = Effect.gen(function* () {
         errors,
         truncated: batches.some((batch) => batch.truncated),
         nextCursors,
+        ...(batches.some((batch) => batch.cursorLimitReached) ? { cursorLimitReached: true } : {}),
       };
     });
 

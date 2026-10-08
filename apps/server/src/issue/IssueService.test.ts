@@ -14,6 +14,8 @@ import * as Redacted from "effect/Redacted";
 import {
   issueProjectSourceKey,
   issueSourceKey,
+  IssueListInput,
+  IssueListResult,
   type IssueCapabilities,
   type IssueTemplateList,
   type IssueProviderKind,
@@ -32,6 +34,7 @@ import {
   type ProviderIssue,
   type ProviderIssueDetail,
   type IssueAdapter,
+  type ProviderListCursor,
 } from "./IssueProvider.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
@@ -961,6 +964,147 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
   }),
 );
 
+it.effect.each([
+  ["repository", 600, 100_000],
+  ["grouped", 600, 100_000],
+  ["repository", 1000, 100_000_000],
+  ["grouped", 1000, 100_000_000],
+] as const)("round-trips a large %s continuation with %i tied issues", ([mode, count, start]) =>
+  Effect.gen(function* () {
+    const boundary = "2026-07-02T00:00:00Z";
+    const numbers = Array.from({ length: count }, (_, index) => start + index);
+    const rows = numbers.map((number) => batchedIssue(number, "acme/web", boundary));
+    let calls = 0;
+    const read = (cursor: ProviderListCursor | undefined) => {
+      calls++;
+      if (calls === 1) {
+        assert.isUndefined(cursor);
+        return Effect.succeed({ items: rows, truncated: true, continues: true });
+      }
+      assert.strictEqual(cursor?.updatedBefore, boundary);
+      assert.deepStrictEqual(
+        mode === "grouped" ? cursor?.seenAtByRepository?.["acme/web"] : cursor?.seenAt,
+        calls === 2 ? numbers : [...numbers, start + count],
+      );
+      return Effect.succeed({
+        items: [
+          rows[0]!,
+          batchedIssue(start + count, "acme/web", boundary),
+          ...(calls === 2
+            ? []
+            : [batchedIssue(start + count + 1, "acme/web", "2026-07-01T00:00:00Z")]),
+        ],
+        truncated: true,
+        continues: true,
+      });
+    };
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          listIssues: ({ cursor }) => read(cursor),
+          ...(mode === "grouped" ? { listIssuesAcross: ({ cursor }) => read(cursor) } : {}),
+        }),
+      ],
+    });
+    const outputCodec = Schema.toCodecJson(IssueListResult);
+    const result = yield* service.list({ state: "open", limit: 99 });
+    assert.isAbove(result.nextCursors[cursorKey("acme/web")]!.length, 4096);
+    const first = yield* Schema.decodeUnknownEffect(outputCodec)(
+      yield* Schema.encodeUnknownEffect(outputCodec)(result),
+    );
+    assert.deepStrictEqual(first, result);
+    assert.isUndefined(first.cursorLimitReached);
+    assert.deepStrictEqual(first.entries.map((entry) => entry.number).toSorted(), numbers);
+    const inputCodec = Schema.toCodecJson(IssueListInput);
+    const input = yield* Schema.decodeUnknownEffect(inputCodec)(
+      yield* Schema.encodeUnknownEffect(inputCodec)({
+        state: "open",
+        limit: 99,
+        cursors: first.nextCursors,
+      }),
+    );
+    const second = yield* Schema.decodeUnknownEffect(outputCodec)(
+      yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(input)),
+    );
+    assert.deepStrictEqual(
+      second.entries.map((entry) => entry.number),
+      [start + count],
+    );
+    assert.deepStrictEqual(second.nextCursors, {
+      [cursorKey("acme/web")]: `${boundary}|0|${[...numbers, start + count].join(",")}`,
+    });
+    const continuation = yield* Schema.decodeUnknownEffect(inputCodec)(
+      yield* Schema.encodeUnknownEffect(inputCodec)({
+        state: "open",
+        limit: 99,
+        cursors: second.nextCursors,
+      }),
+    );
+    const third = yield* Schema.decodeUnknownEffect(outputCodec)(
+      yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(continuation)),
+    );
+    assert.deepStrictEqual(
+      third.entries.map((entry) => entry.number),
+      [start + count + 1],
+    );
+    assert.deepStrictEqual(third.nextCursors, {
+      [cursorKey("acme/web")]: `2026-07-01T00:00:00Z|0|${start + count + 1}`,
+    });
+    assert.strictEqual(calls, 3);
+  }),
+);
+
+it.effect.each(["repository", "grouped"] as const)(
+  "reports a truncated %s page when its complete continuation exceeds the wire bound",
+  (mode) =>
+    Effect.gen(function* () {
+      const boundary = "2026-07-02T00:00:00Z";
+      const numbers = Array.from({ length: 1636 }, (_, index) => 100_000_000 + index);
+      const read = (cursor: ProviderListCursor | undefined) => {
+        assert.deepStrictEqual(
+          mode === "grouped" ? cursor?.seenAtByRepository?.["acme/web"] : cursor?.seenAt,
+          numbers,
+        );
+        return Effect.succeed({
+          items: [
+            batchedIssue(numbers[0]!, "acme/web", boundary),
+            batchedIssue(200_000_000, "acme/web", boundary),
+          ],
+          truncated: true,
+          continues: true,
+        });
+      };
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("github", {
+            listIssues: ({ cursor }) => read(cursor),
+            ...(mode === "grouped" ? { listIssuesAcross: ({ cursor }) => read(cursor) } : {}),
+          }),
+        ],
+      });
+      const inputCodec = Schema.toCodecJson(IssueListInput);
+      const input = yield* Schema.decodeUnknownEffect(inputCodec)(
+        yield* Schema.encodeUnknownEffect(inputCodec)({
+          state: "open",
+          cursors: { [cursorKey("acme/web")]: `${boundary}|0|${numbers.join(",")}` },
+        }),
+      );
+      const outputCodec = Schema.toCodecJson(IssueListResult);
+      const result = yield* Schema.decodeUnknownEffect(outputCodec)(
+        yield* Schema.encodeUnknownEffect(outputCodec)(yield* service.list(input)),
+      );
+      assert.deepStrictEqual(
+        result.entries.map((entry) => entry.number),
+        [200_000_000],
+      );
+      assert.isTrue(result.truncated);
+      assert.isTrue(result.cursorLimitReached);
+      assert.deepStrictEqual(result.nextCursors, {});
+    }),
+);
+
 it.effect("carries on from a slice that was nothing but rows it had already sent", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
@@ -988,6 +1132,63 @@ it.effect("carries on from a slice that was nothing but rows it had already sent
     assert.deepStrictEqual(result.nextCursors, {
       [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|0|7",
     });
+  }),
+);
+
+it.effect("keeps other repositories paging when one complete cursor exceeds its bound", () =>
+  Effect.gen(function* () {
+    const boundary = "2026-07-02T00:00:00Z";
+    const numbers = Array.from({ length: 1636 }, (_, index) => 100_000_000 + index);
+    let calls = 0;
+    const service = yield* makeService({
+      projects: TWO_PROJECTS,
+      providers: [
+        fakeProvider("github", {
+          listIssues: () => Effect.die("must use grouped continuation"),
+          listIssuesAcross: ({ repositories, cursor }) => {
+            calls++;
+            if (calls === 1) {
+              assert.deepStrictEqual(cursor?.seenAtByRepository, {
+                "acme/web": numbers,
+                "acme/api": [7],
+              });
+              return Effect.succeed({
+                items: [
+                  batchedIssue(200_000_000, "acme/web", boundary),
+                  batchedIssue(8, "acme/api", boundary),
+                ],
+                truncated: true,
+              });
+            }
+            assert.deepStrictEqual(repositories, ["acme/api"]);
+            assert.deepStrictEqual(cursor?.seenAtByRepository, { "acme/api": [7, 8] });
+            return Effect.succeed({
+              items: [batchedIssue(9, "acme/api", "2026-07-01T00:00:00Z")],
+              truncated: false,
+            });
+          },
+        }),
+      ],
+    });
+    const first = yield* service.list({
+      state: "open",
+      cursors: {
+        [cursorKey("acme/web")]: `${boundary}|0|${numbers.join(",")}`,
+        [cursorKey("acme/api")]: `${boundary}|0|7`,
+      },
+    });
+    assert.isTrue(first.cursorLimitReached);
+    assert.isTrue(first.truncated);
+    assert.deepStrictEqual(first.nextCursors, { [cursorKey("acme/api")]: `${boundary}|0|7,8` });
+    const second = yield* service.list({ state: "open", cursors: first.nextCursors });
+    assert.deepStrictEqual(
+      second.entries.map((entry) => entry.number),
+      [9],
+    );
+    assert.isUndefined(second.cursorLimitReached);
+    assert.isFalse(second.truncated);
+    assert.deepStrictEqual(second.nextCursors, {});
+    assert.strictEqual(calls, 2);
   }),
 );
 
