@@ -9,6 +9,11 @@ const runtime = vi.hoisted(() => ({ current: null as { status: string } | null }
 const refreshes = vi.hoisted(() => new Map<string, number>());
 const pending = vi.hoisted(() => new Set<string>());
 const invalidate = vi.hoisted(() => vi.fn());
+const served = vi.hoisted(() => new Map<string, unknown>());
+const failed = vi.hoisted(() => new Set<string>());
+const open = vi.hoisted(() => vi.fn());
+const openInBrowser = vi.hoisted(() => vi.fn());
+vi.mock("~/lib/openIssueLink", () => ({ openLinkInBrowser: openInBrowser }));
 vi.mock("~/state/entities", () => ({
   useThreadShell: () => (runtime.current ? { runtime: runtime.current } : null),
 }));
@@ -25,7 +30,12 @@ vi.mock("~/state/query", async () => {
   const { useCallback } = await import("react");
   return {
     useEnvironmentQuery: ({ projectId }: { projectId: string }) => ({
-      data: pending.has(projectId) ? null : issues.find((issue) => issue.projectId === projectId),
+      data: pending.has(projectId)
+        ? null
+        : served.has(projectId)
+          ? served.get(projectId)
+          : issues.find((issue) => issue.projectId === projectId),
+      error: failed.has(projectId) ? "The environment request failed." : null,
       isPending: pending.has(projectId),
       refresh: useCallback(
         () => refreshes.set(projectId, (refreshes.get(projectId) ?? 0) + 1),
@@ -81,7 +91,11 @@ afterEach(() => {
   runtime.current = null;
   refreshes.clear();
   pending.clear();
+  served.clear();
+  failed.clear();
   invalidate.mockClear();
+  open.mockClear();
+  openInBrowser.mockClear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -100,24 +114,24 @@ function trees(linked: ReadonlyArray<ThreadIssueLink> = issues, environment = "e
       threadRef={null}
       linked={linked}
       projectFor={(candidate) => candidate.projectId ?? null}
-      onOpen={() => {}}
+      onOpen={open}
       onOpenPullRequest={() => {}}
       renderActions={(candidate) => <span data-url={candidate.url} />}
     />
   );
 }
 
+const treeLabels = () =>
+  renderer!.root
+    .findAll((node) => node.props.role === "tree")
+    .map((node) => node.props["aria-label"]);
 const counts = () =>
   Object.fromEntries(issues.map(({ projectId }) => [projectId, refreshes.get(projectId!) ?? 0]));
 const each = (count: number) => ({ public: count, enterprise: count, linear: count });
 
 it("keeps same-numbered issues on different hosts as separate trees with their own actions", () => {
   mount(issues.slice(0, 2));
-  expect(
-    renderer!.root
-      .findAll((node) => node.props.role === "tree")
-      .map((node) => node.props["aria-label"]),
-  ).toEqual(["Public", "Enterprise"]);
+  expect(treeLabels()).toEqual(["Public", "Enterprise"]);
   expect(
     renderer!.root
       .findAll((node) => node.type === "span" && node.props["data-url"])
@@ -182,4 +196,47 @@ it("re-reads each tree once per finished run through the server cache", () => {
   }
   expect(counts()).toEqual(each(3));
   expect(invalidate).not.toHaveBeenCalled();
+});
+
+it("shows a tree only while the tracker answers with the saved issue", () => {
+  const linear = issues[2]!;
+  served.set("linear", { ...linear, title: "Renamed", url: `${linear.url}-renamed?x=1` });
+  mount([linear]);
+  expect(treeLabels()).toEqual(["Renamed"]);
+  act(() =>
+    renderer!.root
+      .find((node) => node.type === "button" && node.props["aria-current"])
+      .props.onClick(),
+  );
+  expect(open).toHaveBeenCalledOnce();
+
+  for (const answer of [
+    { ...linear, title: "Other org", url: "https://linear.app/other/issue/ENG-3/linear" },
+    { ...linear, provider: "github" },
+    null,
+  ]) {
+    served.set("linear", answer);
+    act(() => renderer!.update(trees([linear])));
+    expect(treeLabels()).toEqual([]);
+    act(() => renderer!.root.findByType("button").props.onClick());
+  }
+  expect(openInBrowser.mock.calls).toEqual([[linear.url], [linear.url], [linear.url]]);
+  expect(open).toHaveBeenCalledOnce();
+
+  pending.add("linear");
+  act(() => renderer!.update(trees([linear])));
+  expect(treeLabels()).toEqual([]);
+  expect(renderer!.root.findAllByType("button")).toEqual([]);
+});
+
+it("opens the saved URL instead of a tree kept from before a failed refresh", () => {
+  const linear = issues[2]!;
+  mount([linear]);
+  expect(treeLabels()).toEqual(["Linear"]);
+  failed.add("linear");
+  act(() => renderer!.update(trees([linear])));
+  expect(treeLabels()).toEqual([]);
+  act(() => renderer!.root.findByType("button").props.onClick());
+  expect(openInBrowser).toHaveBeenCalledExactlyOnceWith(linear.url);
+  expect(open).not.toHaveBeenCalled();
 });

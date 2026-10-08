@@ -12,6 +12,7 @@ import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
+import { openLinkInBrowser } from "~/lib/openIssueLink";
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
@@ -178,7 +179,7 @@ export function ThreadIssueTrees({
         return (
           <div key={key}>
             {renderFallback?.(issue) ?? (
-              <PlainIssueRow issue={issue} onOpen={() => onOpen(issue, issue)} />
+              <PlainIssueRow issue={issue} onOpen={() => openLinkInBrowser(issue.url)} />
             )}
           </div>
         );
@@ -248,8 +249,15 @@ function LinkedIssueRead({
     refresh();
   }, [refresh, refreshToken]);
 
-  const detail = detailQuery.data ?? null;
-  const pending = detail === null && detailQuery.isPending;
+  const data = detailQuery.data ?? null;
+  const detail =
+    data !== null &&
+    detailQuery.error === null &&
+    data.provider === issue.provider &&
+    normalizeWorkItemLinkKey(data).url === normalizeWorkItemLinkKey(issue).url
+      ? data
+      : null;
+  const pending = data === null && detailQuery.isPending;
   const key = threadIssueKey(issue);
   useEffect(() => onRead(key, { detail, pending }), [detail, key, onRead, pending]);
   return null;

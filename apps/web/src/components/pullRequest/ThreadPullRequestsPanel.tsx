@@ -179,11 +179,9 @@ const isSourceControlProvider = Schema.is(SourceControlProviderKind);
 
 function IssueRow({
   issue,
-  onOpen,
   onUnlink,
 }: {
   issue: ThreadIssueLink;
-  onOpen: (issue: ThreadIssueLink) => void;
   onUnlink: (issue: ThreadIssueLink) => void;
 }) {
   const menu = useRowMenu();
@@ -193,7 +191,7 @@ function IssueRow({
   const openIssue = (event: MouseEvent<HTMLElement>) => {
     if (shouldOpenPullRequestExternally(event)) return;
     event.preventDefault();
-    onOpen(issue);
+    openLinkInBrowser(issue.url);
   };
   return (
     <div
@@ -558,10 +556,6 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
     },
     [projects, supportsPullRequests, threadRef],
   );
-  const handleOpenIssue = useCallback(
-    (issue: ThreadIssueLink) => openThreadIssue(issue, issue),
-    [openThreadIssue],
-  );
   const handleUnlink = useCallback(
     (link: ThreadPullRequestLink) => {
       void unlink({
@@ -670,9 +664,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               projectFor={issueProjectId}
               onOpen={openThreadIssue}
               onOpenPullRequest={openTreePullRequest}
-              renderFallback={(issue) => (
-                <IssueRow issue={issue} onOpen={handleOpenIssue} onUnlink={handleUnlinkIssue} />
-              )}
+              renderFallback={(issue) => <IssueRow issue={issue} onUnlink={handleUnlinkIssue} />}
               renderActions={(issue) => (
                 <IssueTreeActions issue={issue} onUnlink={handleUnlinkIssue} />
               )}
