@@ -14,7 +14,7 @@ import { cn } from "../../lib/utils";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
-  THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./threadDetailsPanelStyles";
 
@@ -181,7 +181,7 @@ export function ThreadLineageWorkflowRow({
   return (
     // The flag lets the lineage list trade its compact height for the open tree.
     <li className="group" data-workflow-expanded={expanded ? "" : undefined}>
-      <div className={cn("relative", THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS)}>
+      <div className={cn("relative", THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS)}>
         {header}
         {onStop ? (
           <div className="pointer-events-none absolute right-9 top-1/2 -translate-y-1/2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
