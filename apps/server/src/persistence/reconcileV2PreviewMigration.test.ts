@@ -42,8 +42,9 @@ describe("V2 preview upgrade", () => {
         [57, "ScheduledTaskWebhooks"],
         [58, "WebhookRelayDeliveries"],
         [59, "McpAppModelContext"],
-        [60, "ProjectionThreadIssues"],
-        [61, "WorkItemLinks"],
+        [60, "ThreadSnapshotWindowIndexes"],
+        [61, "ProjectionThreadIssues"],
+        [62, "WorkItemLinks"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -126,33 +127,34 @@ describe("V2 preview upgrade", () => {
         [57, "ScheduledTaskWebhooks"],
         [58, "WebhookRelayDeliveries"],
         [59, "McpAppModelContext"],
-        [60, "ProjectionThreadIssues"],
-        [61, "WorkItemLinks"],
+        [60, "ThreadSnapshotWindowIndexes"],
+        [61, "ProjectionThreadIssues"],
+        [62, "WorkItemLinks"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("upgrades main migration 59 without losing MCP app context", () =>
+  it.effect.each([59, 60])("upgrades main migration %s without losing MCP app context", (mainId) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 59 });
+      yield* runMigrations({ toMigrationInclusive: mainId });
       yield* sql`INSERT INTO mcp_app_model_context VALUES ('thread', 'item', 'server', 'tool', 'context', '2026-10-07')`;
       const context = yield* sql`SELECT * FROM mcp_app_model_context`;
       const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [60, "ProjectionThreadIssues"],
-        [61, "WorkItemLinks"],
-      ]);
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        migrationManifest.filter(([id]) => id > mainId),
+      );
       assert.deepStrictEqual(yield* sql`SELECT * FROM mcp_app_model_context`, context);
       assert.deepStrictEqual(
-        yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= 59 ORDER BY migration_id`,
+        yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= ${mainId} ORDER BY migration_id`,
         history,
       );
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([57, 59, 60])("upgrades issue migration %s without losing links", (issueId) =>
+  it.effect.each([57, 59, 60, 61])("upgrades issue migration %s without losing links", (issueId) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: issueId - 1 });
@@ -171,13 +173,23 @@ describe("V2 preview upgrade", () => {
       const links = yield* sql`SELECT * FROM work_item_links`;
       const issueHistory = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
       yield* runMigrations();
+      assert.deepStrictEqual(
+        yield* sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
+          'orchestration_v2_projection_turn_items_user_message_idx',
+          'orchestration_v2_projection_nodes_live_idx'
+        ) ORDER BY name`,
+        [
+          { name: "orchestration_v2_projection_nodes_live_idx" },
+          { name: "orchestration_v2_projection_turn_items_user_message_idx" },
+        ],
+      );
       assert.deepStrictEqual(yield* sql`SELECT * FROM projection_threads`, threads);
       assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
       assert.deepStrictEqual(
         yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id < ${issueId} ORDER BY migration_id`,
         baseHistory,
       );
-      if (issueId === 60) {
+      if (issueId === 61) {
         assert.deepStrictEqual(
           yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
           issueHistory,
@@ -196,24 +208,26 @@ describe("V2 preview upgrade", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("refuses unknown migrations after old issue migration 59 without changing links", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 58 });
-      yield* ProjectionThreadIssues;
-      yield* WorkItemLinks;
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
-        VALUES (59, 'ProjectionThreadIssues'), (60, 'UnknownFork')`;
-      yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
-      const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
-      const links = yield* sql`SELECT * FROM work_item_links`;
-      assert.ok(Exit.isFailure(yield* Effect.exit(runMigrations())));
-      assert.deepStrictEqual(
-        yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
-        history,
-      );
-      assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect.each([59, 60])(
+    "refuses unknown migrations after old issue migration %s without changing links",
+    (issueId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: issueId - 1 });
+        yield* ProjectionThreadIssues;
+        yield* WorkItemLinks;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (${issueId}, 'ProjectionThreadIssues'), (${issueId + 1}, 'UnknownFork')`;
+        yield* sql`INSERT INTO work_item_links VALUES ('github', 'issue', 'a/b', 1, 'Issue', 'github', 'pr', 'a/b', 2, 'Fix')`;
+        const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        const links = yield* sql`SELECT * FROM work_item_links`;
+        assert.ok(Exit.isFailure(yield* Effect.exit(runMigrations())));
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
+          history,
+        );
+        assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("refuses unexpected later migrations without modifying their history", () =>
