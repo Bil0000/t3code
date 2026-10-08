@@ -642,22 +642,36 @@ it.effect(
         const variables = body.variables as {
           first?: number;
           last?: number;
+          after?: string;
+          before?: string;
           filter: { updatedAt?: { lte: string }; number?: { nin: number[] } };
         };
-        const selected = rows.filter(
+        const filtered = rows.filter(
           (row) =>
             (variables.filter.updatedAt === undefined ||
               row.updatedAt <= variables.filter.updatedAt.lte) &&
             !variables.filter.number?.nin.includes(row.number),
         );
+        const selected = filtered.slice(
+          variables.after === undefined
+            ? 0
+            : filtered.findIndex((row) => row.id === variables.after) + 1,
+          variables.before === undefined
+            ? undefined
+            : filtered.findIndex((row) => row.id === variables.before),
+        );
         const size = variables.first ?? variables.last ?? 50;
+        const nodes =
+          variables.last === undefined ? selected.slice(0, size) : selected.slice(-size);
         return {
           data: {
             issues: {
-              nodes: variables.last === undefined ? selected.slice(0, size) : selected.slice(-size),
+              nodes,
               pageInfo: {
                 hasNextPage: variables.last === undefined && selected.length > size,
                 hasPreviousPage: variables.last !== undefined && selected.length > size,
+                startCursor: nodes[0]?.id ?? null,
+                endCursor: nodes.at(-1)?.id ?? null,
               },
             },
           },
@@ -706,9 +720,9 @@ it.effect(
       assert.isFalse(oldest.continues);
       assert.include(String(requests.at(-1)?.body.query), "last: $last");
       const cappedOldest = yield* provider.listIssues({ ...input, limit: 500, order: "asc" });
-      assert.strictEqual(cappedOldest.items.length, 250);
+      assert.strictEqual(cappedOldest.items.length, 263);
       assert.strictEqual(cappedOldest.items[0]?.number, 263);
-      assert.isTrue(cappedOldest.truncated);
+      assert.isFalse(cappedOldest.truncated);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -719,6 +733,397 @@ it.effect(
     );
   },
 );
+
+it.effect.each([
+  [250, "desc"],
+  [198, "asc"],
+  [500, "asc"],
+] as const)(
+  "fetches the complete %s-row %s Linear prefix within the query cost limit",
+  ([limit, order]) => {
+    const rows = Array.from({ length: 563 }, (_, index) => ({
+      id: `issue-${index + 1}`,
+      identifier: `ENG-${index + 1}`,
+      number: index + 1,
+      title: `Issue ${index + 1}`,
+      url: `https://linear.app/acme/issue/ENG-${index + 1}`,
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:00.000Z",
+      state: { name: "Open", type: "started" },
+      labels: {
+        nodes: Array.from({ length: 50 }, (_, label) => ({
+          name: `Label ${label + 1}`,
+          color: "abcdef",
+        })),
+      },
+    }));
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: (body) => {
+        const query = String(body.query);
+        const variables = body.variables as {
+          first?: number;
+          last?: number;
+          after?: string;
+          before?: string;
+          filter: { number?: { nin: number[] } };
+        };
+        const fields = query.match(/nodes \{([\s\S]+)\}\s+pageInfo/)![1]!;
+        const labels = fields.match(/labels(?:\(first: (\d+)\))?\s*\{\s*nodes\s*\{([^{}]+)\}/)!;
+        const labelCost =
+          Number(labels[1] ?? 50) * (1 + labels[2]!.trim().split(/\s+/).length * 0.1);
+        const objectCost = [
+          ...fields.matchAll(/(?:state|creator|assignee)\s*\{([^{}]+)\}/g),
+        ].reduce((cost, match) => cost + 1 + match[1]!.trim().split(/\s+/).length * 0.1, 0);
+        const scalarFields = fields
+          .replace(/labels(?:\(first: \d+\))?\s*\{\s*nodes\s*\{[^{}]+\}\s*\}/, "")
+          .replace(/\w+\s*\{[^{}]+\}/g, "")
+          .trim()
+          .split(/\s+/);
+        const pageFields = query
+          .match(/pageInfo\s*\{([^{}]+)\}/)![1]!
+          .trim()
+          .split(/\s+/);
+        const size = variables.first ?? variables.last ?? 50;
+        const complexity = Math.ceil(
+          size * (1 + scalarFields.length * 0.1 + objectCost + labelCost) +
+            1 +
+            pageFields.length * 0.1,
+        );
+        assert.include(query, "labels { nodes { name color } }");
+        if (complexity > 10000)
+          return { errors: [{ message: "Query exceeds maximum complexity" }] };
+        const filtered = rows.filter((row) => !variables.filter.number?.nin.includes(row.number));
+        const selected = filtered.slice(
+          variables.after === undefined
+            ? 0
+            : filtered.findIndex((row) => row.id === variables.after) + 1,
+          variables.before === undefined
+            ? undefined
+            : filtered.findIndex((row) => row.id === variables.before),
+        );
+        const nodes =
+          variables.last === undefined ? selected.slice(0, size) : selected.slice(-size);
+        return {
+          data: {
+            issues: {
+              nodes,
+              pageInfo: {
+                hasNextPage: variables.last === undefined && selected.length > size,
+                hasPreviousPage: variables.last !== undefined && selected.length > size,
+                startCursor: nodes[0]?.id ?? null,
+                endCursor: nodes.at(-1)?.id ?? null,
+              },
+            },
+          },
+        };
+      },
+    });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      const input = {
+        teamKey: "ENG",
+        state: "all",
+        involvement: "all",
+        viewer: "user",
+        limit,
+        order,
+      } as const;
+      const page = yield* api.listIssues(input);
+      const expected = order === "asc" ? rows.toReversed().slice(0, limit) : rows.slice(0, limit);
+      assert.lengthOf(page.issues, limit);
+      assert.deepStrictEqual(page.issues, expected);
+      assert.isTrue(page.truncated);
+      assert.isAtMost(requests.length, 4);
+      assert.isTrue(
+        requests.every(({ body }) => {
+          const variables = body.variables as { first?: number; last?: number };
+          return (variables.first ?? variables.last ?? 0) <= 150;
+        }),
+      );
+      if (order === "desc") {
+        const next = yield* api.listIssues({
+          ...input,
+          cursor: {
+            updatedBefore: page.issues.at(-1)!.updatedAt,
+            seenAt: page.issues.map((issue) => issue.number),
+          },
+        });
+        assert.deepStrictEqual(next.issues, rows.slice(limit, limit * 2));
+        assert.isTrue(next.truncated);
+      }
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("checks the complexity balance before fetching another Linear list page", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: () =>
+      Response.json(
+        {
+          data: {
+            issues: {
+              nodes: Array.from({ length: 150 }, (_, index) => ({
+                id: `issue-${index}`,
+                identifier: `ENG-${index}`,
+                number: index,
+                title: "Issue",
+                url: "https://linear.app/issue",
+                createdAt: "2026-07-01T00:00:00.000Z",
+                updatedAt: "2026-07-03T00:00:00.000Z",
+                state: { name: "Open", type: "started" },
+              })),
+              pageInfo: { hasNextPage: true, hasPreviousPage: false, endCursor: "next" },
+            },
+          },
+        },
+        {
+          headers: {
+            "X-RateLimit-Complexity-Remaining": "100",
+            "X-RateLimit-Complexity-Reset": "61000",
+          },
+        },
+      ),
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    const error = yield* api
+      .listIssues({ teamKey: "ENG", state: "all", involvement: "all", viewer: "user", limit: 198 })
+      .pipe(Effect.flip);
+    assert.equal(error.retryAt, 61000);
+    assert.equal(requests.length, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each(["requests", "complexity"])(
+  "keeps the later shared Linear %s reset when a new key is verified",
+  (kind) => {
+    const { layer, requests } = makeLayer({
+      envToken: "known-key",
+      credentials: pool(["new", "new-key"]),
+      response: (_body, authorization) =>
+        Response.json(
+          { data: { viewer: { id: "user" } } },
+          {
+            headers:
+              authorization === "new-key"
+                ? {
+                    "X-RateLimit-Complexity-Remaining": "9999",
+                    "X-RateLimit-Complexity-Reset": "61000",
+                    "X-RateLimit-Requests-Remaining": "20",
+                  }
+                : {
+                    [`X-RateLimit-${kind}-Remaining`]: kind === "complexity" ? "4000" : "0",
+                    [`X-RateLimit-${kind}-Reset`]: "121000",
+                  },
+          },
+        ),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      yield* api.getViewer({});
+      yield* api.getViewer({ credentialId: "new" });
+      for (const credentialId of [undefined, "new"])
+        assert.equal(
+          (yield* api
+            .getIssue({
+              identifier: "ENG-1",
+              ...(credentialId === undefined ? {} : { credentialId }),
+            })
+            .pipe(Effect.flip)).retryAt,
+          121000,
+        );
+      assert.equal(requests.length, 2);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("retains an unknown token's endpoint pause when its Linear user is verified", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "known-key",
+    credentials: pool(["new", "new-key"]),
+    response: (body) =>
+      String(body.query).includes("T3LinearIssues")
+        ? Response.json(
+            {},
+            {
+              status: 429,
+              headers: {
+                "X-RateLimit-Endpoint-Requests-Remaining": "0",
+                "X-RateLimit-Endpoint-Requests-Reset": "61000",
+              },
+            },
+          )
+        : { data: { viewer: { id: "user" } } },
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    const input = {
+      teamKey: "ENG",
+      state: "all",
+      involvement: "all",
+      viewer: "user",
+      limit: 5,
+    } as const;
+    yield* api.getViewer({});
+    assert.equal(
+      (yield* api.listIssues({ ...input, credentialId: "new" }).pipe(Effect.flip)).retryAt,
+      61000,
+    );
+    yield* api.getViewer({ credentialId: "new" });
+    for (const credentialId of [undefined, "new"])
+      assert.equal(
+        (yield* api
+          .listIssues({ ...input, ...(credentialId === undefined ? {} : { credentialId }) })
+          .pipe(Effect.flip)).retryAt,
+        61000,
+      );
+    assert.equal(requests.length, 3);
+    yield* api.getViewer({});
+    assert.equal(requests.length, 4);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each(["requests", "complexity", "rate-limit", "endpoint", "low-budget"])(
+  "shares verified Linear user %s limits across keys without joining different users",
+  (kind) => {
+    let limited = false;
+    const { layer, requests } = makeLayer({
+      envToken: "environment-key",
+      credentials: pool(["saved", "saved-key"], ["new", "new-key"], ["same-user", "other-key"]),
+      response: (body, authorization) => {
+        const query = String(body.query);
+        if (query.includes("T3LinearIssue(")) return { data: { issue: null } };
+        if (query.includes("T3LinearComment"))
+          return { data: { commentCreate: { success: true } } };
+        const payload = {
+          data: { viewer: { id: authorization === "other-key" ? "other-user" : "user" } },
+        };
+        if (!limited || authorization !== "environment-key") return payload;
+        return Response.json(payload, {
+          status: kind === "rate-limit" || kind === "endpoint" ? 429 : 200,
+          headers:
+            kind === "rate-limit"
+              ? { "Retry-After": "60" }
+              : kind === "low-budget"
+                ? {
+                    "X-RateLimit-Complexity-Remaining": "4000",
+                    "X-RateLimit-Complexity-Reset": "61000",
+                  }
+                : {
+                    [`X-RateLimit-${kind === "endpoint" ? "Endpoint-Requests" : kind}-Remaining`]:
+                      "0",
+                    [`X-RateLimit-${kind === "endpoint" ? "Endpoint-Requests" : kind}-Reset`]:
+                      "61000",
+                  },
+        });
+      },
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      yield* api.getViewer({});
+      yield* api.getViewer({ credentialId: "saved" });
+      limited = true;
+      yield* api.getViewer({}).pipe(Effect.exit);
+      for (const credentialId of [undefined, "saved"]) {
+        const error = yield* (
+          kind === "low-budget"
+            ? api.getIssue({
+                identifier: "ENG-1",
+                ...(credentialId === undefined ? {} : { credentialId }),
+              })
+            : api.getViewer(credentialId === undefined ? {} : { credentialId })
+        ).pipe(Effect.flip);
+        assert.equal(error.reason, "rate-limited");
+        assert.equal(error.retryAt, 61000);
+        if (kind === "low-budget")
+          assert.equal(
+            (yield* api
+              .listIssues({
+                teamKey: "ENG",
+                state: "all",
+                involvement: "all",
+                viewer: "user",
+                limit: 198,
+                ...(credentialId === undefined ? {} : { credentialId }),
+              })
+              .pipe(Effect.flip)).reason,
+            "rate-limited",
+          );
+      }
+      assert.equal(requests.length, 3);
+      yield* api.getViewer({ credentialId: "new" });
+      assert.equal(requests.length, 4);
+      assert.equal(
+        (yield* (
+          kind === "low-budget"
+            ? api.getIssue({ identifier: "ENG-1", credentialId: "new" })
+            : api.getViewer({ credentialId: "new" })
+        ).pipe(Effect.flip)).retryAt,
+        61000,
+      );
+      assert.equal(requests.length, 4);
+      yield* api.getViewer({ credentialId: "same-user" });
+      assert.equal(
+        (yield* api.getIssue({ identifier: "ENG-1", credentialId: "same-user" }).pipe(Effect.flip))
+          .reason,
+        "failed",
+      );
+      assert.equal(requests.length, 6);
+      if (kind === "endpoint") {
+        yield* api.comment({ issueId: "ENG-1", body: "Hello", credentialId: "saved" });
+        assert.equal(requests.length, 7);
+      }
+      limited = false;
+      yield* TestClock.setTime(61000);
+      yield* api.getViewer({});
+      yield* api.getViewer({ credentialId: "saved" });
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("does not accept a Linear viewer identity from a failed response", () => {
+  let limited = false;
+  let failed = true;
+  const { layer, requests } = makeLayer({
+    envToken: "known-key",
+    credentials: pool(["same-user", "unknown-key"]),
+    response: (_, authorization) => {
+      if (authorization === "unknown-key")
+        return {
+          data: { viewer: { id: "user" } },
+          ...(failed ? { errors: [{ message: "Permission denied" }] } : {}),
+        };
+      return limited
+        ? Response.json({}, { status: 429, headers: { "Retry-After": "60" } })
+        : { data: { viewer: { id: "user" } } };
+    },
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({});
+    assert.equal(
+      (yield* api.getViewer({ credentialId: "same-user" }).pipe(Effect.flip)).reason,
+      "failed",
+    );
+    limited = true;
+    yield* api.getViewer({}).pipe(Effect.flip);
+    failed = false;
+    yield* api.getViewer({ credentialId: "same-user" });
+    assert.equal(requests.length, 4);
+    assert.equal(
+      (yield* api.getViewer({ credentialId: "same-user" }).pipe(Effect.flip)).reason,
+      "rate-limited",
+    );
+    assert.equal(requests.length, 4);
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("shares Linear pauses across requests, isolates tokens, and resumes at the reset", () => {
   let limited = true;
