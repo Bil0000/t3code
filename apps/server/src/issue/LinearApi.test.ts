@@ -734,6 +734,103 @@ it.effect(
   },
 );
 
+it.effect.each([true, false])(
+  "handles compound Linear endpoint limits with Endpoint-Name present: %s",
+  (named) => {
+    const { layer, requests } = makeLayer({
+      envToken: "environment-key",
+      credentials: pool(["saved", "saved-key"]),
+      response: (body) => {
+        const query = String(body.query);
+        if (query.includes("T3LinearIssueActivity"))
+          return Response.json(
+            {},
+            {
+              status: 429,
+              headers: {
+                ...(named ? { "X-RateLimit-Endpoint-Name": "viewer" } : {}),
+                "X-RateLimit-Endpoint-Requests-Remaining": "0",
+                "X-RateLimit-Endpoint-Requests-Reset": "121000",
+              },
+            },
+          );
+        if (query.includes("T3LinearIssueSummary"))
+          return {
+            data: {
+              issue: {
+                number: 1,
+                title: "Issue",
+                url: "https://linear.app/issue/ENG-1",
+                state: { name: "Open", type: "started" },
+              },
+            },
+          };
+        return { data: { viewer: { id: "user" }, teams: { nodes: [] } } };
+      },
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      yield* api.getViewer({});
+      yield* api.getViewer({ credentialId: "saved" });
+      yield* api.getActivity({ identifier: "ENG-1" }).pipe(Effect.flip);
+      assert.equal(
+        (yield* api.getViewer({ credentialId: "saved" }).pipe(Effect.flip)).retryAt,
+        121000,
+      );
+      yield* api.connection;
+      assert.equal(requests.length, 3);
+      if (named) {
+        yield* api.getIssueSummary({ identifier: "ENG-1" });
+        assert.equal(requests.length, 4);
+      } else {
+        assert.equal(
+          (yield* api.getIssueSummary({ identifier: "ENG-1" }).pipe(Effect.flip)).retryAt,
+          121000,
+        );
+        assert.equal(requests.length, 3);
+      }
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("keeps Linear reaction creation and deletion endpoint pauses separate", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) => {
+      const query = String(body.query);
+      if (query.includes("reactionCreate"))
+        return Response.json(
+          {},
+          {
+            status: 429,
+            headers: {
+              "X-RateLimit-Endpoint-Name": "reactionCreate",
+              "X-RateLimit-Endpoint-Requests-Remaining": "0",
+              "X-RateLimit-Endpoint-Requests-Reset": "121000",
+            },
+          },
+        );
+      if (query.includes("reactionDelete")) return { data: { reactionDelete: { success: true } } };
+      return {
+        data: {
+          viewer: { id: "user" },
+          issue: { reactions: [{ id: "reaction", emoji: "👍", user: { id: "user" } }] },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({});
+    yield* api.setReaction({ issueId: "ENG-1", emoji: "👍", reacted: true }).pipe(Effect.flip);
+    yield* api.setReaction({ issueId: "ENG-1", emoji: "👍", reacted: false });
+    assert.equal(requests.length, 4);
+    assert.include(String(requests.at(-1)?.body.query), "reactionDelete");
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect.each([
   [250, "desc"],
   [198, "asc"],
@@ -1495,6 +1592,158 @@ it.effect("queries and decodes team keys on Linear issue relatives", () => {
     assert.include(String(requests[0]?.body.query), "team { key }");
   }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "shares the native Linear issue endpoint across detail, summary, activity, and reaction reads",
+  () => {
+    const { layer, requests } = makeLayer({
+      envToken: "environment-key",
+      credentials: pool(["saved", "saved-key"]),
+      response: (body) =>
+        String(body.query).includes("T3LinearViewer")
+          ? { data: { viewer: { id: "user" } } }
+          : Response.json(
+              {},
+              {
+                status: 429,
+                headers: {
+                  "X-RateLimit-Endpoint-Name": "issue",
+                  "X-RateLimit-Endpoint-Requests-Remaining": "0",
+                  "X-RateLimit-Endpoint-Requests-Reset": "121000",
+                },
+              },
+            ),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      yield* api.getViewer({});
+      yield* api.getViewer({ credentialId: "saved" });
+      yield* api.getIssue({ identifier: "ENG-1" }).pipe(Effect.flip);
+      const account = { credentialId: "saved" };
+      for (const [read, operation] of [
+        [api.getIssueSummary({ identifier: "ENG-1", ...account }), "issue summary"],
+        [api.getActivity({ identifier: "ENG-1", ...account }), "issue activity"],
+        [
+          api.setReaction({ issueId: "ENG-1", emoji: "👍", reacted: false, ...account }),
+          "reaction lookup",
+        ],
+      ] as const) {
+        const error = yield* read.pipe(Effect.flip);
+        assert.equal(error.retryAt, 121000);
+        assert.equal(error.operation, operation);
+      }
+      assert.equal(requests.length, 3);
+      yield* api.getViewer(account);
+      assert.equal(requests.length, 4);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect.each([
+  [429, "requests"],
+  [400, "requests"],
+  [200, "requests"],
+  [429, "complexity"],
+  [400, "complexity"],
+  [200, "complexity"],
+] as const)(
+  "keeps separate global and endpoint resets for HTTP %s %s exhaustion",
+  ([status, kind]) => {
+    const { layer, requests } = makeLayer({
+      envToken: "environment-key",
+      credentials: pool(["saved", "saved-key"]),
+      response: (body) =>
+        String(body.query).includes("T3LinearViewer")
+          ? { data: { viewer: { id: "user" } } }
+          : Response.json(
+              { errors: [{ message: "Too many requests", extensions: { code: "RATELIMITED" } }] },
+              {
+                status,
+                headers: {
+                  [`X-RateLimit-${kind}-Remaining`]: "0",
+                  [`X-RateLimit-${kind}-Reset`]: "61000",
+                  "X-RateLimit-Endpoint-Name": "issue",
+                  "X-RateLimit-Endpoint-Requests-Remaining": "0",
+                  "X-RateLimit-Endpoint-Requests-Reset": "121000",
+                },
+              },
+            ),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      yield* api.getViewer({});
+      yield* api.getViewer({ credentialId: "saved" });
+      yield* api.getIssue({ identifier: "ENG-1" }).pipe(Effect.flip);
+      assert.equal(
+        (yield* api.getViewer({ credentialId: "saved" }).pipe(Effect.flip)).retryAt,
+        61000,
+      );
+      assert.equal(requests.length, 3);
+      yield* TestClock.setTime(61000);
+      yield* api.getViewer({ credentialId: "saved" });
+      assert.equal(requests.length, 4);
+      for (const account of [{}, { credentialId: "saved" }] as const) {
+        const error = yield* api.getIssue({ identifier: "ENG-1", ...account }).pipe(Effect.flip);
+        assert.equal(error.retryAt, 121000);
+      }
+      assert.equal(requests.length, 4);
+      yield* TestClock.setTime(121000);
+      yield* api.getIssue({ identifier: "ENG-1" }).pipe(Effect.flip);
+      assert.equal(requests.length, 5);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect(
+  "keeps a later Retry-After on the affected Linear endpoint after the global reset",
+  () => {
+    const { layer, requests } = makeLayer({
+      envToken: "environment-key",
+      credentials: pool(["saved", "saved-key"]),
+      response: (body) =>
+        String(body.query).includes("T3LinearViewer")
+          ? { data: { viewer: { id: "user" } } }
+          : Response.json(
+              {},
+              {
+                status: 429,
+                headers: {
+                  "Retry-After": "180",
+                  "X-RateLimit-Requests-Remaining": "0",
+                  "X-RateLimit-Requests-Reset": "61000",
+                  "X-RateLimit-Endpoint-Name": "issue",
+                  "X-RateLimit-Endpoint-Requests-Remaining": "0",
+                  "X-RateLimit-Endpoint-Requests-Reset": "121000",
+                },
+              },
+            ),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      yield* api.getViewer({});
+      yield* api.getViewer({ credentialId: "saved" });
+      assert.equal(
+        (yield* api.getIssue({ identifier: "ENG-1" }).pipe(Effect.flip)).retryAt,
+        181000,
+      );
+      assert.equal((yield* api.getViewer({}).pipe(Effect.flip)).retryAt, 61000);
+      yield* TestClock.setTime(61000);
+      yield* api.getViewer({});
+      yield* TestClock.setTime(121000);
+      assert.equal(
+        (yield* api.getIssue({ identifier: "ENG-1", credentialId: "saved" }).pipe(Effect.flip))
+          .retryAt,
+        181000,
+      );
+      assert.equal(requests.length, 4);
+      yield* api.getViewer({ credentialId: "saved" });
+      assert.equal(requests.length, 5);
+    }).pipe(Effect.provide(layer));
+  },
+);
 
 it.effect("an endpoint pause does not block other Linear operations", () => {
   const { layer, requests } = makeLayer({

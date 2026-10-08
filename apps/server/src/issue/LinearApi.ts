@@ -236,6 +236,9 @@ const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
     }
   }
 }`;
+const SUMMARY_QUERY = `query T3LinearIssueSummary($id: String!) {
+  issue(id: $id) { number title url state { name type } }
+}`;
 const ACTIVITY_QUERY = `query T3LinearIssueActivity($id: String!, $comments: Int!) {
   viewer { id name email avatarUrl }
   issue(id: $id) {
@@ -264,6 +267,19 @@ const COMMENT_REACTIONS_QUERY = `query T3LinearCommentReactions($id: String!) {
   viewer { id name email avatarUrl }
   comment(id: $id) { reactions { ${REACTION_FIELDS} } }
 }`;
+const QUERY_ENDPOINTS = new Map<string, ReadonlyArray<string>>([
+  [CONNECTION_QUERY, ["viewer", "teams"]],
+  [VIEWER_QUERY, ["viewer"]],
+  [LIST_QUERY, ["issues"]],
+  [ISSUE_QUERY, ["issue"]],
+  [SUMMARY_QUERY, ["issue"]],
+  [ACTIVITY_QUERY, ["viewer", "issue"]],
+  [ISSUE_REACTIONS_QUERY, ["viewer", "issue"]],
+  [COMMENT_REACTIONS_QUERY, ["viewer", "comment"]],
+  [COMMENT_MUTATION, ["commentCreate"]],
+  [REACTION_CREATE_MUTATION, ["reactionCreate"]],
+  [REACTION_DELETE_MUTATION, ["reactionDelete"]],
+]);
 
 export class LinearApiError extends Schema.TaggedError<LinearApiError>()("LinearApiError", {
   operation: Schema.String,
@@ -462,14 +478,16 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const tokenScope = Hex.encode(sha256(new TextEncoder().encode(key)));
       let credentialScope = verifiedTokenScopes.get(tokenScope) ?? tokenScope;
+      const queryEndpoints = QUERY_ENDPOINTS.get(document)!;
       if (credentialScope === tokenScope) {
         const endpoints = tokenEndpoints.get(tokenScope) ?? new Set<string>();
-        endpoints.add(operation);
+        for (const endpoint of queryEndpoints) endpoints.add(endpoint);
         tokenEndpoints.set(tokenScope, endpoints);
       }
       let lease = yield* checkRateLimit(operation, credentialScope);
-      let endpointScope = `${credentialScope}\0${operation}`;
-      let endpointLease = yield* checkRateLimit(operation, endpointScope);
+      let endpointLeases = yield* Effect.forEach(queryEndpoints, (endpoint) =>
+        checkRateLimit(operation, `${credentialScope}\0${endpoint}`),
+      );
       const now = yield* Clock.currentTimeMillis;
       const costKey = [document, variables.first, variables.last].join("\0");
       const cost =
@@ -492,7 +510,6 @@ const make = Effect.gen(function* () {
           });
         budget.remaining = Math.max(0, budget.remaining - cost);
       }
-      let endpointOnly = false;
       return yield* http
         .execute(
           HttpClientRequest.post(config.baseUrl).pipe(
@@ -538,6 +555,29 @@ const make = Effect.gen(function* () {
               });
               const endpointRemaining = response.headers["x-ratelimit-endpoint-requests-remaining"];
               const endpointReset = Number(response.headers["x-ratelimit-endpoint-requests-reset"]);
+              const reportedEndpoint = response.headers["x-ratelimit-endpoint-name"];
+              const limitedEndpoints =
+                reportedEndpoint !== undefined && queryEndpoints.includes(reportedEndpoint)
+                  ? [reportedEndpoint]
+                  : queryEndpoints;
+              const recordEndpoints = (retryAt?: number) =>
+                Effect.forEach(limitedEndpoints, (endpoint) => {
+                  const input = {
+                    ...rateLimitKey,
+                    lease: endpointLeases[queryEndpoints.indexOf(endpoint)]!,
+                    retryAt,
+                  };
+                  return (
+                    retryAt === undefined
+                      ? rateLimits.recordSuccess(input)
+                      : rateLimits.recordRateLimit(input)
+                  ).pipe(
+                    Effect.provideService(
+                      SourceControlRateLimit.CredentialScope,
+                      `${credentialScope}\0${endpoint}`,
+                    ),
+                  );
+                });
               const endpointRetryAt =
                 endpointRemaining !== undefined &&
                 Number(endpointRemaining) <= 0 &&
@@ -545,19 +585,40 @@ const make = Effect.gen(function* () {
                 endpointReset > now
                   ? endpointReset
                   : undefined;
-              endpointOnly = resets.length === 0 && endpointRetryAt !== undefined;
-              const retryAt =
-                SourceControlRateLimit.retryAtFromHeader(response.headers["retry-after"], now) ??
-                (resets.length > 0 ? Math.max(...resets) : endpointRetryAt);
+              const retryAfter = SourceControlRateLimit.retryAtFromHeader(
+                response.headers["retry-after"],
+                now,
+              );
+              const retryTimes = [
+                ...resets,
+                ...(endpointRetryAt === undefined ? [] : [endpointRetryAt]),
+                ...(retryAfter === undefined ? [] : [retryAfter]),
+              ];
+              const retryAt = retryTimes.length === 0 ? undefined : Math.max(...retryTimes);
               const limited = () =>
-                Effect.fail(
-                  new LinearApiError({
+                Effect.gen(function* () {
+                  if (resets.length > 0 || endpointRetryAt === undefined)
+                    yield* rateLimits
+                      .recordRateLimit({
+                        ...rateLimitKey,
+                        lease,
+                        retryAt: endpointRetryAt === undefined ? retryAt : Math.max(...resets),
+                      })
+                      .pipe(
+                        Effect.provideService(
+                          SourceControlRateLimit.CredentialScope,
+                          credentialScope,
+                        ),
+                      );
+                  if (endpointRetryAt !== undefined)
+                    yield* recordEndpoints(Math.max(endpointRetryAt, retryAfter ?? 0));
+                  return yield* new LinearApiError({
                     operation,
                     reason: "rate-limited",
                     status: response.status,
                     ...(retryAt === undefined ? {} : { retryAt }),
-                  }),
-                );
+                  });
+                }).pipe(Effect.uninterruptible);
               if (response.status === 429) return yield* limited();
               if (response.status === 401 || response.status === 403)
                 return yield* new LinearApiError({ operation, reason: "unauthenticated" });
@@ -619,7 +680,6 @@ const make = Effect.gen(function* () {
                       complexityBudgets.delete(credentialScope);
                     }
                     credentialScope = userScope;
-                    endpointScope = `${credentialScope}\0${operation}`;
                     for (const endpoint of tokenEndpoints.get(tokenScope) ?? []) {
                       const retryAt = yield* rateLimits.check(rateLimitKey).pipe(
                         Effect.provideService(
@@ -646,7 +706,9 @@ const make = Effect.gen(function* () {
                     }
                     tokenEndpoints.delete(tokenScope);
                     lease = yield* checkRateLimit(operation, credentialScope, true);
-                    endpointLease = yield* checkRateLimit(operation, endpointScope, true);
+                    endpointLeases = yield* Effect.forEach(queryEndpoints, (endpoint) =>
+                      checkRateLimit(operation, `${credentialScope}\0${endpoint}`, true),
+                    );
                   }
                 }
                 if (resets.length > 0)
@@ -671,41 +733,10 @@ const make = Effect.gen(function* () {
                         credentialScope,
                       ),
                     );
-                if (endpointRetryAt !== undefined)
-                  yield* rateLimits
-                    .recordRateLimit({
-                      ...rateLimitKey,
-                      lease: endpointLease,
-                      retryAt: endpointRetryAt,
-                    })
-                    .pipe(
-                      Effect.provideService(SourceControlRateLimit.CredentialScope, endpointScope),
-                    );
-                else
-                  yield* rateLimits
-                    .recordSuccess({ ...rateLimitKey, lease: endpointLease })
-                    .pipe(
-                      Effect.provideService(SourceControlRateLimit.CredentialScope, endpointScope),
-                    );
+                yield* recordEndpoints(endpointRetryAt);
                 return envelope;
               }).pipe(Effect.uninterruptible);
             }),
-          ),
-          Effect.tapError((error) =>
-            error.reason === "rate-limited"
-              ? rateLimits
-                  .recordRateLimit({
-                    ...rateLimitKey,
-                    lease: endpointOnly ? endpointLease : lease,
-                    retryAt: error.retryAt,
-                  })
-                  .pipe(
-                    Effect.provideService(
-                      SourceControlRateLimit.CredentialScope,
-                      endpointOnly ? endpointScope : credentialScope,
-                    ),
-                  )
-              : Effect.void,
           ),
         );
     }).pipe(requestGate.withPermits(1));
@@ -975,9 +1006,7 @@ const make = Effect.gen(function* () {
       request(
         credentialId,
         "issue summary",
-        `query T3LinearIssueSummary($id: String!) {
-        issue(id: $id) { number title url state { name type } }
-      }`,
+        SUMMARY_QUERY,
         { id: identifier },
         SummaryEnvelope,
       ).pipe(
