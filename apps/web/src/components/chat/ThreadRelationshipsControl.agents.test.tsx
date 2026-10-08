@@ -967,6 +967,39 @@ it("shows readable models and only differing workspace details in agent tooltips
     await rerender({ ...child, modelSelection });
     expect(text()).not.toMatch(/Fast|Ultrafast|Normal|Standard|Flex| · high/);
   }
+  state.shells = [];
+  for (const status of ["running", "completed", "failed"] as const) {
+    state.projection = {
+      ...projection,
+      subagents: [
+        {
+          ...projection.subagents[0],
+          origin: "provider_native",
+          status,
+          modelSelection: {
+            instanceId: "codex",
+            model: "gpt-5.4",
+            options: [
+              { id: "reasoningEffort", value: "low" },
+              { id: "serviceTier", value: "ultrafast" },
+            ],
+          },
+        },
+      ],
+    };
+    await act(async () => renderer.update(cloneElement(panel)));
+    if (status === "completed") {
+      await act(async () =>
+        renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
+      );
+    }
+    expect(text()).toContain("My GPT · Work account · Ultrafast mode onlow");
+    expect(text()).not.toContain(" · high");
+  }
+  await act(async () =>
+    renderer.root.findByProps({ type: "button", "aria-expanded": true }).props.onClick(),
+  );
+  state.projection = projection;
   state.configs.set("test", speedConfig);
   child.modelSelection.options = [{ id: "reasoningEffort", value: "high" }];
   await rerender({ ...child, modelSelection: { ...child.modelSelection, instanceId: "other" } });
