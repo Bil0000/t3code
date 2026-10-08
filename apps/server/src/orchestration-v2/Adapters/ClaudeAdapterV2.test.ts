@@ -10034,6 +10034,132 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("keeps resumed workflow tools open after stale interrupted cleanup", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const clock = yield* Clock.Clock;
+        const cleanupPaused = yield* Deferred.make<void>();
+        const releaseCleanup = yield* Deferred.make<void>();
+        let readsUntilPause = 0;
+        yield* Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarnessWithOptions({
+            close: Queue.shutdown,
+            freshQueueOnReopen: true,
+          });
+          const oldAttempt = RunAttemptId.make("attempt-workflow-stale-cleanup-old");
+          const oldBash = "toolu-workflow-stale-cleanup-old-bash";
+          const newBash = "toolu-workflow-stale-cleanup-new-bash";
+          const resumeTool = "toolu-workflow-stale-cleanup-resume";
+          const toolUpdates = (nativeId: string) =>
+            harness.events.flatMap((event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.nativeItemRef?.nativeId === nativeId
+                ? [event.turnItem]
+                : [],
+            );
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: oldAttempt,
+              text: "Run the workflow.",
+              attachments: [],
+            }),
+          );
+          yield* launchWorkflow({ harness, snapshotUuid: "00000000-0000-4000-8000-000000001150" });
+          for (const frame of makeSubagentAssistantFrames({
+            parentToolUseId: WORKFLOW_TOOL_USE_ID,
+            uuid: "00000000-0000-4000-8000-000000001151",
+            bashToolUseId: oldBash,
+          })) {
+            yield* harness.offerAndWait(frame);
+          }
+          yield* awaitUntil(() => toolUpdates(oldBash).length === 1, "old workflow tool running");
+          readsUntilPause = 2;
+          const stop = yield* harness.runtime
+            .interruptTurn({
+              providerThread: harness.providerThread,
+              providerTurnId: (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                nativeTurnId: `turn:${oldAttempt}`,
+              }),
+            })
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(cleanupPaused);
+          yield* TestClock.adjust("10 seconds");
+          yield* Fiber.join(stop);
+          yield* Queue.take(harness.terminalReceipts);
+          const oldToolCount = toolUpdates(oldBash).length;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-workflow-stale-cleanup-new"),
+              text: "Resume the workflow.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+            }),
+          );
+          const resumedQueue = harness.processQueues[1]!;
+          yield* Queue.offer(
+            resumedQueue,
+            claudeSdkFrame({
+              ...workflowTaskStarted,
+              tool_use_id: resumeTool,
+              prompt: "Resume the workflow.",
+              uuid: "00000000-0000-4000-8000-000000001152",
+            }),
+          );
+          for (const frame of makeSubagentAssistantFrames({
+            parentToolUseId: resumeTool,
+            uuid: "00000000-0000-4000-8000-000000001153",
+            bashToolUseId: newBash,
+          })) {
+            yield* Queue.offer(resumedQueue, frame);
+          }
+          yield* awaitUntil(
+            () => toolUpdates(newBash).length === 1,
+            "resumed workflow tool running",
+          );
+          yield* Deferred.succeed(releaseCleanup, undefined);
+          yield* Queue.take(harness.terminalReceipts);
+          assert.lengthOf(toolUpdates(oldBash), oldToolCount);
+          assert.deepEqual(
+            toolUpdates(newBash).map((item) => item.status),
+            ["running"],
+          );
+          yield* Queue.offer(
+            resumedQueue,
+            makeSubagentToolResultFrame({
+              parentToolUseId: resumeTool,
+              uuid: "00000000-0000-4000-8000-000000001154",
+              toolUseId: newBash,
+            }),
+          );
+          yield* awaitUntil(
+            () => toolUpdates(newBash).at(-1)?.status === "completed",
+            "resumed workflow tool completed",
+          );
+          assert.equal(toolUpdates(newBash).at(-1)?.output, "ok");
+        }).pipe(
+          Effect.provideService(Clock.Clock, {
+            ...clock,
+            currentTimeMillis: Effect.gen(function* () {
+              if (readsUntilPause > 0 && --readsUntilPause === 0) {
+                yield* Deferred.succeed(cleanupPaused, undefined);
+                yield* Deferred.await(releaseCleanup);
+              }
+              return yield* clock.currentTimeMillis;
+            }),
+          }),
+        );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("does not replay stale idle progress over a completed workflow", () =>
     Effect.scoped(
       Effect.gen(function* () {

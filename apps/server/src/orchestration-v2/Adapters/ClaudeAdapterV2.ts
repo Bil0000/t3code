@@ -4533,23 +4533,6 @@ export function makeClaudeAdapterV2(
           ) {
             return;
           }
-          // A call the subagent left open never returns once it ends. It ends
-          // first, while the run that owns the child thread still takes its
-          // events.
-          if (existingSubagent !== undefined && input.status !== "running") {
-            const openCalls = [...subagentToolCalls.values()].filter(
-              (toolCall) => toolCall.threadId === existingSubagent.childThreadId,
-            );
-            yield* endToolCalls({
-              context: input.context,
-              toolCalls: openCalls,
-              status: input.status === "cancelled" ? "interrupted" : "failed",
-              completedAt: yield* DateTime.now,
-            });
-            for (const toolCall of openCalls) {
-              subagentToolCalls.delete(toolCall.nativeItemId);
-            }
-          }
           // A task_started under a tool call other than the current run's is
           // a resume: SendMessage re-emits task_started for the same task id
           // under its own tool_use_id, with the sent message as the prompt.
@@ -4699,6 +4682,23 @@ export function makeClaudeAdapterV2(
             return [true, new Map(current).set(input.taskId, subagent)] as const;
           });
           if (!accepted) return;
+          // A call the subagent left open never returns once it ends. It ends
+          // first, while the run that owns the child thread still takes its
+          // events.
+          if (existingSubagent !== undefined && input.status !== "running") {
+            const openCalls = [...subagentToolCalls.values()].filter(
+              (toolCall) => toolCall.threadId === existingSubagent.childThreadId,
+            );
+            yield* endToolCalls({
+              context: input.context,
+              toolCalls: openCalls,
+              status: input.status === "cancelled" ? "interrupted" : "failed",
+              completedAt: yield* DateTime.now,
+            });
+            for (const toolCall of openCalls) {
+              subagentToolCalls.delete(toolCall.nativeItemId);
+            }
+          }
           input.context.subagentsByTaskId.set(input.taskId, subagent);
           if (input.toolUseId !== undefined) {
             input.context.subagentsByToolUseId.set(input.toolUseId, subagent);
@@ -5420,14 +5420,15 @@ export function makeClaudeAdapterV2(
           const runningChildThreadIds = new Set(
             [...(yield* Ref.get(sessionSubagentsByTaskId)).values()].flatMap((subagent) =>
               subagent.task.status === "running" &&
+              (input.status === "completed" ||
+                (liveQuery !== null && subagent.task.runId !== input.context.input.runId)) &&
               liveQuery?.subagentsFromEarlierProcesses.has(subagent) !== true
                 ? [subagent.childThreadId]
                 : [],
             ),
           );
           const endingSubagentCalls = [...subagentToolCalls.values()].filter(
-            (toolCall) =>
-              input.status !== "completed" || !runningChildThreadIds.has(toolCall.threadId),
+            (toolCall) => !runningChildThreadIds.has(toolCall.threadId),
           );
           yield* endToolCalls({
             context: input.context,
