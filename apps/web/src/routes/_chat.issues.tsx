@@ -851,7 +851,7 @@ function IssuesRouteView() {
           cursorLimitReached: answered.cursorLimitReached === true,
         };
       }
-      if (sentCursors !== null) {
+      if (sentCursors !== null || answered.errors.length > 0) {
         // A continuation is a slice, not the list: it carries only what comes after the rows
         // already held, and says nothing about a repository that has run out. Everything on
         // screen therefore stays, and the slice — ordered among itself, since one repository's
@@ -934,7 +934,21 @@ function IssuesRouteView() {
   );
 
   const viewers = baselineQuery.data?.viewers ?? listData?.viewers ?? EMPTY_VIEWERS;
-  const listErrors = baselineQuery.data?.errors ?? listData?.errors ?? [];
+  const pageErrors = answered?.errors;
+  const pageFailure = pageErrors?.map((error) => error.message).join(" ") || null;
+  const listErrors = useMemo(
+    () => [
+      ...(pageErrors ?? []),
+      ...(baselineQuery.data?.errors ?? []).filter(
+        (error) => !pageErrors?.some((pageError) => pageError.projectId === error.projectId),
+      ),
+    ],
+    [baselineQuery.data?.errors, pageErrors],
+  );
+  const retryPage = async () => {
+    await invalidateHost();
+    (baselineVisible ? baselineQuery : listQuery).refresh();
+  };
 
   /** The hosts that narrowed the listing themselves, so their answer is not narrowed again. */
   const searchingHosts = useMemo(
@@ -1054,6 +1068,7 @@ function IssuesRouteView() {
       !truncated ||
       listQuery.isPending ||
       listQuery.error !== null ||
+      pageFailure !== null ||
       // The rows on screen belong to the previous question, so nothing about them says where
       // this one carries on from. Growing the page under them would answer neither.
       showingCarried ||
@@ -1083,6 +1098,7 @@ function IssuesRouteView() {
     truncated,
     listQuery.error,
     listQuery.isPending,
+    pageFailure,
     pageSize,
     showingCarried,
   ]);
@@ -1281,6 +1297,8 @@ function IssuesRouteView() {
   // these filters" is a claim, and it is the wrong one to make about a question still in flight,
   // so that case waits with the skeletons rather than answering for the hosts. A search says so
   // in its own words and is left to.
+  const heldCount = (ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []))
+    .length;
   const carriedToNothing =
     showingCarried && listQuery.isPending && visibleRowCount === 0 && typedQuery.length === 0;
   const listBody = (
@@ -1300,6 +1318,12 @@ function IssuesRouteView() {
           refreshing={listQuery.isPending}
           onRetry={() => listQuery.refresh()}
         />
+      ) : pageFailure !== null && heldCount === 0 ? (
+        <IssuesUnavailableState
+          error={pageFailure}
+          refreshing={refreshing}
+          onRetry={() => void retryPage()}
+        />
       ) : carriedToNothing ? (
         <ListGhost rows={7} label="Loading issues" />
       ) : visibleRowCount === 0 ? (
@@ -1315,7 +1339,7 @@ function IssuesRouteView() {
             search.host !== undefined
           }
           searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
-          canLoadMore={truncated && (canContinue || canGrow)}
+          canLoadMore={pageFailure === null && truncated && (canContinue || canGrow)}
           loadingMore={loadingMore}
           onClearQuery={() => updateSearch({ q: undefined })}
           onLoadMore={loadMore}
@@ -1365,6 +1389,19 @@ function IssuesRouteView() {
         <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
           <span>{listQuery.error} Showing the last issues loaded.</span>
           <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {pageFailure !== null && heldCount > 0 ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
+          <span>{pageFailure} Showing the issues that loaded.</span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={refreshing}
+            onClick={() => void retryPage()}
+          >
             Retry
           </Button>
         </div>

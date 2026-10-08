@@ -16,6 +16,7 @@ import { Route, type IssuesSearch } from "./_chat.issues";
 const mocks = vi.hoisted(() => ({
   search: { involvement: "all", state: "open" } as IssuesSearch,
   list: (_input: IssueListInput): IssueListResult | null => null,
+  invalidate: vi.fn(async () => undefined),
 }));
 
 vi.mock("@tanstack/react-router", async (original) => ({
@@ -37,7 +38,7 @@ vi.mock("../state/issues", () => ({
     create: { permissionAtom: () => Atom.make(true) },
   },
 }));
-vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => mocks.invalidate }));
 vi.mock("../state/environments", () => ({
   usePrimaryEnvironment: () => primaryEnvironment,
 }));
@@ -50,10 +51,26 @@ vi.mock("../hooks/useSettings", async (original) => ({
   ...(await original<typeof import("../hooks/useSettings")>()),
   usePrimarySettings: () => undefined,
 }));
-vi.mock("../state/query", async (original) => ({
-  ...(await original<typeof import("../state/query")>()),
-  useEnvironmentQuery: (atom: { input?: IssueListInput } | null) => answer(atom?.input),
-}));
+vi.mock("../state/query", async (original) => {
+  const { useReducer } = await import("react");
+  return {
+    ...(await original<typeof import("../state/query")>()),
+    useEnvironmentQuery: (atom: { input?: IssueListInput } | null) => {
+      const [, rerender] = useReducer((tick: number) => tick + 1, 0);
+      const input = atom?.input;
+      const held = answer(input);
+      return input === undefined
+        ? held
+        : {
+            ...held,
+            refresh: () => {
+              answers.set(JSON.stringify(input), { ...idle, data: mocks.list(input) });
+              rerender();
+            },
+          };
+    },
+  };
+});
 
 const primaryEnvironment = {
   environmentId: "local",
@@ -113,6 +130,14 @@ function result(
   };
 }
 
+const failure = {
+  projectId: ProjectId.make("p1"),
+  projectTitle: "Web",
+  message: "acme/web could not be read.",
+};
+const retryButton = () =>
+  [...document.querySelectorAll("button")].find((button) => button.textContent === "Retry");
+
 const observers: Array<{ active: boolean; reach: () => void }> = [];
 const text = () => document.body.textContent ?? "";
 
@@ -122,6 +147,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   answers.clear();
+  mocks.invalidate.mockClear();
   observers.length = 0;
   vi.unstubAllGlobals();
   window.localStorage.clear();
@@ -142,6 +168,7 @@ async function renderIssues() {
         observers.push(this.observer);
       }
       observe() {}
+      unobserve() {}
       disconnect() {
         this.observer.active = false;
       }
@@ -266,6 +293,60 @@ describe("issues route", () => {
     expect(text()).toContain("More issues remain on the host.");
     expect(text()).not.toContain("Load more issues");
     expect(feedRequests()).toHaveLength(1);
+    await unmount();
+  });
+
+  it("shows a failed search over a readable workspace and retries the search", async () => {
+    let failing = true;
+    mocks.search = { involvement: "all", state: "open", q: "crash" };
+    mocks.list = (input) =>
+      input.involvement !== "all"
+        ? result([])
+        : input.query === undefined
+          ? result([issue(1)])
+          : failing
+            ? result([], { errors: [failure] })
+            : result([issue(2, { title: "Crash on save" })]);
+    vi.useFakeTimers();
+    const { unmount } = await renderIssues();
+    await act(async () => vi.advanceTimersByTime(300));
+    vi.useRealTimers();
+
+    expect(text()).toContain("acme/web could not be read.");
+    expect(text()).not.toContain("No issues");
+
+    failing = false;
+    await act(async () => retryButton()!.click());
+    expect(mocks.invalidate).toHaveBeenCalledTimes(1);
+    expect(text()).toContain("Crash on save");
+    expect(text()).not.toContain("could not be read");
+    await unmount();
+  });
+
+  it("keeps loaded rows when a continuation fails, stops paging, and retries that slice", async () => {
+    let failing = true;
+    mocks.search = { involvement: "all", state: "open" };
+    mocks.list = (input) =>
+      input.involvement !== "all"
+        ? result([])
+        : input.cursors === undefined
+          ? result([issue(1)], { truncated: true, nextCursors: { web: "web-1" } })
+          : failing
+            ? result([], { errors: [failure] })
+            : result([issue(2)]);
+    const { unmount } = await renderIssues();
+
+    await reachEnd();
+    await reachEnd();
+    expect(text()).toContain("Issue 1");
+    expect(text()).toContain("acme/web could not be read.");
+    expect(feedRequests().filter((input) => input.cursors !== undefined)).toHaveLength(1);
+
+    failing = false;
+    await act(async () => retryButton()!.click());
+    expect(text()).toContain("Issue 1");
+    expect(text()).toContain("Issue 2");
+    expect(text()).not.toContain("could not be read");
     await unmount();
   });
 });

@@ -25,6 +25,7 @@ import { useProjects } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { useDebouncedValue } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
+import { useAtomCommand } from "~/state/use-atom-command";
 
 import type { IssueTabStatus } from "../RightPanelTabs";
 import { Button } from "../ui/button";
@@ -272,6 +273,7 @@ function IssueBrowserList({
     entries: ReadonlyArray<IssueListEntry>;
     /** Held with the rows, because a read in flight answers nothing about what is left. */
     truncated: boolean;
+    cursorLimitReached: boolean;
     /**
      * Held with the rows for the same reason: who is signed in is what "assigned to me" is judged
      * against, and forgetting it for the length of a continuation would hide every row on screen.
@@ -286,11 +288,16 @@ function IssueBrowserList({
         ? rankIssueMatches(answered.entries, sent)
         : answered.entries;
     setOrdered((previous) => {
-      if (previous === null || previous.key !== filterKey || sentCursors === null) {
+      if (
+        previous === null ||
+        previous.key !== filterKey ||
+        (sentCursors === null && answered.errors.length === 0)
+      ) {
         return {
           key: filterKey,
           entries: hostOrdered,
           truncated: answered.truncated,
+          cursorLimitReached: answered.cursorLimitReached === true,
           viewers: answered.viewers,
         };
       }
@@ -300,6 +307,7 @@ function IssueBrowserList({
         key: filterKey,
         entries: [...previous.entries, ...arrived],
         truncated: answered.truncated,
+        cursorLimitReached: previous.cursorLimitReached || answered.cursorLimitReached === true,
         viewers: answered.viewers,
       };
     });
@@ -336,19 +344,34 @@ function IssueBrowserList({
     typed,
   ]);
 
+  const heldEntries = ordered?.key === filterKey ? ordered.entries : (answered?.entries ?? []);
+  const cursorLimitReached =
+    (ordered?.key === filterKey && ordered.cursorLimitReached) ||
+    answered?.cursorLimitReached === true;
   /** From what is held rather than from the read in flight, which has not answered yet. */
-  const truncated = ordered?.key === filterKey ? ordered.truncated : (answered?.truncated ?? false);
+  const truncated =
+    (ordered?.key === filterKey ? ordered.truncated : (answered?.truncated ?? false)) ||
+    cursorLimitReached;
+  const failure =
+    listQuery.error ?? (answered?.errors.map((error) => error.message).join(" ") || null);
+  const invalidate = useAtomCommand(issueEnvironment.invalidate, { reportFailure: false });
+  const retry = async () => {
+    if (listQuery.error === null) await invalidate({ environmentId, input: {} });
+    listQuery.refresh();
+  };
   /** Rows are on screen and another slice is on its way, which is what the reader is told. */
   const loadingMore = listQuery.isPending && entries.length > 0;
 
   const nextCursors = answered?.nextCursors ?? {};
   const canContinue = Object.keys(nextCursors).length > 0;
+  const canGrow = !cursorLimitReached && pageSize < MAX_LIMIT;
   const loadMore = () => {
-    onPage(
-      canContinue
-        ? { key: filterKey, size: pageSize, cursors: nextCursors }
-        : { key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_LIMIT), cursors: null },
-    );
+    if (canContinue) {
+      onPage({ key: filterKey, size: pageSize, cursors: nextCursors });
+      return;
+    }
+    if (!canGrow) return;
+    onPage({ key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_LIMIT), cursors: null });
   };
 
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -363,10 +386,10 @@ function IssueBrowserList({
       entries.length === 0 ||
       !truncated ||
       listQuery.isPending ||
-      listQuery.error !== null ||
+      failure !== null ||
       // Asking past the ceiling is refused, and a continuation does not grow the page at all,
       // so the ceiling only stops the growth path.
-      (!canContinue && pageSize >= MAX_LIMIT)
+      (!canContinue && !canGrow)
     ) {
       return;
     }
@@ -383,9 +406,10 @@ function IssueBrowserList({
   }, [
     truncated,
     canContinue,
+    canGrow,
     entries.length,
+    failure,
     filterKey,
-    listQuery.error,
     listQuery.isPending,
     pageSize,
   ]);
@@ -397,14 +421,10 @@ function IssueBrowserList({
 
   /** Offered from what arrived: a label nothing here wears would narrow the list to nothing. */
   const labelOptions = useMemo(() => {
-    const names = new Set(
-      (ordered?.key === filterKey ? ordered.entries : (answered?.entries ?? [])).flatMap((entry) =>
-        entry.labels.map((label) => label.name),
-      ),
-    );
+    const names = new Set(heldEntries.flatMap((entry) => entry.labels.map((label) => label.name)));
     if (filters.label !== undefined) names.add(filters.label);
     return [...names].sort((left, right) => left.localeCompare(right));
-  }, [answered, filterKey, filters.label, ordered]);
+  }, [filters.label, heldEntries]);
 
   // Stable, because the rows are memoized on it.
   const select = useCallback(
@@ -452,8 +472,12 @@ function IssueBrowserList({
         <div className="space-y-0.5 px-1 pb-2">
           {entries.length === 0 && listQuery.isPending ? (
             <ListGhost rows={7} label="Loading issues" />
-          ) : listQuery.error !== null && listQuery.data === null ? (
-            <IssuesUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
+          ) : failure !== null && heldEntries.length === 0 ? (
+            <IssuesUnavailableState
+              error={failure}
+              refreshing={listQuery.isPending}
+              onRetry={() => void retry()}
+            />
           ) : entries.length === 0 ? (
             <div className="space-y-2 px-2">
               <p className="text-sm text-muted-foreground">
@@ -466,10 +490,12 @@ function IssueBrowserList({
               {/* The filters narrow the rows that arrived, so a page they empty says nothing about
                   the pages after it. Asked for by hand rather than by the sentinel: with no rows
                   to scroll past, scrolling would read the whole repository on its own. */}
-              {truncated && (canContinue || pageSize < MAX_LIMIT) ? (
+              {failure === null && truncated && (canContinue || canGrow) ? (
                 <Button variant="outline" size="xs" onClick={loadMore}>
                   Load more
                 </Button>
+              ) : cursorLimitReached && !canContinue ? (
+                <p className="text-xs text-muted-foreground">More issues remain on the host.</p>
               ) : null}
             </div>
           ) : (
@@ -497,11 +523,21 @@ function IssueBrowserList({
                       <Spinner aria-hidden size="sm" />
                       Loading more
                     </span>
+                  ) : cursorLimitReached && !canContinue ? (
+                    "More issues remain on the host."
                   ) : null}
                 </div>
               ) : null}
             </>
           )}
+          {failure !== null && heldEntries.length > 0 ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
+              <span>{failure} Showing the last issues loaded.</span>
+              <Button size="xs" variant="outline" onClick={() => void retry()}>
+                Retry
+              </Button>
+            </div>
+          ) : null}
         </div>
       </ScrollArea>
     </div>
