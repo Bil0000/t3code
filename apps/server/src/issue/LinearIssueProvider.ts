@@ -9,6 +9,7 @@ import type {
   IssueState,
   IssueViewerPermissions,
 } from "@t3tools/contracts";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as LinearConnection from "./LinearConnection.ts";
@@ -98,14 +99,20 @@ function actor(user: LinearApi.LinearUser | null | undefined) {
 }
 
 const PULL_REQUEST_URL =
-  /^https:\/\/(?:github\.com\/([^/]+\/[^/]+)\/pull|gitlab\.com\/(.+?)\/-\/merge_requests)\/(\d+)/;
+  /^https:\/\/(?:github\.com\/([^/]+\/[^/]+)\/pull|gitlab\.com\/(.+?)\/-\/merge_requests)\/(\d+)\/?(?:[?#]|$)/u;
 
 export function linearLinkedPullRequests(
   attachments: ReadonlyArray<LinearApi.LinearAttachment>,
 ): Array<IssueLinkedPullRequest> {
+  const seen = new Set<string>();
   return attachments.flatMap((attachment) => {
     const match = PULL_REQUEST_URL.exec(attachment.url);
     if (match === null) return [];
+    const reference = parseChangeRequestUrl(attachment.url);
+    if (reference === null) return [];
+    const key = `${reference.host}/${reference.repository}#${reference.number}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
     const status = attachment.metadata?.status;
     return [
       {

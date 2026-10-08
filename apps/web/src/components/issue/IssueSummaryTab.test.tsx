@@ -328,3 +328,42 @@ it("shows only threads linked to this issue and opens the matching thread", asyn
   await act(() => renderer.update(<IssueSummaryTab {...props} editing={false} />));
   expect(renderer.root.findAllByProps({ title: "Linked threads" })).toHaveLength(0);
 });
+
+it("keeps same-numbered pull requests from different hosts as separate rows", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const consoleError = vi.spyOn(console, "error");
+  const pullRequest = (url: string, title: string) => ({
+    repository: "acme/project",
+    number: 7,
+    title,
+    url,
+    state: "open" as const,
+    isDraft: false,
+    closesIssue: false,
+  });
+  const github = pullRequest("https://github.com/acme/project/pull/7", "GitHub change");
+  const gitlab = pullRequest("https://gitlab.com/acme/project/-/merge_requests/7", "GitLab change");
+  const withLinks = (linkedPullRequests: IssueDetailView["linkedPullRequests"]) => ({
+    ...detail,
+    capabilities: { ...detail.capabilities, linkedPullRequests: true },
+    linkedPullRequests,
+  });
+  const rows = () =>
+    renderer.root
+      .findAllByType("button")
+      .filter((button) => button.findAllByProps({ role: "img" }).length > 0);
+  await act(() => {
+    renderer = create(
+      <IssueSummaryTab {...props} editing={false} detail={withLinks([github, gitlab])} />,
+    );
+  });
+  await act(() =>
+    renderer.update(
+      <IssueSummaryTab {...props} editing={false} detail={withLinks([gitlab, github])} />,
+    ),
+  );
+  for (const row of rows()) await act(() => row.props.onClick());
+  expect(props.onOpenLinkedPullRequest).toHaveBeenNthCalledWith(1, gitlab);
+  expect(props.onOpenLinkedPullRequest).toHaveBeenNthCalledWith(2, github);
+  expect(consoleError.mock.calls.flat().join("\n")).not.toContain("same key");
+});

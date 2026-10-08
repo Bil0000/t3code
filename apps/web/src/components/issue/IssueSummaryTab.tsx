@@ -539,7 +539,7 @@ export function IssueSummaryTab({
                 });
                 return (
                   <button
-                    key={`${link.repository}#${link.number}`}
+                    key={link.url}
                     type="button"
                     // Beside the issue rather than instead of it: reading the change that closes
                     // an issue is reading them together.
