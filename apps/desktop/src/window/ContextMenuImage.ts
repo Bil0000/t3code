@@ -6,12 +6,12 @@ export async function copyContextMenuImage(
   contents: Electron.WebContents,
   params: Electron.ContextMenuParams,
 ): Promise<void> {
-  if (contents.isDestroyed()) return;
-  if (!params.frame || params.frame === contents.mainFrame) {
+  const frame = params.frame;
+  if (contents.isDestroyed() || !frame || frame.isDestroyed()) return;
+  if (frame === contents.mainFrame) {
     contents.copyImageAt(params.x, params.y);
     return;
   }
-  if (params.frame.isDestroyed()) return;
 
   const url = new URL(params.srcURL);
   if (
@@ -54,7 +54,7 @@ export async function copyContextMenuImage(
 
   const image = Electron.nativeImage.createFromBuffer(Buffer.concat(chunks, byteLength));
   if (image.isEmpty()) throw new Error("Image could not be decoded");
-  if (contents.isDestroyed() || params.frame.isDestroyed()) return;
+  if (contents.isDestroyed() || frame.isDestroyed()) return;
   await Electron.clipboard.write([
     new Electron.ClipboardItem({
       "image/png": new Blob([Uint8Array.from(image.toPNG())], { type: "image/png" }),

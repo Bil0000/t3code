@@ -51,6 +51,16 @@ beforeEach(() => {
   native.write.mockResolvedValue(undefined);
 });
 
+it("preserves the clipboard when the context-menu frame is missing", async () => {
+  await copyContextMenuImage(
+    contents as unknown as Electron.WebContents,
+    { ...params, frame: null } as unknown as Electron.ContextMenuParams,
+  );
+  expect(contents.copyImageAt).not.toHaveBeenCalled();
+  expect(native.fetch).not.toHaveBeenCalled();
+  expect(native.write).not.toHaveBeenCalled();
+});
+
 it("keeps native image copying for the main frame", async () => {
   await copyImage({ frame: mainFrame });
   expect(contents.copyImageAt).toHaveBeenCalledWith(12, 34);
