@@ -143,21 +143,16 @@ function isoFromEpochMillis(value: number | undefined): string | null {
  * provider reports them as a replaced snapshot with no durable entity of their
  * own, so their identity is the run id plus the spawn ordinal.
  */
-function workflowMembersToRuntime(input: {
-  readonly coordinatorId: string;
-  readonly coordinatorStatus: RuntimeSubagent["status"];
-  readonly coordinatorCompletedAt: string | null;
-  readonly workflow: OrchestrationV2SubagentWorkflow;
-  readonly runHandles: SubagentRunHandles | null;
-  readonly fallbackSeenAt: string;
-}): ReadonlyArray<RuntimeSubagent> {
-  const workflowName = input.workflow.name ?? null;
-  return input.workflow.agents.map((agent) => {
+function workflowMembersToRuntime(
+  coordinator: RuntimeSubagent,
+  workflow: OrchestrationV2SubagentWorkflow,
+): ReadonlyArray<RuntimeSubagent> {
+  return workflow.agents.map((agent) => {
     // Every member state but queued is already a runtime status.
     const status =
       (agent.state === "queued" || agent.state === "running") &&
-      isTerminalSubagentStatus(input.coordinatorStatus)
-        ? input.coordinatorStatus
+      isTerminalSubagentStatus(coordinator.status)
+        ? coordinator.status
         : agent.state === "queued"
           ? "pending"
           : agent.state;
@@ -167,15 +162,16 @@ function workflowMembersToRuntime(input: {
     const completedAt = isTerminalSubagentStatus(status)
       ? agent.startedAt !== undefined && agent.durationMs !== undefined
         ? isoFromEpochMillis(agent.startedAt + agent.durationMs)
-        : input.coordinatorCompletedAt
+        : coordinator.completedAt
       : null;
     return {
-      id: `${input.coordinatorId}:agent:${agent.index}`,
+      // Members share the run's handles: the transcript directory is what
+      // makes their conversation readable, and only the run knows it.
+      ...coordinator,
+      id: `${coordinator.id}:agent:${agent.index}`,
       kind: "workflow_agent" as const,
       title: agent.label,
-      role: null,
       model: agent.model ?? null,
-      effort: null,
       status,
       // Surfaces the panel's "run N" badge for a member the workflow retried.
       activationCount: agent.attempt ?? 1,
@@ -183,26 +179,20 @@ function workflowMembersToRuntime(input: {
       // A member keeps its prompt on `progress` even once settled: that is the
       // question half of its conversation, and the detail view shows both halves.
       progress: agent.prompt ?? null,
-      lastToolName: null,
       result: failed ? null : (agent.result ?? null),
       error: failed ? (agent.result ?? null) : null,
-      outputFile: null,
-      parentAgentId: input.coordinatorId,
+      parentAgentId: coordinator.id,
       agentIndex: agent.index,
       phaseIndex: agent.phaseIndex ?? null,
       phaseTitle: agent.phaseTitle ?? null,
       attempt: agent.attempt ?? null,
-      workflowName,
       phases: [],
-      // Members share the run's handles: the transcript directory is what
-      // makes their conversation readable, and only the run knows it.
-      runHandles: input.runHandles,
       childThreadId: agent.childThreadId ?? null,
       recentActivity: [],
-      firstSeenAt: isoFromEpochMillis(agent.queuedAt) ?? startedAt ?? input.fallbackSeenAt,
+      firstSeenAt: isoFromEpochMillis(agent.queuedAt) ?? startedAt ?? coordinator.firstSeenAt,
       startedAt,
       completedAt,
-      updatedAt: completedAt ?? startedAt ?? input.fallbackSeenAt,
+      updatedAt: completedAt ?? startedAt ?? coordinator.firstSeenAt,
     } satisfies RuntimeSubagent;
   });
 }
@@ -266,17 +256,7 @@ export function projectedSubagentsToRuntime(
     } satisfies RuntimeSubagent;
     return workflow === undefined
       ? [coordinator]
-      : [
-          coordinator,
-          ...workflowMembersToRuntime({
-            coordinatorId: subagent.id,
-            coordinatorStatus: coordinator.status,
-            coordinatorCompletedAt: coordinator.completedAt,
-            workflow,
-            runHandles,
-            fallbackSeenAt: firstSeenAt,
-          }),
-        ];
+      : [coordinator, ...workflowMembersToRuntime(coordinator, workflow)];
   });
 }
 
@@ -322,13 +302,7 @@ export function deriveWorkflowGroups(
         isTerminalSubagentStatus(member.status),
       ).length;
       const state: "pending" | "running" | "done" =
-        phaseMembers.length === 0
-          ? "pending"
-          : hasActiveMember
-            ? "running"
-            : settledCount === phaseMembers.length
-              ? "done"
-              : "pending";
+        phaseMembers.length === 0 ? "pending" : hasActiveMember ? "running" : "done";
       return {
         index: phase.index,
         title: phase.title,

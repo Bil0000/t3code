@@ -4211,13 +4211,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           })),
         });
 
-        /** Emits one conversation message into a member's own thread. */
-        const emitWorkflowMemberMessage = Effect.fnUntraced(function* (input: {
+        /** Emits one conversation message into a subagent's own thread. */
+        const emitSubagentConversationMessage = Effect.fnUntraced(function* (input: {
           readonly nativeItemId: string;
           readonly threadId: ThreadId;
+          readonly senderThreadId?: ThreadId;
           readonly rootNodeId: OrchestrationV2ExecutionNode["id"];
           readonly role: "user" | "assistant";
           readonly text: string;
+          readonly ordinal: number;
           readonly now: DateTime.Utc;
         }) {
           const artifacts = makeSubagentConversationArtifacts({
@@ -4230,6 +4232,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               nativeItemId: input.nativeItemId,
             }),
             threadId: input.threadId,
+            ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
             rootNodeId: input.rootNodeId,
             providerThreadId: null,
             providerTurnId: null,
@@ -4240,7 +4243,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             },
             role: input.role,
             text: input.text,
-            ordinal: input.role === "user" ? 100 : 200,
+            ordinal: input.ordinal,
             now: input.now,
           });
           yield* emitProviderEvent({
@@ -4342,22 +4345,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               });
             }
             if (previous === undefined || previous.prompt !== prompt) {
-              yield* emitWorkflowMemberMessage({
+              yield* emitSubagentConversationMessage({
                 nativeItemId: `${memberKey}:prompt`,
                 threadId: childThreadId,
                 rootNodeId: childRootNodeId,
                 role: "user",
                 text: prompt,
+                ordinal: 100,
                 now,
               });
             }
             if (restarted && !settled) {
-              yield* emitWorkflowMemberMessage({
+              yield* emitSubagentConversationMessage({
                 nativeItemId: `${memberKey}:answer:200`,
                 threadId: childThreadId,
                 rootNodeId: childRootNodeId,
                 role: "assistant",
                 text: "Retry in progress.",
+                ordinal: 200,
                 now,
               });
             }
@@ -4466,12 +4471,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 answer !== undefined &&
                 (transcriptAnswer === undefined || restarted || answerDigest !== previousDigest)
               ) {
-                yield* emitWorkflowMemberMessage({
+                yield* emitSubagentConversationMessage({
                   nativeItemId: `${memberKey}:answer:200`,
                   threadId: childThreadId,
                   rootNodeId: childRootNodeId,
                   role: "assistant",
                   text: answer,
+                  ordinal: 200,
                   now,
                 });
               }
@@ -4824,39 +4830,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 ? null
                 : `${nativeItemId}:prompt:${resumeToolUseId}`;
           if (promptNativeItemId !== null) {
-            const promptArtifacts = makeSubagentConversationArtifacts({
+            yield* emitSubagentConversationMessage({
+              nativeItemId: promptNativeItemId,
               senderThreadId: input.context.input.threadId,
-              messageId: idAllocator.derive.messageFromProviderItem({
-                driver: CLAUDE_PROVIDER,
-                nativeItemId: promptNativeItemId,
-              }),
-              turnItemId: idAllocator.derive.turnItemFromProviderItem({
-                driver: CLAUDE_PROVIDER,
-                nativeItemId: promptNativeItemId,
-              }),
               threadId: childThreadId,
               rootNodeId: childRootNodeId,
-              providerThreadId: null,
-              providerTurnId: null,
-              nativeItemRef: {
-                driver: CLAUDE_PROVIDER,
-                nativeId: promptNativeItemId,
-                strength: "strong",
-              },
               role: "user",
               text: task.prompt,
               ordinal: existingSubagent === undefined ? 100 : ++subagent.nextChildItemOrdinal,
               now,
-            });
-            yield* emitProviderEvent({
-              type: "message.updated",
-              driver: CLAUDE_PROVIDER,
-              message: promptArtifacts.message,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CLAUDE_PROVIDER,
-              turnItem: promptArtifacts.turnItem,
             });
           }
           yield* emitProviderEvent({
@@ -4917,38 +4899,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const resultNativeItemId = `${nativeItemId}:result`;
             const resultItemOrdinal = subagent.resultItemOrdinal ?? ++subagent.nextChildItemOrdinal;
             subagent.resultItemOrdinal = resultItemOrdinal;
-            const resultArtifacts = makeSubagentConversationArtifacts({
-              messageId: idAllocator.derive.messageFromProviderItem({
-                driver: CLAUDE_PROVIDER,
-                nativeItemId: resultNativeItemId,
-              }),
-              turnItemId: idAllocator.derive.turnItemFromProviderItem({
-                driver: CLAUDE_PROVIDER,
-                nativeItemId: resultNativeItemId,
-              }),
+            yield* emitSubagentConversationMessage({
+              nativeItemId: resultNativeItemId,
               threadId: childThreadId,
               rootNodeId: childRootNodeId,
-              providerThreadId: null,
-              providerTurnId: null,
-              nativeItemRef: {
-                driver: CLAUDE_PROVIDER,
-                nativeId: resultNativeItemId,
-                strength: "strong",
-              },
               role: "assistant",
               text: input.result,
               ordinal: resultItemOrdinal,
               now,
-            });
-            yield* emitProviderEvent({
-              type: "message.updated",
-              driver: CLAUDE_PROVIDER,
-              message: resultArtifacts.message,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CLAUDE_PROVIDER,
-              turnItem: resultArtifacts.turnItem,
             });
           }
         });
@@ -7067,38 +7025,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 ? `${subagent.lastAssistantText ?? ""}\n${assistantText.text}`
                 : assistantText.text;
             subagent.lastAssistantMessageId = nativeMessageId;
-            const artifacts = makeSubagentConversationArtifacts({
-              messageId: idAllocator.derive.messageFromProviderItem({
-                driver: CLAUDE_PROVIDER,
-                nativeItemId: assistantText.nativeItemId,
-              }),
-              turnItemId: idAllocator.derive.turnItemFromProviderItem({
-                driver: CLAUDE_PROVIDER,
-                nativeItemId: assistantText.nativeItemId,
-              }),
+            yield* emitSubagentConversationMessage({
+              nativeItemId: assistantText.nativeItemId,
               threadId: subagent.childThreadId,
               rootNodeId: subagent.childRootNodeId,
-              providerThreadId: null,
-              providerTurnId: null,
-              nativeItemRef: {
-                driver: CLAUDE_PROVIDER,
-                nativeId: assistantText.nativeItemId,
-                strength: "strong",
-              },
               role: "assistant",
               text: assistantText.text,
               ordinal: ++subagent.nextChildItemOrdinal,
               now,
-            });
-            yield* emitProviderEvent({
-              type: "message.updated",
-              driver: CLAUDE_PROVIDER,
-              message: artifacts.message,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CLAUDE_PROVIDER,
-              turnItem: artifacts.turnItem,
             });
             return;
           }
