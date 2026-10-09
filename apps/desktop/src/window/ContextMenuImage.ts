@@ -1,4 +1,5 @@
 import * as Electron from "electron";
+import { sourceDimensions } from "../preview/FaviconCapture.ts";
 
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 
@@ -52,12 +53,24 @@ export async function copyContextMenuImage(
     reader.releaseLock();
   }
 
-  const image = Electron.nativeImage.createFromBuffer(Buffer.concat(chunks, byteLength));
+  const bytes = Buffer.concat(chunks, byteLength);
+  const dimensions = sourceDimensions(bytes);
+  if (
+    !dimensions ||
+    dimensions.width <= 0 ||
+    dimensions.height <= 0 ||
+    dimensions.width * dimensions.height > MAX_IMAGE_BYTES / 4
+  ) {
+    throw new Error("Image dimensions exceed the size limit");
+  }
+  const image = Electron.nativeImage.createFromBuffer(bytes);
   if (image.isEmpty()) throw new Error("Image could not be decoded");
   if (contents.isDestroyed() || frame.isDestroyed()) return;
+  const png = image.toPNG();
+  if (png.byteLength > MAX_IMAGE_BYTES) throw new Error("PNG exceeded the size limit");
   await Electron.clipboard.write([
     new Electron.ClipboardItem({
-      "image/png": new Blob([Uint8Array.from(image.toPNG())], { type: "image/png" }),
+      "image/png": new Blob([Uint8Array.from(png)], { type: "image/png" }),
     }),
   ]);
 }

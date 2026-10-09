@@ -457,7 +457,10 @@ describe("DesktopWindow", () => {
       let focusedContents: unknown = host.window.webContents;
       const makeContents = () => {
         const contents = Object.assign(new NodeEvents.EventEmitter(), {
-          mainFrame: { routingId: 7, isDestroyed: vi.fn(() => false) },
+          mainFrame: {
+            routingId: 7,
+            isDestroyed: vi.fn(() => false),
+          } as unknown as Electron.WebFrameMain,
           isDestroyed: vi.fn(() => false),
           focus: vi.fn(() => {
             focusedContents = contents;

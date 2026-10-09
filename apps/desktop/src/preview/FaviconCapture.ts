@@ -524,7 +524,7 @@ function icoDimensions(buffer: Buffer): ImageDimensions | null {
   return { width, height };
 }
 
-function sourceDimensions(buffer: Buffer): ImageDimensions | null {
+export function sourceDimensions(buffer: Buffer): ImageDimensions | null {
   return (
     pngDimensions(buffer) ??
     gifDimensions(buffer) ??

@@ -34,6 +34,10 @@ const params = {
   srcURL: "https://example.com/image.png",
   frame,
 };
+const sourcePng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFklEQVR4nGP4TyFgGDVg1IBRA4aLAQBdePwur/3haQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 const copyImage = (overrides: Partial<typeof params> = {}) =>
   copyContextMenuImage(
@@ -47,7 +51,7 @@ beforeEach(() => {
   frame.isDestroyed.mockReturnValue(false);
   native.image.isEmpty.mockReturnValue(false);
   native.createFromBuffer.mockReturnValue(native.image);
-  native.fetch.mockResolvedValue(new Response("image bytes"));
+  native.fetch.mockResolvedValue(new Response(Uint8Array.from(sourcePng)));
   native.write.mockResolvedValue(undefined);
 });
 
@@ -67,7 +71,7 @@ it("keeps native image copying for the main frame", async () => {
   expect(native.fetch).not.toHaveBeenCalled();
 });
 
-it.each(["https://example.com/image.png", "data:image/png;base64,aW1hZ2UgYnl0ZXM="])(
+it.each(["https://example.com/image.png", `data:image/png;base64,${sourcePng.toString("base64")}`])(
   "copies an iframe image from %s",
   async (srcURL) => {
     await copyImage({ srcURL });
@@ -81,7 +85,7 @@ it.each(["https://example.com/image.png", "data:image/png;base64,aW1hZ2UgYnl0ZXM
       expect(native.fetch).not.toHaveBeenCalled();
     }
     expect(contents.copyImageAt).not.toHaveBeenCalled();
-    expect(native.createFromBuffer).toHaveBeenCalledWith(Buffer.from("image bytes"));
+    expect(native.createFromBuffer).toHaveBeenCalledWith(sourcePng);
     const blob = native.write.mock.calls[0]?.[0][0].blobs["image/png"] as Blob;
     expect(blob.type).toBe("image/png");
     expect(Buffer.from(await blob.arrayBuffer())).toEqual(Buffer.from("png"));
@@ -134,10 +138,27 @@ it("preserves the clipboard when the response is not an image", async () => {
   expect(native.write).not.toHaveBeenCalled();
 });
 
+it("rejects large decoded dimensions before image allocation", async () => {
+  const oversizedPng = Buffer.from(sourcePng);
+  oversizedPng.writeUInt32BE(4096, 16);
+  oversizedPng.writeUInt32BE(4096, 20);
+  native.fetch.mockResolvedValue(new Response(Uint8Array.from(oversizedPng)));
+  await expect(copyImage()).rejects.toThrow("size limit");
+  expect(native.createFromBuffer).not.toHaveBeenCalled();
+  expect(native.image.toPNG).not.toHaveBeenCalled();
+  expect(native.write).not.toHaveBeenCalled();
+});
+
+it("preserves the clipboard when the encoded PNG exceeds the limit", async () => {
+  native.image.toPNG.mockReturnValueOnce(Buffer.alloc(32 * 1024 * 1024 + 1));
+  await expect(copyImage()).rejects.toThrow("size limit");
+  expect(native.write).not.toHaveBeenCalled();
+});
+
 it("does not copy after the source frame closes during the request", async () => {
   native.fetch.mockImplementation(() => {
     frame.isDestroyed.mockReturnValue(true);
-    return Promise.resolve(new Response("image bytes"));
+    return Promise.resolve(new Response(Uint8Array.from(sourcePng)));
   });
   await copyImage();
   expect(native.write).not.toHaveBeenCalled();
