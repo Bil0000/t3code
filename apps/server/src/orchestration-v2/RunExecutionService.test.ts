@@ -172,7 +172,7 @@ it.effect("routes shared-runtime events only to their owning root run", () =>
   }),
 );
 
-it("keeps late descendants with their owned child while leaving new root children to the live run", () => {
+it("routes only enrolled workflow members after the root turn ends", () => {
   const threadId = ThreadId.make("thread:late-child");
   const rootProviderTurnId = ProviderTurnId.make("provider-turn:late-child");
   const identity: RunExecutionService.ProviderEventRouteIdentity = {
@@ -210,6 +210,13 @@ it("keeps late descendants with their owned child while leaving new root childre
     initial,
   );
   assert.isTrue(earlyAccepted);
+  const existingDescendant = ThreadId.make("thread:late-child:existing-descendant");
+  const [descendantAccepted, withDescendant] = RunExecutionService.routeProviderEvent(
+    childCreated(existingDescendant, earlyChild),
+    identity,
+    live,
+  );
+  assert.isTrue(descendantAccepted);
   const [terminalAccepted, ended] = RunExecutionService.routeProviderEvent(
     {
       type: "turn.terminal",
@@ -222,7 +229,7 @@ it("keeps late descendants with their owned child while leaving new root childre
       threadDisposition: "reusable",
     },
     identity,
-    live,
+    withDescendant,
   );
   assert.isTrue(terminalAccepted);
   // A child the root launched before it ended stays with this run.
@@ -234,20 +241,91 @@ it("keeps late descendants with their owned child while leaving new root childre
   );
   assert.isFalse(lateAccepted);
   assert.isFalse(afterLate.ownedThreadIds.has(lateChild));
-  const memberThreadId = ThreadId.make("thread:late-child:workflow-member");
-  const [memberAccepted, afterMember] = RunExecutionService.routeProviderEvent(
-    childCreated(memberThreadId, earlyChild),
+
+  const memberId = ThreadId.make("thread:late-child:workflow-member");
+  assert.isFalse(
+    RunExecutionService.routeProviderEvent(childCreated(memberId, earlyChild), identity, ended)[0],
+  );
+  const coordinator: OrchestrationV2Subagent = {
+    id: NodeId.make("node:late-child:workflow"),
+    threadId,
+    runId: identity.runId,
+    parentNodeId: NodeId.make("node:late-child"),
+    origin: "provider_native",
+    createdBy: "agent",
+    driver,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerThreadId: null,
+    childThreadId: earlyChild,
+    nativeTaskRef: null,
+    prompt: "Review the code",
+    title: "Review",
+    model: null,
+    status: "running",
+    result: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: DateTime.makeUnsafe(0),
+    workflow: {
+      phases: [],
+      agents: [{ index: 0, label: "Reviewer", state: "running", childThreadId: memberId }],
+    },
+  };
+  const [foreignAccepted, afterForeign] = RunExecutionService.routeProviderEvent(
+    {
+      type: "subagent.updated",
+      driver,
+      subagent: {
+        ...coordinator,
+        threadId: earlyChild,
+        childThreadId: existingDescendant,
+        runId: RunId.make("run:late-child:new"),
+      },
+    },
     identity,
     ended,
   );
-  assert.isTrue(memberAccepted);
-  assert.isTrue(afterMember.ownedThreadIds.has(memberThreadId));
+  assert.isTrue(foreignAccepted);
   assert.isFalse(
     RunExecutionService.routeProviderEvent(
-      childCreated(memberThreadId, ThreadId.make("thread:unrelated-coordinator")),
+      childCreated(memberId, existingDescendant),
       identity,
-      ended,
+      afterForeign,
     )[0],
+  );
+  const [workflowAccepted, afterWorkflow] = RunExecutionService.routeProviderEvent(
+    { type: "subagent.updated", driver, subagent: coordinator },
+    identity,
+    ended,
+  );
+  assert.isTrue(workflowAccepted);
+  assert.isFalse(
+    RunExecutionService.routeProviderEvent(childCreated(memberId), identity, afterWorkflow)[0],
+  );
+  const [memberAccepted, afterMember] = RunExecutionService.routeProviderEvent(
+    childCreated(memberId, earlyChild),
+    identity,
+    afterWorkflow,
+  );
+  assert.isTrue(memberAccepted);
+  assert.isTrue(afterMember.ownedThreadIds.has(memberId));
+  const [unrelatedAccepted] = RunExecutionService.routeProviderEvent(
+    childCreated(ThreadId.make("thread:late-child:unrelated-member"), lateChild),
+    identity,
+    ended,
+  );
+  assert.isFalse(unrelatedAccepted);
+  const [unrelatedDescendantAccepted, afterUnrelatedDescendant] =
+    RunExecutionService.routeProviderEvent(
+      childCreated(ThreadId.make("thread:late-child:unrelated-descendant"), earlyChild),
+      identity,
+      afterWorkflow,
+    );
+  assert.isFalse(unrelatedDescendantAccepted);
+  assert.isFalse(
+    afterUnrelatedDescendant.ownedThreadIds.has(
+      ThreadId.make("thread:late-child:unrelated-descendant"),
+    ),
   );
 });
 
@@ -1338,12 +1416,21 @@ it.effect("ingests new member threads of an owned child after the root turn term
         type: "subagent.updated",
         driver,
         subagent: {
-          id: subagentNodeId,
-          threadId,
-          runId,
-          status: "running",
+          ...makeRunOwnedSubagentFixture({
+            ids: backgroundScenarioIds("run-execution-late-child"),
+            providerInstanceId,
+            childThreadId,
+            driver,
+            status: "running",
+          }),
+          workflow: {
+            phases: [],
+            agents: [
+              { index: 0, label: "Reviewer", state: "running", childThreadId: memberThreadId },
+            ],
+          },
         },
-      } as ProviderAdapterV2Event,
+      },
       {
         type: "provider_turn.updated",
         driver,
@@ -2526,11 +2613,42 @@ it.effect(
         ids,
         status: "running",
       });
+      const memberThreadId = ThreadId.make("thread:subagent-interrupt-cascade:member");
+      const runningMember = {
+        ...runningSubagent,
+        id: NodeId.make("node:subagent-interrupt-cascade:member"),
+        threadId: childThreadId,
+        runId: null,
+        parentNodeId: runningChildNode.id,
+        childThreadId: memberThreadId,
+      };
+      const foreignSubagent = {
+        ...runningMember,
+        id: NodeId.make("node:subagent-interrupt-cascade:foreign-subagent"),
+        runId: RunId.make("run:subagent-interrupt-cascade:foreign"),
+        childThreadId: unrelatedChildThreadId,
+      };
+      const runningMemberRoot = {
+        ...runningChildNode,
+        id: NodeId.make("node:subagent-interrupt-cascade:member-root"),
+        threadId: memberThreadId,
+        rootNodeId: NodeId.make("node:subagent-interrupt-cascade:member-root"),
+      };
+      const foreignChildNode = {
+        ...runningChildNode,
+        id: NodeId.make("node:subagent-interrupt-cascade:foreign-child"),
+        runId: foreignSubagent.runId,
+      };
       const runningChildTurnItem = makeLinkedChildTurnItemFixture({
         ids,
         driver,
         type: "command_execution",
       });
+      const foreignChildTurnItem = {
+        ...runningChildTurnItem,
+        id: TurnItemId.make("turn-item:subagent-interrupt-cascade:foreign-child"),
+        runId: foreignSubagent.runId,
+      };
       const suppressedChildAssistantTurnItem = makeLinkedChildTurnItemFixture({
         ids: {
           ...ids,
@@ -2604,6 +2722,11 @@ it.effect(
                   driver,
                   turnItem: unrelatedChildTurnItem,
                 },
+                { type: "subagent.updated", driver, subagent: runningMember },
+                { type: "subagent.updated", driver, subagent: foreignSubagent },
+                { type: "node.updated", driver, node: runningMemberRoot },
+                { type: "node.updated", driver, node: foreignChildNode },
+                { type: "turn_item.updated", driver, turnItem: foreignChildTurnItem },
                 rootTerminalEvent(ids, "interrupted"),
                 // Late provider completion after interrupt must not be ingested.
                 {
@@ -2670,7 +2793,7 @@ it.effect(
             providerTurnId: ids.rootProviderTurnId,
           } as OrchestrationV2RunAttempt,
           attemptId: ids.attemptId,
-          relatedThreadIds: [unrelatedChildThreadId],
+          relatedThreadIds: [unrelatedChildThreadId, memberThreadId],
           providerTurnOrdinal: 1,
           message: {
             messageId: MessageId.make("message:subagent-interrupt-cascade:user"),
@@ -2722,8 +2845,39 @@ it.effect(
       const runUpdatedIndex = events.findIndex((event) => event.type === "run.updated");
       assert.isAtLeast(runUpdatedIndex, 0, "root run.updated must be written");
 
-      assert.lengthOf(subagentEvents, 1);
-      const terminalSubagent = subagentEvents[0];
+      assert.lengthOf(subagentEvents, 2);
+      const terminalSubagent = subagentEvents.find(
+        (event) => event.payload.id === runningSubagent.id,
+      );
+      const terminalMember = subagentEvents.find((event) => event.payload.id === runningMember.id);
+      assert.isDefined(terminalMember);
+      assert.equal(terminalMember.payload.status, "interrupted");
+      assert.equal(terminalMember.payload.runId, null);
+      assert.equal(terminalMember.payload.childThreadId, memberThreadId);
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "node.updated" &&
+            event.payload.id === runningMemberRoot.id &&
+            event.payload.status === "interrupted",
+        ),
+      );
+      assert.isFalse(
+        events.some(
+          (event) => event.type === "subagent.updated" && event.payload.id === foreignSubagent.id,
+        ),
+      );
+      assert.isFalse(
+        events.some(
+          (event) => event.type === "node.updated" && event.payload.id === foreignChildNode.id,
+        ),
+      );
+      assert.isFalse(
+        events.some(
+          (event) =>
+            event.type === "turn-item.updated" && event.payload.id === foreignChildTurnItem.id,
+        ),
+      );
       assert.isDefined(terminalSubagent);
       assert.equal(terminalSubagent.payload.status, "interrupted");
       assert.equal(terminalSubagent.payload.childThreadId, childThreadId);
