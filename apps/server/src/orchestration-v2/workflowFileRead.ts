@@ -15,14 +15,14 @@
  */
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { OrchestrationWorkflowFileError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
-function workflowFilesRoot(configDir?: string): string {
-  return NodePath.join(configDir?.trim() || NodePath.join(NodeOS.homedir(), ".claude"), "projects");
+function workflowFilesRoot(home: string, configDir?: string): string {
+  return NodePath.join(configDir?.trim() || NodePath.join(home, ".claude"), "projects");
 }
 
 export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedWorkflowFile")(
@@ -40,8 +40,9 @@ export const readContainedWorkflowFile = Effect.fn("orchestration.readContainedW
       });
     }
 
+    const home = yield* HostProcess.HomeDirectory;
     const root = yield* Effect.tryPromise({
-      try: () => NodeFSP.realpath(workflowFilesRoot(input.configDir)),
+      try: () => NodeFSP.realpath(workflowFilesRoot(home, input.configDir)),
       catch: (cause) =>
         new OrchestrationWorkflowFileError({
           reason: "root-unavailable",
