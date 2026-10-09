@@ -4256,9 +4256,7 @@ export function makeClaudeAdapterV2(
           const transcriptDir = input.workflow.runHandles?.transcriptDir;
 
           for (const member of input.workflow.agents) {
-            // Extends the coordinator node id; provider-thread scope lives on
-            // the child thread ids, not here.
-            const memberKey = `${input.coordinator.task.id}:agent:${member.index}`;
+            const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
             const previous = seen.get(memberKey);
             // Every member state but queued is already a subagent status, and a
             // queued member is work in flight as far as the projection cares.
@@ -4287,7 +4285,7 @@ export function makeClaudeAdapterV2(
                 ? (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) < 3
                 : restarted || previous?.finalTranscriptRead !== true);
             if (!changed && !readTranscript) continue;
-            const startedAt = previous?.startedAt ?? now;
+            const startedAt = (restarted ? undefined : previous?.startedAt) ?? now;
 
             const nodeId = idAllocator.derive.nodeFromProviderItem({
               driver: CLAUDE_PROVIDER,

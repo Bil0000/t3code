@@ -2099,6 +2099,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly stopTask?: (taskId: string) => Effect.Effect<void>;
     readonly environment?: NodeJS.ProcessEnv;
     readonly subagentLaunchToolUseId?: string;
+    readonly nativeSessionId?: string;
     // A CLI process opened after the first streams from its own queue, so the
     // first one can exit (Queue.shutdown) and a later turn can start another.
     readonly freshQueueOnReopen?: boolean;
@@ -2145,7 +2146,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             }).pipe(Effect.andThen(Queue.offer(continuationReceipts, request))),
         },
         queryRunner: {
-          allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),
+          allocateSessionId: Effect.succeed(options?.nativeSessionId ?? WAKE_NATIVE_SESSION),
           open: (input) =>
             Effect.gen(function* () {
               openedOptions = input.options;
@@ -9653,6 +9654,71 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     );
   });
 
+  it.effect("scopes workflow member artifacts to the provider thread", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const memberArtifacts: Array<Array<string>> = [];
+        const memberThreads: Array<ThreadId | null | undefined> = [];
+        for (const nativeSessionId of ["workflow-session-a", "workflow-session-b"]) {
+          const harness = yield* makeWorkflowHarnessWithOptions({ nativeSessionId });
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-${nativeSessionId}`),
+              text: "Run the workflow.",
+              attachments: [],
+            }),
+          );
+          for (const frame of [
+            workflowToolUse,
+            workflowTaskStarted,
+            workflowLaunchAck(harness.transcriptDir),
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001203", state: "done" }),
+          ]) {
+            yield* harness.offerAndWait(claudeSdkFrame({ ...frame, session_id: nativeSessionId }));
+          }
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              ...makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001204", result: "Done." }),
+              session_id: nativeSessionId,
+            }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          const member = workflowMemberEvents(harness.events, 1).at(-1)?.subagent;
+          assert.isDefined(member);
+          memberThreads.push(member?.childThreadId);
+          const ids = harness.events.flatMap<string>((event) => {
+            if (event.type === "subagent.updated" && event.subagent.id === member?.id)
+              return [event.subagent.id];
+            if (event.type === "node.updated" && event.node.threadId === member?.childThreadId)
+              return [event.node.id];
+            if (
+              event.type === "message.updated" &&
+              event.message.threadId === member?.childThreadId
+            )
+              return [event.message.id];
+            if (
+              event.type === "turn_item.updated" &&
+              event.turnItem.threadId === member?.childThreadId
+            )
+              return [event.turnItem.id];
+            return [];
+          });
+          assert.isAtLeast(new Set(ids).size, 6);
+          memberArtifacts.push(ids);
+        }
+        assert.notEqual(memberThreads[0], memberThreads[1]);
+        assert.deepEqual(
+          memberArtifacts[0]?.filter((id) => memberArtifacts[1]?.includes(id)),
+          [],
+        );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("stops only a live workflow task and waits for its stopped notification", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -10633,6 +10699,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           threadMessages(harness.events, secondThreadId).at(-1)?.message.text,
           "A2 from the transcript",
         );
+        const previousStartedAt = workflowMemberEvents(harness.events, 1).at(-1)?.subagent
+          .startedAt;
+        yield* TestClock.adjust(1_000);
         NodeFS.writeFileSync(
           NodePath.join(harness.transcriptDir, "agent-a1.jsonl"),
           [
@@ -10653,6 +10722,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "two-turn workflow member answer",
         );
         assert.equal(currentAssistantAnswers().join("\n\n"), "First answer\n\nSecond answer");
+        assert.notDeepEqual(
+          workflowMemberEvents(harness.events, 1).at(-1)?.subagent.startedAt,
+          previousStartedAt,
+        );
         yield* Queue.offer(
           harness.sdkMessages,
           workflowSnapshot({
