@@ -63,11 +63,39 @@ export async function copyContextMenuImage(
   ) {
     throw new Error("Image dimensions exceed the size limit");
   }
-  const image = Electron.nativeImage.createFromBuffer(bytes);
-  if (image.isEmpty()) throw new Error("Image could not be decoded");
   if (contents.isDestroyed() || frame.isDestroyed()) return;
-  const png = image.toPNG();
+  const image = Electron.nativeImage.createFromBuffer(bytes);
+  let png: Buffer;
+  if (image.isEmpty()) {
+    const decoded: unknown = await contents.executeJavaScriptInIsolatedWorld(1002, [
+      {
+        code: `(async () => {
+          const source = Uint8Array.from(atob("${bytes.toString("base64")}"), char => char.charCodeAt(0));
+          const bitmap = await createImageBitmap(new Blob([source]));
+          try {
+            if (bitmap.width <= 0 || bitmap.height <= 0 || bitmap.width * bitmap.height > ${MAX_IMAGE_BYTES / 4}) {
+              throw new Error("Image dimensions exceed the size limit");
+            }
+            const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+            const context = canvas.getContext("2d");
+            if (!context) throw new Error("Image could not be decoded");
+            context.drawImage(bitmap, 0, 0);
+            const output = await canvas.convertToBlob({ type: "image/png" });
+            if (output.size > ${MAX_IMAGE_BYTES}) throw new Error("PNG exceeded the size limit");
+            return await output.arrayBuffer();
+          } finally {
+            bitmap.close();
+          }
+        })()`,
+      },
+    ]);
+    if (!(decoded instanceof ArrayBuffer)) throw new Error("Image could not be decoded");
+    png = Buffer.from(decoded);
+  } else {
+    png = image.toPNG();
+  }
   if (png.byteLength > MAX_IMAGE_BYTES) throw new Error("PNG exceeded the size limit");
+  if (contents.isDestroyed() || frame.isDestroyed()) return;
   await Electron.clipboard.write([
     new Electron.ClipboardItem({
       "image/png": new Blob([Uint8Array.from(png)], { type: "image/png" }),

@@ -26,6 +26,7 @@ const frame = { isDestroyed: vi.fn(() => false) };
 const contents = {
   isDestroyed: vi.fn(() => false),
   copyImageAt: vi.fn(),
+  executeJavaScriptInIsolatedWorld: vi.fn(),
   mainFrame,
 };
 const params = {
@@ -53,6 +54,9 @@ beforeEach(() => {
   native.createFromBuffer.mockReturnValue(native.image);
   native.fetch.mockResolvedValue(new Response(Uint8Array.from(sourcePng)));
   native.write.mockResolvedValue(undefined);
+  contents.executeJavaScriptInIsolatedWorld.mockRejectedValue(
+    new Error("Image could not be decoded"),
+  );
 });
 
 it("preserves the clipboard when the context-menu frame is missing", async () => {
@@ -91,6 +95,29 @@ it.each(["https://example.com/image.png", `data:image/png;base64,${sourcePng.toS
     expect(Buffer.from(await blob.arrayBuffer())).toEqual(Buffer.from("png"));
   },
 );
+
+it.each([
+  ["WebP", "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAUAmJaQAA3AA/vz0AAA="],
+  ["GIF", "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAkQBADs="],
+])("copies %s using Chromium when nativeImage cannot decode it", async (_, base64) => {
+  native.fetch.mockResolvedValue(new Response(Uint8Array.from(Buffer.from(base64, "base64"))));
+  native.image.isEmpty.mockReturnValue(true);
+  contents.executeJavaScriptInIsolatedWorld.mockResolvedValue(Uint8Array.from(sourcePng).buffer);
+  await copyImage();
+  const blob = native.write.mock.calls[0]?.[0][0].blobs["image/png"] as Blob;
+  expect(Buffer.from(await blob.arrayBuffer())).toEqual(sourcePng);
+  expect(native.image.toPNG).not.toHaveBeenCalled();
+});
+
+it("preserves the clipboard if the source frame closes during Chromium decoding", async () => {
+  native.image.isEmpty.mockReturnValue(true);
+  contents.executeJavaScriptInIsolatedWorld.mockImplementation(() => {
+    frame.isDestroyed.mockReturnValue(true);
+    return Promise.resolve(Uint8Array.from(sourcePng).buffer);
+  });
+  await copyImage();
+  expect(native.write).not.toHaveBeenCalled();
+});
 
 it.each([
   "file:///private/image.png",
