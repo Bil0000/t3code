@@ -205,7 +205,9 @@ export function ThreadLineageWorkflowRow({
                   onClick={() => setPhaseOpen((phases) => new Map(phases).set(phase.index, !open))}
                   accessory={
                     <>
-                      {status === "failed" ? <SectionHeaderStatus>Failed</SectionHeaderStatus> : null}
+                      {status === "failed" ? (
+                        <SectionHeaderStatus>Failed</SectionHeaderStatus>
+                      ) : null}
                       <span className="shrink-0 text-2xs font-normal tabular-nums">
                         {phase.settledCount}/{phase.members.length}{" "}
                         {phase.members.length === 1 ? "agent" : "agents"}
