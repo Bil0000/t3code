@@ -502,6 +502,7 @@ it.effect.each([
   "no-session",
   "unsupported-runtime",
   "provider-failed",
+  "provider-timeout",
   "within-limit",
   "runtime-raised",
   "interaction-raised",
@@ -570,6 +571,7 @@ it.effect.each([
       updatedAt: now,
     };
     const calls: Array<{ taskId: string; providerThread: OrchestrationV2ProviderThread }> = [];
+    const stopStarted = yield* Deferred.make<void>();
     const runtime = {
       driver,
       providerSessionId,
@@ -585,9 +587,11 @@ it.effect.each([
                       detail: "private provider detail",
                     }),
                   )
-                : Effect.sync(() => {
-                    calls.push(input);
-                  }),
+                : state === "provider-timeout"
+                  ? Deferred.succeed(stopStarted, undefined).pipe(Effect.andThen(Effect.never))
+                  : Effect.sync(() => {
+                      calls.push(input);
+                    }),
           }),
     } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime;
     const layerTest = ThreadManagementService.layer.pipe(
@@ -655,7 +659,23 @@ it.effect.each([
               );
               return yield* Fiber.join(pending);
             })
-          : yield* stop;
+          : state === "provider-timeout"
+            ? yield* Effect.gen(function* () {
+                const finished = yield* Ref.make(false);
+                const pending = yield* stop.pipe(
+                  Effect.tap(() => Ref.set(finished, true)),
+                  Effect.forkChild,
+                );
+                yield* Deferred.await(stopStarted);
+                yield* TestClock.adjust("15 seconds");
+                expect(yield* Ref.get(finished)).toBe(true);
+                const result = yield* Fiber.join(pending);
+                expect(yield* executor.withLock(threadId, Effect.succeed("lock-released"))).toBe(
+                  "lock-released",
+                );
+                return result;
+              })
+            : yield* stop;
       if (state === "running" || state === "within-limit") {
         expect(result).toMatchObject({ _tag: "Success" });
         expect(calls).toEqual([{ taskId: "native-workflow-id", providerThread }]);
@@ -672,12 +692,15 @@ it.effect.each([
                 ? "not-running"
                 : state === "unsupported" || state === "unsupported-runtime"
                   ? "unsupported"
-                  : state === "provider-failed"
+                  : state === "provider-failed" || state === "provider-timeout"
                     ? "stop-failed"
                     : "unavailable",
           },
         });
         expect(calls).toEqual([]);
+        if (state === "provider-timeout") {
+          expect(result).toMatchObject({ failure: { cause: { _tag: "TimeoutError" } } });
+        }
         if (state === "runtime-raised" || state === "interaction-raised") {
           expect(yield* Ref.get(refused)).toEqual({
             threadId,

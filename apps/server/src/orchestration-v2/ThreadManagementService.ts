@@ -936,6 +936,7 @@ const make = Effect.gen(function* () {
         return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unsupported" });
       }
       yield* runtime.value.stopTask({ providerThread, taskId }).pipe(
+        Effect.timeout("15 seconds"),
         Effect.mapError(
           (cause) =>
             new OrchestrationV2StopWorkflowError({
