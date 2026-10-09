@@ -54,7 +54,7 @@ export async function copyContextMenuImage(
   }
 
   const bytes = Buffer.concat(chunks, byteLength);
-  const dimensions = sourceDimensions(bytes);
+  const dimensions = sourceDimensions(bytes, MAX_IMAGE_BYTES / 4);
   if (
     !dimensions ||
     dimensions.width <= 0 ||
