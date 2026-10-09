@@ -1,12 +1,11 @@
 import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
-  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type OrchestrationProjectShell,
 } from "@t3tools/contracts";
-import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -25,7 +24,6 @@ import {
   buildBoundedThreadProjection,
   decodeThreadHistoryCursor,
   InvalidThreadHistoryCursorError,
-  projectedRowEncodedBytes,
   THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
   THREAD_HISTORY_PAGE_POLICY,
   OLDER_THREAD_USER_TURN_LIMIT,
@@ -35,6 +33,10 @@ import * as ProjectStore from "./ProjectStore.ts";
 import { buildActiveShellSnapshot, loadShellSnapshotParts } from "./ShellStream.ts";
 import { boundedSnapshotResponseFields } from "./ThreadStream.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
+
+const isThreadTranscriptTooLargeError = Schema.is(
+  ThreadManagementService.ThreadTranscriptTooLargeError,
+);
 
 function isThreadNotFound(error: unknown): boolean {
   return (
@@ -187,44 +189,24 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadTranscript")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          const { projection } = yield* threadManagement
-            .getThreadSnapshot(args.params.threadId)
-            .pipe(
-              Effect.catch(
-                Effect.fnUntraced(function* (error) {
-                  if (isThreadNotFound(error)) {
-                    return yield* failEnvironmentNotFound("thread_not_found");
-                  }
-                  return yield* failEnvironmentInternal(
-                    "orchestration_thread_snapshot_failed",
-                    error,
-                  );
-                }),
-              ),
-            );
-          let sizeBytes = Buffer.byteLength(
-            threadTranscriptHeader(yield* environment.getEnvironmentId, {
-              threadId: projection.thread.id,
-              title: projection.thread.title,
-              updatedAt: projection.updatedAt,
-            }),
-            "utf8",
+          return yield* threadManagement.getThreadTranscript(args.params.threadId).pipe(
+            Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, environment),
+            traceLocalHandlerWork,
+            Effect.catch(
+              Effect.fnUntraced(function* (error) {
+                if (isThreadTranscriptTooLargeError(error)) {
+                  return yield* failEnvironmentInvalidRequest("thread_transcript_too_large");
+                }
+                if (isThreadNotFound(error)) {
+                  return yield* failEnvironmentNotFound("thread_not_found");
+                }
+                return yield* failEnvironmentInternal(
+                  "orchestration_thread_snapshot_failed",
+                  error,
+                );
+              }),
+            ),
           );
-          if (sizeBytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
-            return yield* failEnvironmentInvalidRequest("thread_transcript_too_large");
-          }
-          for (const row of projection.visibleTurnItems) {
-            sizeBytes += projectedRowEncodedBytes(row) + 1;
-            if (sizeBytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
-              return yield* failEnvironmentInvalidRequest("thread_transcript_too_large");
-            }
-          }
-          return {
-            threadId: projection.thread.id,
-            title: projection.thread.title,
-            updatedAt: projection.updatedAt,
-            items: projection.visibleTurnItems,
-          };
         }),
       )
       .handle(

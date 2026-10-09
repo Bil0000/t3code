@@ -215,6 +215,15 @@ it.effect("exports full history with size, scope, and missing-thread checks", ()
       const response = yield* read(thread.id);
       expect(response.status).toBe(expectedStatus);
       if (expectedStatus === 400) {
+        const error = yield* Context.get(services, ThreadManagementService.ThreadManagementService)
+          .getThreadTranscript(thread.id)
+          .pipe(
+            Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
+              getEnvironmentId: Effect.succeed(environmentId),
+            }),
+            Effect.flip,
+          );
+        expect(error).toBeInstanceOf(ThreadManagementService.ThreadTranscriptTooLargeError);
         expect(yield* Effect.promise(() => response.json())).toMatchObject({
           _tag: "EnvironmentRequestInvalidError",
           reason: "thread_transcript_too_large",
