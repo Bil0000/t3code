@@ -7,7 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import { vi } from "vite-plus/test";
 
-import { ProviderEventLoggers } from "../../provider/ProviderEventLoggers.ts";
+import { ProviderEventLoggers } from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   CLAUDE_AGENT_SDK_QUERY_PROTOCOL,
   ClaudeAgentSdkQueryRunner,

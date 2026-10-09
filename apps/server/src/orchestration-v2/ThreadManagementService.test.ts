@@ -33,10 +33,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import {
-  ProviderAdapterProtocolError,
-  type ProviderAdapterV2SessionRuntime,
-} from "./ProviderAdapter.ts";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, type DispatchModeRefusal } from "./DispatchModeLimit.ts";
@@ -583,13 +580,16 @@ it.effect.each([
             stopTask: (input: (typeof calls)[number]) =>
               state === "provider-failed"
                 ? Effect.fail(
-                    new ProviderAdapterProtocolError({ driver, detail: "private provider detail" }),
+                    new ProviderAdapter.ProviderAdapterProtocolError({
+                      driver,
+                      detail: "private provider detail",
+                    }),
                   )
                 : Effect.sync(() => {
                     calls.push(input);
                   }),
           }),
-    } as unknown as ProviderAdapterV2SessionRuntime;
+    } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime;
     const layerTest = ThreadManagementService.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
