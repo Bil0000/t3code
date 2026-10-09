@@ -706,8 +706,8 @@ export const OrchestrationV2WorkflowAgent = Schema.Struct({
    * provider exposes it — both are capped by the CLI at a few hundred
    * characters.
    */
-  prompt: Schema.optional(TrimmedNonEmptyString),
-  result: Schema.optional(TrimmedNonEmptyString),
+  prompt: Schema.optional(Schema.NonEmptyString),
+  result: Schema.optional(Schema.NonEmptyString),
 });
 export type OrchestrationV2WorkflowAgent = typeof OrchestrationV2WorkflowAgent.Type;
 
