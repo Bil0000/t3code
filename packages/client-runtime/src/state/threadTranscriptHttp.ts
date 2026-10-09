@@ -4,7 +4,6 @@ import type * as Option from "effect/Option";
 
 import type { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import type { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import {
   executeAuthenticatedEnvironmentHttpRequest,
@@ -23,11 +22,7 @@ export const fetchEnvironmentThreadTranscript = Effect.fn(
     ...input,
     group: "orchestration",
     method: "GET",
-    url: (httpBaseUrl) =>
-      environmentEndpointUrl(
-        httpBaseUrl,
-        `/api/orchestration/threads/${input.threadId}/transcript`,
-      ),
+    url: (urls) => urls.threadTranscript({ params: { threadId: input.threadId } }),
     timeoutMs: 60_000,
     request: ({ client, headers }) =>
       client.threadTranscript({
