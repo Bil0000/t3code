@@ -171,6 +171,138 @@ describe("mergeClaudeWorkflowProgress", () => {
     expect(second?.phases.map((entry) => entry.title)).toEqual(["Alpha", "Beta", "Gamma"]);
   });
 
+  it("keeps other members and phase links when a sparse frame starts a new attempt", () => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([
+        phase(1, "Alpha"),
+        agent({
+          state: "error",
+          attempt: 1,
+          promptPreview: "First prompt",
+          resultPreview: "First result",
+          tokens: 100,
+          toolCalls: 2,
+          durationMs: 50,
+          queuedAt: 1000,
+          startedAt: 1010,
+        }),
+        agent({ index: 2, state: "done" }),
+      ]),
+    });
+    const second = mergeClaudeWorkflowProgress({
+      previous: first,
+      message: snapshotFrame([
+        { type: "workflow_agent", index: 1, label: "alpha:one", state: "start", attempt: 2 },
+      ]),
+    });
+    expect(second?.agents).toEqual([
+      {
+        index: 1,
+        label: "alpha:one",
+        state: "running",
+        attempt: 2,
+        phaseIndex: 1,
+        phaseTitle: "Alpha",
+      },
+      first?.agents[1],
+    ]);
+    expect(second?.phases).toEqual(first?.phases);
+  });
+
+  it("ignores an older attempt after a retry completes", () => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([agent({ state: "done", attempt: 2, resultPreview: "New result" })]),
+    });
+    const second = mergeClaudeWorkflowProgress({
+      previous: first,
+      message: snapshotFrame([agent({ state: "error", attempt: 1, resultPreview: "Old result" })]),
+    });
+    expect(second?.agents).toEqual(first?.agents);
+  });
+
+  it.each([
+    ["done", "start"],
+    ["done", "queued"],
+    ["error", "start"],
+    ["error", "queued"],
+    ["start", "queued"],
+  ])("keeps member state when the same attempt regresses from %s to %s", (state, staleState) => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([agent({ state, attempt: 2, resultPreview: "Current result" })]),
+    });
+    const second = mergeClaudeWorkflowProgress({
+      previous: first,
+      message: snapshotFrame([
+        agent({ state: staleState, attempt: 2, resultPreview: "Old result" }),
+      ]),
+    });
+    expect(second?.agents).toEqual(first?.agents);
+  });
+
+  it("retains member fields omitted by a later frame in the same attempt", () => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([agent({ attempt: 2, promptPreview: "Current prompt", tokens: 100 })]),
+    });
+    const second = mergeClaudeWorkflowProgress({
+      previous: first,
+      message: snapshotFrame([agent({ state: "done", resultPreview: "Current result" })]),
+    });
+    expect(second?.agents[0]).toMatchObject({
+      state: "completed",
+      attempt: 2,
+      prompt: "Current prompt",
+      result: "Current result",
+      totalTokens: 100,
+    });
+  });
+
+  it("keeps existing run handles when a later acknowledgement supplies only a script path", () => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      runHandles: { runId: "wf_abc", transcriptDir: "/workflows/wf_abc" },
+      message: startFrame,
+    });
+    const second = mergeClaudeWorkflowProgress({
+      previous: first,
+      runHandles: { scriptPath: "/scripts/workflow.js" },
+      message: startFrame,
+    });
+    expect(second?.runHandles).toEqual({
+      runId: "wf_abc",
+      transcriptDir: "/workflows/wf_abc",
+      scriptPath: "/scripts/workflow.js",
+    });
+  });
+
+  it("preserves prompt and result whitespace", () => {
+    const workflow = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([
+        agent({ promptPreview: "  indented\n", resultPreview: "\n  answer\n" }),
+      ]),
+    });
+    expect(workflow?.agents[0]?.prompt).toBe("  indented\n");
+    expect(workflow?.agents[0]?.result).toBe("\n  answer\n");
+  });
+
+  it("drops timestamps outside the DateTime range", () => {
+    const workflow = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([
+        agent({ startedAt: 8_640_000_000_000_001, queuedAt: Number.MAX_SAFE_INTEGER }),
+        agent({ index: 2, startedAt: 8_640_000_000_000_000, queuedAt: 0 }),
+      ]),
+    });
+    expect(workflow?.agents[0]).not.toHaveProperty("startedAt");
+    expect(workflow?.agents[0]).not.toHaveProperty("queuedAt");
+    expect(workflow?.agents[1]?.startedAt).toBe(8_640_000_000_000_000);
+    expect(workflow?.agents[1]?.queuedAt).toBe(0);
+  });
+
   it("drops malformed entries instead of failing the frame", () => {
     const workflow = mergeClaudeWorkflowProgress({
       previous: undefined,

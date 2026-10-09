@@ -1,14 +1,3 @@
-/**
- * Decoders for the Claude CLI's workflow telemetry.
- *
- * A `local_workflow` task reports its shape through `workflow_progress` on
- * `task_progress` — an array the SDK types do not declare, so every field is
- * read defensively and an unrecognised entry is dropped rather than failing
- * the frame. Two frame kinds arrive interleaved: snapshot frames carrying the
- * whole run, and usage-only frames carrying an empty array. Only a non-empty
- * array is authoritative; an empty one must leave the previous snapshot alone
- * or a live run would blink back to zero agents between ticks.
- */
 import type {
   OrchestrationV2SubagentWorkflow,
   OrchestrationV2WorkflowAgent,
@@ -36,6 +25,17 @@ const AGENT_STATES: Record<string, OrchestrationV2WorkflowAgent["state"] | undef
 
 function count(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function timestamp(value: unknown): number | undefined {
+  const milliseconds = count(value);
+  return milliseconds !== undefined && milliseconds <= 8_640_000_000_000_000
+    ? milliseconds
+    : undefined;
+}
+
+function preview(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function optional<T>(key: string, value: T | undefined): Record<string, T> {
@@ -70,10 +70,10 @@ function parseAgent(entry: unknown): OrchestrationV2WorkflowAgent | null {
     ...optional("totalTokens", count(field(entry, "tokens"))),
     ...optional("toolCalls", count(field(entry, "toolCalls"))),
     ...optional("durationMs", count(field(entry, "durationMs"))),
-    ...optional("queuedAt", count(field(entry, "queuedAt"))),
-    ...optional("startedAt", count(field(entry, "startedAt"))),
-    ...optional("prompt", text(field(entry, "promptPreview"))),
-    ...optional("result", text(field(entry, "resultPreview"))),
+    ...optional("queuedAt", timestamp(field(entry, "queuedAt"))),
+    ...optional("startedAt", timestamp(field(entry, "startedAt"))),
+    ...optional("prompt", preview(field(entry, "promptPreview"))),
+    ...optional("result", preview(field(entry, "resultPreview"))),
   };
 }
 
@@ -148,11 +148,43 @@ export function mergeClaudeWorkflowProgress(input: {
     (previous?.phases ?? []).map((phase) => [phase.index, phase] as const),
   );
   for (const phase of snapshot?.phases ?? []) phasesByIndex.set(phase.index, phase);
+  const agentsByIndex = new Map(
+    (previous?.agents ?? []).map((agent) => [agent.index, agent] as const),
+  );
+  for (const agent of snapshot?.agents ?? []) {
+    const prior = agentsByIndex.get(agent.index);
+    const attempt = agent.attempt ?? prior?.attempt ?? 1;
+    if (prior !== undefined && attempt < (prior.attempt ?? 1)) continue;
+    const restarted = prior !== undefined && attempt > (prior.attempt ?? 1);
+    const regressed =
+      !restarted &&
+      (((prior?.state === "completed" || prior?.state === "failed") &&
+        agent.state !== prior.state) ||
+        (prior?.state === "running" && agent.state === "queued"));
+    agentsByIndex.set(
+      agent.index,
+      regressed
+        ? { ...agent, ...prior }
+        : {
+            ...(restarted
+              ? {
+                  ...optional("phaseIndex", prior.phaseIndex),
+                  ...optional("phaseTitle", prior.phaseTitle),
+                }
+              : prior),
+            ...agent,
+          },
+    );
+  }
+  const runHandles =
+    input.runHandles === undefined
+      ? previous?.runHandles
+      : { ...previous?.runHandles, ...input.runHandles };
   return {
     ...optional("name", input.name ?? previous?.name),
-    ...optional("runHandles", input.runHandles ?? previous?.runHandles),
+    ...optional("runHandles", runHandles),
     phases: Array.from(phasesByIndex.values()).sort((left, right) => left.index - right.index),
-    agents: snapshot?.agents ?? previous?.agents ?? [],
+    agents: Array.from(agentsByIndex.values()).sort((left, right) => left.index - right.index),
     ...optional("totalTokens", count(field(reported, "total_tokens")) ?? previous?.totalTokens),
     ...optional("toolCalls", count(field(reported, "tool_uses")) ?? previous?.toolCalls),
     ...optional("durationMs", count(field(reported, "duration_ms")) ?? previous?.durationMs),
