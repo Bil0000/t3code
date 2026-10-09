@@ -9549,7 +9549,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       uuid: "00000000-0000-4000-8000-000000001003",
       session_id: WAKE_NATIVE_SESSION,
       tool_use_result: {
-        status: "async_launched",
         taskType: "local_workflow",
         runId: "wf_probe",
         transcriptDir,
@@ -9653,6 +9652,95 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       "workflow members projected",
     );
   });
+
+  it.effect.each(["Agent", "Workflow"] as const)(
+    "keeps a workflow running after its %s launch reply without an async flag",
+    (toolName) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarness;
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-workflow-launch-${toolName}`),
+              text: "Run the workflow.",
+              attachments: [],
+            }),
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...workflowToolUse,
+              message: {
+                model: "claude-sonnet-4-6",
+                content: [
+                  { type: "tool_use", id: WORKFLOW_TOOL_USE_ID, name: toolName, input: {} },
+                ],
+              },
+            }),
+          );
+          yield* harness.offerAndWait(workflowTaskStarted);
+          yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
+          yield* harness.offerAndWait(
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001200", state: "start" }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001201", result: "Launched." }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          assert.equal(
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+            "running",
+          );
+          assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "running");
+          assert.isTrue(yield* harness.hasPendingBackgroundWork);
+          const toolItems = harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.nativeItemRef?.nativeId === WORKFLOW_TOOL_USE_ID
+              ? [event.turnItem.status]
+              : [],
+          );
+          assert.deepEqual(toolItems, toolName === "Workflow" ? ["running", "completed"] : []);
+          yield* harness.offerAndWait(
+            workflowNotification({
+              uuid: "00000000-0000-4000-8000-000000001202",
+              status: "completed",
+            }),
+          );
+          yield* Queue.take(harness.continuationReceipts);
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-workflow-complete-${toolName}`),
+              text: "Workflow finished.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+              messageCreatedBy: "agent",
+              messageCreationSource: "provider",
+            }),
+          );
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001205", result: "Finished." }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          assert.equal(
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+            "completed",
+          );
+          assert.equal(
+            workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status,
+            "completed",
+          );
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      ),
+  );
 
   it.effect("scopes workflow member artifacts to the provider thread", () =>
     Effect.scoped(

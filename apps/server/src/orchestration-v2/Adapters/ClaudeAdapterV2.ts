@@ -6889,25 +6889,23 @@ export function makeClaudeAdapterV2(
 
           for (const { toolResult, output } of claudeToolResultEntriesFromMessage(message)) {
             const subagent = yield* resolveSubagentByToolUseId(context, toolResult.tool_use_id);
+            const runHandles = parseClaudeWorkflowRunHandles(claudeNativeToolOutputValue(output));
             // Independent of the branches below: unlike the Agent tool, a
             // Workflow tool_use is an ordinary tool call and so lands in
             // toolCalls, which skips the subagent branch entirely. Its launch
             // acknowledgement is the only carrier of the run's filesystem
             // handles, so harvest them wherever the result arrives.
-            if (subagent !== undefined) {
-              const runHandles = parseClaudeWorkflowRunHandles(claudeNativeToolOutputValue(output));
-              if (runHandles !== undefined) {
-                yield* updateClaudeSubagentNode({
-                  context,
-                  taskId: subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id),
-                  toolUseId: toolResult.tool_use_id,
-                  workflowRunHandles: runHandles,
-                  // The acknowledgement arrives at launch, so the coordinator
-                  // is still running; a late one is dropped by the same
-                  // terminal protection that guards every other update.
-                  status: "running",
-                });
-              }
+            if (subagent !== undefined && runHandles !== undefined) {
+              yield* updateClaudeSubagentNode({
+                context,
+                taskId: subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id),
+                toolUseId: toolResult.tool_use_id,
+                workflowRunHandles: runHandles,
+                // The acknowledgement arrives at launch, so the coordinator
+                // is still running; a late one is dropped by the same
+                // terminal protection that guards every other update.
+                status: "running",
+              });
             }
             // A resume task_started reuses the resuming tool call's
             // tool_use_id (e.g. SendMessage), whose tool_result only
@@ -6921,7 +6919,10 @@ export function makeClaudeAdapterV2(
               // A background Agent launch resolves its tool_use immediately
               // with an async-launch ACK while the task keeps running; only
               // the eventual task_notification terminalizes the subagent.
-              if (isClaudeSubagentAsyncLaunchAck(output)) {
+              if (
+                !isClaudeToolResultError(toolResult) &&
+                (runHandles !== undefined || isClaudeSubagentAsyncLaunchAck(output))
+              ) {
                 continue;
               }
               const result = claudeSubagentResultText(output);
