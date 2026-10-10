@@ -493,10 +493,9 @@ export function ThreadRelationshipsPanel(props: {
                 workflowGroup?.workflow.status === "running" &&
                 agent?.origin === "provider_native" &&
                 providerDriver === "claudeAgent";
-              const trailingVisibilityClass =
-                canStop || canStopWorkflow
-                  ? "group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0 [@media(hover:none)]:opacity-0"
-                  : "";
+              const trailingVisibilityClass = (workflowGroup ? canStopWorkflow : canStop)
+                ? "group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0 [@media(hover:none)]:opacity-0"
+                : "";
               const project = projects.find((project) => project.id === node?.thread?.projectId);
               const relationshipHint = node?.missing
                 ? "This related thread is unavailable"
