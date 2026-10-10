@@ -29,6 +29,7 @@ import {
 import {
   NodeId,
   type EnvironmentId,
+  type OrchestrationV2Subagent,
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -237,6 +238,10 @@ export function ThreadRelationshipsPanel(props: {
           subagent.childThreadId,
           {
             ...byId.get(subagent.id)!,
+            id: subagent.id,
+            threadId: subagent.threadId,
+            nativeTaskRef: subagent.nativeTaskRef,
+            nativeStatus: subagent.status,
             driver: subagent.driver,
             providerInstanceId: subagent.providerInstanceId,
             origin: subagent.origin,
@@ -363,12 +368,18 @@ export function ThreadRelationshipsPanel(props: {
     setBusyAction(null);
   };
 
-  const stopSubagent = async (childThreadId: ThreadId) => {
+  const stopSubagent = async (
+    childThreadId: ThreadId,
+    agent: Pick<OrchestrationV2Subagent, "id" | "origin" | "threadId">,
+  ) => {
     if (stoppingId !== null) return;
     setStoppingId(childThreadId);
     const result = await interruptTurn({
       environmentId: props.environmentId,
-      input: { threadId: childThreadId },
+      input:
+        agent.origin === "provider_native"
+          ? { threadId: agent.threadId, subagentId: agent.id }
+          : { threadId: childThreadId },
     });
     setStoppingId(null);
     if (result._tag === "Failure") {
@@ -451,7 +462,13 @@ export function ThreadRelationshipsPanel(props: {
                 : currentSubagent(projectedAgent, node?.thread);
               const failed = rowStatus === "failed" || rowStatus === "error";
               const canStop =
-                agent?.origin === "app_owned" &&
+                agent &&
+                (agent.origin === "app_owned" ||
+                  (agent.origin === "provider_native" &&
+                    agent.driver === "claudeAgent" &&
+                    agent.nativeTaskRef?.strength === "strong" &&
+                    agent.nativeTaskRef.nativeId !== null &&
+                    ["pending", "running", "waiting"].includes(agent.nativeStatus))) &&
                 agent.startedAt &&
                 ["pending", "running", "waiting"].includes(agent.status);
               const threadTitle = relationshipThreadTitle({
@@ -656,7 +673,7 @@ export function ThreadRelationshipsPanel(props: {
                               tone="destructive"
                               aria-label={`Stop subagent ${threadTitle}`}
                               disabled={stoppingId !== null}
-                              onClick={() => void stopSubagent(threadId)}
+                              onClick={() => void stopSubagent(threadId, agent)}
                             />
                           }
                         >
