@@ -10804,11 +10804,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ["aborted_streaming", false],
     ["api_error", true],
   ] as const)(
-    "keeps a live workflow pinned after root result %s, continuation=%s",
+    "stops the run's live workflow after root result %s, continuation=%s",
     ([terminalReason, continuation]) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const harness = yield* makeWorkflowHarness;
+          const stoppedTasks: Array<string> = [];
+          const harness = yield* makeWorkflowHarnessWithOptions({
+            stopTask: (taskId) => Effect.sync(() => void stoppedTasks.push(taskId)),
+          });
           const now = yield* DateTime.now;
           const turnInput = {
             threadId: harness.threadId,
@@ -10857,45 +10860,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const terminal = yield* Queue.take(harness.terminalReceipts);
           assert.equal(terminal.status, terminalReason === "api_error" ? "failed" : "interrupted");
           assert.equal(terminal.threadDisposition, "reusable");
-          assert.isTrue(yield* harness.hasPendingBackgroundWork);
-          assert.equal(
-            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
-            "running",
-          );
-          for (const index of [1, 2]) {
-            assert.equal(
-              workflowMemberEvents(harness.events, index).at(-1)?.subagent.status,
-              "running",
-            );
-          }
-          yield* harness.offerAndWait(
-            workflowNotification({
-              uuid: "00000000-0000-4000-8000-000000001054",
-              status: "completed",
-            }),
-          );
-          yield* harness.offerAndWait(
-            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001055", result: "Finished." }),
-          );
-          yield* harness.runtime.startTurn(
-            makeClaudeTestTurnInput({
-              ...turnInput,
-              attemptId: RunAttemptId.make("attempt-claude-workflow-completed-wake"),
-              providerTurnOrdinal: continuation ? 3 : 2,
-              messageCreatedBy: "agent",
-              messageCreationSource: "provider",
-            }),
-          );
-          yield* Queue.take(harness.terminalReceipts);
+          // The run following the workflow (its launcher, or the run a resumed
+          // workflow was re-attributed to) stops following it, so it is stopped
+          // instead of left running out of sight.
+          const settled = terminalReason === "api_error" ? "failed" : "cancelled";
+          assert.deepEqual(stoppedTasks, [WORKFLOW_TASK_ID]);
           assert.isFalse(yield* harness.hasPendingBackgroundWork);
-          assert.equal(
-            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
-            "completed",
-          );
+          assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, settled);
           for (const index of [1, 2]) {
             assert.equal(
               workflowMemberEvents(harness.events, index).at(-1)?.subagent.status,
-              "completed",
+              settled,
             );
           }
         }).pipe(

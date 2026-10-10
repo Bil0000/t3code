@@ -190,50 +190,6 @@ function emptyOpenRunOwnedSubagentProjection(): OpenRunOwnedSubagentProjection {
   };
 }
 
-/**
- * A root turn that fails or is interrupted while its provider session survives
- * leaves running Claude workflows alive (the adapter only settles them once the
- * CLI process is gone). Their coordinator, members and member threads stay out
- * of the terminal cascade; the run keeps ingesting until they settle.
- */
-function spareLiveWorkflows(open: OpenRunOwnedSubagentProjection): OpenRunOwnedSubagentProjection {
-  const sparedIds = new Set<NodeId>();
-  const sparedThreadIds = new Set<ThreadId>();
-  for (const subagent of open.subagents.values()) {
-    if (subagent.workflow !== undefined && !isSettledSubagentStatus(subagent.status)) {
-      sparedIds.add(subagent.id);
-      if (subagent.childThreadId !== null) sparedThreadIds.add(subagent.childThreadId);
-    }
-  }
-  if (sparedIds.size === 0) return open;
-  // Members live on their coordinator's thread and own a thread of their own.
-  for (const subagent of open.subagents.values()) {
-    if (sparedThreadIds.has(subagent.threadId)) {
-      sparedIds.add(subagent.id);
-      if (subagent.childThreadId !== null) sparedThreadIds.add(subagent.childThreadId);
-    }
-  }
-  const kept = <K, V extends { readonly threadId: ThreadId }>(
-    entries: ReadonlyMap<K, V>,
-    isSpared: (key: K, value: V) => boolean,
-  ) => new Map([...entries].filter(([key, value]) => !isSpared(key, value)));
-  return {
-    subagents: kept(open.subagents, (id) => sparedIds.has(id)),
-    turnItems: kept(
-      open.turnItems,
-      (id, item) =>
-        sparedIds.has(id) ||
-        sparedThreadIds.has(item.threadId) ||
-        (item.childThreadId !== null && sparedThreadIds.has(item.childThreadId)),
-    ),
-    childTurnItems: kept(open.childTurnItems, (_, item) => sparedThreadIds.has(item.threadId)),
-    nodes: kept(open.nodes, (id, node) => sparedIds.has(id) || sparedThreadIds.has(node.threadId)),
-    linkedChildThreadIds: new Set(
-      [...open.linkedChildThreadIds].filter((threadId) => !sparedThreadIds.has(threadId)),
-    ),
-  };
-}
-
 function withLinkedChildThreadId(
   current: OpenRunOwnedSubagentProjection,
   childThreadId: ThreadId | null,
@@ -682,11 +638,7 @@ export const layer: Layer.Layer<
           return;
         }
         const allocateEventId = () => idAllocator.allocate.event({ threadId: input.run.threadId });
-        const openRunOwned = input.openRunOwnedSubagents ?? emptyOpenRunOwnedSubagentProjection();
-        const open =
-          input.terminal.status !== "completed" && input.terminal.threadDisposition === "reusable"
-            ? spareLiveWorkflows(openRunOwned)
-            : openRunOwned;
+        const open = input.openRunOwnedSubagents ?? emptyOpenRunOwnedSubagentProjection();
         const hasOpenSubagentProjection =
           open.subagents.size > 0 ||
           open.turnItems.size > 0 ||
@@ -1021,7 +973,6 @@ export const layer: Layer.Layer<
           const providerThreadOwnerLost = yield* Ref.make(false);
           const activeChildProviderTurns = yield* Ref.make<ReadonlySet<ProviderTurnId>>(new Set());
           const activeChildSubagents = yield* Ref.make<ReadonlySet<NodeId>>(new Set());
-          const liveWorkflows = yield* Ref.make<ReadonlySet<NodeId>>(new Set());
           const activeBackgroundTurnItems = yield* Ref.make<
             ReadonlySet<OrchestrationV2TurnItem["id"]>
           >(new Set(inheritedBackgroundTurnItemsById.keys()));
@@ -1096,17 +1047,6 @@ export const layer: Layer.Layer<
                 const belongsToOwnedChildThread =
                   event.subagent.threadId !== input.run.threadId &&
                   routing.ownedThreadIds.has(event.subagent.threadId);
-                if (belongsToRootRun && event.subagent.workflow !== undefined) {
-                  yield* Ref.update(liveWorkflows, (current) => {
-                    const next = new Set(current);
-                    if (isSettledSubagentStatus(event.subagent.status)) {
-                      next.delete(event.subagent.id);
-                    } else {
-                      next.add(event.subagent.id);
-                    }
-                    return next;
-                  });
-                }
                 if (belongsToRootRun || belongsToOwnedChildThread) {
                   yield* Ref.update(activeChildSubagents, (current) => {
                     const next = new Set(current);
@@ -1223,13 +1163,9 @@ export const layer: Layer.Layer<
               return false;
             }
             const terminal = yield* Ref.get(terminalEvent);
-            // Non-completed terminals drop background tracking immediately,
-            // except for workflows that outlive the turn (see spareLiveWorkflows).
+            // Non-completed terminals drop background tracking immediately.
             if (terminal !== null && terminal.status !== "completed") {
-              return (
-                terminal.threadDisposition !== "reusable" ||
-                (yield* Ref.get(liveWorkflows)).size === 0
-              );
+              return true;
             }
             const childProviderTurns = yield* Ref.get(activeChildProviderTurns);
             if (childProviderTurns.size > 0) {

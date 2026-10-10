@@ -5374,7 +5374,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly result?: SDKResultMessage;
         }) {
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
-          if (input.status !== "completed" && (yield* Ref.get(queryContext)) === null) {
+          if (input.status !== "completed") {
+            // The run stops following its subagents once its root turn fails or is
+            // interrupted, so a workflow it follows is stopped rather than left
+            // running where Lineage can no longer see or stop it.
+            const liveQuery = yield* Ref.get(queryContext);
             for (const [taskId, subagent] of yield* Ref.get(sessionSubagentsByTaskId)) {
               if (
                 subagent.task.workflow === undefined ||
@@ -5382,6 +5386,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 subagent.task.runId !== input.context.input.runId
               )
                 continue;
+              if (liveQuery !== null && !liveQuery.stopping) {
+                yield* liveQuery.query.stopTask(taskId).pipe(Effect.ignore);
+              }
               yield* updateClaudeSubagentNode({
                 context: input.context,
                 taskId,
