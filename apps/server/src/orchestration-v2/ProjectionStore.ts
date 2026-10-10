@@ -588,13 +588,12 @@ function needsRecovery(
             ["preparing", "starting", "running", "waiting"].includes(run.status) ||
             (run.status === "queued" && run.queueHeld !== true),
         ) ||
+        projection.runtimeRequests.some((request) => request.status === "pending") ||
         projection.subagents.some(
           (subagent) =>
-            subagent.runId === null &&
             subagent.origin === "provider_native" &&
             ["pending", "running", "waiting"].includes(subagent.status),
         ) ||
-        projection.runtimeRequests.some((request) => request.status === "pending") ||
         projection.providerSessions.some(
           (session) => session.status !== "stopped" && session.status !== "error",
         ) ||
@@ -3670,16 +3669,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       AND node.status IN ('pending', 'running', 'waiting')
                   )
                 UNION
+                -- No native subagent outlives the provider process that ran it.
+                SELECT thread_id FROM orchestration_v2_projection_subagents
+                WHERE origin = 'provider_native'
+                  AND status IN ('pending', 'running', 'waiting')
+                UNION
                 SELECT item.thread_id FROM orchestration_v2_projection_turn_items AS item
                 WHERE NOT EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_runs AS run
                     WHERE run.run_id = item.run_id AND run.status = 'rolled_back'
                   )
                   AND type IN ('command_execution', 'dynamic_tool', 'subagent')
-                  AND status IN ('pending', 'running', 'waiting')
-                UNION
-                SELECT thread_id FROM orchestration_v2_projection_subagents
-                WHERE run_id IS NULL AND origin = 'provider_native'
                   AND status IN ('pending', 'running', 'waiting')
                 UNION
                 SELECT thread_id FROM orchestration_v2_effect_outbox
@@ -4079,8 +4079,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   )
                   OR node.node_id IN (
                     SELECT subagent_id FROM orchestration_v2_projection_subagents
-                    WHERE thread_id = ${threadId} AND run_id IS NULL
-                      AND origin = 'provider_native'
+                    WHERE thread_id = ${threadId} AND origin = 'provider_native'
                       AND status IN ('pending', 'running', 'waiting')
                   )
                 )
@@ -4091,7 +4090,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE subagent.thread_id = ${threadId}
                 AND subagent.status IN ('pending', 'starting', 'running', 'waiting')
                 AND (
-                  subagent.run_id IN (
+                  subagent.origin = 'provider_native'
+                  OR subagent.run_id IN (
                     SELECT run_id FROM orchestration_v2_projection_runs
                     WHERE thread_id = ${threadId}
                       AND status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
@@ -4102,7 +4102,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     WHERE item.thread_id = ${threadId} AND item.type = 'subagent'
                       AND item.status IN ('pending', 'running', 'waiting')
                   )
-                  OR (subagent.run_id IS NULL AND subagent.origin = 'provider_native')
                 )
               ORDER BY COALESCE(subagent.started_at, ''), subagent.subagent_id ASC
             `,
