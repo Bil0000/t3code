@@ -859,17 +859,16 @@ const make = Effect.gen(function* () {
 
   const stopWorkflow: ThreadManagementServiceShape["stopWorkflow"] = (input) =>
     Effect.gen(function* () {
-      const unavailable = (cause?: unknown) =>
-        new OrchestrationV2StopWorkflowError({
-          ...input,
-          reason: "unavailable",
-          ...(cause === undefined ? {} : { cause }),
-        });
       const records = yield* orchestrator
         .getThreadRecords(input.threadId, ["subagents", "runs", "providerThreads"])
-        .pipe(Effect.mapError(unavailable));
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable", cause }),
+          ),
+        );
       if (records.thread.deletedAt !== null) {
-        return yield* unavailable();
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
       }
       // A limited caller (an agent over MCP) may not stop work on a thread
       // running above its own modes. Checked under the thread lock, where the
@@ -886,7 +885,7 @@ const make = Effect.gen(function* () {
             mode: exceeded,
           });
         }
-        return yield* unavailable();
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
       }
       const task = records.subagents.find((candidate) => candidate.id === input.subagentId);
       if (
@@ -912,13 +911,18 @@ const make = Effect.gen(function* () {
       );
       const taskId = task.nativeTaskRef?.nativeId;
       if (providerThread?.providerSessionId == null || taskId == null || taskId.length === 0) {
-        return yield* unavailable();
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
       }
       const runtime = yield* sessions
         .get(providerThread.providerSessionId)
-        .pipe(Effect.mapError(unavailable));
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable", cause }),
+          ),
+        );
       if (Option.isNone(runtime)) {
-        return yield* unavailable();
+        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
       }
       if (runtime.value.stopTask === undefined) {
         return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unsupported" });

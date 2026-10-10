@@ -8,9 +8,14 @@ import {
   ChatImageAttachment,
   CommandId,
   EnvironmentId,
+  NodeId,
+  OrchestratorMcpThreadReadResult,
+  ProviderDriverKind,
   ProviderInstanceId,
   RunId,
   ThreadId,
+  TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -69,6 +74,7 @@ import {
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
+const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 
 // Registration asks for every service the thread tools declare; these cases call none that use them.
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
@@ -720,21 +726,64 @@ it.effect.each(["t3_thread_interrupt", "t3_workflow_stop"])(
     ),
 );
 
-it.effect("workflow stop needs orchestration capability even when the target is allowed", () => {
+it.effect("discovers workflow stop targets and requires orchestration capability", () => {
+  const threadId = ThreadId.make("workflow-parent");
+  const shell = McpToolAccessTestkit.liveThreadShell(threadId);
+  const subagentId = NodeId.make("workflow-coordinator");
+  const itemId = TurnItemId.make("workflow-coordinator-activity");
+  const row: OrchestrationV2ProjectedTurnItem = {
+    position: 0,
+    visibility: "local",
+    sourceThreadId: threadId,
+    sourceItemId: itemId,
+    item: {
+      id: itemId,
+      threadId,
+      runId: shell.activeRunId,
+      nodeId: subagentId,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "running",
+      title: "Workflow: checkout review",
+      startedAt: shell.createdAt,
+      completedAt: null,
+      updatedAt: shell.updatedAt,
+      type: "subagent",
+      subagentId,
+      origin: "provider_native",
+      driver: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      childThreadId: ThreadId.make("workflow-child"),
+      prompt: "Review checkout",
+      result: null,
+    },
+  };
   const stopped: Array<{ readonly threadId: ThreadId; readonly subagentId: string }> = [];
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    const call = (scope: McpInvocationContext.McpInvocationScope) =>
+    const scope = clientScope("full-access");
+    const read = yield* server
+      .callTool({ name: "t3_thread_read", arguments: { threadId, view: "activity" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(read.isError).toBe(false);
+    const result = yield* decodeThreadReadResult(read.structuredContent);
+    expect(result.items[0]?.subagentId).toBe(subagentId);
+    const call = (invocation: McpInvocationContext.McpInvocationScope) =>
       server
         .callTool({
           name: "t3_workflow_stop",
-          arguments: { threadId: "workflow-parent", subagentId: "workflow-coordinator" },
+          arguments: { threadId, subagentId: result.items[0]?.subagentId },
         })
         .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
-    const scope = clientScope("full-access");
     const denied = yield* call({ ...scope, capabilities: new Set(["worktree"]) });
     expect(declaredFailure(denied)).toMatchObject({ code: "capability_denied" });
     expect(stopped).toEqual([]);
@@ -749,6 +798,9 @@ it.effect("workflow stop needs orchestration capability even when the target is 
         Layer.provide(
           Layer.mock(ThreadManagement.ThreadManagementService)({
             getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+            getProjectThreadRecords: () =>
+              Effect.succeed(McpToolAccessTestkit.idleThreadProjection(shell)),
+            getTimelinePage: () => Effect.succeed({ items: [row], totalItems: 1, hasMore: false }),
             stopWorkflow: (input) =>
               Effect.sync(() => {
                 stopped.push(input);

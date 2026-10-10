@@ -10882,17 +10882,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   );
 
   it.effect.each([
-    ["stopped", false],
-    ["failed", false],
-    ["completed", false],
-    ["stopped", true],
-    ["failed", true],
-    ["completed", true],
-    ["interrupted", false],
-    ["query_failed", false],
+    ["stopped", false, false],
+    ["failed", false, false],
+    ["completed", false, false],
+    ["stopped", true, false],
+    ["failed", true, false],
+    ["completed", true, false],
+    ["interrupted", false, false],
+    ["query_failed", false, false],
+    ["query_failed", true, false],
+    ["query_failed", true, true],
   ] as const)(
-    "settles workflow members when the coordinator reports %s, between turns=%s",
-    ([status, betweenTurns]) =>
+    "settles workflow members on %s, between turns=%s, after an unrelated failed turn=%s",
+    ([status, betweenTurns, afterFailedTurn]) =>
       Effect.scoped(
         Effect.gen(function* () {
           const harness = yield* makeWorkflowHarnessWithOptions({ close: Queue.shutdown });
@@ -10917,6 +10919,38 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }),
             );
             yield* Queue.take(harness.terminalReceipts);
+            if (afterFailedTurn) {
+              yield* harness.runtime.startTurn(
+                makeClaudeTestTurnInput({
+                  threadId: harness.threadId,
+                  providerThread: harness.providerThread,
+                  now,
+                  attemptId: RunAttemptId.make("attempt-unrelated-failed"),
+                  providerTurnOrdinal: 2,
+                  text: "Unrelated follow-up.",
+                  attachments: [],
+                }),
+              );
+              yield* Queue.offer(
+                harness.sdkMessages,
+                makeResultFrame({
+                  uuid: "00000000-0000-4000-8000-000000001015",
+                  result: "Unrelated follow-up failed.",
+                  terminalReason: "api_error",
+                  isError: true,
+                }),
+              );
+              yield* Queue.take(harness.terminalReceipts);
+            }
+            if (status === "query_failed") {
+              yield* harness.offerAndWait(
+                workflowSnapshot({
+                  uuid: "00000000-0000-4000-8000-000000001014",
+                  state: "start",
+                  label: "Updated between turns",
+                }),
+              );
+            }
           }
           if (status !== "interrupted" && status !== "query_failed")
             yield* Queue.offer(
@@ -10926,7 +10960,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 status,
               }),
             );
-          if (betweenTurns) {
+          if (betweenTurns && status !== "query_failed") {
             yield* Queue.take(harness.continuationReceipts);
             yield* harness.runtime.startTurn(
               makeClaudeTestTurnInput({
@@ -10961,7 +10995,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }),
             );
           }
-          yield* Queue.take(harness.terminalReceipts);
+          if (betweenTurns && status === "query_failed") {
+            // The launching turn already ended. Await the last member's
+            // terminal event, which follows its root node update.
+            const lastMemberId = workflowMemberEvents(harness.events, 2)[0]?.subagent.id;
+            while (true) {
+              const update = yield* Queue.take(harness.subagentReceipts);
+              if (update.subagent.id === lastMemberId && update.subagent.status !== "running")
+                break;
+            }
+            assert.isFalse(yield* harness.hasPendingBackgroundWork);
+            assert.equal(
+              workflowMemberEvents(harness.events, 1).at(-1)?.subagent.title,
+              "Updated between turns",
+            );
+          } else {
+            yield* Queue.take(harness.terminalReceipts);
+          }
           const expected =
             status === "stopped" || status === "interrupted"
               ? "cancelled"
