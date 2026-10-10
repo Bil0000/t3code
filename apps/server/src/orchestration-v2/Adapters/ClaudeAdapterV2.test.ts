@@ -10948,21 +10948,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   );
 
   it.effect.each([
-    ["stopped", false, false],
-    ["failed", false, false],
-    ["completed", false, false],
-    ["stopped", true, false],
-    ["failed", true, false],
-    ["completed", true, false],
-    ["interrupted", false, false],
-    ["interrupted", true, false],
-    ["stop_buffered", true, false],
-    ["query_failed", false, false],
-    ["query_failed", true, false],
-    ["query_failed", true, true],
+    ["stopped", false, false, false],
+    ["failed", false, false, false],
+    ["completed", false, false, false],
+    ["stopped", true, false, false],
+    ["failed", true, false, false],
+    ["completed", true, false, false],
+    ["interrupted", false, false, false],
+    ["interrupted", true, false, false],
+    ["stop_buffered", true, false, false],
+    ["stop_buffered", true, false, true],
+    ["query_failed", false, false, false],
+    ["query_failed", true, false, false],
+    ["query_failed", true, false, true],
+    ["query_failed", true, true, false],
   ] as const)(
-    "settles workflow members on %s, between turns=%s, after an unrelated failed turn=%s",
-    ([status, betweenTurns, afterFailedTurn]) =>
+    "settles workflow members on %s, between turns=%s, after an unrelated failed turn=%s, after a buffered resume=%s",
+    ([status, betweenTurns, afterFailedTurn, resumed]) =>
       Effect.scoped(
         Effect.gen(function* () {
           const harness = yield* makeWorkflowHarnessWithOptions({ close: Queue.shutdown });
@@ -11020,22 +11022,44 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               );
             }
           }
-          if (status !== "interrupted" && status !== "query_failed")
+          const bufferedCompletion = status === "stop_buffered" || resumed;
+          if ((status !== "interrupted" && status !== "query_failed") || resumed)
             yield* Queue.offer(
               harness.sdkMessages,
               workflowNotification({
                 uuid: "00000000-0000-4000-8000-000000001011",
-                status: status === "stop_buffered" ? "completed" : status,
+                status: bufferedCompletion ? "completed" : status,
               }),
             );
-          if (betweenTurns && status !== "query_failed" && status !== "interrupted") {
+          if (
+            betweenTurns &&
+            ((status !== "query_failed" && status !== "interrupted") || resumed)
+          ) {
             yield* Queue.take(harness.continuationReceipts);
+          }
+          if (resumed) {
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                ...workflowTaskStarted,
+                tool_use_id: "toolu-workflow-resume",
+                prompt: "Continue the workflow.",
+                uuid: "00000000-0000-4000-8000-000000001016",
+              }),
+            );
+            yield* harness.offerAndWait(
+              workflowSnapshot({
+                uuid: "00000000-0000-4000-8000-000000001017",
+                state: "start",
+                attempt: 2,
+                label: "Updated between turns",
+              }),
+            );
           }
           if (
             betweenTurns &&
             status !== "query_failed" &&
             status !== "interrupted" &&
-            status !== "stop_buffered"
+            !bufferedCompletion
           ) {
             yield* harness.runtime.startTurn(
               makeClaudeTestTurnInput({
@@ -11094,7 +11118,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             yield* Queue.take(harness.terminalReceipts);
           }
           const expected =
-            status === "stopped" || status === "interrupted"
+            status === "stopped" ||
+            status === "interrupted" ||
+            (status === "stop_buffered" && resumed)
               ? "cancelled"
               : status === "query_failed"
                 ? "failed"
@@ -11102,6 +11128,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   ? "completed"
                   : status;
           assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, expected);
+          if (resumed) {
+            assert.notEqual(
+              workflowCoordinatorEvents(harness.events).at(-1)?.subagent.result,
+              "Workflow finished.",
+            );
+          }
           for (const index of [1, 2]) {
             const updates = workflowMemberEvents(harness.events, index);
             const member = updates.at(-1)?.subagent;

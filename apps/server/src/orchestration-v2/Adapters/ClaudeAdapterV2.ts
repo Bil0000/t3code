@@ -5781,14 +5781,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               closedQuery.subagentsFromEarlierProcesses.has(subagent)
             )
               continue;
-            const completion = buffered?.findLast(
+            const latestLifecycle = buffered?.findLast(
               (
                 message,
-              ): message is Extract<SDKMessage, { readonly subtype: "task_notification" }> =>
+              ): message is Extract<
+                SDKMessage,
+                { readonly subtype: "task_started" | "task_notification" }
+              > =>
                 message.type === "system" &&
-                message.subtype === "task_notification" &&
+                (message.subtype === "task_started" || message.subtype === "task_notification") &&
                 message.task_id === taskId,
             );
+            // A later start resumes the same task and invalidates its older outcome.
+            const completion =
+              latestLifecycle?.subtype === "task_notification" ? latestLifecycle : undefined;
             yield* updateClaudeSubagentNode({
               context,
               taskId,
