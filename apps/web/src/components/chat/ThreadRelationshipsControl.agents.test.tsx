@@ -289,6 +289,15 @@ it("opens the correct chat for every workflow phase and unphased member", async 
     ],
   });
   state.projection = project(agents);
+  // Matching IDs from another environment cannot make these chats available.
+  const memberShells = agents.map((agent) => ({
+    id: agent.childThreadId,
+    title: agent.label,
+    lineage: { parentThreadId: "workflow-chat", relationshipToParent: "subagent" },
+    status: "completed",
+    activityRunStatus: null,
+  }));
+  state.shells = memberShells.map((source) => ({ environmentId: "other", source }));
   const panel = (
     <ThreadRelationshipsPanel
       environmentId={EnvironmentId.make("remote")}
@@ -325,6 +334,15 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   ).toBeDefined();
   for (const phase of phaseButtons().slice(0, 2)) await act(async () => phase.props.onClick());
   expect(memberButtons()).toHaveLength(7);
+  for (const button of memberButtons()) {
+    expect(button.props.disabled).toBe(true);
+    await act(async () => button.props.onClick());
+  }
+  expect(state.navigate).not.toHaveBeenCalled();
+  // The coordinator roster arrives before the member thread shells.
+  state.shells = memberShells.map((source) => ({ environmentId: "remote", source }));
+  await act(async () => renderer.update(cloneElement(panel)));
+  for (const button of memberButtons()) expect(button.props.disabled).toBe(false);
   for (const agent of agents) {
     await act(async () =>
       renderer.root.findByProps({ "aria-label": `Open ${agent.label} chat` }).props.onClick(),

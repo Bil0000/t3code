@@ -591,6 +591,9 @@ export function ThreadRelationshipsPanel(props: {
                     providers={providers}
                     driver={providerDriver}
                     onOpenThread={(memberThreadId) => openThread(memberThreadId as ThreadId)}
+                    isThreadAvailable={(memberThreadId) =>
+                      graph.nodes.get(memberThreadId as ThreadId)?.missing === false
+                    }
                     onStop={canStopWorkflow ? () => void stopWorkflow(agent.id) : undefined}
                     stopping={stoppingId === agent.id}
                     stopDisabled={stoppingId !== null}
