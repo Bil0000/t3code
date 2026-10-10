@@ -10956,6 +10956,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ["completed", true, false, false],
     ["interrupted", false, false, false],
     ["interrupted", true, false, false],
+    ["interrupt_timeout", true, false, false],
     ["stop_buffered", true, false, false],
     ["stop_buffered", true, false, true],
     ["query_failed", false, false, false],
@@ -10967,7 +10968,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ([status, betweenTurns, afterFailedTurn, resumed]) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const harness = yield* makeWorkflowHarnessWithOptions({ close: Queue.shutdown });
+          const interrupted = status === "interrupted" || status === "interrupt_timeout";
+          const harness = yield* makeWorkflowHarnessWithOptions({
+            close: status === "interrupt_timeout" ? () => Effect.void : Queue.shutdown,
+          });
           const now = yield* DateTime.now;
           yield* harness.runtime.startTurn(
             makeClaudeTestTurnInput({
@@ -10989,7 +10993,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }),
             );
             yield* Queue.take(harness.terminalReceipts);
-            if (afterFailedTurn) {
+            if (afterFailedTurn || status === "interrupt_timeout") {
               yield* harness.runtime.startTurn(
                 makeClaudeTestTurnInput({
                   threadId: harness.threadId,
@@ -11001,16 +11005,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   attachments: [],
                 }),
               );
-              yield* Queue.offer(
-                harness.sdkMessages,
-                makeResultFrame({
-                  uuid: "00000000-0000-4000-8000-000000001015",
-                  result: "Unrelated follow-up failed.",
-                  terminalReason: "api_error",
-                  isError: true,
-                }),
-              );
-              yield* Queue.take(harness.terminalReceipts);
+              if (afterFailedTurn) {
+                yield* Queue.offer(
+                  harness.sdkMessages,
+                  makeResultFrame({
+                    uuid: "00000000-0000-4000-8000-000000001015",
+                    result: "Unrelated follow-up failed.",
+                    terminalReason: "api_error",
+                    isError: true,
+                  }),
+                );
+                yield* Queue.take(harness.terminalReceipts);
+              }
             }
             if (status === "query_failed") {
               yield* harness.offerAndWait(
@@ -11023,7 +11029,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             }
           }
           const bufferedCompletion = status === "stop_buffered" || resumed;
-          if ((status !== "interrupted" && status !== "query_failed") || resumed)
+          if ((!interrupted && status !== "query_failed") || resumed)
             yield* Queue.offer(
               harness.sdkMessages,
               workflowNotification({
@@ -11031,10 +11037,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 status: bufferedCompletion ? "completed" : status,
               }),
             );
-          if (
-            betweenTurns &&
-            ((status !== "query_failed" && status !== "interrupted") || resumed)
-          ) {
+          if (betweenTurns && ((status !== "query_failed" && !interrupted) || resumed)) {
             yield* Queue.take(harness.continuationReceipts);
           }
           if (resumed) {
@@ -11055,12 +11058,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }),
             );
           }
-          if (
-            betweenTurns &&
-            status !== "query_failed" &&
-            status !== "interrupted" &&
-            !bufferedCompletion
-          ) {
+          if (betweenTurns && status !== "query_failed" && !interrupted && !bufferedCompletion) {
             yield* harness.runtime.startTurn(
               makeClaudeTestTurnInput({
                 threadId: harness.threadId,
@@ -11075,15 +11073,27 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }),
             );
           }
-          if (status === "interrupted" || status === "stop_buffered") {
-            yield* harness.runtime.interruptTurn({
+          if (interrupted || status === "stop_buffered") {
+            const interrupt = harness.runtime.interruptTurn({
               providerThread: harness.providerThread,
               providerTurnId: (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
                 driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-                nativeTurnId: "turn:attempt-workflow-terminal",
+                nativeTurnId:
+                  status === "interrupt_timeout"
+                    ? "turn:attempt-unrelated-failed"
+                    : "turn:attempt-workflow-terminal",
               }),
               ...(betweenTurns ? { requestRuntimeRestart: true } : {}),
             });
+            if (status === "interrupt_timeout") {
+              const stop = yield* interrupt.pipe(Effect.forkScoped);
+              yield* TestClock.adjust("10 seconds");
+              yield* Fiber.join(stop);
+              assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
+              assert.isFalse(yield* harness.hasPendingBackgroundWork);
+            } else {
+              yield* interrupt;
+            }
           } else if (status === "query_failed") {
             yield* Queue.shutdown(harness.sdkMessages);
           } else {
@@ -11097,7 +11107,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }
           if (
             betweenTurns &&
-            (status === "query_failed" || status === "interrupted" || status === "stop_buffered")
+            (status === "query_failed" || interrupted || status === "stop_buffered")
           ) {
             // The launching turn already ended. Await the last member's
             // terminal event, which follows its root node update.
@@ -11118,9 +11128,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             yield* Queue.take(harness.terminalReceipts);
           }
           const expected =
-            status === "stopped" ||
-            status === "interrupted" ||
-            (status === "stop_buffered" && resumed)
+            status === "stopped" || interrupted || (status === "stop_buffered" && resumed)
               ? "cancelled"
               : status === "query_failed"
                 ? "failed"
