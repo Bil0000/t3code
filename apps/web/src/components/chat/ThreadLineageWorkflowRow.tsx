@@ -1,5 +1,5 @@
 import type {
-  AgentPanelWorkflowGroup,
+  SubagentWorkflowGroup,
   RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { ProviderDriverKind, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
@@ -24,7 +24,7 @@ import {
  * first start to the last finish is the time the phase actually took. Shaped
  * for AgentElapsed, which ticks it while the phase is still running.
  */
-function phaseElapsed(phase: AgentPanelWorkflowGroup["phases"][number]) {
+function phaseElapsed(phase: SubagentWorkflowGroup["phases"][number]) {
   const instants = (key: "startedAt" | "completedAt") =>
     phase.members
       .map((member) => member[key])
@@ -42,7 +42,7 @@ function phaseElapsed(phase: AgentPanelWorkflowGroup["phases"][number]) {
 }
 
 /** Phase state for the header's label; the tone and member badges show it visually. */
-function phaseStatusLabel(phase: AgentPanelWorkflowGroup["phases"][number]) {
+function phaseStatusLabel(phase: SubagentWorkflowGroup["phases"][number]) {
   if (phase.state === "running") return "running";
   if (phase.members.some((member) => member.status === "failed")) return "failed";
   if (
@@ -125,7 +125,7 @@ export function ThreadLineageWorkflowRow({
   stopping,
   stopDisabled,
 }: {
-  readonly group: AgentPanelWorkflowGroup;
+  readonly group: SubagentWorkflowGroup;
   readonly header: ReactNode;
   readonly providerInstanceId: ProviderInstanceId;
   readonly provider: ServerProvider | undefined;

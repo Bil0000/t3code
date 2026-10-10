@@ -715,9 +715,9 @@ export type OrchestrationV2WorkflowAgent = typeof OrchestrationV2WorkflowAgent.T
 
 /**
  * Filesystem handles the provider reports when a run launches. The transcript
- * directory is what makes a member's full conversation readable: members never
- * become threads, and nothing about them crosses the event stream beyond the
- * progress snapshot.
+ * directory is what makes a member's full answer readable: the progress
+ * snapshot only carries a capped excerpt, so the server reads the member's
+ * transcript from here to fill its thread.
  */
 export const OrchestrationV2WorkflowRunHandles = Schema.Struct({
   runId: Schema.optional(TrimmedNonEmptyString),

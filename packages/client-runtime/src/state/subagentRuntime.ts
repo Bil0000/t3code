@@ -103,10 +103,8 @@ export function isLiveSubagentTurnItem(item: OrchestrationV2TurnItem): boolean {
   return item.type === "subagent" && isOrchestrationV2WorkActive(item.status);
 }
 
-/**
- * Workflow rows share the coordinator and member roster.
- */
-export interface AgentPanelWorkflowGroup {
+/** A workflow coordinator with its members grouped by phase, as Lineage renders it. */
+export interface SubagentWorkflowGroup {
   readonly workflow: RuntimeSubagent;
   readonly phases: ReadonlyArray<{
     readonly index: number;
@@ -138,10 +136,11 @@ function isoFromEpochMillis(value: number | undefined): string | null {
 }
 
 /**
- * Expands a coordinator's nested workflow roster into member rows so the panel
- * renders one group per run. Members are synthesized rather than projected: the
- * provider reports them as a replaced snapshot with no durable entity of their
- * own, so their identity is the run id plus the spawn ordinal.
+ * Expands a coordinator's workflow roster into member rows. Members are
+ * synthesized from the coordinator's snapshot rather than read from their own
+ * subagent entities, so a parent thread's Lineage can show them without
+ * loading the coordinator's child thread; their identity is the coordinator id
+ * plus the spawn ordinal.
  */
 function workflowMembersToRuntime(
   coordinator: RuntimeSubagent,
@@ -173,7 +172,7 @@ function workflowMembersToRuntime(
       title: agent.label,
       model: agent.model ?? null,
       status,
-      // Surfaces the panel's "run N" badge for a member the workflow retried.
+      // A member the workflow retried counts each attempt as a run.
       activationCount: agent.attempt ?? 1,
       usage: workflowUsage(agent),
       // A member keeps its prompt on `progress` even once settled: that is the
@@ -262,7 +261,7 @@ export function projectedSubagentsToRuntime(
 
 export function deriveWorkflowGroups(
   agents: ReadonlyArray<RuntimeSubagent>,
-): ReadonlyArray<AgentPanelWorkflowGroup> {
+): ReadonlyArray<SubagentWorkflowGroup> {
   const workflows = agents
     .filter((agent) => agent.kind === "workflow")
     .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));

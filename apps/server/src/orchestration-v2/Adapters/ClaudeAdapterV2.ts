@@ -6313,9 +6313,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // A workflow is normally launched in the background, so most of its
             // run happens after the turn that started it has settled. Nothing
             // here can build turn items or nodes without a turn context, but the
-            // coordinator entity is exactly what the Agents surface renders —
-            // refresh it from the session registry so a live run keeps reporting
-            // its phases, members and usage instead of freezing at turn end.
+            // coordinator entity is what Lineage renders, so refresh it from the
+            // session registry and a live run keeps reporting its phases, members
+            // and usage instead of freezing at turn end.
             yield* applyWorkflowProgressWithoutTurn(message);
             // task_notification must buffer wake evidence while still tracked
             // on the roster; clearing first would drop the wake pin.
@@ -6707,8 +6707,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 title: message.description,
               });
               // A workflow coordinator is marked as one the moment it starts, so
-              // the Agents surface can open its group before the first member
-              // spawns rather than after the first progress snapshot.
+              // Lineage can expand it before the first member spawns rather than
+              // after the first progress snapshot.
               const isWorkflow =
                 claudeTaskTypeFromSdkMessage(message) === CLAUDE_WORKFLOW_TASK_TYPE;
               // `meta.name` from the workflow script; only workflow tasks carry it.

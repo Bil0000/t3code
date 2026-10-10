@@ -370,6 +370,10 @@ export interface ThreadManagementServiceShape {
   readonly interruptThread: (
     input: ThreadManagementInterruptInput,
   ) => Effect.Effect<ThreadManagementInterruptResult, ThreadManagementFailure>;
+  /**
+   * Asks the provider to stop a running workflow coordinator. The provider's
+   * own terminal notification then settles the coordinator and its members.
+   */
   readonly stopWorkflow: (
     input: OrchestrationV2StopWorkflowInput,
   ) => Effect.Effect<void, OrchestrationV2StopWorkflowError>;
@@ -855,44 +859,35 @@ const make = Effect.gen(function* () {
 
   const stopWorkflow: ThreadManagementServiceShape["stopWorkflow"] = (input) =>
     Effect.gen(function* () {
-      const limit = yield* DispatchModeLimit;
-      if (limit !== undefined) {
-        const thread = yield* orchestrator
-          .getThreadShell(input.threadId)
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable", cause }),
-            ),
-          );
-        if (thread === null || thread.deletedAt !== null) {
-          return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
-        }
-        const mode = exceededDispatchModeLimit(limit, thread);
-        if (mode !== undefined) {
-          if (limit.refused !== undefined) {
-            yield* Ref.set(limit.refused, {
-              threadId: input.threadId,
-              runtimeMode: thread.runtimeMode,
-              interactionMode: thread.interactionMode,
-              mode,
-            });
-          }
-          return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
-        }
-      }
+      const unavailable = (cause?: unknown) =>
+        new OrchestrationV2StopWorkflowError({
+          ...input,
+          reason: "unavailable",
+          ...(cause === undefined ? {} : { cause }),
+        });
       const records = yield* orchestrator
         .getThreadRecords(input.threadId, ["subagents", "runs", "providerThreads"])
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new OrchestrationV2StopWorkflowError({
-                ...input,
-                reason: "unavailable",
-                cause,
-              }),
-          ),
-        );
+        .pipe(Effect.mapError(unavailable));
+      if (records.thread.deletedAt !== null) {
+        return yield* unavailable();
+      }
+      // A limited caller (an agent over MCP) may not stop work on a thread
+      // running above its own modes. Checked under the thread lock, where the
+      // thread's user cannot raise the modes between this read and the stop.
+      const limit = yield* DispatchModeLimit;
+      const exceeded =
+        limit === undefined ? undefined : exceededDispatchModeLimit(limit, records.thread);
+      if (limit !== undefined && exceeded !== undefined) {
+        if (limit.refused !== undefined) {
+          yield* Ref.set(limit.refused, {
+            threadId: input.threadId,
+            runtimeMode: records.thread.runtimeMode,
+            interactionMode: records.thread.interactionMode,
+            mode: exceeded,
+          });
+        }
+        return yield* unavailable();
+      }
       const task = records.subagents.find((candidate) => candidate.id === input.subagentId);
       if (
         task === undefined ||
@@ -917,24 +912,18 @@ const make = Effect.gen(function* () {
       );
       const taskId = task.nativeTaskRef?.nativeId;
       if (providerThread?.providerSessionId == null || taskId == null || taskId.length === 0) {
-        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
+        return yield* unavailable();
       }
-      const runtime = yield* sessions.get(providerThread.providerSessionId).pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestrationV2StopWorkflowError({
-              ...input,
-              reason: "unavailable",
-              cause,
-            }),
-        ),
-      );
+      const runtime = yield* sessions
+        .get(providerThread.providerSessionId)
+        .pipe(Effect.mapError(unavailable));
       if (Option.isNone(runtime)) {
-        return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unavailable" });
+        return yield* unavailable();
       }
       if (runtime.value.stopTask === undefined) {
         return yield* new OrchestrationV2StopWorkflowError({ ...input, reason: "unsupported" });
       }
+      // Bounded so a provider that never answers cannot hold the thread lock.
       yield* runtime.value.stopTask({ providerThread, taskId }).pipe(
         Effect.timeout("15 seconds"),
         Effect.mapError(

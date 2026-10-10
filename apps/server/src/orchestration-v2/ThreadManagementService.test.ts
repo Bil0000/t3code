@@ -598,21 +598,16 @@ it.effect.each([
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(Orchestrator.OrchestratorV2)({
-            getThreadShell: () =>
+            getThreadRecords: () =>
               Effect.sync(
                 () =>
                   ({
-                    id: threadId,
-                    deletedAt: null,
-                    ...targetModes,
-                  }) as OrchestrationV2ThreadShell,
+                    thread: { id: threadId, deletedAt: null, ...targetModes },
+                    subagents: state === "missing" ? [] : [task],
+                    runs: [{ id: runId, providerThreadId }],
+                    providerThreads: [providerThread],
+                  }) as unknown as OrchestrationV2ThreadProjection,
               ),
-            getThreadRecords: () =>
-              Effect.succeed({
-                subagents: state === "missing" ? [] : [task],
-                runs: [{ id: runId, providerThreadId }],
-                providerThreads: [providerThread],
-              } as unknown as OrchestrationV2ThreadProjection),
           }),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             get: (id) => {

@@ -3743,6 +3743,7 @@ function captureRootRunTermination(input: {
               }),
             writeWithEffects: (payload) =>
               Effect.gen(function* () {
+                yield* Ref.update(submittedEffects, (current) => [...current, ...payload.effects]);
                 yield* Ref.update(committedEffects, (current) => [...current, ...payload.effects]);
                 yield* captureFinalEvents(payload.events);
                 return [];
