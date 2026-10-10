@@ -240,6 +240,7 @@ export function ThreadRelationshipsPanel(props: {
             ...byId.get(subagent.id)!,
             id: subagent.id,
             threadId: subagent.threadId,
+            runId: subagent.runId,
             nativeTaskRef: subagent.nativeTaskRef,
             nativeStatus: subagent.status,
             driver: subagent.driver,
@@ -466,6 +467,7 @@ export function ThreadRelationshipsPanel(props: {
                 (agent.origin === "app_owned" ||
                   (agent.origin === "provider_native" &&
                     agent.driver === "claudeAgent" &&
+                    agent.runId != null &&
                     agent.nativeTaskRef?.strength === "strong" &&
                     agent.nativeTaskRef.nativeId !== null &&
                     ["pending", "running", "waiting"].includes(agent.nativeStatus))) &&

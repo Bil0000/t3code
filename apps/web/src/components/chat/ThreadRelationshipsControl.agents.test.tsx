@@ -461,12 +461,13 @@ it("groups and counts a workflow by its run status instead of its coordinator ch
 });
 
 it.each([
-  { driver: "codex", origin: "app_owned" },
-  { driver: "claudeAgent", origin: "app_owned" },
-  { driver: "claudeAgent", origin: "provider_native" },
+  { driver: "codex", origin: "app_owned", runId: null, canStop: true },
+  { driver: "claudeAgent", origin: "app_owned", runId: null, canStop: true },
+  { driver: "claudeAgent", origin: "provider_native", runId: "run-1", canStop: true },
+  { driver: "claudeAgent", origin: "provider_native", runId: null, canStop: false },
 ])(
-  "stops active $origin $driver subagents without opening their thread",
-  async ({ driver, origin }) => {
+  "offers individual Stop for supported $origin $driver subagents with run $runId",
+  async ({ driver, origin, runId, canStop }) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const parent = {
       id: "parent",
@@ -483,6 +484,7 @@ it.each([
       childThreadId: "child",
       origin,
       threadId: "parent",
+      runId,
       nativeTaskRef: { driver, nativeId: "claude-task", strength: "strong" },
       driver,
       providerInstanceId: "codex",
@@ -515,6 +517,12 @@ it.each([
     await act(async () => {
       renderer = create(panel);
     });
+    if (!canStop) {
+      expect(renderer.root.findAllByProps({ "aria-label": "Stop subagent Worker" })).toHaveLength(
+        0,
+      );
+      return;
+    }
     const stopButton = () => renderer.root.findByProps({ "aria-label": "Stop subagent Worker" });
     await act(async () => stopButton().props.onClick());
     expect(state.command).toHaveBeenCalledWith({
