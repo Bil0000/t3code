@@ -6841,7 +6841,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 status: "running",
                 reopen: true,
               });
-              // A live resume supersedes outcomes buffered before this turn started.
+              // A live resume supersedes earlier buffered starts and outcomes for this task.
               yield* Ref.update(wakeBuffers, (current) => {
                 const entry = current.get(liveQuery.nativeThreadId);
                 if (entry === undefined) return current;
@@ -6849,7 +6849,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   (buffered) =>
                     !(
                       buffered.type === "system" &&
-                      buffered.subtype === "task_notification" &&
+                      (buffered.subtype === "task_started" ||
+                        buffered.subtype === "task_notification") &&
                       buffered.task_id === message.task_id
                     ),
                 );
