@@ -1637,6 +1637,25 @@ it.effect("does not pin ingestion on background items when the root turn is inte
   }),
 );
 
+it.effect.each([
+  [true, ["subagent:running", "root-finalized", "subagent:completed"]],
+  [false, ["subagent:running", "root-finalized", "cascade:failed"]],
+] as const)(
+  "keeps a live workflow open past a failed root turn (workflow=%s)",
+  ([workflow, expected]) =>
+    Effect.gen(function* () {
+      const observed = yield* runBackgroundItemScenario(
+        `failed-root-workflow-${workflow}`,
+        (ids) => [
+          subagentEvent(ids, "running", { workflow }),
+          rootTerminalEvent(ids, "failed"),
+          subagentEvent(ids, "completed", { workflow }),
+        ],
+      );
+      assert.deepEqual(observed, expected);
+    }),
+);
+
 it.effect("seeds inherited background items before their next update", () =>
   Effect.gen(function* () {
     const key = "inherited-background-seeded";
@@ -3979,6 +3998,7 @@ function backgroundTurnItemEventForRun(
 function subagentEvent(
   ids: BackgroundScenarioIds,
   status: "running" | "completed" | "idle",
+  options?: { readonly workflow?: boolean },
 ): ProviderAdapter.ProviderAdapterV2Event {
   return {
     type: "subagent.updated",
@@ -3988,8 +4008,9 @@ function subagentEvent(
       threadId: ids.threadId,
       runId: ids.runId,
       status,
+      ...(options?.workflow === true ? { workflow: { phases: [], agents: [] } } : {}),
     },
-  } as ProviderAdapter.ProviderAdapterV2Event;
+  } as unknown as ProviderAdapter.ProviderAdapterV2Event;
 }
 
 function makeRunOwnedSubagentFixture(input: {
@@ -4221,6 +4242,14 @@ function runBackgroundItemScenario(
                   )
                 ) {
                   yield* Ref.update(observed, (current) => [...current, "root-finalized"]);
+                }
+                for (const event of input.events) {
+                  if (event.type === "subagent.updated") {
+                    yield* Ref.update(observed, (current) => [
+                      ...current,
+                      `cascade:${event.payload.status}`,
+                    ]);
+                  }
                 }
                 return [];
               }),
