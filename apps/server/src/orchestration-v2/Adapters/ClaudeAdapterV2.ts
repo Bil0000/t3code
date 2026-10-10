@@ -6841,6 +6841,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 status: "running",
                 reopen: true,
               });
+              // A live resume supersedes outcomes buffered before this turn started.
+              yield* Ref.update(wakeBuffers, (current) => {
+                const entry = current.get(liveQuery.nativeThreadId);
+                if (entry === undefined) return current;
+                const messages = entry.messages.filter(
+                  (buffered) =>
+                    !(
+                      buffered.type === "system" &&
+                      buffered.subtype === "task_notification" &&
+                      buffered.task_id === message.task_id
+                    ),
+                );
+                return messages.length === entry.messages.length
+                  ? current
+                  : new Map(current).set(liveQuery.nativeThreadId, { ...entry, messages });
+              });
             }
           }
 
