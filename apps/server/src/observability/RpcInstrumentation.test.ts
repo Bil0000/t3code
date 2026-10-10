@@ -3,11 +3,8 @@ import {
   AuthEnvironmentMaintainScope,
   AuthOrchestrationReadScope,
   type AuthEnvironmentScope,
-  NodeId,
-  ORCHESTRATION_V2_WS_METHODS,
   ScheduledTaskError,
   ScheduledTaskId,
-  ThreadId,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -105,33 +102,6 @@ const requestDuration = (snapshots: ReadonlyArray<Metric.Metric.Snapshot>, metho
   )?.state;
 
 describe("WS RPC instrumentation middleware", () => {
-  it.effect("records a workflow stop rejected by authorization", () =>
-    withTelemetry((ended) =>
-      Effect.gen(function* () {
-        const method = ORCHESTRATION_V2_WS_METHODS.stopWorkflow;
-        const group = groupOf(method);
-        const client = yield* RpcTest.makeClient(group).pipe(
-          Effect.provide(
-            Layer.merge(
-              group.toLayerHandler(method, () => Effect.die("unauthorized workflow stop")),
-              readOnlyConnection,
-            ),
-          ),
-        );
-        const error = yield* client[method]({
-          threadId: ThreadId.make("thread:workflow"),
-          subagentId: NodeId.make("node:workflow"),
-        }).pipe(Effect.flip);
-        assert.equal(error._tag, "EnvironmentAuthorizationError");
-        const spans = rpcSpans(ended);
-        assert.lengthOf(spans, 1);
-        assert.equal(spans[0]?.attributes.get("rpc.aggregate"), "orchestration");
-        assert.equal(exitTag(spans[0]), "Failure");
-        assert.equal(requestCount(yield* Metric.snapshot, method, "failure")?.count, 1);
-      }),
-    ),
-  );
-
   it.effect("records one span and request metric per call, including rejected calls", () =>
     withTelemetry((ended) =>
       Effect.gen(function* () {

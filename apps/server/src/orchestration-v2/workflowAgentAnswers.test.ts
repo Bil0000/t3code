@@ -74,70 +74,48 @@ describe("parseWorkflowAgentAnswers", () => {
   });
 });
 
-// Must sit under ~/.claude/projects: readContainedWorkflowFile rejects any path
-// outside it, so a tmpdir would fail containment instead of exercising the read.
-const root = NodePath.join(NodeOS.homedir(), ".claude", "projects", "__wf_answers_test__");
+// Transcripts must sit under <configDir>/projects: readContainedWorkflowFile
+// rejects any path outside it. A temporary configDir keeps the real
+// ~/.claude untouched.
+let configDir: string;
+let transcriptDir: string;
 beforeAll(() => {
-  NodeFS.mkdirSync(root, { recursive: true });
+  configDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "wf-config-"));
+  transcriptDir = NodePath.join(configDir, "projects", "test");
+  NodeFS.mkdirSync(transcriptDir, { recursive: true });
 });
 
 afterAll(() => {
-  NodeFS.rmSync(root, { recursive: true, force: true });
+  NodeFS.rmSync(configDir, { recursive: true, force: true });
 });
 
 describe("readWorkflowAgentAnswers", () => {
-  effectIt.effect("reads transcripts from a configured Claude directory", () =>
-    Effect.gen(function* () {
-      const configDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "wf-config-"));
-      try {
-        const transcriptDir = NodePath.join(configDir, "projects", "test");
-        NodeFS.mkdirSync(transcriptDir, { recursive: true });
-        NodeFS.writeFileSync(
-          NodePath.join(transcriptDir, "agent-custom.jsonl"),
-          assistant("custom", [{ type: "text", text: "custom answer" }]),
-        );
-        expect(
-          yield* readWorkflowAgentAnswers({ transcriptDir, agentId: "custom", configDir }),
-        ).toEqual(["custom answer"]);
-      } finally {
-        NodeFS.rmSync(configDir, { recursive: true, force: true });
-      }
-    }),
-  );
-
   // The under-cap case is the control: without it a read stuck on [] would pass.
   effectIt.effect("reads final answers from both small and capped transcripts", () =>
     Effect.gen(function* () {
       const turn = assistant("a", [{ type: "text", text: "the answer" }]);
       const filler = line({ type: "user", message: { role: "user", content: "x".repeat(4096) } });
-      NodeFS.writeFileSync(NodePath.join(root, "agent-small.jsonl"), turn);
+      const write = (agentId: string, contents: string) =>
+        NodeFS.writeFileSync(NodePath.join(transcriptDir, `agent-${agentId}.jsonl`), contents);
+      const read = (agentId: string) =>
+        readWorkflowAgentAnswers({ transcriptDir, agentId, configDir });
+      write("small", turn);
       const edgeAnswer = "x".repeat(
         512 * 1024 + 1 - Buffer.byteLength(assistant("edge", [{ type: "text", text: "" }])),
       );
-      NodeFS.writeFileSync(
-        NodePath.join(root, "agent-edge.jsonl"),
-        assistant("edge", [{ type: "text", text: edgeAnswer }]),
-      );
-      NodeFS.writeFileSync(
-        NodePath.join(root, "agent-boundary.jsonl"),
+      write("edge", assistant("edge", [{ type: "text", text: edgeAnswer }]));
+      write(
+        "boundary",
         filler.repeat(160) + turn + " ".repeat(512 * 1024 - Buffer.byteLength(turn)),
       );
-      NodeFS.writeFileSync(
-        NodePath.join(root, "agent-huge.jsonl"),
+      write(
+        "huge",
         turn + filler.repeat(160) + assistant("final", [{ type: "text", text: "final answer" }]),
       );
-      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "small" })).toEqual([
-        "the answer",
-      ]);
-      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "edge" })).toEqual([
-        edgeAnswer,
-      ]);
-      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "huge" })).toEqual([
-        "final answer",
-      ]);
-      expect(yield* readWorkflowAgentAnswers({ transcriptDir: root, agentId: "boundary" })).toEqual(
-        ["the answer"],
-      );
+      expect(yield* read("small")).toEqual(["the answer"]);
+      expect(yield* read("edge")).toEqual([edgeAnswer]);
+      expect(yield* read("huge")).toEqual(["final answer"]);
+      expect(yield* read("boundary")).toEqual(["the answer"]);
     }),
   );
 });

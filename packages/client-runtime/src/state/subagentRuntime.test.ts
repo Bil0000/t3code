@@ -119,6 +119,8 @@ describe("projectedSubagentsToRuntime workflow expansion", () => {
           },
         }),
       ]);
+      // The settled run keeps its members reachable under the coordinator.
+      expect(groups[0]?.workflow.status).toBe(status);
       const members = groups[0]?.phases.flatMap((phase) => phase.members);
       expect(members?.map((agent) => agent.status)).toEqual([status, status, "completed"]);
       expect(members?.[0]?.completedAt).toBe("2026-08-01T10:00:09.000Z");
@@ -193,21 +195,6 @@ describe("deriveWorkflowGroups over a dynamic workflow", () => {
       subagent({ workflow: { phases: [], agents: missingFirst ? agents.toReversed() : agents } }),
     ]);
     expect(groups[0]?.phases[0]?.title).toBe("Review");
-  });
-
-  it("keeps a settled run's members reachable under the coordinator", () => {
-    const groups = groupsOf([
-      subagent({
-        status: "completed",
-        completedAt: at("2026-08-01T10:00:09.000Z"),
-        workflow: { phases: [], agents: [member({ state: "completed" })] },
-      }),
-    ]);
-    const group = groups[0];
-    expect(group?.workflow.status).toBe("completed");
-    expect(group?.phases.flatMap((phase) => phase.members).map((agent) => agent.title)).toEqual([
-      "alpha:one",
-    ]);
   });
 
   it("keeps unphased members with their workflow and excludes unrelated agents", () => {
