@@ -182,23 +182,35 @@ function relationshipThreadTitle(input: {
 }
 
 /**
- * A delegated task settles with its first run, but the parent can keep sending
- * the child follow-ups. While the child thread has a live run, the row's timer
- * and hover card follow that run instead of the settled task.
+ * The row's timer and hover card follow current child work, including queued
+ * follow-ups whose provider turn has not started yet.
  */
-function liveSubagent<Agent extends RuntimeSubagent>(
+function currentSubagent<Agent extends RuntimeSubagent>(
   agent: Agent | undefined,
   childThread: OrchestrationV2ThreadShell | null | undefined,
 ): Agent | undefined {
-  const liveStatus = childThread?.activityRunStatus;
-  if (!agent || !liveStatus) return agent;
-  const startedAt = childThread.activityRunStartedAt;
+  const liveStatus =
+    childThread?.activityRunStatus ?? (childThread?.status === "queued" ? "queued" : null);
+  if (!agent || !childThread) return agent;
+  const newerRun =
+    childThread.latestRunRequestedAt &&
+    DateTime.toEpochMillis(childThread.latestRunRequestedAt) >
+      Date.parse(agent.completedAt ?? agent.startedAt ?? agent.updatedAt);
+  if (!liveStatus && !newerRun) return agent;
+  const status = liveStatus ?? childThread.status;
+  const startedAt = liveStatus ? childThread.activityRunStartedAt : childThread.latestRunStartedAt;
+  const completedAt = liveStatus ? null : childThread.latestRunCompletedAt;
   return {
     ...agent,
-    status: liveStatus === "running" || liveStatus === "waiting" ? liveStatus : "pending",
+    status:
+      status === "preparing" || status === "starting" || status === "queued"
+        ? "pending"
+        : status === "rolled_back"
+          ? "interrupted"
+          : status,
     startedAt: startedAt ? DateTime.formatIso(startedAt) : null,
-    completedAt: null,
-    // The settled task's output belongs to its first run, not this one.
+    completedAt: completedAt ? DateTime.formatIso(completedAt) : null,
+    // The task's output belongs to its recorded run, not newer child work.
     progress: null,
     result: null,
     error: null,
@@ -436,7 +448,7 @@ export function ThreadRelationshipsPanel(props: {
                   : workflowGroupsById.get(projectedAgent.id);
               const agent = workflowGroup
                 ? projectedAgent
-                : liveSubagent(projectedAgent, node?.thread);
+                : currentSubagent(projectedAgent, node?.thread);
               const failed = rowStatus === "failed" || rowStatus === "error";
               const canStop =
                 agent?.origin === "app_owned" &&
