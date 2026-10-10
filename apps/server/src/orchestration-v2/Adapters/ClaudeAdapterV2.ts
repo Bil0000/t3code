@@ -89,6 +89,7 @@ import * as Hex from "effect/encoding/Hex";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -3170,8 +3171,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               readonly label: string;
               readonly prompt: string;
               readonly model: string;
-              /** First instant this member was seen, so settling cannot restamp it. */
-              readonly startedAt: DateTime.Utc;
+              readonly createdAt: DateTime.Utc;
+              readonly startedAt: DateTime.Utc | null;
             }
           >(),
         );
@@ -4313,20 +4314,30 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           for (const member of input.workflow.agents) {
             const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
             const previous = seen.get(memberKey);
-            // Every member state but queued is already a subagent status, and a
-            // queued member is work in flight as far as the projection cares.
             const status =
-              member.state === "queued" || member.state === "running"
+              (member.state === "queued" || member.state === "running") &&
+              input.coordinator.task.status !== "running"
                 ? input.coordinator.task.status
-                : member.state;
-            const settled = status !== "running";
+                : member.state === "queued"
+                  ? "pending"
+                  : member.state;
+            const settled = status !== "pending" && status !== "running";
             const prompt = member.prompt ?? member.label;
             const model = member.model ?? parentThread.modelSelection.model;
             const attempt = member.attempt ?? previous?.attempt ?? 1;
             const restarted = previous !== undefined && attempt > previous.attempt;
+            const createdAt = previous?.createdAt ?? now;
+            const startedAt =
+              status === "pending"
+                ? null
+                : member.startedAt !== undefined
+                  ? DateTime.makeUnsafe(member.startedAt)
+                  : ((restarted ? null : previous?.startedAt) ??
+                    (status === "running" ? now : null));
             const changed =
               restarted ||
               previous?.status !== status ||
+              !Equal.equals(previous?.startedAt, startedAt) ||
               previous?.result !== member.result ||
               previous?.label !== member.label ||
               previous?.prompt !== prompt ||
@@ -4340,7 +4351,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 ? (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) < 3
                 : restarted || previous?.finalTranscriptRead !== true);
             if (!changed && !readTranscript) continue;
-            const startedAt = (restarted ? undefined : previous?.startedAt) ?? now;
 
             const nodeId = idAllocator.derive.nodeFromProviderItem({
               driver: CLAUDE_PROVIDER,
@@ -4369,7 +4379,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   providerInstanceId: parentThread.providerInstanceId,
                   modelSelection: { instanceId: parentThread.providerInstanceId, model },
                   title: member.label,
-                  now: previous?.startedAt ?? now,
+                  now: createdAt,
                   createdBy: "agent",
                   creationSource: "provider",
                 }),
@@ -4531,6 +4541,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   (readTranscript &&
                     transcript.length > 0 &&
                     input.coordinator.task.status !== "running"),
+                createdAt,
                 startedAt,
               }),
             );

@@ -9911,7 +9911,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     });
   const workflowSnapshot = (input: {
     readonly uuid: string;
-    readonly state: "start" | "done";
+    readonly state: "queued" | "start" | "done";
+    readonly secondState?: "queued" | "start" | "done";
+    readonly startedAt?: number;
     readonly label?: string;
     readonly prompt?: string;
     readonly model?: string;
@@ -9936,6 +9938,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           phaseTitle: "Alpha",
           model: input.model ?? "claude-opus-5[1m]",
           promptPreview: input.prompt ?? "Reply with exactly: A1",
+          ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }),
           ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
           ...(input.state === "done" && input.omitResult !== true
             ? { resultPreview: "A1 excerpt" }
@@ -9946,7 +9949,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           index: 2,
           label: "alpha:two",
           agentId: "a2",
-          state: input.state,
+          state: input.secondState ?? input.state,
           phaseIndex: 1,
           phaseTitle: "Alpha",
           promptPreview: "Reply with exactly: A2",
@@ -10006,12 +10009,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   const launchWorkflow = Effect.fnUntraced(function* (input: {
     readonly harness: Effect.Success<typeof makeWorkflowHarness>;
     readonly snapshotUuid: string;
+    readonly state?: "queued" | "start";
   }) {
     yield* input.harness.offerAndWait(workflowToolUse);
     yield* input.harness.offerAndWait(workflowTaskStarted);
     yield* input.harness.offerAndWait(workflowLaunchAck(input.harness.transcriptDir));
     yield* input.harness.offerAndWait(
-      workflowSnapshot({ uuid: input.snapshotUuid, state: "start" }),
+      workflowSnapshot({ uuid: input.snapshotUuid, state: input.state ?? "start" }),
     );
     yield* awaitUntil(
       () => workflowMemberEvents(input.harness.events, 2).length === 1,
@@ -10312,12 +10316,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachments: [],
           }),
         );
-        yield* launchWorkflow({ harness, snapshotUuid: "00000000-0000-4000-8000-000000001004" });
+        yield* launchWorkflow({
+          harness,
+          snapshotUuid: "00000000-0000-4000-8000-000000001004",
+          state: "queued",
+        });
 
         const coordinator = workflowCoordinatorEvents(harness.events).at(-1)?.subagent;
         const first = workflowMemberEvents(harness.events, 1).at(-1)?.subagent;
         const second = workflowMemberEvents(harness.events, 2).at(-1)?.subagent;
-        assert.equal(first?.status, "running");
+        assert.equal(first?.status, "pending");
+        assert.isNull(first?.startedAt);
+        assert.equal(second?.status, "pending");
+        assert.isNull(second?.startedAt);
         const coordinatorThread = harness.events.find(
           (event) =>
             event.type === "app_thread.created" &&
@@ -10360,6 +10371,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ["subagent", "root_turn"],
         );
         assert.deepEqual(
+          memberNodes.map((event) => [event.node.status, event.node.startedAt]),
+          [
+            ["pending", null],
+            ["pending", null],
+          ],
+        );
+        assert.deepEqual(
           threadMessages(harness.events, first?.childThreadId).map((event) => event.message.text),
           ["Reply with exactly: A1"],
         );
@@ -10368,10 +10386,41 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ["Reply with exactly: A2"],
         );
 
+        yield* TestClock.adjust("60 seconds");
+        const memberStartedAt = DateTime.add(now, { seconds: 30 });
+        yield* harness.offerAndWait(
+          workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000001007",
+            state: "start",
+            secondState: "queued",
+            startedAt: DateTime.toEpochMillis(memberStartedAt),
+          }),
+        );
+        let started = yield* Queue.take(harness.subagentReceipts);
+        while (started.subagent.id !== first?.id || started.subagent.status !== "running") {
+          started = yield* Queue.take(harness.subagentReceipts);
+        }
+        assert.deepEqual(started.subagent.startedAt, memberStartedAt);
+        const startedRoot = harness.events.findLast(
+          (event) => event.type === "node.updated" && event.node.threadId === first?.childThreadId,
+        );
+        assert.equal(
+          startedRoot?.type === "node.updated" ? startedRoot.node.status : null,
+          "running",
+        );
+        assert.deepEqual(
+          startedRoot?.type === "node.updated" ? startedRoot.node.startedAt : null,
+          memberStartedAt,
+        );
+
         const turnItemsBeforeRepeat = coordinatorTurnItems().length;
         yield* Queue.offer(
           harness.sdkMessages,
-          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001005", state: "start" }),
+          workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000001005",
+            state: "start",
+            secondState: "queued",
+          }),
         );
         // The coordinator's turn item is emitted after its members are
         // projected, so a re-emitted member would already be in `events`.
@@ -10379,7 +10428,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           () => coordinatorTurnItems().length > turnItemsBeforeRepeat,
           "repeated workflow snapshot",
         );
-        assert.lengthOf(workflowMemberEvents(harness.events, 1), 1);
+        assert.lengthOf(workflowMemberEvents(harness.events, 1), 2);
         assert.lengthOf(workflowMemberEvents(harness.events, 2), 1);
 
         const firstThreadId = first?.childThreadId;
@@ -10398,6 +10447,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           workflowSnapshot({
             uuid: "00000000-0000-4000-8000-000000001017",
             state: "start",
+            secondState: "queued",
             label: "alpha:review",
             prompt: "Review the change",
             model: "claude-sonnet-4-6",
@@ -10433,6 +10483,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "Review the change",
         );
 
+        yield* harness.offerAndWait(
+          workflowNotification({ uuid: "00000000-0000-4000-8000-000000001008", status: "stopped" }),
+        );
         yield* Queue.offer(
           harness.sdkMessages,
           makeResultFrame({
@@ -10441,6 +10494,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }),
         );
         yield* Queue.take(harness.terminalReceipts);
+        const stopped = workflowMemberEvents(harness.events, 2).at(-1)?.subagent;
+        assert.equal(stopped?.status, "cancelled");
+        assert.isNull(stopped?.startedAt);
+        const stoppedRoot = harness.events.findLast(
+          (event) => event.type === "node.updated" && event.node.threadId === second?.childThreadId,
+        );
+        assert.equal(
+          stoppedRoot?.type === "node.updated" ? stoppedRoot.node.status : null,
+          "cancelled",
+        );
+        assert.isNull(
+          stoppedRoot?.type === "node.updated" ? stoppedRoot.node.startedAt : undefined,
+        );
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
