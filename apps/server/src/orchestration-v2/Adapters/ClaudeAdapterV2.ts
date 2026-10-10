@@ -6869,13 +6869,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 status: "running",
                 reopen: true,
               });
-              // A live resume supersedes earlier buffered starts and outcomes for this task.
+              // A resume supersedes earlier buffered starts and outcomes for this task.
+              // Replaying a start preserves the completion buffered after it.
               yield* Ref.update(wakeBuffers, (current) => {
                 const entry = current.get(liveQuery.nativeThreadId);
                 if (entry === undefined) return current;
+                const replayIndex = entry.messages.indexOf(message);
                 const messages = entry.messages.filter(
-                  (buffered) =>
+                  (buffered, index) =>
                     !(
+                      (replayIndex === -1 || index < replayIndex) &&
                       buffered.type === "system" &&
                       (buffered.subtype === "task_started" ||
                         buffered.subtype === "task_notification") &&
@@ -8236,15 +8239,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               yield* querySession.query.offer(userMessage);
               return;
             }
-            const drained = yield* Ref.modify(wakeBuffers, (current) => {
-              const entry = current.get(nativeThreadId);
-              if (entry === undefined) {
-                return [[] as ReadonlyArray<SDKMessage>, current] as const;
-              }
-              const updated = new Map(current);
-              updated.delete(nativeThreadId);
-              return [entry.messages, updated] as const;
-            });
+            // Live resumes can supersede pending frames while a replayed
+            // workflow waits on transcript I/O. Keep those frames reachable.
+            const drained = (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];
             yield* Ref.update(requestedContinuations, (current) => {
               const updated = new Set(current);
               updated.delete(nativeThreadId);
@@ -8273,9 +8270,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 opaqueReplayTombstones.has(entry.task_id),
             );
             for (const entry of drained) {
+              if (!(yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages.includes(entry)) {
+                continue;
+              }
               if (entry.type !== "result") {
                 yield* handleSdkMessage({ query: querySession.query, message: entry });
               }
+              yield* Ref.update(wakeBuffers, (current) => {
+                const buffered = current.get(nativeThreadId);
+                if (buffered === undefined || !buffered.messages.includes(entry)) return current;
+                const messages = buffered.messages.filter((message) => message !== entry);
+                const next = new Map(current);
+                if (messages.length === 0) next.delete(nativeThreadId);
+                else next.set(nativeThreadId, { ...buffered, messages });
+                return next;
+              });
             }
             const lastResult = resultMessages.at(-1);
             if (lastResult !== undefined) {
