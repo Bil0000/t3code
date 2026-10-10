@@ -5387,7 +5387,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               )
                 continue;
               if (liveQuery !== null && !liveQuery.stopping) {
-                yield* liveQuery.query.stopTask(taskId).pipe(Effect.ignore);
+                // Best effort and off the terminal path: an unanswered stop must
+                // not keep the turn from ending.
+                yield* liveQuery.query
+                  .stopTask(taskId)
+                  .pipe(Effect.timeout("15 seconds"), Effect.ignore, Effect.forkIn(sessionScope));
               }
               yield* updateClaudeSubagentNode({
                 context: input.context,
