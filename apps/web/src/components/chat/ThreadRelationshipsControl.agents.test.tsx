@@ -39,6 +39,18 @@ vi.mock("../../state/use-atom-command", () => ({
       : state.command,
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
+vi.mock("../../state/orchestration", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const granted = Atom.make(true);
+  return {
+    orchestrationEnvironment: {
+      stopWorkflow: {
+        label: "environment-data:orchestration:stop-workflow",
+        permissionAtom: () => granted,
+      },
+    },
+  };
+});
 vi.mock("../ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => children,
   TooltipTrigger: ({ render, children }: { render: ReactElement; children: ReactNode }) =>
@@ -299,14 +311,18 @@ it("opens the correct chat for every workflow phase and unphased member", async 
       (node) =>
         node.type === "button" &&
         typeof node.props["aria-expanded"] === "boolean" &&
-        String(node.props["aria-label"]).endsWith(" phase"),
+        String(node.props["aria-label"]).includes(" phase, "),
     );
   // Only the running phase starts open, beside the unphased member.
   expect(memberButtons()).toHaveLength(3);
   expect(phaseButtons()).toHaveLength(3);
-  expect(renderer.root.findByProps({ "aria-label": "Expand Inspect phase" })).toBeDefined();
-  expect(renderer.root.findByProps({ "aria-label": "Expand Improve phase" })).toBeDefined();
-  expect(renderer.root.findByProps({ "aria-label": "Collapse Verify phase" })).toBeDefined();
+  expect(renderer.root.findByProps({ "aria-label": "Expand Inspect phase, done" })).toBeDefined();
+  expect(
+    renderer.root.findByProps({ "aria-label": "Expand Improve phase, stopped" }),
+  ).toBeDefined();
+  expect(
+    renderer.root.findByProps({ "aria-label": "Collapse Verify phase, running" }),
+  ).toBeDefined();
   for (const phase of phaseButtons().slice(0, 2)) await act(async () => phase.props.onClick());
   expect(memberButtons()).toHaveLength(7);
   for (const agent of agents) {

@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -261,6 +262,9 @@ export function ThreadRelationshipsPanel(props: {
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
   const interruptTurn = useAtomCommand(threadEnvironment.interruptTurn);
   const stopWorkflowCommand = useAtomCommand(orchestrationEnvironment.stopWorkflow);
+  const canOperateWorkflow = useAtomValue(
+    orchestrationEnvironment.stopWorkflow.permissionAtom(props.environmentId),
+  );
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const latestMergeBackRun = projection === null ? null : resolveLatestMergeBackRun(projection);
@@ -454,6 +458,7 @@ export function ThreadRelationshipsPanel(props: {
               );
               const providerDriver = agent?.driver ?? provider?.driver;
               const canStopWorkflow =
+                canOperateWorkflow &&
                 workflowGroup?.workflow.status === "running" &&
                 agent?.origin === "provider_native" &&
                 providerDriver === "claudeAgent";

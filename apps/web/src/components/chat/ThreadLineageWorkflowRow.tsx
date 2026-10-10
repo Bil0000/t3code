@@ -41,7 +41,7 @@ function phaseElapsed(phase: AgentPanelWorkflowGroup["phases"][number]) {
   };
 }
 
-/** Phase state for screen readers; the header tone and member badges show it visually. */
+/** Phase state for the header's label; the tone and member badges show it visually. */
 function phaseStatusLabel(phase: AgentPanelWorkflowGroup["phases"][number]) {
   if (phase.state === "running") return "running";
   if (phase.members.some((member) => member.status === "failed")) return "failed";
@@ -201,7 +201,7 @@ export function ThreadLineageWorkflowRow({
                   variant="panel"
                   tone={phase.state === "running" ? "emphasized" : "muted"}
                   expanded={open}
-                  aria-label={`${open ? "Collapse" : "Expand"} ${phase.title} phase`}
+                  aria-label={`${open ? "Collapse" : "Expand"} ${phase.title} phase, ${status}`}
                   onClick={() => setPhaseOpen((phases) => new Map(phases).set(phase.index, !open))}
                   accessory={
                     <>
@@ -215,7 +215,6 @@ export function ThreadLineageWorkflowRow({
                       <span className="shrink-0 text-2xs font-normal tabular-nums empty:hidden">
                         <AgentElapsed agent={phaseElapsed(phase)} />
                       </span>
-                      <span className="sr-only">{status}</span>
                     </>
                   }
                 >
