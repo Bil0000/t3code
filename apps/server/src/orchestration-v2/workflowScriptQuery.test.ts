@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import { OrchestrationWorkflowFileError } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { afterAll, assert, describe } from "vite-plus/test";
@@ -34,7 +34,7 @@ afterAll(() => {
 });
 
 describe("workflow script containment", () => {
-  effectIt.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+  effectIt.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     "rejects a FIFO without waiting for a writer",
     () =>
       Effect.gen(function* () {
