@@ -8304,18 +8304,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     uuid: promptUuid,
                   });
             const querySession = yield* openQuery(turnInput, nativeThreadId);
-            querySession.lastTurn = context;
-            yield* Ref.set(activeTurn, context);
-            yield* emitProviderEvent({
-              type: "provider_turn.updated",
-              driver: CLAUDE_PROVIDER,
-              providerTurn: providerTurnPayload({
-                context,
-                status: "running",
-                completedAt: null,
-              }),
+            const attachTurn = Effect.gen(function* () {
+              querySession.lastTurn = context;
+              yield* Ref.set(activeTurn, context);
+              yield* emitProviderEvent({
+                type: "provider_turn.updated",
+                driver: CLAUDE_PROVIDER,
+                providerTurn: providerTurnPayload({
+                  context,
+                  status: "running",
+                  completedAt: null,
+                }),
+              });
             });
             if (userMessage !== null) {
+              yield* attachTurn;
               // A user turn that races a wake leaves the buffer alone: the
               // continuation run the worker queued behind this run drains it
               // afterwards with correct attribution.
@@ -8328,6 +8331,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // buffer has been applied so starts, completions and the root result stay ordered.
             yield* sdkMessageLock.withPermits(1)(
               Effect.gen(function* () {
+                if (
+                  (yield* Ref.get(queryContext))?.query !== querySession.query ||
+                  querySession.stopping
+                ) {
+                  return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+                    driver: CLAUDE_PROVIDER,
+                    detail: "Claude provider query ended before the continuation could start.",
+                  });
+                }
+                // Live frames can finish while this continuation waits for the permit.
+                yield* attachTurn;
                 // Exit and interrupt cleanup can run during transcript reads.
                 // Keep pending outcomes visible until replay applies them.
                 const drained = (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];

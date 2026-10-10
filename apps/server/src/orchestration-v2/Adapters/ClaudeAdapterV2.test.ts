@@ -11348,6 +11348,176 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect.each(["root result", "query close"] as const)(
+    "keeps a waiting continuation inactive until replay can handle %s",
+    (arrival) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const crypto = yield* Crypto.Crypto;
+          const digestStarted = yield* Deferred.make<void>();
+          const releaseDigest = yield* Deferred.make<void>();
+          const closeStarted = yield* Deferred.make<void>();
+          let pauseDigest = false;
+          yield* Effect.gen(function* () {
+            const harness = yield* makeWorkflowHarnessWithOptions({
+              freshQueueOnReopen: true,
+              close: (messages) =>
+                Deferred.succeed(closeStarted, undefined).pipe(
+                  Effect.andThen(Queue.shutdown(messages)),
+                ),
+            });
+            const start = (attemptId: string, ordinal: number, continuation: boolean) =>
+              harness.runtime.startTurn(
+                makeClaudeTestTurnInput({
+                  threadId: harness.threadId,
+                  providerThread: harness.providerThread,
+                  now: DateTime.makeUnsafe(0),
+                  attemptId: RunAttemptId.make(attemptId),
+                  providerTurnOrdinal: ordinal,
+                  text: "Continue working.",
+                  attachments: [],
+                  ...(continuation
+                    ? { messageCreatedBy: "agent", messageCreationSource: "provider" }
+                    : {}),
+                }),
+              );
+            yield* start("attempt-workflow-waiting-launch", 1, false);
+            yield* launchWorkflow({
+              harness,
+              snapshotUuid: "00000000-0000-4000-8000-000000003200",
+            });
+            const fileSystem = yield* FileSystem.FileSystem;
+            const liveTranscriptDir = NodePath.join(harness.transcriptDir, "live");
+            yield* fileSystem.makeDirectory(liveTranscriptDir);
+            yield* fileSystem.writeFileString(
+              NodePath.join(liveTranscriptDir, "agent-a1.jsonl"),
+              '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Live member answer"}]}}\n',
+            );
+            const liveTaskId = "task-workflow-live-while-waiting";
+            const liveToolUseId = "toolu-workflow-live-while-waiting";
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                type: "assistant",
+                message: {
+                  model: "claude-sonnet-4-6",
+                  content: [{ type: "tool_use", id: liveToolUseId, name: "Workflow", input: {} }],
+                },
+                parent_tool_use_id: null,
+                session_id: WAKE_NATIVE_SESSION,
+                uuid: "00000000-0000-4000-8000-000000003201",
+              }),
+            );
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                ...workflowTaskStarted,
+                task_id: liveTaskId,
+                tool_use_id: liveToolUseId,
+                uuid: "00000000-0000-4000-8000-000000003202",
+              }),
+            );
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                type: "user",
+                message: {
+                  role: "user",
+                  content: [
+                    { type: "tool_result", tool_use_id: liveToolUseId, content: "Launched." },
+                  ],
+                },
+                tool_use_result: {
+                  taskType: "local_workflow",
+                  runId: "wf_live_while_waiting",
+                  transcriptDir: liveTranscriptDir,
+                },
+                parent_tool_use_id: null,
+                session_id: WAKE_NATIVE_SESSION,
+                uuid: "00000000-0000-4000-8000-000000003203",
+              }),
+            );
+            const liveProgress = (state: "start" | "done", uuid: string) =>
+              claudeSdkFrame({
+                ...workflowSnapshot({ state, uuid }),
+                task_id: liveTaskId,
+                tool_use_id: liveToolUseId,
+              });
+            yield* harness.offerAndWait(
+              liveProgress("start", "00000000-0000-4000-8000-000000003204"),
+            );
+            yield* harness.offerAndWait(
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000003205",
+                result: "Launched both workflows.",
+              }),
+            );
+            yield* Queue.take(harness.terminalReceipts);
+            yield* harness.offerAndWait(
+              workflowNotification({
+                uuid: "00000000-0000-4000-8000-000000003206",
+                status: "completed",
+              }),
+            );
+            yield* Queue.take(harness.continuationReceipts);
+            yield* harness.offerAndWait(wakeTurnInit);
+            pauseDigest = true;
+            const progress = yield* harness
+              .offerAndWait(liveProgress("done", "00000000-0000-4000-8000-000000003207"))
+              .pipe(Effect.forkScoped);
+            yield* Deferred.await(digestStarted);
+            const replay = yield* start("attempt-workflow-waiting-replay", 2, true).pipe(
+              Effect.forkScoped({ startImmediately: true }),
+            );
+            if (arrival === "query close") {
+              const stop = yield* harness.runtime
+                .interruptTurn({
+                  providerThread: harness.providerThread,
+                  providerTurnId: (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+                    driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                    nativeTurnId: "turn:attempt-workflow-waiting-replay",
+                  }),
+                  requestRuntimeRestart: true,
+                })
+                .pipe(Effect.forkScoped);
+              yield* Deferred.await(closeStarted);
+              yield* Deferred.succeed(releaseDigest, undefined);
+              yield* Fiber.join(progress);
+              yield* Fiber.join(stop);
+              assert.isTrue(Exit.isFailure(yield* Fiber.await(replay)));
+            } else {
+              const offered = yield* Deferred.make<void>();
+              const result = yield* harness
+                .offerAndWait(wakeResult, offered)
+                .pipe(Effect.forkScoped);
+              yield* Deferred.await(offered);
+              yield* Deferred.succeed(releaseDigest, undefined);
+              yield* Fiber.join(progress);
+              yield* Fiber.join(replay);
+              yield* Fiber.join(result);
+              yield* Queue.take(harness.terminalReceipts);
+              assert.lengthOf(harness.continuationRequests, 1);
+            }
+            yield* start("attempt-workflow-waiting-next-user", 3, false);
+          }).pipe(
+            Effect.provideService(Crypto.Crypto, {
+              ...crypto,
+              digest: (algorithm, data) =>
+                Effect.gen(function* () {
+                  if (pauseDigest) {
+                    pauseDigest = false;
+                    yield* Deferred.succeed(digestStarted, undefined);
+                    yield* Deferred.await(releaseDigest);
+                  }
+                  return yield* crypto.digest(algorithm, data);
+                }),
+            }),
+          );
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect.each(["registry", "transcript"] as const)(
     "does not replay stale idle progress over a completed workflow after awaiting %s",
     (boundary) =>
