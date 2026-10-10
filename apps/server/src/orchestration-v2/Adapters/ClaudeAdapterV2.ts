@@ -98,6 +98,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -3235,6 +3236,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveClaudeTurnContext | null>(null);
+        const sdkMessageLock = yield* Semaphore.make(1);
         // Survives turn settle: members mostly finish after the launching
         // turn has ended, and each transition must be emitted exactly once.
         const workflowMemberStates = yield* Ref.make(
@@ -8150,16 +8152,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           };
           yield* Ref.set(queryContext, context);
           yield* querySession.messages.pipe(
-            Stream.runForEach((message) => {
-              if (
-                message.type === "system" &&
-                (message.subtype === "init" || message.subtype === "status") &&
-                message.permissionMode !== undefined
-              ) {
-                context.permissionMode = message.permissionMode;
-              }
-              return handleSdkMessage({ query: querySession, message });
-            }),
+            Stream.runForEach((message) =>
+              sdkMessageLock.withPermits(1)(
+                Effect.suspend(() => {
+                  if (
+                    message.type === "system" &&
+                    (message.subtype === "init" || message.subtype === "status") &&
+                    message.permissionMode !== undefined
+                  ) {
+                    context.permissionMode = message.permissionMode;
+                  }
+                  return handleSdkMessage({ query: querySession, message });
+                }),
+              ),
+            ),
             Effect.exit,
             Effect.flatMap(
               Effect.fnUntraced(function* (exit: ClaudeQueryStreamExit) {
@@ -8318,76 +8324,84 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               yield* querySession.query.offer(userMessage);
               return;
             }
-            // Live resumes can supersede pending frames while a replayed
-            // workflow waits on transcript I/O. Keep those frames reachable.
-            const drained = (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];
-            yield* Ref.update(requestedContinuations, (current) => {
-              const updated = new Set(current);
-              updated.delete(nativeThreadId);
-              return updated;
-            });
-            if (drained.length === 0) {
-              // Spurious continuation (buffer already lost with a recycled
-              // session, or a duplicate request): settle immediately instead
-              // of leaving a run waiting on a prompt that was never sent.
-              const completedAt = yield* DateTime.now;
-              yield* finalizeActiveTurn({ context, status: "completed", completedAt });
-              return;
-            }
-            // Replay any result message last: a result finalizes the turn, and
-            // replaying it before the rest would drop them back into the wake
-            // buffer and request another continuation.
-            const resultMessages = drained.filter((entry) => entry.type === "result");
-            const opaqueReplayTombstones = taskIdSetForNativeThread(
-              yield* Ref.get(opaqueBackgroundTaskReplayTombstonesByNativeThread),
-              nativeThreadId,
+            // Transcript reads suspend replay. Hold live SDK frames until the whole
+            // buffer has been applied so starts, completions and the root result stay ordered.
+            yield* sdkMessageLock.withPermits(1)(
+              Effect.gen(function* () {
+                // Exit and interrupt cleanup can run during transcript reads.
+                // Keep pending outcomes visible until replay applies them.
+                const drained = (yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages ?? [];
+                yield* Ref.update(requestedContinuations, (current) => {
+                  const updated = new Set(current);
+                  updated.delete(nativeThreadId);
+                  return updated;
+                });
+                if (drained.length === 0) {
+                  // Spurious continuation (buffer already lost with a recycled
+                  // session, or a duplicate request): settle immediately instead
+                  // of leaving a run waiting on a prompt that was never sent.
+                  const completedAt = yield* DateTime.now;
+                  yield* finalizeActiveTurn({ context, status: "completed", completedAt });
+                  return;
+                }
+                // Replay any result message last: a result finalizes the turn, and
+                // replaying it before the rest would drop them back into the wake
+                // buffer and request another continuation.
+                const resultMessages = drained.filter((entry) => entry.type === "result");
+                const opaqueReplayTombstones = taskIdSetForNativeThread(
+                  yield* Ref.get(opaqueBackgroundTaskReplayTombstonesByNativeThread),
+                  nativeThreadId,
+                );
+                const hasOpaqueTaskNotification = drained.some(
+                  (entry) =>
+                    entry.type === "system" &&
+                    entry.subtype === "task_notification" &&
+                    opaqueReplayTombstones.has(entry.task_id),
+                );
+                for (const entry of drained) {
+                  if (
+                    !(yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages.includes(entry)
+                  ) {
+                    continue;
+                  }
+                  if (entry.type !== "result") {
+                    yield* handleSdkMessage({ query: querySession.query, message: entry });
+                  }
+                  yield* Ref.update(wakeBuffers, (current) => {
+                    const buffered = current.get(nativeThreadId);
+                    if (buffered === undefined) return current;
+                    const index = buffered.messages.indexOf(entry);
+                    if (index === -1) return current;
+                    // An idle handler may requeue this same frame for the next continuation.
+                    const messages = [
+                      ...buffered.messages.slice(0, index),
+                      ...buffered.messages.slice(index + 1),
+                    ];
+                    const next = new Map(current);
+                    if (messages.length === 0) next.delete(nativeThreadId);
+                    else next.set(nativeThreadId, { ...buffered, messages });
+                    return next;
+                  });
+                }
+                const lastResult = resultMessages.at(-1);
+                if (lastResult !== undefined) {
+                  yield* handleSdkMessage({ query: querySession.query, message: lastResult });
+                  return;
+                }
+                // A drained `init` means Claude began the wake turn, so its output
+                // may still be on the way: stay open for it.
+                const hasNativeWakeFrame = drained.some(
+                  (entry) =>
+                    entry.type === "user" ||
+                    entry.type === "assistant" ||
+                    isClaudeTurnStartMessage(entry),
+                );
+                if (hasOpaqueTaskNotification && !hasNativeWakeFrame) {
+                  const completedAt = yield* DateTime.now;
+                  yield* finalizeActiveTurn({ context, status: "completed", completedAt });
+                }
+              }),
             );
-            const hasOpaqueTaskNotification = drained.some(
-              (entry) =>
-                entry.type === "system" &&
-                entry.subtype === "task_notification" &&
-                opaqueReplayTombstones.has(entry.task_id),
-            );
-            for (const entry of drained) {
-              if (!(yield* Ref.get(wakeBuffers)).get(nativeThreadId)?.messages.includes(entry)) {
-                continue;
-              }
-              if (entry.type !== "result") {
-                yield* handleSdkMessage({ query: querySession.query, message: entry });
-              }
-              yield* Ref.update(wakeBuffers, (current) => {
-                const buffered = current.get(nativeThreadId);
-                if (buffered === undefined) return current;
-                const index = buffered.messages.indexOf(entry);
-                if (index === -1) return current;
-                // An idle handler may requeue this same frame for the next continuation.
-                const messages = [
-                  ...buffered.messages.slice(0, index),
-                  ...buffered.messages.slice(index + 1),
-                ];
-                const next = new Map(current);
-                if (messages.length === 0) next.delete(nativeThreadId);
-                else next.set(nativeThreadId, { ...buffered, messages });
-                return next;
-              });
-            }
-            const lastResult = resultMessages.at(-1);
-            if (lastResult !== undefined) {
-              yield* handleSdkMessage({ query: querySession.query, message: lastResult });
-              return;
-            }
-            // A drained `init` means Claude began the wake turn, so its output
-            // may still be on the way: stay open for it.
-            const hasNativeWakeFrame = drained.some(
-              (entry) =>
-                entry.type === "user" ||
-                entry.type === "assistant" ||
-                isClaudeTurnStartMessage(entry),
-            );
-            if (hasOpaqueTaskNotification && !hasNativeWakeFrame) {
-              const completedAt = yield* DateTime.now;
-              yield* finalizeActiveTurn({ context, status: "completed", completedAt });
-            }
           },
           (effect, turnInput) =>
             effect.pipe(

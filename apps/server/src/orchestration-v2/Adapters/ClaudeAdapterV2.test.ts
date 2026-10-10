@@ -2159,10 +2159,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const sdkMessages = yield* Queue.unbounded<SDKMessage>();
       const processQueues: Array<Queue.Queue<SDKMessage>> = [];
       const processedMessages = new WeakMap<SDKMessage, Deferred.Deferred<void>>();
-      const offerAndWait = Effect.fnUntraced(function* (message: SDKMessage) {
+      const offerAndWait = Effect.fnUntraced(function* (
+        message: SDKMessage,
+        offered?: Deferred.Deferred<void>,
+      ) {
         const processed = yield* Deferred.make<void>();
         processedMessages.set(message, processed);
         yield* Queue.offer(sdkMessages, message);
+        if (offered !== undefined) yield* Deferred.succeed(offered, undefined);
         yield* Deferred.await(processed);
       });
       const offeredMessages: Array<SDKUserMessage> = [];
@@ -11410,7 +11414,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               )
               .pipe(Effect.forkScoped);
             yield* Deferred.await(progressRead);
-            yield* harness.runtime.startTurn(continuationInput);
+            const continuation = yield* harness.runtime
+              .startTurn(continuationInput)
+              .pipe(Effect.forkScoped);
+            yield* Deferred.succeed(releaseProgress, undefined);
+            yield* Fiber.join(progress);
+            yield* Fiber.join(continuation);
             if (boundary === "registry") {
               yield* Queue.take(harness.terminalReceipts);
             } else {
@@ -11421,8 +11430,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                   break;
               }
             }
-            yield* Deferred.succeed(releaseProgress, undefined);
-            yield* Fiber.join(progress);
             if (boundary === "transcript") {
               yield* harness.offerAndWait(
                 makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001065", result: "Done." }),
@@ -11484,71 +11491,81 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
-  it.effect.each(["live resume", "root result"] as const)(
-    "preserves pending subagent work when %s arrives during workflow transcript replay",
-    (arrival) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const crypto = yield* Crypto.Crypto;
-          const digestStarted = yield* Deferred.make<void>();
-          const releaseDigest = yield* Deferred.make<void>();
-          let pauseDigest = false;
-          yield* Effect.gen(function* () {
-            const harness = yield* makeWorkflowHarnessWithOptions({ close: Queue.shutdown });
-            const taskId = "task-resumed-during-workflow-replay";
-            const taskStart = (toolUseId: string, prompt: string, uuid: string) =>
-              claudeSdkFrame({
-                ...workflowTaskStarted,
-                task_id: taskId,
-                task_type: "local_agent",
-                is_backgrounded: true,
-                subagent_type: "general-purpose",
-                spawn_depth: 1,
-                workflow_name: undefined,
-                tool_use_id: toolUseId,
-                prompt,
-                uuid,
-              });
-            const taskFinished = (toolUseId: string, summary: string, uuid: string) =>
-              claudeSdkFrame({
-                ...workflowNotification({ uuid, status: "completed" }),
-                task_id: taskId,
-                tool_use_id: toolUseId,
-                summary,
-              });
-            yield* harness.runtime.startTurn(
-              makeClaudeTestTurnInput({
-                threadId: harness.threadId,
-                providerThread: harness.providerThread,
-                now: yield* DateTime.now,
-                attemptId: RunAttemptId.make("attempt-workflow-replay-launch"),
-                text: "Run the workflow and a background subagent.",
-                attachments: [],
-              }),
-            );
-            yield* harness.offerAndWait(workflowToolUse);
-            yield* harness.offerAndWait(workflowTaskStarted);
-            yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
-            yield* harness.offerAndWait(
-              workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000003001", state: "start" }),
-            );
+  it.effect.each([
+    "root result",
+    "resume after root result",
+    "completion before buffered start",
+  ] as const)("orders %s arriving during workflow transcript replay", (arrival) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const crypto = yield* Crypto.Crypto;
+        const digestStarted = yield* Deferred.make<void>();
+        const releaseDigest = yield* Deferred.make<void>();
+        const liveFrameOffered = yield* Deferred.make<void>();
+        let pauseDigest = false;
+        yield* Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarnessWithOptions({ close: Queue.shutdown });
+          const taskId = "task-resumed-during-workflow-replay";
+          const taskStart = (toolUseId: string, prompt: string, uuid: string) =>
+            claudeSdkFrame({
+              ...workflowTaskStarted,
+              task_id: taskId,
+              task_type: "local_agent",
+              is_backgrounded: true,
+              subagent_type: "general-purpose",
+              spawn_depth: 1,
+              workflow_name: undefined,
+              tool_use_id: toolUseId,
+              prompt,
+              uuid,
+            });
+          const taskFinished = (toolUseId: string, summary: string, uuid: string) =>
+            claudeSdkFrame({
+              ...workflowNotification({ uuid, status: "completed" }),
+              task_id: taskId,
+              tool_use_id: toolUseId,
+              summary,
+            });
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-workflow-replay-launch"),
+              text: "Run the workflow and a background subagent.",
+              attachments: [],
+            }),
+          );
+          yield* harness.offerAndWait(workflowToolUse);
+          yield* harness.offerAndWait(workflowTaskStarted);
+          yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
+          yield* harness.offerAndWait(
+            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000003001", state: "start" }),
+          );
+          if (arrival !== "completion before buffered start") {
             yield* harness.offerAndWait(
               taskStart("toolu-initial", "Initial work.", "00000000-0000-4000-8000-000000003002"),
             );
+          }
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000003003",
+              result: "Launched both tasks.",
+            }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          yield* harness.offerAndWait(
+            workflowNotification({
+              uuid: "00000000-0000-4000-8000-000000003004",
+              status: "completed",
+            }),
+          );
+          yield* Queue.take(harness.continuationReceipts);
+          if (arrival === "completion before buffered start") {
             yield* harness.offerAndWait(
-              makeResultFrame({
-                uuid: "00000000-0000-4000-8000-000000003003",
-                result: "Launched both tasks.",
-              }),
+              taskStart("toolu-initial", "Initial work.", "00000000-0000-4000-8000-000000003005"),
             );
-            yield* Queue.take(harness.terminalReceipts);
-            yield* harness.offerAndWait(
-              workflowNotification({
-                uuid: "00000000-0000-4000-8000-000000003004",
-                status: "completed",
-              }),
-            );
-            yield* Queue.take(harness.continuationReceipts);
+          } else {
             yield* harness.offerAndWait(
               taskFinished(
                 "toolu-initial",
@@ -11556,131 +11573,280 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 "00000000-0000-4000-8000-000000003005",
               ),
             );
-            if (arrival === "live resume") {
-              yield* harness.offerAndWait(
-                taskStart(
-                  "toolu-buffered",
-                  "Buffered resume.",
-                  "00000000-0000-4000-8000-000000003006",
-                ),
-              );
+          }
+          if (arrival === "root result") {
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                type: "system",
+                subtype: "init",
+                session_id: WAKE_NATIVE_SESSION,
+                uuid: "00000000-0000-4000-8000-000000003006",
+              }),
+            );
+          }
+          pauseDigest = true;
+          const replay = yield* harness.runtime
+            .startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-workflow-replay-continuation"),
+                providerTurnOrdinal: 2,
+                text: "Continue.",
+                attachments: [],
+                messageCreatedBy: "agent",
+                messageCreationSource: "provider",
+              }),
+            )
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(digestStarted);
+          const liveFrames = yield* Effect.gen(function* () {
+            if (arrival === "completion before buffered start") {
               yield* harness.offerAndWait(
                 taskFinished(
-                  "toolu-buffered",
-                  "Buffered result.",
+                  "toolu-initial",
+                  "Initial result.",
                   "00000000-0000-4000-8000-000000003007",
                 ),
+                liveFrameOffered,
               );
+              return;
             }
-            pauseDigest = true;
-            const replay = yield* harness.runtime
-              .startTurn(
-                makeClaudeTestTurnInput({
-                  threadId: harness.threadId,
-                  providerThread: harness.providerThread,
-                  now: yield* DateTime.now,
-                  attemptId: RunAttemptId.make("attempt-workflow-replay-continuation"),
-                  providerTurnOrdinal: 2,
-                  text: "Continue.",
-                  attachments: [],
-                  messageCreatedBy: "agent",
-                  messageCreationSource: "provider",
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                ...makeResultFrame({
+                  uuid: "00000000-0000-4000-8000-000000003008",
+                  result: "Native wake turn finished.",
                 }),
-              )
-              .pipe(Effect.forkScoped);
-            yield* Deferred.await(digestStarted);
-            if (arrival === "live resume") {
+                origin: { kind: "task-notification" },
+                num_turns: 1,
+              }),
+              liveFrameOffered,
+            );
+            if (arrival === "resume after root result") {
+              yield* harness.offerAndWait(
+                claudeSdkFrame({
+                  type: "system",
+                  subtype: "init",
+                  session_id: WAKE_NATIVE_SESSION,
+                  uuid: "00000000-0000-4000-8000-000000003009",
+                }),
+              );
               yield* harness.offerAndWait(
                 taskStart(
                   "toolu-latest",
                   "Latest live resume.",
-                  "00000000-0000-4000-8000-000000003008",
+                  "00000000-0000-4000-8000-000000003010",
                 ),
               );
-              while (true) {
-                const event = yield* Queue.take(harness.subagentReceipts);
-                if (
-                  event.subagent.nativeTaskRef?.nativeId === taskId &&
-                  event.subagent.prompt === "Latest live resume."
-                )
-                  break;
-              }
-            } else {
-              yield* harness.offerAndWait(
-                claudeSdkFrame({
-                  ...makeResultFrame({
-                    uuid: "00000000-0000-4000-8000-000000003010",
-                    result: "Native wake turn finished.",
-                  }),
-                  origin: { kind: "task-notification" },
-                  num_turns: 1,
-                }),
-              );
-              yield* Queue.take(harness.terminalReceipts);
             }
-            yield* Deferred.succeed(releaseDigest, undefined);
-            yield* Fiber.join(replay);
-            if (arrival === "root result") {
-              yield* Queue.take(harness.continuationReceipts);
-              yield* harness.runtime.startTurn(
-                makeClaudeTestTurnInput({
-                  threadId: harness.threadId,
-                  providerThread: harness.providerThread,
-                  now: yield* DateTime.now,
-                  attemptId: RunAttemptId.make("attempt-workflow-replay-next-continuation"),
-                  providerTurnOrdinal: 3,
-                  text: "Continue.",
-                  attachments: [],
-                  messageCreatedBy: "agent",
-                  messageCreationSource: "provider",
-                }),
-              );
-            }
+          }).pipe(Effect.forkScoped);
+          yield* Deferred.await(liveFrameOffered);
+          yield* Deferred.succeed(releaseDigest, undefined);
+          yield* Fiber.join(replay);
+          yield* Fiber.join(liveFrames);
+          if (arrival === "resume after root result") {
+            yield* Queue.take(harness.terminalReceipts);
+            yield* Queue.take(harness.continuationReceipts);
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-workflow-replay-resume-continuation"),
+                providerTurnOrdinal: 3,
+                text: "Continue.",
+                attachments: [],
+                messageCreatedBy: "agent",
+                messageCreationSource: "provider",
+              }),
+            );
+          }
+          if (arrival !== "root result") {
             yield* harness.offerAndWait(
               makeResultFrame({
-                uuid: "00000000-0000-4000-8000-000000003009",
+                uuid: "00000000-0000-4000-8000-000000003011",
                 result: "Workflow answer delivered.",
               }),
             );
-            yield* Queue.take(harness.terminalReceipts);
-            const latest = harness.events
-              .flatMap((event) =>
-                event.type === "subagent.updated" &&
-                event.subagent.nativeTaskRef?.nativeId === taskId
-                  ? [event.subagent]
-                  : [],
-              )
-              .at(-1);
-            if (arrival === "live resume") {
-              assert.equal(latest?.status, "running");
-              assert.equal(latest?.prompt, "Latest live resume.");
-              assert.isNull(latest?.result);
-              assert.isTrue(yield* harness.hasPendingBackgroundWork);
-            } else {
-              assert.equal(latest?.status, "completed");
-              assert.equal(latest?.result, "Initial result.");
-              assert.isFalse(yield* harness.hasPendingBackgroundWork);
-            }
-          }).pipe(
-            Effect.provideService(Crypto.Crypto, {
-              ...crypto,
-              digest: (algorithm, data) =>
-                Effect.gen(function* () {
-                  if (pauseDigest) {
-                    pauseDigest = false;
-                    yield* Deferred.succeed(digestStarted, undefined);
-                    yield* Deferred.await(releaseDigest);
-                  }
-                  return yield* crypto.digest(algorithm, data);
-                }),
-            }),
-          );
+          }
+          yield* Queue.take(harness.terminalReceipts);
+          const latest = harness.events
+            .flatMap((event) =>
+              event.type === "subagent.updated" && event.subagent.nativeTaskRef?.nativeId === taskId
+                ? [event.subagent]
+                : [],
+            )
+            .at(-1);
+          if (arrival === "resume after root result") {
+            assert.equal(latest?.status, "running");
+            assert.equal(latest?.prompt, "Latest live resume.");
+            assert.isNull(latest?.result);
+            assert.isTrue(yield* harness.hasPendingBackgroundWork);
+          } else {
+            assert.equal(latest?.status, "completed");
+            assert.equal(latest?.result, "Initial result.");
+            assert.isFalse(yield* harness.hasPendingBackgroundWork);
+            assert.lengthOf(harness.continuationRequests, 1);
+            // The native wake turn ended once; no extra provider result will
+            // arrive to settle a mistakenly opened continuation.
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-workflow-replay-next-user"),
+                providerTurnOrdinal: 3,
+                text: "Next task.",
+                attachments: [],
+              }),
+            );
+          }
         }).pipe(
-          Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-          ),
+          Effect.provideService(Crypto.Crypto, {
+            ...crypto,
+            digest: (algorithm, data) =>
+              Effect.gen(function* () {
+                if (pauseDigest) {
+                  pauseDigest = false;
+                  yield* Deferred.succeed(digestStarted, undefined);
+                  yield* Deferred.await(releaseDigest);
+                }
+                return yield* crypto.digest(algorithm, data);
+              }),
+          }),
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
         ),
       ),
+    ),
+  );
+
+  it.effect("preserves buffered workflow outcomes when interrupted during replay", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const crypto = yield* Crypto.Crypto;
+        const digestStarted = yield* Deferred.make<void>();
+        const releaseDigest = yield* Deferred.make<void>();
+        let pauseDigest = false;
+        yield* Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarnessWithOptions({ close: Queue.shutdown });
+          const secondTaskId = "task-workflow-buffered-completion";
+          const secondToolUseId = "toolu-workflow-buffered-completion";
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-workflow-buffered-launch"),
+              text: "Run both workflows.",
+              attachments: [],
+            }),
+          );
+          yield* launchWorkflow({
+            harness,
+            snapshotUuid: "00000000-0000-4000-8000-000000003100",
+          });
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...workflowTaskStarted,
+              task_id: secondTaskId,
+              tool_use_id: secondToolUseId,
+              uuid: "00000000-0000-4000-8000-000000003101",
+            }),
+          );
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...workflowSnapshot({
+                uuid: "00000000-0000-4000-8000-000000003102",
+                state: "start",
+              }),
+              task_id: secondTaskId,
+              tool_use_id: secondToolUseId,
+            }),
+          );
+          yield* harness.offerAndWait(
+            makeResultFrame({
+              uuid: "00000000-0000-4000-8000-000000003103",
+              result: "Launched both workflows.",
+            }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          yield* harness.offerAndWait(
+            workflowNotification({
+              uuid: "00000000-0000-4000-8000-000000003104",
+              status: "completed",
+            }),
+          );
+          yield* Queue.take(harness.continuationReceipts);
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...workflowNotification({
+                uuid: "00000000-0000-4000-8000-000000003105",
+                status: "completed",
+              }),
+              task_id: secondTaskId,
+              tool_use_id: secondToolUseId,
+            }),
+          );
+          const continuationInput = makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-workflow-buffered-replay"),
+            providerTurnOrdinal: 2,
+            text: "Continue.",
+            attachments: [],
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+          });
+          pauseDigest = true;
+          const replay = yield* harness.runtime
+            .startTurn(continuationInput)
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(digestStarted);
+          yield* harness.runtime.interruptTurn({
+            providerThread: harness.providerThread,
+            providerTurnId: (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+              nativeTurnId: `turn:${continuationInput.attemptId}`,
+            }),
+          });
+          yield* Deferred.succeed(releaseDigest, undefined);
+          yield* Fiber.join(replay);
+          const second = harness.events
+            .flatMap((event) =>
+              event.type === "subagent.updated" &&
+              event.subagent.nativeTaskRef?.nativeId === secondTaskId
+                ? [event.subagent]
+                : [],
+            )
+            .at(-1);
+          assert.equal(second?.status, "completed");
+          assert.equal(second?.result, "Workflow finished.");
+        }).pipe(
+          Effect.provideService(Crypto.Crypto, {
+            ...crypto,
+            digest: (algorithm, data) =>
+              Effect.gen(function* () {
+                if (pauseDigest) {
+                  pauseDigest = false;
+                  yield* Deferred.succeed(digestStarted, undefined);
+                  yield* Deferred.await(releaseDigest);
+                }
+                return yield* crypto.digest(algorithm, data);
+              }),
+          }),
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
   );
 
   it.effect.each([
