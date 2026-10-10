@@ -5723,6 +5723,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
          * emitted, because node and turn-item ids need a turn context this path
          * does not have. Status is left alone — `task_notification` owns the
          * lifecycle, and it has its own turn-aware path.
+         * These updates only reach the projection while the launching run is still
+         * ingesting, which holds because a running coordinator keeps that run open.
          */
         const applyWorkflowProgressWithoutTurn = Effect.fnUntraced(function* (message: SDKMessage) {
           if (message.type !== "system" || message.subtype !== "task_progress") return;
