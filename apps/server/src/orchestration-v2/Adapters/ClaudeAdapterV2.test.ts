@@ -10955,6 +10955,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ["failed", true, false],
     ["completed", true, false],
     ["interrupted", false, false],
+    ["interrupted", true, false],
+    ["stop_buffered", true, false],
     ["query_failed", false, false],
     ["query_failed", true, false],
     ["query_failed", true, true],
@@ -11023,11 +11025,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               harness.sdkMessages,
               workflowNotification({
                 uuid: "00000000-0000-4000-8000-000000001011",
-                status,
+                status: status === "stop_buffered" ? "completed" : status,
               }),
             );
-          if (betweenTurns && status !== "query_failed") {
+          if (betweenTurns && status !== "query_failed" && status !== "interrupted") {
             yield* Queue.take(harness.continuationReceipts);
+          }
+          if (
+            betweenTurns &&
+            status !== "query_failed" &&
+            status !== "interrupted" &&
+            status !== "stop_buffered"
+          ) {
             yield* harness.runtime.startTurn(
               makeClaudeTestTurnInput({
                 threadId: harness.threadId,
@@ -11042,13 +11051,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }),
             );
           }
-          if (status === "interrupted") {
+          if (status === "interrupted" || status === "stop_buffered") {
             yield* harness.runtime.interruptTurn({
               providerThread: harness.providerThread,
               providerTurnId: (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
                 driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
                 nativeTurnId: "turn:attempt-workflow-terminal",
               }),
+              ...(betweenTurns ? { requestRuntimeRestart: true } : {}),
             });
           } else if (status === "query_failed") {
             yield* Queue.shutdown(harness.sdkMessages);
@@ -11061,7 +11071,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               }),
             );
           }
-          if (betweenTurns && status === "query_failed") {
+          if (
+            betweenTurns &&
+            (status === "query_failed" || status === "interrupted" || status === "stop_buffered")
+          ) {
             // The launching turn already ended. Await the last member's
             // terminal event, which follows its root node update.
             const lastMemberId = workflowMemberEvents(harness.events, 2)[0]?.subagent.id;
@@ -11071,10 +11084,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 break;
             }
             assert.isFalse(yield* harness.hasPendingBackgroundWork);
-            assert.equal(
-              workflowMemberEvents(harness.events, 1).at(-1)?.subagent.title,
-              "Updated between turns",
-            );
+            if (status === "query_failed") {
+              assert.equal(
+                workflowMemberEvents(harness.events, 1).at(-1)?.subagent.title,
+                "Updated between turns",
+              );
+            }
           } else {
             yield* Queue.take(harness.terminalReceipts);
           }
@@ -11083,7 +11098,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               ? "cancelled"
               : status === "query_failed"
                 ? "failed"
-                : status;
+                : status === "stop_buffered"
+                  ? "completed"
+                  : status;
+          assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, expected);
           for (const index of [1, 2]) {
             const updates = workflowMemberEvents(harness.events, index);
             const member = updates.at(-1)?.subagent;

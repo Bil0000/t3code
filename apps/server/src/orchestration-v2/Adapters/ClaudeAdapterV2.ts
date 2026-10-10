@@ -5772,25 +5772,34 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             yield* resetBackgroundTaskStateForNativeThreadProcess(closedQuery.nativeThreadId);
           }
           // A workflow can outlive its launching turn, but not its CLI process.
-          // Preserve buffered completions for replay; they already have an outcome.
+          // Apply buffered outcomes before Stop can discard their wake buffer.
           // Capture ownership before finalization, which may yield to a new process.
           for (const [taskId, subagent] of subagents) {
             if (
               subagent.task.workflow === undefined ||
               subagent.task.status !== "running" ||
-              closedQuery.subagentsFromEarlierProcesses.has(subagent) ||
-              buffered?.some(
-                (message) =>
-                  message.type === "system" &&
-                  message.subtype === "task_notification" &&
-                  message.task_id === taskId,
-              )
+              closedQuery.subagentsFromEarlierProcesses.has(subagent)
             )
               continue;
+            const completion = buffered?.findLast(
+              (
+                message,
+              ): message is Extract<SDKMessage, { readonly subtype: "task_notification" }> =>
+                message.type === "system" &&
+                message.subtype === "task_notification" &&
+                message.task_id === taskId,
+            );
             yield* updateClaudeSubagentNode({
               context,
               taskId,
-              status: interrupted ? "cancelled" : "failed",
+              status: completion
+                ? claudeTaskOutcome(completion.status)
+                : interrupted
+                  ? "cancelled"
+                  : "failed",
+              ...(completion === undefined
+                ? {}
+                : { workflowFrame: completion, result: completion.summary }),
               onlyIfRunningInRun: subagent.task.runId,
             });
           }
