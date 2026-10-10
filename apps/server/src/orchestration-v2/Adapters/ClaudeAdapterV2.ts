@@ -8357,8 +8357,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
               yield* Ref.update(wakeBuffers, (current) => {
                 const buffered = current.get(nativeThreadId);
-                if (buffered === undefined || !buffered.messages.includes(entry)) return current;
-                const messages = buffered.messages.filter((message) => message !== entry);
+                if (buffered === undefined) return current;
+                const index = buffered.messages.indexOf(entry);
+                if (index === -1) return current;
+                // An idle handler may requeue this same frame for the next continuation.
+                const messages = [
+                  ...buffered.messages.slice(0, index),
+                  ...buffered.messages.slice(index + 1),
+                ];
                 const next = new Map(current);
                 if (messages.length === 0) next.delete(nativeThreadId);
                 else next.set(nativeThreadId, { ...buffered, messages });

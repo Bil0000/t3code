@@ -11383,158 +11383,203 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
-  it.effect("preserves a live subagent resume while replaying another workflow's answer", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const crypto = yield* Crypto.Crypto;
-        const digestStarted = yield* Deferred.make<void>();
-        const releaseDigest = yield* Deferred.make<void>();
-        let pauseDigest = false;
-        yield* Effect.gen(function* () {
-          const harness = yield* makeWorkflowHarnessWithOptions({ close: Queue.shutdown });
-          const taskId = "task-resumed-during-workflow-replay";
-          const taskStart = (toolUseId: string, prompt: string, uuid: string) =>
-            claudeSdkFrame({
-              ...workflowTaskStarted,
-              task_id: taskId,
-              task_type: "local_agent",
-              is_backgrounded: true,
-              subagent_type: "general-purpose",
-              spawn_depth: 1,
-              workflow_name: undefined,
-              tool_use_id: toolUseId,
-              prompt,
-              uuid,
-            });
-          const taskFinished = (toolUseId: string, summary: string, uuid: string) =>
-            claudeSdkFrame({
-              ...workflowNotification({ uuid, status: "completed" }),
-              task_id: taskId,
-              tool_use_id: toolUseId,
-              summary,
-            });
-          yield* harness.runtime.startTurn(
-            makeClaudeTestTurnInput({
-              threadId: harness.threadId,
-              providerThread: harness.providerThread,
-              now: yield* DateTime.now,
-              attemptId: RunAttemptId.make("attempt-workflow-replay-launch"),
-              text: "Run the workflow and a background subagent.",
-              attachments: [],
-            }),
-          );
-          yield* harness.offerAndWait(workflowToolUse);
-          yield* harness.offerAndWait(workflowTaskStarted);
-          yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
-          yield* harness.offerAndWait(
-            workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000003001", state: "start" }),
-          );
-          yield* harness.offerAndWait(
-            taskStart("toolu-initial", "Initial work.", "00000000-0000-4000-8000-000000003002"),
-          );
-          yield* harness.offerAndWait(
-            makeResultFrame({
-              uuid: "00000000-0000-4000-8000-000000003003",
-              result: "Launched both tasks.",
-            }),
-          );
-          yield* Queue.take(harness.terminalReceipts);
-          yield* harness.offerAndWait(
-            workflowNotification({
-              uuid: "00000000-0000-4000-8000-000000003004",
-              status: "completed",
-            }),
-          );
-          yield* Queue.take(harness.continuationReceipts);
-          yield* harness.offerAndWait(
-            taskFinished(
-              "toolu-initial",
-              "Initial result.",
-              "00000000-0000-4000-8000-000000003005",
-            ),
-          );
-          yield* harness.offerAndWait(
-            taskStart("toolu-buffered", "Buffered resume.", "00000000-0000-4000-8000-000000003006"),
-          );
-          yield* harness.offerAndWait(
-            taskFinished(
-              "toolu-buffered",
-              "Buffered result.",
-              "00000000-0000-4000-8000-000000003007",
-            ),
-          );
-          pauseDigest = true;
-          const replay = yield* harness.runtime
-            .startTurn(
+  it.effect.each(["live resume", "root result"] as const)(
+    "preserves pending subagent work when %s arrives during workflow transcript replay",
+    (arrival) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const crypto = yield* Crypto.Crypto;
+          const digestStarted = yield* Deferred.make<void>();
+          const releaseDigest = yield* Deferred.make<void>();
+          let pauseDigest = false;
+          yield* Effect.gen(function* () {
+            const harness = yield* makeWorkflowHarnessWithOptions({ close: Queue.shutdown });
+            const taskId = "task-resumed-during-workflow-replay";
+            const taskStart = (toolUseId: string, prompt: string, uuid: string) =>
+              claudeSdkFrame({
+                ...workflowTaskStarted,
+                task_id: taskId,
+                task_type: "local_agent",
+                is_backgrounded: true,
+                subagent_type: "general-purpose",
+                spawn_depth: 1,
+                workflow_name: undefined,
+                tool_use_id: toolUseId,
+                prompt,
+                uuid,
+              });
+            const taskFinished = (toolUseId: string, summary: string, uuid: string) =>
+              claudeSdkFrame({
+                ...workflowNotification({ uuid, status: "completed" }),
+                task_id: taskId,
+                tool_use_id: toolUseId,
+                summary,
+              });
+            yield* harness.runtime.startTurn(
               makeClaudeTestTurnInput({
                 threadId: harness.threadId,
                 providerThread: harness.providerThread,
                 now: yield* DateTime.now,
-                attemptId: RunAttemptId.make("attempt-workflow-replay-continuation"),
-                providerTurnOrdinal: 2,
-                text: "Continue.",
+                attemptId: RunAttemptId.make("attempt-workflow-replay-launch"),
+                text: "Run the workflow and a background subagent.",
                 attachments: [],
-                messageCreatedBy: "agent",
-                messageCreationSource: "provider",
               }),
-            )
-            .pipe(Effect.forkScoped);
-          yield* Deferred.await(digestStarted);
-          yield* harness.offerAndWait(
-            taskStart(
-              "toolu-latest",
-              "Latest live resume.",
-              "00000000-0000-4000-8000-000000003008",
-            ),
-          );
-          while (true) {
-            const event = yield* Queue.take(harness.subagentReceipts);
-            if (
-              event.subagent.nativeTaskRef?.nativeId === taskId &&
-              event.subagent.prompt === "Latest live resume."
-            )
-              break;
-          }
-          yield* Deferred.succeed(releaseDigest, undefined);
-          yield* Fiber.join(replay);
-          yield* harness.offerAndWait(
-            makeResultFrame({
-              uuid: "00000000-0000-4000-8000-000000003009",
-              result: "Workflow answer delivered.",
+            );
+            yield* harness.offerAndWait(workflowToolUse);
+            yield* harness.offerAndWait(workflowTaskStarted);
+            yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
+            yield* harness.offerAndWait(
+              workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000003001", state: "start" }),
+            );
+            yield* harness.offerAndWait(
+              taskStart("toolu-initial", "Initial work.", "00000000-0000-4000-8000-000000003002"),
+            );
+            yield* harness.offerAndWait(
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000003003",
+                result: "Launched both tasks.",
+              }),
+            );
+            yield* Queue.take(harness.terminalReceipts);
+            yield* harness.offerAndWait(
+              workflowNotification({
+                uuid: "00000000-0000-4000-8000-000000003004",
+                status: "completed",
+              }),
+            );
+            yield* Queue.take(harness.continuationReceipts);
+            yield* harness.offerAndWait(
+              taskFinished(
+                "toolu-initial",
+                "Initial result.",
+                "00000000-0000-4000-8000-000000003005",
+              ),
+            );
+            if (arrival === "live resume") {
+              yield* harness.offerAndWait(
+                taskStart(
+                  "toolu-buffered",
+                  "Buffered resume.",
+                  "00000000-0000-4000-8000-000000003006",
+                ),
+              );
+              yield* harness.offerAndWait(
+                taskFinished(
+                  "toolu-buffered",
+                  "Buffered result.",
+                  "00000000-0000-4000-8000-000000003007",
+                ),
+              );
+            }
+            pauseDigest = true;
+            const replay = yield* harness.runtime
+              .startTurn(
+                makeClaudeTestTurnInput({
+                  threadId: harness.threadId,
+                  providerThread: harness.providerThread,
+                  now: yield* DateTime.now,
+                  attemptId: RunAttemptId.make("attempt-workflow-replay-continuation"),
+                  providerTurnOrdinal: 2,
+                  text: "Continue.",
+                  attachments: [],
+                  messageCreatedBy: "agent",
+                  messageCreationSource: "provider",
+                }),
+              )
+              .pipe(Effect.forkScoped);
+            yield* Deferred.await(digestStarted);
+            if (arrival === "live resume") {
+              yield* harness.offerAndWait(
+                taskStart(
+                  "toolu-latest",
+                  "Latest live resume.",
+                  "00000000-0000-4000-8000-000000003008",
+                ),
+              );
+              while (true) {
+                const event = yield* Queue.take(harness.subagentReceipts);
+                if (
+                  event.subagent.nativeTaskRef?.nativeId === taskId &&
+                  event.subagent.prompt === "Latest live resume."
+                )
+                  break;
+              }
+            } else {
+              yield* harness.offerAndWait(
+                claudeSdkFrame({
+                  ...makeResultFrame({
+                    uuid: "00000000-0000-4000-8000-000000003010",
+                    result: "Native wake turn finished.",
+                  }),
+                  origin: { kind: "task-notification" },
+                  num_turns: 1,
+                }),
+              );
+              yield* Queue.take(harness.terminalReceipts);
+            }
+            yield* Deferred.succeed(releaseDigest, undefined);
+            yield* Fiber.join(replay);
+            if (arrival === "root result") {
+              yield* Queue.take(harness.continuationReceipts);
+              yield* harness.runtime.startTurn(
+                makeClaudeTestTurnInput({
+                  threadId: harness.threadId,
+                  providerThread: harness.providerThread,
+                  now: yield* DateTime.now,
+                  attemptId: RunAttemptId.make("attempt-workflow-replay-next-continuation"),
+                  providerTurnOrdinal: 3,
+                  text: "Continue.",
+                  attachments: [],
+                  messageCreatedBy: "agent",
+                  messageCreationSource: "provider",
+                }),
+              );
+            }
+            yield* harness.offerAndWait(
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000003009",
+                result: "Workflow answer delivered.",
+              }),
+            );
+            yield* Queue.take(harness.terminalReceipts);
+            const latest = harness.events
+              .flatMap((event) =>
+                event.type === "subagent.updated" &&
+                event.subagent.nativeTaskRef?.nativeId === taskId
+                  ? [event.subagent]
+                  : [],
+              )
+              .at(-1);
+            if (arrival === "live resume") {
+              assert.equal(latest?.status, "running");
+              assert.equal(latest?.prompt, "Latest live resume.");
+              assert.isNull(latest?.result);
+              assert.isTrue(yield* harness.hasPendingBackgroundWork);
+            } else {
+              assert.equal(latest?.status, "completed");
+              assert.equal(latest?.result, "Initial result.");
+              assert.isFalse(yield* harness.hasPendingBackgroundWork);
+            }
+          }).pipe(
+            Effect.provideService(Crypto.Crypto, {
+              ...crypto,
+              digest: (algorithm, data) =>
+                Effect.gen(function* () {
+                  if (pauseDigest) {
+                    pauseDigest = false;
+                    yield* Deferred.succeed(digestStarted, undefined);
+                    yield* Deferred.await(releaseDigest);
+                  }
+                  return yield* crypto.digest(algorithm, data);
+                }),
             }),
           );
-          yield* Queue.take(harness.terminalReceipts);
-          const latest = harness.events
-            .flatMap((event) =>
-              event.type === "subagent.updated" && event.subagent.nativeTaskRef?.nativeId === taskId
-                ? [event.subagent]
-                : [],
-            )
-            .at(-1);
-          assert.equal(latest?.status, "running");
-          assert.equal(latest?.prompt, "Latest live resume.");
-          assert.isNull(latest?.result);
-          assert.isTrue(yield* harness.hasPendingBackgroundWork);
         }).pipe(
-          Effect.provideService(Crypto.Crypto, {
-            ...crypto,
-            digest: (algorithm, data) =>
-              Effect.gen(function* () {
-                if (pauseDigest) {
-                  pauseDigest = false;
-                  yield* Deferred.succeed(digestStarted, undefined);
-                  yield* Deferred.await(releaseDigest);
-                }
-                return yield* crypto.digest(algorithm, data);
-              }),
-          }),
-        );
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
         ),
       ),
-    ),
   );
 
   it.effect.each([
