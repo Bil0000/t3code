@@ -10483,6 +10483,42 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "Review the change",
         );
 
+        yield* TestClock.adjust("10 seconds");
+        yield* harness.offerAndWait(
+          workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000001018",
+            state: "done",
+            secondState: "queued",
+            omitResult: true,
+          }),
+        );
+        let finished = yield* Queue.take(harness.subagentReceipts);
+        while (finished.subagent.id !== first?.id || finished.subagent.status !== "completed") {
+          finished = yield* Queue.take(harness.subagentReceipts);
+        }
+        const completedAt = finished.subagent.completedAt;
+        assert.deepEqual(completedAt, DateTime.add(now, { seconds: 70 }));
+        yield* TestClock.adjust("60 seconds");
+        yield* harness.offerAndWait(
+          workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000001019",
+            state: "done",
+            secondState: "queued",
+          }),
+        );
+        let excerpt = yield* Queue.take(harness.subagentReceipts);
+        while (excerpt.subagent.id !== first?.id || excerpt.subagent.result !== "A1 excerpt") {
+          excerpt = yield* Queue.take(harness.subagentReceipts);
+        }
+        assert.deepEqual(excerpt.subagent.completedAt, completedAt);
+        const finishedRoot = harness.events.findLast(
+          (event) => event.type === "node.updated" && event.node.threadId === firstThreadId,
+        );
+        assert.deepEqual(
+          finishedRoot?.type === "node.updated" ? finishedRoot.node.completedAt : undefined,
+          completedAt,
+        );
+
         yield* harness.offerAndWait(
           workflowNotification({ uuid: "00000000-0000-4000-8000-000000001008", status: "stopped" }),
         );
@@ -10784,85 +10820,144 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect("does not replay stale idle progress over a completed workflow", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const clock = yield* Clock.Clock;
-        const progressRead = yield* Deferred.make<void>();
-        const releaseProgress = yield* Deferred.make<void>();
-        let pauseNextRead = false;
-        yield* Effect.gen(function* () {
-          const harness = yield* makeWorkflowHarness;
-          yield* harness.runtime.startTurn(
-            makeClaudeTestTurnInput({
+  it.effect.each(["registry", "transcript"] as const)(
+    "does not replay stale idle progress over a completed workflow after awaiting %s",
+    (boundary) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const clock = yield* Clock.Clock;
+          const crypto = yield* Crypto.Crypto;
+          const progressRead = yield* Deferred.make<void>();
+          const releaseProgress = yield* Deferred.make<void>();
+          let pauseNextRead = false;
+          yield* Effect.gen(function* () {
+            const harness = yield* makeWorkflowHarness;
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-claude-idle-race-launch"),
+                text: "Run the workflow.",
+                attachments: [],
+              }),
+            );
+            yield* launchWorkflow({
+              harness,
+              snapshotUuid: "00000000-0000-4000-8000-000000001060",
+            });
+            yield* harness.offerAndWait(
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000001061",
+                result: "Launched.",
+              }),
+            );
+            yield* Queue.take(harness.terminalReceipts);
+            yield* harness.offerAndWait(
+              workflowNotification({
+                uuid: "00000000-0000-4000-8000-000000001062",
+                status: "completed",
+              }),
+            );
+            if (boundary === "registry") {
+              yield* harness.offerAndWait(
+                makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001063", result: "Done." }),
+              );
+            }
+            const continuationInput = makeClaudeTestTurnInput({
               threadId: harness.threadId,
               providerThread: harness.providerThread,
               now: yield* DateTime.now,
-              attemptId: RunAttemptId.make("attempt-claude-idle-race-launch"),
-              text: "Run the workflow.",
+              attemptId: RunAttemptId.make("attempt-claude-idle-race-continuation"),
+              text: "Continue.",
               attachments: [],
+              providerTurnOrdinal: 2,
+              messageCreatedBy: "agent",
+              messageCreationSource: "provider",
+            });
+            pauseNextRead = true;
+            const progress = yield* harness
+              .offerAndWait(
+                workflowSnapshot({
+                  uuid: "00000000-0000-4000-8000-000000001064",
+                  state: boundary === "transcript" ? "done" : "start",
+                  secondState: "start",
+                }),
+              )
+              .pipe(Effect.forkScoped);
+            yield* Deferred.await(progressRead);
+            yield* harness.runtime.startTurn(continuationInput);
+            if (boundary === "registry") {
+              yield* Queue.take(harness.terminalReceipts);
+            } else {
+              const lastMemberId = workflowMemberEvents(harness.events, 2)[0]?.subagent.id;
+              while (true) {
+                const event = yield* Queue.take(harness.subagentReceipts);
+                if (event.subagent.id === lastMemberId && event.subagent.status === "completed")
+                  break;
+              }
+            }
+            yield* Deferred.succeed(releaseProgress, undefined);
+            yield* Fiber.join(progress);
+            if (boundary === "transcript") {
+              yield* harness.offerAndWait(
+                makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001065", result: "Done." }),
+              );
+              yield* Queue.take(harness.terminalReceipts);
+            }
+            assert.isFalse(yield* harness.hasPendingBackgroundWork);
+            assert.equal(
+              workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
+              "completed",
+            );
+            const member = workflowMemberEvents(harness.events, 2).at(-1)?.subagent;
+            assert.equal(member?.status, "completed");
+            const root = harness.events.findLast(
+              (event) =>
+                event.type === "node.updated" && event.node.threadId === member?.childThreadId,
+            );
+            assert.equal(root?.type === "node.updated" ? root.node.status : null, "completed");
+            const item = harness.events.findLast(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "subagent" &&
+                event.turnItem.nativeItemRef?.nativeId === WORKFLOW_TASK_ID,
+            );
+            assert.equal(
+              item?.type === "turn_item.updated" ? item.turnItem.status : null,
+              "completed",
+            );
+          }).pipe(
+            Effect.provideService(Clock.Clock, {
+              ...clock,
+              currentTimeMillis: Effect.gen(function* () {
+                if (boundary === "registry" && pauseNextRead) {
+                  pauseNextRead = false;
+                  yield* Deferred.succeed(progressRead, undefined);
+                  yield* Deferred.await(releaseProgress);
+                }
+                return yield* clock.currentTimeMillis;
+              }),
             }),
-          );
-          yield* launchWorkflow({ harness, snapshotUuid: "00000000-0000-4000-8000-000000001060" });
-          yield* harness.offerAndWait(
-            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001061", result: "Launched." }),
-          );
-          yield* Queue.take(harness.terminalReceipts);
-          yield* harness.offerAndWait(
-            workflowNotification({
-              uuid: "00000000-0000-4000-8000-000000001062",
-              status: "completed",
+            Effect.provideService(Crypto.Crypto, {
+              ...crypto,
+              digest: (algorithm, data) =>
+                Effect.gen(function* () {
+                  if (boundary === "transcript" && pauseNextRead) {
+                    pauseNextRead = false;
+                    yield* Deferred.succeed(progressRead, undefined);
+                    yield* Deferred.await(releaseProgress);
+                  }
+                  return yield* crypto.digest(algorithm, data);
+                }),
             }),
-          );
-          yield* harness.offerAndWait(
-            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000001063", result: "Done." }),
-          );
-          const continuationInput = makeClaudeTestTurnInput({
-            threadId: harness.threadId,
-            providerThread: harness.providerThread,
-            now: yield* DateTime.now,
-            attemptId: RunAttemptId.make("attempt-claude-idle-race-continuation"),
-            text: "Continue.",
-            attachments: [],
-            providerTurnOrdinal: 2,
-            messageCreatedBy: "agent",
-            messageCreationSource: "provider",
-          });
-          pauseNextRead = true;
-          const progress = yield* harness
-            .offerAndWait(
-              workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001064", state: "start" }),
-            )
-            .pipe(Effect.forkScoped);
-          yield* Deferred.await(progressRead);
-          yield* harness.runtime.startTurn(continuationInput);
-          yield* Queue.take(harness.terminalReceipts);
-          yield* Deferred.succeed(releaseProgress, undefined);
-          yield* Fiber.join(progress);
-          assert.isFalse(yield* harness.hasPendingBackgroundWork);
-          assert.equal(
-            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status,
-            "completed",
           );
         }).pipe(
-          Effect.provideService(Clock.Clock, {
-            ...clock,
-            currentTimeMillis: Effect.gen(function* () {
-              if (pauseNextRead) {
-                pauseNextRead = false;
-                yield* Deferred.succeed(progressRead, undefined);
-                yield* Deferred.await(releaseProgress);
-              }
-              return yield* clock.currentTimeMillis;
-            }),
-          }),
-        );
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
         ),
       ),
-    ),
   );
 
   it.effect.each([

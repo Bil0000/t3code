@@ -3173,6 +3173,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               readonly model: string;
               readonly createdAt: DateTime.Utc;
               readonly startedAt: DateTime.Utc | null;
+              readonly completedAt: DateTime.Utc | null;
             }
           >(),
         );
@@ -4306,12 +4307,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly workflow: OrchestrationV2SubagentWorkflow;
         }) {
           const parentThread = input.coordinator.childThread;
-          if (parentThread === null) return;
+          const taskId = input.coordinator.task.nativeTaskRef?.nativeId;
+          if (parentThread === null || taskId === undefined || taskId === null) return;
           const now = yield* DateTime.now;
           const seen = yield* Ref.get(workflowMemberStates);
           const transcriptDir = input.workflow.runHandles?.transcriptDir;
 
           for (const member of input.workflow.agents) {
+            if ((yield* Ref.get(sessionSubagentsByTaskId)).get(taskId) !== input.coordinator)
+              return;
             const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
             const previous = seen.get(memberKey);
             const status =
@@ -4334,6 +4338,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ? DateTime.makeUnsafe(member.startedAt)
                   : ((restarted ? null : previous?.startedAt) ??
                     (status === "running" ? now : null));
+            const completedAt = settled
+              ? ((restarted ? null : previous?.completedAt) ?? now)
+              : null;
             const changed =
               restarted ||
               previous?.status !== status ||
@@ -4430,7 +4437,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               status,
               result: member.result ?? null,
               startedAt,
-              completedAt: settled ? now : null,
+              completedAt,
               updatedAt: now,
             } satisfies OrchestrationV2Subagent;
 
@@ -4444,7 +4451,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               runtimeRequestId: null,
               checkpointScopeId: null,
               startedAt,
-              completedAt: settled ? now : null,
+              completedAt,
             };
             if (changed) {
               for (const node of [
@@ -4499,6 +4506,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 transcriptAnswer === undefined
                   ? undefined
                   : yield* sha256Hex(crypto, transcriptAnswer);
+              // A continuation may settle or resume this workflow during the read.
+              if ((yield* Ref.get(sessionSubagentsByTaskId)).get(taskId) !== input.coordinator)
+                return;
               const previousDigest = transcriptAnswerDigest;
               if (answerDigest !== undefined) transcriptAnswerDigest = answerDigest;
               const answer =
@@ -4543,6 +4553,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     input.coordinator.task.status !== "running"),
                 createdAt,
                 startedAt,
+                completedAt,
               }),
             );
           }
@@ -4903,6 +4914,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               coordinator: subagent,
               workflow: workflowWithThreads,
             });
+            if ((yield* Ref.get(sessionSubagentsByTaskId)).get(input.taskId) !== subagent) return;
           }
           yield* emitProviderEvent({
             type: "turn_item.updated",
