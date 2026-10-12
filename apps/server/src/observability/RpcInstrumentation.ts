@@ -132,6 +132,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.issuesDetail]: "issues",
   [WS_METHODS.issuesActivity]: "issues",
   [WS_METHODS.issuesCommentsPage]: "issues",
+  [WS_METHODS.issuesEventsPage]: "issues",
+  [WS_METHODS.issuesLinkedPullRequestsPage]: "issues",
   [WS_METHODS.issuesRunAction]: "issues",
   [WS_METHODS.issuesComment]: "issues",
   [WS_METHODS.issuesUpdateComment]: "issues",

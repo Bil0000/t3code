@@ -430,7 +430,12 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
 
 it.effect("allows read-only issue refresh while blocking comments before their handler runs", () =>
   Effect.gen(function* () {
-    const tested = [WS_METHODS.issuesInvalidate, WS_METHODS.issuesComment] as const;
+    const tested = [
+      WS_METHODS.issuesInvalidate,
+      WS_METHODS.issuesEventsPage,
+      WS_METHODS.issuesLinkedPullRequestsPage,
+      WS_METHODS.issuesComment,
+    ] as const;
     const group = WsRpcGroup.omit(
       ...[...WsRpcGroup.requests.keys()].filter(
         (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
@@ -446,6 +451,18 @@ it.effect("allows read-only issue refresh while blocking comments before their h
               handled.push("refresh");
             }),
           ),
+          group.toLayerHandler(WS_METHODS.issuesEventsPage, () =>
+            Effect.sync(() => {
+              handled.push("events");
+              return { events: [], nextCursor: null, truncated: false };
+            }),
+          ),
+          group.toLayerHandler(WS_METHODS.issuesLinkedPullRequestsPage, () =>
+            Effect.sync(() => {
+              handled.push("links");
+              return { linkedPullRequests: [], nextCursor: null, truncated: false };
+            }),
+          ),
           group.toLayerHandler(WS_METHODS.issuesComment, () =>
             Effect.sync(() => {
               handled.push("comment");
@@ -456,6 +473,14 @@ it.effect("allows read-only issue refresh while blocking comments before their h
       ),
     );
     yield* client[WS_METHODS.issuesInvalidate]({});
+    const page = {
+      projectId: ProjectId.make("project"),
+      repository: "owner/repo",
+      number: 42,
+      cursor: "next",
+    };
+    yield* client[WS_METHODS.issuesEventsPage](page);
+    yield* client[WS_METHODS.issuesLinkedPullRequestsPage](page);
     expect(
       yield* client[WS_METHODS.issuesComment]({
         projectId: ProjectId.make("project"),
@@ -464,7 +489,7 @@ it.effect("allows read-only issue refresh while blocking comments before their h
         body: "comment",
       }).pipe(Effect.flip),
     ).toMatchObject({ requiredPermission: AuthSourceControlWriteScope });
-    expect(handled).toEqual(["refresh"]);
+    expect(handled).toEqual(["refresh", "events", "links"]);
   }).pipe(Effect.scoped),
 );
 

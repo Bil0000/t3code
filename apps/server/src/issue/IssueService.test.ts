@@ -370,6 +370,94 @@ it.effect("isolates custom issue cooldowns by host and saved credential", () =>
   }),
 );
 
+it.effect.each([
+  ["dev.azure.com", false],
+  ["dev.azure.com", true],
+  ["visualstudio.com", false],
+  ["visualstudio.com", true],
+] as const)("isolates Azure organization cooldowns on %s with issue URL %s", ([domain, withUrl]) =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(0);
+    const calls: string[] = [];
+    const host = (organization: string) =>
+      domain === "dev.azure.com" ? domain : `${organization}.${domain}`;
+    const url = (repository: string, number: number) => {
+      const [organization, project] = repository.split("/");
+      const path = domain === "dev.azure.com" ? `${organization}/${project}` : project;
+      return `https://${host(organization!)}/${path}/_workitems/edit/${number}`;
+    };
+    const limits = yield* SourceControlRateLimit.make;
+    const service = yield* makeService({
+      projects: ["first/web/repo", "first/api/repo", "second/web/repo"].map((repository, i) =>
+        project({
+          id: `p${i + 1}`,
+          title: repository,
+          workspaceRoot: `/p${i + 1}`,
+          repository,
+          provider: "azure-devops",
+          host: host(repository.split("/")[0]!),
+        }),
+      ),
+      rateLimits: limits,
+      providers: [
+        fakeProvider("azure-devops", {
+          getIssue: ({ repository, number }) => {
+            calls.push(`detail:${repository}`);
+            return repository.startsWith("first/")
+              ? Effect.fail(
+                  new IssueProviderError({
+                    provider: "azure-devops",
+                    operation: "getIssue",
+                    reason: "rate-limited",
+                    detail: "Quota exhausted.",
+                    retryAt: 60_000,
+                  }),
+                )
+              : Effect.succeed(issueDetail(number, { url: url(repository, number) }));
+          },
+          getViewer: ({ repository }) => {
+            calls.push(`viewer:${repository}`);
+            return Effect.succeed("bilal");
+          },
+          getIssueActivity: () => Effect.die("paused organization must not read activity"),
+        }),
+      ],
+    });
+    const ref = (projectId: string, repository: string, number = 7) => ({
+      projectId: projectId as ProjectId,
+      repository,
+      provider: "azure-devops",
+      host: host(repository.split("/")[0]!),
+      number,
+      ...(withUrl ? { url: url(repository, number) } : {}),
+    });
+    yield* service.detail(ref("p1", "first/web/repo")).pipe(Effect.flip);
+    const paused = yield* limits
+      .check({
+        provider: "azure-devops",
+        host: `https://${host("first")}${domain === "dev.azure.com" ? "/first" : ""}`,
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(paused.retryAt, 60_000);
+    assert.strictEqual((yield* service.detail(ref("p3", "second/web/repo"))).number, 7);
+    for (const read of [
+      service.detail(ref("p1", "first/web/repo", 8)).pipe(Effect.asVoid),
+      service.detail(ref("p2", "first/api/repo")).pipe(Effect.asVoid),
+      service.activity(ref("p1", "first/web/repo")).pipe(Effect.asVoid),
+      service.list({ projectId: "p2" as ProjectId, state: "open" }).pipe(Effect.asVoid),
+    ]) {
+      const error = yield* read.pipe(Effect.flip);
+      assert.strictEqual((error.cause as IssueProviderError).reason, "rate-limited");
+      assert.strictEqual((error.cause as IssueProviderError).retryAt, 60_000);
+    }
+    assert.deepEqual(calls, [
+      "detail:first/web/repo",
+      "detail:second/web/repo",
+      "viewer:second/web/repo",
+    ]);
+  }),
+);
+
 it.effect("shares cooldowns in both directions with the pull request service", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(0);
@@ -4074,5 +4162,283 @@ it.effect("reports a retired issue tracker without calling it a credential failu
     assert.deepStrictEqual((yield* service.list({ state: "open" })).errors, [
       { projectId: REFERENCE.projectId, projectTitle: "web", message: retired.detail },
     ]);
+  }),
+);
+
+it.effect.each(["eventsPage", "linkedPullRequestsPage"] as const)(
+  "continues %s with shared successful pages and fresh credentials",
+  (method) =>
+    Effect.gen(function* () {
+      let fingerprint = "account-a";
+      const events = [
+        {
+          id: "closed",
+          kind: "closed" as const,
+          actor: null,
+          createdAt: "2026-07-02T00:00:00Z",
+          detail: null,
+        },
+      ];
+      const linkedPullRequests = [
+        {
+          repository: "acme/web",
+          number: 42,
+          title: "Fix",
+          url: "https://github.com/acme/web/pull/42",
+          state: "open" as const,
+          isDraft: false,
+          closesIssue: true,
+        },
+      ];
+      const calls: unknown[] = [];
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let fail = false;
+      const adapterRead = (input: unknown) =>
+        Effect.gen(function* () {
+          calls.push(input);
+          assert.strictEqual(yield* SourceControlRateLimit.Interactive, true);
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(release);
+          if (fail) {
+            return yield* new IssueProviderError({
+              provider: "github",
+              operation: method,
+              reason: "failed",
+              detail: "Read failed.",
+            });
+          }
+        });
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("github", {
+            withCredential: (_host, read) => read(fingerprint),
+            getIssueEvents: (input) =>
+              adapterRead(input).pipe(Effect.as({ events, nextCursor: "next", truncated: false })),
+            getIssueLinkedPullRequests: (input) =>
+              adapterRead(input).pipe(
+                Effect.as({ linkedPullRequests, nextCursor: "next", truncated: true }),
+              ),
+          }),
+        ],
+      });
+      const read = (cursor = "first") => {
+        const input = { ...REFERENCE, repository: " ACME/Web ", cursor };
+        return method === "eventsPage"
+          ? service.eventsPage(input).pipe(
+              Effect.map((page) => {
+                assert.deepEqual(page, { events, nextCursor: "next", truncated: false });
+              }),
+            )
+          : service.linkedPullRequestsPage(input).pipe(
+              Effect.map((page) => {
+                assert.deepEqual(page, {
+                  linkedPullRequests,
+                  nextCursor: "next",
+                  truncated: true,
+                });
+              }),
+            );
+      };
+      const first = yield* read().pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      const second = yield* read().pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      assert.strictEqual(calls.length, 1);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      yield* read();
+      assert.deepEqual(calls, [
+        { cwd: "/a", host: "github.com", repository: "acme/web", number: 7, cursor: "first" },
+      ]);
+      yield* read("next");
+      assert.strictEqual(calls.length, 2);
+      fingerprint = "account-b";
+      yield* read();
+      assert.strictEqual(calls.length, 3);
+      yield* service.comment({ ...REFERENCE, body: "Update" });
+      yield* read();
+      assert.strictEqual(calls.length, 4);
+      yield* TestClock.adjust("16 seconds");
+      yield* read();
+      assert.strictEqual(calls.length, 5);
+      fail = true;
+      yield* read("failed").pipe(Effect.flip);
+      yield* read("failed").pipe(Effect.flip);
+      assert.strictEqual(calls.length, 7);
+      fail = false;
+      yield* read("failed");
+      assert.strictEqual(calls.length, 8);
+    }),
+);
+
+it.effect.each(["eventsPage", "linkedPullRequestsPage"] as const)(
+  "checks %s URL access before cached pages and allows unowned reads",
+  (method) =>
+    Effect.gen(function* () {
+      let url = "https://github.com/external/repo/issues/7";
+      let calls = 0;
+      let verifications = 0;
+      let credentialReads = 0;
+      let fingerprint = "account-a";
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("github", {
+            withCredential: (_host, read) => {
+              credentialReads++;
+              return read(fingerprint);
+            },
+            getIssueSummary: () => {
+              verifications++;
+              return Effect.succeed(issueDetail(7, { url }));
+            },
+            getIssueEvents: () => {
+              calls++;
+              return Effect.succeed({ events: [], nextCursor: null, truncated: false });
+            },
+            getIssueLinkedPullRequests: () => {
+              calls++;
+              return Effect.succeed({ linkedPullRequests: [], nextCursor: null, truncated: false });
+            },
+            comment: () => Effect.die("unowned writes must fail"),
+          }),
+        ],
+      });
+      const reference = { ...REFERENCE, repository: "external/repo", url, cursor: "first" };
+      const read =
+        method === "eventsPage"
+          ? service.eventsPage(reference).pipe(Effect.asVoid)
+          : service.linkedPullRequestsPage(reference).pipe(Effect.asVoid);
+      yield* read;
+      yield* read;
+      assert.strictEqual(calls, 1);
+      assert.strictEqual(verifications, 1);
+      assert.strictEqual(credentialReads, 2);
+      yield* service.comment({ ...reference, body: "Blocked" }).pipe(Effect.flip);
+      fingerprint = "account-b";
+      yield* read;
+      assert.strictEqual(verifications, 2);
+      assert.strictEqual(calls, 2);
+      url = "https://github.com/wrong/repo/issues/7";
+      fingerprint = "account-c";
+      assert.strictEqual((yield* read.pipe(Effect.flip))._tag, "IssueOperationError");
+      assert.strictEqual(calls, 2);
+    }),
+);
+
+it.effect.each(["eventsPage", "linkedPullRequestsPage"] as const)(
+  "blocks %s during cooldown before calling its adapter",
+  (method) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const limited = new IssueProviderError({
+        provider: "gitlab",
+        operation: method,
+        reason: "rate-limited",
+        detail: "Quota exhausted.",
+        retryAt: 60_000,
+      });
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "web",
+            workspaceRoot: "/a",
+            repository: "acme/web",
+            provider: "gitlab",
+            host: "gitlab.com",
+          }),
+        ],
+        providers: [
+          fakeProvider("gitlab", {
+            withCredential: (_host, read) => read("account"),
+            getIssueEvents: () => {
+              calls++;
+              return Effect.fail(limited);
+            },
+            getIssueLinkedPullRequests: () => {
+              calls++;
+              return Effect.fail(limited);
+            },
+          }),
+        ],
+      });
+      const read = (cursor: string) =>
+        method === "eventsPage"
+          ? service.eventsPage({ ...REFERENCE, cursor }).pipe(Effect.asVoid)
+          : service.linkedPullRequestsPage({ ...REFERENCE, cursor }).pipe(Effect.asVoid);
+      yield* read("first").pipe(Effect.flip);
+      const error = yield* read("next").pipe(Effect.flip);
+      assert.instanceOf(error.cause, IssueProviderError);
+      assert.strictEqual((error.cause as IssueProviderError).reason, "rate-limited");
+      assert.strictEqual(calls, 1);
+    }),
+);
+
+it.effect("fails unsupported paging before host work", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          withCredential: () => Effect.die("unsupported paging must not resolve credentials"),
+          getIssueSummary: () => Effect.die("unsupported paging must not verify on the host"),
+        }),
+      ],
+    });
+    const input = { ...REFERENCE, url: "https://github.com/acme/web/issues/7", cursor: "first" };
+    assert.strictEqual(
+      (yield* service.eventsPage(input).pipe(Effect.flip))._tag,
+      "IssueOperationError",
+    );
+    assert.strictEqual(
+      (yield* service.linkedPullRequestsPage(input).pipe(Effect.flip))._tag,
+      "IssueOperationError",
+    );
+  }),
+);
+
+it.effect("forwards initial paging cursors and skips caches without credential fingerprints", () =>
+  Effect.gen(function* () {
+    let events = 0;
+    let links = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () => Effect.succeed(issueDetail(7, { nextLinkedPullRequestsCursor: "links" })),
+          getIssueActivity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              events: [],
+              nextEventsCursor: "events",
+            }),
+          getIssueEvents: () => {
+            events++;
+            return Effect.succeed({ events: [], nextCursor: null, truncated: false });
+          },
+          getIssueLinkedPullRequests: () => {
+            links++;
+            return Effect.succeed({ linkedPullRequests: [], nextCursor: null, truncated: true });
+          },
+        }),
+      ],
+    });
+    assert.strictEqual((yield* service.detail(REFERENCE)).nextLinkedPullRequestsCursor, "links");
+    assert.strictEqual((yield* service.activity(REFERENCE)).nextEventsCursor, "events");
+    for (let i = 0; i < 2; i++) {
+      yield* service.eventsPage({ ...REFERENCE, cursor: "events" });
+      assert.deepEqual(yield* service.linkedPullRequestsPage({ ...REFERENCE, cursor: "links" }), {
+        linkedPullRequests: [],
+        nextCursor: null,
+        truncated: true,
+      });
+    }
+    assert.deepEqual([events, links], [2, 2]);
   }),
 );

@@ -29,6 +29,10 @@ import {
   type IssueCreateInput,
   type IssueCreateResult,
   type IssueDetail,
+  type IssueEventsPageInput,
+  type IssueEventsPageResult,
+  type IssueLinkedPullRequestsPageInput,
+  type IssueLinkedPullRequestsPageResult,
   type IssueInvalidateInput,
   type IssueLabelCandidateList,
   type IssueLabelsInput,
@@ -158,6 +162,12 @@ export class IssueService extends Context.Service<
     readonly commentsPage: (
       input: IssueCommentsPageInput,
     ) => Effect.Effect<IssueCommentsPageResult, IssueError>;
+    readonly eventsPage: (
+      input: IssueEventsPageInput,
+    ) => Effect.Effect<IssueEventsPageResult, IssueError>;
+    readonly linkedPullRequestsPage: (
+      input: IssueLinkedPullRequestsPageInput,
+    ) => Effect.Effect<IssueLinkedPullRequestsPageResult, IssueError>;
     readonly runAction: (input: IssueActionInput) => Effect.Effect<void, IssueError>;
     readonly comment: (input: IssueCommentInput) => Effect.Effect<void, IssueError>;
     readonly updateComment: (input: IssueCommentUpdateInput) => Effect.Effect<void, IssueError>;
@@ -394,13 +404,20 @@ const CredentialNamespace = Context.Reference<string>("t3/issue/CredentialNamesp
 });
 
 function withRateLimitBackoff(
-  api: IssueAdapter,
-  host: string,
+  source: IssueProviderRegistry.IssueProjectSource,
   limits: SourceControlRateLimit.SourceControlRateLimit["Service"],
-  credentialId?: string,
 ): IssueAdapter {
+  const { adapter: api, host, repository, credentialId } = source;
   if (api.kind === "github" || api.kind === "linear") return api;
-  const key = { provider: api.kind, host };
+  const key = {
+    provider: api.kind,
+    host:
+      api.kind === "azure-devops"
+        ? host.toLowerCase().endsWith(".visualstudio.com")
+          ? `https://${host}`
+          : `https://${host}/${encodeURIComponent(repository.split("/")[0]!)}`
+        : host,
+  };
   const wrap =
     <I, A>(operation: string, call: (input: I) => Effect.Effect<A, IssueProviderError>) =>
     (input: I) =>
@@ -450,6 +467,17 @@ function withRateLimitBackoff(
     ...(api.getIssueComments === undefined
       ? {}
       : { getIssueComments: wrap("getIssueComments", api.getIssueComments) }),
+    ...(api.getIssueEvents === undefined
+      ? {}
+      : { getIssueEvents: wrap("getIssueEvents", api.getIssueEvents) }),
+    ...(api.getIssueLinkedPullRequests === undefined
+      ? {}
+      : {
+          getIssueLinkedPullRequests: wrap(
+            "getIssueLinkedPullRequests",
+            api.getIssueLinkedPullRequests,
+          ),
+        }),
     getViewerPermissions: wrap("getViewerPermissions", api.getViewerPermissions),
     runAction: wrap("runAction", api.runAction),
     comment: wrap("comment", api.comment),
@@ -508,12 +536,7 @@ export const make = Effect.gen(function* () {
           ...resolved,
           supported: resolved.supported.map((project) => ({
             ...project,
-            adapter: withRateLimitBackoff(
-              project.adapter,
-              project.host,
-              rateLimits,
-              project.credentialId,
-            ),
+            adapter: withRateLimitBackoff(project, rateLimits),
           })),
         })),
       );
@@ -561,12 +584,7 @@ export const make = Effect.gen(function* () {
         });
         return {
           ...source,
-          adapter: withRateLimitBackoff(
-            source.adapter,
-            source.host,
-            rateLimits,
-            source.credentialId,
-          ),
+          adapter: withRateLimitBackoff(source, rateLimits),
         };
       }
       return yield* listWorkspaceProjects({ projectId: ref.projectId }).pipe(
@@ -1278,6 +1296,9 @@ export const make = Effect.gen(function* () {
               ...(issue.linkedPullRequestsTruncated === undefined
                 ? {}
                 : { linkedPullRequestsTruncated: issue.linkedPullRequestsTruncated }),
+              ...(issue.nextLinkedPullRequestsCursor === undefined
+                ? {}
+                : { nextLinkedPullRequestsCursor: issue.nextLinkedPullRequestsCursor }),
               ...(issue.ancestors === undefined ? {} : { ancestors: issue.ancestors }),
               ...(issue.subIssues === undefined ? {} : { subIssues: issue.subIssues }),
             })),
@@ -1310,6 +1331,9 @@ export const make = Effect.gen(function* () {
               ...(activity.eventsTruncated === undefined
                 ? {}
                 : { eventsTruncated: activity.eventsTruncated }),
+              ...(activity.nextEventsCursor === undefined
+                ? {}
+                : { nextEventsCursor: activity.nextEventsCursor }),
               ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
             })),
           ),
@@ -1337,6 +1361,56 @@ export const make = Effect.gen(function* () {
             cursor: input.cursor,
           })
           .pipe(Effect.mapError(toIssueError("commentsPage")));
+      }),
+    );
+
+  const eventsPageUncached: IssueService["Service"]["eventsPage"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<IssueEventsPageResult, IssueError> => {
+        if (project.adapter.getIssueEvents === undefined) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "eventsPage",
+              detail: "This host cannot continue issue history.",
+            }),
+          );
+        }
+        return project.adapter
+          .getIssueEvents({
+            ...providerContextOf(project),
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            host: project.host,
+            number: input.number,
+            cursor: input.cursor,
+          })
+          .pipe(Effect.mapError(toIssueError("eventsPage")));
+      }),
+    );
+
+  const linkedPullRequestsPageUncached: IssueService["Service"]["linkedPullRequestsPage"] = (
+    input,
+  ) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<IssueLinkedPullRequestsPageResult, IssueError> => {
+        if (project.adapter.getIssueLinkedPullRequests === undefined) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "linkedPullRequestsPage",
+              detail: "This host cannot continue linked pull requests.",
+            }),
+          );
+        }
+        return project.adapter
+          .getIssueLinkedPullRequests({
+            ...providerContextOf(project),
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            host: project.host,
+            number: input.number,
+            cursor: input.cursor,
+          })
+          .pipe(Effect.mapError(toIssueError("linkedPullRequestsPage")));
       }),
     );
 
@@ -2128,7 +2202,7 @@ export const make = Effect.gen(function* () {
       read: (input: I) => Effect.Effect<A, IssueError>,
       options: {
         readonly allowReserve?: boolean;
-        readonly verifyUrl?: boolean;
+        readonly verifyUrl?: boolean | "cached";
         readonly write?: boolean;
       } = {},
     ) =>
@@ -2154,19 +2228,22 @@ export const make = Effect.gen(function* () {
             "number" in input && typeof input.number === "number" ? input.number : undefined;
           const request =
             url !== undefined && number !== undefined && options.verifyUrl !== false
-              ? (project.adapter.getIssueSummary ?? project.adapter.getIssue)({
-                  ...providerContextOf(project),
-                  cwd: project.project.workspaceRoot,
-                  host: project.host,
-                  repository: project.repository,
-                  number,
-                }).pipe(
-                  Effect.mapError(toIssueError("resolveRepository")),
-                  Effect.tap((issue) =>
-                    verifyIssueUrl({ ...input, url, number }, issue, project.adapter.kind),
-                  ),
-                  Effect.andThen(read(routedInput)),
-                )
+              ? Effect.gen(function* () {
+                  const namespace = yield* CredentialNamespace;
+                  const issue = yield* options.verifyUrl === "cached" &&
+                  project.adapter.withCredential !== undefined &&
+                  namespace !== ""
+                    ? summary({ ...routedInput, repository: project.repository, url, number })
+                    : (project.adapter.getIssueSummary ?? project.adapter.getIssue)({
+                        ...providerContextOf(project),
+                        cwd: project.project.workspaceRoot,
+                        host: project.host,
+                        repository: project.repository,
+                        number,
+                      }).pipe(Effect.mapError(toIssueError("resolveRepository")));
+                  yield* verifyIssueUrl({ ...input, url, number }, issue, project.adapter.kind);
+                  return yield* read(routedInput);
+                })
               : read(routedInput);
           return project.adapter.withCredential === undefined
             ? request.pipe(
@@ -2195,6 +2272,87 @@ export const make = Effect.gen(function* () {
                 );
         }),
       );
+
+  const eventsPageCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, , input] = JSON.parse(key) as [string, number, IssueEventsPageInput];
+      return eventsPageUncached(input);
+    },
+    {
+      capacity: 64,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
+    },
+  );
+  const eventsPage: IssueService["Service"]["eventsPage"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project) => {
+        if (project.adapter.getIssueEvents === undefined) return eventsPageUncached(input);
+        return credentialScoped(
+          (input: IssueEventsPageInput) =>
+            Effect.gen(function* () {
+              const reference = {
+                projectId: project.project.id,
+                provider: project.adapter.kind,
+                host: project.host.toLowerCase(),
+                repository: project.repository,
+                number: input.number,
+                ...(input.url === undefined ? {} : { url: input.url }),
+                cursor: input.cursor,
+              };
+              const namespace = yield* CredentialNamespace;
+              if (project.adapter.withCredential === undefined || namespace === "") {
+                return yield* eventsPageUncached(reference);
+              }
+              return yield* Cache.get(
+                eventsPageCache,
+                encodeCacheKey([namespace, refEpoch(reference), reference]),
+              );
+            }),
+          { verifyUrl: "cached" },
+        )(input).pipe(Effect.provideService(ResolvedSource, project));
+      }),
+    );
+
+  const linkedPullRequestsPageCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, , input] = JSON.parse(key) as [string, number, IssueLinkedPullRequestsPageInput];
+      return linkedPullRequestsPageUncached(input);
+    },
+    {
+      capacity: 64,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
+    },
+  );
+  const linkedPullRequestsPage: IssueService["Service"]["linkedPullRequestsPage"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project) => {
+        if (project.adapter.getIssueLinkedPullRequests === undefined)
+          return linkedPullRequestsPageUncached(input);
+        return credentialScoped(
+          (input: IssueLinkedPullRequestsPageInput) =>
+            Effect.gen(function* () {
+              const reference = {
+                projectId: project.project.id,
+                provider: project.adapter.kind,
+                host: project.host.toLowerCase(),
+                repository: project.repository,
+                number: input.number,
+                ...(input.url === undefined ? {} : { url: input.url }),
+                cursor: input.cursor,
+              };
+              const namespace = yield* CredentialNamespace;
+              if (project.adapter.withCredential === undefined || namespace === "") {
+                return yield* linkedPullRequestsPageUncached(reference);
+              }
+              return yield* Cache.get(
+                linkedPullRequestsPageCache,
+                encodeCacheKey([namespace, refEpoch(reference), reference]),
+              );
+            }),
+          { verifyUrl: "cached" },
+        )(input).pipe(Effect.provideService(ResolvedSource, project));
+      }),
+    );
 
   const credentialList: IssueService["Service"]["list"] = (input) =>
     listWorkspaceProjects(input).pipe(
@@ -2281,6 +2439,8 @@ export const make = Effect.gen(function* () {
         Effect.tap(() => PubSub.publish(refreshes, input)),
       ),
     commentsPage: credentialScoped(commentsPage),
+    eventsPage,
+    linkedPullRequestsPage,
     comment: credentialScoped(invalidatedByMutation(comment), { write: true }),
     updateComment: credentialScoped(invalidatedByMutation(updateComment), { write: true }),
     setReaction: credentialScoped(invalidatedByMutation(setReaction), { write: true }),

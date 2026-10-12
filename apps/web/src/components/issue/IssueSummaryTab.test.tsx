@@ -140,6 +140,9 @@ const props: ComponentProps<typeof IssueSummaryTab> = {
   onOpenAiMatch: vi.fn(),
   onLoadMoreComments: vi.fn(),
   loadingMoreComments: false,
+  onLoadMorePullRequests: vi.fn(),
+  loadingMorePullRequests: false,
+  pullRequestsFailure: null,
   onRefresh: vi.fn(),
 };
 
@@ -417,4 +420,40 @@ it("says pull request links may be incomplete instead of claiming none exist", a
       .props.onClick(),
   );
   expect(openLinkInBrowser).toHaveBeenCalledExactlyOnceWith(detail.url);
+});
+
+it("offers more pull requests without claiming none exist while a cursor remains", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const summary = (cursor: string | null, failure: string | null = null) => (
+    <IssueSummaryTab
+      {...props}
+      editing={false}
+      pullRequestsFailure={failure}
+      detail={{
+        ...detail,
+        capabilities: { ...detail.capabilities, linkedPullRequests: true },
+        linkedPullRequestsTruncated: true,
+        nextLinkedPullRequestsCursor: cursor,
+      }}
+    />
+  );
+  const texts = (children: string) => renderer.root.findAllByProps({ children });
+  const more = () =>
+    renderer.root.findAllByProps({ type: "button", children: "Load more pull requests" });
+  await act(() => {
+    renderer = create(summary("next"));
+  });
+  expect([more().length, texts("No pull request mentions this issue.").length]).toEqual([1, 0]);
+  expect(texts("Pull request links may be incomplete.")).toHaveLength(0);
+  await act(() => more()[0]!.props.onClick());
+  expect(props.onLoadMorePullRequests).toHaveBeenCalledTimes(1);
+
+  await act(() => renderer.update(summary("next", "Rate limited")));
+  expect(more()).toHaveLength(1);
+  expect(renderer.root.findByProps({ role: "alert" }).props.children).toBe("Rate limited");
+
+  await act(() => renderer.update(summary(null)));
+  expect(more()).toHaveLength(0);
+  expect(texts("Pull request links may be incomplete.")).toHaveLength(1);
+  expect(texts("No pull request mentions this issue.")).toHaveLength(0);
 });

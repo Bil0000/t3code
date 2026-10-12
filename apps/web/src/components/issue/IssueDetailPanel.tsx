@@ -1,12 +1,17 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  squashAtomCommandFailure,
+  type AtomCommandResult,
+} from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   IssueAction,
   IssueCloseReason,
-  IssueComment,
+  IssueCommentsPageResult,
+  IssueEventsPageResult,
   IssueLinkedPullRequest,
+  IssueLinkedPullRequestsPageResult,
   IssueProviderKind,
   IssueRef,
   IssueState,
@@ -74,6 +79,8 @@ import {
   sameProjectIssueNumber,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
   mergeIssueComments,
+  mergeIssueEvents,
+  mergeIssueLinkedPullRequests,
   shouldRefreshIssueActivity,
   type IssueHandoff,
   type IssueHandoffSource,
@@ -127,6 +134,60 @@ const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "timeline", label: "Timeline" },
 ];
+
+function useIssuePages<
+  T,
+  V extends { readonly nextCursor: string | null; readonly truncated?: boolean },
+>(
+  key: string,
+  items: (value: V) => ReadonlyArray<T>,
+  merge: (current: ReadonlyArray<T>, page: ReadonlyArray<T>) => ReadonlyArray<T>,
+) {
+  const [loaded, setLoaded] = useState<{
+    readonly key: string;
+    readonly items: ReadonlyArray<T>;
+    readonly cursor: string | null;
+    readonly truncated: boolean;
+  } | null>(null);
+  const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ readonly key: string; readonly message: string } | null>(
+    null,
+  );
+  const inFlight = useRef<string | null>(null);
+  const latestStarted = useRef<string | null>(null);
+  const load = async (
+    read: () => Promise<AtomCommandResult<V, unknown>>,
+    hint: string,
+  ): Promise<string | null> => {
+    if (inFlight.current === key) return null;
+    inFlight.current = key;
+    latestStarted.current = key;
+    setPendingKey(key);
+    setFailure(null);
+    const result = await read();
+    if (inFlight.current === key) inFlight.current = null;
+    setPendingKey((pending) => (pending === key ? null : pending));
+    if (latestStarted.current !== key) return null;
+    if (result._tag === "Failure") {
+      const message = readableFailure(squashAtomCommandFailure(result), hint);
+      setFailure({ key, message });
+      return message;
+    }
+    setLoaded((previous) => ({
+      key,
+      items: merge(previous?.key === key ? previous.items : [], items(result.value)),
+      cursor: result.value.nextCursor,
+      truncated: result.value.truncated ?? false,
+    }));
+    return null;
+  };
+  return {
+    page: loaded?.key === key ? loaded : null,
+    pending: pendingKey === key,
+    failure: failure?.key === key ? failure.message : null,
+    load,
+  };
+}
 
 /**
  * Where a hand-off from this panel lands. Beside a thread it is that thread's own composer, so
@@ -251,13 +312,11 @@ export function IssueDetailPanel({
   const [actionPending, setActionPending] = useState(false);
   /** Which hand-off is under way, so only the item that was pressed says it is working. */
   const [handoff, setHandoff] = useState<string | null>(null);
-  const [loadedComments, setLoadedComments] = useState<{
-    readonly key: string;
-    readonly comments: ReadonlyArray<IssueComment>;
-    readonly nextCursor: string | null;
-  } | null>(null);
-  const [loadingMoreComments, setLoadingMoreComments] = useState(false);
   const readCommentsPage = useAtomCommand(issueEnvironment.commentsPage, { reportFailure: false });
+  const readEventsPage = useAtomCommand(issueEnvironment.eventsPage, { reportFailure: false });
+  const readLinkedPullRequestsPage = useAtomCommand(issueEnvironment.linkedPullRequestsPage, {
+    reportFailure: false,
+  });
 
   const detailQuery = useEnvironmentQuery(
     issueEnvironment.detail({ environmentId, input: reference }),
@@ -272,49 +331,76 @@ export function IssueDetailPanel({
   const canWrite =
     useAtomValue(issueEnvironment.update.permissionAtom(environmentId)) &&
     coreDetail?.projectBound !== false;
-  const commentsKey = `${issueKey}:${coreDetail?.updatedAt}`;
-  const loadedPage = loadedComments?.key === commentsKey ? loadedComments : null;
-  const detail = useMemo(
-    () =>
-      coreDetail === null
-        ? null
-        : {
-            ...coreDetail,
-            ...(canWrite
-              ? {}
-              : {
-                  capabilities: {
-                    ...coreDetail.capabilities,
-                    reactions: false,
-                    commentReactions: false,
-                    editComment: false,
-                  },
-                  viewerPermissions: {
-                    actions: [],
-                    comment: false,
-                    edit: false,
-                    labels: false,
-                    assignees: false,
-                    create: false,
-                  },
-                }),
-            author: activity?.author ?? coreDetail.author,
-            comments: mergeIssueComments(activity?.comments ?? [], loadedPage?.comments ?? []),
-            // The host's own count, which the core read already carries: the conversation being
-            // unread is not the same as there being nothing in it.
-            commentCount: activity?.commentCount ?? coreDetail.commentCount,
-            commentsTruncated:
-              loadedPage === null
-                ? (activity?.commentsTruncated ?? false)
-                : loadedPage.nextCursor !== null,
-            nextCommentsCursor:
-              loadedPage === null ? (activity?.nextCommentsCursor ?? null) : loadedPage.nextCursor,
-            events: activity?.events ?? [],
-            eventsTruncated: activity?.eventsTruncated ?? false,
-            ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
-          },
-    [activity, canWrite, coreDetail, loadedPage],
+  const revisionKey = `${environmentId}:${issueKey}:${coreDetail?.updatedAt}`;
+  const commentPages = useIssuePages(
+    revisionKey,
+    (value: IssueCommentsPageResult) => value.comments,
+    mergeIssueComments,
   );
+  const eventPages = useIssuePages(
+    revisionKey,
+    (value: IssueEventsPageResult) => value.events,
+    mergeIssueEvents,
+  );
+  const pullRequestPages = useIssuePages(
+    revisionKey,
+    (value: IssueLinkedPullRequestsPageResult) => value.linkedPullRequests,
+    mergeIssueLinkedPullRequests,
+  );
+  const loadedPage = commentPages.page;
+  const loadedEvents = eventPages.page;
+  const loadedPullRequests = pullRequestPages.page;
+  const detail = useMemo(() => {
+    if (coreDetail === null) return null;
+    return {
+      ...coreDetail,
+      ...(canWrite
+        ? {}
+        : {
+            capabilities: {
+              ...coreDetail.capabilities,
+              reactions: false,
+              commentReactions: false,
+              editComment: false,
+            },
+            viewerPermissions: {
+              actions: [],
+              comment: false,
+              edit: false,
+              labels: false,
+              assignees: false,
+              create: false,
+            },
+          }),
+      linkedPullRequests: mergeIssueLinkedPullRequests(
+        coreDetail.linkedPullRequests,
+        loadedPullRequests?.items ?? [],
+      ),
+      linkedPullRequestsTruncated:
+        loadedPullRequests === null
+          ? (coreDetail.linkedPullRequestsTruncated ?? false)
+          : loadedPullRequests.truncated,
+      nextLinkedPullRequestsCursor:
+        loadedPullRequests === null
+          ? (coreDetail.nextLinkedPullRequestsCursor ?? null)
+          : loadedPullRequests.cursor,
+      author: activity?.author ?? coreDetail.author,
+      comments: mergeIssueComments(activity?.comments ?? [], loadedPage?.items ?? []),
+      // The host's own count, which the core read already carries: the conversation being
+      // unread is not the same as there being nothing in it.
+      commentCount: activity?.commentCount ?? coreDetail.commentCount,
+      commentsTruncated:
+        loadedPage === null ? (activity?.commentsTruncated ?? false) : loadedPage.cursor !== null,
+      nextCommentsCursor:
+        loadedPage === null ? (activity?.nextCommentsCursor ?? null) : loadedPage.cursor,
+      events: mergeIssueEvents(activity?.events ?? [], loadedEvents?.items ?? []),
+      eventsTruncated:
+        loadedEvents === null ? (activity?.eventsTruncated ?? false) : loadedEvents.truncated,
+      nextEventsCursor:
+        loadedEvents === null ? (activity?.nextEventsCursor ?? null) : loadedEvents.cursor,
+      ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
+    };
+  }, [activity, canWrite, coreDetail, loadedEvents, loadedPage, loadedPullRequests]);
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
   const refreshDetail = useCallback(() => {
@@ -324,35 +410,33 @@ export function IssueDetailPanel({
   const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
     null,
   );
-  const loadMoreComments = useCallback(async () => {
+  const loadMoreComments = async () => {
     const cursor = detail?.nextCommentsCursor;
-    if (cursor == null || loadingMoreComments) return;
-    setLoadingMoreComments(true);
-    const result = await readCommentsPage({
-      environmentId,
-      input: { ...reference, cursor },
-    });
-    setLoadingMoreComments(false);
-    if (result._tag === "Failure") {
+    if (cursor == null) return;
+    const failure = await commentPages.load(
+      () => readCommentsPage({ environmentId, input: { ...reference, cursor } }),
+      "",
+    );
+    if (failure !== null) {
       toastManager.add({ type: "error", title: "Could not load more comments" });
-      return;
     }
-    setLoadedComments((previous) => {
-      const comments = previous?.key === commentsKey ? previous.comments : [];
-      return {
-        key: commentsKey,
-        comments: mergeIssueComments(comments, result.value.comments),
-        nextCursor: result.value.nextCursor,
-      };
-    });
-  }, [
-    detail?.nextCommentsCursor,
-    commentsKey,
-    environmentId,
-    loadingMoreComments,
-    readCommentsPage,
-    reference,
-  ]);
+  };
+  const loadMoreEvents = () => {
+    const cursor = detail?.nextEventsCursor;
+    if (cursor == null) return;
+    void eventPages.load(
+      () => readEventsPage({ environmentId, input: { ...reference, cursor } }),
+      "The host did not return more history. Try again, or open the issue on the host.",
+    );
+  };
+  const loadMorePullRequests = () => {
+    const cursor = detail?.nextLinkedPullRequestsCursor;
+    if (cursor == null) return;
+    void pullRequestPages.load(
+      () => readLinkedPullRequestsPage({ environmentId, input: { ...reference, cursor } }),
+      "The host did not return more pull requests. Try again, or open the issue on the host.",
+    );
+  };
 
   useEffect(() => {
     if (!coreDetail) return;
@@ -1061,7 +1145,10 @@ export function IssueDetailPanel({
                   reference={reference}
                   detail={detail}
                   onLoadMoreComments={() => void loadMoreComments()}
-                  loadingMoreComments={loadingMoreComments}
+                  loadingMoreComments={commentPages.pending}
+                  onLoadMorePullRequests={loadMorePullRequests}
+                  loadingMorePullRequests={pullRequestPages.pending}
+                  pullRequestsFailure={pullRequestPages.failure}
                   activityPending={activityPending}
                   activityError={activityError}
                   editing={editing === "description"}
@@ -1106,7 +1193,10 @@ export function IssueDetailPanel({
                     reference={reference}
                     detail={detail}
                     onLoadMoreComments={() => void loadMoreComments()}
-                    loadingMoreComments={loadingMoreComments}
+                    loadingMoreComments={commentPages.pending}
+                    onLoadMoreEvents={loadMoreEvents}
+                    loadingMoreEvents={eventPages.pending}
+                    eventsFailure={eventPages.failure}
                     order={timelineOrder}
                     onRefresh={refreshDetail}
                   />

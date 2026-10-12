@@ -4,6 +4,7 @@ import type {
   IssueDetailView,
   IssueEvent,
   IssueActor,
+  IssueLinkedPullRequest,
   IssueProviderKind,
   WorkItemMatch,
 } from "@t3tools/contracts";
@@ -26,6 +27,30 @@ export function mergeIssueComments(
   return [...page.filter((comment) => !currentIds.has(comment.id)), ...current].sort(
     (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
   );
+}
+
+export function mergeIssueEvents(
+  current: ReadonlyArray<IssueEvent>,
+  page: ReadonlyArray<IssueEvent>,
+): ReadonlyArray<IssueEvent> {
+  return [...new Map([...current, ...page].map((event) => [event.id, event])).values()].sort(
+    (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+  );
+}
+
+const linkedPullRequestKey = (link: IssueLinkedPullRequest) =>
+  `${link.repository.toLowerCase()}#${link.number}#${link.url
+    .toLowerCase()
+    .replace(/[?#].*$/u, "")
+    .replace(/\/+$/u, "")}`;
+
+export function mergeIssueLinkedPullRequests(
+  current: ReadonlyArray<IssueLinkedPullRequest>,
+  page: ReadonlyArray<IssueLinkedPullRequest>,
+): ReadonlyArray<IssueLinkedPullRequest> {
+  return [
+    ...new Map([...current, ...page].map((link) => [linkedPullRequestKey(link), link])).values(),
+  ];
 }
 
 export function nextIssueCommentCount(shown: number, pageSize: number): number {

@@ -1,4 +1,9 @@
-import type { EnvironmentId, IssueActivity, IssueDetail } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  IssueActivity,
+  IssueDetail,
+  IssueDetailView,
+} from "@t3tools/contracts";
 import type { DraftId } from "~/composerDraftStore";
 import { Cause } from "effect";
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
@@ -13,12 +18,16 @@ const commands = vi.hoisted(() => ({
   action: vi.fn(),
   refresh: vi.fn(),
   commentsPage: vi.fn(),
+  eventsPage: vi.fn(),
+  pullRequestsPage: vi.fn(),
   newThread: vi.fn(),
 }));
 const permission = vi.hoisted(() => ({ allowed: true }));
+const effects = vi.hoisted(() => ({ run: false }));
 afterEach(() => {
   vi.clearAllMocks();
   permission.allowed = true;
+  effects.run = false;
   currentDetail = detail;
   currentActivity = activity;
 });
@@ -29,7 +38,9 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
-    useEffect: () => undefined,
+    useEffect: (effect: () => void) => {
+      if (effects.run) effect();
+    },
     useLayoutEffect: () => undefined,
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
@@ -51,6 +62,8 @@ vi.mock("~/state/issues", () => ({
     detail: () => "detail",
     activity: () => "activity",
     commentsPage: "commentsPage",
+    eventsPage: "eventsPage",
+    linkedPullRequestsPage: "linkedPullRequestsPage",
     invalidate: "invalidate",
     runAction: "runAction",
     comment: "comment",
@@ -69,11 +82,15 @@ vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
     command === "commentsPage"
       ? commands.commentsPage
-      : command === "comment"
-        ? commands.comment
-        : command === "runAction"
-          ? commands.action
-          : async () => ({ _tag: "Success", value: undefined }),
+      : command === "eventsPage"
+        ? commands.eventsPage
+        : command === "linkedPullRequestsPage"
+          ? commands.pullRequestsPage
+          : command === "comment"
+            ? commands.comment
+            : command === "runAction"
+              ? commands.action
+              : async () => ({ _tag: "Success", value: undefined }),
 }));
 vi.mock("../sourceControl/ActivityUnavailableState", () => ({
   ActivityUnavailableState: () => null,
@@ -174,6 +191,7 @@ import { IssuesPanel } from "./IssuesPanel";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { CommentComposer } from "../sourceControl/CommentComposer";
 import { IssueSummaryTab } from "./IssueSummaryTab";
+import { IssueTimelineTab } from "./IssueTimelineTab";
 import { AlertDialog } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Menu, MenuItem } from "../ui/menu";
@@ -573,4 +591,160 @@ it("replaces a pull request hand-off's prompt and chip when the issue is explain
   expect(draft?.prompt).toContain("Keep my draft");
   expect(draft?.prompt).toContain("Explain this issue.");
   expect(draft?.prompt).not.toContain("Explain this pull request.");
+});
+
+const pullRequest = {
+  repository: "acme/project",
+  number: 7,
+  title: "A change",
+  url: "https://github.com/acme/project/pull/7",
+  state: "open" as const,
+  isDraft: false,
+  closesIssue: false,
+};
+const deferred = () => {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise<unknown>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+const summaryOf = () =>
+  visitElements(renderPanel(), (element) => element.type === IssueSummaryTab)!;
+
+it("reads one history page per press, even before the button re-renders, and merges by id", async () => {
+  hooks.reset();
+  effects.run = true;
+  const event = (id: string, detailText: string | null) => ({
+    id,
+    kind: "labeled" as const,
+    actor: null,
+    createdAt: `2026-08-17T0${id.length}:00:00Z`,
+    detail: detailText,
+  });
+  currentActivity = {
+    ...activity,
+    events: [event("e", null)],
+    eventsTruncated: true,
+    nextEventsCursor: "page-2",
+  };
+  const page = deferred();
+  commands.eventsPage.mockReturnValueOnce(page.promise);
+  const strip = visitElements(renderPanel(), (element) => element.type === DetailTabStrip)!;
+  (strip.props.onSelect as (tab: string) => void)("timeline");
+  renderPanel();
+  const timelineOf = () =>
+    visitElements(renderPanel(), (element) => element.type === IssueTimelineTab)!;
+  const loadMore = timelineOf().props.onLoadMoreEvents as () => void;
+  loadMore();
+  loadMore();
+  expect(commands.eventsPage).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "environment-1",
+    input: expect.objectContaining({ number: 42, cursor: "page-2" }),
+  });
+  expect(timelineOf().props.loadingMoreEvents).toBe(true);
+  page.resolve({
+    _tag: "Success",
+    value: { events: [event("e", "bug"), event("ee", null)], nextCursor: null, truncated: true },
+  });
+  await page.promise;
+  const shown = timelineOf().props as {
+    detail: IssueDetailView;
+    loadingMoreEvents: boolean;
+  };
+  expect(shown.loadingMoreEvents).toBe(false);
+  expect(shown.detail.events.map((value) => [value.id, value.detail])).toEqual([
+    ["e", "bug"],
+    ["ee", null],
+  ]);
+  expect(shown.detail.nextEventsCursor).toBeNull();
+  expect(shown.detail.eventsTruncated).toBe(true);
+});
+
+it("drops a pull request page that lands after the issue changed without clearing the new read", async () => {
+  hooks.reset();
+  const stale = deferred();
+  const fresh = deferred();
+  commands.pullRequestsPage.mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
+  currentDetail = {
+    ...detail,
+    linkedPullRequests: [pullRequest],
+    linkedPullRequestsTruncated: true,
+    nextLinkedPullRequestsCursor: "old-page",
+  };
+  (summaryOf().props.onLoadMorePullRequests as () => void)();
+  currentDetail = {
+    ...currentDetail,
+    updatedAt: "2026-08-18T00:00:00Z",
+    nextLinkedPullRequestsCursor: "fresh-page",
+  };
+  expect(summaryOf().props.loadingMorePullRequests).toBe(false);
+  (summaryOf().props.onLoadMorePullRequests as () => void)();
+  expect(commands.pullRequestsPage).toHaveBeenLastCalledWith(
+    expect.objectContaining({ input: expect.objectContaining({ cursor: "fresh-page" }) }),
+  );
+
+  stale.resolve({
+    _tag: "Success",
+    value: {
+      linkedPullRequests: [{ ...pullRequest, number: 8, url: `${pullRequest.url}8` }],
+      nextCursor: "stale-next",
+      truncated: false,
+    },
+  });
+  await stale.promise;
+  let shown = summaryOf().props as { detail: IssueDetailView; loadingMorePullRequests: boolean };
+  expect(shown.loadingMorePullRequests).toBe(true);
+  expect(shown.detail.linkedPullRequests).toEqual([pullRequest]);
+  expect(shown.detail.nextLinkedPullRequestsCursor).toBe("fresh-page");
+
+  fresh.resolve({
+    _tag: "Success",
+    value: {
+      linkedPullRequests: [{ ...pullRequest, url: `${pullRequest.url}/`, state: "merged" }],
+      nextCursor: null,
+      truncated: false,
+    },
+  });
+  await fresh.promise;
+  shown = summaryOf().props as typeof shown;
+  expect(shown.loadingMorePullRequests).toBe(false);
+  expect(shown.detail.linkedPullRequests.map((link) => link.state)).toEqual(["merged"]);
+  expect(shown.detail.nextLinkedPullRequestsCursor).toBeNull();
+  expect(shown.detail.linkedPullRequestsTruncated).toBe(false);
+});
+
+it("keeps rows and cursor after a failed page on a read-only issue so a press retries", async () => {
+  hooks.reset();
+  permission.allowed = false;
+  currentDetail = {
+    ...detail,
+    projectBound: false,
+    linkedPullRequests: [pullRequest],
+    nextLinkedPullRequestsCursor: "next",
+  };
+  commands.pullRequestsPage.mockResolvedValueOnce({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("API rate limit exceeded")),
+  });
+  (summaryOf().props.onLoadMorePullRequests as () => void)();
+  await Promise.resolve();
+  await Promise.resolve();
+  const shown = summaryOf().props as {
+    detail: IssueDetailView;
+    loadingMorePullRequests: boolean;
+    pullRequestsFailure: string | null;
+  };
+  expect(shown.pullRequestsFailure).toBe("API rate limit exceeded");
+  expect(shown.loadingMorePullRequests).toBe(false);
+  expect(shown.detail.linkedPullRequests).toEqual([pullRequest]);
+  expect(shown.detail.nextLinkedPullRequestsCursor).toBe("next");
+  expect(shown.detail.linkedPullRequestsTruncated).toBe(false);
+  expect(commands.pullRequestsPage).toHaveBeenCalledTimes(1);
+  commands.pullRequestsPage.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { linkedPullRequests: [], nextCursor: null, truncated: false },
+  });
+  (summaryOf().props.onLoadMorePullRequests as () => void)();
+  expect(commands.pullRequestsPage).toHaveBeenCalledTimes(2);
 });

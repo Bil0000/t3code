@@ -43,6 +43,18 @@ export function createIssueEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    eventsPage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:events-page",
+      tag: WS_METHODS.issuesEventsPage,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    linkedPullRequestsPage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:linked-pull-requests-page",
+      tag: WS_METHODS.issuesLinkedPullRequestsPage,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     /**
      * Its own query rather than part of the detail: the labels a repository has are only wanted
      * once somebody opens the label picker, so this atom is read then and not before. Kept fresh

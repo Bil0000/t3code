@@ -384,6 +384,8 @@ export const IssueRef = Schema.Struct({
 });
 export type IssueRef = typeof IssueRef.Type;
 
+const IssuePageCursor = TrimmedNonEmptyString.check(Schema.isMaxLength(16_384));
+
 /**
  * Forget what the server has cached, so the next read asks the host. With a reference it forgets
  * that one issue; without one it forgets the listings. A separate request rather than a flag on
@@ -428,6 +430,7 @@ export const IssueDetail = Schema.Struct({
   commentCount: NonNegativeInt,
   linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
   linkedPullRequestsTruncated: Schema.optional(Schema.Boolean),
+  nextLinkedPullRequestsCursor: Schema.optional(Schema.NullOr(IssuePageCursor)),
   /** Absent when the tracker has no issue hierarchy. */
   /** Root first, ending with the direct parent. */
   ancestors: Schema.optional(Schema.Array(IssueRelative)),
@@ -453,6 +456,7 @@ export const IssueActivity = Schema.Struct({
   nextCommentsCursor: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   events: Schema.Array(IssueEvent),
   eventsTruncated: Schema.optional(Schema.Boolean),
+  nextEventsCursor: Schema.optional(Schema.NullOr(IssuePageCursor)),
   /** Reactions on the issue description itself. */
   reactions: Schema.optional(Schema.Array(IssueReaction)),
 });
@@ -469,6 +473,32 @@ export const IssueCommentsPageResult = Schema.Struct({
   nextCursor: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type IssueCommentsPageResult = typeof IssueCommentsPageResult.Type;
+
+export const IssueEventsPageInput = Schema.Struct({
+  ...IssueRef.fields,
+  cursor: IssuePageCursor,
+});
+export type IssueEventsPageInput = typeof IssueEventsPageInput.Type;
+
+export const IssueEventsPageResult = Schema.Struct({
+  events: Schema.Array(IssueEvent),
+  nextCursor: Schema.NullOr(IssuePageCursor),
+  truncated: Schema.Boolean,
+});
+export type IssueEventsPageResult = typeof IssueEventsPageResult.Type;
+
+export const IssueLinkedPullRequestsPageInput = Schema.Struct({
+  ...IssueRef.fields,
+  cursor: IssuePageCursor,
+});
+export type IssueLinkedPullRequestsPageInput = typeof IssueLinkedPullRequestsPageInput.Type;
+
+export const IssueLinkedPullRequestsPageResult = Schema.Struct({
+  linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
+  nextCursor: Schema.NullOr(IssuePageCursor),
+  truncated: Schema.Boolean,
+});
+export type IssueLinkedPullRequestsPageResult = typeof IssueLinkedPullRequestsPageResult.Type;
 
 /** The complete detail shape after the independently loaded activity has been applied. */
 export const IssueDetailView = Schema.Struct({

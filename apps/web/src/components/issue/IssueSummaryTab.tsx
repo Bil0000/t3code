@@ -249,6 +249,9 @@ export function IssueSummaryTab({
   onOpenAiMatch,
   onLoadMoreComments,
   loadingMoreComments,
+  onLoadMorePullRequests,
+  loadingMorePullRequests,
+  pullRequestsFailure,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
@@ -279,6 +282,9 @@ export function IssueSummaryTab({
   onRefresh: () => void;
   onLoadMoreComments: () => void;
   loadingMoreComments: boolean;
+  onLoadMorePullRequests: () => void;
+  loadingMorePullRequests: boolean;
+  pullRequestsFailure: string | null;
 }) {
   const navigate = useNavigate();
   const projectRefs = useMemo(
@@ -532,7 +538,7 @@ export function IssueSummaryTab({
           />
         }
       >
-        {detail.linkedPullRequestsTruncated ? (
+        {detail.linkedPullRequestsTruncated && detail.nextLinkedPullRequestsCursor == null ? (
           <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>Pull request links may be incomplete.</span>
             <Button size="xs" variant="ghost-muted" onClick={() => openLinkInBrowser(detail.url)}>
@@ -543,7 +549,8 @@ export function IssueSummaryTab({
         ) : null}
         {detail.capabilities.linkedPullRequests ? (
           detail.linkedPullRequests.length === 0 ? (
-            detail.linkedPullRequestsTruncated ? null : (
+            detail.linkedPullRequestsTruncated ||
+            detail.nextLinkedPullRequestsCursor != null ? null : (
               <p className="text-xs text-muted-foreground">No pull request mentions this issue.</p>
             )
           ) : (
@@ -586,6 +593,23 @@ export function IssueSummaryTab({
             This tracker does not report pull request links.
           </p>
         )}
+        {detail.nextLinkedPullRequestsCursor != null ? (
+          <div className="mt-1 space-y-1">
+            <Button
+              size="xs"
+              variant="ghost-muted"
+              disabled={loadingMorePullRequests}
+              onClick={onLoadMorePullRequests}
+            >
+              {loadingMorePullRequests ? "Loading..." : "Load more pull requests"}
+            </Button>
+            {pullRequestsFailure === null ? null : (
+              <p role="alert" className="text-xs text-destructive">
+                {pullRequestsFailure}
+              </p>
+            )}
+          </div>
+        ) : null}
         {aiMatches.related === undefined ? null : (
           <div className="mt-2">
             <WorkItemMatchRows

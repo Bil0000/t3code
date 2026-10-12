@@ -163,6 +163,10 @@ import {
   IssueCommentInput,
   IssueCommentsPageInput,
   IssueCommentsPageResult,
+  IssueEventsPageInput,
+  IssueEventsPageResult,
+  IssueLinkedPullRequestsPageInput,
+  IssueLinkedPullRequestsPageResult,
   IssueCommentUpdateInput,
   IssueCreateInput,
   IssueCreateResult,
@@ -610,6 +614,8 @@ export const WS_METHODS = {
   issuesDetail: "issues.detail",
   issuesActivity: "issues.activity",
   issuesCommentsPage: "issues.commentsPage",
+  issuesEventsPage: "issues.eventsPage",
+  issuesLinkedPullRequestsPage: "issues.linkedPullRequestsPage",
   issuesRunAction: "issues.runAction",
   issuesComment: "issues.comment",
   issuesUpdateComment: "issues.updateComment",
@@ -1246,6 +1252,18 @@ const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
 const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
   payload: IssueCommentsPageInput,
   success: IssueCommentsPageResult,
+  error: IssueRpcError,
+});
+
+const WsIssuesEventsPageRpc = Rpc.make(WS_METHODS.issuesEventsPage, {
+  payload: IssueEventsPageInput,
+  success: IssueEventsPageResult,
+  error: IssueRpcError,
+});
+
+const WsIssuesLinkedPullRequestsPageRpc = Rpc.make(WS_METHODS.issuesLinkedPullRequestsPage, {
+  payload: IssueLinkedPullRequestsPageInput,
+  success: IssueLinkedPullRequestsPageResult,
   error: IssueRpcError,
 });
 
@@ -2208,6 +2226,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesActivityRpc,
   WsIssuesRunActionRpc,
   WsIssuesCommentsPageRpc,
+  WsIssuesEventsPageRpc,
+  WsIssuesLinkedPullRequestsPageRpc,
   WsIssuesCommentRpc,
   WsIssuesUpdateCommentRpc,
   WsIssuesSetReactionRpc,

@@ -62,15 +62,23 @@ const dependencies = [
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue body and a bounded page of comments as Markdown. Linked issues use their saved project and host; references without a URL use this thread's project. Pass repository, number, and provider when needed. Pass a full issue URL to read another repository with existing server credentials, or choose between linked issues on different hosts. If nextCommentsCursor is present, pass it as commentsCursor to read the next page without reloading the issue body. commentsTruncated=true with a null cursor means this host cannot return the rest through T3.",
+    "Read an issue body and bounded pages of comments, history, and linked pull requests as Markdown. Linked issues use their saved project and host; references without a URL use this thread's project. Pass repository, number, and provider when needed. Pass a full issue URL to read another repository with existing server credentials, or choose between linked issues on different hosts. Pass nextCommentsCursor as commentsCursor, nextEventsCursor as eventsCursor, or nextLinkedPullRequestsCursor as linkedPullRequestsCursor to read that next page. Pass at most one cursor per call. Continuations return only the requested section. A section's truncated=true with a null cursor means this host cannot return the rest through T3.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     commentsCursor: Schema.optional(TrimmedNonEmptyString),
+    eventsCursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(16_384))),
+    linkedPullRequestsCursor: Schema.optional(
+      TrimmedNonEmptyString.check(Schema.isMaxLength(16_384)),
+    ),
   }),
   success: Schema.Struct({
     markdown: Schema.String,
     commentsTruncated: Schema.Boolean,
     nextCommentsCursor: Schema.NullOr(TrimmedNonEmptyString),
+    eventsTruncated: Schema.optional(Schema.Boolean),
+    nextEventsCursor: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    linkedPullRequestsTruncated: Schema.optional(Schema.Boolean),
+    nextLinkedPullRequestsCursor: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   failure: IssueToolError,
   dependencies,

@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   allowed: true,
   listeners: new Set<() => void>(),
   updateComment: vi.fn(),
+  loadMoreEvents: vi.fn(),
 }));
 
 vi.mock("~/state/session", async () => {
@@ -102,7 +103,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function timeline(detail: IssueDetailView) {
+function timeline(detail: IssueDetailView, eventsFailure: string | null = null) {
   return (
     <IssueTimelineTab
       environmentId={environmentId}
@@ -112,6 +113,9 @@ function timeline(detail: IssueDetailView) {
       onRefresh={() => undefined}
       onLoadMoreComments={() => undefined}
       loadingMoreComments={false}
+      onLoadMoreEvents={state.loadMoreEvents}
+      loadingMoreEvents={false}
+      eventsFailure={eventsFailure}
     />
   );
 }
@@ -165,4 +169,28 @@ it("points to the host only when the history read was cut short", async () => {
       .props.onClick(),
   );
   expect(openLinkInBrowser).toHaveBeenCalledExactlyOnceWith(writable.url);
+});
+
+it("offers more history while a cursor remains and keeps the host fallback once it runs out", async () => {
+  const more = () => renderer!.root.findAllByProps({ children: "Load more history" });
+  const note = () => renderer!.root.findAllByProps({ children: "History may be incomplete." });
+  await act(() => {
+    renderer = create(timeline({ ...writable, eventsTruncated: true, nextEventsCursor: "next" }));
+  });
+  expect([more().length, note().length]).toEqual([1, 0]);
+  await act(() => more()[0]!.props.onClick());
+  expect(state.loadMoreEvents).toHaveBeenCalledTimes(1);
+
+  await act(() =>
+    renderer!.update(
+      timeline({ ...writable, eventsTruncated: true, nextEventsCursor: "next" }, "Rate limited"),
+    ),
+  );
+  expect(renderer!.root.findByProps({ role: "alert" }).props.children).toBe("Rate limited");
+  expect(more()).toHaveLength(1);
+
+  await act(() =>
+    renderer!.update(timeline({ ...writable, eventsTruncated: true, nextEventsCursor: null })),
+  );
+  expect([more().length, note().length]).toEqual([0, 1]);
 });

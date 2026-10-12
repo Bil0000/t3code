@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Tool from "effect/ai/Tool";
+import * as Schema from "effect/Schema";
 
 import {
   resolveT3McpToolDefinition,
@@ -20,11 +21,17 @@ it("publishes a provider-compatible read-only issue tool with T3 labels", () => 
       provider: { anyOf: [{ type: "string" }, { type: "null" }] },
       url: { anyOf: [{ type: "string" }, { type: "null" }] },
       commentsCursor: { anyOf: [{ type: "string" }, { type: "null" }] },
+      eventsCursor: { anyOf: [{ type: "string" }, { type: "null" }] },
+      linkedPullRequestsCursor: {
+        anyOf: [{ type: "string" }, { type: "null" }],
+      },
     },
   });
   expect(JSON.stringify(schema)).not.toContain('"$ref"');
   expect(Context.get(tool.annotations, Tool.Readonly)).toBe(true);
   expect(Context.get(tool.annotations, Tool.Destructive)).toBe(false);
+  expect(Context.get(tool.annotations, Tool.Idempotent)).toBe(true);
+  expect(Context.get(tool.annotations, Tool.OpenWorld)).toBe(false);
   expect(resolveT3McpToolDefinition("read_issue")?.summaryAction).toBe("read-issue");
   for (const name of ["read_issue", "mcp__t3-code__read_issue", "T3-code.read_issue"]) {
     expect(resolveT3McpToolPresentation(name)).toEqual({
@@ -33,3 +40,17 @@ it("publishes a provider-compatible read-only issue tool with T3 labels", () => 
     });
   }
 });
+
+it.each(["eventsCursor", "linkedPullRequestsCursor"])(
+  "bounds %s and rejects blank values",
+  (cursor) => {
+    const decode = Schema.decodeUnknownSync(IssuesToolkit.tools.read_issue.parametersSchema);
+    const input = { repository: "t3tools/t3code", number: 7 };
+    expect(decode({ ...input, [cursor]: "a".repeat(16_384) })).toMatchObject({
+      [cursor]: "a".repeat(16_384),
+    });
+    for (const value of [" ", "a".repeat(16_385)]) {
+      expect(() => decode({ ...input, [cursor]: value })).toThrow();
+    }
+  },
+);

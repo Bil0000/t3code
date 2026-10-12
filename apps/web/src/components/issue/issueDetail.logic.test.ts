@@ -14,6 +14,7 @@ import {
   groupIssueTimelineConversations,
   issueCommentEditId,
   mergeIssueComments,
+  mergeIssueLinkedPullRequests,
   nextIssueCommentCount,
   shouldRefreshIssueActivity,
   type IssueHandoffSource,
@@ -487,4 +488,34 @@ describe("sameProjectIssueNumber", () => {
       sameProjectIssueNumber(github, "acme/web", "https://github.com/acme/web/pull/12"),
     ).toBeNull();
   });
+});
+
+it("keeps one row per change request and lets the later read correct it", () => {
+  const link = {
+    repository: "acme/project",
+    number: 7,
+    title: "A change",
+    url: "https://github.com/acme/project/pull/7",
+    state: "open" as const,
+    isDraft: false,
+    closesIssue: false,
+  };
+  const elsewhere = { ...link, url: "https://gitlab.com/acme/project/-/merge_requests/7" };
+  expect(
+    mergeIssueLinkedPullRequests(
+      [link, elsewhere],
+      [
+        {
+          ...link,
+          repository: "ACME/Project",
+          url: `${link.url}/?tab=files`,
+          state: "merged",
+          closesIssue: true,
+        },
+      ],
+    ).map((value) => [value.url.startsWith("https://github.com"), value.state, value.closesIssue]),
+  ).toEqual([
+    [true, "merged", true],
+    [false, "open", false],
+  ]);
 });

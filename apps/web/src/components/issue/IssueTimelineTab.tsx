@@ -54,6 +54,9 @@ export function IssueTimelineTab({
   onRefresh,
   onLoadMoreComments,
   loadingMoreComments,
+  onLoadMoreEvents,
+  loadingMoreEvents,
+  eventsFailure,
 }: {
   environmentId: EnvironmentId;
   reference: IssueRef;
@@ -63,6 +66,9 @@ export function IssueTimelineTab({
   onRefresh: () => void;
   onLoadMoreComments: () => void;
   loadingMoreComments: boolean;
+  onLoadMoreEvents: () => void;
+  loadingMoreEvents: boolean;
+  eventsFailure: string | null;
 }) {
   const entries = buildIssueTimeline(detail);
   const rows = groupIssueTimelineConversations(order === "oldest" ? entries : entries.toReversed());
@@ -96,7 +102,24 @@ export function IssueTimelineTab({
   return (
     <div className="h-full overflow-y-auto scrollbar-gutter-both px-4 py-5">
       <div className="mx-auto max-w-3xl">
-        {detail.eventsTruncated ? (
+        {detail.nextEventsCursor != null ? (
+          <div className="mb-4 space-y-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled={loadingMoreEvents}
+              onClick={onLoadMoreEvents}
+            >
+              {loadingMoreEvents ? "Loading..." : "Load more history"}
+            </Button>
+            {eventsFailure === null ? null : (
+              <p role="alert" className="text-xs text-destructive">
+                {eventsFailure}
+              </p>
+            )}
+          </div>
+        ) : detail.eventsTruncated ? (
           <div className="mb-4 flex items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>History may be incomplete.</span>
             <Button size="xs" variant="ghost-muted" onClick={() => openLinkInBrowser(detail.url)}>

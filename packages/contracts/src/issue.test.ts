@@ -8,6 +8,11 @@ import {
   IssueCreateInput,
   IssueUnavailableError,
   IssueDetail,
+  IssueActivity,
+  IssueEventsPageInput,
+  IssueEventsPageResult,
+  IssueLinkedPullRequestsPageInput,
+  IssueLinkedPullRequestsPageResult,
   IssueListInput,
   ISSUE_LIST_CURSOR_MAX_LENGTH,
   IssueListResult,
@@ -26,6 +31,9 @@ const decodeListInput = Schema.decodeUnknownSync(IssueListInput);
 const decodeCreate = Schema.decodeUnknownSync(IssueCreateInput);
 const decodeUpdate = Schema.decodeUnknownSync(IssueUpdateInput);
 const decodeDetail = Schema.decodeUnknownSync(IssueDetail);
+const decodeActivity = Schema.decodeSync(IssueActivity);
+const decodeEventsPage = Schema.decodeSync(IssueEventsPageResult);
+const decodeLinkedPullRequestsPage = Schema.decodeSync(IssueLinkedPullRequestsPageResult);
 const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
 const decodeThreadIssueKey = Schema.decodeUnknownSync(ThreadIssueKey);
 const decodeThreadIssueLink = Schema.decodeUnknownOption(ThreadIssueLink);
@@ -356,6 +364,19 @@ describe("IssueDetail", () => {
     });
 
     expect(detail.linkedPullRequests.map((entry) => entry.closesIssue)).toEqual([true]);
+    expect(detail).not.toHaveProperty("nextLinkedPullRequestsCursor");
+    expect(() =>
+      decodeDetail({ ...detail, nextLinkedPullRequestsCursor: "x".repeat(16_385) }),
+    ).toThrow();
+    expect(
+      decodeDetail({ ...detail, nextLinkedPullRequestsCursor: "x".repeat(16_384) })
+        .nextLinkedPullRequestsCursor,
+    ).toHaveLength(16_384);
+    for (const nextLinkedPullRequestsCursor of [null, "next"]) {
+      expect(
+        decodeDetail({ ...detail, nextLinkedPullRequestsCursor }).nextLinkedPullRequestsCursor,
+      ).toBe(nextLinkedPullRequestsCursor);
+    }
   });
 });
 
@@ -716,4 +737,52 @@ describe("issueTemplateAnswersComplete", () => {
       issueTemplateAnswersComplete([REQUIRED[2]!], { terms: ["I searched the existing issues"] }),
     ).toBe(true);
   });
+});
+
+it("bounds issue page cursors and preserves page continuation metadata", () => {
+  for (const schema of [IssueEventsPageInput, IssueLinkedPullRequestsPageInput]) {
+    const decode = Schema.decodeUnknownSync(schema);
+    const ref = { projectId: "project", repository: "owner/repo", number: 7 };
+    expect(decode({ ...ref, cursor: "x".repeat(16_384) }).cursor).toHaveLength(16_384);
+    for (const cursor of ["", " ", "x".repeat(16_385), null]) {
+      expect(() => decode({ ...ref, cursor })).toThrow();
+    }
+  }
+  expect(
+    decodeEventsPage({
+      events: [],
+      nextCursor: "next",
+      truncated: false,
+    }),
+  ).toEqual({ events: [], nextCursor: "next", truncated: false });
+  expect(
+    decodeLinkedPullRequestsPage({
+      linkedPullRequests: [],
+      nextCursor: null,
+      truncated: true,
+    }),
+  ).toEqual({ linkedPullRequests: [], nextCursor: null, truncated: true });
+  const activity = { comments: [], commentCount: 0, commentsTruncated: false, events: [] };
+  for (const nextEventsCursor of [null, "next"]) {
+    expect(decodeActivity({ ...activity, nextEventsCursor }).nextEventsCursor).toBe(
+      nextEventsCursor,
+    );
+  }
+  expect(decodeActivity(activity)).not.toHaveProperty("nextEventsCursor");
+  for (const cursor of [null, "next", "x".repeat(16_384)]) {
+    expect(decodeActivity({ ...activity, nextEventsCursor: cursor }).nextEventsCursor).toBe(cursor);
+    expect(decodeEventsPage({ events: [], nextCursor: cursor, truncated: true }).nextCursor).toBe(
+      cursor,
+    );
+    expect(
+      decodeLinkedPullRequestsPage({ linkedPullRequests: [], nextCursor: cursor, truncated: true })
+        .nextCursor,
+    ).toBe(cursor);
+  }
+  const tooLong = "x".repeat(16_385);
+  expect(() => decodeActivity({ ...activity, nextEventsCursor: tooLong })).toThrow();
+  expect(() => decodeEventsPage({ events: [], nextCursor: tooLong, truncated: true })).toThrow();
+  expect(() =>
+    decodeLinkedPullRequestsPage({ linkedPullRequests: [], nextCursor: tooLong, truncated: true }),
+  ).toThrow();
 });

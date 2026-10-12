@@ -10,6 +10,8 @@ import type {
   IssueCloseReason,
   IssueComment,
   IssueEvent,
+  IssueEventsPageResult,
+  IssueLinkedPullRequestsPageResult,
   IssueInvolvement,
   IssueListOrder,
   IssueListSort,
@@ -130,6 +132,7 @@ export interface ProviderIssueDetail extends ProviderIssue {
   readonly body: string;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
   readonly linkedPullRequestsTruncated?: boolean;
+  readonly nextLinkedPullRequestsCursor?: string | null | undefined;
   readonly ancestors?: ReadonlyArray<IssueRelative>;
   readonly subIssues?: ReadonlyArray<IssueRelativeNode>;
   readonly viewerPermissions: IssueViewerPermissions;
@@ -149,6 +152,7 @@ export interface ProviderIssueActivity {
   readonly nextCommentsCursor?: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
   readonly eventsTruncated?: boolean;
+  readonly nextEventsCursor?: string | null | undefined;
   readonly reactions?: ReadonlyArray<IssueReaction>;
 }
 
@@ -292,6 +296,14 @@ export interface IssueAdapter {
   readonly getIssueActivity: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderIssueActivity, IssueProviderError>;
+
+  readonly getIssueEvents?: (
+    input: ProviderRepositoryRef & { readonly number: number; readonly cursor: string },
+  ) => Effect.Effect<IssueEventsPageResult, IssueProviderError>;
+
+  readonly getIssueLinkedPullRequests?: (
+    input: ProviderRepositoryRef & { readonly number: number; readonly cursor: string },
+  ) => Effect.Effect<IssueLinkedPullRequestsPageResult, IssueProviderError>;
 
   readonly getIssueComments?: (
     input: ProviderRepositoryRef & { readonly number: number; readonly cursor: string },
