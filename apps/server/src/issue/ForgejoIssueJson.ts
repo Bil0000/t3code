@@ -1,16 +1,22 @@
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import type { IssueComment, IssueEvent, IssueTemplate } from "@t3tools/contracts";
 import { decodeIssueFormYaml } from "./gitHubIssueJson.ts";
 import {
   ForgejoComment,
   ForgejoLabel,
   ForgejoRepository,
+  ForgejoPullRequest,
   ForgejoUser,
   forgejoActor,
 } from "@t3tools/source-control-forgejo/server/forgejoPullRequestJson";
 import type { ProviderIssue } from "./IssueProvider.ts";
+
+export const ForgejoIssueLinkedPullRequest = ForgejoPullRequest.mapFields(
+  Struct.pick(["number", "title", "html_url", "state", "merged", "draft"]),
+);
 
 export const ForgejoIssue = Schema.Struct({
   number: Schema.Int,
@@ -63,6 +69,17 @@ export const ForgejoIssueTimeline = Schema.Struct({
     ),
   ),
 });
+
+export const ForgejoIssuePageCursor = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("events"),
+    page: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(2147483645)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("pulls"),
+    snapshotId: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+  }),
+]);
 
 export const ForgejoIssueCommentsCursor = Schema.StringFromBase64Url.pipe(
   Schema.decodeTo(

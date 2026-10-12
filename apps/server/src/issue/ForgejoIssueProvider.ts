@@ -1,5 +1,8 @@
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -10,6 +13,9 @@ import type {
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import * as ForgejoCli from "@t3tools/source-control-forgejo/server/ForgejoCli";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import { hmac } from "@noble/hashes/hmac";
+import { sha256 } from "@noble/hashes/sha2";
 import {
   ForgejoComment,
   ForgejoLabel,
@@ -30,6 +36,8 @@ import {
   ForgejoIssueRepository,
   ForgejoIssueTimeline,
   ForgejoIssueCommentsCursor,
+  ForgejoIssuePageCursor,
+  ForgejoIssueLinkedPullRequest,
   ForgejoIssueTemplate,
   forgejoIssue,
   forgejoIssueComment,
@@ -66,9 +74,13 @@ const issuePath = (input: ProviderRepositoryRef & { readonly number: number }) =
 const isForgejoCliError = Schema.is(ForgejoCli.ForgejoCliError);
 const decodeCommentsCursor = Schema.decodeResult(ForgejoIssueCommentsCursor);
 const encodeCommentsCursor = Schema.encodeEffect(ForgejoIssueCommentsCursor);
+const encodePagePayload = Schema.encodeEffect(Schema.fromJsonString(ForgejoIssuePageCursor));
+const encodeSnapshot = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 export const make = Effect.gen(function* () {
   const cli = yield* ForgejoCli.ForgejoCli;
+  const crypto = yield* Crypto.Crypto;
+  const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const failure = (operation: string, detail: string, cause?: unknown) =>
     new IssueProviderError({
       provider: "forgejo",
@@ -77,6 +89,28 @@ export const make = Effect.gen(function* () {
       detail,
       ...(cause === undefined ? {} : { cause }),
     });
+  const cursorKey = yield* crypto
+    .randomBytes(32)
+    .pipe(
+      Effect.mapError((cause) => failure("cursor", "Could not create Forgejo cursor key.", cause)),
+    );
+  type PullsSnapshot = {
+    readonly baseUrl: string;
+    readonly refs: ReadonlyArray<readonly [string, number, boolean]>;
+    readonly seen: ReadonlyArray<string>;
+    readonly complete: boolean;
+    readonly page: number | null;
+  };
+  const snapshots = yield* Cache.makeWith<string, PullsSnapshot, IssueProviderError>(
+    () =>
+      Effect.fail(
+        failure(
+          "getIssueLinkedPullRequests",
+          "Forgejo linked pull requests cursor expired. Refresh the issue to continue.",
+        ),
+      ),
+    { capacity: 64, timeToLive: (exit) => (Exit.isSuccess(exit) ? "15 minutes" : 0) },
+  );
   const fail = (operation: string) => (error: ForgejoCli.ForgejoCliError) =>
     new IssueProviderError({
       provider: "forgejo",
@@ -90,12 +124,75 @@ export const make = Effect.gen(function* () {
               ? "rate-limited"
               : "failed",
       detail: error.detail,
+      ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
       cause: error,
     });
-  const request = (input: ForgejoCli.ForgejoApiInput) =>
-    cli.api(input).pipe(Effect.mapError(fail(input.path)));
+  const request = Effect.fn("ForgejoIssueProvider.request")(function* (
+    input: ForgejoCli.ForgejoApiInput & Pick<ProviderRepositoryRef, "host">,
+  ) {
+    const key = { provider: "forgejo" as const, host: input.host };
+    const lease = yield* limits.check(key).pipe(
+      Effect.mapError(
+        (error) =>
+          new IssueProviderError({
+            provider: "forgejo",
+            operation: input.path,
+            reason: "rate-limited",
+            detail: error.detail,
+            retryAt: error.retryAt,
+            cause: error,
+          }),
+      ),
+    );
+    return yield* cli.api(input).pipe(
+      Effect.tapError((error) =>
+        error.reason === "rate-limit"
+          ? limits.recordRateLimit({ ...key, lease, retryAt: error.retryAt })
+          : Effect.void,
+      ),
+      Effect.tap(() => limits.recordSuccess({ ...key, lease })),
+      Effect.mapError(fail(input.path)),
+    );
+  });
+  const signature = (
+    input: ProviderRepositoryRef & { readonly number: number },
+    payload: string,
+    credential: string,
+  ) =>
+    hmac(
+      sha256,
+      cursorKey,
+      JSON.stringify([input.host, input.cwd, input.repository, input.number, credential, payload]),
+    );
+  const encodePageCursor = Effect.fn("ForgejoIssueProvider.encodePageCursor")(function* (
+    input: ProviderRepositoryRef & { readonly number: number },
+    value: typeof ForgejoIssuePageCursor.Type,
+  ) {
+    const encoded = yield* encodePagePayload(value).pipe(
+      Effect.mapError((cause) => failure("cursor", "Could not encode Forgejo cursor.", cause)),
+    );
+    const payload = Buffer.from(encoded).toString("base64url");
+    const credential = yield* SourceControlRateLimit.CredentialScope;
+    return `${payload}.${Buffer.from(signature(input, payload, credential)).toString("hex")}`;
+  });
+  const decodePageCursor = Effect.fn("ForgejoIssueProvider.decodePageCursor")(function* (
+    input: ProviderRepositoryRef & { readonly number: number; readonly cursor: string },
+  ) {
+    if (input.cursor.length > 16384 || !/^[A-Za-z0-9_-]+\.[a-f0-9]{64}$/.test(input.cursor))
+      return null;
+    const [payload, signed] = input.cursor.split(".");
+    const credential = yield* SourceControlRateLimit.CredentialScope;
+    const expected = signature(input, payload!, credential);
+    const actual = Buffer.from(signed!, "hex");
+    if (expected.reduce((difference, byte, index) => difference | (byte ^ actual[index]!), 0) !== 0)
+      return null;
+    const decoded = decodeJsonResult(ForgejoIssuePageCursor)(
+      Buffer.from(payload!, "base64url").toString("utf8"),
+    );
+    return Result.isSuccess(decoded) ? decoded.success : null;
+  });
   const read = Effect.fn("ForgejoIssueProvider.read")(function* <A>(
-    input: ForgejoCli.ForgejoApiInput,
+    input: ForgejoCli.ForgejoApiInput & Pick<ProviderRepositoryRef, "host">,
     schema: Schema.Codec<A, unknown, never, never>,
   ) {
     const response = yield* request(input);
@@ -107,7 +204,7 @@ export const make = Effect.gen(function* () {
     return decoded.success;
   });
   const readPage = Effect.fn("ForgejoIssueProvider.readPage")(function* <A>(
-    input: ForgejoCli.ForgejoApiInput,
+    input: ForgejoCli.ForgejoApiInput & Pick<ProviderRepositoryRef, "host">,
     schema: Schema.Codec<A, unknown, never, never>,
     page: number,
   ) {
@@ -137,7 +234,7 @@ export const make = Effect.gen(function* () {
     };
   });
   const readPages = Effect.fn("ForgejoIssueProvider.readPages")(function* <A>(
-    input: ForgejoCli.ForgejoApiInput,
+    input: ForgejoCli.ForgejoApiInput & Pick<ProviderRepositoryRef, "host">,
     schema: Schema.Codec<A, unknown, never, never>,
     maxPages: number,
   ) {
@@ -149,33 +246,39 @@ export const make = Effect.gen(function* () {
     }
     return { rows, truncated: true };
   });
+  const readTimelinePages = Effect.fn("ForgejoIssueProvider.readTimelinePages")(function* (
+    input: ProviderRepositoryRef & { readonly number: number },
+    start: number,
+  ) {
+    const rows: (typeof ForgejoIssueTimeline.Type | null)[] = [];
+    for (let page = start; page < start + 2; page++) {
+      const response = yield* readPage(
+        { ...input, path: `${issuePath(input)}/timeline` },
+        Schema.NullOr(ForgejoIssueTimeline),
+        page,
+      );
+      rows.push(...response.rows);
+      if (response.rows.length === 0) return { rows, truncated: true, nextPage: null };
+    }
+    return { rows, truncated: true, nextPage: start <= 2147483643 ? start + 2 : null };
+  });
   const readTimeline = Effect.fn("ForgejoIssueProvider.readTimeline")(function* (
     input: ProviderRepositoryRef & { readonly number: number },
   ) {
     const path = `${issuePath(input)}/timeline`;
     const response = yield* request({ ...input, path });
-    if (response.stdoutTruncated) {
-      const rows: (typeof ForgejoIssueTimeline.Type | null)[] = [];
-      for (let page = 1; page <= 10; page++) {
-        const response = yield* readPage(
-          { ...input, path },
-          Schema.NullOr(ForgejoIssueTimeline),
-          page,
-        );
-        rows.push(...response.rows);
-      }
-      return { rows, truncated: true };
-    }
+    if (response.stdoutTruncated) return yield* readTimelinePages(input, 1);
     const decoded = decodeJsonResult(
       Schema.NullOr(Schema.Array(Schema.NullOr(ForgejoIssueTimeline))),
     )(response.stdout);
     if (Result.isFailure(decoded))
       return yield* failure(path, "Forgejo returned an invalid response.", decoded.failure);
-    return { rows: decoded.success ?? [], truncated: false };
+    return { rows: decoded.success ?? [], truncated: false, nextPage: null };
   });
-  const write = (input: ForgejoCli.ForgejoApiInput) => request(input).pipe(Effect.asVoid);
+  const write = (input: ForgejoCli.ForgejoApiInput & Pick<ProviderRepositoryRef, "host">) =>
+    request(input).pipe(Effect.asVoid);
   const readComplete = Effect.fn("ForgejoIssueProvider.readComplete")(function* <A>(
-    input: ForgejoCli.ForgejoApiInput,
+    input: ForgejoCli.ForgejoApiInput & Pick<ProviderRepositoryRef, "host">,
     schema: Schema.Codec<A, unknown, never, never>,
   ) {
     return (yield* readPages(input, schema, Infinity)).rows;
@@ -265,25 +368,22 @@ export const make = Effect.gen(function* () {
           : null,
     };
   });
-  const linkedPullRequests = Effect.fn("ForgejoIssueProvider.linkedPullRequests")(function* (
-    input: ProviderRepositoryRef & { readonly number: number },
-  ) {
-    const target = yield* cli
-      .resolveRepository(input)
-      .pipe(Effect.mapError(fail("linkedPullRequests")));
-    const timeline = yield* readTimeline(input);
+  const pullReferences = (
+    rows: ReadonlyArray<typeof ForgejoIssueTimeline.Type | null>,
+    baseUrl: string,
+    complete: boolean,
+  ) => {
     const references = new Map<
       string,
       { repository: string; number: number; closesIssue: boolean; actionId: number }
     >();
-    const base = new URL(target.baseUrl);
-    const mountPath = base.pathname.replace(/^\/+|\/+$/g, "");
-    for (const event of timeline.rows) {
+    const base = new URL(baseUrl);
+    const root = `${base.pathname.replace(/\/$/, "")}/`;
+    for (const event of rows) {
       if (!event) continue;
       const ref = event.ref_issue;
       if (!ref?.pull_request || !URL.canParse(ref.html_url)) continue;
       const url = new URL(ref.html_url);
-      const root = `${base.pathname.replace(/\/$/, "")}/`;
       if (url.origin !== base.origin || !url.pathname.startsWith(root)) continue;
       const match = /^([^/]+\/[^/]+)\/(?:issues|pulls)\/(\d+)$/.exec(
         url.pathname.slice(root.length),
@@ -295,9 +395,15 @@ export const make = Effect.gen(function* () {
       } catch {
         continue;
       }
+      if (
+        repository.split("/").length !== 2 ||
+        repository.split("/").some((part) => !part || part === "." || part === "..")
+      )
+        continue;
       const key = `${repository}#${ref.number}`;
       const previous = references.get(key);
       const latestAction =
+        complete &&
         (event.ref_action === "closes" || event.ref_action === "reopens") &&
         event.id > (previous?.actionId ?? 0);
       references.set(key, {
@@ -309,32 +415,36 @@ export const make = Effect.gen(function* () {
         actionId: latestAction ? event.id : (previous?.actionId ?? 0),
       });
     }
+    return [...references.values()].map((ref): readonly [string, number, boolean] => [
+      ref.repository,
+      ref.number,
+      ref.closesIssue,
+    ]);
+  };
+  const pullsPage = Effect.fn("ForgejoIssueProvider.pullsPage")(function* (
+    input: ProviderRepositoryRef & { readonly number: number },
+    snapshot: PullsSnapshot,
+  ) {
+    const { refs, page } = snapshot;
+    const mountPath = new URL(snapshot.baseUrl).pathname.replace(/^\/+|\/+$/g, "");
     const pulls = yield* Effect.forEach(
-      [...references.values()].slice(0, 20),
-      (ref) =>
+      refs.slice(0, 5),
+      ([repository, number, closesIssue]) =>
         read(
-          { ...input, repository: ref.repository, path: issuePath({ ...input, ...ref }) },
-          ForgejoIssue,
+          { ...input, repository, path: `${repoPath({ ...input, repository })}/pulls/${number}` },
+          ForgejoIssueLinkedPullRequest,
         ).pipe(
-          Effect.map((issue): IssueLinkedPullRequest[] =>
-            issue.pull_request
-              ? [
-                  {
-                    repository: mountPath ? `${mountPath}/${ref.repository}` : ref.repository,
-                    number: issue.number,
-                    title: issue.title,
-                    url: issue.html_url,
-                    state: issue.pull_request.merged
-                      ? "merged"
-                      : issue.state === "closed"
-                        ? "closed"
-                        : "open",
-                    isDraft: issue.pull_request.draft ?? false,
-                    closesIssue: ref.closesIssue,
-                  },
-                ]
-              : [],
-          ),
+          Effect.map((issue): IssueLinkedPullRequest[] => [
+            {
+              repository: mountPath ? `${mountPath}/${repository}` : repository,
+              number: issue.number,
+              title: issue.title,
+              url: issue.html_url,
+              state: issue.merged ? "merged" : issue.state === "closed" ? "closed" : "open",
+              isDraft: issue.draft ?? false,
+              closesIssue,
+            },
+          ]),
           Effect.catch((error) =>
             isForgejoCliError(error.cause) &&
             (error.cause.reason === "not-found" || error.cause.reason === "forbidden")
@@ -342,11 +452,45 @@ export const make = Effect.gen(function* () {
               : Effect.fail(error),
           ),
         ),
-      { concurrency: 4 },
+      { concurrency: 2 },
     ).pipe(Effect.map((rows) => rows.flat()));
+    const remaining = { ...snapshot, refs: refs.slice(5) };
+    let nextCursor: string | null = null;
+    if (remaining.refs.length > 0 || page !== null) {
+      const encoded = yield* encodeSnapshot(remaining).pipe(
+        Effect.mapError((cause) => failure("cursor", "Could not encode Forgejo snapshot.", cause)),
+      );
+      const snapshotId = Buffer.from(sha256(encoded)).toString("hex");
+      nextCursor = yield* encodePageCursor(input, { kind: "pulls", snapshotId });
+      yield* Cache.set(snapshots, nextCursor, remaining);
+    }
     return {
       linkedPullRequests: pulls,
-      linkedPullRequestsTruncated: timeline.truncated || references.size > 20,
+      nextCursor,
+      truncated: nextCursor !== null || !remaining.complete,
+    };
+  });
+  const linkedPullRequests = Effect.fn("ForgejoIssueProvider.linkedPullRequests")(function* (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) {
+    const target = yield* cli
+      .resolveRepository(input)
+      .pipe(Effect.mapError(fail("linkedPullRequests")));
+    const base = new URL(target.baseUrl);
+    const baseUrl = base.origin + base.pathname;
+    const timeline = yield* readTimeline(input);
+    const refs = pullReferences(timeline.rows, baseUrl, !timeline.truncated);
+    const result = yield* pullsPage(input, {
+      baseUrl,
+      refs,
+      seen: timeline.truncated ? refs.map((ref) => `${ref[0]}#${ref[1]}`) : [],
+      complete: !timeline.truncated,
+      page: timeline.nextPage,
+    });
+    return {
+      linkedPullRequests: result.linkedPullRequests,
+      linkedPullRequestsTruncated: result.truncated,
+      nextLinkedPullRequestsCursor: result.nextCursor,
     };
   });
   const listLabels = Effect.fn("ForgejoIssueProvider.listLabels")(function* (
@@ -552,9 +696,7 @@ export const make = Effect.gen(function* () {
             { ...input, path: `${issuePath(input)}/comments` },
             Schema.NullOr(Schema.Array(ForgejoComment)),
           )) ?? [])
-        : timeline.rows.filter(
-            (row): row is typeof ForgejoIssueTimeline.Type => row?.type === "comment",
-          );
+        : timeline.rows.flatMap((row) => (row?.type === "comment" ? [row] : []));
       const [issue, comments, reactions] = yield* Effect.all(
         [
           getIssue(input),
@@ -570,12 +712,57 @@ export const make = Effect.gen(function* () {
         nextCommentsCursor: comments.nextCursor,
         reactions: forgejoReactions(reactions, viewer),
         eventsTruncated: timeline.truncated,
+        nextEventsCursor:
+          timeline.nextPage === null
+            ? null
+            : yield* encodePageCursor(input, { kind: "events", page: timeline.nextPage }),
         events: timeline.rows.flatMap((row) => {
           const event = row === null ? null : forgejoIssueEvent(row);
           return event ? [event] : [];
         }),
       };
     }),
+    getIssueEvents: Effect.fn("ForgejoIssueProvider.getIssueEvents")(function* (input) {
+      const cursor = yield* decodePageCursor(input);
+      if (cursor?.kind !== "events")
+        return yield* failure("getIssueEvents", "Invalid Forgejo events cursor.");
+      const timeline = yield* readTimelinePages(input, cursor.page);
+      return {
+        events: timeline.rows.flatMap((row) => {
+          const event = row === null ? null : forgejoIssueEvent(row);
+          return event ? [event] : [];
+        }),
+        nextCursor:
+          timeline.nextPage === null
+            ? null
+            : yield* encodePageCursor(input, { kind: "events", page: timeline.nextPage }),
+        truncated: true,
+      };
+    }),
+    getIssueLinkedPullRequests: Effect.fn("ForgejoIssueProvider.getIssueLinkedPullRequests")(
+      function* (input) {
+        const cursor = yield* decodePageCursor(input);
+        if (cursor?.kind !== "pulls")
+          return yield* failure(
+            "getIssueLinkedPullRequests",
+            "Invalid or expired Forgejo linked pull requests cursor. Refresh the issue to continue.",
+          );
+        const snapshot = yield* Cache.get(snapshots, input.cursor);
+        if (snapshot.refs.length > 0 || snapshot.page === null)
+          return yield* pullsPage(input, snapshot);
+        const timeline = yield* readTimelinePages(input, snapshot.page);
+        const seen = new Set(snapshot.seen);
+        const refs = pullReferences(timeline.rows, snapshot.baseUrl, false).filter(
+          (ref) => !seen.has(`${ref[0]}#${ref[1]}`),
+        );
+        return yield* pullsPage(input, {
+          ...snapshot,
+          refs,
+          page: timeline.nextPage,
+          seen: [...snapshot.seen, ...refs.map((ref) => `${ref[0]}#${ref[1]}`)],
+        });
+      },
+    ),
     getIssueComments: Effect.fn("ForgejoIssueProvider.getIssueComments")(function* (input) {
       const cursor = decodeCommentsCursor(input.cursor);
       if (Result.isFailure(cursor))

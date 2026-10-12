@@ -13,6 +13,7 @@ import { ChildProcessSpawner } from "effect/process";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 import type { SourceControlProviderContext } from "@t3tools/source-control-core/server/SourceControlProvider";
 
@@ -33,6 +34,7 @@ export class ForgejoCliError extends Schema.TaggedError<ForgejoCliError>()("Forg
     ]),
   ),
   httpStatus: Schema.optional(Schema.Int),
+  retryAt: Schema.optional(Schema.Finite),
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
@@ -373,6 +375,13 @@ export const make = Effect.gen(function* () {
               maxBytes: 8 * 1024 * 1024,
             });
       if (status < 200 || status >= 300) {
+        const retryAt =
+          status === 429
+            ? SourceControlRateLimit.retryAtFromHeader(
+                response.headers["retry-after"],
+                yield* Clock.currentTimeMillis,
+              )
+            : undefined;
         const detail =
           status === 404
             ? "Forgejo repository or pull request was not found."
@@ -383,6 +392,7 @@ export const make = Effect.gen(function* () {
           command: "fj",
           cwd: input.cwd,
           httpStatus: status,
+          ...(retryAt === undefined ? {} : { retryAt }),
           ...(status === 401
             ? { reason: "authentication" as const }
             : status === 403
@@ -694,11 +704,19 @@ export const make = Effect.gen(function* () {
     });
     // tea reports HTTP failures with exit code zero; use its response status.
     const status = Number(/^HTTP\/\S+ (\d{3})/m.exec(result.stderr)?.[1]);
+    const retryAt =
+      status === 429
+        ? SourceControlRateLimit.retryAtFromHeader(
+            /^retry-after:[ \t]*(.*)$/im.exec(result.stderr)?.[1],
+            yield* Clock.currentTimeMillis,
+          )
+        : undefined;
     if (!status || status >= 400)
       return yield* new ForgejoCliError({
         command: "tea",
         cwd: input.cwd,
         ...(status ? { httpStatus: status } : {}),
+        ...(retryAt === undefined ? {} : { retryAt }),
         ...(status === 401
           ? { reason: "authentication" as const }
           : status === 403

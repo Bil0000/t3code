@@ -1,4 +1,7 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { assert, it } from "@effect/vitest";
+import type { IssueLinkedPullRequestsPageResult } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
@@ -23,6 +26,15 @@ const rawIssue = (number = 7, overrides: Record<string, unknown> = {}) => ({
   assignees: [{ login: "ada" }],
   labels: [{ id: 4, name: "bug", color: "ff0000" }],
   comments: 3,
+  ...overrides,
+});
+const rawPull = (number: number, overrides: Record<string, unknown> = {}) => ({
+  number,
+  title: `Pull ${number}`,
+  html_url: `https://forgejo.test/acme/web/pulls/${number}`,
+  state: "open",
+  merged: false,
+  draft: false,
   ...overrides,
 });
 const rawComment = (id = 3, overrides: Record<string, unknown> = {}) => ({
@@ -58,12 +70,619 @@ const providerFor = (
 ) =>
   ForgejoIssueProvider.make.pipe(
     Effect.provide(
-      Layer.mock(ForgejoCli.ForgejoCli)({
-        api,
-        resolveRepository: () => Effect.succeed(target),
-      }),
+      Layer.mergeAll(
+        NodeCrypto.layer,
+        SourceControlRateLimit.layer,
+        Layer.mock(ForgejoCli.ForgejoCli)({
+          api,
+          resolveRepository: () => Effect.succeed(target),
+        }),
+      ),
     ),
   );
+
+const rawPullReference = (id: number, number: number) =>
+  rawComment(id, {
+    type: "pull_ref",
+    ref_action: "closes",
+    ref_issue: {
+      number,
+      html_url: `https://forgejo.test/acme/web/pulls/${number}`,
+      pull_request: { merged: false },
+    },
+  });
+
+it.effect("rejects unsigned, tampered and foreign cursors before any host call", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const api: ForgejoCli.ForgejoCli["Service"]["api"] = (input) => {
+      paths.push(input.path);
+      const number = Number(input.path.split("/").at(-1));
+      return Effect.succeed(
+        processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 6 }, (_, i) => rawPullReference(i + 1, i + 8))
+              : number >= 8
+                ? rawPull(number)
+                : baseResponse(input),
+          ),
+        ),
+      );
+    };
+    const provider = yield* providerFor(api);
+    const second = yield* providerFor(api);
+    const detail = yield* provider.getIssue(reference);
+    const cursor = detail.nextLinkedPullRequestsCursor!;
+    assert(cursor);
+    const [payload, signature] = cursor.split(".");
+    const snapshot = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"));
+    snapshot.snapshotId = "0".repeat(64);
+    const forged = `${Buffer.from(JSON.stringify(snapshot)).toString("base64url")}.${signature}`;
+    snapshot.kind = "events";
+    snapshot.page = 1;
+    const forgedSource = `${Buffer.from(JSON.stringify(snapshot)).toString("base64url")}.${signature}`;
+    paths.length = 0;
+    for (const input of [
+      { ...reference, cursor: "garbage" },
+      { ...reference, cursor: "x".repeat(16385) },
+      { ...reference, cursor: forged },
+      { ...reference, cursor: forgedSource },
+      { ...reference, cursor, host: "other.test" },
+      { ...reference, cursor, host: "forgejo.test:3000" },
+      { ...reference, cursor, cwd: "/other" },
+      { ...reference, cursor, repository: "git/acme/web" },
+      { ...reference, cursor, number: 9 },
+    ])
+      assert.strictEqual(
+        (yield* Effect.flip(provider.getIssueLinkedPullRequests!(input))).reason,
+        "failed",
+      );
+    const restarted = yield* Effect.flip(
+      second.getIssueLinkedPullRequests!({ ...reference, cursor }),
+    );
+    assert.match(restarted.detail, /Refresh/);
+    yield* Effect.flip(provider.getIssueEvents!({ ...reference, cursor }));
+    yield* Effect.flip(
+      provider.getIssueLinkedPullRequests!({ ...reference, cursor }).pipe(
+        Effect.provideService(SourceControlRateLimit.CredentialScope, "other"),
+      ),
+    );
+    assert.deepStrictEqual(paths, []);
+  }),
+);
+
+it.effect("keeps all small native event metadata complete without local pagination", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const provider = yield* providerFor((input) => {
+      paths.push(input.path);
+      return Effect.succeed(
+        processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 1001 }, (_, i) => rawComment(i + 1, { type: "close" }))
+              : baseResponse(input),
+          ),
+        ),
+      );
+    });
+    const activity = yield* provider.getIssueActivity(reference);
+    assert.strictEqual(activity.events.length, 1001);
+    assert.strictEqual(activity.eventsTruncated, false);
+    assert.strictEqual(activity.nextEventsCursor, null);
+    assert.strictEqual(paths.filter((path) => path.endsWith("/timeline")).length, 1);
+    assert(!paths.some((path) => path.includes("/timeline?")));
+  }),
+);
+
+it.effect(
+  "reads two physical overflow pages per click and never treats a private empty page as complete",
+  () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const provider = yield* providerFor((input) => {
+        paths.push(input.path);
+        if (input.path.endsWith("/timeline"))
+          return Effect.succeed({ ...processOutput("["), stdoutTruncated: true });
+        const page = Number(new URL(input.path, "https://forgejo.test").searchParams.get("page"));
+        return Effect.succeed(
+          processOutput(
+            encodeJson(
+              input.path.includes("/timeline?")
+                ? page <= 4
+                  ? [rawComment(page, { type: "close" })]
+                  : []
+                : baseResponse(input),
+            ),
+            {
+              stderr: 'link: <https://forgejo.test/timeline?page=1>; rel="last"\nx-total-count: 0',
+            },
+          ),
+        );
+      });
+      const activity = yield* provider.getIssueActivity(reference);
+      assert.deepStrictEqual(
+        activity.events.map((row) => row.id),
+        ["1", "2"],
+      );
+      assert(activity.nextEventsCursor);
+      const more = yield* provider.getIssueEvents!({
+        ...reference,
+        cursor: activity.nextEventsCursor!,
+      });
+      assert.deepStrictEqual(
+        more.events.map((row) => row.id),
+        ["3", "4"],
+      );
+      assert(more.nextCursor);
+      const last = yield* provider.getIssueEvents!({ ...reference, cursor: more.nextCursor! });
+      assert.deepStrictEqual(last.events, []);
+      assert.strictEqual(last.nextCursor, null);
+      assert.strictEqual(last.truncated, true);
+      assert.strictEqual(paths.filter((path) => path.endsWith("/timeline")).length, 1);
+      assert.deepStrictEqual(
+        paths
+          .filter((path) => path.includes("/timeline?"))
+          .map((path) => Number(new URL(path, "https://forgejo.test").searchParams.get("page"))),
+        [1, 2, 3, 4, 5],
+      );
+    }),
+);
+
+it.effect("advances denied raw PR references and deduplicates further overflow pages", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const provider = yield* providerFor((input) => {
+      paths.push(input.path);
+      if (input.path.endsWith("/timeline"))
+        return Effect.succeed({ ...processOutput("["), stdoutTruncated: true });
+      if (input.path.includes("/timeline?")) {
+        const page = Number(new URL(input.path, "https://forgejo.test").searchParams.get("page"));
+        const numbers =
+          page === 1 ? [8, 9, 10] : page === 2 ? [11, 12, 13] : page === 3 ? [8, 14] : [];
+        return Effect.succeed(
+          processOutput(encodeJson(numbers.map((number) => rawPullReference(number, number)))),
+        );
+      }
+      const number = Number(input.path.split("/").at(-1));
+      if (number >= 8 && number <= 12)
+        return Effect.fail(
+          new ForgejoCli.ForgejoCliError({
+            command: "fj",
+            cwd: reference.cwd,
+            reason: number % 2 ? "forbidden" : "not-found",
+            detail: "Denied",
+          }),
+        );
+      return Effect.succeed(
+        processOutput(encodeJson(number >= 8 ? rawPull(number) : baseResponse(input))),
+      );
+    });
+    const detail = yield* provider.getIssue(reference);
+    assert.deepStrictEqual(detail.linkedPullRequests, []);
+    assert(detail.nextLinkedPullRequestsCursor);
+    const more = yield* provider.getIssueLinkedPullRequests!({
+      ...reference,
+      cursor: detail.nextLinkedPullRequestsCursor!,
+    });
+    assert.deepStrictEqual(
+      more.linkedPullRequests.map((row) => [row.number, row.closesIssue]),
+      [[13, false]],
+    );
+    assert(more.nextCursor);
+    const last = yield* provider.getIssueLinkedPullRequests!({
+      ...reference,
+      cursor: more.nextCursor!,
+    });
+    assert.deepStrictEqual(
+      last.linkedPullRequests.map((row) => [row.number, row.closesIssue]),
+      [[14, false]],
+    );
+    assert.strictEqual(last.nextCursor, null);
+    assert.strictEqual(last.truncated, true);
+    assert.strictEqual(paths.filter((path) => path.endsWith("/timeline")).length, 1);
+    assert.strictEqual(paths.filter((path) => path.endsWith("/pulls/8")).length, 1);
+  }),
+);
+
+it.effect("records native 429 before queued PR requests and preserves Retry-After", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const retryAt = 120000;
+    const provider = yield* providerFor((input) => {
+      paths.push(input.path);
+      if (input.path === "repos/acme/web/pulls/8")
+        return Effect.fail(
+          new ForgejoCli.ForgejoCliError({
+            command: "fj",
+            cwd: reference.cwd,
+            reason: "rate-limit",
+            detail: "Paused",
+            retryAt,
+          }),
+        );
+      return Effect.succeed(
+        processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 10 }, (_, i) => rawPullReference(i + 1, i + 8))
+              : baseResponse(input),
+          ),
+        ),
+      );
+    });
+    const error = yield* Effect.flip(provider.getIssue(reference));
+    assert.strictEqual(error.reason, "rate-limited");
+    assert.strictEqual(error.retryAt, retryAt);
+    assert(!paths.some((path) => /\/pulls\/(?:1[0-2])$/.test(path)));
+    paths.length = 0;
+    const paused = yield* Effect.flip(provider.getIssueSummary!(reference));
+    assert.strictEqual(paused.retryAt, retryAt);
+    assert.deepStrictEqual(paths, []);
+    yield* provider.getIssueSummary!(reference).pipe(
+      Effect.provideService(SourceControlRateLimit.CredentialScope, "other"),
+    );
+    assert.deepStrictEqual(paths, ["repos/acme/web/issues/7"]);
+  }),
+);
+
+it.effect("fetches five PRs with exactly two concurrent permission reads", () =>
+  Effect.gen(function* () {
+    let active = 0;
+    let peak = 0;
+    const provider = yield* providerFor((input) =>
+      Effect.gen(function* () {
+        const number = Number(/\/pulls\/(\d+)$/.exec(input.path)?.[1]);
+        if (number >= 8) {
+          active++;
+          peak = Math.max(peak, active);
+          yield* Effect.yieldNow;
+          active--;
+          return processOutput(encodeJson(rawPull(number)));
+        }
+        return processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 10 }, (_, i) => rawPullReference(i + 1, i + 8))
+              : baseResponse(input),
+          ),
+        );
+      }),
+    );
+    const detail = yield* provider.getIssue(reference);
+    assert.strictEqual(detail.linkedPullRequests.length, 5);
+    assert.strictEqual(peak, 2);
+    peak = 0;
+    const more = yield* provider.getIssueLinkedPullRequests!({
+      ...reference,
+      cursor: detail.nextLinkedPullRequestsCursor!,
+    });
+    assert.strictEqual(more.linkedPullRequests.length, 5);
+    assert.strictEqual(more.truncated, false);
+    assert.strictEqual(peak, 2);
+  }),
+);
+
+it.effect("keeps all 800 linked PRs reachable with small cursors and bounded fresh reads", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const provider = yield* providerFor((input) => {
+      paths.push(input.path);
+      const number = Number(input.path.split("/").at(-1));
+      return Effect.succeed(
+        processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 800 }, (_, i) => rawPullReference(i + 1, i + 8))
+              : number >= 8
+                ? rawPull(number)
+                : baseResponse(input),
+          ),
+        ),
+      );
+    });
+    const detail = yield* provider.getIssue(reference);
+    assert.strictEqual(detail.linkedPullRequestsTruncated, true);
+    let cursor: string | null | undefined = detail.nextLinkedPullRequestsCursor;
+    assert(cursor);
+    const numbers = detail.linkedPullRequests.map((row) => row.number);
+    while (cursor) {
+      assert(cursor.length < 256);
+      const before = paths.length;
+      const page: IssueLinkedPullRequestsPageResult = yield* provider.getIssueLinkedPullRequests!({
+        ...reference,
+        cursor,
+      });
+      assert.strictEqual(page.truncated, page.nextCursor !== null);
+      assert.strictEqual(paths.length - before, 5);
+      numbers.push(...page.linkedPullRequests.map((row) => row.number));
+      cursor = page.nextCursor;
+    }
+    assert.deepStrictEqual(
+      numbers,
+      Array.from({ length: 800 }, (_, i) => i + 8),
+    );
+    assert.strictEqual(new Set(numbers).size, numbers.length);
+    assert.strictEqual(paths.filter((path) => path.endsWith("/timeline")).length, 1);
+  }),
+);
+
+it.effect("retains physical continuation and all 800 overflow references", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const provider = yield* providerFor((input) => {
+      paths.push(input.path);
+      assert(input.method === undefined || input.method === "GET");
+      if (input.path.endsWith("/timeline"))
+        return Effect.succeed({ ...processOutput("["), stdoutTruncated: true });
+      const page = Number(new URL(input.path, "https://forgejo.test").searchParams.get("page"));
+      const number = Number(/\/pulls\/(\d+)$/.exec(input.path)?.[1]);
+      return Effect.succeed(
+        processOutput(
+          encodeJson(
+            input.path.includes("/timeline?")
+              ? page <= 16
+                ? Array.from({ length: 50 }, (_, i) => {
+                    const number = (page - 1) * 50 + i + 8;
+                    return rawPullReference(number, number);
+                  })
+                : []
+              : number >= 8
+                ? rawPull(number)
+                : baseResponse(input),
+          ),
+        ),
+      );
+    });
+    const detail = yield* provider.getIssue(reference);
+    const numbers = detail.linkedPullRequests.map((row) => row.number);
+    let cursor = detail.nextLinkedPullRequestsCursor;
+    while (cursor) {
+      assert(cursor.length < 256);
+      paths.length = 0;
+      const result = yield* provider.getIssueLinkedPullRequests!({ ...reference, cursor });
+      assert.strictEqual(result.truncated, true);
+      assert(paths.filter((path) => /\/pulls\/\d+$/.test(path)).length <= 5);
+      assert(paths.filter((path) => path.includes("/timeline?")).length <= 2);
+      assert(!paths.some((path) => path.endsWith("/timeline")));
+      numbers.push(...result.linkedPullRequests.map((row) => row.number));
+      cursor = result.nextCursor;
+    }
+    assert.deepStrictEqual(
+      numbers,
+      Array.from({ length: 800 }, (_, i) => i + 8),
+    );
+    assert.deepStrictEqual(paths, ["repos/acme/web/issues/7/timeline?limit=50&page=17"]);
+  }),
+);
+
+it.effect("expires old snapshots after 15 minutes without extending their lifetime on reads", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const provider = yield* providerFor((input) => {
+      paths.push(input.path);
+      const number = Number(/\/pulls\/(\d+)$/.exec(input.path)?.[1]);
+      return Effect.succeed(
+        processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 12 }, (_, i) => rawPullReference(i + 1, i + 8))
+              : number >= 8
+                ? rawPull(number)
+                : baseResponse(input),
+          ),
+        ),
+      );
+    });
+    const detail = yield* provider.getIssue(reference);
+    const cursor = detail.nextLinkedPullRequestsCursor!;
+    yield* TestClock.adjust("14 minutes");
+    const next = yield* provider.getIssueLinkedPullRequests!({ ...reference, cursor });
+    assert(next.nextCursor);
+    yield* TestClock.adjust(60_001);
+    paths.length = 0;
+    const error = yield* Effect.flip(
+      provider.getIssueLinkedPullRequests!({ ...reference, cursor }),
+    );
+    assert.strictEqual(error.reason, "failed");
+    assert.match(error.detail, /expired.*Refresh/);
+    assert.deepStrictEqual(paths, []);
+    const last = yield* provider.getIssueLinkedPullRequests!({
+      ...reference,
+      cursor: next.nextCursor!,
+    });
+    assert.deepStrictEqual(
+      last.linkedPullRequests.map((row) => row.number),
+      [18, 19],
+    );
+    assert.strictEqual(last.truncated, false);
+  }),
+);
+
+it.effect("reuses unchanged detail snapshots and renews their lifetime at minute 14", () =>
+  Effect.gen(function* () {
+    const provider = yield* providerFor((input) => {
+      const number = Number(/\/pulls\/(\d+)$/.exec(input.path)?.[1]);
+      return Effect.succeed(
+        processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 6 }, (_, i) => rawPullReference(i + 1, i + 8))
+              : number >= 8
+                ? rawPull(number)
+                : baseResponse(input),
+          ),
+        ),
+      );
+    });
+    const otherIssue = { ...reference, number: 8 };
+    const other = yield* provider.getIssue(otherIssue);
+    const first = yield* provider.getIssue(reference);
+    const cursor = first.nextLinkedPullRequestsCursor!;
+    assert.notStrictEqual(other.nextLinkedPullRequestsCursor, cursor);
+    assert.strictEqual(other.nextLinkedPullRequestsCursor!.split(".")[0], cursor.split(".")[0]);
+    for (let i = 0; i < 65; i++) {
+      const detail = yield* provider.getIssue(reference);
+      assert.strictEqual(detail.nextLinkedPullRequestsCursor, cursor);
+    }
+    const unrelated = yield* provider.getIssueLinkedPullRequests!({
+      ...otherIssue,
+      cursor: other.nextLinkedPullRequestsCursor!,
+    });
+    assert.deepStrictEqual(
+      unrelated.linkedPullRequests.map((row) => row.number),
+      [13],
+    );
+    yield* TestClock.adjust("14 minutes");
+    const refreshed = yield* provider.getIssue(reference);
+    assert.strictEqual(refreshed.nextLinkedPullRequestsCursor, cursor);
+    yield* TestClock.adjust("2 minutes");
+    const continued = yield* provider.getIssueLinkedPullRequests!({ ...reference, cursor });
+    assert.deepStrictEqual(
+      continued.linkedPullRequests.map((row) => row.number),
+      [13],
+    );
+    assert.strictEqual(continued.truncated, false);
+    yield* TestClock.adjust(13 * 60_000 + 1);
+    const expired = yield* Effect.flip(
+      provider.getIssueLinkedPullRequests!({ ...reference, cursor }),
+    );
+    assert.match(expired.detail, /expired.*Refresh/);
+  }),
+);
+
+it.effect("evicts snapshots beyond capacity 64 and requires refresh without native reads", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const provider = yield* providerFor((input) => {
+      paths.push(input.path);
+      const number = Number(/\/pulls\/(\d+)$/.exec(input.path)?.[1]);
+      return Effect.succeed(
+        processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 6 }, (_, i) => rawPullReference(i + 1, i + 8))
+              : number >= 8
+                ? rawPull(number)
+                : baseResponse(input),
+          ),
+        ),
+      );
+    });
+    const cursors: string[] = [];
+    for (let i = 0; i < 64; i++) {
+      const detail = yield* provider.getIssue({ ...reference, number: i + 7 });
+      cursors.push(detail.nextLinkedPullRequestsCursor!);
+    }
+    const before = yield* provider.getIssueLinkedPullRequests!({
+      ...reference,
+      cursor: cursors[0]!,
+    });
+    assert.deepStrictEqual(
+      before.linkedPullRequests.map((row) => row.number),
+      [13],
+    );
+    const refreshed = yield* provider.getIssue({ ...reference, number: 71 });
+    paths.length = 0;
+    for (let i = 0; i < 20; i++) {
+      const error = yield* Effect.flip(
+        provider.getIssueLinkedPullRequests!({ ...reference, number: 8, cursor: cursors[1]! }),
+      );
+      assert.match(error.detail, /expired.*Refresh/);
+    }
+    assert.deepStrictEqual(paths, []);
+    for (const number of [7, ...Array.from({ length: 63 }, (_, i) => i + 9)]) {
+      const cursor = number === 71 ? refreshed.nextLinkedPullRequestsCursor! : cursors[number - 7]!;
+      const current = yield* provider.getIssueLinkedPullRequests!({ ...reference, number, cursor });
+      assert.deepStrictEqual(
+        current.linkedPullRequests.map((row) => row.number),
+        [13],
+      );
+      assert.strictEqual(current.truncated, false);
+    }
+  }),
+);
+
+it.effect("replays immutable snapshots and lets concurrent walks advance independently", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const provider = yield* providerFor((input) =>
+      Effect.gen(function* () {
+        paths.push(input.path);
+        assert(input.method === undefined || input.method === "GET");
+        yield* Effect.yieldNow;
+        const number = Number(/\/pulls\/(\d+)$/.exec(input.path)?.[1]);
+        return processOutput(
+          encodeJson(
+            input.path.endsWith("/timeline")
+              ? Array.from({ length: 20 }, (_, i) => rawPullReference(i + 1, i + 8))
+              : number >= 8
+                ? rawPull(number)
+                : baseResponse(input),
+          ),
+        );
+      }),
+    );
+    const detail = yield* provider.getIssue(reference);
+    const cursor = detail.nextLinkedPullRequestsCursor!;
+    paths.length = 0;
+    const [first, second] = yield* Effect.all(
+      [
+        provider.getIssueLinkedPullRequests!({ ...reference, cursor }),
+        provider.getIssueLinkedPullRequests!({ ...reference, cursor }),
+      ],
+      { concurrency: 2 },
+    );
+    assert.deepStrictEqual(first.linkedPullRequests, second.linkedPullRequests);
+    assert.strictEqual(first.nextCursor, second.nextCursor);
+    const replay = yield* provider.getIssueLinkedPullRequests!({ ...reference, cursor });
+    assert.deepStrictEqual(replay.linkedPullRequests, first.linkedPullRequests);
+    assert.strictEqual(replay.nextCursor, first.nextCursor);
+    for (const start of [first, second]) {
+      const numbers = start.linkedPullRequests.map((row) => row.number);
+      let next = start.nextCursor;
+      while (next) {
+        const result = yield* provider.getIssueLinkedPullRequests!({ ...reference, cursor: next });
+        assert.strictEqual(result.truncated, result.nextCursor !== null);
+        numbers.push(...result.linkedPullRequests.map((row) => row.number));
+        next = result.nextCursor;
+      }
+      assert.deepStrictEqual(
+        numbers,
+        Array.from({ length: 15 }, (_, i) => i + 13),
+      );
+    }
+    assert.strictEqual(paths.length, 35);
+    assert(paths.every((path) => /\/pulls\/\d+$/.test(path)));
+  }),
+);
+
+it.effect("stops overflow at a private empty first page without claiming complete", () =>
+  Effect.gen(function* () {
+    const paths: string[] = [];
+    const provider = yield* providerFor((input) => {
+      paths.push(input.path);
+      if (input.path.endsWith("/timeline"))
+        return Effect.succeed({ ...processOutput("["), stdoutTruncated: true });
+      return Effect.succeed(
+        processOutput(encodeJson(baseResponse(input)), {
+          stderr: input.path.includes("/timeline?")
+            ? 'link: <https://forgejo.test/timeline?page=2>; rel="next"\nx-total-count: 100'
+            : "",
+        }),
+      );
+    });
+    const detail = yield* provider.getIssue(reference);
+    assert.strictEqual(detail.linkedPullRequestsTruncated, true);
+    assert.strictEqual(detail.nextLinkedPullRequestsCursor, null);
+    const activity = yield* provider.getIssueActivity(reference);
+    assert.strictEqual(activity.eventsTruncated, true);
+    assert.strictEqual(activity.nextEventsCursor, null);
+    assert.strictEqual(paths.filter((path) => path.includes("/timeline?")).length, 2);
+    assert(!paths.some((path) => path.includes("page=2")));
+  }),
+);
 
 const issueListOutput = (
   input: ForgejoCli.ForgejoApiInput,
@@ -287,8 +906,8 @@ it.effect(
         paths.push(input.path);
         const response = input.path.endsWith("/timeline")
           ? timeline
-          : input.path.endsWith("/issues/8")
-            ? rawIssue(8, { pull_request: { merged: false } })
+          : input.path.endsWith("/pulls/8")
+            ? rawPull(8)
             : baseResponse(input);
         return Effect.succeed(
           processOutput(encodeJson(response), {
@@ -425,9 +1044,9 @@ it.effect(
           return Effect.succeed({ ...processOutput("["), stdoutTruncated: true });
         if (input.path.includes("/timeline?")) {
           const page = Number(new URL(input.path, "https://forgejo.test").searchParams.get("page"));
-          assert(page <= 10);
+          assert(page <= 2);
           const rows =
-            page === 2
+            page === 1
               ? [
                   rawComment(4, { type: "close" }),
                   rawComment(5, {
@@ -450,8 +1069,8 @@ it.effect(
             encodeJson(
               input.path.endsWith("/comments")
                 ? [rawComment(1000003)]
-                : input.path.endsWith("/issues/8")
-                  ? rawIssue(8, { pull_request: { merged: false } })
+                : input.path.endsWith("/pulls/8")
+                  ? rawPull(8)
                   : baseResponse(input),
             ),
           ),
@@ -474,16 +1093,13 @@ it.effect(
       assert.strictEqual(detail.linkedPullRequestsTruncated, true);
       assert.deepStrictEqual(
         detail.linkedPullRequests.map((pull) => [pull.number, pull.closesIssue]),
-        [[8, true]],
+        [[8, false]],
       );
       assert.deepStrictEqual(
         paths
           .filter((path) => path.includes("/timeline?"))
           .map((path) => Number(new URL(path, "https://forgejo.test").searchParams.get("page"))),
-        [
-          ...Array.from({ length: 10 }, (_, i) => i + 1),
-          ...Array.from({ length: 10 }, (_, i) => i + 1),
-        ],
+        [1, 2, 1, 2],
       );
       assert.strictEqual(paths.filter((path) => path.endsWith("/comments")).length, 1);
     }),
@@ -1137,7 +1753,7 @@ it.effect(
       const provider = yield* providerFor(
         (input) => {
           paths.push(input.path);
-          if (input.path === "repos/other/web/issues/10")
+          if (input.path === "repos/other/web/pulls/10")
             return Effect.fail(
               new ForgejoCli.ForgejoCliError({
                 command: "tea",
@@ -1165,16 +1781,10 @@ it.effect(
                 },
                 { ...event(8, 8, "neutered"), type: "comment_ref" },
               ]
-            : input.path === "repos/acme/web/issues/8"
-              ? rawIssue(8, {
-                  html_url: `${root}/acme/web/pulls/8`,
-                  pull_request: { merged: true, draft: false },
-                })
-              : input.path === "repos/acme/web/issues/9"
-                ? rawIssue(9, {
-                    html_url: `${root}/acme/web/pulls/9`,
-                    pull_request: { merged: false, draft: true },
-                  })
+            : input.path === "repos/acme/web/pulls/8"
+              ? rawPull(8, { html_url: `${root}/acme/web/pulls/8`, merged: true })
+              : input.path === "repos/acme/web/pulls/9"
+                ? rawPull(9, { html_url: `${root}/acme/web/pulls/9`, draft: true })
                 : input.path === "repos/git/acme/web"
                   ? repository
                   : baseResponse(input);
@@ -1204,61 +1814,83 @@ it.effect(
           ["git/acme/web", 8, "merged", true, false],
         ],
       );
-      assert.strictEqual(paths.filter((path) => path === "repos/acme/web/issues/8").length, 1);
+      assert.strictEqual(paths.filter((path) => path === "repos/acme/web/pulls/8").length, 1);
       assert.strictEqual(detail.linkedPullRequestsTruncated, false);
-      assert(paths.includes("repos/other/web/issues/10"));
-      assert(!paths.some((path) => path.endsWith("/issues/11")));
-      assert(!paths.some((path) => path.endsWith("/issues/12")));
+      assert(paths.includes("repos/other/web/pulls/10"));
+      assert(!paths.some((path) => path.endsWith("/pulls/11")));
+      assert(!paths.some((path) => path.endsWith("/pulls/12")));
     }),
 );
 
-it.effect("caps unique linked PR checks at 20 after one complete timeline read", () =>
-  Effect.gen(function* () {
-    for (const referenceCount of [2, 20, 21, 25]) {
-      const paths: string[] = [];
-      const provider = yield* providerFor((input) => {
-        paths.push(input.path);
-        const number = Number(/^repos\/acme\/web\/issues\/(\d+)$/.exec(input.path)?.[1]);
-        const response = input.path.endsWith("/timeline")
-          ? Array.from({ length: referenceCount * 2 }, (_, i) =>
-              rawComment(i + 1, {
-                type: "pull_ref",
-                ref_action: i >= referenceCount ? "closes" : "none",
-                ref_issue: {
-                  number: 8 + (i % referenceCount),
-                  html_url: `https://forgejo.test/acme/web/pulls/${8 + (i % referenceCount)}`,
-                  pull_request: { merged: false },
-                },
-              }),
-            )
-          : number >= 8
-            ? rawIssue(number, { pull_request: { merged: false } })
-            : baseResponse(input);
-        return Effect.succeed(processOutput(encodeJson(response)));
-      });
-      const detail = yield* provider.getIssue(reference);
-      assert.strictEqual(detail.body, "Body");
-      assert.strictEqual(detail.linkedPullRequestsTruncated, referenceCount > 20);
-      assert.deepStrictEqual(
-        detail.linkedPullRequests.map((pull) => pull.number),
-        Array.from({ length: Math.min(referenceCount, 20) }, (_, i) => i + 8),
-      );
-      assert(detail.linkedPullRequests.every((pull) => pull.closesIssue));
-      assert.strictEqual(paths.filter((path) => path.endsWith("/timeline")).length, 1);
-      assert.strictEqual(
-        paths.filter((path) => /^repos\/acme\/web\/issues\/(\d+)$/.test(path)).length,
-        1 + Math.min(referenceCount, 20),
-      );
-      assert(!paths.some((path) => path.includes("/timeline?")));
-    }
-  }),
+it.effect(
+  "loads every unique linked PR in batches of five without rereading the full timeline",
+  () =>
+    Effect.gen(function* () {
+      for (const referenceCount of [2, 5, 6, 25]) {
+        const paths: string[] = [];
+        const provider = yield* providerFor((input) => {
+          paths.push(input.path);
+          const number = Number(
+            /^repos\/acme\/web\/(?:issues|pulls)\/(\d+)$/.exec(input.path)?.[1],
+          );
+          const response = input.path.endsWith("/timeline")
+            ? Array.from({ length: referenceCount * 2 }, (_, i) =>
+                rawComment(i + 1, {
+                  type: "pull_ref",
+                  ref_action: i >= referenceCount ? "closes" : "none",
+                  ref_issue: {
+                    number: 8 + (i % referenceCount),
+                    html_url: `https://forgejo.test/acme/web/pulls/${8 + (i % referenceCount)}`,
+                    pull_request: { merged: false },
+                  },
+                }),
+              )
+            : number >= 8
+              ? rawPull(number)
+              : baseResponse(input);
+          return Effect.succeed(processOutput(encodeJson(response)));
+        });
+        const detail = yield* provider.getIssue(reference);
+        assert.strictEqual(detail.body, "Body");
+        assert.strictEqual(detail.linkedPullRequestsTruncated, referenceCount > 5);
+        assert.deepStrictEqual(
+          detail.linkedPullRequests.map((pull) => pull.number),
+          Array.from({ length: Math.min(referenceCount, 5) }, (_, i) => i + 8),
+        );
+        assert(detail.linkedPullRequests.every((pull) => pull.closesIssue));
+        assert.strictEqual(paths.filter((path) => path.endsWith("/timeline")).length, 1);
+        assert.strictEqual(
+          paths.filter((path) => /^repos\/acme\/web\/(?:issues|pulls)\/(\d+)$/.test(path)).length,
+          1 + Math.min(referenceCount, 5),
+        );
+        let cursor = detail.nextLinkedPullRequestsCursor;
+        const numbers = detail.linkedPullRequests.map((pull) => pull.number);
+        while (cursor) {
+          const result = yield* provider.getIssueLinkedPullRequests!({ ...reference, cursor });
+          assert(result.linkedPullRequests.length <= 5);
+          assert.strictEqual(result.truncated, result.nextCursor !== null);
+          numbers.push(...result.linkedPullRequests.map((pull) => pull.number));
+          cursor = result.nextCursor;
+        }
+        assert.deepStrictEqual(
+          numbers,
+          Array.from({ length: referenceCount }, (_, i) => i + 8),
+        );
+        assert.strictEqual(paths.filter((path) => path.endsWith("/timeline")).length, 1);
+        assert.strictEqual(
+          paths.filter((path) => /^repos\/acme\/web\/(?:issues|pulls)\/(\d+)$/.test(path)).length,
+          referenceCount + 1,
+        );
+        assert(!paths.some((path) => path.includes("/timeline?")));
+      }
+    }),
 );
 
 it.effect("keeps accessible linked PRs and propagates authentication and rate errors", () =>
   Effect.gen(function* () {
     for (const reason of ["not-found", "forbidden", "authentication", "rate-limit"] as const) {
       const provider = yield* providerFor((input) => {
-        if (input.path === "repos/acme/web/issues/8")
+        if (input.path === "repos/acme/web/pulls/8")
           return Effect.fail(
             new ForgejoCli.ForgejoCliError({
               command: "tea",
@@ -1280,8 +1912,8 @@ it.effect("keeps accessible linked PRs and propagates authentication and rate er
                 pull_request: { merged: false },
               },
             }))
-          : input.path === "repos/acme/web/issues/9"
-            ? rawIssue(9, { pull_request: { merged: false } })
+          : input.path === "repos/acme/web/pulls/9"
+            ? rawPull(9)
             : baseResponse(input);
         return Effect.succeed(
           processOutput(encodeJson(response), {
