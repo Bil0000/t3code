@@ -372,18 +372,11 @@ export const make = Effect.gen(function* () {
               stream: response.stream,
               maxBytes: 8 * 1024 * 1024,
             });
-      if (body.truncated || body.invalidUtf8)
-        return yield* new ForgejoCliError({
-          command: "fj",
-          cwd: input.cwd,
-          reason: "invalid-response",
-          detail: "Forgejo returned an oversized or invalid response.",
-        });
       if (status < 200 || status >= 300) {
         const detail =
           status === 404
             ? "Forgejo repository or pull request was not found."
-            : body.text
+            : body.text && !body.truncated && !body.invalidUtf8
               ? `Forgejo API request failed (HTTP ${status}): ${body.text}`
               : `Forgejo API request failed (HTTP ${status}). Check this server's fj credentials and permissions.`;
         return yield* new ForgejoCliError({
@@ -402,11 +395,18 @@ export const make = Effect.gen(function* () {
           detail,
         });
       }
+      if (body.invalidUtf8 && !body.truncated)
+        return yield* new ForgejoCliError({
+          command: "fj",
+          cwd: input.cwd,
+          reason: "invalid-response",
+          detail: "Forgejo returned an oversized or invalid response.",
+        });
       return {
         exitCode: ChildProcessSpawner.ExitCode(0),
         stdout: body.text,
         stderr: `HTTP/1.1 ${status}\n${response.headers.link ? `link: ${response.headers.link}\n` : ""}`,
-        stdoutTruncated: false,
+        stdoutTruncated: body.truncated,
         stderrTruncated: false,
       };
     },
@@ -469,8 +469,10 @@ export const make = Effect.gen(function* () {
       token,
       path: "user",
     });
-    const user = decodeJsonResult(Schema.Struct({ login: Schema.String }))(currentUser.stdout);
-    if (Result.isFailure(user) || !user.success.login.trim())
+    const user = currentUser.stdoutTruncated
+      ? null
+      : decodeJsonResult(Schema.Struct({ login: Schema.String }))(currentUser.stdout);
+    if (user === null || Result.isFailure(user) || !user.success.login.trim())
       return yield* new ForgejoCliError({
         command: "fj",
         cwd: input.cwd,

@@ -1155,6 +1155,157 @@ it.effect("falls back to tea when fj is missing or has no account for this serve
   }),
 );
 
+it.effect.each([
+  { status: 200, reader: "api", invalidUtf8: false, reason: undefined },
+  { status: 200, reader: "api", invalidUtf8: true, reason: undefined },
+  { status: 200, reader: "invalid", invalidUtf8: true, reason: "invalid-response" },
+  { status: 200, reader: "multibyte", invalidUtf8: false, reason: undefined },
+  { status: 201, reader: "mutation", invalidUtf8: false, reason: undefined },
+  { status: 401, reader: "api", invalidUtf8: false, reason: "authentication" },
+  { status: 403, reader: "api", invalidUtf8: false, reason: "forbidden" },
+  { status: 404, reader: "api", invalidUtf8: false, reason: "not-found" },
+  { status: 429, reader: "api", invalidUtf8: false, reason: "rate-limit" },
+  { status: 401, reader: "api", invalidUtf8: true, reason: "authentication" },
+  { status: 403, reader: "api", invalidUtf8: true, reason: "forbidden" },
+  { status: 404, reader: "api", invalidUtf8: true, reason: "not-found" },
+  { status: 429, reader: "api", invalidUtf8: true, reason: "rate-limit" },
+  { status: 401, reader: "invalid", invalidUtf8: true, reason: "authentication" },
+  { status: 403, reader: "invalid", invalidUtf8: true, reason: "forbidden" },
+  { status: 404, reader: "invalid", invalidUtf8: true, reason: "not-found" },
+  { status: 429, reader: "invalid", invalidUtf8: true, reason: "rate-limit" },
+  { status: 200, reader: "account", invalidUtf8: false, reason: "invalid-response" },
+  { status: 200, reader: "source-control", invalidUtf8: false, reason: "invalid-response" },
+  { status: 200, reader: "pull-request", invalidUtf8: false, reason: "invalid-response" },
+] as const)("bounds oversized fj HTTP responses: %o", ({ status, reader, invalidUtf8, reason }) => {
+  let requests = 0;
+  return Effect.gen(function* () {
+    const cli = yield* ForgejoCli.make;
+    const input = { cwd: "/repo", repository: "maria/project", host: "forgejo.test", number: 42 };
+    const result =
+      reader === "account"
+        ? yield* cli.getAccount!({ cwd: input.cwd, baseUrl: "https://forgejo.test" }).pipe(
+            Effect.result,
+          )
+        : reader === "source-control"
+          ? yield* (yield* ForgejoSourceControlProvider.make.pipe(
+              Effect.provideService(ForgejoCli.ForgejoCli, cli),
+            ))
+              .getChangeRequest({ ...input, reference: "42" })
+              .pipe(Effect.result)
+          : reader === "pull-request"
+            ? yield* (yield* ForgejoPullRequestProvider.make.pipe(
+                Effect.provideService(ForgejoCli.ForgejoCli, cli),
+              )).getChangeRequestSummary!(input).pipe(Effect.result)
+            : yield* cli
+                .api({
+                  ...input,
+                  path: "repos/maria/project/issues/42/timeline",
+                  ...(reader === "mutation" ? { method: "POST" as const, body: {} } : {}),
+                })
+                .pipe(Effect.result);
+    assert.strictEqual(requests, 1);
+    assert.strictEqual(result._tag, reason === undefined ? "Success" : "Failure");
+    if (result._tag === "Success") {
+      assert.propertyVal(result.success, "stdoutTruncated", true);
+      assert.propertyVal(result.success, "stderrTruncated", false);
+      assert.propertyVal(result.success, "exitCode", 0);
+      const stdout = (result.success as { stdout: string }).stdout;
+      if (!invalidUtf8 && reader !== "multibyte")
+        assert.strictEqual(new TextEncoder().encode(stdout).byteLength, 8 * 1024 * 1024);
+      if (reader === "multibyte") assert.strictEqual(stdout.at(-1), "\ufffd");
+    } else if (reader === "source-control") {
+      assert.propertyVal(result.failure.cause, "reason", reason);
+      assert.strictEqual(result.failure.detail, "Forgejo API returned an invalid response.");
+    } else if (reader === "pull-request") {
+      assert.strictEqual(result.failure.detail, "Forgejo response exceeded the output limit.");
+    } else {
+      assert.propertyVal(result.failure, "reason", reason);
+      if (status >= 300) {
+        assert.propertyVal(result.failure, "httpStatus", status);
+        assert.ok(result.failure.detail.length < 200);
+        assert.notInclude(result.failure.detail, "\ufffd");
+      }
+    }
+  }).pipe(
+    Effect.provideService(
+      FileSystem.FileSystem,
+      FileSystem.makeNoop({
+        exists: () => Effect.succeed(true),
+        readFileString: () =>
+          Effect.succeed(
+            encodeJson({ hosts: { "forgejo.test": { type: "Application", token: "test-token" } } }),
+          ),
+      }),
+    ),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        requests++;
+        const prefix = new TextEncoder().encode(
+          reader === "source-control" || reader === "pull-request"
+            ? encodeJson({
+                number: 42,
+                title: "Valid prefix",
+                body: "",
+                html_url: "https://forgejo.test/maria/project/pulls/42",
+                user: { login: "maria" },
+                state: "open",
+                merged: false,
+                head: { ref: "feature", sha: "head", repo: null },
+                base: { ref: "main", sha: "base", repo: null },
+                created_at: "2026-10-01T00:00:00Z",
+                updated_at: "2026-10-01T00:00:00Z",
+                closed_at: null,
+                merged_at: null,
+                labels: [],
+              })
+            : '{"login":"maria"}',
+        );
+        if (invalidUtf8) prefix[0] = 0xff;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(prefix);
+                  if (reader !== "invalid") {
+                    const chunk = new Uint8Array(64 * 1024).fill(0x20);
+                    for (let index = 0; index < 128; index++)
+                      controller.enqueue(
+                        reader === "multibyte" && index === 127
+                          ? chunk.subarray(0, chunk.length - prefix.length - 1)
+                          : chunk,
+                      );
+                    if (reader === "multibyte") controller.enqueue(new TextEncoder().encode("€"));
+                  }
+                  controller.close();
+                },
+              }),
+              { status },
+            ),
+          ),
+        );
+      }),
+    ),
+    Effect.provide(
+      TestSourceControlHost.layer({
+        process: {
+          run: (input) => {
+            if (input.command === "git")
+              return Effect.succeed(
+                processOutput("origin\thttps://forgejo.test/maria/project.git (fetch)"),
+              );
+            assert.strictEqual(input.command, "fj");
+            assert.deepStrictEqual(input.args, ["--host", "https://forgejo.test", "whoami"]);
+            return Effect.succeed(processOutput(""));
+          },
+        },
+      }),
+    ),
+  );
+});
+
 it.effect("handles fj mutation statuses without retrying failures or reading absent bodies", () =>
   Effect.gen(function* () {
     for (const status of [204, 205, 302, 401, 403, 404, 429, 500]) {

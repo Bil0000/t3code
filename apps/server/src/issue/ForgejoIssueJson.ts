@@ -1,7 +1,8 @@
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { IssueComment, IssueEvent } from "@t3tools/contracts";
+import type { IssueComment, IssueEvent, IssueTemplate } from "@t3tools/contracts";
+import { decodeIssueFormYaml } from "./gitHubIssueJson.ts";
 import {
   ForgejoComment,
   ForgejoLabel,
@@ -26,13 +27,21 @@ export const ForgejoIssue = Schema.Struct({
   milestone: Schema.optional(Schema.NullOr(Schema.Struct({ title: Schema.String }))),
   comments: Schema.optional(Schema.Int),
   is_locked: Schema.optional(Schema.Boolean),
-  pull_request: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  pull_request: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        merged: Schema.Boolean,
+        draft: Schema.optional(Schema.Boolean),
+      }),
+    ),
+  ),
 });
 
 export const ForgejoIssueRepository = Schema.Struct({
   ...ForgejoRepository.fields,
   html_url: Schema.optional(Schema.String),
   has_issues: Schema.optional(Schema.Boolean),
+  created_at: Schema.optional(Schema.String),
 });
 
 export const ForgejoIssueTimeline = Schema.Struct({
@@ -43,7 +52,71 @@ export const ForgejoIssueTimeline = Schema.Struct({
   new_title: Schema.optional(Schema.String),
   milestone: Schema.optional(Schema.NullOr(Schema.Struct({ title: Schema.String }))),
   label: Schema.optional(Schema.NullOr(ForgejoLabel)),
+  ref_action: Schema.optional(Schema.String),
+  ref_issue: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        number: Schema.Int,
+        html_url: Schema.String,
+        pull_request: ForgejoIssue.fields.pull_request,
+      }),
+    ),
+  ),
 });
+
+export const ForgejoIssueCommentsCursor = Schema.StringFromBase64Url.pipe(
+  Schema.decodeTo(
+    Schema.fromJsonString(
+      Schema.Tuple([
+        Schema.String.check(
+          Schema.makeFilter(
+            (value) => Number.isFinite(Date.parse(value)) && isoDate(value) === value,
+          ),
+        ),
+        Schema.Int.check(Schema.isGreaterThan(0)),
+      ]).annotate({ parseOptions: { onExcessProperty: "error" } }),
+    ),
+  ),
+);
+
+export const ForgejoIssueTemplate = Schema.Struct({
+  file_name: Schema.String,
+  name: Schema.String,
+  about: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  labels: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+  assignees: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+  body: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+});
+
+export function forgejoIssueTemplate(
+  template: typeof ForgejoIssueTemplate.Type,
+): IssueTemplate | null {
+  if (!template.file_name.trim() || !template.name.trim()) return null;
+  if (/\.ya?ml$/i.test(template.file_name)) {
+    return decodeIssueFormYaml(
+      template.file_name,
+      JSON.stringify({
+        ...template,
+        description: template.about ?? "",
+        labels: template.labels ?? [],
+        assignees: template.assignees ?? [],
+        body: template.body ?? [],
+      }),
+    );
+  }
+  if (!/\.md$/i.test(template.file_name)) return null;
+  return {
+    key: template.file_name,
+    name: template.name,
+    about: template.about ?? "",
+    title: template.title ?? "",
+    body: template.content ?? "",
+    labels: template.labels ?? [],
+    assignees: template.assignees ?? [],
+  };
+}
 
 function isoDate(value: string): string {
   return Option.match(DateTime.make(value), { onNone: () => value, onSome: DateTime.formatIso });

@@ -243,18 +243,27 @@ export const make = Effect.gen(function* () {
   ) =>
     cli.api(input).pipe(
       Effect.flatMap((result) =>
-        Schema.decodeEffect(Schema.fromJsonString(schema))(result.stdout).pipe(
-          Effect.mapError(
-            (cause) =>
+        result.stdoutTruncated
+          ? Effect.fail(
               new ForgejoCli.ForgejoCliError({
                 command: "tea",
                 cwd: input.cwd,
                 detail: "Forgejo API returned an invalid response.",
                 reason: "invalid-response",
-                cause,
               }),
-          ),
-        ),
+            )
+          : Schema.decodeEffect(Schema.fromJsonString(schema))(result.stdout).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ForgejoCli.ForgejoCliError({
+                    command: "tea",
+                    cwd: input.cwd,
+                    detail: "Forgejo API returned an invalid response.",
+                    reason: "invalid-response",
+                    cause,
+                  }),
+              ),
+            ),
       ),
     );
   const mapError = (operation: string, cwd: string) =>
