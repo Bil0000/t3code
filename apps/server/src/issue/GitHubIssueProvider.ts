@@ -2,8 +2,8 @@ import { IssueListSort } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type { IssueCapabilities, IssueViewerPermissions } from "@t3tools/contracts";
 
-import * as GitHubApi from "../sourceControl/GitHubApi.ts";
-import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import type { GitHubIssueViewerAccess } from "./gitHubIssueJson.ts";
 import {

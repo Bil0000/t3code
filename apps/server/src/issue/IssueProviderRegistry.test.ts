@@ -1,7 +1,12 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { issueSourceKey, type OrchestrationProjectShell, type ProjectId } from "@t3tools/contracts";
+import {
+  SourceControlProviderKind,
+  issueSourceKey,
+  type OrchestrationProjectShell,
+  type ProjectId,
+} from "@t3tools/contracts";
 
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { IssueAdapter } from "./IssueProvider.ts";
@@ -205,7 +210,10 @@ it.effect("refines one unknown remote before de-duplicating its worktrees", () =
         refinementCalls += 1;
         return Effect.succeed({
           provider: undefined as never,
-          context: { ...context!, provider: { ...context!.provider, kind: "gitlab" } },
+          context: {
+            ...context!,
+            provider: { ...context!.provider, kind: SourceControlProviderKind.make("gitlab") },
+          },
         });
       },
     });

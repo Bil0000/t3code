@@ -35,7 +35,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
 import * as IssueProviderRegistry from "../../../issue/IssueProviderRegistry.ts";
-import * as SourceControlRateLimit from "../../../sourceControl/SourceControlRateLimit.ts";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { IssuesToolkit } from "./tools.ts";
 
 const projectId = ProjectId.make("project-1");

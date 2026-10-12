@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { ChildProcessSpawner } from "effect/process";
 
-import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
+import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
 import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
 import * as AzureDevOpsIssueProvider from "./AzureDevOpsIssueProvider.ts";
 import { decodeWorkItemJson, decodeWorkItemsJson } from "./azureDevOpsIssueJson.ts";

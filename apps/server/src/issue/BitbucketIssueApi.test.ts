@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
+import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
 import * as BitbucketIssueApi from "./BitbucketIssueApi.ts";
 import * as BitbucketIssueProvider from "./BitbucketIssueProvider.ts";
 import type { ProviderListCursor } from "./IssueProvider.ts";

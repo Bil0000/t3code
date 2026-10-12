@@ -11,10 +11,10 @@ import {
 } from "@t3tools/contracts";
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
-import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
-import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
-import * as GitHubApi from "../sourceControl/GitHubApi.ts";
-import * as GitLabCli from "../sourceControl/GitLabCli.ts";
+import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
+import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
+import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
+import * as GitLabCli from "@t3tools/source-control-gitlab/server/GitLabCli";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
 import * as AzureDevOpsIssueProvider from "./AzureDevOpsIssueProvider.ts";
@@ -184,7 +184,7 @@ const projectResolver = Effect.fn("IssueProviderRegistry.projectResolver")(funct
         ),
       { concurrency: SOURCE_RESOLUTION_CONCURRENCY },
     );
-    return new Map(resolved);
+    return new Map<string, IssueProviderKind>(resolved);
   });
 
   return Effect.fn("IssueProviderRegistry.resolveProjects")(function* (

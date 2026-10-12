@@ -54,8 +54,7 @@ import {
   type IssueProviderKind,
 } from "@t3tools/contracts";
 
-import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
-import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import {
@@ -1975,14 +1974,14 @@ export const make = Effect.gen(function* () {
             ? read(input).pipe(
                 Effect.provideService(CredentialNamespace, sourceKeyOf(project)),
                 Effect.provideService(ResolvedSource, project),
-                Effect.provideService(AllowGitHubReserve, allowReserve),
+                Effect.provideService(SourceControlRateLimit.Interactive, allowReserve),
               )
             : project.adapter
                 .withCredential(project.host, (fingerprint) =>
                   read(input).pipe(
                     Effect.provideService(CredentialNamespace, fingerprint),
                     Effect.provideService(ResolvedSource, project),
-                    Effect.provideService(AllowGitHubReserve, allowReserve),
+                    Effect.provideService(SourceControlRateLimit.Interactive, allowReserve),
                   ),
                 )
                 .pipe(

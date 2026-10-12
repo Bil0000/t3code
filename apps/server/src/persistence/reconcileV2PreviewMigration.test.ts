@@ -43,8 +43,9 @@ describe("V2 preview upgrade", () => {
         [58, "WebhookRelayDeliveries"],
         [59, "McpAppModelContext"],
         [60, "ThreadSnapshotWindowIndexes"],
-        [61, "ProjectionThreadIssues"],
-        [62, "WorkItemLinks"],
+        [61, "PullRequestReviewGuides"],
+        [62, "ProjectionThreadIssues"],
+        [63, "WorkItemLinks"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -128,87 +129,112 @@ describe("V2 preview upgrade", () => {
         [58, "WebhookRelayDeliveries"],
         [59, "McpAppModelContext"],
         [60, "ThreadSnapshotWindowIndexes"],
-        [61, "ProjectionThreadIssues"],
-        [62, "WorkItemLinks"],
+        [61, "PullRequestReviewGuides"],
+        [62, "ProjectionThreadIssues"],
+        [63, "WorkItemLinks"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([59, 60])("upgrades main migration %s without losing MCP app context", (mainId) =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: mainId });
-      yield* sql`INSERT INTO mcp_app_model_context VALUES ('thread', 'item', 'server', 'tool', 'context', '2026-10-07')`;
-      const context = yield* sql`SELECT * FROM mcp_app_model_context`;
-      const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
-      assert.deepStrictEqual(
-        yield* runMigrations(),
-        migrationManifest.filter(([id]) => id > mainId),
-      );
-      assert.deepStrictEqual(yield* sql`SELECT * FROM mcp_app_model_context`, context);
-      assert.deepStrictEqual(
-        yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= ${mainId} ORDER BY migration_id`,
-        history,
-      );
-      assert.deepStrictEqual(yield* runMigrations(), []);
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  it.effect.each([59, 60, 61])(
+    "upgrades main migration %s without losing MCP app context",
+    (mainId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: mainId });
+        yield* sql`INSERT INTO mcp_app_model_context VALUES ('thread', 'item', 'server', 'tool', 'context', '2026-10-07')`;
+        const context = yield* sql`SELECT * FROM mcp_app_model_context`;
+        if (mainId === 61) {
+          yield* sql`INSERT INTO pull_request_review_guides VALUES ('github.com', 'a/b', 1, '{"summary":"Saved guide"}')`;
+        }
+        const history = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        assert.deepStrictEqual(
+          yield* runMigrations(),
+          migrationManifest.filter(([id]) => id > mainId),
+        );
+        assert.deepStrictEqual(yield* sql`SELECT * FROM mcp_app_model_context`, context);
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM pull_request_review_guides`,
+          mainId === 61
+            ? [
+                {
+                  host: "github.com",
+                  repository: "a/b",
+                  number: 1,
+                  guide_json: '{"summary":"Saved guide"}',
+                },
+              ]
+            : [],
+        );
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id <= ${mainId} ORDER BY migration_id`,
+          history,
+        );
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([57, 59, 60, 61])("upgrades issue migration %s without losing links", (issueId) =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: issueId - 1 });
-      const baseHistory = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
-      yield* Migrator.make({})({
-        loader: Migrator.fromRecord({
-          [`${issueId}_ProjectionThreadIssues`]: ProjectionThreadIssues,
-          [`${issueId + 1}_WorkItemLinks`]: WorkItemLinks,
-        }),
-      });
-      yield* sql`INSERT INTO projection_threads
+  it.effect.each([57, 59, 60, 61, 62])(
+    "upgrades issue migration %s without losing links",
+    (issueId) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: issueId - 1 });
+        const baseHistory = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        yield* Migrator.make({})({
+          loader: Migrator.fromRecord({
+            [`${issueId}_ProjectionThreadIssues`]: ProjectionThreadIssues,
+            [`${issueId + 1}_WorkItemLinks`]: WorkItemLinks,
+          }),
+        });
+        yield* sql`INSERT INTO projection_threads
         (thread_id, project_id, title, created_at, updated_at, issue_links_json)
         VALUES ('thread', 'project', 'Thread', '2026-10-07', '2026-10-07', '[{"url":"https://github.com/a/b/issues/1"}]')`;
-      const threads = yield* sql`SELECT * FROM projection_threads`;
-      yield* sql`INSERT INTO work_item_links VALUES ('github', 'https://github.com/a/b/issues/1', 'a/b', 1, 'Issue', 'github', 'https://github.com/a/b/pull/2', 'a/b', 2, 'Fix')`;
-      const links = yield* sql`SELECT * FROM work_item_links`;
-      const issueHistory = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
-      yield* runMigrations();
-      assert.deepStrictEqual(
-        yield* sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
+        const threads = yield* sql`SELECT * FROM projection_threads`;
+        yield* sql`INSERT INTO work_item_links VALUES ('github', 'https://github.com/a/b/issues/1', 'a/b', 1, 'Issue', 'github', 'https://github.com/a/b/pull/2', 'a/b', 2, 'Fix')`;
+        const links = yield* sql`SELECT * FROM work_item_links`;
+        const issueHistory = yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`;
+        yield* runMigrations();
+        assert.deepStrictEqual(
+          yield* sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
           'orchestration_v2_projection_turn_items_user_message_idx',
           'orchestration_v2_projection_nodes_live_idx'
         ) ORDER BY name`,
-        [
-          { name: "orchestration_v2_projection_nodes_live_idx" },
-          { name: "orchestration_v2_projection_turn_items_user_message_idx" },
-        ],
-      );
-      assert.deepStrictEqual(yield* sql`SELECT * FROM projection_threads`, threads);
-      assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
-      assert.deepStrictEqual(
-        yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id < ${issueId} ORDER BY migration_id`,
-        baseHistory,
-      );
-      if (issueId === 61) {
-        assert.deepStrictEqual(
-          yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
-          issueHistory,
+          [
+            { name: "orchestration_v2_projection_nodes_live_idx" },
+            { name: "orchestration_v2_projection_turn_items_user_message_idx" },
+          ],
         );
-      }
-      yield* sql`INSERT INTO mcp_app_model_context VALUES ('thread', 'item', 'server', 'tool', 'context', '2026-10-07')`;
-      assert.deepStrictEqual(yield* runMigrations(), []);
-      const history = yield* sql<{
-        readonly migration_id: number;
-        readonly name: string;
-      }>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
-      assert.deepStrictEqual(
-        history.map((row) => [row.migration_id, row.name] as const),
-        migrationManifest,
-      );
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+        assert.deepStrictEqual(yield* sql`SELECT * FROM projection_threads`, threads);
+        assert.deepStrictEqual(yield* sql`SELECT * FROM work_item_links`, links);
+        assert.deepStrictEqual(
+          yield* sql`SELECT name FROM sqlite_master WHERE name = 'pull_request_review_guides'`,
+          [{ name: "pull_request_review_guides" }],
+        );
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM effect_sql_migrations WHERE migration_id < ${issueId} ORDER BY migration_id`,
+          baseHistory,
+        );
+        if (issueId === 62) {
+          assert.deepStrictEqual(
+            yield* sql`SELECT * FROM effect_sql_migrations ORDER BY migration_id`,
+            issueHistory,
+          );
+        }
+        yield* sql`INSERT INTO mcp_app_model_context VALUES ('thread', 'item', 'server', 'tool', 'context', '2026-10-07')`;
+        assert.deepStrictEqual(yield* runMigrations(), []);
+        const history = yield* sql<{
+          readonly migration_id: number;
+          readonly name: string;
+        }>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
+        assert.deepStrictEqual(
+          history.map((row) => [row.migration_id, row.name] as const),
+          migrationManifest,
+        );
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect.each([59, 60])(
+  it.effect.each([59, 60, 61])(
     "refuses unknown migrations after old issue migration %s without changing links",
     (issueId) =>
       Effect.gen(function* () {

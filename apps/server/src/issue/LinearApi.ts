@@ -18,7 +18,7 @@ import type {
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import type { ProviderListCursor } from "./IssueProvider.ts";
 
 const API_URL = "https://api.linear.app/graphql";

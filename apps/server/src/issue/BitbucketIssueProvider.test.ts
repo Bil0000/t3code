@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
+import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
 import * as BitbucketIssueApi from "./BitbucketIssueApi.ts";
 import * as BitbucketIssueProvider from "./BitbucketIssueProvider.ts";
 import type { BitbucketIssueDetail } from "./bitbucketIssueJson.ts";

@@ -10,8 +10,8 @@ import { runMigrations } from "../Migrations.ts";
 it.effect("adds an issue link column with an empty default", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 60 });
     yield* runMigrations({ toMigrationInclusive: 61 });
+    yield* runMigrations({ toMigrationInclusive: 62 });
     const columns = yield* sql<{
       readonly name: string;
       readonly notnull: number;
@@ -44,8 +44,9 @@ it.effect("upgrades the issue preview ledger without losing saved links", () =>
       { migration_id: 58, name: "WebhookRelayDeliveries" },
       { migration_id: 59, name: "McpAppModelContext" },
       { migration_id: 60, name: "ThreadSnapshotWindowIndexes" },
-      { migration_id: 61, name: "ProjectionThreadIssues" },
-      { migration_id: 62, name: "WorkItemLinks" },
+      { migration_id: 61, name: "PullRequestReviewGuides" },
+      { migration_id: 62, name: "ProjectionThreadIssues" },
+      { migration_id: 63, name: "WorkItemLinks" },
     ]);
     const links = yield* sql<{
       readonly issue_title: string;

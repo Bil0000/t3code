@@ -20,7 +20,10 @@ export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigratio
       `;
       const rebasedIssuePreview = history.find(
         (row) =>
-          (row.migration_id === 57 || row.migration_id === 59 || row.migration_id === 60) &&
+          (row.migration_id === 57 ||
+            row.migration_id === 59 ||
+            row.migration_id === 60 ||
+            row.migration_id === 61) &&
           row.name === "ProjectionThreadIssues",
       );
       if (rebasedIssuePreview) {

@@ -12,7 +12,7 @@ import type {
   IssueListState,
 } from "@t3tools/contracts";
 
-import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
+import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
 import {
   decodeCreatedIssueJson,
   decodeIssueCommentsJson,

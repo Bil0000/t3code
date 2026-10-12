@@ -20,7 +20,7 @@ import type {
   IssueTemplateList,
 } from "@t3tools/contracts";
 
-import * as GitLabCli from "../sourceControl/GitLabCli.ts";
+import * as GitLabCli from "@t3tools/source-control-gitlab/server/GitLabCli";
 import {
   decodeOwnGitLabAwardPageJson,
   gitLabAwardName,

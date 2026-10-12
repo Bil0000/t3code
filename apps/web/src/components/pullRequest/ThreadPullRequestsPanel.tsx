@@ -1,6 +1,5 @@
 import {
   formatIssueReference,
-  SourceControlProviderKind,
   type IssueLinkedPullRequest,
   type IssueRelative,
   type ProjectId,
@@ -8,7 +7,10 @@ import {
   type ThreadIssueLink,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
+import {
+  sourceControlClients,
+  UNKNOWN_SOURCE_CONTROL_CLIENT,
+} from "@t3tools/client-runtime/source-control-clients";
 import {
   resolveThreadPullRequestChains,
   visibleThreadPullRequests,
@@ -22,7 +24,6 @@ import {
   MoreHorizontalIcon,
   PlusIcon,
 } from "lucide-react";
-import * as Schema from "effect/Schema";
 import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -68,6 +69,7 @@ import {
 } from "./pullRequestPresentation";
 import { PullRequestGlyph } from "./pullRequestIcons";
 import { resolveIssueState } from "../issue/issuePresentation";
+import { pullRequestQuickActions } from "./pullRequestList.logic";
 import { PullRequestSpeedActions } from "./PullRequestSpeedActions";
 
 const SOURCE_LABELS: Record<ThreadPullRequestLink["source"], string> = {
@@ -174,8 +176,6 @@ function RowMenu({
     </span>
   );
 }
-
-const isSourceControlProvider = Schema.is(SourceControlProviderKind);
 
 function IssueRow({
   issue,
@@ -295,11 +295,12 @@ function LinkRow({
   const snapshot = link.snapshot;
   const open = snapshot === null || snapshot.state === "open";
   const watching = link.watch !== undefined;
+  // A link carries no host summary, so the host's own definition says what it can do.
+  const linkHostActions = (
+    sourceControlClients.findByChangeRequestUrl(link.url) ?? UNKNOWN_SOURCE_CONTROL_CLIENT
+  ).changeRequestActions;
   const actionEntry =
-    projectId !== null &&
-    snapshot !== null &&
-    snapshot.state !== "merged" &&
-    detectSourceControlProviderFromRemoteUrl(link.url)?.kind === "github"
+    projectId !== null && snapshot !== null && snapshot.state !== "merged"
       ? {
           environmentId: threadRef.environmentId,
           projectId,
@@ -311,6 +312,9 @@ function LinkRow({
           ...(link.stack === null ? {} : { stack: link.stack }),
         }
       : null;
+  // Speed mode swaps the menu for quick actions only where a row has some to offer.
+  const hasQuickActions =
+    actionEntry !== null && pullRequestQuickActions(actionEntry, linkHostActions).length > 0;
   return (
     <div
       className={cn(PULL_REQUEST_ROW_CLASS, "relative hover:bg-accent/60")}
@@ -396,7 +400,7 @@ function LinkRow({
                   </TooltipTrigger>
                   <TooltipPopup>
                     {stack.kind === "native"
-                      ? `GitHub stack of ${stack.size}: merging a layer lands the ones below it.`
+                      ? `${sourceControlClients.hostLabelForChangeRequestUrl(link.url)} stack of ${stack.size}: merging a layer lands the ones below it.`
                       : `${stack.size} pull requests chained by base branch.`}
                   </TooltipPopup>
                 </Tooltip>
@@ -431,12 +435,16 @@ function LinkRow({
         />
       </a>
       {actionEntry !== null ? (
-        <PullRequestSpeedActions entry={actionEntry} visible={speedMode} />
+        <PullRequestSpeedActions
+          entry={actionEntry}
+          hostActions={linkHostActions}
+          visible={speedMode}
+        />
       ) : null}
       <RowMenu
         label={`Actions for #${link.number}`}
         menu={menu}
-        hidden={speedMode && actionEntry !== null}
+        hidden={speedMode && hasQuickActions}
       >
         <MenuItem onClick={() => void writeTextToClipboard(link.url, "link")}>
           <LinkIcon className="size-3.5" />
@@ -514,7 +522,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
       const project =
         issue.projectId !== undefined
           ? environmentProjects.find((candidate) => candidate.id === issue.projectId)
-          : isSourceControlProvider(issue.provider)
+          : sourceControlClients.find(issue.provider) !== undefined
             ? findProjectForLink(environmentProjects, issue)
             : environmentProjects.find((candidate) => candidate.id === thread?.projectId);
       return project?.id ?? null;

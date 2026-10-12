@@ -24,6 +24,7 @@ import {
   type ProjectId,
   type IssueRef,
   IssueTrackingError,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 
 import * as ProjectService from "../project/ProjectService.ts";
@@ -37,18 +38,17 @@ import {
   type ProviderListCursor,
 } from "./IssueProvider.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import { AllowGitHubReserve } from "../sourceControl/GitHubApi.ts";
-import * as GitHubApi from "../sourceControl/GitHubApi.ts";
+import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
-import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as PullRequestProviderRegistry from "../pullRequest/PullRequestProviderRegistry.ts";
-import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
+import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import * as PullRequestReadCache from "../pullRequest/PullRequestReadCache.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import * as GitLabCli from "../sourceControl/GitLabCli.ts";
+import * as GitLabCli from "@t3tools/source-control-gitlab/server/GitLabCli";
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
 import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
 import { IssueProviderRegistry, fromProviders } from "./IssueProviderRegistry.ts";
@@ -420,9 +420,9 @@ it.effect("shares cooldowns in both directions with the pull request service", (
           Layer.mock(PullRequestFilesViewed.PullRequestFilesViewedRepository)({}),
           Layer.mock(PullRequestReadCache.PullRequestReadCache)({ get: (_key, read) => read }),
           Layer.mock(PullRequestProviderRegistry.PullRequestProviderRegistry)({
-            kinds: ["gitlab"],
+            kinds: [SourceControlProviderKind.make("gitlab")],
             get: () => ({
-              kind: "gitlab",
+              kind: SourceControlProviderKind.make("gitlab"),
               capabilities: {
                 diff: false,
                 comment: false,
@@ -439,7 +439,7 @@ it.effect("shares cooldowns in both directions with the pull request service", (
                   calls.pr++;
                   return Effect.fail(
                     new PullRequestProviderError({
-                      provider: "gitlab",
+                      provider: SourceControlProviderKind.make("gitlab"),
                       operation: "getChangeRequest",
                       reason: "rate-limited",
                       detail: "Quota exhausted.",
@@ -2633,7 +2633,7 @@ it.effect.each(["github", "linear", "gitlab", "azure-devops", "bitbucket", "forg
 
 it.effect("keeps issue reads out of GitHub's reserve while allowing writes to use it", () =>
   Effect.gen(function* () {
-    const read = AllowGitHubReserve.pipe(
+    const read = SourceControlRateLimit.Interactive.pipe(
       Effect.flatMap((allowed) =>
         allowed
           ? Effect.succeed(issueDetail(7))
