@@ -1,11 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, OrchestrationV2Subagent } from "@t3tools/contracts";
 import { useState } from "react";
-import { Alert, Pressable } from "react-native";
+import { Alert, Pressable, View } from "react-native";
 
 import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
+import { cn } from "../../lib/cn";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -17,6 +18,7 @@ import {
 export function SubagentStopButton(props: {
   readonly environmentId: EnvironmentId;
   readonly subagent: OrchestrationV2Subagent;
+  readonly className?: string;
 }) {
   const target = resolveSubagentStopTarget(props.subagent);
   const canStopWorkflow = useAtomValue(
@@ -72,14 +74,19 @@ export function SubagentStopButton(props: {
       accessibilityState={{ disabled: stopping, busy: stopping }}
       disabled={stopping}
       onPress={confirmStop}
-      className="min-h-11 min-w-11 flex-row items-center justify-center gap-1.5 rounded-full bg-subtle px-3 active:opacity-70 disabled:opacity-50"
-    >
-      {stopping ? (
-        <AppActivityIndicator size="small" />
-      ) : (
-        <SymbolView name="stop.fill" size={10} tintColorClassName="accent-danger-foreground" />
+      className={cn(
+        "min-h-11 justify-center active:opacity-70 disabled:opacity-50",
+        props.className,
       )}
-      <Text className="font-t3-medium text-xs text-danger-foreground">Stop</Text>
+    >
+      <View className="h-7 flex-row items-center gap-1.5 rounded-full border border-danger-border bg-danger px-3">
+        {stopping ? (
+          <AppActivityIndicator size="small" />
+        ) : (
+          <SymbolView name="stop.fill" size={9} tintColorClassName="accent-danger-foreground" />
+        )}
+        <Text className="font-t3-medium text-xs text-danger-foreground">Stop</Text>
+      </View>
     </Pressable>
   );
 }

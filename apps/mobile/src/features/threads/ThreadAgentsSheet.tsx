@@ -102,6 +102,11 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
           return group === undefined ? (
             <View key={subagent.id} className="border-b border-border">
               {row}
+              <SubagentStopButton
+                environmentId={target.environmentId}
+                subagent={subagent}
+                className="-mt-3 mb-1 self-end"
+              />
             </View>
           ) : (
             <ThreadWorkflowGroup
@@ -109,6 +114,9 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
               environmentId={target.environmentId}
               group={group}
               header={row}
+              stopButton={
+                <SubagentStopButton environmentId={target.environmentId} subagent={subagent} />
+              }
               onOpen={openChildThread}
             />
           );
@@ -179,28 +187,22 @@ function AgentRow(props: {
     </View>
   );
 
-  return (
-    <View className="flex-row items-center gap-3">
-      {childThreadId === null ? (
-        <View
-          accessible
-          accessibilityHint="Provider-managed agent. Its work appears in the transcript."
-          className="min-w-0 flex-1"
-        >
-          {row}
-        </View>
-      ) : (
-        <Pressable
-          accessibilityRole="link"
-          accessibilityHint="Opens this agent thread"
-          onPress={() => props.onOpen(childThreadId)}
-          className="min-w-0 flex-1 active:opacity-70"
-        >
-          {row}
-        </Pressable>
-      )}
-      <SubagentStopButton environmentId={props.environmentId} subagent={subagent} />
+  return childThreadId === null ? (
+    <View
+      accessible
+      accessibilityHint="Provider-managed agent. Its work appears in the transcript."
+    >
+      {row}
     </View>
+  ) : (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityHint="Opens this agent thread"
+      onPress={() => props.onOpen(childThreadId)}
+      className="active:opacity-70"
+    >
+      {row}
+    </Pressable>
   );
 }
 
