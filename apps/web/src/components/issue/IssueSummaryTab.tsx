@@ -400,6 +400,8 @@ export function IssueSummaryTab({
                   environmentId={environmentId}
                   reference={reference}
                   allowed={detail.viewerPermissions.assignees}
+                  maxAssignees={detail.capabilities.maxAssignees}
+                  typedAssignees={detail.capabilities.typedAssignees}
                   open={openPicker === "assignees"}
                   onOpenChange={(open) => onOpenPickerChange(open ? "assignees" : null)}
                   onChanged={onRefresh}

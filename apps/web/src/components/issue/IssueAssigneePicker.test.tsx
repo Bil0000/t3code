@@ -21,6 +21,7 @@ vi.mock("~/state/query", () => ({
 }));
 vi.mock("../pullRequest/PullRequestCandidatePicker", () => ({
   PullRequestCandidatePicker: <T,>(props: {
+    onQueryChange: (query: string) => void;
     candidates: ReadonlyArray<T>;
     disabled: boolean;
     candidateKey: (candidate: T) => string;
@@ -28,6 +29,7 @@ vi.mock("../pullRequest/PullRequestCandidatePicker", () => ({
     children: (candidate: T) => ReactNode;
   }) => (
     <div>
+      <input onChange={(event) => props.onQueryChange(event.target.value)} />
       {props.candidates.map((candidate) => (
         <button
           key={props.candidateKey(candidate)}
@@ -186,4 +188,64 @@ it("ignores a second choice while a write is in flight", async () => {
     ada!.props.onClick();
   });
   expect(setAssignees).toHaveBeenCalledOnce();
+});
+
+it("replaces whoever has it on a single-assignee host", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  query.data = {
+    truncated: false,
+    candidates: [
+      { id: "1", login: "ada", isAssigned: true },
+      { id: "2", login: "grace", isAssigned: false },
+    ],
+  };
+  setAssignees.mockResolvedValueOnce({ _tag: "Success" });
+  await act(() => {
+    renderer = create(
+      <IssueAssigneePicker
+        environmentId={environmentId}
+        reference={reference}
+        allowed
+        maxAssignees={1}
+        open
+        onOpenChange={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+  });
+  await act(() => renderer.root.findAllByType("button")[1]!.props.onClick());
+  expect(setAssignees).toHaveBeenCalledWith({
+    environmentId,
+    input: { ...reference, assignees: ["2"] },
+  });
+});
+
+it("assigns a typed address the bounded list did not include", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  setAssignees.mockResolvedValueOnce({ _tag: "Success" });
+  await act(() => {
+    renderer = create(
+      <IssueAssigneePicker
+        environmentId={environmentId}
+        reference={reference}
+        allowed
+        maxAssignees={1}
+        typedAssignees
+        open
+        onOpenChange={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+  });
+  await act(() => renderer.root.findByType("input").props.onChange({ target: { value: "ada" } }));
+  expect(renderer.root.findAllByType("button")).toHaveLength(1);
+  await act(() =>
+    renderer.root.findByType("input").props.onChange({ target: { value: " kim@example.com " } }),
+  );
+  const buttons = renderer.root.findAllByType("button");
+  await act(() => buttons[buttons.length - 1]!.props.onClick());
+  expect(setAssignees).toHaveBeenCalledWith({
+    environmentId,
+    input: { ...reference, assignees: ["kim@example.com"] },
+  });
 });

@@ -34,6 +34,8 @@ export function IssueAssigneePicker({
   environmentId,
   reference,
   allowed,
+  maxAssignees,
+  typedAssignees,
   open,
   onOpenChange,
   onChanged,
@@ -43,6 +45,8 @@ export function IssueAssigneePicker({
   /** False where the host would refuse this account, which is worth saying rather than hiding:
    * the control disabled with a reason answers the question its absence would raise. */
   allowed: boolean;
+  maxAssignees?: number | undefined;
+  typedAssignees?: boolean | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The detail carries who is assigned, so it is re-read once the host has taken the change. */
@@ -64,7 +68,21 @@ export function IssueAssigneePicker({
     if (written === null || candidatesQuery.dataUpdatedAt > written.at) return listed;
     return listed.map((entry) => ({ ...entry, isAssigned: written.ids.includes(entry.id) }));
   }, [candidatesQuery.data, candidatesQuery.dataUpdatedAt, written]);
-  const candidates = useMemo(() => all.filter((entry) => matches(entry, query)), [all, query]);
+  const typed = query.trim();
+  const typedCandidate = useMemo<IssueAssigneeCandidate | null>(() => {
+    if (!typedAssignees || typed.length === 0) return null;
+    const needle = typed.toLowerCase();
+    const listed = all.some(
+      (entry) => entry.id.toLowerCase() === needle || entry.login.toLowerCase() === needle,
+    );
+    return listed
+      ? null
+      : { id: typed, login: typed, name: null, avatarUrl: null, isAssigned: false };
+  }, [all, typed, typedAssignees]);
+  const candidates = useMemo(() => {
+    const listed = all.filter((entry) => matches(entry, query));
+    return typedCandidate === null ? listed : [...listed, typedCandidate];
+  }, [all, query, typedCandidate]);
   /**
    * The host has more people with access than it listed — a common thing on an organisation
    * repository, and no reason not to assign: every host puts whoever already has the issue in this
@@ -81,7 +99,9 @@ export function IssueAssigneePicker({
     // whoever already has it is listed here: a host that can assign somebody can name them.
     const next = candidate.isAssigned
       ? all.flatMap((entry) => (entry.isAssigned && entry.id !== candidate.id ? [entry.id] : []))
-      : [...all.flatMap((entry) => (entry.isAssigned ? [entry.id] : [])), candidate.id];
+      : [...all.flatMap((entry) => (entry.isAssigned ? [entry.id] : [])), candidate.id].slice(
+          -(maxAssignees ?? Infinity),
+        );
     writing.current = true;
     setPending(candidate.id);
     const result = await setAssignees({ environmentId, input: { ...reference, assignees: next } });
@@ -121,7 +141,9 @@ export function IssueAssigneePicker({
       onOpenChange={onOpenChange}
       query={query}
       onQueryChange={setQuery}
-      searchLabel="Search people with access"
+      searchLabel={
+        typedAssignees ? "Search, or type an email or sign-in name" : "Search people with access"
+      }
       isPending={candidatesQuery.isPending && candidatesQuery.data === null}
       error={candidatesQuery.data === null ? candidatesQuery.error : null}
       candidates={candidates}
@@ -131,19 +153,27 @@ export function IssueAssigneePicker({
       truncated={truncated}
       // Typing filters what arrived; it does not ask the host again, so this says what the list
       // is rather than offering a search that would find nothing further.
-      truncatedLabel="This repository has more people with access than are listed here. Everybody already assigned is, so choosing from here keeps them — somebody else who is missing has to be assigned on the host."
+      truncatedLabel={
+        typedAssignees
+          ? "This repository has more people with access than are listed here. Type the email or sign-in name of somebody missing to assign them."
+          : "This repository has more people with access than are listed here. Everybody already assigned is, so choosing from here keeps them — somebody else who is missing has to be assigned on the host."
+      }
       candidateKey={(candidate) => candidate.id}
       disabled={pending !== null}
       onSelect={(candidate) => void toggle(candidate)}
     >
-      {(candidate) => (
-        <>
-          <PullRequestActorLabel actor={candidate} className="flex-1" />
-          {candidate.isAssigned ? (
-            <CheckIcon aria-label="Already assigned" className="size-3.5 shrink-0" />
-          ) : null}
-        </>
-      )}
+      {(candidate) =>
+        candidate === typedCandidate ? (
+          <span className="flex-1 truncate">Assign {candidate.login}</span>
+        ) : (
+          <>
+            <PullRequestActorLabel actor={candidate} className="flex-1" />
+            {candidate.isAssigned ? (
+              <CheckIcon aria-label="Already assigned" className="size-3.5 shrink-0" />
+            ) : null}
+          </>
+        )
+      }
     </PullRequestCandidatePicker>
   );
 }

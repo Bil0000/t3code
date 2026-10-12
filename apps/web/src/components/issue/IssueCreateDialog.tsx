@@ -333,6 +333,7 @@ export function IssueCreateDialog({
   const [answers, setAnswers] = useState<IssueTemplateAnswers>({});
   const [labels, setLabels] = useState("");
   const [assignees, setAssignees] = useState("");
+  const [workItemType, setWorkItemType] = useState<string | null>(null);
   const [filing, setFiling] = useState(false);
   /**
    * The same "already filing" as `filing`, kept where a second press can read it. State is only
@@ -405,6 +406,12 @@ export function IssueCreateDialog({
       : undefined;
   // A template supplies questions or a draft, never both, so this is what tells the two apart.
   const fields = template?.fields ?? [];
+  const workItemTypes = offer.workItemTypes;
+  const typeChosen =
+    workItemTypes === undefined || (workItemType !== null && workItemTypes.includes(workItemType));
+  const assigneeList = can.assignees ? parseList(assignees) : [];
+  const maxAssignees = offer.capabilities?.maxAssignees;
+  const tooManyAssignees = maxAssignees !== undefined && assigneeList.length > maxAssignees;
 
   /** Taking a starting point writes the whole draft, so going back and taking another replaces it
    *  rather than leaving half of the last one behind. */
@@ -433,6 +440,7 @@ export function IssueCreateDialog({
     if (!next) {
       setChosen(null);
       setSelectedId(null);
+      setWorkItemType(null);
       resetDraft(undefined);
     }
     onOpenChange(next);
@@ -440,7 +448,7 @@ export function IssueCreateDialog({
 
   const complete = issueTemplateAnswersComplete(fields, answers);
   /** Whether a draft is being written at all, which a host that files nothing never gets to. */
-  const composing = choice !== null && can.create;
+  const composing = choice !== null && can.create && workItemTypes?.length !== 0;
   // Nothing has been started on the chooser, so there is nothing to file from it: the Create
   // button is absent there, but the keyboard reaches this from every step of the dialog.
   const canFile =
@@ -452,6 +460,8 @@ export function IssueCreateDialog({
     (choice.kind === "blank" ? offer.blankIssuesEnabled : template !== undefined) &&
     trimmedTitle.length > 0 &&
     complete &&
+    typeChosen &&
+    !tooManyAssignees &&
     !filing;
 
   const submit = async () => {
@@ -470,7 +480,8 @@ export function IssueCreateDialog({
         // Nothing the host does not take: a set it has no notion of is dropped here rather than
         // sent and thrown away where nobody sees it happen.
         labels: can.labels ? parseList(labels) : [],
-        assignees: can.assignees ? parseList(assignees) : [],
+        assignees: assigneeList,
+        ...(workItemType !== null ? { workItemType } : {}),
       },
     });
     filingRef.current = false;
@@ -554,7 +565,7 @@ export function IssueCreateDialog({
           {selected === undefined ? (
             <p className="text-sm text-muted-foreground">
               None of these projects is checked out from a host that takes issues. Add a project
-              with a GitHub, GitLab, Bitbucket or Azure DevOps remote, then file one from here.
+              with a GitHub, GitLab, Forgejo, Gitea or Azure DevOps remote, then file one from here.
             </p>
           ) : (
             <>
@@ -574,6 +585,7 @@ export function IssueCreateDialog({
                     // straight to the blank form, which never passes the chooser that would
                     // otherwise have cleared them, so they are cleared here instead.
                     setChosen(null);
+                    setWorkItemType(null);
                     resetDraft(undefined);
                   }}
                 >
@@ -608,6 +620,11 @@ export function IssueCreateDialog({
                 <p className="text-sm text-muted-foreground">
                   {selected.repository} is on a host that does not take new issues from here. Open
                   it on the host to file one.
+                </p>
+              ) : workItemTypes?.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {selected.repository} has no work item types this account can file. Open it on the
+                  host to file one.
                 </p>
               ) : choice === null ? (
                 // Hairlines rather than boxes, and the whole row is the target: this is a list to
@@ -675,6 +692,29 @@ export function IssueCreateDialog({
                 </div>
               ) : (
                 <>
+                  {workItemTypes !== undefined ? (
+                    <div className="space-y-1.5">
+                      <label className="block font-medium text-sm" htmlFor="issue-work-item-type">
+                        Work item type <RequiredMark />
+                      </label>
+                      <Select
+                        disabled={filing}
+                        value={workItemType ?? ""}
+                        onValueChange={setWorkItemType}
+                      >
+                        <SelectTrigger className="w-fit min-w-40" id="issue-work-item-type">
+                          <SelectValue>{workItemType ?? "Select"}</SelectValue>
+                        </SelectTrigger>
+                        <SelectPopup align="start" alignItemWithTrigger={false}>
+                          {workItemTypes.map((type) => (
+                            <SelectItem key={type} value={type}>
+                              {type}
+                            </SelectItem>
+                          ))}
+                        </SelectPopup>
+                      </Select>
+                    </div>
+                  ) : null}
                   <div className="space-y-1.5">
                     <label className="block font-medium text-sm" htmlFor="issue-title">
                       Add a title <RequiredMark />
@@ -776,9 +816,20 @@ export function IssueCreateDialog({
                             id="issue-assignees"
                             disabled={filing}
                             value={assignees}
-                            placeholder="octocat, hubot"
+                            placeholder={
+                              offer.capabilities?.typedAssignees
+                                ? "name@example.com"
+                                : "octocat, hubot"
+                            }
+                            aria-invalid={tooManyAssignees || undefined}
                             onChange={(event) => setAssignees(event.target.value)}
                           />
+                          {tooManyAssignees ? (
+                            <p className="text-xs text-destructive">
+                              This host takes at most {maxAssignees} assignee
+                              {maxAssignees === 1 ? "" : "s"}.
+                            </p>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

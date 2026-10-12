@@ -94,7 +94,7 @@ export function IssueTimelineTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-5">
+    <div className="h-full overflow-y-auto scrollbar-gutter-both px-4 py-5">
       <div className="mx-auto max-w-3xl">
         {detail.nextCommentsCursor != null ? (
           <Button

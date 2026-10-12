@@ -3,6 +3,7 @@ import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon, TicketIcon } from "luc
 import { PULL_REQUEST_STATE_PRESENTATION } from "../pullRequest/pullRequestIcons";
 import { PullRequestLabelChip } from "../pullRequest/pullRequestPresentation";
 
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { cn } from "~/lib/utils";
 
@@ -16,18 +17,11 @@ interface StatePresentation {
 }
 
 export function getIssueProviderPresentation(kind: IssueProviderKind) {
-  switch (kind) {
-    case "github":
-    case "gitlab":
-    case "azure-devops":
-    case "bitbucket":
-    case "unknown":
-      return getSourceControlPresentationForKind(kind);
-    case "linear":
-      return { providerName: "Linear", Icon: LinearIcon };
-    default:
-      return { providerName: kind, Icon: TicketIcon };
+  if (kind === "linear") return { providerName: "Linear", Icon: LinearIcon };
+  if (kind === "unknown" || sourceControlClients.find(kind) !== undefined) {
+    return getSourceControlPresentationForKind(kind);
   }
+  return { providerName: kind, Icon: TicketIcon };
 }
 
 /**
