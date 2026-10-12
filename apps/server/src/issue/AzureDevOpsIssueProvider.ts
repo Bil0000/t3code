@@ -2,7 +2,10 @@ import * as Effect from "effect/Effect";
 import type { IssueCapabilities, IssueViewerPermissions } from "@t3tools/contracts";
 
 import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
-import type { AzureDevOpsWorkItem } from "./azureDevOpsIssueJson.ts";
+import {
+  AZURE_DEVOPS_COMMENT_REACTIONS,
+  type AzureDevOpsWorkItem,
+} from "./azureDevOpsIssueJson.ts";
 import {
   IssueProviderError,
   type IssueAdapter,
@@ -28,8 +31,11 @@ const CAPABILITIES: IssueCapabilities = {
   listLabelCandidates: true,
   listAssigneeCandidates: true,
   search: true,
-  linkedPullRequests: false,
-  timelineEvents: false,
+  linkedPullRequests: true,
+  timelineEvents: true,
+  reactions: false,
+  commentReactions: true,
+  reactionContents: Object.values(AZURE_DEVOPS_COMMENT_REACTIONS),
 };
 
 /**
@@ -141,31 +147,40 @@ export const make = Effect.gen(function* () {
               })),
             ),
 
-    getIssue: (input) =>
-      cli.getWorkItem(input).pipe(
-        Effect.mapError(fail("getIssue")),
-        Effect.map((item): ProviderIssueDetail => ({
+    getIssue: Effect.fn("AzureDevOpsIssueProvider.getIssue")(
+      function* (input) {
+        const item = yield* cli.getWorkItem(input);
+        const { linkedPullRequests, linkedPullRequestsTruncated } =
+          yield* cli.listLinkedPullRequests({
+            ...input,
+            relations: item.relations ?? [],
+          });
+        return {
           ...toIssue(item),
           body: item.description,
-          linkedPullRequests: [],
+          linkedPullRequests,
+          linkedPullRequestsTruncated,
           viewerPermissions: AZURE_DEVOPS_ISSUE_VIEWER_PERMISSIONS,
-        })),
-      ),
+        } satisfies ProviderIssueDetail;
+      },
+      Effect.mapError(fail("getIssue")),
+    ),
 
     getIssueSummary: (input) =>
       cli.getWorkItemSummary(input).pipe(Effect.mapError(fail("getIssueSummary"))),
 
-    getIssueActivity: (input) =>
-      cli.listComments(input).pipe(
-        Effect.mapError(fail("getIssueActivity")),
-        Effect.map((page) => ({
-          comments: page.comments,
-          commentCount: page.commentCount,
-          commentsTruncated: page.nextCursor !== null,
-          nextCommentsCursor: page.nextCursor,
-          events: [],
-        })),
-      ),
+    getIssueActivity: Effect.fn("AzureDevOpsIssueProvider.getIssueActivity")(function* (input) {
+      const [page, updates] = yield* Effect.all([cli.listComments(input), cli.listUpdates(input)], {
+        concurrency: 2,
+      }).pipe(Effect.mapError(fail("getIssueActivity")));
+      return {
+        comments: page.comments,
+        commentCount: page.commentCount,
+        commentsTruncated: page.nextCursor !== null,
+        nextCommentsCursor: page.nextCursor,
+        ...updates,
+      };
+    }),
 
     getIssueComments: (input) =>
       cli.listComments(input).pipe(
@@ -181,6 +196,8 @@ export const make = Effect.gen(function* () {
     comment: (input) => cli.comment(input).pipe(Effect.mapError(fail("comment"))),
 
     updateComment: (input) => cli.comment(input).pipe(Effect.mapError(fail("updateComment"))),
+
+    setReaction: (input) => cli.setReaction(input).pipe(Effect.mapError(fail("setReaction"))),
 
     create: (input) => cli.createWorkItem(input).pipe(Effect.mapError(fail("create"))),
 

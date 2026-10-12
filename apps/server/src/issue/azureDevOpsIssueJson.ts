@@ -1,7 +1,15 @@
 import type * as Cause from "effect/Cause";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type { IssueState, IssueActor, IssueComment, IssueLabel } from "@t3tools/contracts";
+import type {
+  IssueState,
+  IssueActor,
+  IssueComment,
+  IssueLabel,
+  IssueEvent,
+  IssueReactionContent,
+} from "@t3tools/contracts";
+import { IsoDateTime, PositiveInt } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 /**
@@ -23,6 +31,7 @@ export interface AzureDevOpsWorkItem {
   readonly commentCount: number;
   readonly labels: ReadonlyArray<IssueLabel>;
   readonly project: string | null;
+  readonly relations?: ReadonlyArray<typeof Relation.Type>;
 }
 
 /**
@@ -52,10 +61,16 @@ const Fields = Schema.Struct({
   "System.AssignedTo": Schema.optional(Schema.NullOr(Schema.Union([Identity, Schema.String]))),
 });
 
+const Relation = Schema.Struct({
+  rel: Schema.String,
+  url: Schema.String,
+});
+
 const WorkItem = Schema.Struct({
   id: Schema.Union([Schema.Int, Schema.String]),
   url: Schema.optional(Schema.NullOr(Schema.String)),
   fields: Schema.optional(Schema.NullOr(Fields)),
+  relations: Schema.optional(Schema.NullOr(Schema.Array(Relation))),
 });
 
 const decodeWorkItem = Schema.decodeUnknownResult(WorkItem);
@@ -132,6 +147,7 @@ function toWorkItem(raw: unknown): AzureDevOpsWorkItem | null {
       .filter((name) => name.length > 0)
       .map((name) => ({ name, color: null })),
     project: fields["System.TeamProject"]?.trim() || null,
+    ...(item.relations == null ? {} : { relations: item.relations }),
   };
 }
 
@@ -181,6 +197,15 @@ export function decodeWorkItemSummaryJson(
   });
 }
 
+export const AZURE_DEVOPS_COMMENT_REACTIONS = {
+  like: "thumbs-up",
+  dislike: "thumbs-down",
+  heart: "heart",
+  hooray: "hooray",
+  smile: "laugh",
+  confused: "confused",
+} as const satisfies Record<string, IssueReactionContent>;
+
 const Comment = Schema.Struct({
   id: Schema.optional(Schema.Int),
   commentId: Schema.optional(Schema.Int),
@@ -188,6 +213,17 @@ const Comment = Schema.Struct({
   createdDate: Schema.String,
   createdBy: Schema.optional(Schema.NullOr(Identity)),
   isDeleted: Schema.optional(Schema.Boolean),
+  reactions: Schema.optional(
+    Schema.NullOr(
+      Schema.Array(
+        Schema.Struct({
+          type: Schema.Union([Schema.String, Schema.Int]),
+          count: Schema.Int,
+          isCurrentUserEngaged: Schema.optional(Schema.Boolean),
+        }),
+      ),
+    ),
+  ),
 });
 
 export function decodeWorkItemCommentsJson(raw: string): Result.Result<
@@ -216,6 +252,29 @@ export function decodeWorkItemCommentsJson(raw: string): Result.Result<
         body: entry.text,
         createdAt: entry.createdDate,
         url: null,
+        ...(entry.reactions === undefined
+          ? {}
+          : {
+              reactions: (entry.reactions ?? []).flatMap((reaction) => {
+                const type =
+                  typeof reaction.type === "number"
+                    ? Object.keys(AZURE_DEVOPS_COMMENT_REACTIONS)[reaction.type]
+                    : reaction.type.toLowerCase();
+                const content = Object.entries(AZURE_DEVOPS_COMMENT_REACTIONS).find(
+                  ([native]) => native === type,
+                )?.[1];
+                return content === undefined || reaction.count <= 0
+                  ? []
+                  : [
+                      {
+                        content,
+                        count: reaction.count,
+                        actors: [],
+                        viewerHasReacted: reaction.isCurrentUserEngaged ?? false,
+                      },
+                    ];
+              }),
+            }),
       },
     ];
   });
@@ -224,4 +283,127 @@ export function decodeWorkItemCommentsJson(raw: string): Result.Result<
     commentCount: decoded.success.totalCount ?? comments.length,
     nextCursor: decoded.success.continuationToken || null,
   });
+}
+
+const FieldChange = Schema.Struct({
+  oldValue: Schema.optional(Schema.Unknown),
+  newValue: Schema.optional(Schema.Unknown),
+});
+
+const isIsoDateTime = Schema.is(IsoDateTime);
+
+const WorkItemUpdates = Schema.Struct({
+  value: Schema.Array(
+    Schema.Struct({
+      id: PositiveInt,
+      rev: PositiveInt,
+      revisedDate: IsoDateTime,
+      revisedBy: Schema.optional(Schema.NullOr(Identity)),
+      fields: Schema.optional(Schema.Record(Schema.String, FieldChange)),
+      relations: Schema.optional(
+        Schema.Struct({
+          added: Schema.optional(Schema.Array(Relation)),
+        }),
+      ),
+    }),
+  ),
+});
+
+export const decodeWorkItemUpdatesJson = decodeJsonResult(WorkItemUpdates);
+type WorkItemUpdate = (typeof WorkItemUpdates.Type.value)[number];
+
+export function workItemUpdateEvents(update: WorkItemUpdate): ReadonlyArray<IssueEvent> {
+  if (update.id === 1) return [];
+  const fields = update.fields ?? {};
+  const changedDate = fields["System.ChangedDate"]?.newValue;
+  const createdAt = isIsoDateTime(changedDate) ? changedDate : update.revisedDate;
+  if (createdAt.startsWith("9999-")) return [];
+  const events: IssueEvent[] = [];
+  const add = (kind: IssueEvent["kind"], detail: string | null) =>
+    events.push({
+      id: `azure-update-${update.id}-${events.length}`,
+      kind,
+      actor: actorOf(update.revisedBy),
+      createdAt,
+      detail,
+    });
+  const state = fields["System.State"];
+  if (typeof state?.oldValue === "string" && typeof state.newValue === "string") {
+    const wasClosed = CLOSED_STATES.has(state.oldValue.trim().toLowerCase());
+    const isClosed = CLOSED_STATES.has(state.newValue.trim().toLowerCase());
+    if (wasClosed !== isClosed)
+      add(isClosed ? "closed" : "reopened", state.newValue.trim() || null);
+  }
+  const title = fields["System.Title"];
+  if (
+    typeof title?.oldValue === "string" &&
+    typeof title.newValue === "string" &&
+    title.oldValue !== title.newValue &&
+    title.newValue.trim()
+  )
+    add("renamed", title.newValue.trim());
+  const tags = fields["System.Tags"];
+  if (tags) {
+    const split = (value: unknown) =>
+      typeof value === "string"
+        ? [
+            ...new Set(
+              value
+                .split(";")
+                .map((tag) => tag.trim())
+                .filter(Boolean),
+            ),
+          ]
+        : [];
+    const oldTags = split(tags.oldValue);
+    const newTags = split(tags.newValue);
+    for (const tag of oldTags) if (!newTags.includes(tag)) add("unlabeled", tag);
+    for (const tag of newTags) if (!oldTags.includes(tag)) add("labeled", tag);
+  }
+  const assigned = fields["System.AssignedTo"];
+  if (assigned) {
+    const before = actorOf(assigned.oldValue)?.login;
+    const after = actorOf(assigned.newValue)?.login;
+    if (before?.toLowerCase() !== after?.toLowerCase()) {
+      if (before) add("unassigned", before);
+      if (after) add("assigned", after);
+    }
+  }
+  for (const relation of update.relations?.added ?? []) {
+    const pr = azureDevOpsPullRequestArtifact(relation);
+    if (pr) add("referenced", `Pull request #${pr.number}`);
+  }
+  return events;
+}
+
+export const decodeLinkedPullRequestJson = decodeJsonResult(
+  Schema.Struct({
+    pullRequestId: PositiveInt,
+    title: Schema.NonEmptyString,
+    status: Schema.Literals(["active", "completed", "abandoned"]),
+    url: Schema.optional(Schema.String),
+    isDraft: Schema.optional(Schema.Boolean),
+    repository: Schema.Struct({
+      name: Schema.NonEmptyString,
+      webUrl: Schema.optional(Schema.NullOr(Schema.String)),
+      remoteUrl: Schema.optional(Schema.NullOr(Schema.String)),
+      project: Schema.Struct({ name: Schema.NonEmptyString }),
+    }),
+  }),
+);
+
+export function azureDevOpsPullRequestArtifact(relation: typeof Relation.Type) {
+  if (relation.rel !== "ArtifactLink" || !relation.url.startsWith("vstfs:///Git/PullRequestId/"))
+    return null;
+  try {
+    const artifact = decodeURIComponent(relation.url.slice("vstfs:///Git/PullRequestId/".length));
+    const match =
+      /^([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\/([1-9]\d*)$/iu.exec(
+        artifact,
+      );
+    if (!match || Number(match[3]) > 2147483647) return null;
+    return { project: match[1]!, repository: match[2]!, number: Number(match[3]) };
+  } catch {
+    return null;
+  }
 }

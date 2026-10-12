@@ -421,10 +421,492 @@ layer((it) => {
       const args = mockedExecute.mock.calls[1]?.[0].args ?? [];
       expect(args).toContain("$top=100");
       expect(args).toContain("continuationToken=opaque=previous&value");
+      expect(args).toContain("$expand=reactions");
+      expect(args).toContain("api-version=7.1-preview.4");
       expect(args).toContain("project=Project One");
       expect(args).toContain("https://dev.azure.com/other");
       expect(args).toContain("7.1-preview");
     }),
+  );
+
+  it.effect("reads every updates page from the work item's project and stops on empty pages", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation(({ args }) => {
+        if (args[0] === "boards")
+          return Effect.succeed(
+            output(JSON.stringify(workItem(7, { "System.TeamProject": "Actual Project" }))),
+          );
+        const skip = Number(args.find((arg) => arg.startsWith("$skip="))?.slice(6));
+        return Effect.succeed(
+          output(
+            JSON.stringify({
+              value:
+                skip >= 2
+                  ? []
+                  : [
+                      {
+                        id: skip + 2,
+                        rev: skip + 2,
+                        revisedDate: "9999-01-01T00:00:00Z",
+                        revisedBy: { uniqueName: "ada@example.com" },
+                        fields: {
+                          "System.ChangedDate": {
+                            newValue: skip ? "2026-07-03T00:00:00Z" : "2026-07-03T00:00:00.253Z",
+                          },
+                          "System.State": {
+                            oldValue: skip ? "Closed" : "Active",
+                            newValue: skip ? "Active" : "Closed",
+                          },
+                        },
+                      },
+                    ],
+            }),
+          ),
+        );
+      });
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      const { events, eventsTruncated } = yield* cli.listUpdates({ ...target, number: 7 });
+      assert.deepStrictEqual(
+        events.map((event) => event.kind),
+        ["reopened", "closed"],
+      );
+      assert.strictEqual(events[0]?.createdAt, "2026-07-03T00:00:00Z");
+      assert.isFalse(eventsTruncated);
+      const calls = mockedExecute.mock.calls.slice(1).map(([request]) => request.args);
+      assert.deepStrictEqual(
+        calls.map((args) => args.find((arg) => arg.startsWith("$skip="))),
+        ["$skip=0", "$skip=1", "$skip=2"],
+      );
+      for (const args of calls) {
+        expect(args).toContain("project=Actual Project");
+        expect(args).toContain("id=7");
+        expect(args).toContain("updates");
+        expect(args).toContain("$top=100");
+        expect(args).toContain("7.1");
+        expect(args).toContain("https://dev.azure.com/other");
+      }
+    }),
+  );
+
+  it.effect("rejects repeated or malformed history pages and keeps later-page API errors", () =>
+    Effect.gen(function* () {
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      const error = ruleError(1);
+      for (const response of ["repeat", "malformed", "failed"] as const) {
+        mockedExecute.mockImplementation(({ args }) => {
+          if (args[0] === "boards")
+            return Effect.succeed(
+              output(JSON.stringify(workItem(7, { "System.TeamProject": "Actual Project" }))),
+            );
+          if (args.includes("$skip=1"))
+            return response === "failed"
+              ? Effect.fail(error)
+              : Effect.succeed(
+                  output(
+                    response === "malformed"
+                      ? "bad json"
+                      : JSON.stringify({
+                          value: [{ id: 1, rev: 2, revisedDate: "2026-07-03T00:00:00Z" }],
+                        }),
+                  ),
+                );
+          return Effect.succeed(
+            output(
+              JSON.stringify({ value: [{ id: 1, rev: 2, revisedDate: "2026-07-03T00:00:00Z" }] }),
+            ),
+          );
+        });
+        const result = yield* Effect.flip(cli.listUpdates({ ...target, number: 7 }));
+        if (response === "failed") assert.strictEqual(result, error);
+        else {
+          assert.strictEqual(result._tag, "AzureDevOpsIssueReadError");
+          if (result._tag === "AzureDevOpsIssueReadError")
+            assert.strictEqual(result.operation, "listUpdates");
+        }
+      }
+    }),
+  );
+
+  it.effect(
+    "reads linked PRs with their native project and repo IDs on modern and legacy hosts",
+    () =>
+      Effect.gen(function* () {
+        const project = "11111111-1111-1111-1111-111111111111";
+        const repository = "22222222-2222-2222-2222-222222222222";
+        const artifact = `vstfs:///Git/PullRequestId/${project}%2F${repository}%2F8`;
+        const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+        for (const host of ["dev.azure.com", "other.visualstudio.com"]) {
+          const base =
+            host === "dev.azure.com"
+              ? "https://dev.azure.com/other"
+              : "https://other.visualstudio.com/DefaultCollection";
+          mockedExecute.mockReturnValue(
+            Effect.succeed(
+              output(
+                JSON.stringify({
+                  pullRequestId: 8,
+                  title: "Fix the linked work item",
+                  status: "completed",
+                  isDraft: false,
+                  repository: {
+                    name: "Different Repo",
+                    webUrl: `${base}/Different%20Project/_git/Different%20Repo`,
+                    project: { name: "Different Project" },
+                  },
+                }),
+              ),
+            ),
+          );
+          const { linkedPullRequests: prs, linkedPullRequestsTruncated } =
+            yield* cli.listLinkedPullRequests({
+              ...target,
+              host,
+              relations: [
+                { rel: "ArtifactLink", url: artifact },
+                { rel: "ArtifactLink", url: artifact.replaceAll("%2F", "/") },
+                { rel: "Hyperlink", url: artifact },
+                { rel: "ArtifactLink", url: "vstfs:///Git/PullRequestId/%bad" },
+                { rel: "ArtifactLink", url: "vstfs:///Git/Commit/something" },
+              ],
+            });
+          assert.strictEqual(linkedPullRequestsTruncated, false);
+          assert.deepStrictEqual(prs, [
+            {
+              repository: "other/Different Project/Different Repo",
+              number: 8,
+              title: "Fix the linked work item",
+              url: `${base}/Different%20Project/_git/Different%20Repo/pullrequest/8`,
+              state: "merged",
+              isDraft: false,
+              closesIssue: false,
+            },
+          ]);
+          const args = mockedExecute.mock.calls.at(-1)?.[0].args ?? [];
+          expect(args).toContain(`project=${project}`);
+          expect(args).toContain(`repositoryId=${repository}`);
+          expect(args).toContain("pullRequestId=8");
+          expect(args).toContain("git");
+          expect(args).toContain("pullrequests");
+          expect(args).toContain(
+            host === "dev.azure.com"
+              ? "https://dev.azure.com/other"
+              : "https://other.visualstudio.com",
+          );
+        }
+        assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      }),
+  );
+
+  it.effect("bounds native PR resolution to twenty links", () =>
+    Effect.gen(function* () {
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      mockedExecute.mockImplementation(({ args }) => {
+        const number = Number(args.find((arg) => arg.startsWith("pullRequestId="))?.slice(14));
+        return Effect.succeed(
+          output(
+            JSON.stringify({
+              pullRequestId: number,
+              title: `PR ${number}`,
+              status: "active",
+              repository: {
+                name: "repo",
+                webUrl: "https://dev.azure.com/other/Actual/_git/repo",
+                project: { name: "Actual" },
+              },
+            }),
+          ),
+        );
+      });
+      for (const count of [0, 20, 25]) {
+        mockedExecute.mockClear();
+        const relations = Array.from({ length: count }, (_, index) => ({
+          rel: "ArtifactLink",
+          url: `vstfs:///Git/PullRequestId/11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222/${index + 1}`,
+        }));
+        const { linkedPullRequests: prs, linkedPullRequestsTruncated } =
+          yield* cli.listLinkedPullRequests({ ...target, relations });
+        assert.deepStrictEqual(
+          prs.map((pr) => pr.number),
+          Array.from({ length: Math.min(count, 20) }, (_, index) => index + 1),
+        );
+        assert.strictEqual(linkedPullRequestsTruncated, count > 20);
+        assert.strictEqual(mockedExecute.mock.calls.length, Math.min(count, 20));
+      }
+    }),
+  );
+
+  it.effect(
+    "keeps comments readable with 1001 updates and reports a bounded native history prefix",
+    () =>
+      Effect.gen(function* () {
+        const updates = Array.from({ length: 1001 }, (_, index) => ({
+          id: index + 1,
+          rev: index + 1,
+          revisedDate: "2026-07-03T00:00:00Z",
+          fields: {
+            "System.Title": { oldValue: `Title ${index}`, newValue: `Title ${index + 1}` },
+          },
+        }));
+        mockedExecute.mockImplementation(({ args }) => {
+          if (args[0] === "boards")
+            return Effect.succeed(
+              output(JSON.stringify(workItem(7, { "System.TeamProject": "Actual Project" }))),
+            );
+          if (args.includes("comments"))
+            return Effect.succeed(
+              output(
+                JSON.stringify({
+                  totalCount: 1,
+                  comments: [
+                    {
+                      id: 5,
+                      text: "Still readable",
+                      createdDate: "2026-07-01T00:00:00Z",
+                      reactions: null,
+                    },
+                  ],
+                }),
+              ),
+            );
+          const skip = Number(args.find((arg) => arg.startsWith("$skip="))?.slice(6));
+          return Effect.succeed(
+            output(
+              JSON.stringify({
+                value: updates.slice(skip, skip + 100),
+              }),
+            ),
+          );
+        });
+        const provider = yield* AzureDevOpsIssueProvider.make;
+        const activity = yield* provider.getIssueActivity({ ...target, number: 7 });
+        assert.deepStrictEqual(
+          activity.comments.map((comment) => comment.body),
+          ["Still readable"],
+        );
+        assert.strictEqual(activity.commentCount, 1);
+        assert.isFalse(activity.commentsTruncated);
+        assert.isTrue(activity.eventsTruncated);
+        assert.strictEqual(activity.events.length, 999);
+        assert.strictEqual(activity.events[0]?.id, "azure-update-2-0");
+        assert.strictEqual(activity.events.at(-1)?.id, "azure-update-1000-0");
+        assert.deepStrictEqual(
+          mockedExecute.mock.calls
+            .filter(([request]) => request.args.includes("updates"))
+            .map(([request]) => request.args.find((arg) => arg.startsWith("$skip="))),
+          Array.from({ length: 10 }, (_, index) => `$skip=${index * 100}`),
+        );
+      }),
+  );
+
+  it.effect(
+    "keeps late-page authentication, permission, rate-limit and decode failures visible in activity",
+    () =>
+      Effect.gen(function* () {
+        const context = {
+          operation: "execute" as const,
+          command: "az" as const,
+          cwd: "/w",
+          argumentCount: 1,
+          cause: "provider refused history",
+        };
+        const provider = yield* AzureDevOpsIssueProvider.make;
+        for (const [source, reason] of [
+          [new AzureDevOpsCli.AzureDevOpsCliAuthenticationError(context), "unauthenticated"],
+          [
+            new AzureDevOpsCli.AzureDevOpsCommandFailedError({ ...context, cause: "403" }),
+            "failed",
+          ],
+          [new AzureDevOpsCli.AzureDevOpsCliRateLimitError(context), "rate-limited"],
+          [null, "failed"],
+        ] as const) {
+          mockedExecute.mockImplementation(({ args }) => {
+            if (args[0] === "boards")
+              return Effect.succeed(
+                output(JSON.stringify(workItem(7, { "System.TeamProject": "Actual Project" }))),
+              );
+            if (args.includes("comments"))
+              return Effect.succeed(
+                output(
+                  JSON.stringify({
+                    comments: [{ id: 5, text: "Readable", createdDate: "2026-07-01T00:00:00Z" }],
+                  }),
+                ),
+              );
+            if (args.includes("$skip=900"))
+              return source ? Effect.fail(source) : Effect.succeed(output("bad json"));
+            const skip = Number(args.find((arg) => arg.startsWith("$skip="))?.slice(6));
+            return Effect.succeed(
+              output(
+                JSON.stringify({
+                  value: Array.from({ length: 100 }, (_, index) => ({
+                    id: skip + index + 1,
+                    rev: skip + index + 1,
+                    revisedDate: "2026-07-03T00:00:00Z",
+                  })),
+                }),
+              ),
+            );
+          });
+          const error = yield* Effect.flip(provider.getIssueActivity({ ...target, number: 7 }));
+          assert.strictEqual(error.operation, "getIssueActivity");
+          assert.strictEqual(error.reason, reason);
+          if (source) assert.strictEqual(error.cause, source);
+          else assert.instanceOf(error.cause, AzureDevOpsIssueCli.AzureDevOpsIssueReadError);
+        }
+      }),
+  );
+
+  it.effect(
+    "uses repository remote URLs when Azure omits web URLs and keeps PR read failures",
+    () =>
+      Effect.gen(function* () {
+        const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+        const relations = [
+          {
+            rel: "ArtifactLink",
+            url: "vstfs:///Git/PullRequestId/11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222/8",
+          },
+        ];
+        mockedExecute.mockReturnValue(
+          Effect.succeed(
+            output(
+              JSON.stringify({
+                pullRequestId: 8,
+                title: "Closed",
+                status: "abandoned",
+                isDraft: true,
+                repository: {
+                  name: "repo",
+                  remoteUrl:
+                    "https://other.visualstudio.com/DefaultCollection/Actual%20Project/_git/repo",
+                  project: { name: "Actual Project" },
+                },
+              }),
+            ),
+          ),
+        );
+        const { linkedPullRequests: prs, linkedPullRequestsTruncated } =
+          yield* cli.listLinkedPullRequests({ ...target, relations });
+        assert.strictEqual(
+          prs[0]?.url,
+          "https://other.visualstudio.com/DefaultCollection/Actual%20Project/_git/repo/pullrequest/8",
+        );
+        assert.strictEqual(linkedPullRequestsTruncated, false);
+        assert.strictEqual(prs[0]?.state, "closed");
+        assert.strictEqual(prs[0]?.isDraft, true);
+        const error = new AzureDevOpsCli.AzureDevOpsCliAuthenticationError({
+          operation: "execute",
+          command: "az",
+          cwd: "/w",
+          argumentCount: 1,
+          cause: "401",
+        });
+        mockedExecute.mockReturnValue(Effect.fail(error));
+        assert.strictEqual(
+          yield* Effect.flip(cli.listLinkedPullRequests({ ...target, relations })),
+          error,
+        );
+      }),
+  );
+
+  it.effect("does not submit a comment reaction when Azure refuses the work item read", () =>
+    Effect.gen(function* () {
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      const error = new AzureDevOpsCli.AzureDevOpsCliAuthenticationError({
+        operation: "execute",
+        command: "az",
+        cwd: "/w",
+        argumentCount: 1,
+        cause: "401",
+      });
+      mockedExecute.mockReturnValue(Effect.fail(error));
+      assert.strictEqual(
+        yield* Effect.flip(
+          cli.setReaction({
+            ...target,
+            number: 7,
+            subjectId: "5",
+            content: "heart",
+            reacted: true,
+          }),
+        ),
+        error,
+      );
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      expect(mockedExecute.mock.calls[0]?.[0].args).toContain("show");
+      expect(mockedExecute.mock.calls[0]?.[0].args).not.toContain("commentsReactions");
+    }),
+  );
+
+  it.effect("adds and removes all six native comment reactions in the item's actual project", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation(({ args }) =>
+        Effect.succeed(
+          output(
+            args[0] === "boards"
+              ? JSON.stringify(workItem(7, { "System.TeamProject": "Actual Project" }))
+              : "{}",
+          ),
+        ),
+      );
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      for (const [content, native] of [
+        ["thumbs-up", "like"],
+        ["thumbs-down", "dislike"],
+        ["heart", "heart"],
+        ["hooray", "hooray"],
+        ["laugh", "smile"],
+        ["confused", "confused"],
+      ] as const) {
+        for (const reacted of [true, false]) {
+          yield* cli.setReaction({
+            ...target,
+            host: "other.visualstudio.com",
+            number: 7,
+            subjectId: "5",
+            content,
+            reacted,
+          });
+          const args = mockedExecute.mock.calls.at(-1)?.[0].args ?? [];
+          for (const expected of [
+            "commentsReactions",
+            "project=Actual Project",
+            "workItemId=7",
+            "commentId=5",
+            `reactionType=${native}`,
+            "7.1-preview",
+            "api-version=7.1-preview.1",
+            reacted ? "PUT" : "DELETE",
+            "https://other.visualstudio.com",
+          ])
+            expect(args).toContain(expected);
+          expect(args).not.toContain("--in-file");
+        }
+      }
+    }),
+  );
+
+  it.effect(
+    "rejects whole-item, unsupported, and invalid-ID reactions before reading or writing",
+    () =>
+      Effect.gen(function* () {
+        const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+        for (const input of [
+          { content: "heart" as const },
+          { subjectId: "5", content: "rocket" as const },
+          { subjectId: "5", content: "eyes" as const },
+          ...["0", "-1", "1&evil=2", "2147483648"].map((subjectId) => ({
+            subjectId,
+            content: "heart" as const,
+          })),
+        ]) {
+          const error = yield* Effect.flip(
+            cli.setReaction({ ...target, number: 7, reacted: true, ...input }),
+          );
+          assert.strictEqual(error._tag, "AzureDevOpsIssueInputError");
+        }
+        assert.strictEqual(mockedExecute.mock.calls.length, 0);
+      }),
   );
 
   it.effect("posts and edits comments as Markdown and cleans request files after failures", () =>
@@ -677,6 +1159,8 @@ layer((it) => {
         "true",
         "--id",
         "7",
+        "--expand",
+        "relations",
         "--only-show-errors",
         "--output",
         "json",

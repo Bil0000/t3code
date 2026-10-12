@@ -84,6 +84,7 @@ it.effect("reads modern and legacy Azure work item URLs in lists and details", (
       const detail = yield* provider.getIssue({ ...reference, number: 7 });
       assert.strictEqual(detail.url, expectedUrl);
       assert.strictEqual(detail.body, "Work item body");
+      assert.strictEqual(detail.linkedPullRequestsTruncated, false);
     }
   }),
 );
@@ -155,5 +156,121 @@ it.effect("maps CLI rate limits without changing other Azure DevOps failures", (
         assert.strictEqual(error.cause, source);
       }
     }
+  }),
+);
+
+it.effect("returns native PR links and activity without claiming whole-item reactions", () =>
+  Effect.gen(function* () {
+    const reference = { cwd: "/repo", repository: "acme/web", host: "dev.azure.com", number: 7 };
+    const parsed = decodeWorkItemJson(
+      JSON.stringify({
+        id: 7,
+        url: "https://dev.azure.com/acme/web/_apis/wit/workItems/7",
+        fields: { "System.Title": "Work item", "System.CreatedDate": "2026-07-01T00:00:00Z" },
+        relations: [{ rel: "ArtifactLink", url: "native-artifact" }],
+      }),
+    );
+    assert.isTrue(Result.isSuccess(parsed));
+    if (!Result.isSuccess(parsed) || parsed.success === null) return;
+    const item = parsed.success;
+    const linkedPullRequests = [
+      {
+        repository: "acme/other/repo",
+        number: 8,
+        title: "Linked",
+        url: "https://dev.azure.com/acme/other/_git/repo/pullrequest/8",
+        state: "open" as const,
+        isDraft: false,
+        closesIssue: false,
+      },
+    ];
+    const comments = [
+      {
+        id: "5",
+        author: null,
+        body: "Hello",
+        createdAt: "2026-07-01T00:00:00Z",
+        url: null,
+        reactions: [{ content: "heart" as const, count: 1, actors: [], viewerHasReacted: true }],
+      },
+    ];
+    const events = [
+      {
+        id: "update-1",
+        kind: "closed" as const,
+        actor: null,
+        createdAt: "2026-07-02T00:00:00Z",
+        detail: "Closed",
+      },
+    ];
+    const provider = yield* AzureDevOpsIssueProvider.make.pipe(
+      Effect.provide(
+        Layer.mock(AzureDevOpsIssueCli.AzureDevOpsIssueCli)({
+          getWorkItem: () => Effect.succeed(item),
+          listLinkedPullRequests: (input) => {
+            assert.deepStrictEqual(input, { ...reference, relations: item.relations ?? [] });
+            return Effect.succeed({ linkedPullRequests, linkedPullRequestsTruncated: true });
+          },
+          listComments: () => Effect.succeed({ comments, commentCount: 150, nextCursor: "next" }),
+          listUpdates: () => Effect.succeed({ events, eventsTruncated: false }),
+        }),
+      ),
+    );
+    const detail = yield* provider.getIssue(reference);
+    assert.deepStrictEqual(detail.linkedPullRequests, linkedPullRequests);
+    assert.strictEqual(detail.linkedPullRequestsTruncated, true);
+    assert.strictEqual(detail.reactions, undefined);
+    assert.strictEqual(provider.capabilities.reactions, false);
+    assert.strictEqual(provider.capabilities.commentReactions, true);
+    assert.deepStrictEqual(provider.capabilities.reactionContents, [
+      "thumbs-up",
+      "thumbs-down",
+      "heart",
+      "hooray",
+      "laugh",
+      "confused",
+    ]);
+    assert.strictEqual(provider.capabilities.linkedPullRequests, true);
+    assert.strictEqual(provider.capabilities.timelineEvents, true);
+    assert.deepStrictEqual(yield* provider.getIssueActivity(reference), {
+      comments,
+      commentCount: 150,
+      commentsTruncated: true,
+      nextCommentsCursor: "next",
+      events,
+      eventsTruncated: false,
+    });
+    assert.deepStrictEqual(
+      yield* provider.getIssueComments!({ ...reference, cursor: "previous" }),
+      { comments, nextCursor: "next" },
+    );
+  }),
+);
+
+it.effect("maps native reaction refusals and stops whole-item writes before calling Azure", () =>
+  Effect.gen(function* () {
+    const provider = yield* AzureDevOpsIssueProvider.make.pipe(
+      Effect.provide(
+        Layer.mock(AzureDevOpsIssueCli.AzureDevOpsIssueCli)({
+          setReaction: () =>
+            Effect.fail(
+              new AzureDevOpsIssueCli.AzureDevOpsIssueInputError({ reason: "comment-required" }),
+            ),
+        }),
+      ),
+    );
+    const error = yield* Effect.flip(
+      provider.setReaction!({
+        cwd: "/repo",
+        repository: "acme/web",
+        host: "dev.azure.com",
+        number: 7,
+        content: "heart",
+        reacted: true,
+      }),
+    );
+    assert.strictEqual(error.operation, "setReaction");
+    assert.strictEqual(error.reason, "failed");
+    assert.strictEqual(error.detail, "Azure DevOps supports reactions on comments only.");
   }),
 );

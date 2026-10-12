@@ -14,15 +14,25 @@ import {
   type IssueLabelCandidateList,
   type IssueAssigneeCandidateList,
   type IssueComment,
+  type IssueEvent,
+  type IssueReactionContent,
+  type IssueLinkedPullRequest,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
 import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
+import { azureDevOpsPullRequestWebUrl } from "@t3tools/source-control-azure-devops/server/azureDevOpsPullRequests";
 import {
   decodeWorkItemJson,
   decodeWorkItemsJson,
   decodeWorkItemSummaryJson,
   decodeWorkItemCommentsJson,
+  decodeWorkItemUpdatesJson,
+  workItemUpdateEvents,
+  AZURE_DEVOPS_COMMENT_REACTIONS,
+  decodeLinkedPullRequestJson,
+  azureDevOpsPullRequestArtifact,
   type AzureDevOpsWorkItem,
 } from "./azureDevOpsIssueJson.ts";
 import type { ProviderListCursor } from "./IssueProvider.ts";
@@ -128,6 +138,8 @@ export class AzureDevOpsIssueInputError extends Schema.TaggedError<AzureDevOpsIs
       "too-many-assignees",
       "invalid-tag",
       "invalid-comment-id",
+      "comment-required",
+      "unsupported-reaction",
     ]),
   },
 ) {
@@ -140,7 +152,11 @@ export class AzureDevOpsIssueInputError extends Schema.TaggedError<AzureDevOpsIs
       case "invalid-tag":
         return "Azure DevOps tags cannot contain commas or semicolons, or exceed 400 characters.";
       case "invalid-comment-id":
-        return "An Azure DevOps comment ID must be a positive integer.";
+        return "An Azure DevOps comment ID must be a positive 32-bit integer.";
+      case "comment-required":
+        return "Azure DevOps supports reactions on comments only.";
+      case "unsupported-reaction":
+        return "Azure DevOps does not support this comment reaction.";
     }
   }
 }
@@ -225,6 +241,32 @@ export class AzureDevOpsIssueCli extends Context.Service<
       },
       AzureDevOpsIssueCliError
     >;
+    readonly listUpdates: (
+      input: AzureDevOpsIssueScope & { readonly number: number },
+    ) => Effect.Effect<
+      { readonly events: ReadonlyArray<IssueEvent>; readonly eventsTruncated: boolean },
+      AzureDevOpsIssueCliError
+    >;
+    readonly listLinkedPullRequests: (
+      input: AzureDevOpsIssueScope & {
+        readonly repository: string;
+        readonly relations: NonNullable<AzureDevOpsWorkItem["relations"]>;
+      },
+    ) => Effect.Effect<
+      {
+        readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
+        readonly linkedPullRequestsTruncated: boolean;
+      },
+      AzureDevOpsIssueCliError
+    >;
+    readonly setReaction: (
+      input: AzureDevOpsIssueScope & {
+        readonly number: number;
+        readonly subjectId?: string | undefined;
+        readonly content: IssueReactionContent;
+        readonly reacted: boolean;
+      },
+    ) => Effect.Effect<void, AzureDevOpsIssueCliError>;
     readonly comment: (
       input: AzureDevOpsIssueScope & {
         readonly number: number;
@@ -443,7 +485,16 @@ const make = Effect.gen(function* () {
     read({
       cwd: input.cwd,
       operation: "getWorkItem",
-      args: ["boards", "work-item", "show", ...scopeArgs(input), "--id", String(input.number)],
+      args: [
+        "boards",
+        "work-item",
+        "show",
+        ...scopeArgs(input),
+        "--id",
+        String(input.number),
+        "--expand",
+        "relations",
+      ],
       decode: decodeWorkItemJson,
     }).pipe(
       Effect.flatMap((item) =>
@@ -623,12 +674,153 @@ const make = Effect.gen(function* () {
               "$top=100",
               "order=asc",
               "includeDeleted=false",
+              "$expand=reactions",
+              "api-version=7.1-preview.4",
               ...(input.cursor === undefined ? [] : [`continuationToken=${input.cursor}`]),
             ],
             decode: decodeWorkItemCommentsJson,
           }),
         ),
       ),
+
+    listUpdates: Effect.fn("AzureDevOpsIssueCli.listUpdates")(function* (input) {
+      const project = yield* itemProject(input);
+      const events: IssueEvent[] = [];
+      const seen = new Set<number>();
+      let skip = 0;
+      let eventsTruncated = true;
+      for (let pageIndex = 0; pageIndex < 10; pageIndex++) {
+        const page = yield* read({
+          cwd: input.cwd,
+          operation: "listUpdates",
+          args: [
+            ...invokeArgs(input, "updates", project, [`id=${input.number}`]),
+            "--query-parameters",
+            "$top=100",
+            `$skip=${skip}`,
+          ],
+          decode: decodeWorkItemUpdatesJson,
+        });
+        if (page.value.length === 0) {
+          eventsTruncated = false;
+          break;
+        }
+        if (page.value.every((update) => seen.has(update.id))) {
+          return yield* new AzureDevOpsIssueReadError({
+            command: "az",
+            cwd: input.cwd,
+            operation: "listUpdates",
+            cause: "repeated-page",
+          });
+        }
+        for (const update of page.value) {
+          if (seen.has(update.id)) continue;
+          seen.add(update.id);
+          events.push(...workItemUpdateEvents(update));
+        }
+        skip += page.value.length;
+      }
+      events.sort((left, right) => compareDateTimeStrings(left.createdAt, right.createdAt));
+      return { events, eventsTruncated };
+    }),
+
+    listLinkedPullRequests: Effect.fn("AzureDevOpsIssueCli.listLinkedPullRequests")(
+      function* (input) {
+        const links = new Map<string, { project: string; repository: string; number: number }>();
+        for (const relation of input.relations) {
+          const link = azureDevOpsPullRequestArtifact(relation);
+          if (link)
+            links.set(
+              `${link.project.toLowerCase()}/${link.repository.toLowerCase()}/${link.number}`,
+              link,
+            );
+        }
+        const linkedPullRequests = yield* Effect.forEach(
+          [...links.values()].slice(0, 20),
+          (link) =>
+            read({
+              cwd: input.cwd,
+              operation: "listLinkedPullRequests",
+              args: [
+                "devops",
+                "invoke",
+                ...scopeArgs(input),
+                "--area",
+                "git",
+                "--resource",
+                "pullrequests",
+                "--route-parameters",
+                `project=${link.project}`,
+                `repositoryId=${link.repository}`,
+                `pullRequestId=${link.number}`,
+                "--api-version",
+                "7.1",
+              ],
+              decode: decodeLinkedPullRequestJson,
+            }).pipe(
+              Effect.map((pr): IssueLinkedPullRequest => ({
+                repository: `${input.repository.split("/")[0]}/${pr.repository.project.name}/${pr.repository.name}`,
+                number: pr.pullRequestId,
+                title: pr.title,
+                url: azureDevOpsPullRequestWebUrl({
+                  pullRequestId: pr.pullRequestId,
+                  repositoryWebUrl: pr.repository.webUrl ?? pr.repository.remoteUrl,
+                  restApiUrl: pr.url,
+                  projectName: pr.repository.project.name,
+                  repositoryName: pr.repository.name,
+                }),
+                state:
+                  pr.status === "completed"
+                    ? "merged"
+                    : pr.status === "abandoned"
+                      ? "closed"
+                      : "open",
+                isDraft: pr.isDraft ?? false,
+                closesIssue: false,
+              })),
+            ),
+          { concurrency: 3 },
+        );
+        return { linkedPullRequests, linkedPullRequestsTruncated: links.size > 20 };
+      },
+    ),
+
+    setReaction: (input) => {
+      if (input.subjectId === undefined)
+        return Effect.fail(new AzureDevOpsIssueInputError({ reason: "comment-required" }));
+      if (!/^[1-9]\d*$/u.test(input.subjectId) || Number(input.subjectId) > 2147483647)
+        return Effect.fail(new AzureDevOpsIssueInputError({ reason: "invalid-comment-id" }));
+      const type = Object.entries(AZURE_DEVOPS_COMMENT_REACTIONS).find(
+        ([, content]) => content === input.content,
+      )?.[0];
+      if (type === undefined)
+        return Effect.fail(new AzureDevOpsIssueInputError({ reason: "unsupported-reaction" }));
+      return itemProject(input).pipe(
+        Effect.flatMap((project) =>
+          executeJson({
+            cwd: input.cwd,
+            args: [
+              ...invokeArgs(
+                input,
+                "commentsReactions",
+                project,
+                [
+                  `workItemId=${input.number}`,
+                  `commentId=${input.subjectId}`,
+                  `reactionType=${type}`,
+                ],
+                "7.1-preview",
+              ),
+              "--http-method",
+              input.reacted ? "PUT" : "DELETE",
+              "--query-parameters",
+              "api-version=7.1-preview.1",
+            ],
+          }),
+        ),
+        Effect.asVoid,
+      );
+    },
 
     comment: (input) => {
       if (input.commentId !== undefined && !/^[1-9]\d*$/u.test(input.commentId))
