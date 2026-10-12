@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
-import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
+import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import {
   LOCATION_CACHE_CAPACITY,
   make,
