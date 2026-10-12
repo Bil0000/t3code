@@ -201,4 +201,24 @@ describe("resolveSubagentPillSegment", () => {
       accessibilityLabel: "2 agents done",
     });
   });
+
+  it("does not count idle agents as done alongside settled workflows", () => {
+    const turn = deriveThreadTurnSubagents({
+      runs: [finishedRun, run("run-2", "completed")],
+      subagents: [
+        subagent({ id: "workflow", status: "completed", workflow: { phases: [], agents: [] } }),
+        subagent({
+          id: "idle",
+          runId: RunId.make("run-2"),
+          status: "idle",
+          updatedAt: at("2026-06-20T00:00:09.000Z"),
+        }),
+      ],
+    });
+
+    expect(resolveSubagentPillSegment(turn)).toEqual({
+      label: "1 done",
+      accessibilityLabel: "1 agent done",
+    });
+  });
 });
