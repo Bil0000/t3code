@@ -14,6 +14,7 @@ import type {
   IssueLinkedPullRequest,
   IssueListState,
   IssueListOrder,
+  IssueListSort,
   IssueReaction,
   IssueReactionContent,
   IssueTemplate,
@@ -34,6 +35,8 @@ import {
   decodeIssueTemplateEntriesJson,
   decodeIssueTemplateJson,
   decodeLabelEventsJson,
+  decodeStateEventsJson,
+  decodeNoteAwardsJson,
   decodeLinkedMergeRequestsJson,
   decodeProjectLabelsJson,
   decodeProjectMembersJson,
@@ -43,7 +46,7 @@ import {
   type GitLabIssueDetail,
   type GitLabIssueTemplateEntry,
 } from "./gitLabIssueJson.ts";
-import type { ProviderListCursor } from "./IssueProvider.ts";
+import type { ProviderIssueCommentsPage, ProviderListCursor } from "./IssueProvider.ts";
 
 /**
  * Names the read that produced unusable output, so a failure reports the call it came from
@@ -124,6 +127,7 @@ export interface GitLabIssueActivity {
   readonly events: ReadonlyArray<IssueEvent>;
   readonly truncated: boolean;
   readonly reactions: ReadonlyArray<IssueReaction>;
+  readonly nextCommentsCursor: string | null;
 }
 
 export class GitLabIssueCli extends Context.Service<
@@ -131,15 +135,18 @@ export class GitLabIssueCli extends Context.Service<
   {
     readonly getViewerUsername: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
     }) => Effect.Effect<string, GitLabIssueCliError>;
 
     readonly listIssues: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly state: IssueListState;
       readonly involvement: Exclude<IssueInvolvement, "mentioned">;
       readonly viewer: string;
       readonly limit: number;
+      readonly sort?: IssueListSort | undefined;
       readonly order?: IssueListOrder | undefined;
       /** Free text for GitLab's own `search`, which matches title and description. */
       readonly query?: string | undefined;
@@ -149,6 +156,7 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly getIssueDetail: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<GitLabIssueDetail, GitLabIssueCliError>;
@@ -160,18 +168,29 @@ export class GitLabIssueCli extends Context.Service<
      */
     readonly listLinkedMergeRequests: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<ReadonlyArray<IssueLinkedPullRequest>, GitLabIssueCliError>;
 
     readonly listActivity: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<GitLabIssueActivity, GitLabIssueCliError>;
 
+    readonly getIssueComments: (input: {
+      readonly cwd: string;
+      readonly host?: string | undefined;
+      readonly repository: string;
+      readonly number: number;
+      readonly cursor: string;
+    }) => Effect.Effect<ProviderIssueCommentsPage, GitLabIssueCliError>;
+
     readonly createIssue: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly title: string;
       readonly body: string;
@@ -181,6 +200,7 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly updateIssue: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly title?: string | undefined;
@@ -189,6 +209,7 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly runIssueAction: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly action: IssueAction;
@@ -196,6 +217,7 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly commentOnIssue: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly body: string;
@@ -203,6 +225,7 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly updateComment: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly commentId: string;
@@ -211,6 +234,7 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly setReaction: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly subjectId?: string | undefined;
@@ -220,6 +244,7 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly setLabels: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly labels: ReadonlyArray<string>;
@@ -227,6 +252,7 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly setAssignees: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       /** GitLab's own numeric user ids, as the candidate list handed them out. */
@@ -235,12 +261,14 @@ export class GitLabIssueCli extends Context.Service<
 
     readonly listLabelCandidates: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<IssueLabelCandidateList, GitLabIssueCliError>;
 
     readonly listAssigneeCandidates: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<IssueAssigneeCandidateList, GitLabIssueCliError>;
@@ -251,6 +279,7 @@ export class GitLabIssueCli extends Context.Service<
      */
     readonly listIssueTemplates: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
     }) => Effect.Effect<IssueTemplateList, GitLabIssueCliError>;
   }
@@ -328,6 +357,7 @@ const make = Effect.gen(function* () {
 
   const api = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly path: string;
     readonly method?: string;
     readonly stdin?: string;
@@ -337,6 +367,7 @@ const make = Effect.gen(function* () {
       args: [
         "api",
         input.path,
+        ...(input.host === undefined ? [] : ["--hostname", input.host]),
         ...(input.method === undefined ? [] : ["--method", input.method]),
         // A raw body from stdin: argv is visible in process listings and is echoed back
         // inside process-runner failure messages. Unlike `gh`, `glab api --input` sends no
@@ -366,11 +397,13 @@ const make = Effect.gen(function* () {
    */
   const listPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly state: IssueListState;
     readonly involvement: Exclude<IssueInvolvement, "mentioned">;
     readonly viewer: string;
     readonly limit: number;
+    readonly sort?: IssueListSort | undefined;
     readonly order?: IssueListOrder | undefined;
     readonly query?: string | undefined;
     readonly cursor?: ProviderListCursor | undefined;
@@ -385,6 +418,7 @@ const make = Effect.gen(function* () {
     const lastPage = Math.floor(input.limit / perPage) + 1;
     return api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/issues?${query([
         ["state", stateParam(input.state)],
         ...involvementParams(input),
@@ -393,8 +427,8 @@ const make = Effect.gen(function* () {
         // URL-encoded like every other value here, so no text in it can become a parameter of
         // its own.
         ...searchParams(input.query),
-        ...cursorParams(input.cursor),
-        ["order_by", "updated_at"],
+        ...cursorParams(input.sort === "created" ? undefined : input.cursor),
+        ["order_by", input.sort === "created" ? "created_at" : "updated_at"],
         ["sort", input.order ?? "desc"],
         ["per_page", String(perPage)],
         ["page", String(input.page)],
@@ -456,11 +490,13 @@ const make = Effect.gen(function* () {
 
   const issueDetail = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
   }): Effect.Effect<GitLabIssueDetail, GitLabIssueCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/issues/${input.number}`,
     }).pipe(
       Effect.flatMap((result) => {
@@ -481,9 +517,11 @@ const make = Effect.gen(function* () {
    */
   const notesPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
+    readonly lastPage: number;
     readonly comments: ReadonlyArray<IssueComment>;
     readonly events: ReadonlyArray<IssueEvent>;
   }): Effect.Effect<
@@ -491,11 +529,13 @@ const make = Effect.gen(function* () {
       readonly comments: ReadonlyArray<IssueComment>;
       readonly events: ReadonlyArray<IssueEvent>;
       readonly truncated: boolean;
+      readonly nextCursor: string | null;
     },
     GitLabIssueCliError
   > =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes?${query([
         ["per_page", String(MAX_PAGE_SIZE)],
         ["page", String(input.page)],
@@ -513,10 +553,15 @@ const make = Effect.gen(function* () {
         const comments = [...input.comments, ...decoded.success.comments];
         const events = [...input.events, ...decoded.success.events];
         if (decoded.success.rawCount < MAX_PAGE_SIZE) {
-          return Effect.succeed({ comments, events, truncated: false });
+          return Effect.succeed({ comments, events, truncated: false, nextCursor: null });
         }
-        return input.page >= CONVERSATION_PAGES
-          ? Effect.succeed({ comments, events, truncated: true })
+        return input.page >= input.lastPage
+          ? Effect.succeed({
+              comments,
+              events,
+              truncated: true,
+              nextCursor: String(input.page + 1),
+            })
           : notesPage({ ...input, page: input.page + 1, comments, events });
       }),
     );
@@ -526,27 +571,32 @@ const make = Effect.gen(function* () {
    * the same way too: an issue relabelled more often than the walk follows has a history as
    * incomplete as one talked over more than the walk reads.
    */
-  const labelEventsPage = (input: {
+  const resourceEventsPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
     readonly collected: ReadonlyArray<IssueEvent>;
+    readonly resource: "label" | "state";
   }): Effect.Effect<
     { readonly events: ReadonlyArray<IssueEvent>; readonly truncated: boolean },
     GitLabIssueCliError
   > =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/issues/${
         input.number
-      }/resource_label_events?${query([
+      }/resource_${input.resource}_events?${query([
         ["per_page", String(MAX_PAGE_SIZE)],
         ["page", String(input.page)],
       ])}`,
     }).pipe(
       Effect.flatMap((result) => {
-        const decoded = decodeLabelEventsJson(result.stdout.trim());
+        const decoded = (
+          input.resource === "label" ? decodeLabelEventsJson : decodeStateEventsJson
+        )(result.stdout.trim());
         if (!Result.isSuccess(decoded)) {
           return Effect.fail(
             readError({ cwd: input.cwd, operation: "listActivity" })(decoded.failure),
@@ -558,7 +608,7 @@ const make = Effect.gen(function* () {
         }
         return input.page >= CONVERSATION_PAGES
           ? Effect.succeed({ events: collected, truncated: true })
-          : labelEventsPage({ ...input, page: input.page + 1, collected });
+          : resourceEventsPage({ ...input, page: input.page + 1, collected });
       }),
     );
 
@@ -570,6 +620,7 @@ const make = Effect.gen(function* () {
    */
   const linkedMergeRequests = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly endpoint: "closed_by" | "related_merge_requests";
@@ -578,6 +629,7 @@ const make = Effect.gen(function* () {
   }): Effect.Effect<ReadonlyArray<IssueLinkedPullRequest>, GitLabIssueCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/issues/${input.number}/${
         input.endpoint
       }?${query([
@@ -602,9 +654,14 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const projectLabels = (input: { readonly cwd: string; readonly repository: string }) =>
+  const projectLabels = (input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly repository: string;
+  }) =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/labels?${query([
         ["per_page", String(MAX_PAGE_SIZE)],
       ])}`,
@@ -619,9 +676,14 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const projectMembers = (input: { readonly cwd: string; readonly repository: string }) =>
+  const projectMembers = (input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly repository: string;
+  }) =>
     api({
       cwd: input.cwd,
+      host: input.host,
       // `members/all` rather than `members`, so the people a parent group lends the project are
       // offered too — GitLab lets every one of them be assigned an issue.
       path: `projects/${projectPath(input.repository)}/members/all?${query([
@@ -644,11 +706,13 @@ const make = Effect.gen(function* () {
    */
   const templateContent = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly entry: GitLabIssueTemplateEntry;
   }): Effect.Effect<ReadonlyArray<IssueTemplate>, GitLabIssueCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/templates/issues/${encodeURIComponent(input.entry.key)}`,
     }).pipe(
       Effect.map((result) => {
@@ -678,12 +742,14 @@ const make = Effect.gen(function* () {
   /** Every write to an issue is the same PUT, so its body is the only thing that differs. */
   const updateIssue = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly body: Record<string, unknown>;
   }) =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/issues/${input.number}`,
       method: "PUT",
       // A JSON body rather than a `--raw-field`: glab coerces a field that reads as a literal
@@ -691,8 +757,8 @@ const make = Effect.gen(function* () {
       stdin: JSON.stringify(input.body),
     }).pipe(Effect.asVoid);
 
-  const viewerUsername = (input: { readonly cwd: string }) =>
-    api({ cwd: input.cwd, path: "user" }).pipe(
+  const viewerUsername = (input: { readonly cwd: string; readonly host?: string | undefined }) =>
+    api({ cwd: input.cwd, host: input.host, path: "user" }).pipe(
       Effect.flatMap((result): Effect.Effect<string, GitLabIssueCliError> => {
         const decoded = decodeViewerJson(result.stdout.trim());
         if (!Result.isSuccess(decoded)) {
@@ -719,6 +785,7 @@ const make = Effect.gen(function* () {
 
   const ownAwardId = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly subject: string;
     readonly content: IssueReactionContent;
     readonly viewer: string;
@@ -726,6 +793,7 @@ const make = Effect.gen(function* () {
   }): Effect.Effect<number | null, GitLabIssueCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path:
         input.subject +
         "?" +
@@ -749,6 +817,7 @@ const make = Effect.gen(function* () {
 
   const awardsPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly cursor: string | null;
@@ -764,6 +833,7 @@ const make = Effect.gen(function* () {
   > =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: "graphql",
       method: "POST",
       stdin: JSON.stringify({
@@ -834,32 +904,87 @@ const make = Effect.gen(function* () {
     listActivity: (input) =>
       Effect.all(
         [
-          notesPage({ ...input, page: 1, comments: [], events: [] }),
-          labelEventsPage({ ...input, page: 1, collected: [] }),
+          notesPage({ ...input, page: 1, lastPage: CONVERSATION_PAGES, comments: [], events: [] }),
+          resourceEventsPage({ ...input, resource: "label", page: 1, collected: [] }),
+          resourceEventsPage({ ...input, resource: "state", page: 1, collected: [] }),
           awardsPage({ ...input, cursor: null, page: 1, collected: new Map() }),
         ],
         { concurrency: 2 },
       ).pipe(
-        Effect.map(([notes, labelEvents, awards]) => ({
-          comments: notes.comments.map((comment) => ({
-            ...comment,
-            reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
-          })),
-          // Two reads, so the merged history is ordered here rather than left interleaved by
-          // whichever of them answered first.
-          events: [...notes.events, ...labelEvents.events].sort((left, right) =>
-            left.createdAt === right.createdAt ? 0 : left.createdAt < right.createdAt ? -1 : 1,
-          ),
-          // Either walk hitting its bound leaves the timeline short, and a history missing its
-          // labellings is no more complete than one missing its remarks.
-          truncated: notes.truncated || labelEvents.truncated || awards.truncated,
-          reactions: awards.reactions,
-        })),
+        Effect.map(([notes, labelEvents, stateEvents, awards]) => {
+          const states = new Set(
+            stateEvents.events.map((event) => `${event.kind}:${event.createdAt}`),
+          );
+          return {
+            comments: notes.comments.map((comment) => ({
+              ...comment,
+              reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+            })),
+            events: [
+              ...notes.events.filter((event) => !states.has(`${event.kind}:${event.createdAt}`)),
+              ...labelEvents.events,
+              ...stateEvents.events,
+            ].sort((left, right) =>
+              left.createdAt === right.createdAt ? 0 : left.createdAt < right.createdAt ? -1 : 1,
+            ),
+            truncated:
+              notes.truncated || labelEvents.truncated || stateEvents.truncated || awards.truncated,
+            reactions: awards.reactions,
+            nextCommentsCursor: notes.nextCursor,
+          };
+        }),
       ),
+
+    getIssueComments: (input) =>
+      Effect.gen(function* () {
+        const page = Number(input.cursor);
+        if (!/^[1-9]\d*$/.test(input.cursor) || !Number.isSafeInteger(page)) {
+          return yield* Effect.fail(
+            readError({ cwd: input.cwd, operation: "getIssueComments" })("Invalid comments cursor"),
+          );
+        }
+        const notes = yield* notesPage({
+          ...input,
+          page,
+          lastPage: page,
+          comments: [],
+          events: [],
+        });
+        const comments = yield* Effect.forEach(
+          Array.from({ length: Math.ceil(notes.comments.length / 25) }, (_, index) =>
+            notes.comments.slice(index * 25, (index + 1) * 25),
+          ),
+          (batch) =>
+            api({
+              cwd: input.cwd,
+              host: input.host,
+              path: "graphql",
+              method: "POST",
+              stdin: JSON.stringify({
+                query: `query {
+                  currentUser { username }
+                  ${batch.map((comment, index) => `note${index}: note(id: "gid://gitlab/Note/${comment.id}") { awardEmoji { nodes { name user { username } } } }`).join("\n")}
+                }`,
+              }),
+            }).pipe(
+              Effect.flatMap((result) => {
+                const decoded = decodeNoteAwardsJson(result.stdout.trim(), batch);
+                return Result.isSuccess(decoded)
+                  ? Effect.succeed(decoded.success)
+                  : Effect.fail(
+                      readError({ cwd: input.cwd, operation: "getIssueComments" })(decoded.failure),
+                    );
+              }),
+            ),
+          { concurrency: 2 },
+        );
+        return { comments: comments.flat(), nextCursor: notes.nextCursor };
+      }),
 
     createIssue: (input) =>
       api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/issues`,
         method: "POST",
         stdin: JSON.stringify({
@@ -897,6 +1022,7 @@ const make = Effect.gen(function* () {
     commentOnIssue: (input) =>
       api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes`,
         method: "POST",
         stdin: JSON.stringify({ body: input.body }),
@@ -905,6 +1031,7 @@ const make = Effect.gen(function* () {
     updateComment: (input) =>
       api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes/${encodeURIComponent(input.commentId)}`,
         method: "PUT",
         stdin: JSON.stringify({ body: input.body }),
@@ -916,21 +1043,28 @@ const make = Effect.gen(function* () {
         if (input.reacted) {
           yield* api({
             cwd: input.cwd,
+            host: input.host,
             path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
             method: "POST",
           });
           return;
         }
-        const viewer = yield* viewerUsername({ cwd: input.cwd });
+        const viewer = yield* viewerUsername({ cwd: input.cwd, host: input.host });
         const own = yield* ownAwardId({
           cwd: input.cwd,
+          host: input.host,
           subject,
           content: input.content,
           viewer,
           page: 1,
         });
         if (own === null) return;
-        yield* api({ cwd: input.cwd, path: subject + "/" + own, method: "DELETE" });
+        yield* api({
+          cwd: input.cwd,
+          host: input.host,
+          path: subject + "/" + own,
+          method: "DELETE",
+        });
       }),
 
     setLabels: (input) =>
@@ -985,6 +1119,7 @@ const make = Effect.gen(function* () {
     listIssueTemplates: (input) =>
       api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/templates/issues`,
       }).pipe(
         Effect.flatMap(
@@ -997,7 +1132,13 @@ const make = Effect.gen(function* () {
             }
             return Effect.forEach(
               decoded.success.slice(0, TEMPLATE_LIMIT),
-              (entry) => templateContent({ cwd: input.cwd, repository: input.repository, entry }),
+              (entry) =>
+                templateContent({
+                  cwd: input.cwd,
+                  host: input.host,
+                  repository: input.repository,
+                  entry,
+                }),
               { concurrency: TEMPLATE_CONCURRENCY },
             ).pipe(Effect.map((templates) => templates.flat()));
           },

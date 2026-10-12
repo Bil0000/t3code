@@ -10,7 +10,7 @@ import {
 } from "./IssueProvider.ts";
 
 const CAPABILITIES: IssueCapabilities = {
-  sorts: ["updated"],
+  sorts: ["created", "updated"],
   referenceStyle: "hash",
   closesViaPullRequest: true,
   comment: true,
@@ -80,7 +80,9 @@ export const make = Effect.gen(function* () {
     capabilities: CAPABILITIES,
 
     getViewer: (input) =>
-      cli.getViewerUsername({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
+      cli
+        .getViewerUsername({ cwd: input.cwd, host: input.host })
+        .pipe(Effect.mapError(fail("getViewer"))),
 
     listIssues: (input) =>
       input.involvement === "mentioned"
@@ -95,11 +97,13 @@ export const make = Effect.gen(function* () {
         : cli
             .listIssues({
               cwd: input.cwd,
+              host: input.host,
               repository: input.repository,
               state: input.state,
               involvement: input.involvement,
               viewer: input.viewer,
               limit: input.limit,
+              sort: input.sort,
               order: input.order,
               query: input.query,
               cursor: input.cursor,
@@ -109,9 +113,16 @@ export const make = Effect.gen(function* () {
               Effect.map(({ items, truncated }) => ({
                 items,
                 truncated,
-                continues: input.order !== "asc",
+                continues:
+                  (input.sort === undefined || input.sort === "updated") && input.order !== "asc",
               })),
             ),
+
+    getIssueSummary: (input) =>
+      cli.getIssueDetail(input).pipe(
+        Effect.mapError(fail("getIssueSummary")),
+        Effect.map(({ number, title, url, state }) => ({ number, title, url, state })),
+      ),
 
     getIssue: (input) =>
       Effect.all([cli.getIssueDetail(input), cli.listLinkedMergeRequests(input)], {
@@ -135,10 +146,14 @@ export const make = Effect.gen(function* () {
           // the notes endpoint carries every remark, and it is read until GitLab runs out.
           commentCount: activity.comments.length,
           commentsTruncated: activity.truncated,
+          nextCommentsCursor: activity.nextCommentsCursor,
           events: activity.events,
           reactions: activity.reactions,
         })),
       ),
+
+    getIssueComments: (input) =>
+      cli.getIssueComments(input).pipe(Effect.mapError(fail("getIssueComments"))),
 
     // No request at all: nothing GitLab reports about an issue narrows what this viewer may ask
     // for, so there is nothing to read and re-reading the issue would only cost a round trip.
@@ -150,6 +165,7 @@ export const make = Effect.gen(function* () {
       cli
         .runIssueAction({
           cwd: input.cwd,
+          host: input.host,
           repository: input.repository,
           number: input.number,
           action: input.action,
@@ -166,6 +182,7 @@ export const make = Effect.gen(function* () {
       cli
         .createIssue({
           cwd: input.cwd,
+          host: input.host,
           repository: input.repository,
           title: input.title,
           body: input.body,
@@ -178,6 +195,7 @@ export const make = Effect.gen(function* () {
       cli
         .updateIssue({
           cwd: input.cwd,
+          host: input.host,
           repository: input.repository,
           number: input.number,
           title: input.title,
@@ -189,6 +207,7 @@ export const make = Effect.gen(function* () {
       cli
         .setLabels({
           cwd: input.cwd,
+          host: input.host,
           repository: input.repository,
           number: input.number,
           labels: input.labels,
@@ -199,6 +218,7 @@ export const make = Effect.gen(function* () {
       cli
         .setAssignees({
           cwd: input.cwd,
+          host: input.host,
           repository: input.repository,
           number: input.number,
           assignees: input.assignees,
@@ -209,6 +229,7 @@ export const make = Effect.gen(function* () {
       cli
         .listLabelCandidates({
           cwd: input.cwd,
+          host: input.host,
           repository: input.repository,
           number: input.number,
         })
@@ -218,6 +239,7 @@ export const make = Effect.gen(function* () {
       cli
         .listAssigneeCandidates({
           cwd: input.cwd,
+          host: input.host,
           repository: input.repository,
           number: input.number,
         })
@@ -225,7 +247,7 @@ export const make = Effect.gen(function* () {
 
     listIssueTemplates: (input) =>
       cli
-        .listIssueTemplates({ cwd: input.cwd, repository: input.repository })
+        .listIssueTemplates({ cwd: input.cwd, host: input.host, repository: input.repository })
         .pipe(Effect.mapError(fail("listIssueTemplates"))),
   };
 

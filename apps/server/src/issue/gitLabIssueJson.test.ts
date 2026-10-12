@@ -8,10 +8,68 @@ import {
   decodeIssueNotesJson,
   decodeLabelEventsJson,
   decodeLinkedMergeRequestsJson,
+  decodeNoteAwardsJson,
   decodeProjectLabelsJson,
   decodeProjectMembersJson,
   decodeViewerJson,
 } from "./gitLabIssueJson.ts";
+
+describe("decodeNoteAwardsJson", () => {
+  const comments = [
+    { id: "1", author: null, body: "First", createdAt: "2026-07-01T00:00:00Z", url: null },
+  ];
+
+  it("reads the viewer separately from aliased note awards", () => {
+    const decoded = expectSuccess(
+      decodeNoteAwardsJson(
+        JSON.stringify({
+          data: {
+            currentUser: { username: "bilal" },
+            note0: { awardEmoji: { nodes: [{ name: "heart", user: { username: "bilal" } }] } },
+          },
+        }),
+        comments,
+      ),
+    );
+    expect(decoded).toEqual([
+      {
+        ...comments[0],
+        reactions: [{ content: "heart", count: 1, actors: [], viewerHasReacted: true }],
+      },
+    ]);
+  });
+
+  it("keeps a comment with no awards", () => {
+    const decoded = expectSuccess(
+      decodeNoteAwardsJson(
+        JSON.stringify({
+          data: {
+            currentUser: { username: "bilal" },
+            note0: { awardEmoji: { nodes: [] } },
+          },
+        }),
+        comments,
+      ),
+    );
+    expect(decoded).toEqual([{ ...comments[0], reactions: [] }]);
+  });
+
+  it("rejects malformed awards on an aliased note", () => {
+    expect(
+      Result.isSuccess(
+        decodeNoteAwardsJson(
+          JSON.stringify({
+            data: {
+              currentUser: { username: "bilal" },
+              note0: { awardEmoji: { nodes: "invalid" } },
+            },
+          }),
+          comments,
+        ),
+      ),
+    ).toBe(false);
+  });
+});
 
 function issueJson(entry: Record<string, unknown>): string {
   return JSON.stringify({

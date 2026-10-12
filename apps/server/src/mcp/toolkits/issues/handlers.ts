@@ -31,6 +31,7 @@ const issueRef = (projectId: ProjectId, ref: typeof IssueTargetInput.Type): Issu
   repository: ref.repository,
   number: ref.number,
   ...(ref.provider === undefined ? {} : { provider: ref.provider }),
+  ...(ref.url === undefined ? {} : { url: ref.url }),
 });
 
 const issueMarkdown = (
@@ -126,12 +127,6 @@ const make = Effect.gen(function* () {
           });
         }
         const linked = matches[0];
-        if (input.url !== undefined && linked === undefined) {
-          return yield* new IssueOperationError({
-            operation: "read",
-            detail: "No linked issue matches this URL.",
-          });
-        }
         let ref = issueRef(thread.projectId, input);
         if (linked !== undefined) {
           const url = URL.parse(linked.url);
@@ -188,18 +183,14 @@ const make = Effect.gen(function* () {
       (input) =>
         Effect.gen(function* () {
           const thread = yield* requireThread();
-          const detail = yield* issues.detail({
-            projectId: thread.projectId,
-            repository: input.repository,
-            number: input.number,
-            ...(input.provider === undefined ? {} : { provider: input.provider }),
-          });
+          const detail = yield* issues.detail(issueRef(thread.projectId, input));
           const issue: ThreadIssueLink = {
             provider: detail.provider,
             repository: detail.repository,
             number: detail.number,
             url: detail.url,
             title: detail.title,
+            ...(input.url === undefined ? {} : { projectId: detail.projectId }),
           };
           if (
             (thread.issues ?? []).some(

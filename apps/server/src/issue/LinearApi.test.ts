@@ -553,7 +553,107 @@ it.effect("loads Linear activity reactions from API arrays", () => {
       ],
       reactions: [{ id: "reaction-2", emoji: "🎉", user: { id: "user-2" } }],
       commentsTruncated: false,
+      nextCommentsCursor: null,
     });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("continues Linear comments without repeating rows and keeps the selected account", () => {
+  const comments = Array.from({ length: 60 }, (_, index) => ({
+    id: `comment-${index}`,
+    body: `Comment ${index}`,
+    createdAt: `2026-09-01T00:${String(index).padStart(2, "0")}:00.000Z`,
+    reactions: [{ id: `reaction-${index}`, emoji: "👍", user: { id: "user-1" } }],
+  })).toReversed();
+  const { layer, requests } = makeLayer({
+    credentials: pool(["account-1", "lin_api_test"]),
+    response: (body) => {
+      const variables = body.variables as { after?: string; comments: number };
+      const start =
+        variables.after === undefined
+          ? 0
+          : comments.findIndex((comment) => comment.id === variables.after) + 1;
+      const page = comments.slice(start, start + variables.comments);
+      return {
+        data: {
+          viewer: { id: "user-1" },
+          issue: {
+            id: "issue-1",
+            identifier: "ENG-7",
+            number: 7,
+            title: "Activity",
+            url: "https://linear.app/eng/issue/ENG-7",
+            createdAt: "2026-08-17T00:00:00.000Z",
+            updatedAt: "2026-08-17T00:00:00.000Z",
+            state: { name: "In Progress", type: "started" },
+            comments: {
+              nodes: page,
+              pageInfo: {
+                hasNextPage: start + page.length < comments.length,
+                endCursor: page.at(-1)?.id ?? null,
+              },
+            },
+            reactions: [],
+          },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const first = yield* api.getActivity({ identifier: "ENG-7", credentialId: "account-1" });
+    assert.strictEqual(first.comments.length, 50);
+    assert.isTrue(first.commentsTruncated);
+    const second = yield* api.getActivity({
+      identifier: "ENG-7",
+      credentialId: "account-1",
+      cursor: first.nextCommentsCursor!,
+    });
+    assert.strictEqual(second.comments.length, 10);
+    assert.isFalse(second.commentsTruncated);
+    assert.strictEqual(second.nextCommentsCursor, null);
+    assert.strictEqual(
+      new Set([...first.comments, ...second.comments].map((comment) => comment.id)).size,
+      60,
+    );
+    assert.strictEqual(second.comments[0]?.reactions?.[0]?.user?.id, "user-1");
+    assert.deepStrictEqual(
+      requests.map((request) => request.authorization),
+      ["lin_api_test", "lin_api_test"],
+    );
+    assert.strictEqual(
+      (requests[1]!.body.variables as { after: string }).after,
+      first.nextCommentsCursor,
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("requests Linear created sorting without an updated continuation filter", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "lin_api_test",
+    response: () => ({
+      data: {
+        issues: {
+          nodes: [],
+          pageInfo: { hasNextPage: false, hasPreviousPage: false },
+        },
+      },
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.listIssues({
+      teamKey: "ENG",
+      state: "all",
+      involvement: "all",
+      viewer: "user-1",
+      limit: 10,
+      sort: "created",
+      cursor: { updatedBefore: "2026-01-01T00:00:00Z", seenAt: [7] },
+    });
+    const variables = requests[0]?.body.variables as { orderBy: string; filter: unknown };
+    assert.strictEqual(variables.orderBy, "createdAt");
+    assert.deepStrictEqual(variables.filter, { team: { key: { eq: "ENG" } } });
   }).pipe(Effect.provide(layer));
 });
 

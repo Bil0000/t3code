@@ -276,6 +276,7 @@ it.effect("updates a legacy link's title and state and shares a read across thre
           repository: "owner/repo",
           number: 7,
           host: "github.com",
+          url: LINK.url,
         },
       ]);
       const commands = yield* Ref.get(fixture.commands);
@@ -839,7 +840,6 @@ it.effect("does not replace a link with a result from another host or issue", ()
     Effect.gen(function* () {
       const cases: ReadonlyArray<Partial<IssueDetail>> = [
         { url: "https://enterprise.example/owner/repo/issues/7" },
-        { projectId: ProjectId.make("other-project") },
         { provider: "gitlab" },
         { repository: "owner/other-repo" },
         { number: 8 },
@@ -986,6 +986,21 @@ it.effect("resumes issue sync at the provider reset instead of waiting thirty mi
       yield* fixture.reactor.drain;
       assert.equal(reads, 2);
       assert.equal((yield* Ref.get(fixture.commands)).length, 1);
+    }),
+  ),
+);
+
+it.effect("accepts an owning project remap only with the same canonical issue identity", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makeHarness([THREAD], (ref) =>
+        Effect.succeed(detail(ref, { projectId: ProjectId.make("owning-project") })),
+      );
+      yield* fixture.reactor.drain;
+      const commands = yield* Ref.get(fixture.commands);
+      assert.strictEqual(commands.length, 1);
+      assert.strictEqual(commands[0]?.projectId, PROJECT_ID);
+      assert.strictEqual((yield* Ref.get(fixture.reads))[0]?.url, LINK.url);
     }),
   ),
 );

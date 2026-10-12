@@ -11,6 +11,7 @@ import * as Semaphore from "effect/Semaphore";
 import type {
   IssueListState,
   IssueListOrder,
+  IssueListSort,
   IssueInvolvement,
   IssueTrackerAccount,
   IssueTrackerConnection,
@@ -123,7 +124,12 @@ const Issue = Schema.Struct({
     Schema.NullOr(
       Schema.Struct({
         nodes: Schema.Array(Comment),
-        pageInfo: Schema.optional(Schema.Struct({ hasNextPage: Schema.Boolean })),
+        pageInfo: Schema.optional(
+          Schema.Struct({
+            hasNextPage: Schema.Boolean,
+            endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+          }),
+        ),
       }),
     ),
   ),
@@ -215,8 +221,8 @@ const CONNECTION_QUERY = `query T3LinearConnection {
   teams(first: 250) { nodes { id key name } }
 }`;
 const VIEWER_QUERY = `query T3LinearViewer { viewer { ${USER_FIELDS} } }`;
-const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $after: String, $before: String, $filter: IssueFilter!) {
-  issues(first: $first, last: $last, after: $after, before: $before, filter: $filter, orderBy: updatedAt) {
+const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $after: String, $before: String, $filter: IssueFilter!, $orderBy: PaginationOrderBy!) {
+  issues(first: $first, last: $last, after: $after, before: $before, filter: $filter, orderBy: $orderBy) {
     nodes { ${ISSUE_FIELDS} }
     pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
   }
@@ -239,13 +245,13 @@ const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
 const SUMMARY_QUERY = `query T3LinearIssueSummary($id: String!) {
   issue(id: $id) { number title url state { name type } }
 }`;
-const ACTIVITY_QUERY = `query T3LinearIssueActivity($id: String!, $comments: Int!) {
+const ACTIVITY_QUERY = `query T3LinearIssueActivity($id: String!, $comments: Int!, $after: String) {
   viewer { id name email avatarUrl }
   issue(id: $id) {
     ${ISSUE_FIELDS}
-    comments(first: $comments) {
+    comments(first: $comments, after: $after, orderBy: createdAt) {
       nodes { id body createdAt url user { ${USER_FIELDS} } reactions { ${REACTION_FIELDS} } }
-      pageInfo { hasNextPage }
+      pageInfo { hasNextPage endCursor }
     }
     reactions { ${REACTION_FIELDS} }
   }
@@ -350,6 +356,7 @@ export class LinearApi extends Context.Service<
       readonly involvement: IssueInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      readonly sort?: IssueListSort | undefined;
       readonly order?: IssueListOrder | undefined;
       readonly query?: string;
       readonly cursor?: ProviderListCursor | undefined;
@@ -369,12 +376,14 @@ export class LinearApi extends Context.Service<
     readonly getActivity: (input: {
       readonly identifier: string;
       readonly credentialId?: string;
+      readonly cursor?: string;
     }) => Effect.Effect<
       {
         readonly viewerId: string;
         readonly comments: ReadonlyArray<LinearComment>;
         readonly reactions: ReadonlyArray<LinearReaction>;
         readonly commentsTruncated: boolean;
+        readonly nextCommentsCursor: string | null;
       },
       LinearApiError
     >;
@@ -966,8 +975,10 @@ const make = Effect.gen(function* () {
           filter.or = [...(filter.or as Array<unknown>), { number: { eq: Number(reference[2]) } }];
         }
       }
-      if (input.cursor !== undefined) filter.updatedAt = { lte: input.cursor.updatedBefore };
-      if (input.cursor?.seenAt?.length) filter.number = { nin: input.cursor.seenAt };
+      if (input.sort !== "created" && input.cursor !== undefined) {
+        filter.updatedAt = { lte: input.cursor.updatedBefore };
+        if (input.cursor.seenAt?.length) filter.number = { nin: input.cursor.seenAt };
+      }
       const ascending = input.order === "asc";
       return Effect.gen(function* () {
         const issues: LinearIssue[] = [];
@@ -983,6 +994,7 @@ const make = Effect.gen(function* () {
               [ascending ? "last" : "first"]: size,
               ...(cursor === undefined ? {} : { [ascending ? "before" : "after"]: cursor }),
               filter,
+              orderBy: input.sort === "created" ? "createdAt" : "updatedAt",
             },
             ListEnvelope,
           );
@@ -1022,12 +1034,12 @@ const make = Effect.gen(function* () {
       request(credentialId, "issue", ISSUE_QUERY, { id: identifier }, IssueEnvelope).pipe(
         Effect.flatMap(({ data }) => issueOrFail(identifier, data.issue)),
       ),
-    getActivity: ({ identifier, credentialId }) =>
+    getActivity: ({ identifier, credentialId, cursor }) =>
       request(
         credentialId,
         "issue activity",
         ACTIVITY_QUERY,
-        { id: identifier, comments: 50 },
+        { id: identifier, comments: 50, ...(cursor === undefined ? {} : { after: cursor }) },
         ActivityEnvelope,
       ).pipe(
         Effect.flatMap(({ data }) =>
@@ -1040,6 +1052,10 @@ const make = Effect.gen(function* () {
               ),
               reactions: issue.reactions ?? [],
               commentsTruncated: issue.comments?.pageInfo?.hasNextPage ?? false,
+              nextCommentsCursor:
+                issue.comments?.pageInfo?.hasNextPage === true
+                  ? (issue.comments.pageInfo.endCursor ?? null)
+                  : null,
             };
           }),
         ),

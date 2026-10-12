@@ -17,7 +17,7 @@ import * as LinearApi from "./LinearApi.ts";
 import { IssueProviderError, type IssueAdapter, type ProviderIssue } from "./IssueProvider.ts";
 
 const CAPABILITIES: IssueCapabilities = {
-  sorts: ["updated"],
+  sorts: ["created", "updated"],
   referenceStyle: "key-number",
   closesViaPullRequest: false,
   comment: true,
@@ -96,6 +96,17 @@ function actor(user: LinearApi.LinearUser | null | undefined) {
         name: user.name?.trim() || null,
         avatarUrl: user.avatarUrl?.trim() || null,
       };
+}
+
+function toComment(comment: LinearApi.LinearComment, viewerId: string) {
+  return {
+    id: comment.id,
+    author: actor(comment.user),
+    body: comment.body,
+    createdAt: comment.createdAt,
+    url: comment.url ?? null,
+    reactions: linearReactions(comment.reactions ?? [], viewerId),
+  };
 }
 
 const PULL_REQUEST_URL =
@@ -235,6 +246,7 @@ export const make = Effect.gen(function* () {
           involvement: input.involvement,
           viewer: input.viewer,
           limit: input.limit,
+          sort: input.sort,
           order: input.order,
           ...(input.query === undefined ? {} : { query: input.query }),
           ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
@@ -245,7 +257,8 @@ export const make = Effect.gen(function* () {
           Effect.map(({ issues, truncated }) => ({
             items: issues.map(toIssue),
             truncated,
-            continues: input.order !== "asc",
+            continues:
+              (input.sort === undefined || input.sort === "updated") && input.order !== "asc",
           })),
         ),
     getIssueSummary: (input) =>
@@ -289,18 +302,26 @@ export const make = Effect.gen(function* () {
         .pipe(
           Effect.mapError(fail("getIssueActivity")),
           Effect.map((activity) => ({
-            comments: activity.comments.map((comment) => ({
-              id: comment.id,
-              author: actor(comment.user),
-              body: comment.body,
-              createdAt: comment.createdAt,
-              url: comment.url ?? null,
-              reactions: linearReactions(comment.reactions ?? [], activity.viewerId),
-            })),
+            comments: activity.comments.map((comment) => toComment(comment, activity.viewerId)),
             commentCount: activity.comments.length,
             commentsTruncated: activity.commentsTruncated,
+            nextCommentsCursor: activity.nextCommentsCursor ?? null,
             events: [],
             reactions: linearReactions(activity.reactions, activity.viewerId),
+          })),
+        ),
+    getIssueComments: (input) =>
+      api
+        .getActivity({
+          identifier: identifier(input.repository, input.number),
+          cursor: input.cursor,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(
+          Effect.mapError(fail("getIssueComments")),
+          Effect.map((activity) => ({
+            comments: activity.comments.map((comment) => toComment(comment, activity.viewerId)),
+            nextCursor: activity.nextCommentsCursor,
           })),
         ),
     getViewerPermissions: () => Effect.succeed(PERMISSIONS),

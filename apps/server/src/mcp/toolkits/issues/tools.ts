@@ -28,6 +28,7 @@ export const IssueTargetInput = Schema.Struct({
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   provider: Schema.optional(IssueProviderKind),
+  url: Schema.optional(TrimmedNonEmptyString),
 });
 
 export class IssueThreadNotFoundError extends Schema.TaggedError<IssueThreadNotFoundError>()(
@@ -61,10 +62,9 @@ const dependencies = [
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue body and a bounded page of comments as Markdown. Linked issues use their saved project and host; unlinked references use this thread's project. Pass repository, number, and provider when needed. Pass url to choose between linked issues with the same repository and number on different hosts. If nextCommentsCursor is present, pass it as commentsCursor to read the next page without reloading the issue body. commentsTruncated=true with a null cursor means this host cannot return the rest through T3.",
+    "Read an issue body and a bounded page of comments as Markdown. Linked issues use their saved project and host; references without a URL use this thread's project. Pass repository, number, and provider when needed. Pass a full issue URL to read another repository with existing server credentials, or choose between linked issues on different hosts. If nextCommentsCursor is present, pass it as commentsCursor to read the next page without reloading the issue body. commentsTruncated=true with a null cursor means this host cannot return the rest through T3.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
-    url: Schema.optional(TrimmedNonEmptyString),
     commentsCursor: Schema.optional(TrimmedNonEmptyString),
   }),
   success: Schema.Struct({
@@ -83,7 +83,7 @@ const ReadIssueTool = Tool.make("read_issue", {
 
 const LinkIssueTool = Tool.make("link_issue", {
   description:
-    "Link an issue in this thread's project to this thread. Use after taking work on an issue. The link appears with the thread and its pull requests. Linking the same issue again succeeds with alreadyLinked=true.",
+    "Link an issue to this thread. References without a URL use this thread's project. Pass a full issue URL to link another repository with existing server credentials. The link appears with the thread and its pull requests. Linking the same issue again succeeds with alreadyLinked=true.",
   parameters: IssueTargetInput,
   success: Schema.Struct({ issue: ThreadIssueLink, alreadyLinked: Schema.Boolean }),
   failure: IssueToolError,

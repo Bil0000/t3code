@@ -1,7 +1,7 @@
 import type * as Cause from "effect/Cause";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type { IssueState, IssueActor } from "@t3tools/contracts";
+import type { IssueState, IssueActor, IssueComment, IssueLabel } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 /**
@@ -21,6 +21,8 @@ export interface AzureDevOpsWorkItem {
   readonly closedAt: string | null;
   readonly description: string;
   readonly commentCount: number;
+  readonly labels: ReadonlyArray<IssueLabel>;
+  readonly project: string | null;
 }
 
 /**
@@ -44,6 +46,8 @@ const Fields = Schema.Struct({
   "System.ChangedDate": Schema.optional(Schema.NullOr(Schema.String)),
   "Microsoft.VSTS.Common.ClosedDate": Schema.optional(Schema.NullOr(Schema.String)),
   "System.Description": Schema.optional(Schema.NullOr(Schema.String)),
+  "System.Tags": Schema.optional(Schema.NullOr(Schema.String)),
+  "System.TeamProject": Schema.optional(Schema.NullOr(Schema.String)),
   "System.CreatedBy": Schema.optional(Schema.NullOr(Schema.Union([Identity, Schema.String]))),
   "System.AssignedTo": Schema.optional(Schema.NullOr(Schema.Union([Identity, Schema.String]))),
 });
@@ -64,13 +68,19 @@ type DecodeFailure = Cause.Cause<Schema.SchemaError>;
  * The organization link `az` returns addresses the REST resource, which is not a page anybody
  * can open. The one a reader wants is the board's own item, which Azure spells this way.
  */
-function browserUrl(apiUrl: string | null | undefined, id: number): string | null {
+function browserUrl(
+  apiUrl: string | null | undefined,
+  id: number,
+  project?: string | null,
+): string | null {
   if (apiUrl === null || apiUrl === undefined) return null;
   const match =
-    /^(https?:\/\/(?:[^/]+\/[^/]+|[^/]+\.visualstudio\.com))\/(?:[^/]+\/)?_apis\/wit\/workItems\//iu.exec(
+    /^(https?:\/\/(?:[^/]+\.visualstudio\.com(?:\/DefaultCollection)?|[^/]+\/[^/]+))(?:\/([^/]+))?\/_apis\/wit\/workItems\//iu.exec(
       apiUrl,
     );
-  return match === null ? null : `${match[1]}/_workitems/edit/${id}`;
+  if (match === null) return null;
+  const projectPath = match[2] ?? (project ? encodeURIComponent(project) : null);
+  return `${match[1]}${projectPath === null ? "" : `/${projectPath}`}/_workitems/edit/${id}`;
 }
 
 function actorOf(value: unknown): IssueActor | null {
@@ -99,7 +109,7 @@ function toWorkItem(raw: unknown): AzureDevOpsWorkItem | null {
   const title = (fields["System.Title"] ?? "").trim();
   const createdAt = fields["System.CreatedDate"] ?? null;
   const updatedAt = fields["System.ChangedDate"] ?? createdAt;
-  const url = browserUrl(item.url, number);
+  const url = browserUrl(item.url, number, fields["System.TeamProject"]);
   if (title.length === 0 || createdAt === null || updatedAt === null || url === null) return null;
   const assignee = actorOf(fields["System.AssignedTo"]);
   return {
@@ -116,6 +126,12 @@ function toWorkItem(raw: unknown): AzureDevOpsWorkItem | null {
     closedAt: fields["Microsoft.VSTS.Common.ClosedDate"] ?? null,
     description: fields["System.Description"] ?? "",
     commentCount: fields["System.CommentCount"] ?? 0,
+    labels: (fields["System.Tags"] ?? "")
+      .split(";")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0)
+      .map((name) => ({ name, color: null })),
+    project: fields["System.TeamProject"]?.trim() || null,
   };
 }
 
@@ -140,4 +156,72 @@ export function decodeWorkItemJson(
   return Result.isSuccess(decoded)
     ? Result.succeed(toWorkItem(decoded.success))
     : Result.fail(decoded.failure);
+}
+
+export function decodeWorkItemSummaryJson(
+  raw: string,
+): Result.Result<
+  Pick<AzureDevOpsWorkItem, "number" | "title" | "url" | "state"> | null,
+  DecodeFailure
+> {
+  const decoded = decodeJsonResult(WorkItem)(raw);
+  if (Result.isFailure(decoded)) return Result.fail(decoded.failure);
+  const item = decoded.success;
+  const number = typeof item.id === "string" ? Number(item.id) : item.id;
+  const title = item.fields?.["System.Title"]?.trim();
+  const url = browserUrl(item.url, number, item.fields?.["System.TeamProject"]);
+  if (!Number.isInteger(number) || number <= 0 || !title || !url) return Result.succeed(null);
+  return Result.succeed({
+    number,
+    title,
+    url,
+    state: CLOSED_STATES.has((item.fields?.["System.State"] ?? "").trim().toLowerCase())
+      ? ("closed" as const)
+      : ("open" as const),
+  });
+}
+
+const Comment = Schema.Struct({
+  id: Schema.optional(Schema.Int),
+  commentId: Schema.optional(Schema.Int),
+  text: Schema.String,
+  createdDate: Schema.String,
+  createdBy: Schema.optional(Schema.NullOr(Identity)),
+  isDeleted: Schema.optional(Schema.Boolean),
+});
+
+export function decodeWorkItemCommentsJson(raw: string): Result.Result<
+  {
+    readonly comments: ReadonlyArray<IssueComment>;
+    readonly commentCount: number;
+    readonly nextCursor: string | null;
+  },
+  DecodeFailure
+> {
+  const decoded = decodeJsonResult(
+    Schema.Struct({
+      comments: Schema.Array(Comment),
+      totalCount: Schema.optional(Schema.Int),
+      continuationToken: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  )(raw);
+  if (Result.isFailure(decoded)) return Result.fail(decoded.failure);
+  const comments = decoded.success.comments.flatMap((entry): IssueComment[] => {
+    const id = entry.id ?? entry.commentId;
+    if (entry.isDeleted || id === undefined || id <= 0) return [];
+    return [
+      {
+        id: String(id),
+        author: actorOf(entry.createdBy),
+        body: entry.text,
+        createdAt: entry.createdDate,
+        url: null,
+      },
+    ];
+  });
+  return Result.succeed({
+    comments,
+    commentCount: decoded.success.totalCount ?? comments.length,
+    nextCursor: decoded.success.continuationToken || null,
+  });
 }

@@ -2,8 +2,8 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
-  SourceControlProviderKind,
   issueSourceKey,
+  SourceControlProviderKind,
   type OrchestrationProjectShell,
   type ProjectId,
 } from "@t3tools/contracts";
@@ -264,4 +264,147 @@ it.effect("routes account management by provider and rejects unsupported tracker
     assert.strictEqual(error.operation, "connect");
     assert.include(error.detail, "not supported for github");
   }),
+);
+
+it.effect("resolves configured hosts without guessing the caller's provider", () =>
+  Effect.gen(function* () {
+    const github = { kind: "github" } as unknown as IssueAdapter;
+    const registry = yield* fromProviders([github]).pipe(Effect.provide(sourceControlLayer));
+    const reference = {
+      projectId: PROJECT.id,
+      repository: "external/repo",
+      number: 7,
+      provider: "github" as const,
+      url: "https://private.example.test/external/repo/issues/7",
+    };
+    const rejected = yield* registry
+      .resolveUrl({ reference, project: PROJECT, sources: [] })
+      .pipe(Effect.flip);
+    assert.strictEqual(rejected._tag, "IssueOperationError");
+    const resolved = yield* registry.resolveUrl({
+      reference,
+      project: PROJECT,
+      sources: [
+        { project: PROJECT, adapter: github, host: "private.example.test", repository: "acme/web" },
+      ],
+    });
+    assert.strictEqual(resolved.project, PROJECT);
+    assert.strictEqual(resolved.host, "private.example.test");
+    assert.strictEqual(resolved.repository, "external/repo");
+  }),
+);
+
+it.effect("uses one connected Linear account without a project binding and refuses ambiguity", () =>
+  Effect.gen(function* () {
+    const account = {
+      credentialId: "account-1",
+      status: "authenticated" as const,
+      accountName: "Account",
+      accountEmail: null,
+      projects: [{ id: "team", key: "ENG", name: "Engineering" }],
+    };
+    let accounts = [account];
+    const linear = {
+      kind: "linear",
+      tracker: {
+        get status() {
+          return Effect.succeed({
+            status: "authenticated",
+            hasStoredToken: true,
+            accountName: "Account",
+            accountEmail: null,
+            projects: account.projects,
+            accounts,
+          });
+        },
+      },
+    } as unknown as IssueAdapter;
+    const registry = yield* fromProviders([linear]).pipe(Effect.provide(sourceControlLayer));
+    const reference = {
+      projectId: PROJECT.id,
+      repository: "ENG",
+      number: 7,
+      url: "https://linear.app/acme/issue/ENG-7",
+    };
+    const resolved = yield* registry.resolveUrl({ reference, project: PROJECT, sources: [] });
+    assert.strictEqual(resolved.credentialId, "account-1");
+    accounts = [account, { ...account, credentialId: "account-2" }];
+    assert.strictEqual(
+      (yield* registry.resolveUrl({ reference, project: PROJECT, sources: [] }).pipe(Effect.flip))
+        ._tag,
+      "IssueOperationError",
+    );
+    const bound = yield* registry.resolveUrl({
+      reference,
+      project: PROJECT,
+      sources: [
+        {
+          project: PROJECT,
+          adapter: linear,
+          repository: "ENG",
+          host: "linear.app",
+          credentialId: "account-2",
+        },
+      ],
+    });
+    assert.strictEqual(bound.credentialId, "account-2");
+  }),
+);
+
+it.effect("uses the actual owning project when a full URL matches its bound source", () =>
+  Effect.gen(function* () {
+    const github = { kind: "github" } as unknown as IssueAdapter;
+    const owner = { ...PROJECT, id: "owner" as ProjectId, workspaceRoot: "/owner" };
+    const registry = yield* fromProviders([github]).pipe(Effect.provide(sourceControlLayer));
+    const result = yield* registry.resolveUrl({
+      project: PROJECT,
+      reference: {
+        projectId: PROJECT.id,
+        repository: "acme/web",
+        number: 7,
+        url: "https://github.com/acme/web/issues/7",
+      },
+      sources: [{ project: owner, adapter: github, host: "github.com", repository: "acme/web" }],
+    });
+    assert.strictEqual(result.project, owner);
+    assert.strictEqual(result.projectBound, true);
+  }),
+);
+
+it.effect.each(["dev.azure.com", "acme.visualstudio.com"])(
+  "matches Azure organization aliases and project checkouts on %s",
+  (host) =>
+    Effect.gen(function* () {
+      const azure = { kind: "azure-devops" } as unknown as IssueAdapter;
+      const registry = yield* fromProviders([azure]).pipe(Effect.provide(sourceControlLayer));
+      const owner = { ...PROJECT, id: "owner" as ProjectId };
+      const reference = {
+        projectId: PROJECT.id,
+        repository: "acme/team",
+        number: 7,
+        url: "https://acme.visualstudio.com/DefaultCollection/team/_workitems/edit/7",
+      };
+      const resolve = (repository: string) =>
+        registry.resolveUrl({
+          project: PROJECT,
+          reference,
+          sources: [{ project: owner, adapter: azure, host, repository }],
+        });
+      const bound = yield* resolve("acme/team/_git/repo");
+      assert.strictEqual(bound.project, owner);
+      assert.strictEqual(bound.projectBound, true);
+      assert.strictEqual(bound.repository, reference.repository);
+      const exact = yield* registry.resolveUrl({
+        project: PROJECT,
+        reference: { ...reference, repository: "acme/team/_git/repo" },
+        sources: [{ project: owner, adapter: azure, host, repository: "acme/team/_git/repo" }],
+      });
+      assert.strictEqual(exact.project, owner);
+      assert.strictEqual(exact.repository, "acme/team/_git/repo");
+      for (const repository of ["other/team/_git/repo", "acme/other/_git/repo"]) {
+        const unbound = yield* resolve(repository);
+        assert.strictEqual(unbound.project, PROJECT);
+        assert.strictEqual(unbound.projectBound, false);
+      }
+    }),
 );

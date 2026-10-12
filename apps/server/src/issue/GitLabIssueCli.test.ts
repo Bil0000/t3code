@@ -158,6 +158,228 @@ afterEach(() => {
 });
 
 layer("GitLabIssueCli.layer", (it) => {
+  it.effect("pins all GitLab reads and writes to the requested host outside a repository", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1] ?? "";
+        const result =
+          path === "graphql"
+            ? awardPage()
+            : path === "user"
+              ? JSON.stringify({ username: "bilal" })
+              : path.endsWith("/award_emoji?per_page=100&page=1")
+                ? awards(1, 1, "bilal")
+                : path.includes("/templates/issues/")
+                  ? templateContent("Describe the bug")
+                  : path.endsWith("/templates/issues")
+                    ? templateEntries([{ key: "bug", name: "Bug" }])
+                    : path.includes("/labels?")
+                      ? JSON.stringify([{ name: "backend" }])
+                      : path.includes("/members/all?")
+                        ? JSON.stringify([{ id: 5, username: "bilal" }])
+                        : path.endsWith("/issues/7") ||
+                            (path.endsWith("/issues") && input.args.includes("POST"))
+                          ? issueJson({ assignees: [{ id: 5, username: "bilal" }] })
+                          : "[]";
+        return Effect.succeed(output(result));
+      });
+      const provider = yield* GitLabIssueProvider.make;
+      const reference = {
+        cwd: "/outside-a-repository",
+        host: "gitlab.example.com",
+        repository: "acme/web",
+        number: 7,
+      };
+      yield* provider.getViewer(reference);
+      yield* provider.listIssues({
+        ...reference,
+        state: "all",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+      });
+      yield* provider.getIssueSummary!(reference);
+      yield* provider.getIssue(reference);
+      yield* provider.getIssueActivity(reference);
+      yield* provider.getIssueComments!({ ...reference, cursor: "11" });
+      yield* provider.runAction({ ...reference, action: "close" });
+      yield* provider.comment({ ...reference, body: "Comment" });
+      yield* provider.updateComment!({ ...reference, commentId: "1", body: "Updated" });
+      yield* provider.setReaction!({ ...reference, content: "heart", reacted: false });
+      yield* provider.create({
+        ...reference,
+        title: "Issue",
+        body: "Body",
+        labels: [],
+        assignees: [],
+      });
+      yield* provider.update({ ...reference, title: "Updated" });
+      yield* provider.setLabels({ ...reference, labels: ["backend"] });
+      yield* provider.setAssignees({ ...reference, assignees: ["5"] });
+      yield* provider.listLabelCandidates(reference);
+      yield* provider.listAssigneeCandidates(reference);
+      yield* provider.listIssueTemplates!({ ...reference });
+      assert.isAbove(mockedExecute.mock.calls.length, 20);
+      for (const [input] of mockedExecute.mock.calls) {
+        assert.strictEqual(input.args[input.args.indexOf("--hostname") + 1], reference.host);
+        assert.strictEqual(input.cwd, reference.cwd);
+      }
+    }),
+  );
+
+  it.effect("uses created sorting without the updated timestamp cursor", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output(issues(2, 1))));
+      const provider = yield* GitLabIssueProvider.make;
+      const result = yield* provider.listIssues({
+        cwd: "/w",
+        host: "gitlab.com",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 1,
+        sort: "created",
+        cursor: { updatedBefore: "2026-06-01T00:00:00Z", seenAt: [1] },
+      });
+      assert.isTrue(result.truncated);
+      assert.isFalse(result.continues);
+      expect(pathOfCall(0)).toContain("order_by=created_at");
+      expect(pathOfCall(0)).not.toContain("updated_before");
+      expect(pathOfCall(0)).not.toContain("iids");
+    }),
+  );
+
+  it.effect("reads a GitLab summary without linked merge request requests", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issueJson({ state: "closed" }))));
+      const provider = yield* GitLabIssueProvider.make;
+      const summary = yield* provider.getIssueSummary!({
+        cwd: "/w",
+        host: "gitlab.com",
+        repository: "acme/web",
+        number: 7,
+      });
+      assert.deepStrictEqual(summary, {
+        number: 7,
+        title: "The page never loads",
+        url: "https://gitlab.com/acme/web/-/issues/7",
+        state: "closed",
+      });
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("continues raw note pages past system notes and retains comment reactions", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1] ?? "";
+        if (path === "graphql") {
+          return Effect.succeed(
+            output(
+              JSON.stringify({
+                data: {
+                  currentUser: { username: "bilal" },
+                  note0: {
+                    awardEmoji: { nodes: [{ name: "heart", user: { username: "bilal" } }] },
+                  },
+                },
+              }),
+            ),
+          );
+        }
+        const page = pageOf(path);
+        if (page === 11) {
+          return Effect.succeed(
+            output(
+              JSON.stringify(
+                Array.from({ length: 100 }, (_, index) => ({
+                  id: 1000 + index,
+                  body: "closed",
+                  system: true,
+                  created_at: "2026-07-03T00:00:00Z",
+                })),
+              ),
+            ),
+          );
+        }
+        return Effect.succeed(output(notes(1, 1100)));
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+      const first = yield* cli.getIssueComments({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        cursor: "11",
+      });
+      assert.deepStrictEqual(first, { comments: [], nextCursor: "12" });
+      const next = yield* cli.getIssueComments({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        cursor: first.nextCursor!,
+      });
+      assert.strictEqual(next.nextCursor, null);
+      assert.deepStrictEqual(
+        next.comments.map((comment) => comment.id),
+        ["1100"],
+      );
+      assert.deepStrictEqual(next.comments[0]?.reactions, [
+        { content: "heart", count: 1, actors: [], viewerHasReacted: true },
+      ]);
+      expect(mockedExecute.mock.calls[2]?.[0].stdin).toContain("gid://gitlab/Note/1100");
+      for (const cursor of ["0", "1&per_page=999", "9007199254740992"]) {
+        const error = yield* cli
+          .getIssueComments({
+            cwd: "/w",
+            repository: "acme/web",
+            number: 7,
+            cursor,
+          })
+          .pipe(Effect.flip);
+        assert.strictEqual(error._tag, "GitLabIssueReadError");
+      }
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+    }),
+  );
+
+  it.effect("uses state resource events once when system notes repeat the transition", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1] ?? "";
+        const result =
+          path === "graphql"
+            ? awardPage()
+            : path.includes("/notes?")
+              ? JSON.stringify([
+                  { id: 1, body: "closed", system: true, created_at: "2026-07-03T00:00:00Z" },
+                ])
+              : path.includes("/resource_state_events?")
+                ? JSON.stringify([
+                    {
+                      id: 2,
+                      state: "closed",
+                      created_at: "2026-07-03T00:00:00Z",
+                      user: { username: "bilal" },
+                    },
+                    { id: 3, state: "opened", created_at: "2026-07-04T00:00:00Z" },
+                  ])
+                : "[]";
+        return Effect.succeed(output(result));
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+      const activity = yield* cli.listActivity({ cwd: "/w", repository: "acme/web", number: 7 });
+      assert.deepStrictEqual(
+        activity.events.map((event) => [event.id, event.kind]),
+        [
+          ["state-2", "closed"],
+          ["state-3", "reopened"],
+        ],
+      );
+      assert.strictEqual(activity.nextCommentsCursor, null);
+    }),
+  );
+
   it.effect(
     "pages through tied updates without loss and reads the oldest slice in ascending order",
     () =>
@@ -629,6 +851,7 @@ layer("GitLabIssueCli.layer", (it) => {
             ),
           ),
         );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(awardPage())));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
@@ -662,7 +885,7 @@ layer("GitLabIssueCli.layer", (it) => {
       });
 
       // Ten pages of notes and ten of labellings, both bounded by the same limit.
-      assert.strictEqual(mockedExecute.mock.calls.length, 21);
+      assert.strictEqual(mockedExecute.mock.calls.length, 31);
       assert.strictEqual(activity.comments.length, 1000);
       assert.isTrue(activity.truncated);
     }),
@@ -679,7 +902,9 @@ layer("GitLabIssueCli.layer", (it) => {
               ? awardPage()
               : path.includes("/notes?")
                 ? notes(1, 1)
-                : labelEvents(100, 1),
+                : path.includes("/resource_state_events?")
+                  ? "[]"
+                  : labelEvents(100, 1),
           ),
         );
       });
@@ -721,7 +946,7 @@ layer("GitLabIssueCli.layer", (it) => {
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
       const activity = yield* cli.listActivity({ cwd: "/w", repository: "acme/web", number: 7 });
       assert.isTrue(activity.truncated);
-      assert.strictEqual(mockedExecute.mock.calls.length, 12);
+      assert.strictEqual(mockedExecute.mock.calls.length, 13);
     }),
   );
 

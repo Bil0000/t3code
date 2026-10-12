@@ -486,6 +486,10 @@
     "./PtyAdapter": {
       "types": "./src/PtyAdapter.ts",
       "import": "./src/PtyAdapter.ts"
+    },
+    "./issueUrl": {
+      "types": "./src/issueUrl.ts",
+      "import": "./src/issueUrl.ts"
     }
   },
   "scripts": {

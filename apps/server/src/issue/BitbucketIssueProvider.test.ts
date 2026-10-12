@@ -58,6 +58,7 @@ it.effect.each([
   [401, "unauthenticated", "unauthenticated"],
   [403, "failed", "failed"],
   [404, "tracker-disabled", "failed"],
+  [410, "tracker-retired", "tracker-retired"],
   [500, "failed", "failed"],
 ] as const)(
   "keeps authentication and tracker error mapping for HTTP %s",

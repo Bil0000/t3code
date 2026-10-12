@@ -10,39 +10,24 @@ import {
   type ProviderIssueDetail,
 } from "./IssueProvider.ts";
 
-/**
- * Azure DevOps has work items rather than issues, and `az boards` reaches a narrow part of them:
- * a query, one item, and a field write. Everything past that — comments, labels, assignment,
- * text search — lives behind REST routes the CLI does not wrap, so it is declared missing rather
- * than half-implemented.
- */
 const CAPABILITIES: IssueCapabilities = {
   sorts: ["created", "updated", "comments"],
   referenceStyle: "hash",
   closesViaPullRequest: false,
-  // `az boards work-item update --discussion` posts one, but nothing in `az boards` reads the
-  // discussion back — and a composer that writes into a conversation the reader cannot see is
-  // worse than no composer.
-  comment: false,
+  comment: true,
   actions: ["close", "reopen"],
-  // A state is written like any other field, so closing carries no reason to record.
   closeReasons: [],
-  // Filing a work item needs its type, and which types a project has is its own process
-  // template's business — a guess would file the wrong kind of thing.
-  create: false,
-  // A work item's starting point is its process template's, which lives in the project's process
-  // definition rather than in the repository, and `az boards` reads none of it.
-  issueTemplates: false,
-  edit: false,
-  editComment: false,
-  // Azure has tags rather than labels, on a different field with different semantics.
-  labels: false,
-  // One assignee, written as an identity `az boards` resolves but never lists.
-  assignees: false,
-  listLabelCandidates: false,
-  listAssigneeCandidates: false,
-  // `az boards query` filters by WIQL clauses, and by no free text.
-  search: false,
+  create: true,
+  issueTemplates: true,
+  edit: true,
+  editComment: true,
+  labels: true,
+  assignees: true,
+  maxAssignees: 1,
+  typedAssignees: true,
+  listLabelCandidates: true,
+  listAssigneeCandidates: true,
+  search: true,
   linkedPullRequests: false,
   timelineEvents: false,
 };
@@ -52,7 +37,7 @@ const CAPABILITIES: IssueCapabilities = {
  * anywhere `az boards` reaches: the answer lives in the security namespaces, behind identity
  * descriptors that would be several calls per work item to resolve.
  *
- * So the two actions stay live and a viewer who may not take one is told so by Azure, at the
+ * Controls stay live and a viewer who may not use one is told so by Azure, at the
  * moment they try — the safer half of an unknown, since hiding a control from somebody entitled
  * to it leaves them no way through and no reason given.
  */
@@ -72,6 +57,10 @@ function reasonFor(
   if (error._tag === "AzureDevOpsCliUnavailableError") return "missing-tool";
   if (error._tag === "AzureDevOpsCliAuthenticationError") return "unauthenticated";
   if (error._tag === "AzureDevOpsCliRateLimitError") return "rate-limited";
+  if (error._tag === "AzureDevOpsIssueMutationRefusedError") {
+    if (error.statusCode === 401) return "unauthenticated";
+    if (error.statusCode === 429) return "rate-limited";
+  }
   return "failed";
 }
 
@@ -88,7 +77,7 @@ function toIssue(item: AzureDevOpsWorkItem): ProviderIssue {
     updatedAt: item.updatedAt,
     closedAt: item.closedAt,
     assignees: item.assignees,
-    labels: [],
+    labels: item.labels,
     milestone: null,
     commentCount: item.commentCount,
   };
@@ -109,17 +98,6 @@ export const make = Effect.gen(function* () {
         cause: error,
       });
     };
-
-  /** Declared unavailable in `CAPABILITIES`, so the service refuses these before reaching here. */
-  const unsupported = (operation: string) =>
-    Effect.fail(
-      new IssueProviderError({
-        provider: "azure-devops",
-        operation,
-        reason: "failed",
-        detail: "Azure DevOps work items cannot be changed this way from the CLI.",
-      }),
-    );
 
   return {
     kind: "azure-devops",
@@ -143,6 +121,9 @@ export const make = Effect.gen(function* () {
         : cli
             .listWorkItems({
               cwd: input.cwd,
+              repository: input.repository,
+              host: input.host,
+              query: input.query,
               state: input.state,
               involvement: input.involvement,
               limit: input.limit,
@@ -161,7 +142,7 @@ export const make = Effect.gen(function* () {
             ),
 
     getIssue: (input) =>
-      cli.getWorkItem({ cwd: input.cwd, number: input.number }).pipe(
+      cli.getWorkItem(input).pipe(
         Effect.mapError(fail("getIssue")),
         Effect.map((item): ProviderIssueDetail => ({
           ...toIssue(item),
@@ -171,33 +152,59 @@ export const make = Effect.gen(function* () {
         })),
       ),
 
-    // Nothing in `az boards` reads a discussion back, so the conversation is empty rather than
-    // partly read: a count nobody can open is worse than none.
-    getIssueActivity: () =>
-      Effect.succeed({ comments: [], commentCount: 0, commentsTruncated: false, events: [] }),
+    getIssueSummary: (input) =>
+      cli.getWorkItemSummary(input).pipe(Effect.mapError(fail("getIssueSummary"))),
+
+    getIssueActivity: (input) =>
+      cli.listComments(input).pipe(
+        Effect.mapError(fail("getIssueActivity")),
+        Effect.map((page) => ({
+          comments: page.comments,
+          commentCount: page.commentCount,
+          commentsTruncated: page.nextCursor !== null,
+          nextCommentsCursor: page.nextCursor,
+          events: [],
+        })),
+      ),
+
+    getIssueComments: (input) =>
+      cli.listComments(input).pipe(
+        Effect.mapError(fail("getIssueComments")),
+        Effect.map((page) => ({ comments: page.comments, nextCursor: page.nextCursor })),
+      ),
 
     // No request at all: Azure has nothing to say about the viewer that a work item read reaches.
     getViewerPermissions: () => Effect.succeed(AZURE_DEVOPS_ISSUE_VIEWER_PERMISSIONS),
 
-    runAction: (input) =>
-      cli
-        .runWorkItemAction({ cwd: input.cwd, number: input.number, action: input.action })
-        .pipe(Effect.mapError(fail("runAction"))),
+    runAction: (input) => cli.runWorkItemAction(input).pipe(Effect.mapError(fail("runAction"))),
 
-    // Declared unsupported above, so the service refuses these before a provider is reached.
-    // They exist because every provider answers the whole port.
-    comment: () => unsupported("comment"),
+    comment: (input) => cli.comment(input).pipe(Effect.mapError(fail("comment"))),
 
-    create: () => unsupported("create"),
+    updateComment: (input) => cli.comment(input).pipe(Effect.mapError(fail("updateComment"))),
 
-    update: () => unsupported("update"),
+    create: (input) => cli.createWorkItem(input).pipe(Effect.mapError(fail("create"))),
 
-    setLabels: () => unsupported("setLabels"),
+    update: (input) => cli.updateWorkItem(input).pipe(Effect.mapError(fail("update"))),
 
-    setAssignees: () => unsupported("setAssignees"),
+    setLabels: (input) => cli.updateWorkItem(input).pipe(Effect.mapError(fail("setLabels"))),
 
-    listLabelCandidates: () => unsupported("listLabelCandidates"),
+    setAssignees: (input) => cli.updateWorkItem(input).pipe(Effect.mapError(fail("setAssignees"))),
 
-    listAssigneeCandidates: () => unsupported("listAssigneeCandidates"),
+    listLabelCandidates: (input) =>
+      cli.listTagCandidates(input).pipe(Effect.mapError(fail("listLabelCandidates"))),
+
+    listAssigneeCandidates: (input) =>
+      cli.listAssigneeCandidates(input).pipe(Effect.mapError(fail("listAssigneeCandidates"))),
+
+    listIssueTemplates: (input) =>
+      cli.listWorkItemTypes(input).pipe(
+        Effect.mapError(fail("listIssueTemplates")),
+        Effect.map((workItemTypes) => ({
+          templates: [],
+          contactLinks: [],
+          blankIssuesEnabled: true,
+          workItemTypes,
+        })),
+      ),
   } satisfies IssueAdapter;
 });

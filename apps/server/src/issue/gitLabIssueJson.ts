@@ -69,6 +69,13 @@ const RawLabelEventSchema = Schema.Struct({
   label: Schema.optional(Schema.NullOr(Schema.Struct({ name: Schema.optional(Schema.String) }))),
 });
 
+const RawStateEventSchema = Schema.Struct({
+  id: Schema.Int,
+  state: Schema.String,
+  created_at: Schema.String,
+  user: Schema.optional(Schema.NullOr(RawUserSchema)),
+});
+
 const RawLinkedMergeRequestSchema = Schema.Struct({
   iid: Schema.Int,
   title: Schema.String,
@@ -196,6 +203,7 @@ const decodeIssueEntry = Schema.decodeUnknownExit(RawIssueSchema);
 const decodeIssue = decodeJsonResult(RawIssueSchema);
 const decodeNoteEntry = Schema.decodeUnknownExit(RawNoteSchema);
 const decodeLabelEventEntry = Schema.decodeUnknownExit(RawLabelEventSchema);
+const decodeStateEventEntry = Schema.decodeUnknownExit(RawStateEventSchema);
 const decodeLinkedMergeRequestEntry = Schema.decodeUnknownExit(RawLinkedMergeRequestSchema);
 const decodeProjectLabelEntry = Schema.decodeUnknownExit(RawProjectLabelSchema);
 const decodeUserEntry = Schema.decodeUnknownExit(RawUserSchema);
@@ -388,6 +396,26 @@ export function decodeLabelEventsJson(
       createdAt: event.value.created_at,
       // A label deleted since the event leaves the labelling with nothing to name.
       detail: trimmed(event.value.label?.name),
+    });
+  }
+  return Result.succeed({ events, rawCount: decoded.success.length });
+}
+
+export function decodeStateEventsJson(raw: string) {
+  const decoded = decodeUnknownList(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const events: IssueEvent[] = [];
+  for (const entry of decoded.success) {
+    const event = decodeStateEventEntry(entry);
+    if (Exit.isFailure(event)) continue;
+    const state = event.value.state.trim().toLowerCase();
+    if (state !== "opened" && state !== "closed") continue;
+    events.push({
+      id: `state-${event.value.id}`,
+      kind: state === "closed" ? "closed" : "reopened",
+      actor: toActor(event.value.user),
+      createdAt: event.value.created_at,
+      detail: null,
     });
   }
   return Result.succeed({ events, rawCount: decoded.success.length });
@@ -591,6 +619,39 @@ const RawIssueAwardPageSchema = Schema.Struct({
   }),
 });
 const decodeIssueAwardPage = decodeJsonResult(RawIssueAwardPageSchema);
+
+const decodeNoteAwards = decodeJsonResult(
+  Schema.Struct({
+    data: Schema.StructWithRest(
+      Schema.Struct({
+        currentUser: Schema.optional(
+          Schema.NullOr(Schema.Struct({ username: Schema.optional(Schema.NullOr(Schema.String)) })),
+        ),
+      }),
+      [
+        Schema.Record(
+          Schema.String.check(Schema.isPattern(/^note\d+$/)),
+          Schema.NullOr(Schema.Struct({ awardEmoji: GitLabAwardNodesSchema })),
+        ),
+      ],
+    ),
+  }),
+);
+
+export function decodeNoteAwardsJson(raw: string, comments: ReadonlyArray<IssueComment>) {
+  const decoded = decodeNoteAwards(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const data = decoded.success.data;
+  return Result.succeed(
+    comments.map((comment, index) => ({
+      ...comment,
+      reactions: toGitLabReactions(
+        data[`note${index}`]?.awardEmoji,
+        data.currentUser?.username ?? null,
+      ),
+    })),
+  );
+}
 
 export function decodeIssueAwardEmojiJson(raw: string) {
   const decoded = decodeIssueAwardPage(raw);

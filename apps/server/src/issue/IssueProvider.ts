@@ -47,6 +47,7 @@ export class IssueProviderError extends Schema.TaggedError<IssueProviderError>()
       "missing-tool",
       "unauthenticated",
       "tracker-disabled",
+      "tracker-retired",
       "rate-limited",
       "failed",
     ]),
@@ -167,7 +168,16 @@ export function issueProviderContextKey(
   provider: IssueProviderKind,
   host: string,
   credentialId?: string,
+  repository?: string,
 ): string {
+  if (provider === "azure-devops" && repository !== undefined) {
+    return JSON.stringify([
+      provider,
+      host.toLowerCase(),
+      credentialId ?? null,
+      repository.split("/")[0]!.toLowerCase(),
+    ]);
+  }
   return credentialId === undefined
     ? issueSourceKey(provider, host)
     : JSON.stringify([provider, host.toLowerCase(), credentialId]);
@@ -227,6 +237,7 @@ export interface IssueAdapter {
     input: {
       readonly cwd: string;
       readonly host: string;
+      readonly repository?: string | undefined;
     } & IssueProviderContext,
   ) => Effect.Effect<string, IssueProviderError>;
 
@@ -327,6 +338,7 @@ export interface IssueAdapter {
   /** Only called when `capabilities.create` is true. */
   readonly create: (
     input: ProviderRepositoryRef & {
+      readonly workItemType?: string;
       readonly title: string;
       readonly body: string;
       readonly labels: ReadonlyArray<string>;

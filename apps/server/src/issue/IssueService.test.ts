@@ -683,9 +683,9 @@ it.effect("keeps a cached read from bypassing the requested host", () =>
     assert.equal(error._tag, "IssueOperationError");
     assert.equal(reads, 1);
     yield* service.detail({ ...REFERENCE, provider: "github", host: "GITHUB.COM" });
-    assert.equal(reads, 2);
+    assert.equal(reads, 1);
     yield* service.detail({ ...REFERENCE, provider: "github", host: "github.com" });
-    assert.equal(reads, 2);
+    assert.equal(reads, 1);
   }),
 );
 
@@ -719,8 +719,9 @@ it.effect("resolves a cold project shell before its first issue listing", () =>
             assert.strictEqual(candidate.repositoryIdentity, hydrated.repositoryIdentity);
             return Effect.succeed(null);
           },
-          getViewer: ({ host }) => {
+          getViewer: ({ host, repository }) => {
             assert.strictEqual(host, "github.acme.dev");
+            assert.strictEqual(repository, "acme/web");
             return Effect.succeed("enterprise-user");
           },
           listIssues: ({ cwd, repository, host, viewer }) => {
@@ -1441,6 +1442,63 @@ it.effect("asks each host for the account signed in on that host, not on another
       [issueProjectSourceKey("github", "github.com", "p1" as ProjectId)]: "bilal",
       [issueProjectSourceKey("github", "github.acme.dev", "p2" as ProjectId)]: "b.hassan",
     });
+  }),
+);
+
+it.effect("resolves Azure organizations separately on one host", () =>
+  Effect.gen(function* () {
+    const asked: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "one",
+          workspaceRoot: "/one",
+          repository: "one/Project/repo",
+          provider: "azure-devops",
+          host: "dev.azure.com",
+        }),
+        project({
+          id: "p2",
+          title: "two",
+          workspaceRoot: "/two",
+          repository: "two/Project/repo",
+          provider: "azure-devops",
+          host: "dev.azure.com",
+        }),
+      ],
+      providers: [
+        fakeProvider("azure-devops", {
+          getViewer: ({ repository }) => {
+            asked.push(repository!);
+            return repository?.startsWith("one/")
+              ? Effect.fail(unusable("azure-devops", "unauthenticated"))
+              : Effect.succeed("two-user");
+          },
+          listIssues: ({ repository, viewer }) => {
+            assert.strictEqual(repository, "two/Project/repo");
+            assert.strictEqual(viewer, "two-user");
+            return Effect.succeed({
+              items: [issue(7, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: true,
+            });
+          },
+        }),
+      ],
+    });
+    const result = yield* service.list({ state: "open", involvement: "assigned" });
+    assert.deepStrictEqual(asked.toSorted(), ["one/Project/repo", "two/Project/repo"]);
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.projectId),
+      ["p2"],
+    );
+    assert.deepStrictEqual(
+      result.errors.map((error) => error.projectId),
+      ["p1"],
+    );
+    assert.strictEqual(result.providers.length, 1);
+    assert.strictEqual(result.providers[0]?.projectCount, 2);
   }),
 );
 
@@ -3474,5 +3532,381 @@ it.effect("stops a stale detail refresh when the service scope closes", () =>
     assert.isTrue(yield* Deferred.isDone(finished));
     assert.isTrue(Exit.hasInterrupts(yield* Deferred.await(finished)));
     assert.equal(reads, 2);
+  }),
+);
+
+it.effect.each([
+  ["github", "https://github.com/external/repo/issues/7", "external/repo"],
+  ["gitlab", "https://gitlab.com/external/group/repo/-/issues/7", "external/group/repo"],
+  ["bitbucket", "https://bitbucket.org/external/repo/issues/7", "external/repo"],
+  ["azure-devops", "https://dev.azure.com/external/team/_workitems/edit/7", "external/team"],
+  ["forgejo", "https://codeberg.org/external/repo/issues/7", "external/repo"],
+] as const)("reads an unbound %s URL through the context project", ([kind, url, repository]) =>
+  Effect.gen(function* () {
+    const calls: unknown[] = [];
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "local", workspaceRoot: "/local" })],
+      providers: [
+        fakeProvider(kind, {
+          getIssue: (input) => {
+            calls.push(input);
+            return Effect.succeed(issueDetail(input.number, { url }));
+          },
+        }),
+      ],
+    });
+    const detail = yield* service.detail({
+      projectId: REFERENCE.projectId,
+      repository,
+      number: 7,
+      url,
+    });
+    assert.strictEqual(detail.projectId, REFERENCE.projectId);
+    assert.strictEqual(detail.workspaceRoot, "/local");
+    assert.strictEqual(detail.repository, repository);
+    assert.strictEqual(detail.url, url);
+    assert.deepStrictEqual(calls, [
+      { cwd: "/local", repository, host: new URL(url).host, number: 7 },
+    ]);
+    const listing = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(listing.entries, []);
+  }),
+);
+
+it.effect("keeps unbound references strict unless their full URL matches", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () => {
+            reads++;
+            return Effect.succeed(issueDetail(7));
+          },
+        }),
+      ],
+    });
+    for (const ref of [
+      { ...REFERENCE, repository: "external/repo" },
+      {
+        ...REFERENCE,
+        repository: "external/repo",
+        url: "https://github.com/another/repo/issues/7",
+      },
+      {
+        ...REFERENCE,
+        repository: "external/repo",
+        number: 8,
+        url: "https://github.com/external/repo/issues/7",
+      },
+      {
+        ...REFERENCE,
+        repository: "external/repo",
+        provider: "gitlab" as const,
+        url: "https://github.com/external/repo/issues/7",
+      },
+      {
+        ...REFERENCE,
+        repository: "external/repo",
+        url: "https://unknown.test/external/repo/issues/7",
+      },
+    ]) {
+      assert.strictEqual(
+        (yield* service.detail(ref).pipe(Effect.flip))._tag,
+        "IssueOperationError",
+      );
+    }
+    assert.strictEqual(reads, 0);
+  }),
+);
+
+it.effect("checks canonical URL identity before exposing activity or running a write", () =>
+  Effect.gen(function* () {
+    let activities = 0;
+    let writes = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () =>
+            Effect.succeed(issueDetail(7, { url: "https://github.com/wrong/repo/issues/7" })),
+          getIssueActivity: () => {
+            activities++;
+            return Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              events: [],
+            });
+          },
+          runAction: () => {
+            writes++;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = {
+      ...REFERENCE,
+      repository: "external/repo",
+      url: "https://github.com/external/repo/issues/7",
+    };
+    for (const operation of [
+      service.detail(reference),
+      service.summary(reference),
+      service.activity(reference),
+      service.runAction({ ...reference, action: "close" }),
+    ]) {
+      assert.strictEqual((yield* operation.pipe(Effect.flip))._tag, "IssueOperationError");
+    }
+    assert.strictEqual(activities, 0);
+    assert.strictEqual(writes, 0);
+  }),
+);
+
+it.effect("keeps Linear workspace URLs apart in cached reads", () =>
+  Effect.gen(function* () {
+    const firstUrl = "https://linear.app/first/issue/ENG-7";
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("linear", {
+          resolveSource: () =>
+            Effect.succeed({ host: "linear.app", repository: "ENG", credentialId: "account" }),
+          getIssue: () => Effect.succeed(issueDetail(7, { url: firstUrl })),
+        }),
+      ],
+    });
+    const reference = { ...REFERENCE, provider: "linear" as const, repository: "ENG" };
+    assert.strictEqual((yield* service.detail({ ...reference, url: firstUrl })).url, firstUrl);
+    assert.strictEqual(
+      (yield* service
+        .detail({ ...reference, url: "https://linear.app/second/issue/ENG-7" })
+        .pipe(Effect.flip))._tag,
+      "IssueOperationError",
+    );
+  }),
+);
+
+it.effect("forwards work item types and rejects extra assignees before writing", () =>
+  Effect.gen(function* () {
+    const writes: unknown[] = [];
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          capabilities: { ...FULL_CAPABILITIES, maxAssignees: 1 },
+          create: (input) => {
+            writes.push(input);
+            return Effect.succeed({ number: 8, url: "https://github.com/acme/web/issues/8" });
+          },
+          setAssignees: (input) => {
+            writes.push(input);
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const input = {
+      projectId: REFERENCE.projectId,
+      repository: REFERENCE.repository,
+      title: "Bug",
+      body: "",
+      labels: [],
+      assignees: ["one"],
+      workItemType: "Bug",
+    };
+    yield* service.create(input);
+    assert.deepStrictEqual(writes, [
+      {
+        cwd: "/a",
+        repository: REFERENCE.repository,
+        host: "github.com",
+        title: "Bug",
+        body: "",
+        labels: [],
+        assignees: ["one"],
+        workItemType: "Bug",
+      },
+    ]);
+    assert.strictEqual(
+      (yield* service.create({ ...input, assignees: ["one", "two"] }).pipe(Effect.flip))._tag,
+      "IssueOperationError",
+    );
+    assert.strictEqual(
+      (yield* service.setAssignees({ ...REFERENCE, assignees: ["one", "two"] }).pipe(Effect.flip))
+        ._tag,
+      "IssueOperationError",
+    );
+    assert.strictEqual(writes.length, 1);
+  }),
+);
+
+it.effect("keeps unowned issue reads available while refusing every host write", () =>
+  Effect.gen(function* () {
+    let writes = 0;
+    const url = "https://github.com/external/repo/issues/7";
+    const write = () => {
+      writes++;
+      return Effect.void;
+    };
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () => Effect.succeed(issueDetail(7, { url })),
+          runAction: write,
+          comment: write,
+          updateComment: write,
+          setReaction: write,
+          update: write,
+          setLabels: write,
+          setAssignees: write,
+        }),
+      ],
+    });
+    const reference = { ...REFERENCE, repository: "external/repo", url };
+    const detail = yield* service.detail(reference);
+    assert.strictEqual(detail.projectBound, false);
+    assert.deepStrictEqual(detail.viewerPermissions, {
+      actions: [],
+      comment: false,
+      edit: false,
+      labels: false,
+      assignees: false,
+      create: false,
+    });
+    for (const operation of [
+      service.runAction({ ...reference, action: "close" }),
+      service.comment({ ...reference, body: "Comment" }),
+      service.updateComment({ ...reference, commentId: "comment", body: "Edit" }),
+      service.setReaction({ ...reference, content: "thumbs-up", reacted: true }),
+      service.update({ ...reference, title: "Edit", body: "" }),
+      service.setLabels({ ...reference, labels: ["bug"] }),
+      service.setAssignees({ ...reference, assignees: ["user"] }),
+    ]) {
+      assert.strictEqual((yield* operation.pipe(Effect.flip))._tag, "IssueOperationError");
+    }
+    assert.strictEqual(writes, 0);
+  }),
+);
+
+it.effect("shares invalidation between bound URL reads and project references", () =>
+  Effect.gen(function* () {
+    let title = "Before";
+    const url = "https://github.com/acme/web/issues/7";
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", { getIssue: () => Effect.succeed(issueDetail(7, { title, url })) }),
+      ],
+    });
+    yield* service.detail({ ...REFERENCE, url });
+    yield* service.detail(REFERENCE);
+    title = "After";
+    yield* service.invalidate({ reference: REFERENCE });
+    assert.strictEqual((yield* service.detail({ ...REFERENCE, url })).title, "After");
+    assert.strictEqual((yield* service.detail(REFERENCE)).title, "After");
+  }),
+);
+
+it.effect(
+  "reads and writes an owning Azure issue through its legacy URL without crossing projects",
+  () =>
+    Effect.gen(function* () {
+      let url = "https://dev.azure.com/acme/team/_workitems/edit/7";
+      let title = "Before";
+      let writes = 0;
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "Azure",
+            workspaceRoot: "/azure",
+            provider: "azure-devops",
+            host: "dev.azure.com",
+            repository: "acme/team/_git/repo",
+          }),
+        ],
+        providers: [
+          fakeProvider("azure-devops", {
+            getIssue: () => Effect.succeed(issueDetail(7, { url, title })),
+            runAction: () =>
+              Effect.sync(() => {
+                writes++;
+                title = "After";
+              }),
+          }),
+        ],
+      });
+      const reference = {
+        projectId: REFERENCE.projectId,
+        repository: "acme/team",
+        number: 7,
+        url: "https://acme.visualstudio.com/DefaultCollection/team/_workitems/edit/7",
+      };
+      assert.notStrictEqual((yield* service.detail(reference)).projectBound, false);
+      assert.strictEqual((yield* service.summary(reference)).url, url);
+      const oldReference = {
+        projectId: reference.projectId,
+        repository: "acme/team/_git/repo",
+        number: 7,
+      };
+      assert.strictEqual((yield* service.detail(oldReference)).title, "Before");
+      yield* service.runAction({ ...reference, action: "close" });
+      assert.strictEqual(writes, 1);
+      assert.strictEqual((yield* service.detail(oldReference)).title, "After");
+      for (url of [
+        "https://dev.azure.com/other/team/_workitems/edit/7",
+        "https://dev.azure.com/acme/other/_workitems/edit/7",
+      ]) {
+        assert.strictEqual(
+          (yield* service.runAction({ ...reference, action: "close" }).pipe(Effect.flip))._tag,
+          "IssueOperationError",
+        );
+      }
+      assert.strictEqual(writes, 1);
+    }),
+);
+
+it.effect("reports a retired issue tracker without calling it a credential failure", () =>
+  Effect.gen(function* () {
+    const retired = new IssueProviderError({
+      provider: "bitbucket",
+      operation: "getIssue",
+      reason: "tracker-retired",
+      detail: "Bitbucket Cloud issue trackers have been retired.",
+    });
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "acme/web",
+          provider: "bitbucket",
+          host: "bitbucket.org",
+        }),
+      ],
+      providers: [
+        fakeProvider("bitbucket", {
+          getIssue: () => Effect.fail(retired),
+          listIssues: () => Effect.fail(retired),
+        }),
+      ],
+    });
+    assert.strictEqual(
+      (yield* service.detail(REFERENCE).pipe(Effect.flip))._tag,
+      "IssueUnavailableError",
+    );
+    assert.propertyVal(
+      yield* service.detail(REFERENCE).pipe(Effect.flip),
+      "reason",
+      "tracker-retired",
+    );
+    assert.deepStrictEqual((yield* service.list({ state: "open" })).errors, [
+      { projectId: REFERENCE.projectId, projectTitle: "web", message: retired.detail },
+    ]);
   }),
 );

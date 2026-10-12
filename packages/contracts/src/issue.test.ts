@@ -6,6 +6,7 @@ import {
   issueProjectSourceKey,
   issueSourceKey,
   IssueCreateInput,
+  IssueUnavailableError,
   IssueDetail,
   IssueListInput,
   ISSUE_LIST_CURSOR_MAX_LENGTH,
@@ -32,6 +33,23 @@ const decodeThreadIssueLinkSync = Schema.decodeSync(ThreadIssueLink);
 const decodeIssueRef = Schema.decodeUnknownSync(IssueRef);
 const GITHUB_SOURCE = issueSourceKey("github", "github.com");
 const GITLAB_SOURCE = issueSourceKey("gitlab", "gitlab.com");
+
+it("explains a retired issue tracker without suggesting it can be enabled", () => {
+  expect(
+    new IssueUnavailableError({ provider: "bitbucket", reason: "tracker-retired" }).message,
+  ).toBe("Bitbucket Cloud has removed its issue tracker and issue APIs.");
+});
+
+it("keeps an external issue URL in a project context", () => {
+  const ref = {
+    projectId: "context",
+    provider: "github",
+    repository: "upstream/repo",
+    number: 7,
+    url: "https://github.com/upstream/repo/issues/7",
+  };
+  expect(decodeIssueRef(ref)).toEqual(ref);
+});
 
 it("accepts legacy unlink keys and keeps host URLs while links require a URL", () => {
   const key = { provider: "github", repository: "t3tools/t3code", number: 1 };

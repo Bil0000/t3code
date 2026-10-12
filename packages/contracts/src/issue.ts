@@ -246,6 +246,8 @@ export const IssueCapabilities = Schema.Struct({
   listLabelCandidates: Schema.Boolean,
   /** The people who may be assigned can be listed, for the same reason. */
   listAssigneeCandidates: Schema.Boolean,
+  maxAssignees: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 25 }))),
+  typedAssignees: Schema.optional(Schema.Boolean),
   /** The host can narrow a listing by free text, rather than the page narrowing what arrives. */
   search: Schema.Boolean,
   /** The host reports which change requests reference an issue, so the links are its own. */
@@ -372,6 +374,7 @@ export type IssueListResult = typeof IssueListResult.Type;
 
 export const IssueRef = Schema.Struct({
   projectId: ProjectId,
+  url: Schema.optionalKey(TrimmedNonEmptyString),
   host: Schema.optionalKey(TrimmedNonEmptyString),
   provider: Schema.optionalKey(IssueProviderKind),
   repository: TrimmedNonEmptyString,
@@ -390,6 +393,7 @@ export const IssueInvalidateInput = Schema.Struct({
 export type IssueInvalidateInput = typeof IssueInvalidateInput.Type;
 
 export const IssueDetail = Schema.Struct({
+  projectBound: Schema.optional(Schema.Boolean),
   repositoryUrl: Schema.optionalKey(TrimmedNonEmptyString),
   provider: IssueProviderKind,
   capabilities: IssueCapabilities,
@@ -517,6 +521,7 @@ export type IssueRepositoryRef = typeof IssueRepositoryRef.Type;
 
 export const IssueCreateInput = Schema.Struct({
   ...IssueRepositoryRef.fields,
+  workItemType: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
   title: IssueTitle,
   /** May be empty: an issue with a title and nothing else is a legitimate one. */
   body: Schema.String.check(Schema.isMaxLength(65_536)),
@@ -748,6 +753,7 @@ export const IssueContactLink = Schema.Struct({
 export type IssueContactLink = typeof IssueContactLink.Type;
 
 export const IssueTemplateList = Schema.Struct({
+  workItemTypes: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   /**
    * What the host can do with issues at all, which a composer has no other way to learn: every
    * other answer carrying `IssueCapabilities` is about an issue that already exists, and the one
@@ -831,6 +837,7 @@ export const IssueUnavailableReason = Schema.Literals([
   "cli-unauthenticated",
   "provider-unsupported",
   "tracker-disabled",
+  "tracker-retired",
 ]);
 export type IssueUnavailableReason = typeof IssueUnavailableReason.Type;
 
@@ -883,6 +890,7 @@ export function issueProviderRequirement(
       return requirement.unauthenticated;
     case "provider-unsupported":
     case "tracker-disabled":
+    case "tracker-retired":
       return null;
   }
 }
@@ -919,6 +927,8 @@ export class IssueUnavailableError extends Schema.TaggedError<IssueUnavailableEr
         return "Issues cannot be browsed for this project's host yet.";
       case "tracker-disabled":
         return "This repository has its issue tracker switched off.";
+      case "tracker-retired":
+        return "Bitbucket Cloud has removed its issue tracker and issue APIs.";
     }
   }
 }

@@ -53,6 +53,7 @@ import {
   type IssueUpdateInput,
   type IssueProviderKind,
 } from "@t3tools/contracts";
+import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -242,7 +243,12 @@ function parseListCursor(raw: string): ListCursor | null {
 }
 
 function sourceKeyOf(project: IssueProviderRegistry.IssueProjectSource): string {
-  return issueProviderContextKey(project.adapter.kind, project.host, project.credentialId);
+  return issueProviderContextKey(
+    project.adapter.kind,
+    project.host,
+    project.credentialId,
+    project.repository,
+  );
 }
 
 const providerContextOf = (project: IssueProviderRegistry.IssueProjectSource) =>
@@ -357,8 +363,9 @@ function toIssueError(operation: string): (error: IssueProviderError) => IssueEr
       // saying so as an unavailability is what lets the page explain the setting rather than
       // report a failure the reader cannot act on.
       case "tracker-disabled":
+      case "tracker-retired":
         return new IssueUnavailableError({
-          reason: "tracker-disabled",
+          reason: error.reason,
           provider: error.provider,
           cause: error,
         });
@@ -517,11 +524,51 @@ export const make = Effect.gen(function* () {
    * remote: that field travels through the client, so it is never handed to a provider verbatim.
    */
   const requireProject = (
-    ref: Pick<IssueRef, "projectId" | "provider" | "repository" | "host">,
+    ref: Pick<IssueRef, "projectId" | "provider" | "repository" | "host"> &
+      Partial<Pick<IssueRef, "url" | "number">>,
   ): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> =>
     Effect.gen(function* () {
       const resolved = yield* ResolvedSource;
       if (resolved !== null) return resolved;
+      if (ref.url !== undefined) {
+        if (ref.number === undefined) {
+          return yield* new IssueOperationError({
+            operation: "resolveRepository",
+            detail: "An issue URL needs an issue number.",
+          });
+        }
+        const shells = yield* projects.listShells().pipe(
+          Effect.mapError(
+            (cause) =>
+              new IssueOperationError({
+                operation: "listProjects",
+                detail: "The project list could not be read.",
+                cause,
+              }),
+          ),
+        );
+        const project = shells.find((shell) => shell.id === ref.projectId);
+        if (project === undefined)
+          return yield* new IssueOperationError({
+            operation: "resolveRepository",
+            detail: "The selected project is no longer available.",
+          });
+        const { supported } = yield* listWorkspaceProjects({});
+        const source = yield* registry.resolveUrl({
+          reference: { ...ref, number: ref.number, url: ref.url },
+          project,
+          sources: supported,
+        });
+        return {
+          ...source,
+          adapter: withRateLimitBackoff(
+            source.adapter,
+            source.host,
+            rateLimits,
+            source.credentialId,
+          ),
+        };
+      }
       return yield* listWorkspaceProjects({ projectId: ref.projectId }).pipe(
         Effect.flatMap(
           ({ supported }): Effect.Effect<IssueProviderRegistry.IssueProjectSource, IssueError> => {
@@ -548,6 +595,33 @@ export const make = Effect.gen(function* () {
         ),
       );
     });
+
+  const verifyIssueUrl = (
+    input: IssueRef,
+    issue: Pick<ProviderIssue, "url" | "number">,
+    provider: IssueProviderKind,
+  ) => {
+    if (input.url === undefined) return Effect.void;
+    const requested = parseIssueUrl(input.url, { provider });
+    const returned = parseIssueUrl(issue.url, { provider });
+    return requested !== null &&
+      returned !== null &&
+      requested.provider === returned.provider &&
+      (requested.host.toLowerCase() === returned.host.toLowerCase() ||
+        (provider === "azure-devops" &&
+          requested.url.toLowerCase() === returned.url.toLowerCase())) &&
+      requested.repository.toLowerCase() === returned.repository.toLowerCase() &&
+      requested.number === returned.number &&
+      input.number === issue.number &&
+      (provider !== "linear" || requested.url.toLowerCase() === returned.url.toLowerCase())
+      ? Effect.void
+      : Effect.fail(
+          new IssueOperationError({
+            operation: "resolveRepository",
+            detail: "The resolved issue does not match the requested issue URL.",
+          }),
+        );
+  };
 
   /**
    * What the signed-in account may do with this issue, asked of the host itself. Every write goes
@@ -657,7 +731,12 @@ export const make = Effect.gen(function* () {
               roots.map((cwd) =>
                 sourceRead(
                   first,
-                  adapter.getViewer({ ...providerContextOf(first), cwd, host: first.host }),
+                  adapter.getViewer({
+                    ...providerContextOf(first),
+                    cwd,
+                    host: first.host,
+                    repository: first.repository,
+                  }),
                 ),
               ),
             ).pipe(
@@ -731,7 +810,9 @@ export const make = Effect.gen(function* () {
     message:
       error.reason === "tracker-disabled"
         ? `Issue tracker is switched off for ${project.repository}.`
-        : `${project.repository} could not be read.`,
+        : error.reason === "tracker-retired"
+          ? error.detail
+          : `${project.repository} could not be read.`,
   });
 
   const reactionContentBySort: Partial<Record<IssueListSort, IssueReactionContent>> = {
@@ -1151,16 +1232,29 @@ export const make = Effect.gen(function* () {
                       ...providerContextOf(project),
                       cwd: project.project.workspaceRoot,
                       host: project.host,
+                      repository: project.repository,
                     })
                     .pipe(Effect.orElseSucceed(() => undefined))
               ).pipe(Effect.map((viewer) => ({ issue, viewer }))),
             ),
             Effect.mapError(toIssueError("detail")),
+            Effect.tap(({ issue }) => verifyIssueUrl(input, issue, project.adapter.kind)),
             Effect.map(({ issue, viewer }): IssueDetail => ({
               provider: project.adapter.kind,
               ...(issue.repositoryUrl === undefined ? {} : { repositoryUrl: issue.repositoryUrl }),
               capabilities: project.adapter.capabilities,
-              viewerPermissions: issue.viewerPermissions,
+              viewerPermissions:
+                project.projectBound === false
+                  ? {
+                      actions: [],
+                      comment: false,
+                      edit: false,
+                      labels: false,
+                      assignees: false,
+                      create: false,
+                    }
+                  : issue.viewerPermissions,
+              ...(project.projectBound === false ? { projectBound: false } : {}),
               projectId: project.project.id,
               projectTitle: project.project.title,
               workspaceRoot: project.project.workspaceRoot,
@@ -1412,6 +1506,15 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
+        const maxAssignees = project.adapter.capabilities.maxAssignees;
+        if (maxAssignees !== undefined && input.assignees.length > maxAssignees) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "create",
+              detail: `This host accepts at most ${maxAssignees} assignee.`,
+            }),
+          );
+        }
         return project.adapter
           .create({
             ...providerContextOf(project),
@@ -1422,6 +1525,7 @@ export const make = Effect.gen(function* () {
             body: input.body,
             labels: input.labels,
             assignees: input.assignees,
+            ...(input.workItemType === undefined ? {} : { workItemType: input.workItemType }),
           })
           .pipe(Effect.mapError(toIssueError("create")));
       }),
@@ -1510,6 +1614,15 @@ export const make = Effect.gen(function* () {
             new IssueOperationError({
               operation: "setAssignees",
               detail: "This host cannot assign an issue to somebody.",
+            }),
+          );
+        }
+        const maxAssignees = project.adapter.capabilities.maxAssignees;
+        if (maxAssignees !== undefined && input.assignees.length > maxAssignees) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "setAssignees",
+              detail: `This host accepts at most ${maxAssignees} assignee.`,
             }),
           );
         }
@@ -1706,7 +1819,17 @@ export const make = Effect.gen(function* () {
   const refEpochs = new Map<string, number>();
   const REF_EPOCH_CAPACITY = 2_048;
   const refScope = (ref: IssueRef) =>
-    `${ref.projectId} ${ref.repository.trim().toLowerCase()} ${ref.number}`;
+    JSON.stringify([
+      ref.provider ?? null,
+      ref.host?.toLowerCase() ?? null,
+      (ref.provider === "azure-devops"
+        ? ref.repository.split("/").slice(0, 2).join("/")
+        : ref.repository
+      )
+        .trim()
+        .toLowerCase(),
+      ref.number,
+    ]);
   const refEpoch = (ref: IssueRef) => refEpochs.get(refScope(ref)) ?? allRefsEpoch;
   const bumpRefEpoch = (ref: IssueRef) => {
     const scope = refScope(ref);
@@ -1792,6 +1915,7 @@ export const make = Effect.gen(function* () {
             number: input.number,
           }).pipe(
             Effect.mapError(toIssueError("summary")),
+            Effect.tap((issue) => verifyIssueUrl(input, issue, project.adapter.kind)),
             Effect.map((issue) => ({
               projectId: project.project.id,
               provider: project.adapter.kind,
@@ -1822,6 +1946,7 @@ export const make = Effect.gen(function* () {
             repository: input.repository,
             number: input.number,
             ...(input.host === undefined ? {} : { host: input.host }),
+            ...(input.url === undefined ? {} : { url: input.url }),
           },
           yield* CredentialNamespace,
         ]),
@@ -1830,18 +1955,20 @@ export const make = Effect.gen(function* () {
 
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, provider, repository, number, host] = JSON.parse(key) as [
+      const [, projectId, provider, repository, number, host, url] = JSON.parse(key) as [
         number,
         string,
         string | null,
         string,
         number,
+        string | null,
         string | null,
       ];
       return detailUncached({
         projectId,
         ...(provider === null ? {} : { provider }),
         ...(host === null ? {} : { host }),
+        ...(url === null ? {} : { url }),
         repository,
         number,
       } as IssueRef);
@@ -1861,6 +1988,7 @@ export const make = Effect.gen(function* () {
         input.repository,
         input.number,
         input.host?.toLowerCase() ?? null,
+        input.url ?? null,
         yield* CredentialNamespace,
       ]);
       return yield* staleDetail(key, Cache.get(detailCache, key));
@@ -1868,18 +1996,20 @@ export const make = Effect.gen(function* () {
 
   const activityCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, provider, repository, number, host] = JSON.parse(key) as [
+      const [, projectId, provider, repository, number, host, url] = JSON.parse(key) as [
         number,
         string,
         string | null,
         string,
         number,
+        string | null,
         string | null,
       ];
       return activityUncached({
         projectId,
         ...(provider === null ? {} : { provider }),
         ...(host === null ? {} : { host }),
+        ...(url === null ? {} : { url }),
         repository,
         number,
       } as IssueRef);
@@ -1902,6 +2032,7 @@ export const make = Effect.gen(function* () {
         input.repository,
         input.number,
         input.host?.toLowerCase() ?? null,
+        input.url ?? null,
         yield* CredentialNamespace,
       ]);
       return yield* staleActivity(key, Cache.get(activityCache, key));
@@ -1930,20 +2061,28 @@ export const make = Effect.gen(function* () {
       );
     });
 
-  const invalidate: IssueService["Service"]["invalidate"] = (input) =>
-    Effect.sync(() => {
-      if (input.reference === undefined) {
-        listingsEpoch = ++epochCounter;
-        templatesEpoch = ++epochCounter;
-        allRefsEpoch = ++epochCounter;
-        refEpochs.clear();
-        // A whole-workspace refresh is the reader asking to be re-answered from the hosts, and
-        // that includes who the hosts say they are.
-        viewersBySource.clear();
-        return;
-      }
-      bumpRefEpoch(input.reference);
+  const invalidate: IssueService["Service"]["invalidate"] = (input) => {
+    if (input.reference !== undefined) {
+      const reference = input.reference;
+      return requireProject(reference).pipe(
+        Effect.match({
+          onSuccess: (source) =>
+            bumpRefEpoch({ ...reference, provider: source.adapter.kind, host: source.host }),
+          onFailure: () => {
+            allRefsEpoch = ++epochCounter;
+            refEpochs.clear();
+          },
+        }),
+      );
+    }
+    return Effect.sync(() => {
+      listingsEpoch = ++epochCounter;
+      templatesEpoch = ++epochCounter;
+      allRefsEpoch = ++epochCounter;
+      refEpochs.clear();
+      viewersBySource.clear();
     });
+  };
 
   // A mutation's own client re-reads right after it, and every other client's next read must see
   // the change too — so a write forgets the issue it touched and the listings its state change
@@ -1965,31 +2104,74 @@ export const make = Effect.gen(function* () {
   const credentialScoped =
     <I extends IssueRepositoryRef, A>(
       read: (input: I) => Effect.Effect<A, IssueError>,
-      allowReserve = true,
+      options: {
+        readonly allowReserve?: boolean;
+        readonly verifyUrl?: boolean;
+        readonly write?: boolean;
+      } = {},
     ) =>
     (input: I) =>
       requireProject(input).pipe(
-        Effect.flatMap((project) =>
-          project.adapter.withCredential === undefined
-            ? read(input).pipe(
+        Effect.flatMap((project) => {
+          if (options.write && project.projectBound === false) {
+            return Effect.fail(
+              new IssueOperationError({
+                operation: "resolveRepository",
+                detail: "An issue without a bound project can only be read or linked.",
+              }),
+            );
+          }
+          const routedInput = {
+            ...input,
+            projectId: project.project.id,
+            provider: project.adapter.kind,
+            host: project.host,
+          };
+          const url = "url" in input && typeof input.url === "string" ? input.url : undefined;
+          const number =
+            "number" in input && typeof input.number === "number" ? input.number : undefined;
+          const request =
+            url !== undefined && number !== undefined && options.verifyUrl !== false
+              ? (project.adapter.getIssueSummary ?? project.adapter.getIssue)({
+                  ...providerContextOf(project),
+                  cwd: project.project.workspaceRoot,
+                  host: project.host,
+                  repository: project.repository,
+                  number,
+                }).pipe(
+                  Effect.mapError(toIssueError("resolveRepository")),
+                  Effect.tap((issue) =>
+                    verifyIssueUrl({ ...input, url, number }, issue, project.adapter.kind),
+                  ),
+                  Effect.andThen(read(routedInput)),
+                )
+              : read(routedInput);
+          return project.adapter.withCredential === undefined
+            ? request.pipe(
                 Effect.provideService(CredentialNamespace, sourceKeyOf(project)),
                 Effect.provideService(ResolvedSource, project),
-                Effect.provideService(SourceControlRateLimit.Interactive, allowReserve),
+                Effect.provideService(
+                  SourceControlRateLimit.Interactive,
+                  options.allowReserve ?? true,
+                ),
               )
             : project.adapter
                 .withCredential(project.host, (fingerprint) =>
-                  read(input).pipe(
+                  request.pipe(
                     Effect.provideService(CredentialNamespace, fingerprint),
                     Effect.provideService(ResolvedSource, project),
-                    Effect.provideService(SourceControlRateLimit.Interactive, allowReserve),
+                    Effect.provideService(
+                      SourceControlRateLimit.Interactive,
+                      options.allowReserve ?? true,
+                    ),
                   ),
                 )
                 .pipe(
                   Effect.mapError((error) =>
                     error._tag === "IssueProviderError" ? toIssueError("credential")(error) : error,
                   ),
-                ),
-        ),
+                );
+        }),
       );
 
   const credentialList: IssueService["Service"]["list"] = (input) =>
@@ -2069,29 +2251,29 @@ export const make = Effect.gen(function* () {
         Effect.tap(() => invalidate({})),
       ),
     list: credentialList,
-    summary: credentialScoped(summary, false),
-    detail: credentialScoped(detail, false),
-    activity: credentialScoped(activity, false),
+    summary: credentialScoped(summary, { allowReserve: false, verifyUrl: false }),
+    detail: credentialScoped(detail, { allowReserve: false, verifyUrl: false }),
+    activity: credentialScoped(activity, { allowReserve: false }),
     runAction: (input) =>
-      credentialScoped(invalidatedByMutation(runAction))(input).pipe(
+      credentialScoped(invalidatedByMutation(runAction), { write: true })(input).pipe(
         Effect.tap(() => PubSub.publish(refreshes, input)),
       ),
     commentsPage: credentialScoped(commentsPage),
-    comment: credentialScoped(invalidatedByMutation(comment)),
-    updateComment: credentialScoped(invalidatedByMutation(updateComment)),
-    setReaction: credentialScoped(invalidatedByMutation(setReaction)),
+    comment: credentialScoped(invalidatedByMutation(comment), { write: true }),
+    updateComment: credentialScoped(invalidatedByMutation(updateComment), { write: true }),
+    setReaction: credentialScoped(invalidatedByMutation(setReaction), { write: true }),
     // A new issue belongs on every listing that would hold it, and there is no issue of its own
     // to forget yet.
     create: (input) =>
-      credentialScoped(create)(input).pipe(
+      credentialScoped(create, { write: true })(input).pipe(
         Effect.tap(() => Effect.sync(() => (listingsEpoch = ++epochCounter))),
       ),
     update: (input) =>
-      credentialScoped(invalidatedByMutation(update))(input).pipe(
+      credentialScoped(invalidatedByMutation(update), { write: true })(input).pipe(
         Effect.tap(() => PubSub.publish(refreshes, input)),
       ),
-    setLabels: credentialScoped(invalidatedByMutation(setLabels)),
-    setAssignees: credentialScoped(invalidatedByMutation(setAssignees)),
+    setLabels: credentialScoped(invalidatedByMutation(setLabels), { write: true }),
+    setAssignees: credentialScoped(invalidatedByMutation(setAssignees), { write: true }),
     // The candidate lists are deliberately read fresh per menu-open, so they stay uncached.
     labelCandidates: credentialScoped(labelCandidates),
     assigneeCandidates: credentialScoped(assigneeCandidates),

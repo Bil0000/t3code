@@ -178,10 +178,10 @@ const make = Effect.gen(function* () {
           repository: first.link.repository,
           number: first.link.number,
           host: url.host,
+          url: first.link.url,
         };
         const detail = yield* issues.summary(ref);
         if (
-          detail.projectId !== ref.projectId ||
           detail.provider !== ref.provider ||
           detail.repository.toLowerCase() !== ref.repository.toLowerCase() ||
           detail.number !== ref.number ||

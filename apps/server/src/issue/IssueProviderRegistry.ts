@@ -3,18 +3,23 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
   IssueTrackingError,
+  IssueOperationError,
+  IssueUnavailableError,
   issueRepositoryKey,
   type IssueListInput,
   type IssueProviderKind,
+  type IssueRef,
   type OrchestrationProjectShell,
   type SourceControlProviderInfo,
 } from "@t3tools/contracts";
+import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
 import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
 import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
 import * as GitLabCli from "@t3tools/source-control-gitlab/server/GitLabCli";
+import * as ForgejoCli from "@t3tools/source-control-forgejo/server/ForgejoCli";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
 import * as AzureDevOpsIssueProvider from "./AzureDevOpsIssueProvider.ts";
@@ -24,6 +29,7 @@ import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
 import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
+import * as ForgejoIssueProvider from "./ForgejoIssueProvider.ts";
 import * as LinearIssueProvider from "./LinearIssueProvider.ts";
 import {
   issueProviderContextKey,
@@ -40,6 +46,7 @@ export interface IssueProjectSource {
   readonly repository: string;
   readonly host: string;
   readonly credentialId?: string;
+  readonly projectBound?: boolean;
 }
 
 export interface IssueWorkspaceProjects {
@@ -226,7 +233,7 @@ const projectResolver = Effect.fn("IssueProviderRegistry.projectResolver")(funct
 
       for (const { adapter, kind, repository, host, credentialId } of sources) {
         if (filter.host !== undefined && host !== filter.host.toLowerCase()) continue;
-        const sourceKey = issueProviderContextKey(kind, host, credentialId);
+        const sourceKey = issueProviderContextKey(kind, host, credentialId, repository);
         if (adapter !== null) {
           const roots = viewerRoots.get(sourceKey);
           if (roots === undefined) viewerRoots.set(sourceKey, [project.workspaceRoot]);
@@ -267,6 +274,11 @@ export class IssueProviderRegistry extends Context.Service<
       projects: ReadonlyArray<OrchestrationProjectShell>,
       filter: IssueProjectFilter,
     ) => Effect.Effect<IssueWorkspaceProjects>;
+    readonly resolveUrl: (input: {
+      readonly reference: IssueRef & { readonly url: string };
+      readonly project: OrchestrationProjectShell;
+      readonly sources: ReadonlyArray<IssueProjectSource>;
+    }) => Effect.Effect<IssueProjectSource, IssueOperationError | IssueUnavailableError>;
   }
 >()("t3/issue/IssueProviderRegistry") {}
 
@@ -290,6 +302,116 @@ export const fromProviders = Effect.fn("IssueProviderRegistry.fromProviders")(fu
         : Effect.succeed(tracker);
     },
     resolveProjects: yield* projectResolver(byKind),
+    resolveUrl: Effect.fn("IssueProviderRegistry.resolveUrl")(function* ({
+      reference,
+      project,
+      sources,
+    }: {
+      readonly reference: IssueRef & { readonly url: string };
+      readonly project: OrchestrationProjectShell;
+      readonly sources: ReadonlyArray<IssueProjectSource>;
+    }) {
+      const refuse = (detail: string) =>
+        new IssueOperationError({ operation: "resolveRepository", detail });
+      const url = URL.parse(reference.url);
+      const hostSources = sources.filter(
+        (source) => source.host.toLowerCase() === url?.host.toLowerCase(),
+      );
+      const kinds = new Set(hostSources.map((source) => source.adapter.kind));
+      const knownKind = kinds.size === 1 ? [...kinds][0] : undefined;
+      const parsed = parseIssueUrl(
+        reference.url,
+        knownKind === undefined ? {} : { provider: knownKind },
+      );
+      if (parsed === null || parsed.provider === undefined || parsed.provider === null) {
+        return yield* refuse("This issue URL does not name a supported, configured host.");
+      }
+      const repository = reference.repository.toLowerCase();
+      if (
+        (reference.provider !== undefined && reference.provider !== parsed.provider) ||
+        (reference.host !== undefined &&
+          reference.host.toLowerCase() !== parsed.host.toLowerCase()) ||
+        reference.number !== parsed.number ||
+        (repository !== parsed.repository.toLowerCase() &&
+          !(
+            parsed.provider === "azure-devops" &&
+            repository.startsWith(`${parsed.repository.toLowerCase()}/`)
+          ))
+      ) {
+        return yield* refuse("The issue reference does not match its URL.");
+      }
+      const adapter = byKind.get(parsed.provider);
+      if (adapter === undefined)
+        return yield* new IssueUnavailableError({
+          reason: "provider-unsupported",
+          provider: parsed.provider,
+        });
+      const azureHosts = new Set([
+        "dev.azure.com",
+        `${parsed.repository.split("/")[0]!.toLowerCase()}.visualstudio.com`,
+      ]);
+      const matching = sources.filter(
+        (source) =>
+          source.adapter.kind === parsed.provider &&
+          (source.host.toLowerCase() === parsed.host ||
+            (parsed.provider === "azure-devops" &&
+              azureHosts.has(parsed.host) &&
+              azureHosts.has(source.host.toLowerCase()))) &&
+          (source.repository.toLowerCase() === repository ||
+            (parsed.provider === "azure-devops" &&
+              repository === parsed.repository.toLowerCase() &&
+              source.repository.toLowerCase().startsWith(`${repository}/`))),
+      );
+      const bound =
+        matching.find((source) => source.project.id === project.id) ??
+        (matching.length === 1 ? matching[0] : undefined);
+      let credentialId = bound?.credentialId;
+      if (parsed.provider === "linear" && bound === undefined) {
+        if (adapter.tracker === undefined)
+          return yield* new IssueUnavailableError({
+            reason: "cli-unauthenticated",
+            provider: "linear",
+          });
+        const connection = yield* adapter.tracker.status.pipe(
+          Effect.mapError(
+            (cause) =>
+              new IssueOperationError({
+                operation: "credential",
+                detail: "Could not read the connected Linear accounts.",
+                cause,
+              }),
+          ),
+        );
+        const accounts = connection.accounts.filter(
+          (account) =>
+            account.status === "authenticated" &&
+            account.projects.some((team) => team.key.toLowerCase() === repository),
+        );
+        const environmentMatches =
+          connection.environmentAccount?.status === "authenticated" &&
+          connection.environmentAccount.projects.some(
+            (team) => team.key.toLowerCase() === repository,
+          );
+        if (accounts.length + (environmentMatches ? 1 : 0) > 1)
+          return yield* refuse(
+            "More than one Linear account can read this team. Bind the intended account to the project.",
+          );
+        if (accounts.length === 0 && !environmentMatches)
+          return yield* new IssueUnavailableError({
+            reason: "cli-unauthenticated",
+            provider: "linear",
+          });
+        credentialId = accounts[0]?.credentialId;
+      }
+      return {
+        project: bound?.project ?? project,
+        adapter,
+        projectBound: bound !== undefined,
+        repository: reference.repository,
+        host: bound?.host ?? parsed.host,
+        ...(credentialId === undefined ? {} : { credentialId }),
+      };
+    }),
   };
 });
 
@@ -304,6 +426,7 @@ const make = Effect.gen(function* () {
     BitbucketIssueProvider.make,
     AzureDevOpsIssueProvider.make,
     LinearIssueProvider.make,
+    ForgejoIssueProvider.make,
   ]);
   return yield* fromProviders(providers);
 });
@@ -313,4 +436,5 @@ export const layer = Layer.effect(IssueProviderRegistry, make).pipe(
   Layer.provide(GitLabIssueCli.layer.pipe(Layer.provide(GitLabCli.layer))),
   Layer.provide(BitbucketIssueApi.layer.pipe(Layer.provide(BitbucketApi.layer))),
   Layer.provide(AzureDevOpsIssueCli.layer.pipe(Layer.provide(AzureDevOpsCli.layer))),
+  Layer.provide(ForgejoCli.layer),
 );

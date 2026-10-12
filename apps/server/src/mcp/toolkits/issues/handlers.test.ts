@@ -304,6 +304,7 @@ describe("issue toolkit handlers", () => {
           repository: issue.repository,
           number: issue.number,
           host: "github.com",
+          url: linked.url,
         };
         yield* harness.call("read_issue", input);
         yield* harness.call("read_issue", { ...input, commentsCursor: "next-page" });
@@ -339,7 +340,12 @@ describe("issue toolkit handlers", () => {
       expect(yield* Ref.get(harness.detailRequests)).toEqual([]);
       yield* harness.call("read_issue", { ...input, url: `${enterprise.url}#comment` });
       expect(yield* Ref.get(harness.detailRequests)).toEqual([
-        { projectId: enterprise.projectId, ...input, host: "github.example.com" },
+        {
+          projectId: enterprise.projectId,
+          ...input,
+          host: "github.example.com",
+          url: enterprise.url,
+        },
       ]);
     }),
   );
@@ -384,6 +390,7 @@ describe("issue toolkit handlers", () => {
             repository: "ENG",
             number: 5,
             host: "linear.app",
+            url: linked.url,
           },
         ]);
         expect(yield* Ref.get(harness.activityRequests)).toEqual([]);
@@ -423,9 +430,14 @@ describe("issue toolkit handlers", () => {
       }),
   );
 
-  it.effect("rejects an unmatched URL instead of using it to choose a source", () =>
+  it.effect("forwards an unlinked URL to IssueService and preserves a source refusal", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness(thread([issue]));
+      const harness = yield* makeHarness(thread([issue]), undefined, {
+        readError: new IssueOperationError({
+          operation: "resolveRepository",
+          detail: "This host is not configured.",
+        }),
+      });
       expect(
         yield* harness
           .call("read_issue", {
@@ -434,8 +446,15 @@ describe("issue toolkit handlers", () => {
             url: "https://other.example.com/t3tools/t3code/issues/7",
           })
           .pipe(Effect.flip),
-      ).toMatchObject({ _tag: "IssueOperationError", detail: "No linked issue matches this URL." });
-      expect(yield* Ref.get(harness.detailRequests)).toEqual([]);
+      ).toMatchObject({ _tag: "IssueOperationError", detail: "This host is not configured." });
+      expect(yield* Ref.get(harness.detailRequests)).toEqual([
+        {
+          projectId,
+          repository: issue.repository,
+          number: issue.number,
+          url: "https://other.example.com/t3tools/t3code/issues/7",
+        },
+      ]);
     }),
   );
 
@@ -913,3 +932,34 @@ describe("issue toolkit handlers", () => {
     }),
   );
 });
+
+it.effect("links and reads an unowned issue URL without changing the thread project", () =>
+  Effect.gen(function* () {
+    const external = {
+      ...issueDetail,
+      repository: "external/repo",
+      url: "https://github.com/external/repo/issues/7",
+    };
+    const harness = yield* makeHarness(thread(), undefined, { detail: external });
+    const input = { repository: external.repository, number: external.number, url: external.url };
+    const linked = yield* harness.call("link_issue", input);
+    expect(linked).toMatchObject({
+      alreadyLinked: false,
+      issue: { projectId, repository: external.repository, url: external.url },
+    });
+    const read = yield* harness.call("read_issue", input);
+    expect(read.markdown).toContain(external.url);
+    expect(yield* Ref.get(harness.detailRequests)).toEqual([
+      { projectId, ...input },
+      { projectId, ...input },
+    ]);
+    expect(yield* Ref.get(harness.activityRequests)).toEqual([{ projectId, ...input }]);
+    expect(yield* Ref.get(harness.commands)).toMatchObject([
+      {
+        type: "thread.metadata.update",
+        threadId,
+        issueLink: { projectId, repository: external.repository, url: external.url },
+      },
+    ]);
+  }),
+);

@@ -294,6 +294,7 @@ it.effect("maps Linear comment reaction arrays into issue activity", () => {
       ],
       commentCount: 1,
       commentsTruncated: false,
+      nextCommentsCursor: null,
       events: [],
       reactions: [{ content: "hooray", count: 2, actors: ["user-2"], viewerHasReacted: false }],
     });
@@ -306,6 +307,59 @@ it.effect("maps Linear comment reaction arrays into issue activity", () => {
     ),
   );
 });
+
+it.effect(
+  "continues Linear comment pages with the cursor, credential, and viewer reactions",
+  () => {
+    let asked: Parameters<LinearApi.LinearApi["Service"]["getActivity"]>[0] | undefined;
+    const api = {
+      getActivity: (input) => {
+        asked = input;
+        return Effect.succeed({
+          viewerId: "user-1",
+          comments: [
+            {
+              id: "comment-51",
+              body: "Next page",
+              createdAt: "2026-08-17T00:00:00.000Z",
+              reactions: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }],
+            },
+          ],
+          reactions: [],
+          commentsTruncated: false,
+          nextCommentsCursor: null,
+        });
+      },
+    } satisfies Partial<LinearApi.LinearApi["Service"]>;
+    return Effect.gen(function* () {
+      const adapter = yield* make;
+      const page = yield* adapter.getIssueComments!({
+        cwd: PROJECT.workspaceRoot,
+        host: "linear.app",
+        repository: "ENG",
+        number: 7,
+        credentialId: "account-1",
+        cursor: "cursor-50",
+      });
+      assert.deepStrictEqual(asked, {
+        identifier: "ENG-7",
+        credentialId: "account-1",
+        cursor: "cursor-50",
+      });
+      assert.strictEqual(page.nextCursor, null);
+      assert.deepStrictEqual(page.comments[0]?.reactions, [
+        { content: "thumbs-up", count: 1, actors: ["user-1"], viewerHasReacted: true },
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(LinearApi.LinearApi)(api),
+          ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
+        ),
+      ),
+    );
+  },
+);
 
 it.effect("uses the project binding credential for Linear requests", () => {
   const asked: Array<string | undefined> = [];

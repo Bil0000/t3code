@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -10,6 +11,9 @@ import {
   type IssueListState,
   type IssueListSort,
   type IssueListOrder,
+  type IssueLabelCandidateList,
+  type IssueAssigneeCandidateList,
+  type IssueComment,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
@@ -17,6 +21,8 @@ import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/Azu
 import {
   decodeWorkItemJson,
   decodeWorkItemsJson,
+  decodeWorkItemSummaryJson,
+  decodeWorkItemCommentsJson,
   type AzureDevOpsWorkItem,
 } from "./azureDevOpsIssueJson.ts";
 import type { ProviderListCursor } from "./IssueProvider.ts";
@@ -109,7 +115,49 @@ export type AzureDevOpsIssueCliError =
   | AzureDevOpsIssueReadError
   | AzureDevOpsProjectUnknownError
   | AzureDevOpsWorkItemIncompleteError
-  | AzureDevOpsWorkItemStateRefusedError;
+  | AzureDevOpsWorkItemStateRefusedError
+  | AzureDevOpsIssueInputError
+  | AzureDevOpsIssueWriteError
+  | AzureDevOpsIssueMutationRefusedError;
+
+export class AzureDevOpsIssueInputError extends Schema.TaggedError<AzureDevOpsIssueInputError>()(
+  "AzureDevOpsIssueInputError",
+  {
+    reason: Schema.Literals([
+      "missing-type",
+      "too-many-assignees",
+      "invalid-tag",
+      "invalid-comment-id",
+    ]),
+  },
+) {
+  get detail(): string {
+    switch (this.reason) {
+      case "missing-type":
+        return "Choose a work item type before creating an Azure DevOps work item.";
+      case "too-many-assignees":
+        return "Azure DevOps work items can have only one assignee.";
+      case "invalid-tag":
+        return "Azure DevOps tags cannot contain commas or semicolons, or exceed 400 characters.";
+      case "invalid-comment-id":
+        return "An Azure DevOps comment ID must be a positive integer.";
+    }
+  }
+}
+
+export class AzureDevOpsIssueMutationRefusedError extends Schema.TaggedError<AzureDevOpsIssueMutationRefusedError>()(
+  "AzureDevOpsIssueMutationRefusedError",
+  { statusCode: Schema.Int, detail: Schema.String },
+) {}
+
+export class AzureDevOpsIssueWriteError extends Schema.TaggedError<AzureDevOpsIssueWriteError>()(
+  "AzureDevOpsIssueWriteError",
+  { operation: Schema.String, cause: Schema.Defect() },
+) {
+  get detail(): string {
+    return "The Azure DevOps request file could not be prepared.";
+  }
+}
 
 /**
  * Involvement as Azure can answer it. `mentioned` is left out rather than answered unnarrowed:
@@ -118,34 +166,99 @@ export type AzureDevOpsIssueCliError =
  */
 export type AzureDevOpsInvolvement = Exclude<IssueInvolvement, "mentioned">;
 
+type AzureDevOpsIssueScope = {
+  readonly cwd: string;
+  readonly host?: string | undefined;
+  readonly repository?: string | undefined;
+};
+
 export class AzureDevOpsIssueCli extends Context.Service<
   AzureDevOpsIssueCli,
   {
-    readonly getViewer: (input: {
-      readonly cwd: string;
-    }) => Effect.Effect<string, AzureDevOpsIssueCliError>;
-    readonly listWorkItems: (input: {
-      readonly cwd: string;
-      readonly state: IssueListState;
-      /** No `mentioned`: Azure records none, and the provider refuses that filter before here. */
-      readonly involvement: AzureDevOpsInvolvement;
-      readonly limit: number;
-      readonly sort?: IssueListSort | undefined;
-      readonly order?: IssueListOrder | undefined;
-      readonly cursor?: ProviderListCursor | undefined;
-    }) => Effect.Effect<
+    readonly getViewer: (
+      input: AzureDevOpsIssueScope,
+    ) => Effect.Effect<string, AzureDevOpsIssueCliError>;
+    readonly listWorkItems: (
+      input: AzureDevOpsIssueScope & {
+        readonly state: IssueListState;
+        /** No `mentioned`: Azure records none, and the provider refuses that filter before here. */
+        readonly involvement: AzureDevOpsInvolvement;
+        readonly limit: number;
+        readonly sort?: IssueListSort | undefined;
+        readonly order?: IssueListOrder | undefined;
+        readonly query?: string | undefined;
+        readonly cursor?: ProviderListCursor | undefined;
+      },
+    ) => Effect.Effect<
       { readonly items: ReadonlyArray<AzureDevOpsWorkItem>; readonly truncated: boolean },
       AzureDevOpsIssueCliError
     >;
-    readonly getWorkItem: (input: {
-      readonly cwd: string;
-      readonly number: number;
-    }) => Effect.Effect<AzureDevOpsWorkItem, AzureDevOpsIssueCliError>;
-    readonly runWorkItemAction: (input: {
-      readonly cwd: string;
-      readonly number: number;
-      readonly action: IssueAction;
-    }) => Effect.Effect<void, AzureDevOpsIssueCliError>;
+    readonly getWorkItem: (
+      input: AzureDevOpsIssueScope & {
+        readonly number: number;
+      },
+    ) => Effect.Effect<AzureDevOpsWorkItem, AzureDevOpsIssueCliError>;
+    readonly runWorkItemAction: (
+      input: AzureDevOpsIssueScope & {
+        readonly number: number;
+        readonly action: IssueAction;
+      },
+    ) => Effect.Effect<void, AzureDevOpsIssueCliError>;
+    readonly getWorkItemSummary: (
+      input: AzureDevOpsIssueScope & {
+        readonly number: number;
+      },
+    ) => Effect.Effect<
+      Pick<AzureDevOpsWorkItem, "number" | "title" | "url" | "state">,
+      AzureDevOpsIssueCliError
+    >;
+    readonly listComments: (
+      input: AzureDevOpsIssueScope & {
+        readonly number: number;
+        readonly cursor?: string | undefined;
+      },
+    ) => Effect.Effect<
+      {
+        readonly comments: ReadonlyArray<IssueComment>;
+        readonly commentCount: number;
+        readonly nextCursor: string | null;
+      },
+      AzureDevOpsIssueCliError
+    >;
+    readonly comment: (
+      input: AzureDevOpsIssueScope & {
+        readonly number: number;
+        readonly body: string;
+        readonly commentId?: string | undefined;
+      },
+    ) => Effect.Effect<void, AzureDevOpsIssueCliError>;
+    readonly createWorkItem: (
+      input: AzureDevOpsIssueScope & {
+        readonly title: string;
+        readonly body: string;
+        readonly labels: ReadonlyArray<string>;
+        readonly assignees: ReadonlyArray<string>;
+        readonly workItemType?: string | undefined;
+      },
+    ) => Effect.Effect<{ readonly number: number; readonly url: string }, AzureDevOpsIssueCliError>;
+    readonly updateWorkItem: (
+      input: AzureDevOpsIssueScope & {
+        readonly number: number;
+        readonly title?: string | undefined;
+        readonly body?: string | undefined;
+        readonly labels?: ReadonlyArray<string> | undefined;
+        readonly assignees?: ReadonlyArray<string> | undefined;
+      },
+    ) => Effect.Effect<void, AzureDevOpsIssueCliError>;
+    readonly listWorkItemTypes: (
+      input: AzureDevOpsIssueScope,
+    ) => Effect.Effect<ReadonlyArray<string>, AzureDevOpsIssueCliError>;
+    readonly listTagCandidates: (
+      input: AzureDevOpsIssueScope & { readonly number: number },
+    ) => Effect.Effect<IssueLabelCandidateList, AzureDevOpsIssueCliError>;
+    readonly listAssigneeCandidates: (
+      input: AzureDevOpsIssueScope & { readonly number: number },
+    ) => Effect.Effect<IssueAssigneeCandidateList, AzureDevOpsIssueCliError>;
   }
 >()("t3/issue/AzureDevOpsIssueCli") {}
 
@@ -166,8 +279,16 @@ const ACTION_STATES: Record<IssueAction, readonly [string, ...ReadonlyArray<stri
   reopen: ["Active", "Committed", "Doing", "To Do", "New", "Proposed"],
 };
 
-/** WIQL has one quote to escape, and a title filter never reaches it — but a cursor does. */
 const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
+const encodeRequest = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeBatchResponse = decodeJsonResult(
+  Schema.Struct({
+    value: Schema.Tuple([Schema.Struct({ code: Schema.Int, body: Schema.String })]),
+  }),
+);
+const decodeErrorBody = decodeJsonResult(
+  Schema.Struct({ message: Schema.optional(Schema.String) }),
+);
 
 function involvementClause(involvement: AzureDevOpsInvolvement): string {
   switch (involvement) {
@@ -198,10 +319,20 @@ function stateClause(state: IssueListState): string {
 
 const make = Effect.gen(function* () {
   const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
+  const fs = yield* FileSystem.FileSystem;
 
-  // Every command resolves the organization and project from the checkout, which is what the
-  // rest of the Azure wrapper does: the remote takes three shapes and only `az` reads all of them.
   const detectArgs = ["--detect", "true"] as const;
+  const scopeArgs = (input: AzureDevOpsIssueScope) =>
+    input.host && input.repository
+      ? [
+          "--detect",
+          "false",
+          "--organization",
+          input.host.toLowerCase().endsWith(".visualstudio.com")
+            ? `https://${input.host}`
+            : `https://${input.host}/${encodeURIComponent(input.repository.split("/")[0]!)}`,
+        ]
+      : detectArgs;
 
   const executeJson = (input: { readonly cwd: string; readonly args: ReadonlyArray<string> }) =>
     azure.execute({
@@ -238,14 +369,17 @@ const make = Effect.gen(function* () {
    * organization. Read from the repository the checkout points at, which is where `az` already
    * looks for everything else.
    */
-  const projectName = (cwd: string) =>
-    azure
+  const projectName = (input: AzureDevOpsIssueScope) => {
+    const project = input.repository?.split("/")[1];
+    if (input.host && project) return Effect.succeed(project);
+    const { cwd } = input;
+    return azure
       .execute({
         cwd,
         args: [
           "repos",
           "show",
-          ...detectArgs,
+          ...scopeArgs(input),
           "--query",
           "project.name",
           "--only-show-errors",
@@ -260,6 +394,111 @@ const make = Effect.gen(function* () {
           return Effect.fail(new AzureDevOpsProjectUnknownError({ command: "az", cwd }));
         }),
       );
+  };
+
+  const invokeArgs = (
+    input: AzureDevOpsIssueScope,
+    resource: string,
+    project: string,
+    route: ReadonlyArray<string> = [],
+    version = "7.1",
+  ) => [
+    "devops",
+    "invoke",
+    ...scopeArgs(input),
+    "--area",
+    "wit",
+    "--resource",
+    resource,
+    "--route-parameters",
+    `project=${project}`,
+    ...route,
+    "--api-version",
+    version,
+  ];
+
+  const writeJson = (
+    cwd: string,
+    operation: string,
+    args: ReadonlyArray<string>,
+    body: unknown,
+    mediaType = "application/json",
+  ) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const file = yield* fs
+          .makeTempFileScoped({ prefix: "t3-azure-issue-" })
+          .pipe(Effect.mapError((cause) => new AzureDevOpsIssueWriteError({ operation, cause })));
+        yield* fs
+          .writeFileString(file, encodeRequest(body))
+          .pipe(Effect.mapError((cause) => new AzureDevOpsIssueWriteError({ operation, cause })));
+        return yield* executeJson({
+          cwd,
+          args: [...args, "--in-file", file, "--media-type", mediaType],
+        });
+      }),
+    );
+
+  const getWorkItem = (input: AzureDevOpsIssueScope & { readonly number: number }) =>
+    read({
+      cwd: input.cwd,
+      operation: "getWorkItem",
+      args: ["boards", "work-item", "show", ...scopeArgs(input), "--id", String(input.number)],
+      decode: decodeWorkItemJson,
+    }).pipe(
+      Effect.flatMap((item) =>
+        item === null
+          ? Effect.fail(
+              new AzureDevOpsWorkItemIncompleteError({
+                command: "az",
+                cwd: input.cwd,
+                number: input.number,
+              }),
+            )
+          : Effect.succeed(item),
+      ),
+    );
+
+  const itemProject = (input: AzureDevOpsIssueScope & { readonly number: number }) =>
+    getWorkItem(input).pipe(
+      Effect.flatMap((item) =>
+        item.project === null ? projectName(input) : Effect.succeed(item.project),
+      ),
+    );
+
+  const validateFields = (input: {
+    readonly labels?: ReadonlyArray<string> | undefined;
+    readonly assignees?: ReadonlyArray<string> | undefined;
+  }) => {
+    if ((input.assignees?.length ?? 0) > 1)
+      return Effect.fail(new AzureDevOpsIssueInputError({ reason: "too-many-assignees" }));
+    if (input.labels?.some((tag) => tag.length > 400 || /[,;]/u.test(tag)))
+      return Effect.fail(new AzureDevOpsIssueInputError({ reason: "invalid-tag" }));
+    return Effect.void;
+  };
+
+  const fieldPatch = (input: {
+    readonly title?: string | undefined;
+    readonly body?: string | undefined;
+    readonly labels?: ReadonlyArray<string> | undefined;
+    readonly assignees?: ReadonlyArray<string> | undefined;
+  }) => [
+    ...(input.title === undefined
+      ? []
+      : [{ op: "add", path: "/fields/System.Title", value: input.title }]),
+    ...(input.body === undefined
+      ? []
+      : [
+          { op: "add", path: "/fields/System.Description", value: input.body },
+          { op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" },
+        ]),
+    ...(input.labels === undefined
+      ? []
+      : [{ op: "add", path: "/fields/System.Tags", value: input.labels.join("; ") }]),
+    ...(input.assignees === undefined
+      ? []
+      : [{ op: "add", path: "/fields/System.AssignedTo", value: input.assignees[0] ?? "" }]),
+  ];
 
   return AzureDevOpsIssueCli.of({
     getViewer: (input) =>
@@ -269,7 +508,7 @@ const make = Effect.gen(function* () {
         args: [
           "devops",
           "invoke",
-          ...detectArgs,
+          ...scopeArgs(input),
           "--area",
           "profile",
           "--resource",
@@ -303,25 +542,26 @@ const make = Effect.gen(function* () {
         read({
           cwd: input.cwd,
           operation: "listWorkItems",
-          // The query travels as one argv value rather than through a shell, and carries no
-          // text the reader typed: Azure filters by no free text, so a search never reaches it.
           args: [
             "boards",
             "query",
-            ...detectArgs,
+            ...scopeArgs(input),
             "--wiql",
             "SELECT [System.Id], [System.Title], [System.State], [System.CreatedDate], " +
-              "[System.ChangedDate], [System.CreatedBy], [System.AssignedTo], [System.CommentCount] " +
+              "[System.ChangedDate], [System.CreatedBy], [System.AssignedTo], [System.CommentCount], [System.Tags], [System.TeamProject] " +
               `FROM WorkItems WHERE [System.TeamProject] = ${quoted(project)}` +
               stateClause(input.state) +
               involvementClause(input.involvement) +
+              (input.query?.trim()
+                ? ` AND [System.Title] CONTAINS ${quoted(input.query.trim())}`
+                : "") +
               cursorClause +
               ` ORDER BY [${sortField}] ${direction}, [System.Id] ASC`,
           ],
           decode: decodeWorkItemsJson,
         });
 
-      return projectName(input.cwd).pipe(
+      return projectName(input).pipe(
         Effect.flatMap(query),
         Effect.map((page) => ({
           items: page.items.slice(0, input.limit),
@@ -332,12 +572,25 @@ const make = Effect.gen(function* () {
       );
     },
 
-    getWorkItem: (input) =>
+    getWorkItem,
+
+    getWorkItemSummary: (input) =>
       read({
         cwd: input.cwd,
-        operation: "getWorkItem",
-        args: ["boards", "work-item", "show", ...detectArgs, "--id", String(input.number)],
-        decode: decodeWorkItemJson,
+        operation: "getWorkItemSummary",
+        args: [
+          "boards",
+          "work-item",
+          "show",
+          ...scopeArgs(input),
+          "--id",
+          String(input.number),
+          "--fields",
+          "System.Title,System.State,System.TeamProject",
+          "--expand",
+          "none",
+        ],
+        decode: decodeWorkItemSummaryJson,
       }).pipe(
         Effect.flatMap((item) =>
           item === null
@@ -352,6 +605,284 @@ const make = Effect.gen(function* () {
         ),
       ),
 
+    listComments: (input) =>
+      itemProject(input).pipe(
+        Effect.flatMap((project) =>
+          read({
+            cwd: input.cwd,
+            operation: "listComments",
+            args: [
+              ...invokeArgs(
+                input,
+                "comments",
+                project,
+                [`workItemId=${input.number}`],
+                "7.1-preview",
+              ),
+              "--query-parameters",
+              "$top=100",
+              "order=asc",
+              "includeDeleted=false",
+              ...(input.cursor === undefined ? [] : [`continuationToken=${input.cursor}`]),
+            ],
+            decode: decodeWorkItemCommentsJson,
+          }),
+        ),
+      ),
+
+    comment: (input) => {
+      if (input.commentId !== undefined && !/^[1-9]\d*$/u.test(input.commentId))
+        return Effect.fail(new AzureDevOpsIssueInputError({ reason: "invalid-comment-id" }));
+      return itemProject(input).pipe(
+        Effect.flatMap((project) =>
+          writeJson(
+            input.cwd,
+            "comment",
+            [
+              ...invokeArgs(
+                input,
+                "comments",
+                project,
+                [
+                  `workItemId=${input.number}`,
+                  ...(input.commentId === undefined ? [] : [`commentId=${input.commentId}`]),
+                ],
+                "7.1-preview",
+              ),
+              "--http-method",
+              input.commentId === undefined ? "POST" : "PATCH",
+              "--query-parameters",
+              "format=markdown",
+            ],
+            { text: input.body },
+          ),
+        ),
+        Effect.asVoid,
+      );
+    },
+
+    createWorkItem: (input) => {
+      if (!input.workItemType?.trim())
+        return Effect.fail(new AzureDevOpsIssueInputError({ reason: "missing-type" }));
+      const workItemType = input.workItemType;
+      return validateFields(input).pipe(
+        Effect.andThen(projectName(input)),
+        Effect.flatMap((project) =>
+          writeJson(
+            input.cwd,
+            "createWorkItem",
+            [
+              ...invokeArgs(input, "workitems", project, [
+                `type=${workItemType}`,
+                `id=$${workItemType}`,
+              ]),
+              "--http-method",
+              "POST",
+            ],
+            fieldPatch(input),
+            "application/json-patch+json",
+          ),
+        ),
+        Effect.flatMap((result) => {
+          const decoded = decodeWorkItemSummaryJson(result.stdout);
+          if (Result.isFailure(decoded))
+            return Effect.fail(
+              new AzureDevOpsIssueReadError({
+                command: "az",
+                cwd: input.cwd,
+                operation: "createWorkItem",
+                cause: decoded.failure,
+              }),
+            );
+          if (decoded.success === null)
+            return Effect.fail(
+              new AzureDevOpsIssueReadError({
+                command: "az",
+                cwd: input.cwd,
+                operation: "createWorkItem",
+                cause: "incomplete-response",
+              }),
+            );
+          return Effect.succeed({ number: decoded.success.number, url: decoded.success.url });
+        }),
+      );
+    },
+
+    updateWorkItem: (input) =>
+      validateFields(input).pipe(
+        Effect.andThen(projectName(input)),
+        Effect.flatMap((project) =>
+          writeJson(
+            input.cwd,
+            "updateWorkItem",
+            [...invokeArgs(input, "batch", project, [], "4.1"), "--http-method", "PATCH"],
+            [
+              {
+                method: "PATCH",
+                uri: `/${encodeURIComponent(project)}/_apis/wit/workitems/${input.number}?api-version=7.1`,
+                headers: { "Content-Type": "application/json-patch+json" },
+                body: fieldPatch(input),
+              },
+            ],
+            "application/json",
+          ),
+        ),
+        Effect.flatMap((result): Effect.Effect<void, AzureDevOpsIssueCliError> => {
+          const decoded = decodeBatchResponse(result.stdout);
+          if (Result.isFailure(decoded))
+            return Effect.fail(
+              new AzureDevOpsIssueReadError({
+                command: "az",
+                cwd: input.cwd,
+                operation: "updateWorkItem",
+                cause: decoded.failure,
+              }),
+            );
+          const response = decoded.success.value[0];
+          if (response.code >= 200 && response.code < 300) return Effect.void;
+          const error = decodeErrorBody(response.body);
+          return Effect.fail(
+            new AzureDevOpsIssueMutationRefusedError({
+              statusCode: response.code,
+              detail: Result.isSuccess(error)
+                ? (error.success.message ??
+                  `Azure DevOps refused the update (HTTP ${response.code}).`)
+                : `Azure DevOps refused the update (HTTP ${response.code}).`,
+            }),
+          );
+        }),
+      ),
+
+    listWorkItemTypes: (input) =>
+      projectName(input).pipe(
+        Effect.flatMap((project) =>
+          read({
+            cwd: input.cwd,
+            operation: "listWorkItemTypes",
+            args: invokeArgs(input, "workitemtypes", project),
+            decode: decodeJsonResult(
+              Schema.Struct({
+                value: Schema.Array(
+                  Schema.Struct({
+                    name: Schema.NonEmptyString,
+                    isDisabled: Schema.optional(Schema.Boolean),
+                  }),
+                ),
+              }),
+            ),
+          }),
+        ),
+        Effect.map((page) =>
+          page.value.filter((item) => !item.isDisabled).map((item) => item.name),
+        ),
+      ),
+
+    listTagCandidates: (input) =>
+      getWorkItem(input).pipe(
+        Effect.flatMap((item) =>
+          (item.project === null ? projectName(input) : Effect.succeed(item.project)).pipe(
+            Effect.flatMap((project) =>
+              read({
+                cwd: input.cwd,
+                operation: "listTagCandidates",
+                args: invokeArgs(input, "tags", project),
+                decode: decodeJsonResult(
+                  Schema.Struct({
+                    value: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString })),
+                  }),
+                ),
+              }),
+            ),
+            Effect.map((page) => ({
+              candidates: [
+                ...new Set([
+                  ...page.value.map((tag) => tag.name),
+                  ...item.labels.map((tag) => tag.name),
+                ]),
+              ].map((name) => ({
+                name,
+                color: null,
+                description: null,
+                isApplied: item.labels.some((tag) => tag.name === name),
+              })),
+              truncated: false,
+            })),
+          ),
+        ),
+      ),
+
+    listAssigneeCandidates: (input) =>
+      Effect.gen(function* () {
+        const item = yield* getWorkItem(input);
+        const project = item.project ?? (yield* projectName(input));
+        const teams = yield* read({
+          cwd: input.cwd,
+          operation: "listTeams",
+          args: [
+            "devops",
+            "team",
+            "list",
+            ...scopeArgs(input),
+            "--project",
+            project,
+            "--top",
+            "10",
+          ],
+          decode: decodeJsonResult(Schema.Array(Schema.Struct({ id: Schema.NonEmptyString }))),
+        });
+        const members = yield* Effect.forEach(
+          teams,
+          (team) =>
+            read({
+              cwd: input.cwd,
+              operation: "listTeamMembers",
+              args: [
+                "devops",
+                "team",
+                "list-member",
+                ...scopeArgs(input),
+                "--project",
+                project,
+                "--team",
+                team.id,
+                "--top",
+                "100",
+              ],
+              decode: decodeJsonResult(
+                Schema.Array(
+                  Schema.Struct({
+                    identity: Schema.Struct({
+                      uniqueName: Schema.NonEmptyString,
+                      displayName: Schema.optional(Schema.String),
+                      imageUrl: Schema.optional(Schema.String),
+                      isContainer: Schema.optional(Schema.Boolean),
+                    }),
+                  }),
+                ),
+              ),
+            }),
+          { concurrency: 3 },
+        );
+        const candidates = new Map(
+          item.assignees.map((actor) => [
+            actor.login.toLowerCase(),
+            { ...actor, id: actor.login, isAssigned: true },
+          ]),
+        );
+        for (const member of members.flat()) {
+          const identity = member.identity;
+          if (identity.isContainer || candidates.has(identity.uniqueName.toLowerCase())) continue;
+          candidates.set(identity.uniqueName.toLowerCase(), {
+            id: identity.uniqueName,
+            login: identity.uniqueName,
+            name: identity.displayName ?? null,
+            avatarUrl: identity.imageUrl ?? null,
+            isAssigned: false,
+          });
+        }
+        return { candidates: [...candidates.values()], truncated: true };
+      }),
+
     runWorkItemAction: (input) => {
       const write = (
         state: string,
@@ -363,7 +894,7 @@ const make = Effect.gen(function* () {
             "boards",
             "work-item",
             "update",
-            ...detectArgs,
+            ...scopeArgs(input),
             "--id",
             String(input.number),
             "--state",

@@ -1,3 +1,4 @@
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -18,7 +19,7 @@ it.effect("reads modern and legacy Azure work item URLs in lists and details", (
       ],
       [
         "https://dev.azure.com/acme/web/_apis/wit/workItems/7",
-        "https://dev.azure.com/acme/_workitems/edit/7",
+        "https://dev.azure.com/acme/web/_workitems/edit/7",
       ],
       [
         "https://acme.visualstudio.com/_apis/wit/workItems/7",
@@ -30,11 +31,11 @@ it.effect("reads modern and legacy Azure work item URLs in lists and details", (
       ],
       [
         "https://acme.visualstudio.com/DefaultCollection/web/_apis/wit/workItems/7",
-        "https://acme.visualstudio.com/DefaultCollection/_workitems/edit/7",
+        "https://acme.visualstudio.com/DefaultCollection/web/_workitems/edit/7",
       ],
       [
         "https://azure.example.com/collection/web/_apis/wit/workItems/7",
-        "https://azure.example.com/collection/_workitems/edit/7",
+        "https://azure.example.com/collection/web/_workitems/edit/7",
       ],
     ]) {
       const item = {
@@ -49,6 +50,7 @@ it.effect("reads modern and legacy Azure work item URLs in lists and details", (
       const provider = yield* AzureDevOpsIssueProvider.make.pipe(
         Effect.provide(
           AzureDevOpsIssueCli.layer.pipe(
+            Layer.provide(NodeFileSystem.layer),
             Layer.provide(
               Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
                 execute: ({ args }) =>
