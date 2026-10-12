@@ -6,6 +6,8 @@ import {
   IssueOperationError,
   IssueUnavailableError,
   issueRepositoryKey,
+  sourceControlHostOf,
+  SourceControlProviderKind,
   type IssueListInput,
   type IssueProviderKind,
   type IssueRef,
@@ -82,6 +84,8 @@ function issueHostOf(
   identity: OrchestrationProjectShell["repositoryIdentity"],
   kind: IssueProviderKind,
 ): string {
+  if (kind === "forgejo")
+    return sourceControlHostOf(identity, SourceControlProviderKind.make(kind));
   const canonicalHost = identity?.canonicalKey?.split("/")[0]?.trim();
   if (canonicalHost !== undefined && canonicalHost.length > 0) return canonicalHost.toLowerCase();
   const provider = identity

@@ -294,6 +294,46 @@ it.effect("resolves configured hosts without guessing the caller's provider", ()
   }),
 );
 
+it.effect("keeps a Forgejo checkout's HTTP port when resolving its owning issue URL", () =>
+  Effect.gen(function* () {
+    const forgejo = { kind: "forgejo" } as unknown as IssueAdapter;
+    const registry = yield* fromProviders([forgejo]).pipe(Effect.provide(sourceControlLayer));
+    const owner: OrchestrationProjectShell = {
+      ...PROJECT,
+      repositoryIdentity: {
+        canonicalKey: "git.example.test/acme/web",
+        provider: "forgejo",
+        displayName: "acme/web",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "https://git.example.test:8443/acme/web.git",
+        },
+      },
+    };
+    const { supported } = yield* registry.resolveProjects([owner], {});
+    assert.strictEqual(supported[0]?.host, "git.example.test:8443");
+    const reference = {
+      projectId: owner.id,
+      repository: "acme/web",
+      number: 7,
+      url: "https://git.example.test:8443/acme/web/issues/7",
+    };
+    const bound = yield* registry.resolveUrl({ reference, project: owner, sources: supported });
+    assert.strictEqual(bound.project, owner);
+    assert.strictEqual(bound.projectBound, true);
+    assert.strictEqual(bound.host, "git.example.test:8443");
+    const wrongPort = yield* registry
+      .resolveUrl({
+        reference: { ...reference, url: "https://git.example.test:8444/acme/web/issues/7" },
+        project: owner,
+        sources: supported,
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(wrongPort._tag, "IssueOperationError");
+  }),
+);
+
 it.effect("uses one connected Linear account without a project binding and refuses ambiguity", () =>
   Effect.gen(function* () {
     const account = {
