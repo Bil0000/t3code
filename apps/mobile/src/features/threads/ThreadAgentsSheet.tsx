@@ -1,4 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
+import {
+  deriveWorkflowGroups,
+  projectedSubagentsToRuntime,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import type { ThreadTurnSubagents } from "@t3tools/client-runtime/state/thread-subagents";
 import {
   isOrchestrationV2WorkActive,
@@ -10,7 +14,7 @@ import { deriveSubagentElapsedMs, formatDuration } from "@t3tools/shared/orchest
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import * as DateTime from "effect/DateTime";
 import * as Haptics from "expo-haptics";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { Screen, ScreenStack, ScreenStackHeaderConfig } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,6 +25,7 @@ import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { environmentThreadDetails } from "../../state/threads";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { SubagentRow } from "./SubagentRow";
+import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
 import { MaterialScreenContent } from "../../components/MaterialScreenContent";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
@@ -41,6 +46,16 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
   const turn = useThreadTurnSubagents(target);
   const subagents = turn?.subagents ?? [];
   const hasLiveAgent = (turn?.liveCount ?? 0) > 0;
+  const workflowGroups = useMemo(
+    () =>
+      new Map(
+        deriveWorkflowGroups(projectedSubagentsToRuntime(subagents)).map((group) => [
+          group.workflow.id,
+          group,
+        ]),
+      ),
+    [subagents],
+  );
 
   const openChildThread = (childThreadId: ThreadId) => {
     void Haptics.selectionAsync();
@@ -69,15 +84,35 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
           No agents in this turn.
         </Text>
       ) : (
-        subagents.map((subagent) => (
-          <AgentRow
-            key={subagent.id}
-            subagent={subagent}
-            environmentId={target.environmentId}
-            tickSeconds={hasLiveAgent}
-            onOpen={openChildThread}
-          />
-        ))
+        subagents.map((subagent) => {
+          const group = workflowGroups.get(subagent.id);
+          const row = (
+            <AgentRow
+              subagent={
+                subagent.workflow?.name === undefined
+                  ? subagent
+                  : { ...subagent, title: subagent.workflow.name }
+              }
+              environmentId={target.environmentId}
+              tickSeconds={hasLiveAgent}
+              onOpen={openChildThread}
+            />
+          );
+          return group === undefined ? (
+            <View key={subagent.id} className="border-b border-border">
+              {row}
+            </View>
+          ) : (
+            <ThreadWorkflowGroup
+              key={subagent.id}
+              environmentId={target.environmentId}
+              coordinator={subagent}
+              group={group}
+              header={row}
+              onOpen={openChildThread}
+            />
+          );
+        })
       )}
     </ScrollView>
   );
@@ -135,7 +170,7 @@ function AgentRow(props: {
   const childThreadId = subagent.childThreadId;
 
   const row = (
-    <View className="border-b border-border py-3.5">
+    <View className="py-3.5">
       <SubagentRow
         environmentId={props.environmentId}
         subagent={subagent}

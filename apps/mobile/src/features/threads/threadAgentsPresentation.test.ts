@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveSubagentRowPresentation } from "./threadAgentsPresentation";
+import { resolveSubagentRowPresentation, workflowGroupSummary } from "./threadAgentsPresentation";
 
 const base = {
   title: null,
@@ -74,5 +74,22 @@ describe("resolveSubagentRowPresentation", () => {
     });
     expect(row.detail).toBe(`${"x".repeat(280)}…`);
     expect(row.statusLabel).toBe("Failed");
+  });
+});
+
+type Group = Parameters<typeof workflowGroupSummary>[0];
+
+const members = (...statuses: ReadonlyArray<string>) => statuses.map((status) => ({ status }));
+
+describe("workflowGroupSummary", () => {
+  it("summarizes phases and settled agents", () => {
+    const group = {
+      phases: [{ members: members("completed", "failed") }, { members: [] }],
+      unphasedMembers: members("running"),
+    } as unknown as Group;
+    expect(workflowGroupSummary(group)).toBe("1 phase · 2/3 agents done");
+    expect(workflowGroupSummary({ phases: [], unphasedMembers: [] } as unknown as Group)).toBe(
+      "No agents yet",
+    );
   });
 });

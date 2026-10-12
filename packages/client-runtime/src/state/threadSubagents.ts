@@ -1,12 +1,3 @@
-/**
- * The subagent roster for one turn, and the compact label the mobile composer
- * pill renders for it.
- *
- * Scoped to a run rather than the whole thread: a thread accumulates every
- * subagent it ever spawned, while the pill and its sheet answer "what is this
- * turn doing right now". Statuses come from the v2 projection directly, so
- * this stays a pure fold over `runs` and `subagents`.
- */
 import * as DateTime from "effect/DateTime";
 import type { OrchestrationV2Subagent, OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 import { copySorted } from "@t3tools/shared/Array";
@@ -19,7 +10,6 @@ type Subagent = OrchestrationV2Subagent;
 type RunId = Projection["runs"][number]["id"];
 
 export interface ThreadTurnSubagents {
-  /** The run the roster belongs to: the active one, else the most recent one that spawned agents. */
   readonly runId: RunId | null;
   readonly turnActive: boolean;
   /** Spawn order: startedAt, falling back to updatedAt for agents that never started. */
@@ -52,7 +42,9 @@ export function deriveThreadTurnSubagents(
   );
   const runId = activeRun?.id ?? latestUpdated.runId;
   const subagents = copySorted(
-    projection.subagents.filter((subagent) => subagent.runId === runId),
+    projection.subagents.filter(
+      (subagent) => subagent.runId === runId || subagent.workflow !== undefined,
+    ),
     (left, right) => orderKey(left) - orderKey(right) || left.id.localeCompare(right.id),
   );
   if (subagents.length === 0) return null;
@@ -68,14 +60,18 @@ export function deriveThreadTurnSubagents(
 
 /**
  * What the pill's agents segment says, or null while it should stay hidden.
- * The segment is for work in flight: once the turn settles it goes away
- * rather than leaving a stale count above the composer.
  */
 export function resolveSubagentPillSegment(
   turn: ThreadTurnSubagents | null,
 ): SubagentPillSegment | null {
   if (turn === null) return null;
-  if (!turn.turnActive && turn.liveCount === 0) return null;
+  if (
+    !turn.turnActive &&
+    turn.liveCount === 0 &&
+    !turn.subagents.some((subagent) => subagent.workflow !== undefined)
+  ) {
+    return null;
+  }
   const total = turn.subagents.length;
   if (turn.liveCount > 0) {
     return {

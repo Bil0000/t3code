@@ -2,7 +2,11 @@ import {
   formatSubagentDisplayTitle,
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
-import { isActiveSubagentStatus } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  isActiveSubagentStatus,
+  isTerminalSubagentStatus,
+  type SubagentWorkflowGroup,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import type { OrchestrationV2Subagent } from "@t3tools/contracts";
 
 const PROMPT_TITLE_LIMIT = 80;
@@ -72,4 +76,13 @@ export function resolveSubagentRowPresentation(
     live,
     canOpenThread: subagent.childThreadId !== null,
   };
+}
+
+export function workflowGroupSummary(group: SubagentWorkflowGroup): string {
+  const members = [...group.phases.flatMap((phase) => phase.members), ...group.unphasedMembers];
+  if (members.length === 0) return "No agents yet";
+  const settled = members.filter((member) => isTerminalSubagentStatus(member.status)).length;
+  const phases = group.phases.filter((phase) => phase.members.length > 0).length;
+  const agents = `${settled}/${members.length} ${members.length === 1 ? "agent" : "agents"} done`;
+  return phases === 0 ? agents : `${phases} ${phases === 1 ? "phase" : "phases"} · ${agents}`;
 }
