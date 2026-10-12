@@ -1,4 +1,4 @@
-import type { EnvironmentId, IssueReaction, IssueRef } from "@t3tools/contracts";
+import type { EnvironmentId, IssueCapabilities, IssueReaction, IssueRef } from "@t3tools/contracts";
 
 import { issueEnvironment } from "~/state/issues";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -7,7 +7,7 @@ import { SourceControlReactionBar } from "../sourceControl/SourceControlReaction
 
 export function IssueReactionBar({
   reactions,
-  canReact,
+  capabilities,
   subjectId,
   environmentId,
   reference,
@@ -15,7 +15,7 @@ export function IssueReactionBar({
   className,
 }: {
   readonly reactions: ReadonlyArray<IssueReaction>;
-  readonly canReact: boolean;
+  readonly capabilities: IssueCapabilities;
   readonly subjectId?: string | undefined;
   readonly environmentId: EnvironmentId;
   readonly reference: IssueRef;
@@ -26,7 +26,12 @@ export function IssueReactionBar({
   return (
     <SourceControlReactionBar
       reactions={reactions}
-      canReact={canReact}
+      canReact={
+        (subjectId === undefined
+          ? capabilities.reactions
+          : (capabilities.commentReactions ?? capabilities.reactions)) === true
+      }
+      contents={capabilities.reactionContents}
       className={className}
       onToggle={async (content, reacted) => {
         const result = await setReaction({

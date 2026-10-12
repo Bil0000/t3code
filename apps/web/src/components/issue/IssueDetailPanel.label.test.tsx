@@ -385,22 +385,41 @@ it.each(["comment-failed", "action-failed", "success"])(
   },
 );
 
-it.each([true, false])("offers issue writes only with write permission (%s)", (allowed) => {
-  hooks.reset();
-  permission.allowed = allowed;
-  currentDetail = {
-    ...detail,
-    capabilities: { ...detail.capabilities, comment: true, edit: true, reactions: true },
-    viewerPermissions: { ...detail.viewerPermissions, comment: true, edit: true, labels: true },
-  };
-  const panel = renderPanel();
-  const summary = visitElements(panel, (element) => element.type === IssueSummaryTab)!;
-  const shown = summary.props.detail as IssueDetail;
-  expect(shown.title).toBe(detail.title);
-  expect(shown.capabilities.reactions).toBe(allowed);
-  expect(shown.viewerPermissions.edit).toBe(allowed);
-  expect(shown.viewerPermissions.labels).toBe(allowed);
-});
+it.each([
+  { allowed: true, projectBound: undefined, writable: true },
+  { allowed: false, projectBound: undefined, writable: false },
+  { allowed: true, projectBound: false, writable: false },
+])(
+  "offers issue writes only with write permission on an owned issue (%o)",
+  ({ allowed, projectBound, writable }) => {
+    hooks.reset();
+    permission.allowed = allowed;
+    currentDetail = {
+      ...detail,
+      ...(projectBound === undefined ? {} : { projectBound }),
+      capabilities: {
+        ...detail.capabilities,
+        comment: true,
+        edit: true,
+        editComment: true,
+        reactions: true,
+        commentReactions: true,
+      },
+      viewerPermissions: { ...detail.viewerPermissions, comment: true, edit: true, labels: true },
+    };
+    const panel = renderPanel();
+    const summary = visitElements(panel, (element) => element.type === IssueSummaryTab)!;
+    const shown = summary.props.detail as IssueDetail;
+    expect(shown.title).toBe(detail.title);
+    expect(shown.capabilities.reactions).toBe(writable);
+    expect(shown.capabilities.commentReactions).toBe(writable);
+    expect(shown.capabilities.editComment).toBe(writable);
+    expect(shown.viewerPermissions.edit).toBe(writable);
+    expect(shown.viewerPermissions.labels).toBe(writable);
+    const composer = visitElements(panel, (element) => element.type === CommentComposer);
+    expect(composer?.props.actionPending).toBe(!writable);
+  },
+);
 
 it("keeps the comment composer mounted while write access is withdrawn and restored", () => {
   hooks.reset();
@@ -449,6 +468,37 @@ it("opens a related pull request through the thread issues panel handler", () =>
   };
   (summary.props.onOpenLinkedPullRequest as (value: typeof link) => void)(link);
   expect(onOpenLinkedPullRequest).toHaveBeenCalledWith(link);
+});
+
+it("closes a Linear issue as not planned through its native close reasons", async () => {
+  hooks.reset();
+  commands.action.mockResolvedValue({ _tag: "Success" });
+  currentDetail = {
+    ...detail,
+    capabilities: {
+      ...detail.capabilities,
+      actions: ["close"],
+      closeReasons: ["completed", "not-planned"],
+    },
+    viewerPermissions: { ...detail.viewerPermissions, actions: ["close"] },
+  };
+  const notPlanned = visitElements(
+    renderPanel(),
+    (element) =>
+      element.type === MenuItem && textContent(element.props.children) === "Close as not planned",
+  )!;
+  (notPlanned.props.onClick as () => void)();
+  const confirm = visitElements(
+    renderPanel(),
+    (element) => element.type === Button && element.props.children === "Close as not planned",
+  )!;
+  (confirm.props.onClick as () => void)();
+  await Promise.resolve();
+  expect(commands.action).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({ action: "close", reason: "not-planned" }),
+    }),
+  );
 });
 
 it("blocks an open close confirmation while write access is revoked", async () => {

@@ -402,6 +402,7 @@ export function IssueSummaryTab({
                   allowed={detail.viewerPermissions.assignees}
                   maxAssignees={detail.capabilities.maxAssignees}
                   typedAssignees={detail.capabilities.typedAssignees}
+                  provider={detail.provider}
                   open={openPicker === "assignees"}
                   onOpenChange={(open) => onOpenPickerChange(open ? "assignees" : null)}
                   onChanged={onRefresh}
@@ -474,7 +475,7 @@ export function IssueSummaryTab({
           <IssueReactionBar
             className="mt-2"
             reactions={detail.reactions ?? []}
-            canReact={detail.capabilities.reactions === true}
+            capabilities={detail.capabilities}
             environmentId={environmentId}
             reference={reference}
             onRefresh={onRefresh}
@@ -740,7 +741,7 @@ export function IssueSummaryTab({
                     <IssueReactionBar
                       className="mt-2"
                       reactions={comment.reactions ?? []}
-                      canReact={detail.capabilities.reactions === true}
+                      capabilities={detail.capabilities}
                       subjectId={comment.id}
                       environmentId={environmentId}
                       reference={reference}

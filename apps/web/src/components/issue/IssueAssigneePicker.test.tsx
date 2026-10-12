@@ -21,6 +21,7 @@ vi.mock("~/state/query", () => ({
 }));
 vi.mock("../pullRequest/PullRequestCandidatePicker", () => ({
   PullRequestCandidatePicker: <T,>(props: {
+    searchLabel: string;
     onQueryChange: (query: string) => void;
     candidates: ReadonlyArray<T>;
     disabled: boolean;
@@ -29,7 +30,10 @@ vi.mock("../pullRequest/PullRequestCandidatePicker", () => ({
     children: (candidate: T) => ReactNode;
   }) => (
     <div>
-      <input onChange={(event) => props.onQueryChange(event.target.value)} />
+      <input
+        aria-label={props.searchLabel}
+        onChange={(event) => props.onQueryChange(event.target.value)}
+      />
       {props.candidates.map((candidate) => (
         <button
           key={props.candidateKey(candidate)}
@@ -248,4 +252,28 @@ it("assigns a typed address the bounded list did not include", async () => {
     environmentId,
     input: { ...reference, assignees: ["kim@example.com"] },
   });
+});
+
+it("asks Linear for an email only, and other typed hosts for an email or sign-in name", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const label = async (provider: string) => {
+    await act(() => {
+      renderer = create(
+        <IssueAssigneePicker
+          environmentId={environmentId}
+          reference={reference}
+          allowed
+          typedAssignees
+          provider={provider}
+          open
+          onOpenChange={vi.fn()}
+          onChanged={vi.fn()}
+        />,
+      );
+    });
+    return renderer.root.findByType("input").props["aria-label"];
+  };
+  expect(await label("linear")).toBe("Search, or type an email");
+  await act(() => renderer.unmount());
+  expect(await label("azure-devops")).toBe("Search, or type an email or sign-in name");
 });

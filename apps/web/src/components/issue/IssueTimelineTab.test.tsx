@@ -147,3 +147,22 @@ it("keeps a comment edit through revoked write access and saves it once restored
     input: { ...reference, commentId: "comment-1", body: "Unsaved edit" },
   });
 });
+
+it("points to the host only when the history read was cut short", async () => {
+  const { openLinkInBrowser } = await import("~/lib/openIssueLink");
+  const note = () => renderer!.root.findAllByProps({ children: "Some history is not shown here." });
+  await act(() => {
+    renderer = create(timeline(writable));
+  });
+  expect(note()).toHaveLength(0);
+
+  await act(() => renderer!.update(timeline({ ...writable, eventsTruncated: true })));
+  expect(note()).toHaveLength(1);
+  await act(() =>
+    renderer!.root
+      .findAllByType("button")
+      .find((button) => button.props.children?.[1] === "Open on host")!
+      .props.onClick(),
+  );
+  expect(openLinkInBrowser).toHaveBeenCalledExactlyOnceWith(writable.url);
+});

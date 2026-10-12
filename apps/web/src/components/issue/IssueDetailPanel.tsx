@@ -269,7 +269,9 @@ export function IssueDetailPanel({
   );
   const coreDetail = detailQuery.data;
   const activity = activityQuery.data;
-  const canWrite = useAtomValue(issueEnvironment.update.permissionAtom(environmentId));
+  const canWrite =
+    useAtomValue(issueEnvironment.update.permissionAtom(environmentId)) &&
+    coreDetail?.projectBound !== false;
   const commentsKey = `${issueKey}:${coreDetail?.updatedAt}`;
   const loadedPage = loadedComments?.key === commentsKey ? loadedComments : null;
   const detail = useMemo(
@@ -284,6 +286,7 @@ export function IssueDetailPanel({
                   capabilities: {
                     ...coreDetail.capabilities,
                     reactions: false,
+                    commentReactions: false,
                     editComment: false,
                   },
                   viewerPermissions: {
@@ -307,6 +310,7 @@ export function IssueDetailPanel({
             nextCommentsCursor:
               loadedPage === null ? (activity?.nextCommentsCursor ?? null) : loadedPage.nextCursor,
             events: activity?.events ?? [],
+            eventsTruncated: activity?.eventsTruncated ?? false,
             ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
           },
     [activity, canWrite, coreDetail, loadedPage],

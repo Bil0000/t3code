@@ -819,7 +819,7 @@ export function IssueCreateDialog({
                             placeholder={
                               offer.capabilities?.typedAssignees
                                 ? "name@example.com"
-                                : "octocat, hubot"
+                                : "Separate with commas"
                             }
                             aria-invalid={tooManyAssignees || undefined}
                             onChange={(event) => setAssignees(event.target.value)}

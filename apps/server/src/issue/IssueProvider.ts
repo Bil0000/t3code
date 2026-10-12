@@ -147,6 +147,7 @@ export interface ProviderIssueActivity {
   readonly commentsTruncated: boolean;
   readonly nextCommentsCursor?: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
+  readonly eventsTruncated?: boolean;
   readonly reactions?: ReadonlyArray<IssueReaction>;
 }
 

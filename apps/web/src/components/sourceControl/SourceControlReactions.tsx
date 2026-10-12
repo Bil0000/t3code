@@ -30,11 +30,13 @@ function reactionsSignature(reactions: ReadonlyArray<PullRequestReaction>): stri
 export function SourceControlReactionBar({
   reactions,
   canReact,
+  contents = PULL_REQUEST_REACTION_ORDER,
   onToggle,
   className,
 }: {
   readonly reactions: ReadonlyArray<PullRequestReaction>;
   readonly canReact: boolean;
+  readonly contents?: ReadonlyArray<PullRequestReactionContent> | undefined;
   readonly onToggle: (content: PullRequestReactionContent, reacted: boolean) => Promise<boolean>;
   readonly className?: string | undefined;
 }) {
@@ -62,7 +64,10 @@ export function SourceControlReactionBar({
     }
   };
 
-  if (shown.length === 0 && !canReact) return null;
+  const offered = canReact
+    ? PULL_REQUEST_REACTION_ORDER.filter((content) => contents.includes(content))
+    : [];
+  if (shown.length === 0 && offered.length === 0) return null;
 
   return (
     <div className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-1", className)}>
@@ -74,13 +79,13 @@ export function SourceControlReactionBar({
                 type="button"
                 aria-pressed={reaction.viewerHasReacted}
                 aria-label={`${pullRequestReactionName(reaction.content)}, ${reaction.count}`}
-                disabled={!canReact}
+                disabled={!offered.includes(reaction.content)}
                 className={cn(
                   PILL_CLASS,
                   reaction.viewerHasReacted
                     ? "border-primary/60 bg-primary/10 text-foreground"
                     : "border-border/70 bg-muted/40 text-muted-foreground",
-                  canReact ? "hover:border-primary/60" : "cursor-default",
+                  offered.includes(reaction.content) ? "hover:border-primary/60" : "cursor-default",
                 )}
                 onClick={() => void toggle(reaction.content, !reaction.viewerHasReacted)}
               />
@@ -93,7 +98,7 @@ export function SourceControlReactionBar({
         </Tooltip>
       ))}
 
-      {canReact ? (
+      {offered.length > 0 ? (
         <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
           <PopoverTrigger
             render={
@@ -111,7 +116,7 @@ export function SourceControlReactionBar({
           </PopoverTrigger>
           <PopoverPopup align="start" side="top" padding="compact">
             <div className="flex items-center gap-0.5">
-              {PULL_REQUEST_REACTION_ORDER.map((content) => {
+              {offered.map((content) => {
                 const reacted =
                   shown.find((reaction) => reaction.content === content)?.viewerHasReacted ?? false;
                 return (

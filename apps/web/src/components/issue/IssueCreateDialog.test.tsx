@@ -169,3 +169,47 @@ it("blocks the submit shortcut while templates load and when blank issues are di
   );
   await createIssue.mock.results[0]!.value;
 });
+
+it("files a Linear issue from a native template with at most one assignee", async () => {
+  hooks.reset();
+  vi.stubGlobal("navigator", { platform: "Linux" });
+  createIssue.mockResolvedValue({
+    _tag: "Success",
+    value: { number: 12, url: "https://linear.app/acme/issue/ENG-12" },
+  });
+  offerExtras = {
+    capabilities: { create: true, labels: true, assignees: true, maxAssignees: 1 },
+    templates: [
+      {
+        key: "bug",
+        name: "Bug",
+        about: "",
+        title: "Bug: ",
+        body: "Steps",
+        labels: [],
+        assignees: [],
+      },
+    ],
+  };
+  expect(byId("issue-title")).toBeNull();
+  const bug = visitElements(
+    renderDialog(),
+    (element) =>
+      element.type === "button" && JSON.stringify(element.props.children).includes("Bug"),
+  )!;
+  (bug.props.onClick as () => void)();
+  expect(byId("issue-title")!.props.value).toBe("Bug: ");
+  expect(byId("issue-assignees")!.props.placeholder).toBe("Separate with commas");
+  type("issue-title", "Bug: crash");
+  type("issue-assignees", "ada, grace");
+  pressCreate();
+  expect(createIssue).not.toHaveBeenCalled();
+  type("issue-assignees", "ada");
+  pressCreate();
+  expect(createIssue).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({ title: "Bug: crash", body: "Steps", assignees: ["ada"] }),
+    }),
+  );
+  await createIssue.mock.results[0]!.value;
+});

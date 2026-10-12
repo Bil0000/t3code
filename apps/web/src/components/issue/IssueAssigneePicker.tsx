@@ -36,6 +36,7 @@ export function IssueAssigneePicker({
   allowed,
   maxAssignees,
   typedAssignees,
+  provider,
   open,
   onOpenChange,
   onChanged,
@@ -47,6 +48,7 @@ export function IssueAssigneePicker({
   allowed: boolean;
   maxAssignees?: number | undefined;
   typedAssignees?: boolean | undefined;
+  provider?: string | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The detail carries who is assigned, so it is re-read once the host has taken the change. */
@@ -90,6 +92,7 @@ export function IssueAssigneePicker({
    * being shown everybody.
    */
   const truncated = candidatesQuery.data?.truncated === true;
+  const typedName = provider === "linear" ? "email" : "email or sign-in name";
 
   const toggle = async (candidate: IssueAssigneeCandidate) => {
     if (writing.current) return;
@@ -141,9 +144,7 @@ export function IssueAssigneePicker({
       onOpenChange={onOpenChange}
       query={query}
       onQueryChange={setQuery}
-      searchLabel={
-        typedAssignees ? "Search, or type an email or sign-in name" : "Search people with access"
-      }
+      searchLabel={typedAssignees ? `Search, or type an ${typedName}` : "Search people with access"}
       isPending={candidatesQuery.isPending && candidatesQuery.data === null}
       error={candidatesQuery.data === null ? candidatesQuery.error : null}
       candidates={candidates}
@@ -155,7 +156,7 @@ export function IssueAssigneePicker({
       // is rather than offering a search that would find nothing further.
       truncatedLabel={
         typedAssignees
-          ? "This repository has more people with access than are listed here. Type the email or sign-in name of somebody missing to assign them."
+          ? `This repository has more people with access than are listed here. Type the ${typedName} of somebody missing to assign them.`
           : "This repository has more people with access than are listed here. Everybody already assigned is, so choosing from here keeps them — somebody else who is missing has to be assigned on the host."
       }
       candidateKey={(candidate) => candidate.id}

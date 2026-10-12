@@ -1,5 +1,5 @@
 import type { EnvironmentId, IssueComment, IssueDetailView, IssueRef } from "@t3tools/contracts";
-import { CircleDotIcon, PencilIcon } from "lucide-react";
+import { ArrowUpRightIcon, CircleDotIcon, PencilIcon } from "lucide-react";
 import { useState } from "react";
 
 import { openLinkInBrowser } from "~/lib/openIssueLink";
@@ -96,6 +96,15 @@ export function IssueTimelineTab({
   return (
     <div className="h-full overflow-y-auto scrollbar-gutter-both px-4 py-5">
       <div className="mx-auto max-w-3xl">
+        {detail.eventsTruncated ? (
+          <div className="mb-4 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Some history is not shown here.</span>
+            <Button size="xs" variant="ghost-muted" onClick={() => openLinkInBrowser(detail.url)}>
+              <ArrowUpRightIcon aria-hidden />
+              Open on host
+            </Button>
+          </div>
+        ) : null}
         {detail.nextCommentsCursor != null ? (
           <Button
             size="sm"
@@ -151,7 +160,7 @@ export function IssueTimelineTab({
                       <IssueReactionBar
                         className="mt-2"
                         reactions={comments.get(entry.id)?.reactions ?? []}
-                        canReact={detail.capabilities.reactions === true}
+                        capabilities={detail.capabilities}
                         subjectId={entry.id}
                         environmentId={environmentId}
                         reference={reference}

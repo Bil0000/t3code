@@ -240,6 +240,8 @@ export const IssueCapabilities = Schema.Struct({
   editComment: Schema.optional(Schema.Boolean),
   /** Reactions can be read, added, and removed on the issue and its comments. */
   reactions: Schema.optional(Schema.Boolean),
+  commentReactions: Schema.optional(Schema.Boolean),
+  reactionContents: Schema.optional(Schema.Array(IssueReactionContent)),
   labels: Schema.Boolean,
   assignees: Schema.Boolean,
   /** The labels a repository has can be listed, so a picker offers them instead of taking text. */
@@ -449,6 +451,7 @@ export const IssueActivity = Schema.Struct({
   commentsTruncated: Schema.Boolean,
   nextCommentsCursor: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   events: Schema.Array(IssueEvent),
+  eventsTruncated: Schema.optional(Schema.Boolean),
   /** Reactions on the issue description itself. */
   reactions: Schema.optional(Schema.Array(IssueReaction)),
 });

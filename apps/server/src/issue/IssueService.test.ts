@@ -2727,6 +2727,41 @@ it.effect("keeps issue reads out of GitHub's reserve while allowing writes to us
   }),
 );
 
+it.effect("preserves readable comments when provider history is incomplete", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssueActivity: () =>
+            Effect.succeed({
+              comments: [
+                {
+                  id: "17",
+                  author: { login: "bilal", name: null, avatarUrl: null },
+                  body: "Still readable",
+                  createdAt: "2026-07-02T00:00:00Z",
+                  updatedAt: "2026-07-02T00:00:00Z",
+                  url: "https://host/issues/7#comment-17",
+                  viewerCanEdit: true,
+                },
+              ],
+              commentCount: 1,
+              commentsTruncated: false,
+              events: [],
+              eventsTruncated: true,
+            }),
+        }),
+      ],
+    });
+    const activity = yield* service.activity(REFERENCE);
+    assert.equal(activity.eventsTruncated, true);
+    assert.equal(activity.comments[0]?.body, "Still readable");
+    assert.equal(activity.commentCount, 1);
+    assert.equal(activity.commentsTruncated, false);
+  }),
+);
+
 it.effect("an explicit invalidation refreshes issue detail and activity", () =>
   Effect.gen(function* () {
     let detailVersion = 0;
@@ -3788,6 +3823,113 @@ it.effect("keeps unowned issue reads available while refusing every host write",
     ]) {
       assert.strictEqual((yield* operation.pipe(Effect.flip))._tag, "IssueOperationError");
     }
+    assert.strictEqual(writes, 0);
+  }),
+);
+
+it.effect("allows native comment reactions without allowing issue or unsupported reactions", () =>
+  Effect.gen(function* () {
+    const writes: unknown[] = [];
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            ...FULL_CAPABILITIES,
+            reactions: false,
+            commentReactions: true,
+            reactionContents: ["thumbs-up", "heart"],
+          },
+          setReaction: (input) => {
+            writes.push(input);
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reaction = { ...REFERENCE, content: "thumbs-up" as const, reacted: true };
+    for (const input of [
+      reaction,
+      { ...reaction, subjectId: "comment", content: "rocket" as const },
+    ]) {
+      assert.strictEqual(
+        (yield* service.setReaction(input).pipe(Effect.flip))._tag,
+        "IssueOperationError",
+      );
+    }
+    assert.strictEqual(writes.length, 0);
+    yield* service.setReaction({ ...reaction, subjectId: "comment" });
+    assert.strictEqual(writes.length, 1);
+    assert.deepStrictEqual(writes[0], {
+      cwd: "/a",
+      repository: "acme/web",
+      host: "github.com",
+      number: 7,
+      subjectId: "comment",
+      content: "thumbs-up",
+      reacted: true,
+    });
+  }),
+);
+
+it.effect("preserves legacy reaction support and honors explicit comment restrictions", () =>
+  Effect.gen(function* () {
+    for (const commentReactions of [undefined, false]) {
+      let writes = 0;
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("github", {
+            capabilities: {
+              ...FULL_CAPABILITIES,
+              ...(commentReactions === undefined ? {} : { commentReactions }),
+            },
+            setReaction: () => {
+              writes++;
+              return Effect.void;
+            },
+          }),
+        ],
+      });
+      const reaction = { ...REFERENCE, content: "heart" as const, reacted: false };
+      yield* service.setReaction(reaction);
+      const comment = service.setReaction({ ...reaction, subjectId: "comment" });
+      if (commentReactions === false) {
+        assert.strictEqual((yield* comment.pipe(Effect.flip))._tag, "IssueOperationError");
+      } else {
+        yield* comment;
+      }
+      assert.strictEqual(writes, commentReactions === false ? 1 : 2);
+    }
+  }),
+);
+
+it.effect("refuses comment-only reactions on an unowned issue URL", () =>
+  Effect.gen(function* () {
+    let writes = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          capabilities: { ...FULL_CAPABILITIES, reactions: false, commentReactions: true },
+          setReaction: () => {
+            writes++;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const error = yield* service
+      .setReaction({
+        ...REFERENCE,
+        repository: "external/repo",
+        url: "https://github.com/external/repo/issues/7",
+        subjectId: "comment",
+        content: "heart",
+        reacted: true,
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(error._tag, "IssueOperationError");
     assert.strictEqual(writes, 0);
   }),
 );

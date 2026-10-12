@@ -1304,6 +1304,9 @@ export const make = Effect.gen(function* () {
                 ? {}
                 : { nextCommentsCursor: activity.nextCommentsCursor }),
               events: activity.events,
+              ...(activity.eventsTruncated === undefined
+                ? {}
+                : { eventsTruncated: activity.eventsTruncated }),
               ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
             })),
           ),
@@ -1468,11 +1471,27 @@ export const make = Effect.gen(function* () {
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, IssueError> => {
         const react = project.adapter.setReaction;
-        if (project.adapter.capabilities.reactions !== true || react === undefined) {
+        const capabilities = project.adapter.capabilities;
+        const supported =
+          input.subjectId === undefined
+            ? capabilities.reactions
+            : (capabilities.commentReactions ?? capabilities.reactions);
+        if (supported !== true || react === undefined) {
           return Effect.fail(
             new IssueOperationError({
               operation: "setReaction",
-              detail: "This host has no reactions.",
+              detail: "This host does not support reactions on this item.",
+            }),
+          );
+        }
+        if (
+          capabilities.reactionContents !== undefined &&
+          !capabilities.reactionContents.includes(input.content)
+        ) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "setReaction",
+              detail: "This host does not support this reaction.",
             }),
           );
         }
