@@ -321,6 +321,11 @@ export const make = Effect.gen(function* () {
             ...toIssue(issue),
             body: issue.description ?? "",
             linkedPullRequests: linearLinkedPullRequests(issue.attachments?.nodes ?? []),
+            linkedPullRequestsTruncated: issue.attachments?.pageInfo?.hasNextPage ?? false,
+            nextLinkedPullRequestsCursor:
+              issue.attachments?.pageInfo?.hasNextPage === true
+                ? (issue.attachments.pageInfo.endCursor ?? null)
+                : null,
             ancestors: linearAncestors(issue),
             subIssues: (issue.children?.nodes ?? []).map(toRelativeNode),
             viewerPermissions: PERMISSIONS,
@@ -341,9 +346,25 @@ export const make = Effect.gen(function* () {
           nextCommentsCursor: activity.nextCommentsCursor ?? null,
           events: toEvents(history.nodes),
           eventsTruncated: history.truncated,
+          nextEventsCursor: history.nextCursor,
           reactions: linearReactions(activity.reactions, activity.viewerId),
         };
       }).pipe(Effect.mapError(fail("getIssueActivity"))),
+    getIssueEvents: (input) =>
+      api
+        .getHistory({
+          identifier: identifier(input.repository, input.number),
+          cursor: input.cursor,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(
+          Effect.mapError(fail("getIssueEvents")),
+          Effect.map((history) => ({
+            events: toEvents(history.nodes),
+            nextCursor: history.nextCursor,
+            truncated: history.truncated,
+          })),
+        ),
     getIssueComments: (input) =>
       api
         .getActivity({
@@ -356,6 +377,21 @@ export const make = Effect.gen(function* () {
           Effect.map((activity) => ({
             comments: activity.comments.map((comment) => toComment(comment, activity.viewerId)),
             nextCursor: activity.nextCommentsCursor,
+          })),
+        ),
+    getIssueLinkedPullRequests: (input) =>
+      api
+        .getAttachments({
+          identifier: identifier(input.repository, input.number),
+          cursor: input.cursor,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(
+          Effect.mapError(fail("getIssueLinkedPullRequests")),
+          Effect.map((attachments) => ({
+            linkedPullRequests: linearLinkedPullRequests(attachments.nodes),
+            nextCursor: attachments.nextCursor,
+            truncated: attachments.truncated,
           })),
         ),
     getViewerPermissions: () => Effect.succeed(PERMISSIONS),

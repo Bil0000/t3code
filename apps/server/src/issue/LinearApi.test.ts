@@ -1792,6 +1792,10 @@ it.effect.each([
       for (const account of [{}, { credentialId: "saved" }] as const) {
         const error = yield* api.getIssue({ identifier: "ENG-1", ...account }).pipe(Effect.flip);
         assert.equal(error.retryAt, 121000);
+        const attachments = yield* api
+          .getAttachments({ identifier: "ENG-1", cursor: "page-50", ...account })
+          .pipe(Effect.flip);
+        assert.equal(attachments.retryAt, 121000);
       }
       assert.equal(requests.length, 4);
       yield* TestClock.setTime(121000);
@@ -1884,6 +1888,188 @@ it.effect("an endpoint pause does not block other Linear operations", () => {
     assert.equal(requests.length, 1);
     yield* api.getIssueSummary({ identifier: "DEV-7" });
     assert.equal(requests.length, 2);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("loads PR attachments after an empty PR page with one query per page", () => {
+  const unrelated = Array.from({ length: 50 }, (_, index) => ({
+    url: `https://figma.com/file/${index}`,
+    title: "Design",
+    sourceType: "figma",
+  }));
+  const prs = Array.from({ length: 50 }, (_, index) => ({
+    url: `https://github.com/acme/web/pull/${index + 1}`,
+    title: "Change",
+    sourceType: "github",
+    metadata: { status: "merged" },
+  }));
+  const { layer, requests, values } = makeLayer({
+    credentials: pool(["saved", "saved-key"]),
+    response: (body) => {
+      const { after } = body.variables as { after?: string };
+      const attachments = {
+        nodes: after === "page-50" ? prs : unrelated,
+        pageInfo:
+          after === "page-100"
+            ? { hasNextPage: false, endCursor: "terminal-native" }
+            : {
+                hasNextPage: true,
+                endCursor: after === undefined ? "page-50" : "page-100",
+              },
+      };
+      return {
+        data: {
+          issue:
+            after === undefined
+              ? {
+                  id: "issue-7",
+                  identifier: "ENG-7",
+                  number: 7,
+                  title: "Bug",
+                  url: "https://linear.app/acme/issue/ENG-7",
+                  createdAt: "2026-10-01T00:00:00.000Z",
+                  updatedAt: "2026-10-01T00:00:00.000Z",
+                  state: { name: "Todo", type: "unstarted" },
+                  attachments,
+                }
+              : { attachments },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const adapter = yield* LinearIssueProvider.make;
+    const reference = {
+      cwd: "/work/web",
+      host: "linear.app",
+      repository: "ENG",
+      number: 7,
+      credentialId: "saved",
+    };
+    const detail = yield* adapter.getIssue(reference);
+    assert.deepStrictEqual(detail.linkedPullRequests, []);
+    assert.isTrue(detail.linkedPullRequestsTruncated);
+    assert.strictEqual(detail.nextLinkedPullRequestsCursor, "page-50");
+    assert.isTrue(detail.viewerPermissions?.comment);
+    assert.strictEqual(requests.length, 1);
+    values.set("issue-trackers.linear.credentials", bytes(pool(["saved", "fresh-key"])));
+    const next = yield* adapter.getIssueLinkedPullRequests({
+      ...reference,
+      cursor: detail.nextLinkedPullRequestsCursor!,
+    });
+    assert.deepStrictEqual(
+      next.linkedPullRequests.map((pr) => [pr.number, pr.state, pr.closesIssue]),
+      prs.map((_, index) => [index + 1, "merged", false]),
+    );
+    assert.isTrue(next.truncated);
+    assert.strictEqual(next.nextCursor, "page-100");
+    assert.strictEqual(requests.length, 2);
+    const last = yield* adapter.getIssueLinkedPullRequests({
+      ...reference,
+      cursor: next.nextCursor!,
+    });
+    assert.deepStrictEqual(last, { linkedPullRequests: [], truncated: false, nextCursor: null });
+    assert.deepStrictEqual(
+      requests.map((request) => request.body.variables),
+      [{ id: "ENG-7" }, { id: "ENG-7", after: "page-50" }, { id: "ENG-7", after: "page-100" }],
+    );
+    assert.deepStrictEqual(
+      requests.map((request) => request.authorization),
+      ["saved-key", "fresh-key", "fresh-key"],
+    );
+    assert.include(String(requests[0]?.body.query), "pageInfo { hasNextPage endCursor }");
+    for (const request of requests.slice(1)) {
+      const query = String(request.body.query);
+      assert.include(query, "attachments(first: 50, after: $after)");
+      assert.notMatch(query, /description|comments|history|viewer|parent|children|labels/);
+    }
+  }).pipe(Effect.provide(Layer.mergeAll(layer, ServerSettings.layerTest())));
+});
+
+it.effect.each([undefined, null, "", "   ", "current"])(
+  "rejects a missing, malformed, or repeated attachment continuation %s",
+  (endCursor) => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: () => ({
+        data: { issue: { attachments: { nodes: [], pageInfo: { hasNextPage: true, endCursor } } } },
+      }),
+    });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      const error = yield* api
+        .getAttachments({ identifier: "ENG-7", cursor: "current" })
+        .pipe(Effect.flip);
+      assert.strictEqual(error.reason, "failed");
+      assert.strictEqual(requests.length, 1);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect.each([undefined, null, "", "   "])(
+  "rejects missing or malformed initial attachment cursors %s",
+  (endCursor) => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: () => ({
+        data: {
+          issue: {
+            id: "issue-7",
+            identifier: "ENG-7",
+            number: 7,
+            title: "Bug",
+            url: "https://linear.app/acme/issue/ENG-7",
+            createdAt: "2026-10-01T00:00:00.000Z",
+            updatedAt: "2026-10-01T00:00:00.000Z",
+            state: { name: "Todo", type: "unstarted" },
+            attachments: { nodes: [], pageInfo: { hasNextPage: true, endCursor } },
+          },
+        },
+      }),
+    });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      const error = yield* api.getIssue({ identifier: "ENG-7" }).pipe(Effect.flip);
+      assert.strictEqual(error.reason, "failed");
+      assert.strictEqual(requests.length, 1);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect.each(["", "   "])("rejects an empty attachment cursor before a request %s", (cursor) => {
+  const { layer, requests } = makeLayer({ envToken: "test-key", response: () => ({}) });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const error = yield* api.getAttachments({ identifier: "ENG-7", cursor }).pipe(Effect.flip);
+    assert.strictEqual(error.operation, "issue attachments cursor");
+    assert.strictEqual(requests.length, 0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reserves attachment query complexity before sending HTTP", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: () =>
+      Response.json(
+        { data: { viewer: { id: "user" } } },
+        {
+          headers: {
+            "X-RateLimit-Complexity-Remaining": "499",
+            "X-RateLimit-Complexity-Reset": "61000",
+          },
+        },
+      ),
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({});
+    const error = yield* api
+      .getAttachments({ identifier: "ENG-7", cursor: "page-50" })
+      .pipe(Effect.flip);
+    assert.strictEqual(error.reason, "rate-limited");
+    assert.strictEqual(error.retryAt, 61000);
+    assert.strictEqual(requests.length, 1);
   }).pipe(Effect.provide(layer));
 });
 
@@ -2349,7 +2535,11 @@ it.effect("maps plain team and workspace templates using native content and JSON
                   after === undefined
                     ? [template]
                     : [
-                        { ...template, id: "form", hasFormFields: true },
+                        {
+                          ...template,
+                          id: "a5d0d1ec-922e-4d76-8bc2-897067a6ac67",
+                          hasFormFields: true,
+                        },
                         {
                           ...template,
                           id: "structured",
@@ -2381,6 +2571,12 @@ it.effect("maps plain team and workspace templates using native content and JSON
                     templateData: { title: "Task", description: "Body draft" },
                   },
                   { ...template, id: "project-template", type: "project" },
+                  {
+                    ...template,
+                    id: "rich-description",
+                    content: null,
+                    templateData: { description: { type: "doc", content: [] } },
+                  },
                 ],
                 pageInfo: LAST_PAGE,
               },
@@ -2414,9 +2610,26 @@ it.effect("maps plain team and workspace templates using native content and JSON
           assignees: [],
         },
       ],
-      contactLinks: [],
+      contactLinks: [
+        {
+          name: "Bug report",
+          about: "About the template",
+          url: "https://linear.app/team/ENG/new?template=a5d0d1ec-922e-4d76-8bc2-897067a6ac67",
+        },
+        {
+          name: "Bug report",
+          about: "About the template",
+          url: "https://linear.app/team/ENG/new?template=structured",
+        },
+        {
+          name: "Bug report",
+          about: "About the template",
+          url: "https://linear.app/team/ENG/new?template=rich-description",
+        },
+      ],
       blankIssuesEnabled: true,
     });
+    assert.strictEqual(requests.length, 5);
     assert.deepStrictEqual(
       requests
         .filter((request) => String(request.body.query).includes("T3LinearTeamTemplates"))
@@ -2513,15 +2726,106 @@ it.effect("pages native history and preserves system actors and workflow details
   return Effect.gen(function* () {
     const api = yield* LinearApi.LinearApi;
     const read = yield* api.getHistory({ identifier: "ENG-7", credentialId: "account-1" });
-    assert.deepStrictEqual(read.nodes, history);
-    assert.isFalse(read.truncated);
+    assert.deepStrictEqual(read, {
+      nodes: history.slice(0, 50),
+      truncated: true,
+      nextCursor: "history-page",
+    });
+    assert.strictEqual(requests.length, 1);
+    const next = yield* api.getHistory({
+      identifier: "ENG-7",
+      credentialId: "account-1",
+      cursor: read.nextCursor!,
+    });
+    assert.deepStrictEqual(next, { nodes: history.slice(50), truncated: false, nextCursor: null });
     assert.deepStrictEqual(
       requests.map((request) => request.body.variables),
       [{ id: "ENG-7" }, { id: "ENG-7", after: "history-page" }],
     );
+    assert.isTrue(
+      requests.every((request) => {
+        const query = String(request.body.query);
+        return (
+          query.includes("history(first: 50, after: $after") &&
+          !query.includes("comments") &&
+          !query.includes("attachments") &&
+          !query.includes("viewer")
+        );
+      }),
+    );
     assert.isTrue(requests.every((request) => request.authorization === "saved-key"));
   }).pipe(Effect.provide(layer));
 });
+
+it.effect.each([null, "", "   ", "current"])(
+  "rejects a missing, malformed, or repeated history continuation %s",
+  (endCursor) => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: () => ({
+        data: { issue: { history: { nodes: [], pageInfo: { hasNextPage: true, endCursor } } } },
+      }),
+    });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      const error = yield* api
+        .getHistory({ identifier: "ENG-7", cursor: "current" })
+        .pipe(Effect.flip);
+      assert.strictEqual(error.reason, "failed");
+      assert.strictEqual(error.operation, "issue history cursor");
+      assert.strictEqual(requests.length, 1);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect.each(["", "   "])("rejects an empty history cursor before a request %s", (cursor) => {
+  const { layer, requests } = makeLayer({ envToken: "test-key", response: () => ({}) });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const error = yield* api.getHistory({ identifier: "ENG-7", cursor }).pipe(Effect.flip);
+    assert.strictEqual(error.operation, "issue history cursor");
+    assert.strictEqual(requests.length, 0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each(["history", "attachments"] as const)(
+  "%s continuation shares issue endpoint pauses without retrying HTTP 429",
+  (kind) => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: () =>
+        Response.json(
+          {},
+          {
+            status: 429,
+            headers: {
+              "X-RateLimit-Endpoint-Name": "issue",
+              "X-RateLimit-Endpoint-Requests-Remaining": "0",
+              "X-RateLimit-Endpoint-Requests-Reset": "61000",
+              "Retry-After": "60",
+            },
+          },
+        ),
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(1000);
+      const api = yield* LinearApi.LinearApi;
+      const reference = { identifier: "ENG-7", cursor: "page-50" };
+      const read = () =>
+        kind === "history"
+          ? api.getHistory(reference).pipe(Effect.flip)
+          : api.getAttachments(reference).pipe(Effect.flip);
+      const first = yield* read();
+      const next = yield* read();
+      const detail = yield* api.getIssue({ identifier: "ENG-7" }).pipe(Effect.flip);
+      for (const error of [first, next, detail]) {
+        assert.strictEqual(error.reason, "rate-limited");
+        assert.strictEqual(error.retryAt, 61000);
+      }
+      assert.strictEqual(requests.length, 1);
+    }).pipe(Effect.provide(layer));
+  },
+);
 
 it.effect("new writes share account-wide and mutation endpoint quota pauses", () => {
   let paused = false;
@@ -2615,7 +2919,7 @@ it.effect("reserves new mutation complexity before dispatching HTTP", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("bounds history at four pages when the native history continues", () => {
+it.effect("returns one history page and its exact native continuation", () => {
   const { layer, requests } = makeLayer({
     envToken: "test-key",
     response: (body) => {
@@ -2650,9 +2954,10 @@ it.effect("bounds history at four pages when the native history continues", () =
   return Effect.gen(function* () {
     const api = yield* LinearApi.LinearApi;
     const history = yield* api.getHistory({ identifier: "ENG-7" });
-    assert.strictEqual(history.nodes.length, 4);
+    assert.strictEqual(history.nodes.length, 1);
     assert.isTrue(history.truncated);
-    assert.strictEqual(requests.length, 4);
+    assert.strictEqual(history.nextCursor, "1");
+    assert.strictEqual(requests.length, 1);
     assert.isTrue(
       requests.every((request) => String(request.body.query).includes("history(first: 50,")),
     );
@@ -2797,8 +3102,29 @@ it.effect("uses ancestor labels and templates while excluding unrelated teams", 
                           hasFormFields: false,
                           templateData: { labelIds: [inherited[0]!.id] },
                         },
+                        {
+                          id: "inherited-form",
+                          name: "Parent form",
+                          description: null,
+                          content: null,
+                          type: "issue",
+                          hasFormFields: true,
+                          templateData: {},
+                        },
                       ]
-                    : [],
+                    : query.includes("T3LinearWorkspaceTemplates")
+                      ? [
+                          {
+                            id: "workspace-rich&template=other#fragment",
+                            name: "Workspace rich template",
+                            description: null,
+                            content: null,
+                            type: "issue",
+                            hasFormFields: false,
+                            templateData: { descriptionData: { type: "doc" } },
+                          },
+                        ]
+                      : [],
                 pageInfo: LAST_PAGE,
               },
             },
@@ -2827,6 +3153,30 @@ it.effect("uses ancestor labels and templates while excluding unrelated teams", 
     assert.deepStrictEqual(
       templates.templates.map((t) => [t.key, t.labels]),
       [["inherited-template", ["Parent"]]],
+    );
+    assert.deepStrictEqual(templates.contactLinks, [
+      {
+        name: "Parent form",
+        about: "",
+        url: "https://linear.app/team/ENG/new?template=inherited-form",
+      },
+      {
+        name: "Workspace rich template",
+        about: "",
+        url: "https://linear.app/team/ENG/new?template=workspace-rich%26template%3Dother%23fragment",
+      },
+    ]);
+    const workspaceUrl = new URL(templates.contactLinks[1]!.url);
+    assert.strictEqual(
+      workspaceUrl.searchParams.get("template"),
+      "workspace-rich&template=other#fragment",
+    );
+    assert.strictEqual(workspaceUrl.hash, "");
+    assert.deepStrictEqual(
+      requests
+        .filter((request) => String(request.body.query).includes("Templates"))
+        .map((request) => request.body.variables),
+      [{ id: "team-eng" }, { id: "root-team" }, { id: "parent-team" }, {}],
     );
     yield* api.createIssue({
       teamKey: "ENG",

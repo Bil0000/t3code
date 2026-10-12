@@ -109,6 +109,10 @@ const Relative: Schema.Codec<Relative> = Schema.Struct({
     ),
   ),
 });
+const PageInfo = Schema.Struct({
+  hasNextPage: Schema.Boolean,
+  endCursor: Schema.NullOr(Schema.String),
+});
 const Issue = Schema.Struct({
   id: Schema.String,
   identifier: Schema.String,
@@ -138,15 +142,18 @@ const Issue = Schema.Struct({
     ),
   ),
   reactions: Schema.optional(Schema.NullOr(Schema.Array(Reaction))),
-  attachments: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Attachment) }))),
+  attachments: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.Array(Attachment),
+        pageInfo: Schema.optional(PageInfo),
+      }),
+    ),
+  ),
   parent: Schema.optional(Schema.NullOr(Relative)),
   children: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Relative) }))),
 });
 
-const PageInfo = Schema.Struct({
-  hasNextPage: Schema.Boolean,
-  endCursor: Schema.NullOr(Schema.String),
-});
 const CandidateLabel = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -176,7 +183,7 @@ const History = Schema.Struct({
 const TemplateData = Schema.Struct({
   descriptionData: Schema.optional(Schema.Unknown),
   title: Schema.optional(Schema.NullOr(Schema.String)),
-  description: Schema.optional(Schema.NullOr(Schema.String)),
+  description: Schema.optional(Schema.Unknown),
   labelIds: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
   assigneeId: Schema.optional(Schema.NullOr(Schema.String)),
 });
@@ -330,6 +337,16 @@ const HistoryEnvelope = Schema.Struct({
     ),
   }),
 });
+const AttachmentsEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    issue: Schema.NullOr(
+      Schema.Struct({
+        attachments: Schema.Struct({ nodes: Schema.Array(Attachment), pageInfo: PageInfo }),
+      }),
+    ),
+  }),
+});
 const TemplatesEnvelope = Schema.Struct({
   ...Errors,
   data: Schema.Struct({
@@ -367,7 +384,7 @@ const LIST_QUERY = `query T3LinearIssues($first: Int, $last: Int, $after: String
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
   issue(id: $id) {
     ${ISSUE_FIELDS}
-    attachments(first: 50) { nodes { url title sourceType metadata } }
+    attachments(first: 50) { nodes { url title sourceType metadata } pageInfo { hasNextPage endCursor } }
     parent { ${RELATIVE_WITH_PULL_REQUESTS} parent { ${RELATIVE_FIELDS} parent { ${RELATIVE_FIELDS} } } }
     children(first: 20) {
       nodes {
@@ -462,6 +479,12 @@ const HISTORY_QUERY = `query T3LinearHistory($id: String!, $after: String) {
     pageInfo { hasNextPage endCursor }
   } }
 }`;
+const ATTACHMENTS_QUERY = `query T3LinearAttachments($id: String!, $after: String) {
+  issue(id: $id) { attachments(first: 50, after: $after) {
+    nodes { url title sourceType metadata }
+    pageInfo { hasNextPage endCursor }
+  } }
+}`;
 const TEMPLATE_FIELDS = `id name description content type hasFormFields templateData`;
 const TEAM_TEMPLATES_QUERY = `query T3LinearTeamTemplates($id: String!, $after: String) {
   source: team(id: $id) { templates(first: 100, after: $after, filter: { type: { eq: "issue" } }) {
@@ -484,6 +507,7 @@ const QUERY_COSTS = new Map<string, number>([
   [ISSUE_CREATE_MUTATION, 30],
   [ISSUE_UPDATE_MUTATION, 20],
   [HISTORY_QUERY, 5_000],
+  [ATTACHMENTS_QUERY, 500],
   [TEAM_TEMPLATES_QUERY, 1_000],
   [WORKSPACE_TEMPLATES_QUERY, 1_000],
 ]);
@@ -509,6 +533,7 @@ const QUERY_ENDPOINTS = new Map<string, ReadonlyArray<string>>([
   [ISSUE_CREATE_MUTATION, ["issueCreate"]],
   [ISSUE_UPDATE_MUTATION, ["issueUpdate"]],
   [HISTORY_QUERY, ["issue"]],
+  [ATTACHMENTS_QUERY, ["issue"]],
   [TEAM_TEMPLATES_QUERY, ["team"]],
   [WORKSPACE_TEMPLATES_QUERY, ["organization"]],
 ]);
@@ -662,8 +687,25 @@ export class LinearApi extends Context.Service<
     readonly getHistory: (input: {
       readonly identifier: string;
       readonly credentialId?: string;
+      readonly cursor?: string;
     }) => Effect.Effect<
-      { readonly nodes: ReadonlyArray<LinearHistory>; readonly truncated: boolean },
+      {
+        readonly nodes: ReadonlyArray<LinearHistory>;
+        readonly truncated: boolean;
+        readonly nextCursor: string | null;
+      },
+      LinearApiError
+    >;
+    readonly getAttachments: (input: {
+      readonly identifier: string;
+      readonly credentialId?: string;
+      readonly cursor?: string;
+    }) => Effect.Effect<
+      {
+        readonly nodes: ReadonlyArray<LinearAttachment>;
+        readonly truncated: boolean;
+        readonly nextCursor: string | null;
+      },
       LinearApiError
     >;
     readonly createIssue: (input: {
@@ -1540,6 +1582,14 @@ const make = Effect.gen(function* () {
     getIssue: ({ identifier, credentialId }) =>
       request(credentialId, "issue", ISSUE_QUERY, { id: identifier }, IssueEnvelope).pipe(
         Effect.flatMap(({ data }) => issueOrFail(identifier, data.issue)),
+        Effect.flatMap((issue) => {
+          const pageInfo = issue.attachments?.pageInfo;
+          return pageInfo?.hasNextPage && !pageInfo.endCursor?.trim()
+            ? Effect.fail(
+                new LinearApiError({ operation: "issue attachments cursor", reason: "failed" }),
+              )
+            : Effect.succeed(issue);
+        }),
       ),
     getActivity: ({ identifier, credentialId, cursor }) =>
       request(
@@ -1571,27 +1621,67 @@ const make = Effect.gen(function* () {
       mutation(credentialId, "comment", COMMENT_MUTATION, { input: { issueId, body } }),
     getIssueSelection: ({ identifier, credentialId }) =>
       getIssueSelection(identifier, credentialId),
-    getHistory: ({ identifier, credentialId }) =>
-      readPages((after) =>
-        request(
+    getHistory: ({ identifier, credentialId, cursor }) =>
+      Effect.gen(function* () {
+        if (cursor !== undefined && cursor.trim().length === 0)
+          return yield* new LinearApiError({ operation: "issue history cursor", reason: "failed" });
+        const { data } = yield* request(
           credentialId,
           "issue history",
           HISTORY_QUERY,
           {
             id: identifier,
-            ...(after === undefined ? {} : { after }),
+            ...(cursor === undefined ? {} : { after: cursor }),
           },
           HistoryEnvelope,
-        ).pipe(
-          Effect.flatMap(({ data }) =>
-            data.issue === null
-              ? Effect.fail(
-                  new LinearApiError({ operation: "issue history", reason: "failed", identifier }),
-                )
-              : Effect.succeed(data.issue.history),
-          ),
-        ),
-      ),
+        );
+        if (data.issue === null)
+          return yield* new LinearApiError({
+            operation: "issue history",
+            reason: "failed",
+            identifier,
+          });
+        const { nodes, pageInfo } = data.issue.history;
+        const nextCursor = pageInfo.hasNextPage ? (pageInfo.endCursor ?? null) : null;
+        if (
+          pageInfo.hasNextPage &&
+          (nextCursor === null || !nextCursor.trim() || nextCursor === cursor)
+        )
+          return yield* new LinearApiError({ operation: "issue history cursor", reason: "failed" });
+        return { nodes, truncated: pageInfo.hasNextPage, nextCursor };
+      }),
+    getAttachments: ({ identifier, credentialId, cursor }) =>
+      Effect.gen(function* () {
+        if (cursor !== undefined && cursor.trim().length === 0)
+          return yield* new LinearApiError({
+            operation: "issue attachments cursor",
+            reason: "failed",
+          });
+        const { data } = yield* request(
+          credentialId,
+          "issue attachments",
+          ATTACHMENTS_QUERY,
+          { id: identifier, ...(cursor === undefined ? {} : { after: cursor }) },
+          AttachmentsEnvelope,
+        );
+        if (data.issue === null)
+          return yield* new LinearApiError({
+            operation: "issue attachments",
+            reason: "failed",
+            identifier,
+          });
+        const { nodes, pageInfo } = data.issue.attachments;
+        const nextCursor = pageInfo.hasNextPage ? pageInfo.endCursor : null;
+        if (
+          pageInfo.hasNextPage &&
+          (nextCursor === null || !nextCursor.trim() || nextCursor === cursor)
+        )
+          return yield* new LinearApiError({
+            operation: "issue attachments cursor",
+            reason: "failed",
+          });
+        return { nodes, truncated: pageInfo.hasNextPage, nextCursor };
+      }),
     createIssue: (input) =>
       Effect.gen(function* () {
         if (input.assignees.length > 1)
@@ -1760,14 +1850,29 @@ const make = Effect.gen(function* () {
             writeRejection: "incomplete-templates",
           });
         const templates: IssueTemplate[] = [];
+        const contactLinks: IssueTemplateList["contactLinks"][number][] = [];
         for (const template of [
           ...teamTemplates.flatMap((result) => result.nodes),
           ...workspaceTemplates.nodes,
         ]) {
-          if (template.type !== "issue" || template.hasFormFields) continue;
+          if (template.type !== "issue") continue;
           const data = template.templateData;
-          if (data.descriptionData != null && template.content === null && data.description == null)
+          if (
+            template.hasFormFields ||
+            (template.content === null &&
+              data.description != null &&
+              typeof data.description !== "string") ||
+            (data.descriptionData != null && template.content === null && data.description == null)
+          ) {
+            const url = new URL(`https://linear.app/team/${encodeURIComponent(team.key)}/new`);
+            url.searchParams.set("template", template.id);
+            contactLinks.push({
+              name: template.name,
+              about: template.description ?? "",
+              url: url.href,
+            });
             continue;
+          }
           const names = (data.labelIds ?? []).map((id) => {
             const label = labels.nodes.find((label) => label.id === id);
             const selected = labels.nodes.find((candidate) => candidate.name === label?.name);
@@ -1784,12 +1889,13 @@ const make = Effect.gen(function* () {
             name: template.name,
             about: template.description ?? "",
             title: data.title ?? "",
-            body: template.content ?? data.description ?? "",
+            body:
+              template.content ?? (typeof data.description === "string" ? data.description : ""),
             labels: names as string[],
             assignees: data.assigneeId ? [data.assigneeId] : [],
           });
         }
-        return { templates, contactLinks: [], blankIssuesEnabled: true };
+        return { templates, contactLinks, blankIssuesEnabled: true };
       }),
     updateComment: (input) =>
       Effect.gen(function* () {

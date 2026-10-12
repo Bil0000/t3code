@@ -252,7 +252,7 @@ it.effect("uses Linear user ids for viewer-comparable issue actors", () => {
 
 it.effect("maps Linear comment reaction arrays into issue activity", () => {
   const api = {
-    getHistory: () => Effect.succeed({ nodes: [], truncated: false }),
+    getHistory: () => Effect.succeed({ nodes: [], truncated: false, nextCursor: null }),
     getActivity: () =>
       Effect.succeed({
         viewerId: "user-1",
@@ -298,6 +298,7 @@ it.effect("maps Linear comment reaction arrays into issue activity", () => {
       nextCommentsCursor: null,
       events: [],
       eventsTruncated: false,
+      nextEventsCursor: null,
       reactions: [{ content: "hooray", count: 2, actors: ["user-2"], viewerHasReacted: false }],
     });
   }).pipe(
@@ -514,6 +515,8 @@ it.effect("carries mixed-team ancestors and same-number sub-issues on a Linear d
       );
     }
     assert.strictEqual(detail.subIssues?.[1]?.linkedPullRequests, undefined);
+    assert.strictEqual(detail.linkedPullRequestsTruncated, false);
+    assert.strictEqual(detail.nextLinkedPullRequestsCursor, null);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -796,6 +799,7 @@ it.effect("maps native history into real state, label, assignment, and title eve
     assert.strictEqual(activity.reactions?.[0]?.viewerHasReacted, true);
     assert.strictEqual(activity.nextCommentsCursor, "next-comments");
     assert.strictEqual(activity.eventsTruncated, true);
+    assert.strictEqual(activity.nextEventsCursor, "next-events");
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -844,6 +848,7 @@ it.effect("maps native history into real state, label, assignment, and title eve
                 },
               ],
               truncated: true,
+              nextCursor: "next-events",
             });
           },
         }),
@@ -852,6 +857,150 @@ it.effect("maps native history into real state, label, assignment, and title eve
     ),
   );
 });
+
+it.effect("continues native events without reading comments or issue details", () => {
+  let reads = 0;
+  return Effect.gen(function* () {
+    const adapter = yield* make;
+    const page = yield* adapter.getIssueEvents({
+      cwd: PROJECT.workspaceRoot,
+      host: "linear.app",
+      repository: "ENG",
+      number: 7,
+      credentialId: "account-1",
+      cursor: "page-50",
+    });
+    assert.deepStrictEqual(page, {
+      events: [
+        {
+          id: "history:renamed:0",
+          kind: "renamed",
+          actor: null,
+          createdAt: "2026-10-01T00:00:00.000Z",
+          detail: "New title",
+        },
+      ],
+      nextCursor: null,
+      truncated: false,
+    });
+    assert.strictEqual(reads, 1);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(LinearApi.LinearApi)({
+          getHistory: (input) => {
+            reads++;
+            assert.deepStrictEqual(input, {
+              identifier: "ENG-7",
+              credentialId: "account-1",
+              cursor: "page-50",
+            });
+            return Effect.succeed({
+              nodes: [
+                {
+                  id: "history",
+                  createdAt: "2026-10-01T00:00:00.000Z",
+                  actor: null,
+                  fromState: null,
+                  toState: null,
+                  fromAssignee: null,
+                  toAssignee: null,
+                  addedLabels: null,
+                  removedLabels: null,
+                  fromTitle: "Old title",
+                  toTitle: "New title",
+                },
+              ],
+              truncated: false,
+              nextCursor: null,
+            });
+          },
+        }),
+        ServerSettings.layerTest(),
+      ),
+    ),
+  );
+});
+
+it.effect("continues an empty attachment page using its native cursor", () => {
+  return Effect.gen(function* () {
+    const adapter = yield* make;
+    const page = yield* adapter.getIssueLinkedPullRequests({
+      cwd: PROJECT.workspaceRoot,
+      host: "linear.app",
+      repository: "ENG",
+      number: 7,
+      credentialId: "account-1",
+      cursor: "page-50",
+    });
+    assert.deepStrictEqual(page, {
+      linkedPullRequests: [],
+      nextCursor: "page-100",
+      truncated: true,
+    });
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(LinearApi.LinearApi)({
+          getAttachments: (input) => {
+            assert.deepStrictEqual(input, {
+              identifier: "ENG-7",
+              credentialId: "account-1",
+              cursor: "page-50",
+            });
+            return Effect.succeed({
+              nodes: [{ url: "https://figma.com/file/design", title: "Design" }],
+              nextCursor: "page-100",
+              truncated: true,
+            });
+          },
+        }),
+        ServerSettings.layerTest(),
+      ),
+    ),
+  );
+});
+
+it.effect.each(["events", "attachments"] as const)(
+  "preserves a Linear quota failure when %s continuation is denied",
+  (kind) => {
+    const failure = new LinearApi.LinearApiError({
+      operation: "issue history",
+      reason: "rate-limited",
+      retryAt: 61000,
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* make;
+      const reference = {
+        cwd: PROJECT.workspaceRoot,
+        host: "linear.app",
+        repository: "ENG",
+        number: 7,
+        cursor: "page-50",
+      };
+      const error = yield* kind === "events"
+        ? adapter.getIssueEvents(reference).pipe(Effect.flip)
+        : adapter.getIssueLinkedPullRequests(reference).pipe(Effect.flip);
+      assert.strictEqual(
+        error.operation,
+        kind === "events" ? "getIssueEvents" : "getIssueLinkedPullRequests",
+      );
+      assert.strictEqual(error.reason, "rate-limited");
+      assert.strictEqual(error.retryAt, 61000);
+      assert.strictEqual(error.cause, failure);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(LinearApi.LinearApi)({
+            getHistory: () => Effect.fail(failure),
+            getAttachments: () => Effect.fail(failure),
+          }),
+          ServerSettings.layerTest(),
+        ),
+      ),
+    );
+  },
+);
 
 it.effect("preserves a Linear quota failure when a workflow write is denied", () => {
   const failure = new LinearApi.LinearApiError({
