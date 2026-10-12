@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -22,6 +23,7 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
 import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { azureDevOpsPullRequestWebUrl } from "@t3tools/source-control-azure-devops/server/azureDevOpsPullRequests";
 import {
   decodeWorkItemJson,
@@ -122,6 +124,7 @@ export class AzureDevOpsWorkItemStateRefusedError extends Schema.TaggedError<Azu
 
 export type AzureDevOpsIssueCliError =
   | AzureDevOpsCli.AzureDevOpsCliError
+  | SourceControlRateLimit.SourceControlRateLimitPausedError
   | AzureDevOpsIssueReadError
   | AzureDevOpsProjectUnknownError
   | AzureDevOpsWorkItemIncompleteError
@@ -242,20 +245,29 @@ export class AzureDevOpsIssueCli extends Context.Service<
       AzureDevOpsIssueCliError
     >;
     readonly listUpdates: (
-      input: AzureDevOpsIssueScope & { readonly number: number },
+      input: AzureDevOpsIssueScope & {
+        readonly number: number;
+        readonly cursor?: string | undefined;
+      },
     ) => Effect.Effect<
-      { readonly events: ReadonlyArray<IssueEvent>; readonly eventsTruncated: boolean },
+      {
+        readonly events: ReadonlyArray<IssueEvent>;
+        readonly eventsTruncated: boolean;
+        readonly nextCursor: string | null;
+      },
       AzureDevOpsIssueCliError
     >;
     readonly listLinkedPullRequests: (
       input: AzureDevOpsIssueScope & {
         readonly repository: string;
         readonly relations: NonNullable<AzureDevOpsWorkItem["relations"]>;
+        readonly cursor?: string | undefined;
       },
     ) => Effect.Effect<
       {
         readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
         readonly linkedPullRequestsTruncated: boolean;
+        readonly nextCursor: string | null;
       },
       AzureDevOpsIssueCliError
     >;
@@ -359,8 +371,27 @@ function stateClause(state: IssueListState): string {
   }
 }
 
+export const cursorOffset = (
+  input: { readonly cwd: string; readonly cursor?: string | undefined },
+  operation: string,
+) => {
+  if (input.cursor === undefined) return Effect.succeed(0);
+  const offset = Number(input.cursor);
+  return /^[1-9]\d*$/u.test(input.cursor) && Number.isSafeInteger(offset) && offset <= 2147483647
+    ? Effect.succeed(offset)
+    : Effect.fail(
+        new AzureDevOpsIssueReadError({
+          command: "az",
+          cwd: input.cwd,
+          operation,
+          cause: "invalid-cursor",
+        }),
+      );
+};
+
 const make = Effect.gen(function* () {
   const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
+  const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
   const fs = yield* FileSystem.FileSystem;
 
   const detectArgs = ["--detect", "true"] as const;
@@ -376,8 +407,38 @@ const make = Effect.gen(function* () {
         ]
       : detectArgs;
 
+  const execute = Effect.fn("AzureDevOpsIssueCli.execute")(function* (input: {
+    readonly cwd: string;
+    readonly args: ReadonlyArray<string>;
+  }) {
+    const organizationIndex = input.args.indexOf("--organization");
+    const organization = organizationIndex < 0 ? undefined : input.args[organizationIndex + 1];
+    if (organization === undefined) return yield* azure.execute(input);
+    const key = { provider: "azure-devops" as const, host: organization };
+    const lease = yield* rateLimits.check(key);
+    return yield* azure.execute(input).pipe(
+      Effect.tapError((error) =>
+        error._tag === "AzureDevOpsCliRateLimitError"
+          ? Effect.gen(function* () {
+              const retryAt =
+                "retryAt" in error && typeof error.retryAt === "number"
+                  ? error.retryAt
+                  : "retryAfter" in error && typeof error.retryAfter === "string"
+                    ? SourceControlRateLimit.retryAtFromHeader(
+                        error.retryAfter,
+                        yield* Clock.currentTimeMillis,
+                      )
+                    : undefined;
+              yield* rateLimits.recordRateLimit({ ...key, lease, retryAt });
+            })
+          : Effect.void,
+      ),
+      Effect.tap(() => rateLimits.recordSuccess({ ...key, lease })),
+    );
+  });
+
   const executeJson = (input: { readonly cwd: string; readonly args: ReadonlyArray<string> }) =>
-    azure.execute({
+    execute({
       cwd: input.cwd,
       args: [...input.args, "--only-show-errors", "--output", "json"],
     });
@@ -415,27 +476,25 @@ const make = Effect.gen(function* () {
     const project = input.repository?.split("/")[1];
     if (input.host && project) return Effect.succeed(project);
     const { cwd } = input;
-    return azure
-      .execute({
-        cwd,
-        args: [
-          "repos",
-          "show",
-          ...scopeArgs(input),
-          "--query",
-          "project.name",
-          "--only-show-errors",
-          "--output",
-          "tsv",
-        ],
-      })
-      .pipe(
-        Effect.flatMap((result) => {
-          const name = result.stdout.trim();
-          if (name.length > 0) return Effect.succeed(name);
-          return Effect.fail(new AzureDevOpsProjectUnknownError({ command: "az", cwd }));
-        }),
-      );
+    return execute({
+      cwd,
+      args: [
+        "repos",
+        "show",
+        ...scopeArgs(input),
+        "--query",
+        "project.name",
+        "--only-show-errors",
+        "--output",
+        "tsv",
+      ],
+    }).pipe(
+      Effect.flatMap((result) => {
+        const name = result.stdout.trim();
+        if (name.length > 0) return Effect.succeed(name);
+        return Effect.fail(new AzureDevOpsProjectUnknownError({ command: "az", cwd }));
+      }),
+    );
   };
 
   const invokeArgs = (
@@ -684,59 +743,66 @@ const make = Effect.gen(function* () {
       ),
 
     listUpdates: Effect.fn("AzureDevOpsIssueCli.listUpdates")(function* (input) {
+      const skip = yield* cursorOffset(input, "listUpdates");
       const project = yield* itemProject(input);
       const events: IssueEvent[] = [];
       const seen = new Set<number>();
-      let skip = 0;
-      let eventsTruncated = true;
-      for (let pageIndex = 0; pageIndex < 10; pageIndex++) {
-        const page = yield* read({
+      const page = yield* read({
+        cwd: input.cwd,
+        operation: "listUpdates",
+        args: [
+          ...invokeArgs(input, "updates", project, [`id=${input.number}`]),
+          "--query-parameters",
+          "$top=100",
+          `$skip=${skip}`,
+        ],
+        decode: decodeWorkItemUpdatesJson,
+      });
+      if (
+        page.value.length > 100 ||
+        (page.value.length > 0 && page.value.every((update) => update.id <= skip))
+      ) {
+        return yield* new AzureDevOpsIssueReadError({
+          command: "az",
           cwd: input.cwd,
           operation: "listUpdates",
-          args: [
-            ...invokeArgs(input, "updates", project, [`id=${input.number}`]),
-            "--query-parameters",
-            "$top=100",
-            `$skip=${skip}`,
-          ],
-          decode: decodeWorkItemUpdatesJson,
+          cause: page.value.length > 100 ? "oversized-page" : "repeated-page",
         });
-        if (page.value.length === 0) {
-          eventsTruncated = false;
-          break;
-        }
-        if (page.value.every((update) => seen.has(update.id))) {
-          return yield* new AzureDevOpsIssueReadError({
-            command: "az",
-            cwd: input.cwd,
-            operation: "listUpdates",
-            cause: "repeated-page",
-          });
-        }
-        for (const update of page.value) {
-          if (seen.has(update.id)) continue;
-          seen.add(update.id);
-          events.push(...workItemUpdateEvents(update));
-        }
-        skip += page.value.length;
+      }
+      for (const update of page.value) {
+        if (update.id <= skip || seen.has(update.id)) continue;
+        seen.add(update.id);
+        events.push(...workItemUpdateEvents(update));
       }
       events.sort((left, right) => compareDateTimeStrings(left.createdAt, right.createdAt));
-      return { events, eventsTruncated };
+      const eventsTruncated = page.value.length > 0;
+      return {
+        events,
+        eventsTruncated,
+        nextCursor:
+          eventsTruncated && skip + page.value.length <= 2147483647
+            ? String(skip + page.value.length)
+            : null,
+      };
     }),
 
     listLinkedPullRequests: Effect.fn("AzureDevOpsIssueCli.listLinkedPullRequests")(
       function* (input) {
-        const links = new Map<string, { project: string; repository: string; number: number }>();
-        for (const relation of input.relations) {
+        const offset = yield* cursorOffset(input, "listLinkedPullRequests");
+        const links = new Map<
+          string,
+          { project: string; repository: string; number: number; offset: number }
+        >();
+        for (const [index, relation] of input.relations.entries()) {
           const link = azureDevOpsPullRequestArtifact(relation);
-          if (link)
-            links.set(
-              `${link.project.toLowerCase()}/${link.repository.toLowerCase()}/${link.number}`,
-              link,
-            );
+          if (!link) continue;
+          const key = `${link.project.toLowerCase()}/${link.repository.toLowerCase()}/${link.number}`;
+          if (!links.has(key)) links.set(key, { ...link, offset: index + 1 });
         }
+        const remaining = [...links.values()].filter((link) => link.offset > offset);
+        const page = remaining.slice(0, 5);
         const linkedPullRequests = yield* Effect.forEach(
-          [...links.values()].slice(0, 20),
+          page,
           (link) =>
             read({
               cwd: input.cwd,
@@ -755,6 +821,8 @@ const make = Effect.gen(function* () {
                 `pullRequestId=${link.number}`,
                 "--api-version",
                 "7.1",
+                "--http-method",
+                "GET",
               ],
               decode: decodeLinkedPullRequestJson,
             }).pipe(
@@ -778,10 +846,18 @@ const make = Effect.gen(function* () {
                 isDraft: pr.isDraft ?? false,
                 closesIssue: false,
               })),
+              Effect.catchTags({
+                AzureDevOpsPullRequestNotFoundError: () => Effect.succeed(null),
+              }),
             ),
-          { concurrency: 3 },
+          { concurrency: 2 },
         );
-        return { linkedPullRequests, linkedPullRequestsTruncated: links.size > 20 };
+        const linkedPullRequestsTruncated = remaining.length > page.length;
+        return {
+          linkedPullRequests: linkedPullRequests.filter((pr) => pr !== null),
+          linkedPullRequestsTruncated,
+          nextCursor: linkedPullRequestsTruncated ? String(page.at(-1)!.offset) : null,
+        };
       },
     ),
 

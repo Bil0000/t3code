@@ -63,6 +63,7 @@ function reasonFor(
   if (error._tag === "AzureDevOpsCliUnavailableError") return "missing-tool";
   if (error._tag === "AzureDevOpsCliAuthenticationError") return "unauthenticated";
   if (error._tag === "AzureDevOpsCliRateLimitError") return "rate-limited";
+  if (error._tag === "SourceControlRateLimitPausedError") return "rate-limited";
   if (error._tag === "AzureDevOpsIssueMutationRefusedError") {
     if (error.statusCode === 401) return "unauthenticated";
     if (error.statusCode === 429) return "rate-limited";
@@ -102,6 +103,9 @@ export const make = Effect.gen(function* () {
         reason: reasonFor(error),
         detail,
         cause: error,
+        ...("retryAt" in error && typeof error.retryAt === "number"
+          ? { retryAt: error.retryAt }
+          : {}),
       });
     };
 
@@ -150,7 +154,7 @@ export const make = Effect.gen(function* () {
     getIssue: Effect.fn("AzureDevOpsIssueProvider.getIssue")(
       function* (input) {
         const item = yield* cli.getWorkItem(input);
-        const { linkedPullRequests, linkedPullRequestsTruncated } =
+        const { linkedPullRequests, linkedPullRequestsTruncated, nextCursor } =
           yield* cli.listLinkedPullRequests({
             ...input,
             relations: item.relations ?? [],
@@ -160,6 +164,7 @@ export const make = Effect.gen(function* () {
           body: item.description,
           linkedPullRequests,
           linkedPullRequestsTruncated,
+          nextLinkedPullRequestsCursor: nextCursor,
           viewerPermissions: AZURE_DEVOPS_ISSUE_VIEWER_PERMISSIONS,
         } satisfies ProviderIssueDetail;
       },
@@ -178,7 +183,9 @@ export const make = Effect.gen(function* () {
         commentCount: page.commentCount,
         commentsTruncated: page.nextCursor !== null,
         nextCommentsCursor: page.nextCursor,
-        ...updates,
+        events: updates.events,
+        eventsTruncated: updates.eventsTruncated,
+        nextEventsCursor: updates.nextCursor,
       };
     }),
 
@@ -187,6 +194,33 @@ export const make = Effect.gen(function* () {
         Effect.mapError(fail("getIssueComments")),
         Effect.map((page) => ({ comments: page.comments, nextCursor: page.nextCursor })),
       ),
+
+    getIssueEvents: (input) =>
+      cli.listUpdates(input).pipe(
+        Effect.mapError(fail("getIssueEvents")),
+        Effect.map((page) => ({
+          events: page.events,
+          nextCursor: page.nextCursor,
+          truncated: page.eventsTruncated,
+        })),
+      ),
+
+    getIssueLinkedPullRequests: Effect.fn("AzureDevOpsIssueProvider.getIssueLinkedPullRequests")(
+      function* (input) {
+        yield* AzureDevOpsIssueCli.cursorOffset(input, "listLinkedPullRequests");
+        const item = yield* cli.getWorkItem(input);
+        const page = yield* cli.listLinkedPullRequests({
+          ...input,
+          relations: item.relations ?? [],
+        });
+        return {
+          linkedPullRequests: page.linkedPullRequests,
+          nextCursor: page.nextCursor,
+          truncated: page.linkedPullRequestsTruncated,
+        };
+      },
+      Effect.mapError(fail("getIssueLinkedPullRequests")),
+    ),
 
     // No request at all: Azure has nothing to say about the viewer that a work item read reaches.
     getViewerPermissions: () => Effect.succeed(AZURE_DEVOPS_ISSUE_VIEWER_PERMISSIONS),
