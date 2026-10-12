@@ -98,7 +98,7 @@ export function IssueTimelineTab({
       <div className="mx-auto max-w-3xl">
         {detail.eventsTruncated ? (
           <div className="mb-4 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>Some history is not shown here.</span>
+            <span>History may be incomplete.</span>
             <Button size="xs" variant="ghost-muted" onClick={() => openLinkInBrowser(detail.url)}>
               <ArrowUpRightIcon aria-hidden />
               Open on host

@@ -129,6 +129,7 @@ export interface ProviderIssueDetail extends ProviderIssue {
   readonly repositoryUrl?: string;
   readonly body: string;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
+  readonly linkedPullRequestsTruncated?: boolean;
   readonly ancestors?: ReadonlyArray<IssueRelative>;
   readonly subIssues?: ReadonlyArray<IssueRelativeNode>;
   readonly viewerPermissions: IssueViewerPermissions;

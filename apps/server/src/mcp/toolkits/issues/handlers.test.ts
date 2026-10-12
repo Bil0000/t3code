@@ -835,6 +835,7 @@ describe("issue toolkit handlers", () => {
                         getIssue: () =>
                           Effect.succeed({
                             ...issueDetail,
+                            linkedPullRequestsTruncated: false,
                             viewer: "reporter",
                             reactions: [],
                             ancestors: [],

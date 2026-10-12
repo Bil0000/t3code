@@ -150,7 +150,7 @@ it("keeps a comment edit through revoked write access and saves it once restored
 
 it("points to the host only when the history read was cut short", async () => {
   const { openLinkInBrowser } = await import("~/lib/openIssueLink");
-  const note = () => renderer!.root.findAllByProps({ children: "Some history is not shown here." });
+  const note = () => renderer!.root.findAllByProps({ children: "History may be incomplete." });
   await act(() => {
     renderer = create(timeline(writable));
   });

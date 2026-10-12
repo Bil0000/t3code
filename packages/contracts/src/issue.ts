@@ -427,6 +427,7 @@ export const IssueDetail = Schema.Struct({
   viewer: Schema.optional(TrimmedNonEmptyString),
   commentCount: NonNegativeInt,
   linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
+  linkedPullRequestsTruncated: Schema.optional(Schema.Boolean),
   /** Absent when the tracker has no issue hierarchy. */
   /** Root first, ending with the direct parent. */
   ancestors: Schema.optional(Schema.Array(IssueRelative)),

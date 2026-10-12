@@ -13,6 +13,7 @@ import { normalizeWorkItemLinkKey } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowDownUpIcon,
+  ArrowUpRightIcon,
   MessageSquareIcon,
   MilestoneIcon,
   TagIcon,
@@ -21,6 +22,7 @@ import {
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
+import { openLinkInBrowser } from "~/lib/openIssueLink";
 import { cn } from "~/lib/utils";
 import { issueEnvironment } from "~/state/issues";
 import { useThreadShellsForProjectRefs } from "~/state/entities";
@@ -530,9 +532,20 @@ export function IssueSummaryTab({
           />
         }
       >
+        {detail.linkedPullRequestsTruncated ? (
+          <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Pull request links may be incomplete.</span>
+            <Button size="xs" variant="ghost-muted" onClick={() => openLinkInBrowser(detail.url)}>
+              <ArrowUpRightIcon aria-hidden />
+              Open on host
+            </Button>
+          </div>
+        ) : null}
         {detail.capabilities.linkedPullRequests ? (
           detail.linkedPullRequests.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No pull request mentions this issue.</p>
+            detail.linkedPullRequestsTruncated ? null : (
+              <p className="text-xs text-muted-foreground">No pull request mentions this issue.</p>
+            )
           ) : (
             <div className="space-y-0.5">
               {detail.linkedPullRequests.map((link) => {

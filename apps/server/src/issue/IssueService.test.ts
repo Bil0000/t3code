@@ -2727,6 +2727,30 @@ it.effect("keeps issue reads out of GitHub's reserve while allowing writes to us
   }),
 );
 
+it.effect("preserves issue details and native link completeness", () =>
+  Effect.gen(function* () {
+    for (const truncated of [undefined, false, true]) {
+      const service = yield* makeService({
+        projects: ONE_PROJECT,
+        providers: [
+          fakeProvider("github", {
+            getIssue: () =>
+              Effect.succeed(
+                issueDetail(
+                  7,
+                  truncated === undefined ? {} : { linkedPullRequestsTruncated: truncated },
+                ),
+              ),
+          }),
+        ],
+      });
+      const detail = yield* service.detail(REFERENCE);
+      assert.equal(detail.linkedPullRequestsTruncated, truncated);
+      assert.equal(detail.body, "What went wrong");
+    }
+  }),
+);
+
 it.effect("preserves readable comments when provider history is incomplete", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

@@ -43,6 +43,7 @@ vi.mock("../workItems/WorkItemMatches", () => ({
 }));
 vi.mock("../workItems/SavedWorkItemLinks", () => ({ SavedWorkItemLinks: () => null }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("~/lib/openIssueLink", () => ({ openLinkInBrowser: vi.fn() }));
 vi.mock("../ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => children,
   TooltipTrigger: ({ children }: { children: ReactNode }) => children,
@@ -366,4 +367,54 @@ it("keeps same-numbered pull requests from different hosts as separate rows", as
   expect(props.onOpenLinkedPullRequest).toHaveBeenNthCalledWith(1, gitlab);
   expect(props.onOpenLinkedPullRequest).toHaveBeenNthCalledWith(2, github);
   expect(consoleError.mock.calls.flat().join("\n")).not.toContain("same key");
+});
+
+it("says pull request links may be incomplete instead of claiming none exist", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const { openLinkInBrowser } = await import("~/lib/openIssueLink");
+  const link = {
+    repository: "acme/project",
+    number: 7,
+    title: "A change",
+    url: "https://github.com/acme/project/pull/7",
+    state: "open" as const,
+    isDraft: false,
+    closesIssue: false,
+  };
+  const summary = (
+    linkedPullRequests: IssueDetailView["linkedPullRequests"],
+    truncated?: boolean,
+  ) => (
+    <IssueSummaryTab
+      {...props}
+      editing={false}
+      detail={{
+        ...detail,
+        capabilities: { ...detail.capabilities, linkedPullRequests: true },
+        linkedPullRequests,
+        ...(truncated === undefined ? {} : { linkedPullRequestsTruncated: truncated }),
+      }}
+    />
+  );
+  const texts = (children: string) => renderer.root.findAllByProps({ children });
+  const partial = () => texts("Pull request links may be incomplete.");
+  const none = () => texts("No pull request mentions this issue.");
+
+  await act(() => {
+    renderer = create(summary([]));
+  });
+  expect([partial().length, none().length]).toEqual([0, 1]);
+
+  await act(() => renderer.update(summary([link], true)));
+  expect([partial().length, none().length, texts("A change").length]).toEqual([1, 0, 1]);
+
+  await act(() => renderer.update(summary([], true)));
+  expect([partial().length, none().length]).toEqual([1, 0]);
+  await act(() =>
+    renderer.root
+      .findAllByType("button")
+      .find((button) => button.props.children?.[1] === "Open on host")!
+      .props.onClick(),
+  );
+  expect(openLinkInBrowser).toHaveBeenCalledExactlyOnceWith(detail.url);
 });
