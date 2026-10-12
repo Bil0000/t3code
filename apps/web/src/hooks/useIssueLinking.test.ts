@@ -55,12 +55,57 @@ describe("resolveIssueUrl", () => {
     ["https://gitlab.example.com/team/api/-/work_items/7", "api", "team/api", 7],
     ["https://dev.azure.com/org/project/_workitems/edit/12", "ado", "org/project/repo", 12],
   ])("reads %s through the project that owns it", (url, projectId, repository, number) => {
-    expect(resolve(url)).toEqual({ issue: { projectId, repository, number } });
+    expect(resolve(url)).toMatchObject({
+      issue: { projectId, host: new URL(url).host, repository, number },
+    });
   });
 
-  it("refuses an issue no project here can read", () => {
-    expect(resolve("https://github.com/other/repo/issues/3")).toMatchObject({
-      error: expect.stringContaining("github.com/other/repo"),
+  it("names an unowned legacy Azure DevOps URL by its canonical host", () => {
+    expect(resolve("https://acme.visualstudio.com/project/_workitems/edit/5")).toEqual({
+      issue: {
+        projectId: "web",
+        provider: "azure-devops",
+        host: "dev.azure.com",
+        repository: "acme/project",
+        number: 5,
+        url: "https://dev.azure.com/acme/project/_workitems/edit/5",
+      },
+    });
+  });
+
+  it("reads an unowned public issue through the thread's project by its canonical URL", () => {
+    expect(resolve("https://github.com/other/repo/issues/3#top")).toEqual({
+      issue: {
+        projectId: "web",
+        provider: "github",
+        host: "github.com",
+        repository: "other/repo",
+        number: 3,
+        url: "https://github.com/other/repo/issues/3",
+      },
+    });
+    expect(
+      resolveIssueUrl({
+        url: "https://github.com/other/repo/issues/3",
+        projects,
+        threadProjectId: null,
+        linearBindings: undefined,
+      }),
+    ).toMatchObject({ error: expect.stringContaining("github.com/other/repo") });
+  });
+
+  it("hints a self-hosted provider only for the exact configured host and port", () => {
+    expect(resolve("https://gitlab.example.com/other/repo/-/work_items/4")).toMatchObject({
+      issue: {
+        projectId: "web",
+        provider: "gitlab",
+        host: "gitlab.example.com",
+        url: "https://gitlab.example.com/other/repo/-/issues/4",
+      },
+    });
+    expect(resolve("https://gitlab.example.com:8443/other/repo/-/issues/4")).toBeNull();
+    expect(resolve("http://gitlab.example.com/other/repo/-/issues/4")).toMatchObject({
+      issue: { url: "http://gitlab.example.com/other/repo/-/issues/4" },
     });
   });
 
@@ -73,8 +118,15 @@ describe("resolveIssueUrl", () => {
     expect(
       resolve("https://linear.app/acme/issue/ENG-5/title", { api: { repository: "eng" } }),
     ).toMatchObject({ issue: { projectId: "api", provider: "linear", repository: "ENG" } });
-    expect(resolve("https://linear.app/acme/issue/ENG-5")).toMatchObject({
-      issue: { projectId: "web" },
+    expect(resolve("https://linear.app/acme/issue/ENG-5/title")).toEqual({
+      issue: {
+        projectId: "web",
+        provider: "linear",
+        host: "linear.app",
+        repository: "ENG",
+        number: 5,
+        url: "https://linear.app/acme/issue/ENG-5",
+      },
     });
   });
 });
@@ -176,7 +228,6 @@ describe("findThreadIssueLink", () => {
     ).toBeNull();
     expect(
       findThreadIssueLink([gitlab], "https://gitlab.example.com/team/api/-/work_items/7", {
-        projectId: ProjectId.make("api"),
         provider: "forgejo",
         repository: "team/api",
         number: 7,
@@ -241,7 +292,13 @@ describe("useIssueLinking operations", () => {
     await useIssueLinking(environmentId).changeLink(threadRef, issue.url, true);
     expect(mocks.detail).toHaveBeenCalledExactlyOnceWith({
       environmentId,
-      input: { projectId: "api", repository: "team/api", number: 7 },
+      input: {
+        projectId: "api",
+        host: "gitlab.example.com",
+        repository: "team/api",
+        number: 7,
+        url: issue.url,
+      },
     });
     expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
       environmentId,
@@ -300,6 +357,7 @@ describe("useIssueLinking operations", () => {
           host: "linear.app",
           repository: "ENG",
           number: 5,
+          url: "https://linear.app/workspace-b/issue/ENG-5",
         },
       });
       expect(mocks.update).toHaveBeenCalledOnce();

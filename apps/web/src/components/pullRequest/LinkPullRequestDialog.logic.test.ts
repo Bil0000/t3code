@@ -244,7 +244,15 @@ describe("resolveLinkIssueInput", () => {
         findProject,
         linearProjectId: () => undefined,
       }),
-    ).toEqual({ issue: { projectId: "p2", repository: "org/project/web", number: 12 } });
+    ).toEqual({
+      issue: {
+        projectId: "p2",
+        host: "dev.azure.com",
+        repository: "org/project/web",
+        number: 12,
+        url: "https://dev.azure.com/org/project/_workitems/edit/12",
+      },
+    });
     expect(
       resolveLinkIssueInput({
         reference: "https://github.com/other/repo/issues/12",
@@ -256,10 +264,20 @@ describe("resolveLinkIssueInput", () => {
   });
 
   it.each([
-    ["https://github.com/groups/repo/issues/7", "github.com", "groups/repo"],
-    ["https://dev.azure.com/groups/project/_workitems/edit/7", "dev.azure.com", "groups/project"],
-    ["https://bitbucket.org/acme/web/issues/7/fix-login", "bitbucket.org", "acme/web"],
-  ])("preserves supported issue URL %s", (reference, host, repository) => {
+    ["https://github.com/groups/repo/issues/7", "github.com", "groups/repo", undefined],
+    [
+      "https://dev.azure.com/groups/project/_workitems/edit/7",
+      "dev.azure.com",
+      "groups/project",
+      undefined,
+    ],
+    [
+      "https://bitbucket.org/acme/web/issues/7/fix-login",
+      "bitbucket.org",
+      "acme/web",
+      "https://bitbucket.org/acme/web/issues/7",
+    ],
+  ])("preserves supported issue URL %s", (reference, host, repository, url = reference) => {
     expect(
       resolveLinkIssueInput({
         reference,
@@ -270,7 +288,7 @@ describe("resolveLinkIssueInput", () => {
             : undefined,
         linearProjectId: () => undefined,
       }),
-    ).toEqual({ issue: { projectId: "p2", repository, number: 7 } });
+    ).toEqual({ issue: { projectId: "p2", host, repository, number: 7, url } });
   });
 
   it("reads a GitLab work item through the project that owns its nested repository", () => {
@@ -284,7 +302,15 @@ describe("resolveLinkIssueInput", () => {
             : undefined,
         linearProjectId: () => undefined,
       }),
-    ).toEqual({ issue: { projectId: "p2", repository: "g/sub/repo", number: 7 } });
+    ).toEqual({
+      issue: {
+        projectId: "p2",
+        host: "gitlab.com",
+        repository: "g/sub/repo",
+        number: 7,
+        url: "https://gitlab.com/g/sub/repo/-/issues/7",
+      },
+    });
   });
 
   it("reads owner/repo#N on the thread project's host", () => {
@@ -365,6 +391,7 @@ describe("resolveLinkIssueInput", () => {
         host: "linear.app",
         repository: "ENG",
         number: 12,
+        url: "https://linear.app/acme/issue/ENG-12",
       },
     });
     expect(

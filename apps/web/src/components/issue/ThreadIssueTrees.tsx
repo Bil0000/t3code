@@ -4,7 +4,6 @@ import {
   type IssueLinkedPullRequest,
   type IssueRelative,
   normalizeWorkItemLinkKey,
-  type ProjectId,
   type ScopedThreadRef,
   type ThreadIssueLink,
 } from "@t3tools/contracts";
@@ -12,7 +11,8 @@ import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
-import { openLinkInBrowser } from "~/lib/openIssueLink";
+import { issueRefOf, openLinkInBrowser } from "~/lib/openIssueLink";
+import type { IssueTarget } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { useThreadShell } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
@@ -29,8 +29,8 @@ interface ThreadIssueTreesProps {
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef | null;
   linked: ReadonlyArray<ThreadIssueLink>;
-  /** The project an issue is read through; null when none here can read it. */
-  projectFor: (issue: ThreadIssueLink) => ProjectId | null;
+  /** How an issue is read, through its own project or its URL; null when none here can read it. */
+  targetFor: (issue: ThreadIssueLink) => IssueTarget | null;
   onOpen: (
     issue: ThreadIssueLink,
     relative: Pick<IssueRelative, "repository" | "number" | "url">,
@@ -56,7 +56,7 @@ export function ThreadIssueTrees({
   environmentId,
   threadRef,
   linked,
-  projectFor,
+  targetFor,
   onOpen,
   onOpenPullRequest,
   renderFallback,
@@ -84,13 +84,13 @@ export function ThreadIssueTrees({
     () => new Map(linked.map((issue) => [threadIssueKey(issue), issue])),
     [linked],
   );
-  const readable = linked.filter((issue) => projectFor(issue) !== null);
+  const readable = linked.filter((issue) => targetFor(issue) !== null);
   const trees = useMemo(
     () =>
       mergeIssueTrees(
         linked.flatMap((issue) => {
           const detail = reads[threadIssueKey(issue)]?.detail;
-          return detail && projectFor(issue) !== null
+          return detail && targetFor(issue) !== null
             ? [
                 {
                   provider: issue.provider,
@@ -101,10 +101,10 @@ export function ThreadIssueTrees({
             : [];
         }),
       ),
-    [linked, projectFor, reads],
+    [linked, reads, targetFor],
   );
   const unread = linked.filter(
-    (issue) => projectFor(issue) === null || !reads[threadIssueKey(issue)]?.detail,
+    (issue) => targetFor(issue) === null || !reads[threadIssueKey(issue)]?.detail,
   );
 
   return (
@@ -113,7 +113,7 @@ export function ThreadIssueTrees({
         <LinkedIssueRead
           key={threadIssueKey(issue)}
           environmentId={environmentId}
-          projectId={projectFor(issue)!}
+          target={targetFor(issue)!}
           issue={issue}
           refreshToken={refreshToken}
           onRead={report}
@@ -215,32 +215,36 @@ function PlainIssueRow({ issue, onOpen }: { issue: ThreadIssueLink; onOpen: () =
 /** Reads one linked issue's tree and hands it up; the trees are drawn merged, above. */
 function LinkedIssueRead({
   environmentId,
-  projectId,
+  target,
   issue,
   refreshToken,
   onRead,
 }: {
   environmentId: EnvironmentId;
-  projectId: ProjectId;
+  target: IssueTarget;
   issue: ThreadIssueLink;
   refreshToken: number;
   onRead: (key: string, read: TreeRead) => void;
 }) {
+  const { projectId, host, url } = target;
   const reference = useMemo(
-    () => ({
-      projectId,
-      provider: issue.provider,
-      repository: issue.repository,
-      number: issue.number,
-    }),
-    [projectId, issue.provider, issue.repository, issue.number],
+    () =>
+      issueRefOf({
+        projectId,
+        provider: issue.provider,
+        ...(host === undefined ? {} : { host }),
+        repository: issue.repository,
+        number: issue.number,
+        ...(url === undefined ? {} : { url }),
+      }),
+    [projectId, host, url, issue.provider, issue.repository, issue.number],
   );
   const detailQuery = useEnvironmentQuery(
     issueEnvironment.detail({ environmentId, input: reference }),
   );
   const { refresh } = detailQuery;
   useLiveRefresh(detailQuery.isPending ? null : refresh, {
-    key: `issue:${environmentId}:${projectId}:${issue.repository}#${issue.number}`,
+    key: `issue:${environmentId}:${projectId}:${url ?? ""}:${issue.repository}#${issue.number}`,
   });
   const applied = useRef(refreshToken);
   useEffect(() => {

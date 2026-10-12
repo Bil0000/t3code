@@ -29,6 +29,7 @@ import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   findProjectForLink,
+  issueLinkTarget,
   linkedPullRequestTarget,
   openLinkInBrowser,
   relatedIssueTarget,
@@ -39,7 +40,7 @@ import {
   useOpenPrLink,
 } from "~/lib/openPullRequestLink";
 import { cn } from "~/lib/utils";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { type IssueTarget, useRightPanelStore } from "~/rightPanelStore";
 import { useShortcutModifierState } from "~/shortcutModifierState";
 import { useProjects, useServerConfigs, useThreadShell } from "~/state/entities";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
@@ -513,40 +514,36 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
   const issues = useMemo(() => thread?.issues ?? [], [thread]);
   // The project an issue is read through, by its saved project, its host URL, or — for a
   // tracker with no repository of its own — the thread's project.
-  const issueProjectId = useCallback(
-    (issue: ThreadIssueLink): ProjectId | null => {
+  const issueTarget = useCallback(
+    (issue: ThreadIssueLink): IssueTarget | null => {
       if (!supportsIssues) return null;
-      const environmentProjects = projects.filter(
-        (candidate) => candidate.environmentId === threadRef.environmentId,
-      );
-      const project =
-        issue.projectId !== undefined
-          ? environmentProjects.find((candidate) => candidate.id === issue.projectId)
-          : sourceControlClients.find(issue.provider) !== undefined
-            ? findProjectForLink(environmentProjects, issue)
-            : environmentProjects.find((candidate) => candidate.id === thread?.projectId);
-      return project?.id ?? null;
+      const saved =
+        issue.projectId === undefined
+          ? undefined
+          : environmentProjects.find((candidate) => candidate.id === issue.projectId);
+      return saved === undefined
+        ? issueLinkTarget(environmentProjects, issue, thread?.projectId ?? null)
+        : {
+            projectId: saved.id,
+            provider: issue.provider,
+            repository: issue.repository,
+            number: issue.number,
+          };
     },
-    [projects, supportsIssues, thread?.projectId, threadRef.environmentId],
+    [environmentProjects, supportsIssues, thread?.projectId],
   );
   const openThreadIssue = useCallback(
     (issue: ThreadIssueLink, relative: Pick<IssueRelative, "repository" | "number" | "url">) => {
-      const projectId = issueProjectId(issue);
+      const current = issueTarget(issue);
       const target =
-        projectId === null
-          ? null
-          : relatedIssueTarget(
-              environmentProjects,
-              { projectId, repository: issue.repository },
-              relative,
-            );
+        current === null ? null : relatedIssueTarget(environmentProjects, current, relative);
       if (target === null) {
         openLinkInBrowser(relative.url);
         return;
       }
-      useRightPanelStore.getState().openIssue(threadRef, { ...target, provider: issue.provider });
+      useRightPanelStore.getState().openIssue(threadRef, { provider: issue.provider, ...target });
     },
-    [environmentProjects, issueProjectId, threadRef],
+    [environmentProjects, issueTarget, threadRef],
   );
   const openTreePullRequest = useCallback(
     (link: IssueLinkedPullRequest) => {
@@ -669,7 +666,7 @@ function EnabledThreadPullRequestsPanel({ threadRef }: { threadRef: ScopedThread
               environmentId={threadRef.environmentId}
               threadRef={threadRef}
               linked={issues}
-              projectFor={issueProjectId}
+              targetFor={issueTarget}
               onOpen={openThreadIssue}
               onOpenPullRequest={openTreePullRequest}
               renderFallback={(issue) => <IssueRow issue={issue} onUnlink={handleUnlinkIssue} />}

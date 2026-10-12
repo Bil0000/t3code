@@ -10,6 +10,7 @@ vi.mock("../components/ui/toast", () => ({
 import { pullRequestSurfaceId } from "../rightPanelStore";
 import {
   findProjectForLink,
+  issueRefOf,
   linkedPullRequestTarget,
   openLinkInBrowser,
   relatedIssueTarget,
@@ -204,6 +205,22 @@ describe("findProjectForLink", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("matches a self-hosted Forgejo checkout only on its exact port", () => {
+    const checkout = project({
+      canonicalKey: "git.example.test/acme/docs",
+      provider: "forgejo",
+      displayName: "acme/docs",
+      locator: { remoteUrl: "https://git.example.test:8443/acme/docs.git" },
+    });
+    const link = (port: number) => ({
+      repository: "acme/docs",
+      number: 9,
+      url: `https://git.example.test:${port}/acme/docs/issues/9`,
+    });
+    expect(findProjectForLink([checkout], link(8443))).toBe(checkout);
+    expect(findProjectForLink([checkout], link(8444))).toBeUndefined();
+  });
 });
 
 describe("repositoryForProjectLink", () => {
@@ -268,14 +285,50 @@ describe("relatedIssueTarget", () => {
     ).toEqual({ projectId: "web", repository: "ENG", number: 3 });
   });
 
-  it("does not open another Linear team's issue through this team's project", () => {
+  it("keeps a saved host for a same-repository relative", () => {
+    expect(
+      relatedIssueTarget(
+        projects,
+        { ...current, host: "github.acme.test" },
+        { number: 2, url: "https://github.acme.test/acme/web/issues/2" },
+      ),
+    ).toEqual({ projectId: "web", host: "github.acme.test", repository: "acme/web", number: 2 });
+  });
+
+  it("opens another Linear team's issue by its own URL rather than as this team's", () => {
     expect(
       relatedIssueTarget(
         projects,
         { projectId: "web", repository: "ENG" },
         { repository: "OPS", number: 42, url: "https://linear.app/acme/issue/OPS-42" },
       ),
-    ).toBeNull();
+    ).toEqual({
+      projectId: "web",
+      provider: "linear",
+      host: "linear.app",
+      repository: "OPS",
+      number: 42,
+      url: "https://linear.app/acme/issue/OPS-42",
+    });
+  });
+
+  it("keeps an unowned issue's relatives on their own URL", () => {
+    expect(
+      relatedIssueTarget(
+        projects,
+        {
+          projectId: "web",
+          repository: "other/repo",
+          url: "https://github.com/other/repo/issues/1",
+        },
+        { number: 2, url: "https://github.com/other/repo/issues/2" },
+      ),
+    ).toMatchObject({
+      projectId: "web",
+      repository: "other/repo",
+      number: 2,
+      url: "https://github.com/other/repo/issues/2",
+    });
   });
 
   it("opens another repository through its own project, or not at all", () => {
@@ -285,13 +338,48 @@ describe("relatedIssueTarget", () => {
         number: 9,
         url: "https://github.com/acme/api/issues/9",
       }),
-    ).toEqual({ projectId: "api", repository: "Acme/API", number: 9 });
+    ).toEqual({
+      projectId: "api",
+      provider: "github",
+      host: "github.com",
+      repository: "Acme/API",
+      number: 9,
+      url: "https://github.com/acme/api/issues/9",
+    });
     expect(
       relatedIssueTarget(projects, current, {
         repository: "acme/docs",
         number: 9,
         url: "https://github.com/acme/docs/issues/9",
       }),
+    ).toMatchObject({ projectId: "web", repository: "acme/docs", host: "github.com" });
+    expect(
+      relatedIssueTarget(projects, current, {
+        repository: "acme/docs",
+        number: 9,
+        url: "https://git.example.test:8443/acme/docs/issues/9",
+      }),
     ).toBeNull();
+  });
+});
+
+describe("issueRefOf", () => {
+  it("keeps a persisted host without a URL, and a URL with its host", () => {
+    expect(
+      issueRefOf({ projectId: "p", host: "github.acme.test", repository: "a/b", number: 1 }),
+    ).toEqual({ projectId: "p", host: "github.acme.test", repository: "a/b", number: 1 });
+    expect(
+      issueRefOf({
+        projectId: "p",
+        provider: "forgejo",
+        host: "git.example.test:8443",
+        repository: "a/b",
+        number: 1,
+        url: "https://git.example.test:8443/a/b/issues/1",
+      }),
+    ).toMatchObject({
+      host: "git.example.test:8443",
+      url: "https://git.example.test:8443/a/b/issues/1",
+    });
   });
 });

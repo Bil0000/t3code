@@ -162,8 +162,10 @@ it("opens each issue in the project its URL names, and Linear in the thread's pr
       {
         projectId: "project-2",
         provider: "github",
-        repository: "acme/api",
+        host: "github.com",
+        repository: "Acme/Api",
         number: 3,
+        url: otherProject.url,
       },
     ],
     [
@@ -171,8 +173,10 @@ it("opens each issue in the project its URL names, and Linear in the thread's pr
       {
         projectId: "project-1",
         provider: "linear",
+        host: "linear.app",
         repository: "ENG",
         number: 12,
+        url: linear.url,
       },
     ],
   ]);
@@ -208,6 +212,25 @@ it("opens a link with a missing source project in the browser", async () => {
   await click(linear.url);
   expect(openIssue).not.toHaveBeenCalled();
   expect(openInBrowser).toHaveBeenCalledWith(linear.url);
+});
+
+it("opens an unowned public issue through the thread's project with its full URL", async () => {
+  const unowned = {
+    ...issue,
+    repository: "other/repo",
+    url: "https://github.com/other/repo/issues/12",
+  };
+  answerWith([unowned]);
+  await render([unowned]);
+  await clickTree(unowned.url);
+  expect(openIssue).toHaveBeenCalledWith(ref, {
+    projectId: "project-1",
+    provider: "github",
+    host: "github.com",
+    repository: "other/repo",
+    number: 12,
+    url: unowned.url,
+  });
 });
 
 it("opens an issue from a host no project in this environment uses in the browser", async () => {
@@ -360,8 +383,10 @@ it.each([
     expect(openIssue).toHaveBeenCalledWith(ref, {
       projectId: "project-1",
       provider: "github",
+      host: "github.com",
       repository: "acme/app",
       number: 12,
+      url: issue.url,
     });
   },
 );

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import {
   normalizeWorkItemLinkKey,
   type EnvironmentId,
@@ -19,7 +20,11 @@ import {
   linkIssuePreviewMatchesReference,
   resolveLinkIssueInput,
 } from "~/components/pullRequest/LinkPullRequestDialog";
-import { findProjectForIssue, repositoryForProjectLink } from "~/lib/openIssueLink";
+import {
+  findProjectForIssue,
+  parseKnownIssueUrl,
+  repositoryForProjectLink,
+} from "~/lib/openIssueLink";
 import { readThreadShell, useProjects, useServerConfigs } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { threadEnvironment } from "~/state/threads";
@@ -50,20 +55,12 @@ export function resolveIssueUrl(input: {
         currentProjectId: input.threadProjectId,
         bindings: input.linearBindings,
       }),
+    parseUrl: (url) => parseKnownIssueUrl(input.projects, url),
+    fallbackProjectId: input.threadProjectId,
   });
 }
 
 const hostOf = (url: string) => (URL.canParse(url) ? new URL(url).host : null);
-
-const savedIssueRef = (url: string) => {
-  const parsed = resolveLinkIssueInput({
-    reference: url,
-    project: null,
-    findProject: (link) => ({ id: "" as ProjectId, repository: link.repository }),
-    linearProjectId: () => "" as ProjectId,
-  });
-  return parsed !== null && "issue" in parsed ? parsed.issue : null;
-};
 
 const sameRepository = (link: ThreadIssueLink, repository: string) => {
   const saved = link.repository.toLowerCase();
@@ -76,22 +73,25 @@ const sameRepository = (link: ThreadIssueLink, repository: string) => {
 export function findThreadIssueLink<T extends ThreadIssueLink>(
   links: ReadonlyArray<T>,
   url: string,
-  ref: IssueRef | null,
+  ref: Pick<IssueRef, "provider" | "repository" | "number"> | null,
 ): T | null {
   const host = hostOf(url);
   return (
-    links.find(
-      (link) =>
+    links.find((link) => {
+      const parsed =
+        ref ?? (hostOf(link.url) === host ? parseIssueUrl(url, { provider: link.provider }) : null);
+      return (
         normalizeWorkItemLinkKey({ provider: link.provider, url }).url ===
           normalizeWorkItemLinkKey(link).url ||
-        (ref !== null &&
+        (parsed !== null &&
           host !== null &&
-          link.number === ref.number &&
-          (ref.provider === undefined || link.provider === ref.provider) &&
+          link.number === parsed.number &&
+          (parsed.provider === undefined || link.provider === parsed.provider) &&
           hostOf(link.url) === host &&
-          sameRepository(link, ref.repository) &&
-          linkIssuePreviewMatchesReference(url, link)),
-    ) ?? null
+          sameRepository(link, parsed.repository) &&
+          linkIssuePreviewMatchesReference(url, link))
+      );
+    }) ?? null
   );
 }
 
@@ -134,7 +134,11 @@ export function useIssueLinking(environmentId: EnvironmentId | null | undefined)
         supported && threadRef.environmentId === environmentId ? readThreadShell(threadRef) : null;
       return thread === null
         ? null
-        : findThreadIssueLink(thread.issues ?? [], url, savedIssueRef(url));
+        : findThreadIssueLink(
+            thread.issues ?? [],
+            url,
+            parseKnownIssueUrl(environmentProjects, url),
+          );
     };
     const changeLink = async (threadRef: ScopedThreadRef, url: string, linked: boolean) => {
       if (!linked) {
@@ -178,7 +182,7 @@ export function useIssueLinking(environmentId: EnvironmentId | null | undefined)
           input: {
             threadId: threadRef.threadId,
             issueLink: {
-              projectId: detail.projectId,
+              ...(detail.projectBound === false ? {} : { projectId: detail.projectId }),
               provider: detail.provider,
               repository: detail.repository,
               number: detail.number,

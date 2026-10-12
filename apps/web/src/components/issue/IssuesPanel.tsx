@@ -19,8 +19,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { IssuesSurface } from "~/rightPanelStore";
-import { openLinkInBrowser, relatedIssueTarget } from "~/lib/openIssueLink";
+import { issueSurfaceId, type IssuesSurface } from "~/rightPanelStore";
+import { issueRefOf, openLinkInBrowser, relatedIssueTarget } from "~/lib/openIssueLink";
 import { useProjects } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { useDebouncedValue } from "~/state/queries";
@@ -163,14 +163,9 @@ function ProjectIssues({
             {/* Hand-offs land in the thread this panel sits beside, so reading an issue and acting
               on it stay one conversation. */}
             <IssueDetailPanel
-              key={`${selected.provider ?? ""}:${selected.repository}#${selected.number}`}
+              key={issueSurfaceId(selected)}
               environmentId={environmentId}
-              reference={{
-                projectId: selected.projectId as ProjectId,
-                ...(selected.provider === undefined ? {} : { provider: selected.provider }),
-                repository: selected.repository,
-                number: selected.number,
-              }}
+              reference={issueRefOf(selected)}
               handoffTarget={handoffTarget}
               onActed={() => setActedAt(Date.now())}
               onStateChange={onStateChange}
@@ -182,7 +177,11 @@ function ProjectIssues({
                   relative,
                 );
                 if (target === null) openLinkInBrowser(relative.url);
-                else onSelect({ ...selected, ...target });
+                else
+                  onSelect({
+                    ...(selected.provider === undefined ? {} : { provider: selected.provider }),
+                    ...target,
+                  });
               }}
               // The panel is the narrowest place this reads, so the metadata folds into the top row
               // once the content scrolls — the same bargain the issues page makes.

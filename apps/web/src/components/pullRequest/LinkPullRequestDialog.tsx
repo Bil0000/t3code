@@ -16,7 +16,12 @@ import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { findProjectForIssue, repositoryForProjectLink } from "~/lib/openIssueLink";
+import { parseIssueUrl } from "@t3tools/shared/issueUrl";
+import {
+  findProjectForIssue,
+  parseKnownIssueUrl,
+  repositoryForProjectLink,
+} from "~/lib/openIssueLink";
 import {
   findProjectOnChangeRequestHost,
   parseChangeRequestUrl,
@@ -66,7 +71,7 @@ interface LinkPullRequestDialogProps {
   open: boolean;
   threadRef: ScopedThreadRef;
   /** The thread's own project: bare numbers resolve against its repository. */
-  projectId: string | null;
+  projectId: ProjectId | null;
   issuesSupported: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -171,26 +176,9 @@ export function linkPullRequestPreviewTarget(input: {
 
 type LinkKind = "issue" | "pull-request";
 
-const ISSUE_URL_PATHS = [
-  /^\/((?:[\w.-]+\/)+[\w.-]+)\/-\/(?:issues|work_items)\/([1-9]\d{0,8})\/?$/u,
-  /^\/([\w.-]+\/[\w.-]+)\/issues\/([1-9]\d{0,8})\/?$/u,
-  /^\/([^/]+(?:\/[^/]+)?)\/_workitems\/edit\/([1-9]\d{0,8})\/?$/u,
-];
 const REPOSITORY_ISSUE = /^([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d{0,8})$/u;
-const LINEAR_ISSUE_PATH = /^\/[^/]+\/issue\/([A-Za-z0-9]+)-([1-9]\d{0,8})(?:\/|$)/u;
-
-const linearIssueMatch = (url: URL) =>
-  url.hostname.toLowerCase() === "linear.app" ? LINEAR_ISSUE_PATH.exec(url.pathname) : null;
-
-const issueUrlMatch = (url: URL) => {
-  if (/^\/groups\/.+\/-\/(?:issues|work_items)\//u.test(url.pathname)) return null;
-  if (url.hostname === "bitbucket.org") {
-    return /^\/([\w.-]+\/[\w.-]+)\/issues\/([1-9]\d{0,8})(?:\/[^/]+)?\/?$/u.exec(url.pathname);
-  }
-  return (
-    ISSUE_URL_PATHS.map((path) => path.exec(url.pathname)).find((match) => match !== null) ?? null
-  );
-};
+const GITLAB_GROUP_ISSUE = /^\/groups\/.+\/-\/(?:issues|work_items)\//u;
+const ISSUE_URL_PROVIDERS = ["github", "gitlab", "forgejo", "bitbucket", "azure-devops", "linear"];
 
 const selectLinearBindings = (settings: UnifiedSettings) =>
   settings.issueTracking.connections.linear?.projectBindings;
@@ -199,10 +187,10 @@ export function linkReferenceKind(reference: string, chosen: LinkKind): LinkKind
   const trimmed = reference.trim();
   if (/^#?\d+$/u.test(trimmed)) return chosen;
   if (REPOSITORY_ISSUE.test(trimmed)) return "issue";
-  if (!URL.canParse(trimmed)) return "pull-request";
-  const url = new URL(trimmed);
-  return /^https?:$/u.test(url.protocol) &&
-    (issueUrlMatch(url) !== null || linearIssueMatch(url) !== null)
+  if (!URL.canParse(trimmed) || GITLAB_GROUP_ISSUE.test(new URL(trimmed).pathname)) {
+    return "pull-request";
+  }
+  return ISSUE_URL_PROVIDERS.some((provider) => parseIssueUrl(trimmed, { provider }) !== null)
     ? "issue"
     : "pull-request";
 }
@@ -254,6 +242,8 @@ export function resolveLinkIssueInput(input: {
     readonly repository: string;
   }) => IssueProject | undefined;
   readonly linearProjectId: (team: string) => ProjectId | undefined;
+  readonly parseUrl?: (url: string) => ReturnType<typeof parseIssueUrl>;
+  readonly fallbackProjectId?: ProjectId | null;
 }): { issue: IssueRef } | { error: string } | null {
   const trimmed = input.reference.trim();
   const bare = /^#?(\d+)$/u.exec(trimmed);
@@ -267,27 +257,58 @@ export function resolveLinkIssueInput(input: {
       issue: { projectId: input.project.id, repository: input.project.repository, number },
     };
   }
-  const url = URL.canParse(trimmed) ? new URL(trimmed) : null;
-  if (url !== null && !/^https?:$/u.test(url.protocol)) return null;
-  const linear = url === null ? null : linearIssueMatch(url);
-  if (linear?.[1] && linear[2]) {
-    const projectId = input.linearProjectId(linear[1]);
-    if (projectId === undefined) {
-      return { error: `No project in this environment can read Linear team ${linear[1]}.` };
+  if (URL.canParse(trimmed)) {
+    if (GITLAB_GROUP_ISSUE.test(new URL(trimmed).pathname)) return null;
+    const parsed = (input.parseUrl ?? parseIssueUrl)(trimmed);
+    if (parsed === null) return null;
+    if (parsed.provider === "linear") {
+      const projectId = input.linearProjectId(parsed.repository);
+      if (projectId === undefined) {
+        return {
+          error: `No project in this environment can read Linear team ${parsed.repository}.`,
+        };
+      }
+      return {
+        issue: {
+          projectId,
+          provider: "linear",
+          host: "linear.app",
+          repository: parsed.repository,
+          number: parsed.number,
+          url: parsed.url,
+        },
+      };
+    }
+    const host = new URL(parsed.url).host;
+    const project = input.findProject({ host, repository: parsed.repository });
+    if (project !== undefined) {
+      return {
+        issue: {
+          projectId: project.id,
+          host,
+          repository: project.repository,
+          number: parsed.number,
+          url: parsed.url,
+        },
+      };
+    }
+    if (input.fallbackProjectId == null) {
+      return { error: `No project in this environment can read ${host}/${parsed.repository}.` };
     }
     return {
       issue: {
-        projectId,
-        provider: "linear",
-        host: "linear.app",
-        repository: linear[1],
-        number: Number(linear[2]),
+        projectId: input.fallbackProjectId,
+        provider: parsed.provider,
+        host,
+        repository: parsed.repository,
+        number: parsed.number,
+        url: parsed.url,
       },
     };
   }
-  const match = url === null ? REPOSITORY_ISSUE.exec(trimmed) : issueUrlMatch(url);
+  const match = REPOSITORY_ISSUE.exec(trimmed);
   if (!match?.[1] || !match[2]) return null;
-  const host = url?.hostname ?? input.project?.host;
+  const host = input.project?.host;
   if (host === undefined) {
     return { error: "Paste a full URL to link an issue from another repository." };
   }
@@ -399,6 +420,8 @@ function LinkPullRequestDialog({
                 currentProjectId: projectId,
                 bindings: linearBindings,
               }),
+            parseUrl: (url) => parseKnownIssueUrl(environmentProjects, url),
+            fallbackProjectId: projectId,
           })
         : null,
     [environmentProjects, kind, linearBindings, ownProject, projectId, reference],
@@ -484,7 +507,7 @@ function LinkPullRequestDialog({
           input: {
             threadId: threadRef.threadId,
             issueLink: {
-              projectId: issue.projectId,
+              ...(issue.projectBound === false ? {} : { projectId: issue.projectId }),
               provider: issue.provider,
               repository: issue.repository,
               number: issue.number,

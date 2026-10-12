@@ -1,10 +1,17 @@
-import { sourceControlHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
+import {
+  sourceControlHostOf,
+  type IssueRef,
+  type ProjectId,
+  type SourceControlProviderKind,
+} from "@t3tools/contracts";
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { canonicalRepositoryKey } from "@t3tools/shared/sourceControl";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import type { IssueTarget } from "../rightPanelStore";
 
 /**
  * The project an issue link belongs to, or nothing. Matched the way the server matches: the
@@ -79,38 +86,104 @@ export function findProjectForLink(
 ): EnvironmentProject | undefined {
   let host: string;
   try {
-    host = new URL(link.url).hostname.toLowerCase();
+    host = new URL(link.url).host.toLowerCase();
   } catch {
     return undefined;
   }
   return findProjectForIssue(projects, { host, repository: link.repository });
 }
 
+export function parseKnownIssueUrl(projects: ReadonlyArray<EnvironmentProject>, raw: string) {
+  const parsed = parseIssueUrl(raw);
+  if (parsed !== null || !URL.canParse(raw)) return parsed;
+  const host = new URL(raw).host.toLowerCase();
+  const provider = projects
+    .map((project) => project.repositoryIdentity)
+    .find((identity) => {
+      const kind = identity?.provider as SourceControlProviderKind | undefined;
+      return (
+        kind !== undefined && kind !== "unknown" && sourceControlHostOf(identity, kind) === host
+      );
+    })?.provider;
+  return provider === undefined ? null : parseIssueUrl(raw, { provider });
+}
+
+export function issueLinkTarget(
+  projects: ReadonlyArray<EnvironmentProject>,
+  link: {
+    readonly provider?: string | undefined;
+    readonly repository?: string | undefined;
+    readonly number: number;
+    readonly url: string;
+  },
+  fallbackProjectId: string | null,
+): IssueTarget | null {
+  const parsed = parseKnownIssueUrl(projects, link.url);
+  const url =
+    parsed === null ||
+    parsed.number !== link.number ||
+    (link.provider !== undefined && parsed.provider !== link.provider)
+      ? null
+      : parsed;
+  const repository = link.repository ?? url?.repository;
+  const project =
+    repository === undefined ? undefined : findProjectForLink(projects, { ...link, repository });
+  const provider = url?.provider ?? link.provider;
+  const projectId = project?.id ?? (url === null ? null : fallbackProjectId);
+  if (projectId === null || repository === undefined) return null;
+  return {
+    projectId,
+    ...(provider === undefined ? {} : { provider }),
+    ...(url === null ? {} : { host: new URL(url.url).host, url: url.url }),
+    repository:
+      project === undefined
+        ? (url?.repository ?? repository)
+        : repositoryForProjectLink(project, repository),
+    number: link.number,
+  };
+}
+
+export function issueRefOf(target: IssueTarget): IssueRef {
+  return {
+    projectId: target.projectId as ProjectId,
+    ...(target.provider === undefined ? {} : { provider: target.provider }),
+    ...(target.host === undefined ? {} : { host: target.host }),
+    ...(target.url === undefined ? {} : { url: target.url }),
+    repository: target.repository,
+    number: target.number,
+  };
+}
+
 export function relatedIssueTarget(
   projects: ReadonlyArray<EnvironmentProject>,
-  current: { readonly projectId: string; readonly repository: string },
+  current: {
+    readonly projectId: string;
+    readonly host?: string;
+    readonly repository: string;
+    readonly url?: string;
+  },
   relative: {
     readonly repository?: string | undefined;
     readonly number: number;
     readonly url: string;
   },
-): { projectId: string; repository: string; number: number } | null {
-  const repository = relative.repository;
-  if (repository === undefined || repository.toLowerCase() === current.repository.toLowerCase()) {
+): IssueTarget | null {
+  const same =
+    relative.repository === undefined ||
+    relative.repository.toLowerCase() === current.repository.toLowerCase();
+  if (same && current.url === undefined) {
     return {
       projectId: current.projectId,
+      ...(current.host === undefined ? {} : { host: current.host }),
       repository: current.repository,
       number: relative.number,
     };
   }
-  const project = findProjectForLink(projects, { ...relative, repository });
-  return project === undefined
-    ? null
-    : {
-        projectId: project.id,
-        repository: repositoryForProjectLink(project, repository),
-        number: relative.number,
-      };
+  return issueLinkTarget(
+    projects,
+    same ? { number: relative.number, url: relative.url } : relative,
+    current.projectId,
+  );
 }
 
 /**

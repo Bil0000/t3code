@@ -1020,6 +1020,32 @@ describe("rightPanelStore", () => {
     expect(state.activeSurfaceId).toBe(issueSurfaceId(first));
   });
 
+  it("keeps same-numbered URL issues on two hosts apart and restores their URL", () => {
+    const owned = { projectId: "project-a", repository: "acme/web", number: 7 };
+    const github = {
+      ...owned,
+      provider: "github",
+      host: "github.com",
+      url: "https://github.com/acme/web/issues/7",
+    };
+    const forgejo = {
+      ...owned,
+      provider: "github",
+      host: "git.example.test:8443",
+      url: "https://git.example.test:8443/acme/web/issues/7",
+    };
+    for (const target of [owned, github, forgejo]) {
+      useRightPanelStore.getState().openIssue(refA, target);
+    }
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(new Set(state.surfaces.map((surface) => surface.id)).size).toBe(3);
+    expect(state.surfaces[0]!.id).toBe(issueSurfaceId(owned));
+    const migrated = migratePersistedRightPanelState({
+      byThreadKey: { "env-1:thread-A": state },
+    });
+    expect(migrated.byThreadKey["env-1:thread-A"]!.surfaces[2]).toMatchObject(forgejo);
+  });
+
   it("keeps one issue read from two servers as two tabs", () => {
     const local = {
       environmentId: "local",

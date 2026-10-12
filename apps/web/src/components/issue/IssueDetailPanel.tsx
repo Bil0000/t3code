@@ -198,7 +198,7 @@ export function IssueDetailPanel({
    */
   chromeVariant?: "full" | "collapse";
 }) {
-  const issueKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
+  const issueKey = `${reference.projectId}:${reference.url ?? ""}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
   const [timelineOrder, setTimelineOrder] = useState<"oldest" | "newest">("newest");
   const [editing, setEditing] = useState<"title" | "description" | null>(null);
@@ -823,30 +823,32 @@ export function IssueDetailPanel({
               {/* Handing the issue to an agent is the reason to open one at all, so it is a
                   button of its own wherever the panel is — beside a thread as much as on the
                   page. */}
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={handoffDisabled}
-                      onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
-                    />
-                  }
-                >
-                  {handoff === "solve" ? (
-                    "Opening..."
-                  ) : activityPending ? (
-                    "Loading..."
-                  ) : (
-                    <>
-                      <HammerIcon className="size-3" />
-                      <span>Solve</span>
-                    </>
-                  )}
-                </TooltipTrigger>
-                <TooltipPopup side="top">{solveDescription}</TooltipPopup>
-              </Tooltip>
+              {detail.projectBound === false ? null : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={handoffDisabled}
+                        onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
+                      />
+                    }
+                  >
+                    {handoff === "solve" ? (
+                      "Opening..."
+                    ) : activityPending ? (
+                      "Loading..."
+                    ) : (
+                      <>
+                        <HammerIcon className="size-3" />
+                        <span>Solve</span>
+                      </>
+                    )}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{solveDescription}</TooltipPopup>
+                </Tooltip>
+              )}
             </>
           ) : null}
         </div>

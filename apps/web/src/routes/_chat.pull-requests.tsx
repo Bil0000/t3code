@@ -160,10 +160,11 @@ import {
 } from "../rightPanelStore";
 import {
   findProjectForLink,
+  issueLinkTarget,
+  issueRefOf,
   linkedPullRequestTarget,
   openLinkInBrowser,
   relatedIssueTarget,
-  repositoryForProjectLink,
 } from "../lib/openIssueLink";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
@@ -2330,14 +2331,7 @@ function PullRequestsRouteView() {
               <IssueDetailPanel
                 key={renderedPullRequestSurface.id}
                 environmentId={panelEnvironmentId}
-                reference={{
-                  projectId: renderedPullRequestSurface.projectId as ProjectId,
-                  ...(renderedPullRequestSurface.provider === undefined
-                    ? {}
-                    : { provider: renderedPullRequestSurface.provider }),
-                  repository: renderedPullRequestSurface.repository,
-                  number: renderedPullRequestSurface.number,
-                }}
+                reference={issueRefOf(renderedPullRequestSurface)}
                 refreshToken={detailRefreshToken}
                 // There is no thread behind this panel, so handing an issue to an agent starts
                 // one rather than continuing whatever the reader last had open.
@@ -2360,10 +2354,10 @@ function PullRequestsRouteView() {
                   }
                   useRightPanelStore.getState().openIssue(rightPanelRef, {
                     environmentId: panelEnvironmentId,
-                    ...target,
                     ...(renderedPullRequestSurface.provider === undefined
                       ? {}
                       : { provider: renderedPullRequestSurface.provider }),
+                    ...target,
                   });
                 }}
                 onOpenLinkedPullRequest={(link) => {
@@ -2465,20 +2459,18 @@ function PullRequestsRouteView() {
                   if (phase === "done") refreshListAndStats(undefined, panelEnvironmentId);
                 }}
                 onOpenLinkedIssue={(link) => {
-                  const project = findProjectForLink(
+                  const target = issueLinkTarget(
                     projects.filter((candidate) => candidate.environmentId === panelEnvironmentId),
                     link,
+                    renderedPullRequestSurface.projectId,
                   );
-                  if (rightPanelRef === null || project === undefined) {
+                  if (rightPanelRef === null || target === null) {
                     openLinkInBrowser(link.url);
                     return;
                   }
                   useRightPanelStore.getState().openIssue(rightPanelRef, {
                     environmentId: panelEnvironmentId,
-                    projectId: project.id,
-                    provider: link.provider,
-                    repository: repositoryForProjectLink(project, link.repository),
-                    number: link.number,
+                    ...target,
                   });
                   selectSurfaceInUrl(null);
                 }}

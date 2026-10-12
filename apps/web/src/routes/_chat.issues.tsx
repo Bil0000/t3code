@@ -109,10 +109,11 @@ import {
 import { useDebouncedValue } from "../state/queries";
 import {
   findProjectForLink,
+  issueLinkTarget,
+  issueRefOf,
   linkedPullRequestTarget,
   openLinkInBrowser,
   relatedIssueTarget,
-  repositoryForProjectLink,
 } from "../lib/openIssueLink";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
@@ -138,6 +139,7 @@ export interface IssuesSearch {
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
   readonly selectedProvider?: string;
+  readonly selectedUrl?: string;
   /**
    * One label name every row must wear. Narrowed here rather than on the hosts: a label is a
    * word the rows already carry, and asking four hosts about it would cost a round trip to
@@ -154,12 +156,14 @@ export function issueSelectionSearchPatch(target: {
   readonly repository: string;
   readonly number: number;
   readonly provider?: string;
+  readonly url?: string;
 }) {
   return {
     repository: target.repository,
     number: target.number,
     selectedProjectId: target.projectId,
     selectedProvider: target.provider,
+    selectedUrl: target.url,
   };
 }
 
@@ -349,6 +353,7 @@ export function patchIssuesSearch(
     ...(next.host ? { host: next.host } : {}),
     ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
     ...(next.selectedProvider ? { selectedProvider: next.selectedProvider } : {}),
+    ...(next.selectedUrl ? { selectedUrl: next.selectedUrl } : {}),
     ...(next.label ? { label: next.label } : {}),
     ...(next.q ? { q: next.q } : {}),
     ...(next.sort ? { sort: next.sort } : {}),
@@ -382,6 +387,9 @@ export const Route = createFileRoute("/_chat/issues")({
         : {}),
       ...(typeof raw.selectedProvider === "string" && raw.selectedProvider
         ? { selectedProvider: raw.selectedProvider.slice(0, 100) }
+        : {}),
+      ...(typeof raw.selectedUrl === "string" && URL.canParse(raw.selectedUrl)
+        ? { selectedUrl: raw.selectedUrl.slice(0, 2048) }
         : {}),
       ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
       ...(sort === undefined ? {} : { sort }),
@@ -538,6 +546,7 @@ function IssuesRouteView() {
     number: undefined,
     selectedProjectId: undefined,
     selectedProvider: undefined,
+    selectedUrl: undefined,
   };
   const updateListScope = (patch: {
     [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
@@ -1150,8 +1159,18 @@ function IssuesRouteView() {
       number: search.number,
       projectId: selectedProjectId,
       ...(provider === undefined ? {} : { provider }),
+      ...(search.selectedUrl === undefined
+        ? {}
+        : { host: new URL(search.selectedUrl).host, url: search.selectedUrl }),
     };
-  }, [entries, search.number, search.repository, search.selectedProvider, selectedProjectId]);
+  }, [
+    entries,
+    search.number,
+    search.repository,
+    search.selectedProvider,
+    search.selectedUrl,
+    selectedProjectId,
+  ]);
   useEffect(() => {
     if (!issuesSupported || rightPanelRef === null || linkedSelection === null) return;
     useRightPanelStore.getState().openIssue(rightPanelRef, linkedSelection);
@@ -1230,6 +1249,7 @@ function IssuesRouteView() {
         number: entry.number,
         selectedProjectId: entry.projectId,
         selectedProvider: entry.provider,
+        selectedUrl: undefined,
       });
     },
     [rightPanelRef, updateSearch],
@@ -1703,24 +1723,18 @@ function IssuesRouteView() {
                   assignedQuery.refresh();
                 }}
                 onOpenLinkedIssue={(link) => {
-                  const project = findProjectForLink(projects, link);
-                  if (rightPanelRef === null || project === undefined) {
+                  const target = issueLinkTarget(projects, link, renderedSurface.projectId);
+                  if (rightPanelRef === null || target === null) {
                     openLinkInBrowser(link.url);
                     return;
                   }
-                  const target = {
-                    projectId: project.id,
-                    provider: link.provider,
-                    repository: repositoryForProjectLink(project, link.repository),
-                    number: link.number,
-                  };
                   useRightPanelStore.getState().openIssue(rightPanelRef, target);
-                  updateSearch({
-                    repository: target.repository,
-                    number: target.number,
-                    selectedProjectId: target.projectId as ProjectId,
-                    selectedProvider: target.provider,
-                  });
+                  updateSearch(
+                    issueSelectionSearchPatch({
+                      ...target,
+                      projectId: target.projectId as ProjectId,
+                    }),
+                  );
                 }}
               />
             ) : (
@@ -1728,14 +1742,7 @@ function IssuesRouteView() {
                 key={renderedSurface.id}
                 environmentId={issueEnvironmentId}
                 panelRef={rightPanelRef}
-                reference={{
-                  projectId: renderedSurface.projectId as ProjectId,
-                  ...(renderedSurface.provider === undefined
-                    ? {}
-                    : { provider: renderedSurface.provider }),
-                  repository: renderedSurface.repository,
-                  number: renderedSurface.number,
-                }}
+                reference={issueRefOf(renderedSurface)}
                 refreshToken={detailRefreshToken}
                 // There is no thread behind this panel, so handing an issue to an agent starts
                 // one rather than continuing whatever the reader last had open.
@@ -1750,11 +1757,11 @@ function IssuesRouteView() {
                     return;
                   }
                   const target = {
-                    ...related,
-                    projectId: related.projectId as ProjectId,
                     ...(renderedSurface.provider === undefined
                       ? {}
                       : { provider: renderedSurface.provider }),
+                    ...related,
+                    projectId: related.projectId as ProjectId,
                   };
                   useRightPanelStore.getState().openIssue(rightPanelRef, target);
                   updateSearch(issueSelectionSearchPatch(target));

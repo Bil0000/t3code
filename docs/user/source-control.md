@@ -261,8 +261,8 @@ and their marks follow the same rules as on web and desktop.
   Browsing issues across several environments is not yet supported.
 - Filter by state, project, host, or label. Assignment, author, and mention filters depend on the host.
 - Free-text search asks hosts that support search; other results are filtered locally.
-- Supports GitHub Issues, GitLab Issues, Bitbucket Issues, Azure DevOps work items, and Linear.
-  Forgejo issues are not yet supported; open them on the host website.
+- Supports GitHub Issues, GitLab Issues, Forgejo and Gitea issues, Azure DevOps work items, and Linear.
+  Bitbucket Cloud has removed its issue tracker; repositories and pull requests remain supported.
 - Available actions depend on the host and your permissions.
 
 **Read and act on one without leaving T3 Code**
@@ -306,6 +306,10 @@ their linked pull requests. These controls are available on web and desktop.
 In the **Link** dialog, paste a full issue URL or enter `owner/repo#N` for a repository on the
 current project’s host. GitLab work item URLs are accepted. Check the issue title and state in
 the preview before linking. A pull request cannot be added as an issue.
+
+A full URL can also link an issue whose repository has no project in T3 Code. You can read it,
+open it on the host, and attach it to a thread. Editing and **Solve** require a connected project.
+Private issues require an account with access. Custom hosts must already be configured locally.
 
 Linked issue titles and status update after you change them in T3 Code. Changes made on the host
 appear after the next background refresh. When the host limits requests, refresh waits until

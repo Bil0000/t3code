@@ -97,8 +97,10 @@ export type RightPanelSurface =
       environmentId?: string;
       projectId: string;
       provider?: string;
+      host?: string;
       repository: string;
       number: number;
+      url?: string;
     }
   | {
       /**
@@ -107,7 +109,7 @@ export type RightPanelSurface =
        */
       id: "issues";
       kind: "issues";
-      selected: { projectId: string; provider?: string; repository: string; number: number } | null;
+      selected: IssueTarget | null;
     }
   /** The thread's linked pull requests, one singleton tab beside any number of `pull-request` tabs. */
   | { id: "pull-requests"; kind: "pull-requests" };
@@ -193,22 +195,10 @@ interface RightPanelStoreState {
       url?: string;
     },
   ) => void;
-  openIssue: (
-    ref: ScopedThreadRef,
-    target: {
-      environmentId?: string;
-      projectId: string;
-      provider?: string;
-      repository: string;
-      number: number;
-    },
-  ) => void;
+  openIssue: (ref: ScopedThreadRef, target: IssueTarget & { environmentId?: string }) => void;
   openIssues: (ref: ScopedThreadRef) => void;
   /** What the issue browser is showing: an issue, or null for the list it was picked from. */
-  selectIssueInPanel: (
-    ref: ScopedThreadRef,
-    target: { projectId: string; provider?: string; repository: string; number: number } | null,
-  ) => void;
+  selectIssueInPanel: (ref: ScopedThreadRef, target: IssueTarget | null) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
@@ -349,13 +339,18 @@ export function pullRequestSurface(target: {
 
 export type IssueSurface = Extract<RightPanelSurface, { kind: "issue" }>;
 
-export function issueSurfaceId(target: {
-  environmentId?: string;
+export interface IssueTarget {
   projectId: string;
   provider?: string;
+  host?: string;
   repository: string;
   number: number;
-}): IssueSurface["id"] {
+  url?: string;
+}
+
+export function issueSurfaceId(
+  target: IssueTarget & { environmentId?: string },
+): IssueSurface["id"] {
   return `issue:${encodeURIComponent(
     JSON.stringify([
       target.environmentId ?? null,
@@ -363,34 +358,15 @@ export function issueSurfaceId(target: {
       target.projectId,
       target.repository,
       target.number,
+      ...(target.host === undefined && target.url === undefined
+        ? []
+        : [target.host?.toLowerCase() ?? null, target.url ?? null]),
     ]),
   )}`;
 }
 
-function issueSurface(target: {
-  environmentId?: string;
-  projectId: string;
-  provider?: string;
-  repository: string;
-  number: number;
-}): IssueSurface {
-  return {
-    id: issueSurfaceId(target),
-    kind: "issue",
-    ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
-    ...(target.provider === undefined ? {} : { provider: target.provider }),
-    projectId: target.projectId,
-    repository: target.repository,
-    number: target.number,
-  };
-}
-
-export type IssuesSurface = Extract<RightPanelSurface, { kind: "issues" }>;
-
-/** A persisted selection is only usable if it still names an issue, so a broken one reads as none. */
-function normalizeIssueSelection(value: unknown): IssuesSurface["selected"] {
-  if (!value || typeof value !== "object") return null;
-  const { projectId, provider, repository, number } = value as Record<string, unknown>;
+function issueTarget(value: Record<string, unknown>): IssueTarget | null {
+  const { projectId, provider, host, repository, number, url } = value;
   if (
     typeof projectId !== "string" ||
     typeof repository !== "string" ||
@@ -403,9 +379,32 @@ function normalizeIssueSelection(value: unknown): IssuesSurface["selected"] {
   return {
     projectId,
     ...(typeof provider === "string" ? { provider } : {}),
+    ...(typeof host === "string" ? { host: host.toLowerCase() } : {}),
     repository,
     number,
+    ...(typeof url === "string" ? { url } : {}),
   };
+}
+
+function issueSurface(target: IssueTarget & { environmentId?: string }): IssueSurface {
+  return {
+    id: issueSurfaceId(target),
+    kind: "issue",
+    ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
+    projectId: target.projectId,
+    ...(target.provider === undefined ? {} : { provider: target.provider }),
+    ...(target.host === undefined ? {} : { host: target.host.toLowerCase() }),
+    repository: target.repository,
+    number: target.number,
+    ...(target.url === undefined ? {} : { url: target.url }),
+  };
+}
+
+export type IssuesSurface = Extract<RightPanelSurface, { kind: "issues" }>;
+
+/** A persisted selection is only usable if it still names an issue, so a broken one reads as none. */
+function normalizeIssueSelection(value: unknown): IssuesSurface["selected"] {
+  return value && typeof value === "object" ? issueTarget(value as Record<string, unknown>) : null;
 }
 
 export function updateIssueTabStatus<Status extends { state: unknown; stateReason: unknown }>(
@@ -627,21 +626,14 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       ];
                     }
                     if (surface.kind === "issue") {
-                      if (
-                        typeof surface.projectId !== "string" ||
-                        typeof surface.repository !== "string" ||
-                        typeof surface.number !== "number" ||
-                        !Number.isSafeInteger(surface.number) ||
-                        surface.number < 1
-                      ) {
-                        return [];
-                      }
-                      const { environmentId, provider, ...rest } = surface;
+                      const target = issueTarget(surface);
+                      if (target === null) return [];
                       return [
                         issueSurface({
-                          ...rest,
-                          ...(typeof environmentId === "string" ? { environmentId } : {}),
-                          ...(typeof provider === "string" ? { provider } : {}),
+                          ...target,
+                          ...(typeof surface.environmentId === "string"
+                            ? { environmentId: surface.environmentId }
+                            : {}),
                         }),
                       ];
                     }

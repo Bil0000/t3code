@@ -407,10 +407,11 @@ import {
 import { type ReviewCommentContext } from "../reviewCommentContext";
 import {
   findProjectForLink,
+  issueLinkTarget,
+  issueRefOf,
   linkedPullRequestTarget,
   openLinkInBrowser,
   relatedIssueTarget,
-  repositoryForProjectLink,
 } from "../lib/openIssueLink";
 import { environmentCatalog } from "../connection/catalog";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -5772,32 +5773,32 @@ export default function ChatView(props: ChatViewProps) {
       link: { provider?: string; repository: string; number: number; url: string },
     ) => {
       const supported = kind === "issue" ? supportsIssues : supportsPullRequests;
-      const project =
+      const environmentProjects =
         activeThreadRef === null
-          ? undefined
-          : findProjectForLink(
-              allProjects.filter(
-                (candidate) => candidate.environmentId === activeThreadRef.environmentId,
-              ),
-              link,
+          ? []
+          : allProjects.filter(
+              (candidate) => candidate.environmentId === activeThreadRef.environmentId,
             );
-      if (!supported || !activeThreadRef || project === undefined) {
+      const project = findProjectForLink(environmentProjects, link);
+      const issueTarget =
+        kind === "issue"
+          ? issueLinkTarget(environmentProjects, link, activeThread?.projectId ?? null)
+          : null;
+      if (
+        !supported ||
+        !activeThreadRef ||
+        (kind === "issue" ? issueTarget === null : project === undefined)
+      ) {
         openLinkInBrowser(link.url);
         return;
       }
       const panel = useRightPanelStore.getState();
-      if (kind === "issue") {
-        panel.openIssue(activeThreadRef, {
-          projectId: project.id,
-          ...(link.provider !== undefined ? { provider: link.provider } : {}),
-          repository: repositoryForProjectLink(project, link.repository),
-          number: link.number,
-        });
-      } else {
+      if (issueTarget !== null) panel.openIssue(activeThreadRef, issueTarget);
+      else if (project !== undefined) {
         panel.openPullRequest(activeThreadRef, linkedPullRequestTarget(project, link));
       }
     },
-    [activeThreadRef, allProjects, supportsIssues, supportsPullRequests],
+    [activeThread?.projectId, activeThreadRef, allProjects, supportsIssues, supportsPullRequests],
   );
   const openLinkedIssue = useCallback(
     (link: { provider?: string; repository: string; number: number; url: string }) =>
@@ -11293,14 +11294,7 @@ export default function ChatView(props: ChatViewProps) {
       <IssueDetailPanel
         key={renderedRightPanelSurface.id}
         environmentId={activeThread.environmentId}
-        reference={{
-          projectId: renderedRightPanelSurface.projectId as ProjectId,
-          ...(renderedRightPanelSurface.provider === undefined
-            ? {}
-            : { provider: renderedRightPanelSurface.provider }),
-          repository: renderedRightPanelSurface.repository,
-          number: renderedRightPanelSurface.number,
-        }}
+        reference={issueRefOf(renderedRightPanelSurface)}
         onOpenRelatedIssue={(relative) => {
           const target = relatedIssueTarget(
             allProjects.filter(
@@ -11314,10 +11308,10 @@ export default function ChatView(props: ChatViewProps) {
             return;
           }
           useRightPanelStore.getState().openIssue(activeThreadRef, {
-            ...target,
             ...(renderedRightPanelSurface.provider === undefined
               ? {}
               : { provider: renderedRightPanelSurface.provider }),
+            ...target,
           });
         }}
         chromeVariant="collapse"

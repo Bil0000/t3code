@@ -13,7 +13,10 @@ const served = vi.hoisted(() => new Map<string, unknown>());
 const failed = vi.hoisted(() => new Set<string>());
 const open = vi.hoisted(() => vi.fn());
 const openInBrowser = vi.hoisted(() => vi.fn());
-vi.mock("~/lib/openIssueLink", () => ({ openLinkInBrowser: openInBrowser }));
+vi.mock("~/lib/openIssueLink", async (original) => ({
+  ...(await original<typeof import("~/lib/openIssueLink")>()),
+  openLinkInBrowser: openInBrowser,
+}));
 vi.mock("~/state/entities", () => ({
   useThreadShell: () => (runtime.current ? { runtime: runtime.current } : null),
 }));
@@ -113,7 +116,9 @@ function trees(linked: ReadonlyArray<ThreadIssueLink> = issues, environment = "e
       environmentId={environment as EnvironmentId}
       threadRef={null}
       linked={linked}
-      projectFor={(candidate) => candidate.projectId ?? null}
+      targetFor={({ projectId, ...candidate }) =>
+        projectId === undefined ? null : { ...candidate, projectId }
+      }
       onOpen={open}
       onOpenPullRequest={() => {}}
       renderActions={(candidate) => <span data-url={candidate.url} />}
