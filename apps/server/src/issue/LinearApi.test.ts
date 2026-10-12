@@ -966,14 +966,19 @@ it.effect.each([
           filter: { number?: { nin: number[] } };
         };
         const fields = query.match(/nodes \{([\s\S]+)\}\s+pageInfo/)![1]!;
-        const labels = fields.match(/labels(?:\(first: (\d+)\))?\s*\{\s*nodes\s*\{([^{}]+)\}/)!;
+        const labels = fields.match(
+          /labels(?:\((?:first: (\d+),? *)?(?:includeArchived: true)?\))?\s*\{\s*nodes\s*\{([^{}]+)\}/,
+        )!;
         const labelCost =
           Number(labels[1] ?? 50) * (1 + labels[2]!.trim().split(/\s+/).length * 0.1);
         const objectCost = [
           ...fields.matchAll(/(?:state|creator|assignee)\s*\{([^{}]+)\}/g),
         ].reduce((cost, match) => cost + 1 + match[1]!.trim().split(/\s+/).length * 0.1, 0);
         const scalarFields = fields
-          .replace(/labels(?:\(first: \d+\))?\s*\{\s*nodes\s*\{[^{}]+\}\s*\}/, "")
+          .replace(
+            /labels(?:\((?:first: \d+,? *)?(?:includeArchived: true)?\))?\s*\{\s*nodes\s*\{[^{}]+\}\s*\}/,
+            "",
+          )
           .replace(/\w+\s*\{[^{}]+\}/g, "")
           .trim()
           .split(/\s+/);
@@ -987,7 +992,7 @@ it.effect.each([
             1 +
             pageFields.length * 0.1,
         );
-        assert.include(query, "labels { nodes { name color } }");
+        assert.include(query, "labels(includeArchived: true) { nodes { name color } }");
         if (complexity > 10000)
           return { errors: [{ message: "Query exceeds maximum complexity" }] };
         const filtered = rows.filter((row) => !variables.filter.number?.nin.includes(row.number));
@@ -1881,3 +1886,1062 @@ it.effect("an endpoint pause does not block other Linear operations", () => {
     assert.equal(requests.length, 2);
   }).pipe(Effect.provide(layer));
 });
+
+const WRITE_TEAM = { id: "team-eng", key: "ENG", name: "Engineering", ancestors: [] };
+const WRITE_STATES = [
+  { id: "done-later", name: "Released", type: "completed", position: 2 },
+  { id: "canceled", name: "Won't do", type: "canceled", position: 0 },
+  { id: "done", name: "Done", type: "completed", position: 1 },
+  { id: "todo", name: "Todo", type: "unstarted", position: 0 },
+  { id: "backlog", name: "Backlog", type: "backlog", position: 0 },
+];
+const WRITE_LABELS = [
+  { id: "workspace-bug", name: "Bug", color: "#ff0000", description: null, team: null },
+  { id: "team-bug", name: "Bug", color: "#00ff00", description: "Team bug", team: WRITE_TEAM },
+  { id: "global", name: "Shared", color: "#0000ff", description: null, team: null },
+];
+const LAST_PAGE = { hasNextPage: false, endCursor: null };
+
+function writeResponse(body: Record<string, unknown>) {
+  const query = String(body.query);
+  const variables = body.variables as Record<string, unknown>;
+  if (query.includes("T3LinearTeam(")) return { data: { teams: { nodes: [WRITE_TEAM] } } };
+  if (query.includes("T3LinearSelection"))
+    return {
+      data: {
+        issue: { id: "issue-7", assignee: null, labels: { nodes: [], pageInfo: LAST_PAGE } },
+      },
+    };
+  if (query.includes("T3LinearLabels")) {
+    const filter = variables.filter as { name?: { in: string[] } };
+    return {
+      data: {
+        issueLabels: {
+          nodes: WRITE_LABELS.filter(
+            (label) => filter.name === undefined || filter.name.in.includes(label.name),
+          ),
+          pageInfo: LAST_PAGE,
+        },
+      },
+    };
+  }
+  if (query.includes("T3LinearMembers")) {
+    const filter = variables.filter as { id?: { in: string[] }; email?: { eq: string } };
+    return {
+      data: {
+        team: {
+          members: {
+            nodes:
+              (filter.id === undefined || filter.id.in.includes("user-1")) &&
+              (filter.email === undefined || filter.email.eq === "ada@example.com")
+                ? [{ id: "user-1", name: "Ada", email: "ada@example.com" }]
+                : [],
+            pageInfo: LAST_PAGE,
+          },
+        },
+      },
+    };
+  }
+  if (query.includes("T3LinearStates")) {
+    return {
+      data: {
+        team: {
+          defaultIssueState: WRITE_STATES[4],
+          states: { nodes: WRITE_STATES, pageInfo: LAST_PAGE },
+        },
+      },
+    };
+  }
+  if (query.includes("T3LinearIssueCreate")) {
+    return {
+      data: {
+        issueCreate: {
+          success: true,
+          issue: { number: 12, url: "https://linear.app/acme/issue/ENG-12" },
+        },
+      },
+    };
+  }
+  if (query.includes("T3LinearIssueUpdate")) return { data: { issueUpdate: { success: true } } };
+  throw new Error(`Unexpected test query: ${query}`);
+}
+
+it.effect("creates in the selected team with native label IDs and one team member", () => {
+  const { layer, requests, values } = makeLayer({
+    credentials: pool(["account-1", "saved-key"]),
+    response: writeResponse,
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const created = yield* api.createIssue({
+      teamKey: "ENG",
+      title: "A bug",
+      body: "  Markdown\n",
+      labels: ["Bug", "Shared"],
+      assignees: ["user-1"],
+      credentialId: "account-1",
+    });
+    assert.deepStrictEqual(created, { number: 12, url: "https://linear.app/acme/issue/ENG-12" });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      input: {
+        teamId: "team-eng",
+        title: "A bug",
+        description: "  Markdown\n",
+        labelIds: ["team-bug", "global"],
+        assigneeId: "user-1",
+        useDefaultTemplate: false,
+      },
+    });
+    assert.isTrue(requests.every((request) => request.authorization === "saved-key"));
+    assert.strictEqual(values.size, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([false, true])("rejects creation success=%s without a created issue", (success) => {
+  const { layer } = makeLayer({
+    envToken: "test-key",
+    response: (body) =>
+      String(body.query).includes("T3LinearIssueCreate")
+        ? { data: { issueCreate: { success, issue: null } } }
+        : writeResponse(body),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const error = yield* api
+      .createIssue({ teamKey: "ENG", title: "Bug", body: "", labels: [], assignees: [] })
+      .pipe(Effect.flip);
+    assert.strictEqual(error.operation, "createIssue");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("edits only supplied issue fields and reports rejected writes", () => {
+  let accepted = true;
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: () => ({ data: { issueUpdate: { success: accepted } } }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.updateIssue({ identifier: "ENG-7", title: "New title" });
+    yield* api.updateIssue({ identifier: "ENG-7", body: "" });
+    assert.deepStrictEqual(
+      requests.map((request) => request.body.variables),
+      [
+        { id: "ENG-7", input: { title: "New title" } },
+        { id: "ENG-7", input: { description: "" } },
+      ],
+    );
+    accepted = false;
+    const error = yield* api
+      .updateIssue({ identifier: "ENG-7", title: "Rejected" })
+      .pipe(Effect.flip);
+    assert.strictEqual(error.operation, "updateIssue");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("replaces and clears labels without applying another team's labels", () => {
+  const { layer, requests } = makeLayer({ envToken: "test-key", response: writeResponse });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: ["Bug", "Bug"] });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { labelIds: ["team-bug"] },
+    });
+    const labelRead = requests.find((request) =>
+      String(request.body.query).includes("T3LinearLabels"),
+    )!;
+    assert.deepStrictEqual(labelRead.body.variables, {
+      filter: {
+        or: [{ team: { id: { in: ["team-eng"] } } }, { team: { null: true } }],
+        isGroup: { eq: false },
+        name: { in: ["Bug", "Bug"] },
+      },
+    });
+    yield* api.setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: [] });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { labelIds: [] },
+    });
+    const count = requests.filter((request) =>
+      String(request.body.query).includes("T3LinearIssueUpdate"),
+    ).length;
+    const error = yield* api
+      .setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: ["Other team's label"] })
+      .pipe(Effect.flip);
+    assert.strictEqual(error.writeRejection, "label-unavailable");
+    assert.strictEqual(
+      requests.filter((request) => String(request.body.query).includes("T3LinearIssueUpdate"))
+        .length,
+      count,
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("assigns an active team member, clears with null, and refuses outsiders", () => {
+  const { layer, requests } = makeLayer({ envToken: "test-key", response: writeResponse });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.setAssignees({ teamKey: "ENG", identifier: "ENG-7", assignees: ["user-1"] });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { assigneeId: "user-1" },
+    });
+    assert.deepStrictEqual(
+      requests.find((request) => String(request.body.query).includes("T3LinearMembers"))?.body
+        .variables,
+      {
+        id: "team-eng",
+        filter: { active: { eq: true }, id: { in: ["user-1"] } },
+      },
+    );
+    yield* api.setAssignees({ teamKey: "ENG", identifier: "ENG-7", assignees: [] });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { assigneeId: null },
+    });
+    const error = yield* api
+      .setAssignees({ teamKey: "ENG", identifier: "ENG-7", assignees: ["outsider"] })
+      .pipe(Effect.flip);
+    assert.strictEqual(error.writeRejection, "assignee-unavailable");
+    const count = requests.length;
+    const multiple = yield* api
+      .setAssignees({ teamKey: "ENG", identifier: "ENG-7", assignees: ["user-1", "user-2"] })
+      .pipe(Effect.flip);
+    const create = yield* api
+      .createIssue({
+        teamKey: "ENG",
+        title: "Bug",
+        body: "",
+        labels: [],
+        assignees: ["user-1", "user-2"],
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(multiple.writeRejection, "too-many-assignees");
+    assert.strictEqual(create.writeRejection, "too-many-assignees");
+    assert.strictEqual(requests.length, count);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([[], [{ ...WRITE_TEAM, key: "OTHER" }]])(
+  "rejects an unavailable or mismatched team %j before writing",
+  (nodes) => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: () => ({ data: { teams: { nodes } } }),
+    });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      const error = yield* api
+        .createIssue({ teamKey: "ENG", title: "Bug", body: "", labels: [], assignees: [] })
+        .pipe(Effect.flip);
+      assert.strictEqual(error.writeRejection, "team-unavailable");
+      assert.strictEqual(requests.length, 1);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect.each([
+  ["close", undefined, "done"],
+  ["close", "completed", "done"],
+  ["close", "not-planned", "canceled"],
+  ["reopen", undefined, "backlog"],
+] as const)(
+  "maps action %s reason %s to the team's workflow state",
+  ([action, reason, stateId]) => {
+    const { layer, requests } = makeLayer({ envToken: "test-key", response: writeResponse });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      yield* api.runAction({
+        teamKey: "ENG",
+        identifier: "ENG-7",
+        action,
+        ...(reason === undefined ? {} : { reason }),
+      });
+      assert.deepStrictEqual(requests.at(-1)?.body.variables, { id: "ENG-7", input: { stateId } });
+      assert.strictEqual(
+        (
+          requests.find((request) => String(request.body.query).includes("T3LinearStates"))!.body
+            .variables as { id: string }
+        ).id,
+        "team-eng",
+      );
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("pages workflow states and fails when no matching state exists", () => {
+  let available = true;
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) => {
+      if (!String(body.query).includes("T3LinearStates")) return writeResponse(body);
+      const { after } = body.variables as { after?: string };
+      return {
+        data: {
+          team: {
+            defaultIssueState: null,
+            states: {
+              nodes: after === undefined ? [WRITE_STATES[3]] : available ? [WRITE_STATES[2]] : [],
+              pageInfo:
+                after === undefined ? { hasNextPage: true, endCursor: "state-page" } : LAST_PAGE,
+            },
+          },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.runAction({ teamKey: "ENG", identifier: "ENG-7", action: "close" });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { stateId: "done" },
+    });
+    available = false;
+    const error = yield* api
+      .runAction({ teamKey: "ENG", identifier: "ENG-7", action: "close" })
+      .pipe(Effect.flip);
+    assert.strictEqual(error.writeRejection, "state-unavailable");
+    yield* api.runAction({ teamKey: "ENG", identifier: "ENG-7", action: "reopen" });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { stateId: "todo" },
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([
+  ["user-1", "ENG-7", undefined],
+  ["other-user", "ENG-7", "not-comment-owner"],
+  [null, "ENG-7", "not-comment-owner"],
+  ["user-1", "OTHER-7", "wrong-comment-issue"],
+] as const)(
+  "checks comment owner %s and issue %s before editing",
+  ([owner, identifier, rejection]) => {
+    const { layer, requests } = makeLayer({
+      credentials: pool(["account-1", "saved-key"]),
+      response: (body) =>
+        String(body.query).includes("T3LinearCommentOwner")
+          ? {
+              data: {
+                viewer: { id: "user-1" },
+                comment: { user: owner === null ? null : { id: owner }, issue: { identifier } },
+              },
+            }
+          : { data: { commentUpdate: { success: true } } },
+    });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      const edit = api.updateComment({
+        identifier: "ENG-7",
+        commentId: "comment-1",
+        body: "  New body\n",
+        credentialId: "account-1",
+      });
+      if (rejection === undefined) {
+        yield* edit;
+        assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+          id: "comment-1",
+          input: { body: "  New body\n" },
+        });
+      } else {
+        const error = yield* edit.pipe(Effect.flip);
+        assert.strictEqual(error.writeRejection, rejection);
+        assert.strictEqual(requests.length, 1);
+      }
+      assert.isTrue(requests.every((request) => request.authorization === "saved-key"));
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("pages team candidates, merges workspace labels, and bounds long member lists", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) => {
+      const query = String(body.query);
+      const { after } = body.variables as { after?: string };
+      if (query.includes("T3LinearLabels"))
+        return {
+          data: {
+            issueLabels: {
+              nodes:
+                after === undefined
+                  ? [
+                      WRITE_LABELS[0],
+                      {
+                        ...WRITE_LABELS[2],
+                        team: { id: "team-other", key: "OTHER", name: "Other" },
+                      },
+                    ]
+                  : [WRITE_LABELS[1], WRITE_LABELS[2]],
+              pageInfo:
+                after === undefined ? { hasNextPage: true, endCursor: "label-page" } : LAST_PAGE,
+            },
+          },
+        };
+      if (query.includes("T3LinearMembers")) {
+        const page = Number(after ?? 0);
+        return {
+          data: {
+            team: {
+              members: {
+                nodes: [{ id: `member-${page}` }],
+                pageInfo: { hasNextPage: true, endCursor: String(page + 1) },
+              },
+            },
+          },
+        };
+      }
+      return writeResponse(body);
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const labels = yield* api.listLabels({ teamKey: "ENG" });
+    assert.deepStrictEqual(
+      labels.nodes.map((label) => [label.name, label.id]),
+      [
+        ["Bug", "team-bug"],
+        ["Shared", "global"],
+      ],
+    );
+    assert.isFalse(labels.truncated);
+    const members = yield* api.listAssignees({ teamKey: "ENG" });
+    assert.deepStrictEqual(
+      members.nodes.map((user) => user.id),
+      ["member-0", "member-1", "member-2", "member-3"],
+    );
+    assert.isTrue(members.truncated);
+    assert.strictEqual(
+      requests.filter((request) => String(request.body.query).includes("T3LinearMembers")).length,
+      4,
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("maps plain team and workspace templates using native content and JSON defaults", () => {
+  const template = {
+    id: "bug-template",
+    name: "Bug report",
+    description: "About the template",
+    content: "## Steps\n",
+    type: "issue",
+    hasFormFields: false,
+    templateData: JSON.stringify({
+      title: "Bug: ",
+      description: "Old body",
+      labelIds: ["team-bug"],
+      assigneeId: "user-1",
+    }),
+  };
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) => {
+      const query = String(body.query);
+      if (query.includes("T3LinearTeamTemplates")) {
+        const { after } = body.variables as { after?: string };
+        return {
+          data: {
+            source: {
+              templates: {
+                nodes:
+                  after === undefined
+                    ? [template]
+                    : [
+                        { ...template, id: "form", hasFormFields: true },
+                        {
+                          ...template,
+                          id: "structured",
+                          content: null,
+                          templateData: JSON.stringify({
+                            descriptionData: { type: "doc", content: [{ type: "unknown" }] },
+                          }),
+                        },
+                      ],
+                pageInfo:
+                  after === undefined
+                    ? { hasNextPage: true, endCursor: "templates-page" }
+                    : LAST_PAGE,
+              },
+            },
+          },
+        };
+      }
+      if (query.includes("T3LinearWorkspaceTemplates"))
+        return {
+          data: {
+            source: {
+              templates: {
+                nodes: [
+                  {
+                    ...template,
+                    id: "workspace-template",
+                    content: null,
+                    templateData: { title: "Task", description: "Body draft" },
+                  },
+                  { ...template, id: "project-template", type: "project" },
+                ],
+                pageInfo: LAST_PAGE,
+              },
+            },
+          },
+        };
+      return writeResponse(body);
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const offer = yield* api.getIssueTemplates({ teamKey: "ENG" });
+    assert.deepStrictEqual(offer, {
+      templates: [
+        {
+          key: "bug-template",
+          name: "Bug report",
+          about: "About the template",
+          title: "Bug: ",
+          body: "## Steps\n",
+          labels: ["Bug"],
+          assignees: ["user-1"],
+        },
+        {
+          key: "workspace-template",
+          name: "Bug report",
+          about: "About the template",
+          title: "Task",
+          body: "Body draft",
+          labels: [],
+          assignees: [],
+        },
+      ],
+      contactLinks: [],
+      blankIssuesEnabled: true,
+    });
+    assert.deepStrictEqual(
+      requests
+        .filter((request) => String(request.body.query).includes("T3LinearTeamTemplates"))
+        .map((request) => request.body.variables),
+      [{ id: "team-eng" }, { id: "team-eng", after: "templates-page" }],
+    );
+    const created = yield* api.createIssue({
+      teamKey: "ENG",
+      title: offer.templates[0]!.title,
+      body: offer.templates[0]!.body,
+      labels: offer.templates[0]!.labels,
+      assignees: offer.templates[0]!.assignees,
+    });
+    assert.strictEqual(created.number, 12);
+    assert.deepStrictEqual((requests.at(-1)!.body.variables as { input: unknown }).input, {
+      teamId: "team-eng",
+      title: "Bug: ",
+      description: "## Steps\n",
+      labelIds: ["team-bug"],
+      assigneeId: "user-1",
+      useDefaultTemplate: false,
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each(["missing-label", "workspace-bug"])(
+  "does not invent missing or ambiguous template label defaults %s",
+  (labelId) => {
+    const { layer } = makeLayer({
+      envToken: "test-key",
+      response: (body) =>
+        String(body.query).includes("Templates")
+          ? {
+              data: {
+                source: {
+                  templates: {
+                    nodes: [
+                      {
+                        id: "t",
+                        name: "Template",
+                        description: null,
+                        content: null,
+                        type: "issue",
+                        hasFormFields: false,
+                        templateData: JSON.stringify({ labelIds: [labelId] }),
+                      },
+                    ],
+                    pageInfo: LAST_PAGE,
+                  },
+                },
+              },
+            }
+          : writeResponse(body),
+    });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      const error = yield* api.getIssueTemplates({ teamKey: "ENG" }).pipe(Effect.flip);
+      assert.strictEqual(error.writeRejection, "incomplete-templates");
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("pages native history and preserves system actors and workflow details", () => {
+  const history = Array.from({ length: 51 }, (_, index) => ({
+    id: `history-${index}`,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    actor: index === 0 ? null : { id: "user-1" },
+    fromState: { name: "Doing", type: "started" },
+    toState: { name: "Done", type: "completed" },
+    fromAssignee: null,
+    toAssignee: null,
+    addedLabels: null,
+    removedLabels: null,
+    fromTitle: null,
+    toTitle: null,
+  }));
+  const { layer, requests } = makeLayer({
+    credentials: pool(["account-1", "saved-key"]),
+    response: (body) => {
+      const { after } = body.variables as { after?: string };
+      return {
+        data: {
+          issue: {
+            history: {
+              nodes: after === undefined ? history.slice(0, 50) : history.slice(50),
+              pageInfo:
+                after === undefined ? { hasNextPage: true, endCursor: "history-page" } : LAST_PAGE,
+            },
+          },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const read = yield* api.getHistory({ identifier: "ENG-7", credentialId: "account-1" });
+    assert.deepStrictEqual(read.nodes, history);
+    assert.isFalse(read.truncated);
+    assert.deepStrictEqual(
+      requests.map((request) => request.body.variables),
+      [{ id: "ENG-7" }, { id: "ENG-7", after: "history-page" }],
+    );
+    assert.isTrue(requests.every((request) => request.authorization === "saved-key"));
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("new writes share account-wide and mutation endpoint quota pauses", () => {
+  let paused = false;
+  const { layer, requests } = makeLayer({
+    envToken: "environment-key",
+    credentials: pool(["saved", "saved-key"]),
+    response: (body) => {
+      const query = String(body.query);
+      if (query.includes("T3LinearViewer")) return { data: { viewer: { id: "user-1" } } };
+      if (query.includes("T3LinearIssueUpdate") && !paused) {
+        paused = true;
+        return Response.json(
+          {},
+          {
+            status: 429,
+            headers: {
+              "X-RateLimit-Requests-Remaining": "0",
+              "X-RateLimit-Requests-Reset": "61000",
+              "X-RateLimit-Endpoint-Name": "issueUpdate",
+              "X-RateLimit-Endpoint-Requests-Remaining": "0",
+              "X-RateLimit-Endpoint-Requests-Reset": "121000",
+            },
+          },
+        );
+      }
+      return writeResponse(body);
+    },
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({});
+    yield* api.getViewer({ credentialId: "saved" });
+    const first = yield* api.updateIssue({ identifier: "ENG-7", title: "Pause" }).pipe(Effect.flip);
+    assert.strictEqual(first.retryAt, 121000);
+    const global = yield* api
+      .createIssue({
+        teamKey: "ENG",
+        title: "Blocked",
+        body: "",
+        labels: [],
+        assignees: [],
+        credentialId: "saved",
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(global.retryAt, 61000);
+    assert.strictEqual(requests.length, 3);
+    yield* TestClock.setTime(62000);
+    const endpoint = yield* api
+      .updateIssue({ identifier: "ENG-7", body: "Blocked", credentialId: "saved" })
+      .pipe(Effect.flip);
+    assert.strictEqual(endpoint.retryAt, 121000);
+    assert.strictEqual(requests.length, 3);
+    yield* api.createIssue({
+      teamKey: "ENG",
+      title: "Allowed",
+      body: "",
+      labels: [],
+      assignees: [],
+      credentialId: "saved",
+    });
+    yield* TestClock.setTime(122000);
+    yield* api.updateIssue({ identifier: "ENG-7", body: "Allowed", credentialId: "saved" });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reserves new mutation complexity before dispatching HTTP", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: () =>
+      Response.json(
+        { data: { viewer: { id: "user-1" } } },
+        {
+          headers: {
+            "X-RateLimit-Complexity-Remaining": "10",
+            "X-RateLimit-Complexity-Reset": "61000",
+          },
+        },
+      ),
+  });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(1000);
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({});
+    const error = yield* api
+      .updateIssue({ identifier: "ENG-7", title: "Too expensive" })
+      .pipe(Effect.flip);
+    assert.strictEqual(error.reason, "rate-limited");
+    assert.strictEqual(error.retryAt, 61000);
+    assert.strictEqual(requests.length, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("bounds history at four pages when the native history continues", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) => {
+      const { after } = body.variables as { after?: string };
+      const page = Number(after ?? 0);
+      return {
+        data: {
+          issue: {
+            history: {
+              nodes: [
+                {
+                  id: `history-${page}`,
+                  createdAt: "2026-10-01T00:00:00.000Z",
+                  actor: null,
+                  fromState: null,
+                  toState: null,
+                  fromAssignee: null,
+                  toAssignee: null,
+                  addedLabels: null,
+                  removedLabels: null,
+                  fromTitle: null,
+                  toTitle: null,
+                },
+              ],
+              pageInfo: { hasNextPage: true, endCursor: String(page + 1) },
+            },
+          },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const history = yield* api.getHistory({ identifier: "ENG-7" });
+    assert.strictEqual(history.nodes.length, 4);
+    assert.isTrue(history.truncated);
+    assert.strictEqual(requests.length, 4);
+    assert.isTrue(
+      requests.every((request) => String(request.body.query).includes("history(first: 50,")),
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("retains current label IDs and resolves only added names", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) =>
+      String(body.query).includes("T3LinearSelection")
+        ? {
+            data: {
+              issue: {
+                id: "issue-7",
+                assignee: null,
+                labels: {
+                  nodes: [
+                    { id: "workspace-bug", name: "Bug" },
+                    ...(String(body.query).includes("includeArchived: true")
+                      ? [{ id: "archived", name: "Old" }]
+                      : []),
+                  ],
+                  pageInfo: LAST_PAGE,
+                },
+              },
+            },
+          }
+        : writeResponse(body),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: ["Bug", "Old", "Shared"] });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { labelIds: ["workspace-bug", "archived", "global"] },
+    });
+    assert.deepStrictEqual(
+      (
+        requests.find((r) => String(r.body.query).includes("T3LinearLabels"))!.body.variables as {
+          filter: { name: unknown };
+        }
+      ).filter.name,
+      { in: ["Shared"] },
+    );
+    yield* api.setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: ["Bug"] });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { labelIds: ["workspace-bug"] },
+    });
+    yield* api.setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: [] });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { labelIds: [] },
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("rejects label writes before choosing IDs from an incomplete native lookup", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) => {
+      if (!String(body.query).includes("T3LinearLabels")) return writeResponse(body);
+      const page = Number((body.variables as { after?: string }).after ?? 0);
+      return {
+        data: {
+          issueLabels: {
+            nodes: [WRITE_LABELS[page === 4 ? 1 : 0]],
+            pageInfo: { hasNextPage: page < 4, endCursor: String(page + 1) },
+          },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    for (const write of [
+      api.createIssue({ teamKey: "ENG", title: "Bug", body: "", labels: ["Bug"], assignees: [] }),
+      api.setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: ["Bug"] }),
+    ]) {
+      const error = yield* write.pipe(Effect.flip);
+      assert.strictEqual(error.writeRejection, "label-unavailable");
+    }
+    assert.strictEqual(
+      requests.filter((request) => String(request.body.query).includes("T3LinearLabels")).length,
+      8,
+    );
+    assert(!requests.some((request) => String(request.body.query).includes("mutation")));
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("uses ancestor labels and templates while excluding unrelated teams", () => {
+  const parent = { id: "parent-team", key: "PARENT", name: "Parent" };
+  const root = { id: "root-team", key: "ROOT", name: "Root" };
+  const inherited = [parent, root].map((team) => ({
+    id: `${team.id}-label`,
+    name: team.name,
+    color: "#000000",
+    description: null,
+    team,
+  }));
+  const { layer, requests } = makeLayer({
+    envToken: "test-key",
+    response: (body) => {
+      const query = String(body.query);
+      const variables = body.variables as { id?: string; filter?: { name?: { in: string[] } } };
+      if (query.includes("T3LinearTeam("))
+        return { data: { teams: { nodes: [{ ...WRITE_TEAM, ancestors: [root, parent] }] } } };
+      if (query.includes("T3LinearLabels"))
+        return {
+          data: {
+            issueLabels: {
+              nodes: [
+                ...inherited,
+                {
+                  ...inherited[0],
+                  id: "outside",
+                  name: "Outside",
+                  team: { id: "other", key: "OTHER", name: "Other" },
+                },
+              ].filter(
+                (label) => !variables.filter?.name || variables.filter.name.in.includes(label.name),
+              ),
+              pageInfo: LAST_PAGE,
+            },
+          },
+        };
+      if (query.includes("T3LinearTeamTemplates") || query.includes("T3LinearWorkspaceTemplates"))
+        return {
+          data: {
+            source: {
+              templates: {
+                nodes:
+                  variables.id === parent.id
+                    ? [
+                        {
+                          id: "inherited-template",
+                          name: "Parent template",
+                          description: null,
+                          content: "Body",
+                          type: "issue",
+                          hasFormFields: false,
+                          templateData: { labelIds: [inherited[0]!.id] },
+                        },
+                      ]
+                    : [],
+                pageInfo: LAST_PAGE,
+              },
+            },
+          },
+        };
+      return writeResponse(body);
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    assert.deepStrictEqual(
+      (yield* api.listLabels({ teamKey: "ENG" })).nodes.map((label) => label.id),
+      inherited.map((label) => label.id),
+    );
+    const filter = (requests.at(-1)!.body.variables as { filter: { or: unknown } }).filter;
+    assert.deepStrictEqual(filter.or, [
+      { team: { id: { in: ["team-eng", "parent-team", "root-team"] } } },
+      { team: { null: true } },
+    ]);
+    yield* api.setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: ["Parent", "Root"] });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { labelIds: inherited.map((label) => label.id) },
+    });
+    const templates = yield* api.getIssueTemplates({ teamKey: "ENG" });
+    assert.deepStrictEqual(
+      templates.templates.map((t) => [t.key, t.labels]),
+      [["inherited-template", ["Parent"]]],
+    );
+    yield* api.createIssue({
+      teamKey: "ENG",
+      title: "Parent template",
+      body: "Body",
+      labels: templates.templates[0]!.labels,
+      assignees: [],
+    });
+    assert.deepStrictEqual(
+      (requests.at(-1)!.body.variables as { input: { labelIds: unknown } }).input.labelIds,
+      [inherited[0]!.id],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("resolves exact team-member email for create and assignment", () => {
+  const { layer, requests } = makeLayer({ envToken: "test-key", response: writeResponse });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.createIssue({
+      teamKey: "ENG",
+      title: "Email",
+      body: "",
+      labels: [],
+      assignees: ["ada@example.com"],
+    });
+    assert.strictEqual(
+      (requests.at(-1)!.body.variables as { input: { assigneeId: string } }).input.assigneeId,
+      "user-1",
+    );
+    yield* api.setAssignees({
+      teamKey: "ENG",
+      identifier: "ENG-7",
+      assignees: ["ada@example.com"],
+    });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+      id: "ENG-7",
+      input: { assigneeId: "user-1" },
+    });
+    assert.deepStrictEqual(
+      requests.find((r) => String(r.body.query).includes("T3LinearMembers"))?.body.variables,
+      {
+        id: "team-eng",
+        filter: { active: { eq: true }, email: { eq: "ada@example.com" } },
+      },
+    );
+    for (const email of ["unknown@example.com", "otherteam@example.com", "Ada"]) {
+      const count = requests.filter((r) => String(r.body.query).startsWith("mutation")).length;
+      const create = yield* api
+        .createIssue({
+          teamKey: "ENG",
+          title: "Rejected",
+          body: "",
+          labels: [],
+          assignees: [email],
+        })
+        .pipe(Effect.flip);
+      const assign = yield* api
+        .setAssignees({ teamKey: "ENG", identifier: "ENG-7", assignees: [email] })
+        .pipe(Effect.flip);
+      assert.strictEqual(create.writeRejection, "assignee-unavailable");
+      assert.strictEqual(assign.writeRejection, "assignee-unavailable");
+      assert.strictEqual(
+        requests.filter((r) => String(r.body.query).startsWith("mutation")).length,
+        count,
+      );
+    }
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([false, true])(
+  "retains paged issue labels and refuses incomplete reads truncated=%s",
+  (truncated) => {
+    const { layer, requests } = makeLayer({
+      envToken: "test-key",
+      response: (body) => {
+        if (!String(body.query).includes("T3LinearSelection")) return writeResponse(body);
+        const { after } = body.variables as { after?: string };
+        const page = Number(after ?? 0);
+        return {
+          data: {
+            issue: {
+              id: "issue-7",
+              assignee: null,
+              labels: {
+                nodes: [{ id: `archived-${page}`, name: "Old" }],
+                pageInfo:
+                  truncated || page === 0
+                    ? { hasNextPage: true, endCursor: String(page + 1) }
+                    : LAST_PAGE,
+              },
+            },
+          },
+        };
+      },
+    });
+    return Effect.gen(function* () {
+      const api = yield* LinearApi.LinearApi;
+      const update = api.setLabels({ teamKey: "ENG", identifier: "ENG-7", labels: ["Old"] });
+      if (truncated) {
+        const error = yield* update.pipe(Effect.flip);
+        assert.strictEqual(error.writeRejection, "label-unavailable");
+        assert.isFalse(requests.some((r) => String(r.body.query).includes("T3LinearIssueUpdate")));
+      } else {
+        yield* update;
+        assert.deepStrictEqual(requests.at(-1)?.body.variables, {
+          id: "ENG-7",
+          input: { labelIds: ["archived-0", "archived-1"] },
+        });
+        assert.isFalse(requests.some((r) => String(r.body.query).includes("T3LinearLabels")));
+      }
+      assert.strictEqual(
+        requests.filter((r) => String(r.body.query).includes("T3LinearSelection")).length,
+        truncated ? 4 : 2,
+      );
+    }).pipe(Effect.provide(layer));
+  },
+);

@@ -15,6 +15,10 @@ import type {
   IssueInvolvement,
   IssueTrackerAccount,
   IssueTrackerConnection,
+  IssueAction,
+  IssueCloseReason,
+  IssueTemplateList,
+  IssueTemplate,
 } from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
@@ -139,6 +143,53 @@ const Issue = Schema.Struct({
   children: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Relative) }))),
 });
 
+const PageInfo = Schema.Struct({
+  hasNextPage: Schema.Boolean,
+  endCursor: Schema.NullOr(Schema.String),
+});
+const CandidateLabel = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  color: Schema.String,
+  description: Schema.NullOr(Schema.String),
+  team: Schema.NullOr(Team),
+});
+const WorkflowState = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  type: Schema.String,
+  position: Schema.Number,
+});
+const History = Schema.Struct({
+  id: Schema.String,
+  createdAt: Schema.String,
+  actor: Schema.NullOr(User),
+  fromState: Schema.NullOr(State),
+  toState: Schema.NullOr(State),
+  fromAssignee: Schema.NullOr(User),
+  toAssignee: Schema.NullOr(User),
+  addedLabels: Schema.NullOr(Schema.Array(Label)),
+  removedLabels: Schema.NullOr(Schema.Array(Label)),
+  fromTitle: Schema.NullOr(Schema.String),
+  toTitle: Schema.NullOr(Schema.String),
+});
+const TemplateData = Schema.Struct({
+  descriptionData: Schema.optional(Schema.Unknown),
+  title: Schema.optional(Schema.NullOr(Schema.String)),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  labelIds: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+  assigneeId: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const Template = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  description: Schema.NullOr(Schema.String),
+  content: Schema.NullOr(Schema.String),
+  type: Schema.String,
+  hasFormFields: Schema.Boolean,
+  templateData: Schema.Union([Schema.fromJsonString(TemplateData), TemplateData]),
+});
+
 const GraphQlError = Schema.Struct({
   message: Schema.String,
   extensions: Schema.optional(Schema.Struct({ code: Schema.optional(Schema.String) })),
@@ -202,6 +253,92 @@ const MutationEnvelope = Schema.Struct({
   data: Schema.Record(Schema.String, Schema.Struct({ success: Schema.Boolean })),
 });
 
+const TeamWithAncestors = Schema.Struct({
+  ...Team.fields,
+  ancestors: Schema.Array(Team),
+});
+const TeamEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({ teams: Schema.Struct({ nodes: Schema.Array(TeamWithAncestors) }) }),
+});
+const LabelsEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    issueLabels: Schema.Struct({ nodes: Schema.Array(CandidateLabel), pageInfo: PageInfo }),
+  }),
+});
+const MembersEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    team: Schema.Struct({
+      members: Schema.Struct({ nodes: Schema.Array(User), pageInfo: PageInfo }),
+    }),
+  }),
+});
+const StatesEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    team: Schema.Struct({
+      defaultIssueState: Schema.NullOr(WorkflowState),
+      states: Schema.Struct({ nodes: Schema.Array(WorkflowState), pageInfo: PageInfo }),
+    }),
+  }),
+});
+const SelectionEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    issue: Schema.NullOr(
+      Schema.Struct({
+        id: Schema.String,
+        assignee: Schema.NullOr(User),
+        labels: Schema.Struct({
+          nodes: Schema.Array(Schema.Struct({ ...Label.fields, id: Schema.String })),
+          pageInfo: PageInfo,
+        }),
+      }),
+    ),
+  }),
+});
+const CommentOwnerEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    viewer: User,
+    comment: Schema.NullOr(
+      Schema.Struct({
+        user: Schema.NullOr(User),
+        issue: Schema.NullOr(Schema.Struct({ identifier: Schema.String })),
+      }),
+    ),
+  }),
+});
+const CreatedEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    issueCreate: Schema.Struct({
+      success: Schema.Boolean,
+      issue: Schema.NullOr(Schema.Struct({ number: Schema.Number, url: Schema.String })),
+    }),
+  }),
+});
+const HistoryEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    issue: Schema.NullOr(
+      Schema.Struct({
+        history: Schema.Struct({ nodes: Schema.Array(History), pageInfo: PageInfo }),
+      }),
+    ),
+  }),
+});
+const TemplatesEnvelope = Schema.Struct({
+  ...Errors,
+  data: Schema.Struct({
+    source: Schema.Struct({
+      templates: Schema.Struct({ nodes: Schema.Array(Template), pageInfo: PageInfo }),
+    }),
+  }),
+});
+
 const USER_FIELDS = "id name email avatarUrl";
 const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
 // Three levels each way bounds the query's complexity; deeper relatives open from the tree.
@@ -213,7 +350,7 @@ const ISSUE_FIELDS = `
   state { name type }
   creator { ${USER_FIELDS} }
   assignee { ${USER_FIELDS} }
-  labels { nodes { name color } }
+  labels(includeArchived: true) { nodes { name color } }
 `;
 
 const CONNECTION_QUERY = `query T3LinearConnection {
@@ -273,6 +410,83 @@ const COMMENT_REACTIONS_QUERY = `query T3LinearCommentReactions($id: String!) {
   viewer { id name email avatarUrl }
   comment(id: $id) { reactions { ${REACTION_FIELDS} } }
 }`;
+const TEAM_QUERY = `query T3LinearTeam($key: String!) {
+  teams(first: 2, filter: { key: { eq: $key } }) { nodes { id key name ancestors { id key name } } }
+}`;
+const LABELS_QUERY = `query T3LinearLabels($filter: IssueLabelFilter!, $after: String) {
+  issueLabels(first: 100, after: $after, filter: $filter) {
+    nodes { id name color description team { id key name } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+const MEMBERS_QUERY = `query T3LinearMembers($id: String!, $filter: UserFilter!, $after: String) {
+  team(id: $id) { members(first: 100, after: $after, filter: $filter) {
+    nodes { ${USER_FIELDS} }
+    pageInfo { hasNextPage endCursor }
+  } }
+}`;
+const STATES_QUERY = `query T3LinearStates($id: String!, $after: String) {
+  team(id: $id) {
+    defaultIssueState { id name type position }
+    states(first: 100, after: $after) {
+      nodes { id name type position }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+const SELECTION_QUERY = `query T3LinearSelection($id: String!, $after: String) {
+  issue(id: $id) { id assignee { ${USER_FIELDS} } labels(first: 100, after: $after, includeArchived: true) { nodes { id name color } pageInfo { hasNextPage endCursor } } }
+}`;
+const COMMENT_OWNER_QUERY = `query T3LinearCommentOwner($id: String!) {
+  viewer { ${USER_FIELDS} }
+  comment(id: $id) { user { ${USER_FIELDS} } issue { identifier } }
+}`;
+const COMMENT_UPDATE_MUTATION = `mutation T3LinearCommentUpdate($id: String!, $input: CommentUpdateInput!) {
+  commentUpdate(id: $id, input: $input) { success }
+}`;
+const ISSUE_CREATE_MUTATION = `mutation T3LinearIssueCreate($input: IssueCreateInput!) {
+  issueCreate(input: $input) { success issue { number url } }
+}`;
+const ISSUE_UPDATE_MUTATION = `mutation T3LinearIssueUpdate($id: String!, $input: IssueUpdateInput!) {
+  issueUpdate(id: $id, input: $input) { success }
+}`;
+const HISTORY_QUERY = `query T3LinearHistory($id: String!, $after: String) {
+  issue(id: $id) { history(first: 50, after: $after, orderBy: createdAt) {
+    nodes {
+      id createdAt actor { ${USER_FIELDS} }
+      fromState { name type } toState { name type }
+      fromAssignee { ${USER_FIELDS} } toAssignee { ${USER_FIELDS} }
+      addedLabels { name color } removedLabels { name color }
+      fromTitle toTitle
+    }
+    pageInfo { hasNextPage endCursor }
+  } }
+}`;
+const TEMPLATE_FIELDS = `id name description content type hasFormFields templateData`;
+const TEAM_TEMPLATES_QUERY = `query T3LinearTeamTemplates($id: String!, $after: String) {
+  source: team(id: $id) { templates(first: 100, after: $after, filter: { type: { eq: "issue" } }) {
+    nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor }
+  } }
+}`;
+const WORKSPACE_TEMPLATES_QUERY = `query T3LinearWorkspaceTemplates($after: String) {
+  source: organization { templates(first: 100, after: $after, filter: { type: { eq: "issue" } }) {
+    nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor }
+  } }
+}`;
+const QUERY_COSTS = new Map<string, number>([
+  [TEAM_QUERY, 20],
+  [LABELS_QUERY, 1_000],
+  [MEMBERS_QUERY, 600],
+  [STATES_QUERY, 600],
+  [SELECTION_QUERY, 200],
+  [COMMENT_OWNER_QUERY, 30],
+  [COMMENT_UPDATE_MUTATION, 20],
+  [ISSUE_CREATE_MUTATION, 30],
+  [ISSUE_UPDATE_MUTATION, 20],
+  [HISTORY_QUERY, 5_000],
+  [TEAM_TEMPLATES_QUERY, 1_000],
+  [WORKSPACE_TEMPLATES_QUERY, 1_000],
+]);
 const QUERY_ENDPOINTS = new Map<string, ReadonlyArray<string>>([
   [CONNECTION_QUERY, ["viewer", "teams"]],
   [VIEWER_QUERY, ["viewer"]],
@@ -285,6 +499,18 @@ const QUERY_ENDPOINTS = new Map<string, ReadonlyArray<string>>([
   [COMMENT_MUTATION, ["commentCreate"]],
   [REACTION_CREATE_MUTATION, ["reactionCreate"]],
   [REACTION_DELETE_MUTATION, ["reactionDelete"]],
+  [TEAM_QUERY, ["teams"]],
+  [LABELS_QUERY, ["issueLabels"]],
+  [MEMBERS_QUERY, ["team"]],
+  [STATES_QUERY, ["team"]],
+  [SELECTION_QUERY, ["issue"]],
+  [COMMENT_OWNER_QUERY, ["viewer", "comment"]],
+  [COMMENT_UPDATE_MUTATION, ["commentUpdate"]],
+  [ISSUE_CREATE_MUTATION, ["issueCreate"]],
+  [ISSUE_UPDATE_MUTATION, ["issueUpdate"]],
+  [HISTORY_QUERY, ["issue"]],
+  [TEAM_TEMPLATES_QUERY, ["team"]],
+  [WORKSPACE_TEMPLATES_QUERY, ["organization"]],
 ]);
 
 export class LinearApiError extends Schema.TaggedError<LinearApiError>()("LinearApiError", {
@@ -297,6 +523,18 @@ export class LinearApiError extends Schema.TaggedError<LinearApiError>()("Linear
   projectId: Schema.optional(Schema.String),
   credentialId: Schema.optional(Schema.String),
   teamKey: Schema.optional(Schema.String),
+  writeRejection: Schema.optional(
+    Schema.Literals([
+      "team-unavailable",
+      "too-many-assignees",
+      "assignee-unavailable",
+      "label-unavailable",
+      "state-unavailable",
+      "not-comment-owner",
+      "wrong-comment-issue",
+      "incomplete-templates",
+    ]),
+  ),
   bindingRejection: Schema.optional(
     Schema.Literals([
       "unknown-credential",
@@ -313,6 +551,20 @@ export class LinearApiError extends Schema.TaggedError<LinearApiError>()("Linear
     if (this.reason === "unauthenticated") {
       return `Linear authentication failed during ${this.operation}.`;
     }
+    if (this.writeRejection === "team-unavailable") return "This Linear team is unavailable.";
+    if (this.writeRejection === "too-many-assignees") return "Linear accepts at most one assignee.";
+    if (this.writeRejection === "assignee-unavailable")
+      return "This assignee is not an active member of the Linear team.";
+    if (this.writeRejection === "label-unavailable")
+      return "This label is unavailable to the Linear team.";
+    if (this.writeRejection === "state-unavailable")
+      return "The Linear team has no workflow state for this action.";
+    if (this.writeRejection === "not-comment-owner")
+      return "Only the author can edit this Linear comment.";
+    if (this.writeRejection === "wrong-comment-issue")
+      return "This Linear comment does not belong to the issue.";
+    if (this.writeRejection === "incomplete-templates")
+      return "Linear template defaults could not be fully read.";
     if (this.status !== undefined)
       return `Linear ${this.operation} failed with HTTP ${this.status}.`;
     if (this.identifier !== undefined) return `Linear issue ${this.identifier} was not found.`;
@@ -333,6 +585,7 @@ export class LinearApiError extends Schema.TaggedError<LinearApiError>()("Linear
 }
 export const isLinearApiError = Schema.is(LinearApiError);
 
+export type LinearHistory = typeof History.Type;
 export type LinearUser = typeof User.Type;
 export type LinearIssue = typeof Issue.Type;
 export type LinearAttachment = typeof Attachment.Type;
@@ -389,6 +642,84 @@ export class LinearApi extends Context.Service<
     >;
     readonly comment: (input: {
       readonly issueId: string;
+      readonly body: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<void, LinearApiError>;
+    readonly getIssueSelection: (input: {
+      readonly identifier: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<
+      {
+        readonly id: string;
+        readonly assignee: LinearUser | null;
+        readonly labels: Pick<
+          NonNullable<typeof SelectionEnvelope.Type.data.issue>["labels"],
+          "nodes"
+        >;
+      },
+      LinearApiError
+    >;
+    readonly getHistory: (input: {
+      readonly identifier: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<
+      { readonly nodes: ReadonlyArray<LinearHistory>; readonly truncated: boolean },
+      LinearApiError
+    >;
+    readonly createIssue: (input: {
+      readonly teamKey: string;
+      readonly title: string;
+      readonly body: string;
+      readonly labels: ReadonlyArray<string>;
+      readonly assignees: ReadonlyArray<string>;
+      readonly credentialId?: string;
+    }) => Effect.Effect<{ readonly number: number; readonly url: string }, LinearApiError>;
+    readonly updateIssue: (input: {
+      readonly identifier: string;
+      readonly title?: string;
+      readonly body?: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<void, LinearApiError>;
+    readonly runAction: (input: {
+      readonly teamKey: string;
+      readonly identifier: string;
+      readonly action: IssueAction;
+      readonly reason?: IssueCloseReason;
+      readonly credentialId?: string;
+    }) => Effect.Effect<void, LinearApiError>;
+    readonly setLabels: (input: {
+      readonly teamKey: string;
+      readonly identifier: string;
+      readonly labels: ReadonlyArray<string>;
+      readonly credentialId?: string;
+    }) => Effect.Effect<void, LinearApiError>;
+    readonly setAssignees: (input: {
+      readonly teamKey: string;
+      readonly identifier: string;
+      readonly assignees: ReadonlyArray<string>;
+      readonly credentialId?: string;
+    }) => Effect.Effect<void, LinearApiError>;
+    readonly listLabels: (input: {
+      readonly teamKey: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<
+      { readonly nodes: ReadonlyArray<typeof CandidateLabel.Type>; readonly truncated: boolean },
+      LinearApiError
+    >;
+    readonly listAssignees: (input: {
+      readonly teamKey: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<
+      { readonly nodes: ReadonlyArray<LinearUser>; readonly truncated: boolean },
+      LinearApiError
+    >;
+    readonly getIssueTemplates: (input: {
+      readonly teamKey: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<IssueTemplateList, LinearApiError>;
+    readonly updateComment: (input: {
+      readonly identifier: string;
+      readonly commentId: string;
       readonly body: string;
       readonly credentialId?: string;
     }) => Effect.Effect<void, LinearApiError>;
@@ -507,7 +838,7 @@ const make = Effect.gen(function* () {
                 Math.ceil(66 * Number(variables.first ?? variables.last) + 1.4),
                 documentCosts.get(costKey) ?? 0,
               )
-            : (documentCosts.get(costKey) ?? 0);
+            : Math.max(QUERY_COSTS.get(document) ?? 0, documentCosts.get(costKey) ?? 0);
       const budget = complexityBudgets.get(credentialScope);
       if (budget !== undefined && budget.reset <= now) complexityBudgets.delete(credentialScope);
       if (budget !== undefined && budget.reset > now) {
@@ -910,6 +1241,182 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const getTeam = (teamKey: string, credentialId?: string) =>
+    request(credentialId, "team", TEAM_QUERY, { key: teamKey }, TeamEnvelope).pipe(
+      Effect.flatMap(({ data }) => {
+        const team = data.teams.nodes[0];
+        return team !== undefined && data.teams.nodes.length === 1 && team.key === teamKey
+          ? Effect.succeed(team)
+          : Effect.fail(
+              new LinearApiError({
+                operation: "team",
+                reason: "failed",
+                writeRejection: "team-unavailable",
+              }),
+            );
+      }),
+    );
+
+  const readPages = <A>(
+    fetch: (after: string | undefined) => Effect.Effect<
+      {
+        readonly nodes: ReadonlyArray<A>;
+        readonly pageInfo: typeof PageInfo.Type;
+      },
+      LinearApiError
+    >,
+  ) =>
+    Effect.gen(function* () {
+      const nodes: A[] = [];
+      let after: string | undefined;
+      let truncated = false;
+      for (let page = 0; page < 4; page++) {
+        const result = yield* fetch(after);
+        nodes.push(...result.nodes);
+        truncated = result.pageInfo.hasNextPage;
+        const next = result.pageInfo.endCursor;
+        if (!truncated || !next || next === after) break;
+        after = next;
+      }
+      return { nodes, truncated };
+    });
+
+  const readLabels = (
+    team: typeof TeamWithAncestors.Type,
+    credentialId?: string,
+    names?: ReadonlyArray<string>,
+  ) => {
+    const teamIds = [team.id, ...team.ancestors.toReversed().map((ancestor) => ancestor.id)];
+    const order = [...teamIds, null];
+    return readPages((after) =>
+      request(
+        credentialId,
+        "labels",
+        LABELS_QUERY,
+        {
+          filter: {
+            or: [{ team: { id: { in: teamIds } } }, { team: { null: true } }],
+            isGroup: { eq: false },
+            ...(names === undefined ? {} : { name: { in: names } }),
+          },
+          ...(after === undefined ? {} : { after }),
+        },
+        LabelsEnvelope,
+      ).pipe(Effect.map(({ data }) => data.issueLabels)),
+    ).pipe(
+      Effect.map((result) => ({
+        ...result,
+        nodes: result.nodes
+          .filter((label) => label.team === null || teamIds.includes(label.team.id))
+          .toSorted(
+            (a, b) => order.indexOf(a.team?.id ?? null) - order.indexOf(b.team?.id ?? null),
+          ),
+      })),
+    );
+  };
+
+  const labelIds = (
+    team: typeof TeamWithAncestors.Type,
+    names: ReadonlyArray<string>,
+    credentialId?: string,
+  ) =>
+    names.length === 0
+      ? Effect.succeed<string[]>([])
+      : readLabels(team, credentialId, names).pipe(
+          Effect.flatMap(({ nodes, truncated }) => {
+            const ids = [...new Set(names)].map(
+              (name) => nodes.find((label) => label.name === name)?.id,
+            );
+            return truncated || ids.some((id) => id === undefined)
+              ? Effect.fail(
+                  new LinearApiError({
+                    operation: "labels",
+                    reason: "failed",
+                    writeRejection: "label-unavailable",
+                  }),
+                )
+              : Effect.succeed(ids as string[]);
+          }),
+        );
+
+  const readMembers = (
+    team: typeof Team.Type,
+    credentialId?: string,
+    filter: Record<string, unknown> = {},
+  ) =>
+    readPages((after) =>
+      request(
+        credentialId,
+        "assignees",
+        MEMBERS_QUERY,
+        {
+          id: team.id,
+          filter: { active: { eq: true }, ...filter },
+          ...(after === undefined ? {} : { after }),
+        },
+        MembersEnvelope,
+      ).pipe(Effect.map(({ data }) => data.team.members)),
+    );
+
+  const assigneeId = (
+    team: typeof Team.Type,
+    assignees: ReadonlyArray<string>,
+    credentialId?: string,
+  ) =>
+    Effect.gen(function* () {
+      const value = assignees[0];
+      if (value === undefined) return null;
+      const isEmail = value.includes("@");
+      const members = yield* readMembers(
+        team,
+        credentialId,
+        isEmail ? { email: { eq: value } } : { id: { in: [value] } },
+      );
+      const matches = members.nodes.filter((user) => (isEmail ? user.email : user.id) === value);
+      if (matches.length !== 1 || members.truncated)
+        return yield* new LinearApiError({
+          operation: "assignees",
+          reason: "failed",
+          writeRejection: "assignee-unavailable",
+        });
+      return matches[0]!.id;
+    });
+
+  const getIssueSelection = (identifier: string, credentialId?: string) =>
+    Effect.gen(function* () {
+      let id = identifier;
+      let assignee: LinearUser | null = null;
+      const labels = yield* readPages((after) =>
+        request(
+          credentialId,
+          "issue selection",
+          SELECTION_QUERY,
+          { id: identifier, ...(after === undefined ? {} : { after }) },
+          SelectionEnvelope,
+        ).pipe(
+          Effect.flatMap(({ data }) => {
+            if (data.issue === null)
+              return Effect.fail(
+                new LinearApiError({ operation: "issue selection", reason: "failed", identifier }),
+              );
+            id = data.issue.id;
+            assignee = data.issue.assignee;
+            return Effect.succeed(data.issue.labels);
+          }),
+        ),
+      );
+      if (labels.truncated)
+        return yield* new LinearApiError({
+          operation: "issue selection",
+          reason: "failed",
+          writeRejection: "label-unavailable",
+        });
+      return { id, assignee, labels: { nodes: labels.nodes } };
+    });
+
+  const updateIssue = (identifier: string, input: Record<string, unknown>, credentialId?: string) =>
+    mutation(credentialId, "updateIssue", ISSUE_UPDATE_MUTATION, { id: identifier, input });
+
   return LinearApi.of({
     connection,
     connect: (value) =>
@@ -1062,6 +1569,254 @@ const make = Effect.gen(function* () {
       ),
     comment: ({ issueId, body, credentialId }) =>
       mutation(credentialId, "comment", COMMENT_MUTATION, { input: { issueId, body } }),
+    getIssueSelection: ({ identifier, credentialId }) =>
+      getIssueSelection(identifier, credentialId),
+    getHistory: ({ identifier, credentialId }) =>
+      readPages((after) =>
+        request(
+          credentialId,
+          "issue history",
+          HISTORY_QUERY,
+          {
+            id: identifier,
+            ...(after === undefined ? {} : { after }),
+          },
+          HistoryEnvelope,
+        ).pipe(
+          Effect.flatMap(({ data }) =>
+            data.issue === null
+              ? Effect.fail(
+                  new LinearApiError({ operation: "issue history", reason: "failed", identifier }),
+                )
+              : Effect.succeed(data.issue.history),
+          ),
+        ),
+      ),
+    createIssue: (input) =>
+      Effect.gen(function* () {
+        if (input.assignees.length > 1)
+          return yield* new LinearApiError({
+            operation: "createIssue",
+            reason: "failed",
+            writeRejection: "too-many-assignees",
+          });
+        const team = yield* getTeam(input.teamKey, input.credentialId);
+        const labels = yield* labelIds(team, input.labels, input.credentialId);
+        const assignee = yield* assigneeId(team, input.assignees, input.credentialId);
+        const { data } = yield* request(
+          input.credentialId,
+          "createIssue",
+          ISSUE_CREATE_MUTATION,
+          {
+            input: {
+              teamId: team.id,
+              title: input.title,
+              description: input.body,
+              labelIds: labels,
+              assigneeId: assignee,
+              useDefaultTemplate: false,
+            },
+          },
+          CreatedEnvelope,
+        );
+        if (!data.issueCreate.success || data.issueCreate.issue === null)
+          return yield* new LinearApiError({ operation: "createIssue", reason: "failed" });
+        return data.issueCreate.issue;
+      }),
+    updateIssue: (input) =>
+      updateIssue(
+        input.identifier,
+        {
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.body === undefined ? {} : { description: input.body }),
+        },
+        input.credentialId,
+      ),
+    runAction: (input) =>
+      Effect.gen(function* () {
+        const team = yield* getTeam(input.teamKey, input.credentialId);
+        let defaultState: typeof WorkflowState.Type | null = null;
+        const states = yield* readPages((after) =>
+          request(
+            input.credentialId,
+            "workflow states",
+            STATES_QUERY,
+            {
+              id: team.id,
+              ...(after === undefined ? {} : { after }),
+            },
+            StatesEnvelope,
+          ).pipe(
+            Effect.map(({ data }) => {
+              defaultState = data.team.defaultIssueState;
+              return data.team.states;
+            }),
+          ),
+        );
+        const type =
+          input.action === "close"
+            ? input.reason === "not-planned"
+              ? "canceled"
+              : "completed"
+            : undefined;
+        const ordered = states.nodes.toSorted(
+          (a, b) => a.position - b.position || a.id.localeCompare(b.id),
+        );
+        const state =
+          type === undefined
+            ? (ordered.find(
+                (state) =>
+                  state.id === defaultState?.id &&
+                  ["triage", "backlog", "unstarted", "started"].includes(state.type),
+              ) ??
+              ["unstarted", "backlog", "started", "triage"].flatMap((type) =>
+                ordered.filter((state) => state.type === type),
+              )[0])
+            : ordered.find((state) => state.type === type);
+        if (state === undefined || states.truncated)
+          return yield* new LinearApiError({
+            operation: "runAction",
+            reason: "failed",
+            writeRejection: "state-unavailable",
+          });
+        yield* updateIssue(input.identifier, { stateId: state.id }, input.credentialId);
+      }),
+    setLabels: (input) =>
+      Effect.gen(function* () {
+        const team = yield* getTeam(input.teamKey, input.credentialId);
+        const issue = yield* getIssueSelection(input.identifier, input.credentialId);
+        const retained = issue.labels.nodes.filter((label) => input.labels.includes(label.name));
+        const added = input.labels.filter((name) => !retained.some((label) => label.name === name));
+        const ids = [
+          ...retained.map((label) => label.id),
+          ...(yield* labelIds(team, added, input.credentialId)),
+        ];
+        yield* updateIssue(input.identifier, { labelIds: ids }, input.credentialId);
+      }),
+    setAssignees: (input) =>
+      Effect.gen(function* () {
+        if (input.assignees.length > 1)
+          return yield* new LinearApiError({
+            operation: "setAssignees",
+            reason: "failed",
+            writeRejection: "too-many-assignees",
+          });
+        const team = yield* getTeam(input.teamKey, input.credentialId);
+        const id = yield* assigneeId(team, input.assignees, input.credentialId);
+        yield* updateIssue(input.identifier, { assigneeId: id }, input.credentialId);
+      }),
+    listLabels: ({ teamKey, credentialId }) =>
+      getTeam(teamKey, credentialId).pipe(
+        Effect.flatMap((team) => readLabels(team, credentialId)),
+        Effect.map((result) => {
+          const labels = new Map<string, typeof CandidateLabel.Type>();
+          for (const label of result.nodes) {
+            if (!labels.has(label.name)) labels.set(label.name, label);
+          }
+          return { ...result, nodes: [...labels.values()] };
+        }),
+      ),
+    listAssignees: ({ teamKey, credentialId }) =>
+      getTeam(teamKey, credentialId).pipe(
+        Effect.flatMap((team) => readMembers(team, credentialId)),
+      ),
+    getIssueTemplates: ({ teamKey, credentialId }) =>
+      Effect.gen(function* () {
+        const team = yield* getTeam(teamKey, credentialId);
+        const teamTemplates = yield* Effect.forEach(
+          [team.id, ...team.ancestors.map((ancestor) => ancestor.id)],
+          (id) =>
+            readPages((after) =>
+              request(
+                credentialId,
+                "team templates",
+                TEAM_TEMPLATES_QUERY,
+                {
+                  id,
+                  ...(after === undefined ? {} : { after }),
+                },
+                TemplatesEnvelope,
+              ).pipe(Effect.map(({ data }) => data.source.templates)),
+            ),
+        );
+        const workspaceTemplates = yield* readPages((after) =>
+          request(
+            credentialId,
+            "workspace templates",
+            WORKSPACE_TEMPLATES_QUERY,
+            after === undefined ? {} : { after },
+            TemplatesEnvelope,
+          ).pipe(Effect.map(({ data }) => data.source.templates)),
+        );
+        const labels = yield* readLabels(team, credentialId);
+        if (
+          teamTemplates.some((result) => result.truncated) ||
+          workspaceTemplates.truncated ||
+          labels.truncated
+        )
+          return yield* new LinearApiError({
+            operation: "templates",
+            reason: "failed",
+            writeRejection: "incomplete-templates",
+          });
+        const templates: IssueTemplate[] = [];
+        for (const template of [
+          ...teamTemplates.flatMap((result) => result.nodes),
+          ...workspaceTemplates.nodes,
+        ]) {
+          if (template.type !== "issue" || template.hasFormFields) continue;
+          const data = template.templateData;
+          if (data.descriptionData != null && template.content === null && data.description == null)
+            continue;
+          const names = (data.labelIds ?? []).map((id) => {
+            const label = labels.nodes.find((label) => label.id === id);
+            const selected = labels.nodes.find((candidate) => candidate.name === label?.name);
+            return selected?.id === id ? label?.name : undefined;
+          });
+          if (names.some((name) => name === undefined))
+            return yield* new LinearApiError({
+              operation: "templates",
+              reason: "failed",
+              writeRejection: "incomplete-templates",
+            });
+          templates.push({
+            key: template.id,
+            name: template.name,
+            about: template.description ?? "",
+            title: data.title ?? "",
+            body: template.content ?? data.description ?? "",
+            labels: names as string[],
+            assignees: data.assigneeId ? [data.assigneeId] : [],
+          });
+        }
+        return { templates, contactLinks: [], blankIssuesEnabled: true };
+      }),
+    updateComment: (input) =>
+      Effect.gen(function* () {
+        const { data } = yield* request(
+          input.credentialId,
+          "comment owner",
+          COMMENT_OWNER_QUERY,
+          { id: input.commentId },
+          CommentOwnerEnvelope,
+        );
+        if (data.comment?.issue?.identifier !== input.identifier)
+          return yield* new LinearApiError({
+            operation: "updateComment",
+            reason: "failed",
+            writeRejection: "wrong-comment-issue",
+          });
+        if (data.comment.user?.id !== data.viewer.id)
+          return yield* new LinearApiError({
+            operation: "updateComment",
+            reason: "failed",
+            writeRejection: "not-comment-owner",
+          });
+        yield* mutation(input.credentialId, "updateComment", COMMENT_UPDATE_MUTATION, {
+          id: input.commentId,
+          input: { body: input.body },
+        });
+      }),
     setReaction: (input) => {
       if (input.reacted) {
         return mutation(input.credentialId, "reaction", REACTION_CREATE_MUTATION, {

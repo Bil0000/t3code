@@ -252,6 +252,7 @@ it.effect("uses Linear user ids for viewer-comparable issue actors", () => {
 
 it.effect("maps Linear comment reaction arrays into issue activity", () => {
   const api = {
+    getHistory: () => Effect.succeed({ nodes: [], truncated: false }),
     getActivity: () =>
       Effect.succeed({
         viewerId: "user-1",
@@ -296,6 +297,7 @@ it.effect("maps Linear comment reaction arrays into issue activity", () => {
       commentsTruncated: false,
       nextCommentsCursor: null,
       events: [],
+      eventsTruncated: false,
       reactions: [{ content: "hooray", count: 2, actors: ["user-2"], viewerHasReacted: false }],
     });
   }).pipe(
@@ -578,6 +580,345 @@ it.effect("carries mixed-team ancestors and same-number sub-issues on a Linear d
             }),
         }),
         ServerSettings.layerTest({ issueTracking: { connections: { linear: {} } } } as never),
+      ),
+    ),
+  );
+});
+
+it.effect.each(["user-1", "late-user", null])(
+  "offers single-assignee writes and reports assigned candidate %s",
+  (assignedId) =>
+    Effect.gen(function* () {
+      const adapter = yield* make;
+      assert.strictEqual(adapter.capabilities.maxAssignees, 1);
+      assert.strictEqual(adapter.capabilities.typedAssignees, true);
+      assert.strictEqual(adapter.capabilities.create, true);
+      assert.strictEqual(adapter.capabilities.editComment, true);
+      const target = {
+        cwd: PROJECT.workspaceRoot,
+        host: "linear.app",
+        repository: "ENG",
+        number: 7,
+        credentialId: "account-1",
+      };
+      const labels = yield* adapter.listLabelCandidates(target);
+      assert.deepStrictEqual(labels, {
+        candidates: [
+          { name: "Bug", color: "#ff0000", description: "Team bug", isApplied: true },
+          { name: "Shared", color: "#0000ff", description: null, isApplied: false },
+        ],
+        truncated: false,
+      });
+      const assignees = yield* adapter.listAssigneeCandidates(target);
+      assert.deepStrictEqual(assignees, {
+        candidates: [
+          {
+            id: "user-1",
+            login: "user-1",
+            name: "Ada",
+            avatarUrl: null,
+            isAssigned: assignedId === "user-1",
+          },
+          { id: "user-2", login: "user-2", name: "Grace", avatarUrl: null, isAssigned: false },
+          ...(assignedId === "late-user"
+            ? [
+                {
+                  id: "late-user",
+                  login: "late-user",
+                  name: "Ada",
+                  avatarUrl: null,
+                  isAssigned: true,
+                },
+              ]
+            : []),
+        ],
+        truncated: true,
+      });
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(LinearApi.LinearApi)({
+            listLabels: (input) => {
+              assert.deepStrictEqual(input, { teamKey: "ENG", credentialId: "account-1" });
+              return Effect.succeed({
+                nodes: [
+                  {
+                    id: "bug",
+                    name: "Bug",
+                    color: "#ff0000",
+                    description: "Team bug",
+                    team: { id: "eng", key: "ENG", name: "Engineering" },
+                  },
+                  { id: "global", name: "Shared", color: "#0000ff", description: null, team: null },
+                ],
+                truncated: false,
+              });
+            },
+            listAssignees: (input) => {
+              assert.deepStrictEqual(input, { teamKey: "ENG", credentialId: "account-1" });
+              return Effect.succeed({
+                nodes: [
+                  { id: "user-1", name: "Ada" },
+                  { id: "user-2", name: "Grace" },
+                ],
+                truncated: true,
+              });
+            },
+            getIssueSelection: (input) => {
+              assert.deepStrictEqual(input, { identifier: "ENG-7", credentialId: "account-1" });
+              return Effect.succeed({
+                id: "issue-7",
+                assignee: assignedId === null ? null : { id: assignedId, name: "Ada" },
+                labels: { nodes: [{ id: "bug", name: "Bug" }] },
+              });
+            },
+          }),
+          ServerSettings.layerTest(),
+        ),
+      ),
+    ),
+);
+
+it.effect.each([2, 400])(
+  "keeps applied archived labels selectable and removable with %s listed labels",
+  (count) => {
+    const nodes = Array.from({ length: count }, (_, index) => ({
+      id: `label-${index}`,
+      name: index === 0 ? "Bug" : `Label ${index}`,
+      color: "#ff0000",
+      description: "Native description",
+      team: null,
+    }));
+    const writes: ReadonlyArray<string>[] = [];
+    return Effect.gen(function* () {
+      const adapter = yield* make;
+      const target = {
+        cwd: PROJECT.workspaceRoot,
+        host: "linear.app",
+        repository: "ENG",
+        number: 7,
+      };
+      const labels = yield* adapter.listLabelCandidates(target);
+      assert.strictEqual(labels.candidates.length, count + 1);
+      assert.strictEqual(labels.truncated, count === 400);
+      assert.deepStrictEqual(labels.candidates[0], {
+        name: "Bug",
+        color: "#ff0000",
+        description: "Native description",
+        isApplied: true,
+      });
+      assert.deepStrictEqual(labels.candidates.at(-1), {
+        name: "Old archived",
+        color: count === 400 ? null : "#0000ff",
+        description: null,
+        isApplied: true,
+      });
+      const applied = labels.candidates
+        .filter((label) => label.isApplied)
+        .map((label) => label.name);
+      assert.deepStrictEqual(applied, ["Bug", "Old archived"]);
+      yield* adapter.setLabels({ ...target, labels: [...applied, "Label 1"] });
+      yield* adapter.setLabels({
+        ...target,
+        labels: [...applied.filter((name) => name !== "Old archived"), "Label 1"],
+      });
+      assert.deepStrictEqual(writes, [
+        ["Bug", "Old archived", "Label 1"],
+        ["Bug", "Label 1"],
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(LinearApi.LinearApi)({
+            listLabels: () => Effect.succeed({ nodes, truncated: count === 400 }),
+            getIssueSelection: () =>
+              Effect.succeed({
+                id: "issue-7",
+                assignee: null,
+                labels: {
+                  nodes: [
+                    { id: "other-bug", name: "Bug", color: "#000000" },
+                    {
+                      id: "archived",
+                      name: "Old archived",
+                      ...(count === 400 ? {} : { color: "#0000ff" }),
+                    },
+                  ],
+                },
+              }),
+            setLabels: (input) =>
+              Effect.sync(() => {
+                writes.push(input.labels);
+              }),
+          }),
+          ServerSettings.layerTest(),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect("maps native history into real state, label, assignment, and title events", () => {
+  const empty = {
+    actor: null,
+    fromState: null,
+    toState: null,
+    fromAssignee: null,
+    toAssignee: null,
+    addedLabels: null,
+    removedLabels: null,
+    fromTitle: null,
+    toTitle: null,
+  };
+  return Effect.gen(function* () {
+    const adapter = yield* make;
+    const activity = yield* adapter.getIssueActivity({
+      cwd: PROJECT.workspaceRoot,
+      host: "linear.app",
+      repository: "ENG",
+      number: 7,
+      credentialId: "account-1",
+    });
+    assert.deepStrictEqual(
+      activity.events.map((event) => [event.kind, event.detail, event.actor?.login ?? null]),
+      [
+        ["assigned", "Grace", "user-1"],
+        ["closed", "Canceled", "user-1"],
+        ["labeled", "Bug", "user-1"],
+        ["renamed", "New title", "user-1"],
+        ["unassigned", "Ada", "user-1"],
+        ["unlabeled", "Old", "user-1"],
+        ["reopened", "Doing", null],
+      ],
+    );
+    assert.strictEqual(new Set(activity.events.map((event) => event.id)).size, 7);
+    assert.strictEqual(activity.comments[0]?.body, "Still here");
+    assert.strictEqual(activity.reactions?.[0]?.viewerHasReacted, true);
+    assert.strictEqual(activity.nextCommentsCursor, "next-comments");
+    assert.strictEqual(activity.eventsTruncated, true);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(LinearApi.LinearApi)({
+          getActivity: () =>
+            Effect.succeed({
+              viewerId: "user-1",
+              comments: [
+                { id: "comment", body: "Still here", createdAt: "2026-10-01T00:00:00.000Z" },
+              ],
+              reactions: [{ id: "r", emoji: "👍", user: { id: "user-1" } }],
+              commentsTruncated: true,
+              nextCommentsCursor: "next-comments",
+            }),
+          getHistory: (input) => {
+            assert.deepStrictEqual(input, { identifier: "ENG-7", credentialId: "account-1" });
+            return Effect.succeed({
+              nodes: [
+                {
+                  ...empty,
+                  id: "reopen",
+                  createdAt: "2026-10-02T00:00:00.000Z",
+                  fromState: { name: "Done", type: "completed" },
+                  toState: { name: "Doing", type: "started" },
+                },
+                {
+                  ...empty,
+                  id: "change",
+                  createdAt: "2026-10-01T00:00:00.000Z",
+                  actor: { id: "user-1" },
+                  fromState: { name: "Doing", type: "started" },
+                  toState: { name: "Canceled", type: "canceled" },
+                  addedLabels: [{ name: "Bug" }],
+                  removedLabels: [{ name: "Old" }],
+                  fromAssignee: { id: "user-1", name: "Ada" },
+                  toAssignee: { id: "user-2", name: "Grace" },
+                  fromTitle: "Old title",
+                  toTitle: "New title",
+                },
+                {
+                  ...empty,
+                  id: "same-closed",
+                  createdAt: "2026-10-01T00:00:00.000Z",
+                  fromState: { name: "Done", type: "completed" },
+                  toState: { name: "Duplicate", type: "duplicate" },
+                },
+              ],
+              truncated: true,
+            });
+          },
+        }),
+        ServerSettings.layerTest(),
+      ),
+    ),
+  );
+});
+
+it.effect("preserves a Linear quota failure when a workflow write is denied", () => {
+  const failure = new LinearApi.LinearApiError({
+    operation: "workflow states",
+    reason: "rate-limited",
+    retryAt: 61000,
+  });
+  return Effect.gen(function* () {
+    const adapter = yield* make;
+    const error = yield* adapter
+      .runAction({
+        cwd: PROJECT.workspaceRoot,
+        host: "linear.app",
+        repository: "ENG",
+        number: 7,
+        action: "close",
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(error.operation, "runAction");
+    assert.strictEqual(error.retryAt, 61000);
+    assert.strictEqual(error.cause, failure);
+    assert.strictEqual(error.reason, "rate-limited");
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(LinearApi.LinearApi)({ runAction: () => Effect.fail(failure) }),
+        ServerSettings.layerTest(),
+      ),
+    ),
+  );
+});
+
+it.effect.each([
+  ["canceled", "not-planned"],
+  ["completed", "completed"],
+  ["started", null],
+] as const)("maps native %s state reason in detail and list", ([type, reason]) => {
+  const issue = {
+    id: "issue-7",
+    identifier: "ENG-7",
+    number: 7,
+    title: "Issue",
+    url: "https://linear.app/acme/issue/ENG-7",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-02T00:00:00.000Z",
+    state: { name: type, type },
+  };
+  return Effect.gen(function* () {
+    const adapter = yield* make;
+    const target = { cwd: PROJECT.workspaceRoot, host: "linear.app", repository: "ENG", number: 7 };
+    assert.strictEqual((yield* adapter.getIssue(target)).stateReason, reason);
+    const page = yield* adapter.listIssues({
+      ...target,
+      state: "all",
+      involvement: "all",
+      viewer: "user-1",
+      limit: 10,
+    });
+    assert.strictEqual(page.items[0]?.stateReason, reason);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(LinearApi.LinearApi)({
+          getIssue: () => Effect.succeed(issue),
+          listIssues: () => Effect.succeed({ issues: [issue], truncated: false }),
+        }),
+        ServerSettings.layerTest(),
       ),
     ),
   );

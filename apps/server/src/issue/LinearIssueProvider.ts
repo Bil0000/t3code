@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import type {
   IssueCapabilities,
+  IssueEvent,
   IssueLinkedPullRequest,
   IssueRelative,
   IssueRelativeNode,
@@ -21,29 +22,31 @@ const CAPABILITIES: IssueCapabilities = {
   referenceStyle: "key-number",
   closesViaPullRequest: false,
   comment: true,
-  actions: [],
-  closeReasons: [],
-  create: false,
-  issueTemplates: false,
-  edit: false,
-  editComment: false,
+  actions: ["close", "reopen"],
+  closeReasons: ["completed", "not-planned"],
+  create: true,
+  issueTemplates: true,
+  edit: true,
+  editComment: true,
   reactions: true,
-  labels: false,
-  assignees: false,
-  listLabelCandidates: false,
-  listAssigneeCandidates: false,
+  labels: true,
+  assignees: true,
+  maxAssignees: 1,
+  typedAssignees: true,
+  listLabelCandidates: true,
+  listAssigneeCandidates: true,
   search: true,
   linkedPullRequests: true,
-  timelineEvents: false,
+  timelineEvents: true,
 };
 
 const PERMISSIONS: IssueViewerPermissions = {
-  actions: [],
+  actions: ["close", "reopen"],
   comment: true,
-  edit: false,
-  labels: false,
-  assignees: false,
-  create: false,
+  edit: true,
+  labels: true,
+  assignees: true,
+  create: true,
 };
 
 const EMOJI: Record<IssueReactionContent, string> = {
@@ -107,6 +110,40 @@ function toComment(comment: LinearApi.LinearComment, viewerId: string) {
     url: comment.url ?? null,
     reactions: linearReactions(comment.reactions ?? [], viewerId),
   };
+}
+
+function toEvents(history: ReadonlyArray<LinearApi.LinearHistory>): IssueEvent[] {
+  return history
+    .flatMap((entry) => {
+      const events: IssueEvent[] = [];
+      const add = (kind: IssueEvent["kind"], detail: string | null) =>
+        events.push({
+          id: `${entry.id}:${kind}:${events.length}`,
+          kind,
+          actor: actor(entry.actor),
+          createdAt: entry.createdAt,
+          detail: detail?.trim() || null,
+        });
+      if (
+        entry.fromState !== null &&
+        entry.toState !== null &&
+        linearIssueState(entry.fromState.type) !== linearIssueState(entry.toState.type)
+      )
+        add(
+          linearIssueState(entry.toState.type) === "closed" ? "closed" : "reopened",
+          entry.toState.name,
+        );
+      for (const label of entry.addedLabels ?? []) add("labeled", label.name);
+      for (const label of entry.removedLabels ?? []) add("unlabeled", label.name);
+      if (entry.fromAssignee !== null && entry.fromAssignee.id !== entry.toAssignee?.id)
+        add("unassigned", entry.fromAssignee.name || entry.fromAssignee.id);
+      if (entry.toAssignee !== null && entry.toAssignee.id !== entry.fromAssignee?.id)
+        add("assigned", entry.toAssignee.name || entry.toAssignee.id);
+      if (entry.toTitle !== null && entry.toTitle !== entry.fromTitle)
+        add("renamed", entry.toTitle);
+      return events;
+    })
+    .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
 const PULL_REQUEST_URL =
@@ -173,7 +210,12 @@ function toIssue(issue: LinearApi.LinearIssue): ProviderIssue {
     url: issue.url,
     author: actor(issue.creator),
     state,
-    stateReason: null,
+    stateReason:
+      issue.state.type === "canceled"
+        ? "not-planned"
+        : issue.state.type === "completed"
+          ? "completed"
+          : null,
     createdAt: issue.createdAt,
     updatedAt: issue.updatedAt,
     closedAt:
@@ -202,15 +244,6 @@ export const make = Effect.gen(function* () {
       detail: error.detail,
       cause: error,
     });
-  const unsupported = (operation: string) =>
-    Effect.fail(
-      new IssueProviderError({
-        provider: "linear",
-        operation,
-        reason: "failed",
-        detail: "This Linear write is not enabled in this release.",
-      }),
-    );
   const identifier = (repository: string, number: number) => `${repository}-${number}`;
 
   return {
@@ -294,22 +327,23 @@ export const make = Effect.gen(function* () {
           })),
         ),
     getIssueActivity: (input) =>
-      api
-        .getActivity({
+      Effect.gen(function* () {
+        const reference = {
           identifier: identifier(input.repository, input.number),
           ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
-        })
-        .pipe(
-          Effect.mapError(fail("getIssueActivity")),
-          Effect.map((activity) => ({
-            comments: activity.comments.map((comment) => toComment(comment, activity.viewerId)),
-            commentCount: activity.comments.length,
-            commentsTruncated: activity.commentsTruncated,
-            nextCommentsCursor: activity.nextCommentsCursor ?? null,
-            events: [],
-            reactions: linearReactions(activity.reactions, activity.viewerId),
-          })),
-        ),
+        };
+        const activity = yield* api.getActivity(reference);
+        const history = yield* api.getHistory(reference);
+        return {
+          comments: activity.comments.map((comment) => toComment(comment, activity.viewerId)),
+          commentCount: activity.comments.length,
+          commentsTruncated: activity.commentsTruncated,
+          nextCommentsCursor: activity.nextCommentsCursor ?? null,
+          events: toEvents(history.nodes),
+          eventsTruncated: history.truncated,
+          reactions: linearReactions(activity.reactions, activity.viewerId),
+        };
+      }).pipe(Effect.mapError(fail("getIssueActivity"))),
     getIssueComments: (input) =>
       api
         .getActivity({
@@ -325,7 +359,16 @@ export const make = Effect.gen(function* () {
           })),
         ),
     getViewerPermissions: () => Effect.succeed(PERMISSIONS),
-    runAction: () => unsupported("runAction"),
+    runAction: (input) =>
+      api
+        .runAction({
+          teamKey: input.repository,
+          identifier: identifier(input.repository, input.number),
+          action: input.action,
+          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(Effect.mapError(fail("runAction"))),
     comment: (input) =>
       api
         .comment({
@@ -334,6 +377,15 @@ export const make = Effect.gen(function* () {
           ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
         })
         .pipe(Effect.mapError(fail("comment"))),
+    updateComment: (input) =>
+      api
+        .updateComment({
+          identifier: identifier(input.repository, input.number),
+          commentId: input.commentId,
+          body: input.body,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(Effect.mapError(fail("updateComment"))),
     setReaction: (input) =>
       api
         .setReaction({
@@ -344,11 +396,100 @@ export const make = Effect.gen(function* () {
           ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
         })
         .pipe(Effect.mapError(fail("setReaction"))),
-    create: () => unsupported("create"),
-    update: () => unsupported("update"),
-    setLabels: () => unsupported("setLabels"),
-    setAssignees: () => unsupported("setAssignees"),
-    listLabelCandidates: () => unsupported("listLabelCandidates"),
-    listAssigneeCandidates: () => unsupported("listAssigneeCandidates"),
+    create: (input) =>
+      api
+        .createIssue({
+          teamKey: input.repository,
+          title: input.title,
+          body: input.body,
+          labels: input.labels,
+          assignees: input.assignees,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(Effect.mapError(fail("create"))),
+    update: (input) =>
+      api
+        .updateIssue({
+          identifier: identifier(input.repository, input.number),
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.body === undefined ? {} : { body: input.body }),
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(Effect.mapError(fail("update"))),
+    setLabels: (input) =>
+      api
+        .setLabels({
+          teamKey: input.repository,
+          identifier: identifier(input.repository, input.number),
+          labels: input.labels,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(Effect.mapError(fail("setLabels"))),
+    setAssignees: (input) =>
+      api
+        .setAssignees({
+          teamKey: input.repository,
+          identifier: identifier(input.repository, input.number),
+          assignees: input.assignees,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(Effect.mapError(fail("setAssignees"))),
+    listLabelCandidates: (input) =>
+      Effect.gen(function* () {
+        const labels = yield* api.listLabels({
+          teamKey: input.repository,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        });
+        const issue = yield* api.getIssueSelection({
+          identifier: identifier(input.repository, input.number),
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        });
+        return {
+          candidates: [
+            ...labels.nodes,
+            ...issue.labels.nodes
+              .filter((applied) => !labels.nodes.some((label) => label.name === applied.name))
+              .map((label) => ({ ...label, description: null })),
+          ].map((label) => ({
+            name: label.name,
+            color: label.color ?? null,
+            description: label.description,
+            isApplied: issue.labels.nodes.some((applied) => applied.name === label.name),
+          })),
+          truncated: labels.truncated,
+        };
+      }).pipe(Effect.mapError(fail("listLabelCandidates"))),
+    listAssigneeCandidates: (input) =>
+      Effect.gen(function* () {
+        const members = yield* api.listAssignees({
+          teamKey: input.repository,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        });
+        const issue = yield* api.getIssueSelection({
+          identifier: identifier(input.repository, input.number),
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        });
+        return {
+          candidates: [
+            ...members.nodes,
+            ...(issue.assignee !== null &&
+            !members.nodes.some((user) => user.id === issue.assignee?.id)
+              ? [issue.assignee]
+              : []),
+          ].map((user) => ({
+            ...actor(user)!,
+            id: user.id,
+            isAssigned: issue.assignee?.id === user.id,
+          })),
+          truncated: members.truncated,
+        };
+      }).pipe(Effect.mapError(fail("listAssigneeCandidates"))),
+    listIssueTemplates: (input) =>
+      api
+        .getIssueTemplates({
+          teamKey: input.repository,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(Effect.mapError(fail("listIssueTemplates"))),
   } satisfies IssueAdapter;
 });
