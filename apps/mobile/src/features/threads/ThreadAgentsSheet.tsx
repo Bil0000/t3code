@@ -25,6 +25,7 @@ import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { environmentThreadDetails } from "../../state/threads";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { SubagentRow } from "./SubagentRow";
+import { SubagentStopButton } from "./SubagentStopButton";
 import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
 import { MaterialScreenContent } from "../../components/MaterialScreenContent";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -106,7 +107,6 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
             <ThreadWorkflowGroup
               key={subagent.id}
               environmentId={target.environmentId}
-              coordinator={subagent}
               group={group}
               header={row}
               onOpen={openChildThread}
@@ -179,26 +179,28 @@ function AgentRow(props: {
     </View>
   );
 
-  if (childThreadId === null) {
-    return (
-      <View
-        accessible
-        accessibilityHint="Provider-managed agent. Its work appears in the transcript."
-      >
-        {row}
-      </View>
-    );
-  }
-
   return (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityHint="Opens this agent's thread"
-      onPress={() => props.onOpen(childThreadId)}
-      className="active:opacity-70"
-    >
-      {row}
-    </Pressable>
+    <View className="flex-row items-center gap-3">
+      {childThreadId === null ? (
+        <View
+          accessible
+          accessibilityHint="Provider-managed agent. Its work appears in the transcript."
+          className="min-w-0 flex-1"
+        >
+          {row}
+        </View>
+      ) : (
+        <Pressable
+          accessibilityRole="link"
+          accessibilityHint="Opens this agent thread"
+          onPress={() => props.onOpen(childThreadId)}
+          className="min-w-0 flex-1 active:opacity-70"
+        >
+          {row}
+        </Pressable>
+      )}
+      <SubagentStopButton environmentId={props.environmentId} subagent={subagent} />
+    </View>
   );
 }
 

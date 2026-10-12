@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
+import { NodeId, ProviderDriverKind, RunId, ThreadId } from "@t3tools/contracts";
 
-import { resolveSubagentRowPresentation, workflowGroupSummary } from "./threadAgentsPresentation";
+import {
+  resolveSubagentRowPresentation,
+  resolveSubagentStopTarget,
+  workflowGroupSummary,
+} from "./threadAgentsPresentation";
 
 const base = {
   title: null,
@@ -91,5 +96,94 @@ describe("workflowGroupSummary", () => {
     expect(workflowGroupSummary({ phases: [], unphasedMembers: [] } as unknown as Group)).toBe(
       "No agents yet",
     );
+  });
+});
+
+const stopAgent = {
+  id: NodeId.make("agent"),
+  threadId: ThreadId.make("parent"),
+  childThreadId: ThreadId.make("child"),
+  status: "running" as const,
+  origin: "app_owned" as const,
+  driver: ProviderDriverKind.make("codex"),
+  runId: RunId.make("run"),
+  nativeTaskRef: null,
+};
+
+describe("resolveSubagentStopTarget", () => {
+  it.each(["pending", "running", "waiting"] as const)(
+    "interrupts only the child of an app-owned %s agent",
+    (status) => {
+      expect(resolveSubagentStopTarget({ ...stopAgent, status })).toEqual({
+        kind: "subagent",
+        input: { threadId: stopAgent.childThreadId },
+      });
+      expect(resolveSubagentStopTarget({ ...stopAgent, status, childThreadId: null })).toBeNull();
+    },
+  );
+
+  it.each(["idle", "completed", "failed", "cancelled", "interrupted"] as const)(
+    "offers no Stop for a %s agent",
+    (status) => {
+      expect(resolveSubagentStopTarget({ ...stopAgent, status })).toBeNull();
+    },
+  );
+
+  const native = {
+    ...stopAgent,
+    origin: "provider_native" as const,
+    driver: ProviderDriverKind.make("claudeAgent"),
+    childThreadId: null,
+    nativeTaskRef: {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      strength: "strong" as const,
+      nativeId: "native-task",
+    },
+  };
+
+  it("targets a supported native task without interrupting its parent run", () => {
+    expect(resolveSubagentStopTarget(native)).toEqual({
+      kind: "subagent",
+      input: { threadId: native.threadId, subagentId: native.id },
+    });
+  });
+
+  it("hides native Stop when the task cannot be identified or stopped", () => {
+    expect(resolveSubagentStopTarget({ ...native, nativeTaskRef: null })).toBeNull();
+    expect(
+      resolveSubagentStopTarget({
+        ...native,
+        nativeTaskRef: { ...native.nativeTaskRef, strength: "weak" },
+      }),
+    ).toBeNull();
+    expect(
+      resolveSubagentStopTarget({
+        ...native,
+        nativeTaskRef: { ...native.nativeTaskRef, nativeId: null },
+      }),
+    ).toBeNull();
+    expect(resolveSubagentStopTarget({ ...native, runId: null })).toBeNull();
+    expect(resolveSubagentStopTarget({ ...native, status: "completed" })).toBeNull();
+    expect(
+      resolveSubagentStopTarget({ ...native, driver: ProviderDriverKind.make("codex") }),
+    ).toBeNull();
+  });
+
+  it("stops the whole workflow through its own command", () => {
+    const workflow = { name: "Review", phases: [], agents: [] };
+    expect(resolveSubagentStopTarget({ ...native, workflow })).toEqual({
+      kind: "workflow",
+      input: { threadId: native.threadId, subagentId: native.id },
+    });
+    expect(resolveSubagentStopTarget({ ...native, workflow, status: "waiting" })).toBeNull();
+    expect(resolveSubagentStopTarget({ ...stopAgent, workflow })).toBeNull();
+    expect(resolveSubagentStopTarget({ ...native, workflow, nativeTaskRef: null })).toBeNull();
+    expect(
+      resolveSubagentStopTarget({
+        ...native,
+        workflow,
+        nativeTaskRef: { ...native.nativeTaskRef, nativeId: "" },
+      }),
+    ).toBeNull();
   });
 });

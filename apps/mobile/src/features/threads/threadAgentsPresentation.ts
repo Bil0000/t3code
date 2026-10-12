@@ -86,3 +86,47 @@ export function workflowGroupSummary(group: SubagentWorkflowGroup): string {
   const agents = `${settled}/${members.length} ${members.length === 1 ? "agent" : "agents"} done`;
   return phases === 0 ? agents : `${phases} ${phases === 1 ? "phase" : "phases"} · ${agents}`;
 }
+
+export function resolveSubagentStopTarget(
+  subagent: Pick<
+    OrchestrationV2Subagent,
+    | "id"
+    | "threadId"
+    | "childThreadId"
+    | "status"
+    | "origin"
+    | "driver"
+    | "runId"
+    | "nativeTaskRef"
+    | "workflow"
+  >,
+) {
+  if (!isActiveSubagentStatus(subagent.status)) return null;
+  if (subagent.workflow !== undefined) {
+    return subagent.status === "running" &&
+      subagent.origin === "provider_native" &&
+      subagent.driver === "claudeAgent" &&
+      Boolean(subagent.nativeTaskRef?.nativeId)
+      ? {
+          kind: "workflow" as const,
+          input: { threadId: subagent.threadId, subagentId: subagent.id },
+        }
+      : null;
+  }
+  if (subagent.origin === "app_owned" && subagent.childThreadId !== null) {
+    return { kind: "subagent" as const, input: { threadId: subagent.childThreadId } };
+  }
+  if (
+    subagent.origin === "provider_native" &&
+    subagent.driver === "claudeAgent" &&
+    subagent.runId !== null &&
+    subagent.nativeTaskRef?.strength === "strong" &&
+    subagent.nativeTaskRef.nativeId !== null
+  ) {
+    return {
+      kind: "subagent" as const,
+      input: { threadId: subagent.threadId, subagentId: subagent.id },
+    };
+  }
+  return null;
+}

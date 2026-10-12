@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isActiveSubagentStatus,
@@ -7,23 +6,15 @@ import {
   type RuntimeSubagent,
   type SubagentWorkflowGroup,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import {
-  NodeId,
-  ThreadId,
-  type EnvironmentId,
-  type OrchestrationV2Subagent,
-} from "@t3tools/contracts";
+import { ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import { deriveSubagentElapsedMs, formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { useState, type ReactNode } from "react";
-import { Alert, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
 
-import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
 import { useThreadShell } from "../../state/entities";
-import { orchestrationEnvironment } from "../../state/orchestration";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { subagentCardDetail } from "./subagent-card-presentation";
 import { SUBAGENT_TONE_TEXT_CLASS, SubagentStatusDot } from "./SubagentStatusDot";
 import { resolveSubagentRowPresentation, workflowGroupSummary } from "./threadAgentsPresentation";
@@ -31,45 +22,16 @@ import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 export function ThreadWorkflowGroup(props: {
   readonly environmentId: EnvironmentId;
-  readonly coordinator: OrchestrationV2Subagent;
   readonly group: SubagentWorkflowGroup;
   readonly header: ReactNode;
   readonly onOpen: (threadId: ThreadId) => void;
 }) {
-  const { coordinator, group } = props;
+  const { group } = props;
   const [expanded, setExpanded] = useState(() => isActiveSubagentStatus(group.workflow.status));
   const [phaseOpen, setPhaseOpen] = useState<ReadonlyMap<number, boolean>>(() => new Map());
   const label = group.workflow.workflowName ?? group.workflow.title;
   const summary = workflowGroupSummary(group);
   const phases = group.phases.filter((phase) => phase.members.length > 0);
-
-  const canOperate = useAtomValue(
-    orchestrationEnvironment.stopWorkflow.permissionAtom(props.environmentId),
-  );
-  const stopWorkflow = useAtomCommand(orchestrationEnvironment.stopWorkflow);
-  const [stopping, setStopping] = useState(false);
-  const canStop =
-    canOperate &&
-    group.workflow.status === "running" &&
-    coordinator.origin === "provider_native" &&
-    coordinator.driver === "claudeAgent";
-  const confirmStop = () =>
-    Alert.alert("Stop workflow?", `Every running agent in ${label} stops.`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Stop",
-        style: "destructive",
-        onPress: async () => {
-          setStopping(true);
-          const result = await stopWorkflow({
-            environmentId: props.environmentId,
-            input: { threadId: coordinator.threadId, subagentId: NodeId.make(coordinator.id) },
-          });
-          setStopping(false);
-          if (result._tag === "Failure") Alert.alert("Could not stop workflow");
-        },
-      },
-    ]);
 
   return (
     <View className="border-b border-border pb-2">
@@ -93,28 +55,6 @@ export function ThreadWorkflowGroup(props: {
             {summary}
           </Text>
         </Pressable>
-        {canStop ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Stop workflow ${label}`}
-            accessibilityState={{ disabled: stopping, busy: stopping }}
-            disabled={stopping}
-            hitSlop={8}
-            onPress={confirmStop}
-            className="min-h-9 flex-row items-center gap-1.5 rounded-full bg-subtle px-3 active:opacity-70 disabled:opacity-50"
-          >
-            {stopping ? (
-              <AppActivityIndicator size="small" />
-            ) : (
-              <SymbolView
-                name="stop.fill"
-                size={10}
-                tintColorClassName="accent-danger-foreground"
-              />
-            )}
-            <Text className="font-t3-medium text-xs text-danger-foreground">Stop</Text>
-          </Pressable>
-        ) : null}
       </View>
       {expanded ? (
         <View className="ml-[3px] border-l border-border pl-3.5">
