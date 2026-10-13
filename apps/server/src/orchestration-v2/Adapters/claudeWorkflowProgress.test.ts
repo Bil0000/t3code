@@ -171,16 +171,23 @@ describe("mergeClaudeWorkflowProgress", () => {
     expect(second?.phases.map((entry) => entry.title)).toEqual(["Alpha", "Beta", "Gamma"]);
   });
 
-  it("resets phase and member progress when a coordinator starts a different run", () => {
+  it("resets run state when a coordinator starts a different run", () => {
     const first = mergeClaudeWorkflowProgress({
       previous: undefined,
-      runHandles: { runId: "first-run" },
-      message: snapshotFrame([
-        phase(1, "Alpha"),
-        phase(2, "Old phase"),
-        agent({ state: "done", resultPreview: "Old result", durationMs: 500 }),
-        agent({ index: 2, state: "done" }),
-      ]),
+      runHandles: {
+        runId: "first-run",
+        transcriptDir: "/workflows/first-run",
+        scriptPath: "/scripts/first-run.js",
+      },
+      message: snapshotFrame(
+        [
+          phase(1, "Alpha"),
+          phase(2, "Old phase"),
+          agent({ state: "done", resultPreview: "Old result", durationMs: 500 }),
+          agent({ index: 2, state: "done" }),
+        ],
+        { total_tokens: 500, tool_uses: 2, duration_ms: 900 },
+      ),
     });
     const second = mergeClaudeWorkflowProgress({
       previous: first,
@@ -191,6 +198,10 @@ describe("mergeClaudeWorkflowProgress", () => {
     expect(second?.agents).toEqual([
       { index: 1, label: "alpha:one", state: "running", phaseIndex: 1, phaseTitle: "New phase" },
     ]);
+    expect(second?.runHandles).toEqual({ runId: "second-run" });
+    expect(second?.totalTokens).toBeUndefined();
+    expect(second?.toolCalls).toBeUndefined();
+    expect(second?.durationMs).toBeUndefined();
     const sparse = mergeClaudeWorkflowProgress({
       previous: second,
       runHandles: { runId: "second-run" },

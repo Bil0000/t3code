@@ -183,15 +183,21 @@ export function mergeClaudeWorkflowProgress(input: {
   }
   const runHandles =
     input.runHandles === undefined
-      ? previous?.runHandles
-      : { ...previous?.runHandles, ...input.runHandles };
+      ? previousProgress?.runHandles
+      : { ...previousProgress?.runHandles, ...input.runHandles };
   return {
     ...optional("name", input.name ?? previous?.name),
     ...optional("runHandles", runHandles),
     phases: Array.from(phasesByIndex.values()).sort((left, right) => left.index - right.index),
     agents: Array.from(agentsByIndex.values()).sort((left, right) => left.index - right.index),
-    ...optional("totalTokens", count(field(reported, "total_tokens")) ?? previous?.totalTokens),
-    ...optional("toolCalls", count(field(reported, "tool_uses")) ?? previous?.toolCalls),
-    ...optional("durationMs", count(field(reported, "duration_ms")) ?? previous?.durationMs),
+    ...optional(
+      "totalTokens",
+      count(field(reported, "total_tokens")) ?? previousProgress?.totalTokens,
+    ),
+    ...optional("toolCalls", count(field(reported, "tool_uses")) ?? previousProgress?.toolCalls),
+    ...optional(
+      "durationMs",
+      count(field(reported, "duration_ms")) ?? previousProgress?.durationMs,
+    ),
   };
 }
