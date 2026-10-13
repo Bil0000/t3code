@@ -113,6 +113,10 @@ it("opens with a fresh URL while keeping the inline page loaded", async () => {
   await renderInline();
   const inlineFrame = document.querySelector("iframe")!;
   const originalSrc = inlineFrame.src;
+  const expandButton = document.querySelector<HTMLButtonElement>(
+    '[aria-label="Open full screen"]',
+  )!;
+  expandButton.focus();
   refresh.mockResolvedValue("https://environment.test/renewed.html");
   await click("Open full screen");
   expect(refresh).toHaveBeenCalledOnce();
@@ -123,6 +127,7 @@ it("opens with a fresh URL while keeping the inline page loaded", async () => {
   await click("Close");
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(document.querySelector("iframe")).toBe(inlineFrame);
+  expect(document.activeElement).toBe(expandButton);
 });
 
 it.each([null, new Error("Disconnected")])(
