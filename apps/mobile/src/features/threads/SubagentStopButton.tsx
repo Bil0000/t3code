@@ -4,7 +4,6 @@ import { useState } from "react";
 import { Alert, Pressable, View } from "react-native";
 
 import { AppActivityIndicator } from "../../components/AppActivityIndicator";
-import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
 import { orchestrationEnvironment } from "../../state/orchestration";
@@ -21,18 +20,14 @@ export function SubagentStopButton(props: {
   readonly className?: string;
 }) {
   const target = resolveSubagentStopTarget(props.subagent);
-  const canStopWorkflow = useAtomValue(
+  const canStop = useAtomValue(
     orchestrationEnvironment.stopWorkflow.permissionAtom(props.environmentId),
-  );
-  const canInterrupt = useAtomValue(
-    orchestrationEnvironment.v2.dispatchCommand.permissionAtom(props.environmentId),
   );
   const stopWorkflow = useAtomCommand(orchestrationEnvironment.stopWorkflow);
   const interruptTurn = useAtomCommand(threadEnvironment.interruptTurn);
   const [stopping, setStopping] = useState(false);
 
-  if (target === null || !(target.kind === "workflow" ? canStopWorkflow : canInterrupt))
-    return null;
+  if (target === null || !canStop) return null;
 
   const workflow = target.kind === "workflow";
   const label =
@@ -75,17 +70,16 @@ export function SubagentStopButton(props: {
       disabled={stopping}
       onPress={confirmStop}
       className={cn(
-        "min-h-11 justify-center active:opacity-70 disabled:opacity-50",
+        "size-11 items-center justify-center active:opacity-70 disabled:opacity-50",
         props.className,
       )}
     >
-      <View className="h-7 flex-row items-center gap-1.5 rounded-full border border-danger-border bg-danger px-3">
+      <View className="size-6 items-center justify-center rounded-full bg-danger">
         {stopping ? (
           <AppActivityIndicator size="small" />
         ) : (
           <SymbolView name="stop.fill" size={9} tintColorClassName="accent-danger-foreground" />
         )}
-        <Text className="font-t3-medium text-xs text-danger-foreground">Stop</Text>
       </View>
     </Pressable>
   );

@@ -24,7 +24,6 @@ export function ThreadWorkflowGroup(props: {
   readonly environmentId: EnvironmentId;
   readonly group: SubagentWorkflowGroup;
   readonly header: ReactNode;
-  readonly stopButton: ReactNode;
   readonly onOpen: (threadId: ThreadId) => void;
 }) {
   const { group } = props;
@@ -56,7 +55,6 @@ export function ThreadWorkflowGroup(props: {
             {summary}
           </Text>
         </Pressable>
-        {props.stopButton}
       </View>
       {expanded ? (
         <View className="ml-[3px] border-l border-border pl-3.5">

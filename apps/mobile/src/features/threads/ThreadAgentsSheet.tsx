@@ -27,6 +27,7 @@ import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../n
 import { SubagentRow } from "./SubagentRow";
 import { SubagentStopButton } from "./SubagentStopButton";
 import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
+import { resolveSubagentStopTarget } from "./threadAgentsPresentation";
 import { MaterialScreenContent } from "../../components/MaterialScreenContent";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
@@ -102,11 +103,6 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
           return group === undefined ? (
             <View key={subagent.id} className="border-b border-border">
               {row}
-              <SubagentStopButton
-                environmentId={target.environmentId}
-                subagent={subagent}
-                className="-mt-3 mb-1 self-end"
-              />
             </View>
           ) : (
             <ThreadWorkflowGroup
@@ -114,9 +110,6 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
               environmentId={target.environmentId}
               group={group}
               header={row}
-              stopButton={
-                <SubagentStopButton environmentId={target.environmentId} subagent={subagent} />
-              }
               onOpen={openChildThread}
             />
           );
@@ -183,26 +176,39 @@ function AgentRow(props: {
         environmentId={props.environmentId}
         subagent={subagent}
         elapsed={<AgentElapsed subagent={subagent} tickSeconds={props.tickSeconds} />}
+        reserveMetadataAction={resolveSubagentStopTarget(subagent) !== null}
       />
     </View>
   );
 
-  return childThreadId === null ? (
-    <View
-      accessible
-      accessibilityHint="Provider-managed agent. Its work appears in the transcript."
-    >
-      {row}
+  const content =
+    childThreadId === null ? (
+      <View
+        accessible
+        accessibilityHint="Provider-managed agent. Its work appears in the transcript."
+      >
+        {row}
+      </View>
+    ) : (
+      <Pressable
+        accessibilityRole="link"
+        accessibilityHint="Opens this agent thread"
+        onPress={() => props.onOpen(childThreadId)}
+        className="active:opacity-70"
+      >
+        {row}
+      </Pressable>
+    );
+
+  return (
+    <View className="-mr-2.5 pr-2.5">
+      {content}
+      <SubagentStopButton
+        environmentId={props.environmentId}
+        subagent={subagent}
+        className="absolute right-0 top-6"
+      />
     </View>
-  ) : (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityHint="Opens this agent thread"
-      onPress={() => props.onOpen(childThreadId)}
-      className="active:opacity-70"
-    >
-      {row}
-    </Pressable>
   );
 }
 

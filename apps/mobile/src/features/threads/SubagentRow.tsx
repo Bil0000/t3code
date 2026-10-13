@@ -37,6 +37,7 @@ export function SubagentRow(props: {
   readonly environmentId: EnvironmentId;
   readonly subagent: SubagentRowSubagent;
   readonly elapsed: ReactNode;
+  readonly reserveMetadataAction?: boolean;
 }) {
   const presentation = resolveSubagentRowPresentation(props.subagent);
   const detail = subagentCardDetail(presentation.detail);
@@ -75,7 +76,11 @@ export function SubagentRow(props: {
             <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-subtle" />
           ) : null}
         </View>
-        <SubagentMetadata environmentId={props.environmentId} subagent={props.subagent} />
+        <SubagentMetadata
+          environmentId={props.environmentId}
+          subagent={props.subagent}
+          className={props.reserveMetadataAction ? "pr-9" : undefined}
+        />
         {detail ? (
           <Text
             numberOfLines={3}
@@ -96,6 +101,7 @@ export function SubagentRow(props: {
 function SubagentMetadata(props: {
   readonly environmentId: EnvironmentId;
   readonly subagent: SubagentRowSubagent;
+  readonly className?: string;
 }) {
   const { environmentId, subagent } = props;
   const config = useEnvironmentServerConfig(environmentId);
@@ -119,7 +125,7 @@ function SubagentMetadata(props: {
     childProject,
   });
   return (
-    <View className="min-w-0 flex-row items-center gap-1.5">
+    <View className={cn("min-w-0 flex-row items-center gap-1.5", props.className)}>
       <ProviderIcon
         provider={provider?.driver ?? subagent.driver}
         iconUrl={provider?.iconUrl}
