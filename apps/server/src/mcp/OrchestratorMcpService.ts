@@ -2007,11 +2007,8 @@ const make = Effect.gen(function* () {
               revision: "HEAD",
             })
             .pipe(
-              Effect.mapError((error) =>
-                failure(
-                  "invalid_request",
-                  `Unable to resolve the parent checkout commit: ${error.message}`,
-                ),
+              Effect.mapError(() =>
+                failure("invalid_request", "Unable to resolve the parent checkout commit."),
               ),
             );
           workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };

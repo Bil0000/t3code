@@ -2714,17 +2714,32 @@ it.effect("replays an accepted message.dispatch after the project disables the i
 
 it.effect.each(
   (["codex", "claudeAgent"] as const).flatMap((driver) =>
-    ([false, true] as const).map((failSetup) => ({ driver, failSetup })),
+    [
+      { failSetup: false, failResolve: false },
+      { failSetup: true, failResolve: false },
+      { failSetup: false, failResolve: true },
+    ].map((failures) => ({ driver, ...failures })),
   ),
 )(
-  "prepares $driver delegated worktrees before execution, setup failure=$failSetup",
-  ({ driver, failSetup }) =>
+  "prepares $driver delegated worktrees before execution, setup failure=$failSetup, commit failure=$failResolve",
+  ({ driver, failSetup, failResolve }) =>
     Effect.gen(function* () {
       const setupEntered = yield* Deferred.make<void>();
       const allowSetup = yield* Deferred.make<void>();
       const childInstanceId = ProviderInstanceId.make(`child-${driver}`);
       const parentWorktree = driver === "codex" ? null : "/parent-worktree";
-      const resolveCommit = vi.fn(() => Effect.succeed({ commitSha: "parent-local-commit" }));
+      const resolveCommit = vi.fn(() =>
+        failResolve
+          ? Effect.fail(
+              new GitCommandError({
+                operation: "resolveCommit",
+                command: "git",
+                cwd: "/private-checkout",
+                detail: "private Git failure details",
+              }),
+            )
+          : Effect.succeed({ commitSha: "parent-local-commit" }),
+      );
       const harness = makeHarness({
         adapters: [
           adapter,
@@ -2822,6 +2837,14 @@ it.effect.each(
           isolation: "worktree" as const,
           clientRequestId: "isolated-child",
         };
+        if (failResolve) {
+          const error = yield* service.delegateTask(scope, input).pipe(Effect.flip);
+          assert.equal(error.code, "invalid_request");
+          assert.equal(error.message, "Unable to resolve the parent checkout commit.");
+          assert.isEmpty((yield* threads.getThreadProjection(parentThreadId)).subagents);
+          assert.equal(harness.createWorktree.mock.calls.length, 0);
+          return;
+        }
         const delegated = yield* service.delegateTask(scope, input);
         yield* Deferred.await(setupEntered);
         const child = yield* threads.getThreadProjection(delegated.childThreadId);
