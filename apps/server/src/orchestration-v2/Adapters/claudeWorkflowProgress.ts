@@ -144,12 +144,17 @@ export function mergeClaudeWorkflowProgress(input: {
     return undefined;
   }
   const reported = field(input.message, "usage");
+  const runChanged =
+    input.runHandles?.runId !== undefined &&
+    previous?.runHandles?.runId !== undefined &&
+    input.runHandles.runId !== previous.runHandles.runId;
+  const previousProgress = runChanged ? undefined : previous;
   const phasesByIndex = new Map(
-    (previous?.phases ?? []).map((phase) => [phase.index, phase] as const),
+    (previousProgress?.phases ?? []).map((phase) => [phase.index, phase] as const),
   );
   for (const phase of snapshot?.phases ?? []) phasesByIndex.set(phase.index, phase);
   const agentsByIndex = new Map(
-    (previous?.agents ?? []).map((agent) => [agent.index, agent] as const),
+    (previousProgress?.agents ?? []).map((agent) => [agent.index, agent] as const),
   );
   for (const agent of snapshot?.agents ?? []) {
     const prior = agentsByIndex.get(agent.index);

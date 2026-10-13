@@ -171,6 +171,35 @@ describe("mergeClaudeWorkflowProgress", () => {
     expect(second?.phases.map((entry) => entry.title)).toEqual(["Alpha", "Beta", "Gamma"]);
   });
 
+  it("resets phase and member progress when a coordinator starts a different run", () => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      runHandles: { runId: "first-run" },
+      message: snapshotFrame([
+        phase(1, "Alpha"),
+        phase(2, "Old phase"),
+        agent({ state: "done", resultPreview: "Old result", durationMs: 500 }),
+        agent({ index: 2, state: "done" }),
+      ]),
+    });
+    const second = mergeClaudeWorkflowProgress({
+      previous: first,
+      runHandles: { runId: "second-run" },
+      message: snapshotFrame([phase(1, "New phase"), agent({ phaseTitle: "New phase" })]),
+    });
+    expect(second?.phases).toEqual([{ index: 1, title: "New phase" }]);
+    expect(second?.agents).toEqual([
+      { index: 1, label: "alpha:one", state: "running", phaseIndex: 1, phaseTitle: "New phase" },
+    ]);
+    const sparse = mergeClaudeWorkflowProgress({
+      previous: second,
+      runHandles: { runId: "second-run" },
+      message: snapshotFrame([]),
+    });
+    expect(sparse?.phases).toEqual(second?.phases);
+    expect(sparse?.agents).toEqual(second?.agents);
+  });
+
   it("keeps other members and phase links when a sparse frame starts a new attempt", () => {
     const first = mergeClaudeWorkflowProgress({
       previous: undefined,
