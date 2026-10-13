@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import {
   HTML_RENDER_COLUMN_WIDTH,
   htmlRenderFileName,
@@ -16,6 +16,7 @@ import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { HtmlRenderDialog } from "./HtmlRenderDialog";
+import { observeResize } from "~/lib/observeResize";
 
 // A frame may load its URL a little after mounting.
 const MIN_URL_LIFE_MS = 5 * 60_000;
@@ -29,6 +30,7 @@ const MIN_URL_LIFE_MS = 5 * 60_000;
 export function HtmlRenderFrame(props: {
   readonly environmentId: EnvironmentId;
   readonly htmlRender: HtmlRenderReference;
+  readonly threadRef: ScopedThreadRef | undefined;
   readonly onOpen: (attachment: ChatFileAttachment) => void;
   readonly onFullscreenChange?: (fullscreen: boolean) => void;
 }) {
@@ -41,11 +43,9 @@ export function HtmlRenderFrame(props: {
     const box = boxRef.current;
     if (!box) return;
     setWidth(box.clientWidth);
-    const observer = new ResizeObserver(([entry]) => {
+    return observeResize(box, ([entry]) => {
       if (entry) setWidth(entry.contentRect.width);
     });
-    observer.observe(box);
-    return () => observer.disconnect();
   }, []);
   // Client fonts can wrap a page taller than the server measured it; a frame
   // left short would scroll inside the thread and take the reader's scroll.
@@ -108,6 +108,7 @@ export function HtmlRenderFrame(props: {
           <HtmlRenderDocument
             src={src}
             title={title}
+            threadRef={props.threadRef}
             className="block size-full"
             onContentHeight={setContentHeight}
           />
@@ -166,6 +167,7 @@ export function HtmlRenderFrame(props: {
             <HtmlRenderDialog
               src={expandedSrc}
               title={title}
+              threadRef={props.threadRef}
               onClose={() => setExpandedSrc(null)}
             />
           ) : null}

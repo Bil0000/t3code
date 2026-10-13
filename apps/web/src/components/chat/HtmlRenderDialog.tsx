@@ -1,3 +1,4 @@
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { MinusIcon, PlusIcon, XIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -8,6 +9,7 @@ import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 export function HtmlRenderDialog(props: {
   readonly src: string;
   readonly title: string;
+  readonly threadRef?: ScopedThreadRef | undefined;
   readonly onClose: () => void;
 }) {
   const [zoom, setZoom] = useState(1);
@@ -35,7 +37,12 @@ export function HtmlRenderDialog(props: {
           </Button>
           <div className="h-[min(86vh,calc(100vh-160px))] overflow-auto overscroll-contain rounded-lg bg-background shadow-2xl ring-1 ring-border/70 [container-type:size]">
             <div className="h-[100cqh] w-[100cqw]" style={{ zoom }}>
-              <HtmlRenderDocument src={props.src} title={props.title} className="block size-full" />
+              <HtmlRenderDocument
+                src={props.src}
+                title={props.title}
+                threadRef={props.threadRef}
+                className="block size-full"
+              />
             </div>
           </div>
           <div className="mt-2 flex min-w-0 items-center justify-center gap-3 text-xs text-white/80">

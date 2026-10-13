@@ -5,12 +5,21 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { htmlRenderTheme, HTML_RENDER_DEFAULT_FONTS } from "@t3tools/shared/htmlRender";
 import { T3_CODE_DARK_THEME_COLORS } from "@t3tools/shared/themePalettes";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import { HtmlRenderDialog } from "./HtmlRenderDialog";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 
-const { refresh, showError } = vi.hoisted(() => ({ refresh: vi.fn(), showError: vi.fn() }));
+const { refresh, showError, openLink, openChangeRequestLink } = vi.hoisted(() => ({
+  refresh: vi.fn(),
+  showError: vi.fn(),
+  openLink: vi.fn(),
+  openChangeRequestLink: vi.fn(),
+}));
+vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => openLink }));
+vi.mock("~/lib/openPullRequestLink", () => ({
+  useOpenChangeRequestLink: () => openChangeRequestLink,
+}));
 vi.mock("~/assets/assetUrls", () => ({
   useAssetUrlState: () => ({
     _tag: "Success",
@@ -41,6 +50,8 @@ beforeEach(async () => {
     },
   );
   refresh.mockReset();
+  openLink.mockReset().mockResolvedValue(undefined);
+  openChangeRequestLink.mockReset().mockReturnValue(false);
   showError.mockClear();
   onClose.mockClear();
   container = document.createElement("div");
@@ -103,6 +114,10 @@ async function renderInline() {
       <HtmlRenderFrame
         environmentId={EnvironmentId.make("environment")}
         htmlRender={{ attachmentId: "html", title: "Diagram", height: 400 }}
+        threadRef={{
+          environmentId: EnvironmentId.make("environment"),
+          threadId: ThreadId.make("thread"),
+        }}
         onOpen={() => undefined}
       />,
     ),
@@ -128,6 +143,31 @@ it("opens with a fresh URL while keeping the inline page loaded", async () => {
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(document.querySelector("iframe")).toBe(inlineFrame);
   expect(document.activeElement).toBe(expandButton);
+});
+
+it("routes links from the expanded page through its thread", async () => {
+  await renderInline();
+  refresh.mockResolvedValue("https://environment.test/renewed.html");
+  openChangeRequestLink.mockReturnValue(true);
+  await click("Open full screen");
+  const frame = document.querySelector<HTMLIFrameElement>('[role="dialog"] iframe')!;
+  frame.focus();
+  const url = "https://github.com/pingdotgg/t3code/pull/17561";
+  await act(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { jsonrpc: "2.0", id: "link", method: "ui/open-link", params: { url } },
+      }),
+    );
+  });
+  expect(openChangeRequestLink).toHaveBeenCalledWith(
+    expect.objectContaining({ metaKey: false, ctrlKey: false }),
+    url,
+    undefined,
+    EnvironmentId.make("environment"),
+  );
+  expect(openLink).not.toHaveBeenCalled();
 });
 
 it.each([null, new Error("Disconnected")])(
