@@ -109,7 +109,7 @@ type PreparationInput = Pick<
   readonly reusedWorktree?: { readonly baseRef: string };
 };
 
-export interface ThreadLaunchRetryInput {
+export interface ThreadLaunchPreparationInput {
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
   readonly runId: RunId;
@@ -180,13 +180,14 @@ export class ThreadLaunchService extends Context.Service<
       input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy">,
     ) => Effect.Effect<void, ThreadLaunchBaseRefError>;
     /** Dispatches prepared-run.retry and prepares the run's workspace again. */
-    readonly retryPreparation: (input: ThreadLaunchRetryInput) => Effect.Effect<
+    readonly retryPreparation: (input: ThreadLaunchPreparationInput) => Effect.Effect<
       Orchestrator.OrchestratorV2DispatchResult,
       // Dispatches prepared-run.retry, a command the enablement chokepoint
       // never gates; the type stays accurate anyway.
       | Orchestrator.OrchestratorV2Error
       | ThreadManagement.ThreadManagementProviderInstanceDisabledError
     >;
+    readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
   }
 >()("t3/orchestration-v2/ThreadLaunchService") {}
 
@@ -979,6 +980,24 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const prepareRun: ThreadLaunchService["Service"]["prepareRun"] = Effect.fn(
+    "ThreadLaunchService.prepareRun",
+  )(function* (input) {
+    const scheduled = yield* Effect.gen(function* () {
+      const projection = yield* threads.getThreadProjection(input.threadId);
+      const run = projection.runs.find((candidate) => candidate.id === input.runId);
+      const workspacePreparation = run?.workspacePreparation;
+      if (run?.status !== "preparing" || workspacePreparation === undefined) return;
+      if (!(yield* reservePreparation(input.commandId))) return;
+      yield* scheduleRunPreparation(input, projection, run, workspacePreparation).pipe(
+        Effect.onError(() => releasePreparation(input.commandId)),
+      );
+    }).pipe(Effect.exit);
+    if (Exit.isFailure(scheduled)) {
+      yield* failPreparedRun(input, input.threadId, input.runId, Cause.squash(scheduled.cause));
+    }
+  });
+
   const retryPreparation: ThreadLaunchService["Service"]["retryPreparation"] = Effect.fn(
     "ThreadLaunchService.retryPreparation",
   )(function* (input) {
@@ -988,28 +1007,12 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       runId: input.runId,
     });
-    // A replayed retry finds the run already past preparation, or prepared by
-    // the attempt that first reserved this command.
-    // From here the run is preparing again; anything that stops preparation
-    // from being scheduled must fail it, or it would wait in preparing forever.
-    const scheduled = yield* Effect.gen(function* () {
-      const projection = yield* threads.getThreadProjection(input.threadId);
-      const run = projection.runs.find((candidate) => candidate.id === input.runId);
-      const workspacePreparation = run?.workspacePreparation;
-      if (run?.status !== "preparing" || workspacePreparation === undefined) return;
-      if (!(yield* reservePreparation(input.commandId))) return;
-      yield* scheduleRetriedPreparation(input, projection, run, workspacePreparation).pipe(
-        Effect.onError(() => releasePreparation(input.commandId)),
-      );
-    }).pipe(Effect.exit);
-    if (Exit.isFailure(scheduled)) {
-      yield* failPreparedRun(input, input.threadId, input.runId, Cause.squash(scheduled.cause));
-    }
+    yield* prepareRun(input);
     return dispatched;
   });
 
-  const scheduleRetriedPreparation = (
-    input: ThreadLaunchRetryInput,
+  const scheduleRunPreparation = (
+    input: ThreadLaunchPreparationInput,
     projection: OrchestrationV2ThreadProjection,
     run: OrchestrationV2ThreadProjection["runs"][number],
     workspacePreparation: ThreadLaunchWorkspaceStrategy,
@@ -1050,7 +1053,7 @@ const make = Effect.gen(function* () {
     );
   };
 
-  return ThreadLaunchService.of({ launch, checkWorktreeBase, retryPreparation });
+  return ThreadLaunchService.of({ launch, checkWorktreeBase, retryPreparation, prepareRun });
 });
 
 export const layer = Layer.effect(ThreadLaunchService, make);
