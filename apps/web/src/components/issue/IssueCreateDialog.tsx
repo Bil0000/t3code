@@ -53,8 +53,17 @@ export function IssueCreateDialog({
   onOpenChange: (open: boolean) => void;
   onCreated: (scope: IssueCreateScope, result: IssueCreateResult) => void;
 }) {
-  const [scopeIndex, setScopeIndex] = useState(0);
-  const scope = scopes[Math.min(scopeIndex, scopes.length - 1)] ?? null;
+  const [chosenScope, setChosenScope] = useState<IssueCreateScope | null>(null);
+  if (chosenScope === null && scopes[0] !== undefined) setChosenScope(scopes[0]);
+  const scopeIndex = scopes.findIndex(
+    (entry) =>
+      entry.environmentId === chosenScope?.environmentId &&
+      entry.scope.projectId === chosenScope.scope.projectId &&
+      entry.scope.tracker === chosenScope.scope.tracker &&
+      entry.scope.host === chosenScope.scope.host &&
+      entry.scope.scope === chosenScope.scope.scope,
+  );
+  const scope = scopes[scopeIndex] ?? null;
   const [templateKey, setTemplateKey] = useState<string>(BLANK);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -109,23 +118,26 @@ export function IssueCreateDialog({
     setExtras({ labels: template.labels, assignees: template.assignees });
   };
 
-  const blocked = issueCreateBlocked({
-    hasScope: scope !== null,
-    canWrite,
-    templates: scope?.templates
-      ? { pending: templatesQuery.isPending, list: templatesQuery.data }
-      : null,
-    blankChosen: templateKey === BLANK,
-    issueTypes:
-      scope?.createIssueTypes === true
-        ? {
-            pending: candidatesQuery.isPending,
-            error: candidatesQuery.error,
-            count: issueTypes.length,
-            chosen: chosenIssueType,
-          }
-        : null,
-  });
+  const blocked =
+    scope === null && scopes.length > 0
+      ? "Choose a project."
+      : issueCreateBlocked({
+          hasScope: scope !== null,
+          canWrite,
+          templates: scope?.templates
+            ? { pending: templatesQuery.isPending, list: templatesQuery.data }
+            : null,
+          blankChosen: templateKey === BLANK,
+          issueTypes:
+            scope?.createIssueTypes === true
+              ? {
+                  pending: candidatesQuery.isPending,
+                  error: candidatesQuery.error,
+                  count: issueTypes.length,
+                  chosen: chosenIssueType,
+                }
+              : null,
+        });
 
   const submit = async () => {
     if (scope === null || pending || blocked !== null) return;
@@ -176,14 +188,14 @@ export function IssueCreateDialog({
         </DialogHeader>
         <DialogPanel>
           <div className="flex flex-wrap gap-3">
-            {scopes.length > 1 ? (
+            {scopes.length > (scope === null ? 0 : 1) ? (
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <Label htmlFor="issue-create-scope">Project</Label>
                 <Select
-                  value={String(scopeIndex)}
+                  value={scope === null ? null : String(scopeIndex)}
                   onValueChange={(value) => {
                     if (value === null) return;
-                    setScopeIndex(Number(value));
+                    setChosenScope(scopes[Number(value)] ?? null);
                     setTemplateKey(BLANK);
                     setExtras({ labels: [], assignees: [] });
                     setIssueType(null);
