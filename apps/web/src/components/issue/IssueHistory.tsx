@@ -18,12 +18,15 @@ export function IssueHistory({
   if (history.items.length === 0 && history.isPending) return <PullRequestTimelineGhost rows={5} />;
   if (history.error !== null && history.items.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground">
-        The history could not be read. {history.error}
-      </p>
+      <>
+        <p className="text-xs text-muted-foreground">
+          The history could not be read. {history.error}
+        </p>
+        <IssueLoadMore page={history} label="Load more history" />
+      </>
     );
   }
-  if (history.items.length === 0) {
+  if (history.items.length === 0 && !history.hasMore) {
     return <p className="text-xs text-muted-foreground">No history yet.</p>;
   }
   return (

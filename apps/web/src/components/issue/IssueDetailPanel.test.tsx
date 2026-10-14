@@ -8,7 +8,9 @@ import {
   ProjectId,
   IssueCommentsPageInput,
 } from "@t3tools/contracts";
-import type { IssueState, IssueComment } from "@t3tools/contracts";
+import type { IssueState, IssueComment, IssueLinkedPullRequestsPage } from "@t3tools/contracts";
+import { RegistryContext } from "@effect/atom-react";
+import { AsyncResult, type Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -77,6 +79,20 @@ const state = vi.hoisted(() => ({
   },
 }));
 vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
+vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const pages = Atom.family((_key: string) =>
+    Atom.make(
+      AsyncResult.success<IssueLinkedPullRequestsPage>({ items: [], nextCursor: null }),
+    ).pipe(Atom.keepAlive),
+  );
+  return {
+    ...(await importOriginal<typeof import("@t3tools/client-runtime/state/issues")>()),
+    createIssueEnvironmentAtoms: () => ({
+      linkedPullRequests: (target: unknown) => pages(JSON.stringify(target)),
+    }),
+  };
+});
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),
   useEnvironmentScope: () => state.allowed,
@@ -91,7 +107,8 @@ vi.mock("./IssueHistory", () => ({ IssueHistory: () => null }));
 vi.mock("../pullRequest/PullRequestCommentBody", () => ({
   PullRequestCommentBody: ({ text }: { text: string }) => <div>{text}</div>,
 }));
-vi.mock("~/state/query", () => ({
+vi.mock("~/state/query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/query")>()),
   useEnvironmentQuery: (atom: { kind: string } | null) =>
     atom?.kind === "states"
       ? state.candidates
@@ -105,7 +122,8 @@ vi.mock("~/state/query", () => ({
           },
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.write }));
-vi.mock("~/state/issues", async () => {
+vi.mock("~/state/issues", async (importOriginal) => {
+  const original = await importOriginal<typeof import("~/state/issues")>();
   const { Atom } = await import("effect/reactivity");
   const command = { permissionAtom: () => Atom.make(state.allowed) };
   return {
@@ -130,15 +148,10 @@ vi.mock("~/state/issues", async () => {
       error: null,
       loadMore: vi.fn(),
     }),
-    useIssueLinkedPullRequests: () => ({
-      items: [],
-      hasMore: false,
-      isPending: false,
-      error: null,
-      loadMore: vi.fn(),
-    }),
+    useIssueLinkedPullRequests: original.useIssueLinkedPullRequests,
   };
 });
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { IssueDetailPanel } from "./IssueDetailPanel";
 
 const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
@@ -714,6 +727,88 @@ it.each(["unknown", "allowed", "denied", "unsupported", "no-grant", "read-only"]
       await act(async () => root.unmount());
       container.remove();
       state.allowed = true;
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+it.each([
+  { tracker: "github", cursor: "related:" },
+  { tracker: "gitlab", cursor: "related:1" },
+])(
+  "loads related pull requests after an empty closing page ($tracker)",
+  async ({ tracker, cursor }) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const environmentId = EnvironmentId.make("environment");
+    const reference = {
+      projectId: ProjectId.make("project"),
+      tracker: IssueTrackerKind.make(tracker),
+      host: `${tracker}.com`,
+      scope: "org/repo",
+      key: "1",
+    };
+    state.detail = {
+      ...state.detail,
+      ...reference,
+      comments: [],
+      commentsCursor: null,
+      capabilities: { ...state.detail.capabilities, linkedPullRequests: true, subIssues: false },
+    };
+    const { issueEnvironment } =
+      await vi.importActual<typeof import("~/state/issues")>("~/state/issues");
+    const first = issueEnvironment.linkedPullRequests({
+      environmentId,
+      input: reference,
+    }) as Atom.Writable<AsyncResult.AsyncResult<IssueLinkedPullRequestsPage, unknown>>;
+    const next = issueEnvironment.linkedPullRequests({
+      environmentId,
+      input: { ...reference, cursor },
+    }) as Atom.Writable<AsyncResult.AsyncResult<IssueLinkedPullRequestsPage, unknown>>;
+    appAtomRegistry.set(first, AsyncResult.success({ items: [], nextCursor: cursor }));
+    const url = `https://${tracker}.com/org/repo/pull/2`;
+    appAtomRegistry.set(
+      next,
+      AsyncResult.success({
+        items: [
+          {
+            repository: "org/repo",
+            number: 2,
+            title: "Related change",
+            url,
+            state: "open",
+            isDraft: false,
+            closesIssue: false,
+          },
+        ],
+        nextCursor: null,
+      }),
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          <RegistryContext.Provider value={appAtomRegistry}>
+            <IssueDetailPanel environmentId={environmentId} reference={reference} />
+          </RegistryContext.Provider>,
+        ),
+      );
+      const loadMore = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Load more pull requests",
+      );
+      expect(loadMore).toBeDefined();
+      await act(async () => loadMore!.click());
+      expect(container.textContent).toContain("Related change");
+      expect(container.querySelector(`a[href="${url}"]`)).not.toBeNull();
+      expect(container.textContent).not.toContain("Load more pull requests");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.detail = {
+        ...state.detail,
+        capabilities: { ...state.detail.capabilities, linkedPullRequests: false },
+      };
       vi.unstubAllGlobals();
     }
   },

@@ -999,7 +999,10 @@ function IssueDetailContent({
                 />
               ) : null}
               {detail.capabilities.linkedPullRequests &&
-              (linkedPages.items.length > 0 || linkedPages.isPending || linkedPages.error) ? (
+              (linkedPages.items.length > 0 ||
+                linkedPages.hasMore ||
+                linkedPages.isPending ||
+                linkedPages.error) ? (
                 <section className="flex flex-col gap-1">
                   <h3 className="text-xs text-muted-foreground">Linked pull requests</h3>
                   {linkedPages.items.map((link) => {
