@@ -181,7 +181,7 @@ it.effect("makes one enhanced search request for open issues and preserves nativ
       nextPageToken: "native-prior",
     });
     expect(result.nextCursor).toBe("native-next");
-    expect(result.items[0]?.state).toEqual({ name: "Review", category: "open" });
+    expect(result.items[0]?.state).toMatchObject({ name: "Review", category: "open" });
     expect(result.items[0]?.author?.id).toBe("native-account");
   }),
 );
@@ -378,9 +378,11 @@ it.effect(
             }
           : request.url.includes("/search/jql")
             ? { issues: [{ fields: { project: { id: "20", key: "ENG" }, labels } }] }
-            : request.url.includes("/user/assignable/search?")
-              ? []
-              : { startAt: 0, total: 1, issueTypes: [{ id: "task", name: "Task" }] },
+            : request.url.endsWith("/statuses")
+              ? [{ statuses: [issue.fields.status] }]
+              : request.url.includes("/user/assignable/search?")
+                ? []
+                : { startAt: 0, total: 1, issueTypes: [{ id: "task", name: "Task" }] },
       }));
       const api = yield* f.api;
       const candidates = yield* api.listCandidates!(target);
@@ -388,6 +390,9 @@ it.effect(
       expect(candidates.assignees).toEqual([]);
       expect(candidates.issueTypes).toEqual([{ id: "task", name: "Task" }]);
       expect(candidates.truncated).toBe(true);
+      expect(candidates.states).toMatchObject([
+        { id: "2", name: "Review", workflowCategory: "started" },
+      ]);
       expect(f.calls.some((request) => new URL(request.url).pathname.endsWith("/label"))).toBe(
         false,
       );
@@ -740,5 +745,388 @@ it.effect("marks bounded native history pages as partial without fetching more",
       expect(result.historyTruncated ?? false).toBe(test.truncated);
       expect(f.calls).toHaveLength(test.embedded ? 3 : 4);
     }
+  }),
+);
+
+it.effect("lets Jira token permissions decide edits without reading a viewer", () =>
+  Effect.gen(function* () {
+    let allowed = true;
+    let applied = 0;
+    const f = fakeJira((request) => {
+      if (request.method === "PUT") {
+        if (!allowed) return { status: 403, body: {} };
+        applied++;
+        return {
+          body: {
+            id: "c1",
+            body: issue.fields.description,
+            author: user,
+            created: issue.fields.created,
+            updated: issue.fields.updated,
+          },
+        };
+      }
+      return { body: issue };
+    });
+    const api = yield* f.api;
+    yield* api.editComment!({ ...target, commentId: "c1", body: "new" });
+    expect(f.calls).toHaveLength(2);
+    allowed = false;
+    yield* api.editComment!({
+      ...target,
+      viewer: "spoofed",
+      commentId: "c1",
+      body: "forbidden",
+    }).pipe(Effect.flip);
+    expect(applied).toBe(1);
+    expect(
+      f.calls.some(
+        (request) => request.url.includes("/myself") || request.url.includes("/mypermissions"),
+      ),
+    ).toBe(false);
+  }),
+);
+
+it.effect("adds edit flags to old comments without a viewer request", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/mypermissions"))
+        return { body: { permissions: { EDIT_OWN_COMMENTS: { havePermission: true } } } };
+      if (url.pathname.endsWith("/comment"))
+        return {
+          body: {
+            startAt: 50,
+            total: 51,
+            comments: [
+              {
+                id: "c1",
+                body: issue.fields.description,
+                author: user,
+                created: issue.fields.created,
+                updated: issue.fields.updated,
+              },
+            ],
+          },
+        };
+      return { body: issue };
+    });
+    const api = yield* f.api;
+    const page = yield* api.getComments({ ...target, viewer: user.accountId, cursor: "50" });
+    expect(page.comments[0]).toMatchObject({ canEdit: true, editedAt: "2026-10-14T11:00:00.000Z" });
+    expect(f.calls.some((request) => request.url.includes("/myself"))).toBe(false);
+  }),
+);
+
+it.effect("pages history and rejects inconsistent offsets", () =>
+  Effect.gen(function* () {
+    let startAt = 50;
+    const f = fakeJira((request) => ({
+      body: request.url.includes("/changelog?")
+        ? {
+            startAt,
+            total: 52,
+            values: [
+              {
+                id: "h1",
+                author: user,
+                created: issue.fields.created,
+                items: [{ field: "summary", fromString: "Old", toString: "New" }],
+              },
+            ],
+          }
+        : issue,
+    }));
+    const api = yield* f.api;
+    expect(yield* api.getHistory!({ ...target, cursor: "50", limit: 1 })).toMatchObject({
+      items: [{ kind: "renamed", detail: "New" }],
+      nextCursor: "51",
+    });
+    startAt = 0;
+    expect(
+      (yield* api.getHistory!({ ...target, cursor: "50", limit: 1 }).pipe(Effect.flip)).reason,
+    ).toBe("failed");
+  }),
+);
+
+it.effect("reads hierarchy and changes parents while protecting subtasks", () =>
+  Effect.gen(function* () {
+    let subtask = false;
+    const current = () => ({
+      ...issue,
+      fields: {
+        ...issue.fields,
+        parent: { key: "ENG-2" },
+        issuetype: { id: "type-1", name: "Task", subtask },
+      },
+    });
+    const parent = { ...issue, key: "ENG-2" };
+    const f = fakeJira((request) => {
+      const url = new URL(request.url);
+      if (request.method === "PUT") return { status: 204 };
+      if (url.pathname.endsWith("/search/jql"))
+        return {
+          body: {
+            issues: [
+              { ...issue, key: "ENG-3", fields: { ...issue.fields, parent: { key: "ENG-1" } } },
+            ],
+            isLast: false,
+            nextPageToken: "next",
+          },
+        };
+      return { body: url.pathname.endsWith("/ENG-2") ? parent : current() };
+    });
+    const api = yield* f.api;
+    expect(yield* api.getHierarchy!({ ...target, limit: 1 })).toMatchObject({
+      parent: { key: "ENG-2" },
+      children: { items: [{ key: "ENG-3" }], nextCursor: "next" },
+    });
+    yield* api.setParent!({ ...target, parentKey: "ENG-2" });
+    yield* api.setParent!({ ...target, parentKey: null });
+    subtask = true;
+    yield* api.setParent!({ ...target, parentKey: null }).pipe(Effect.flip);
+    yield* api.setParent!({ ...target, parentKey: "ENG-1" }).pipe(Effect.flip);
+    expect(f.calls.filter((request) => request.method === "PUT").map(body)).toEqual([
+      { fields: { parent: { key: "ENG-2" } } },
+      { update: { parent: [{ set: { none: true } }] } },
+    ]);
+  }),
+);
+
+it.effect("keeps native category filters and sort order in Jira JQL", () =>
+  Effect.gen(function* () {
+    const f = fakeJira(() => ({ body: { issues: [issue], isLast: true } }));
+    const api = yield* f.api;
+    yield* api.listIssues({
+      ...target,
+      state: "open",
+      stateCategories: ["started", "completed", "canceled"],
+      sort: "created",
+      order: "asc",
+      involvement: "all",
+      viewer: user.accountId,
+      limit: 1,
+    });
+    expect(body(f.calls[0])).toMatchObject({
+      jql: 'project = "ENG" AND statusCategory IN ("indeterminate", "done") ORDER BY created ASC',
+    });
+    yield* api
+      .listIssues({
+        ...target,
+        state: "all",
+        sort: "comments",
+        involvement: "all",
+        viewer: user.accountId,
+        limit: 1,
+      })
+      .pipe(Effect.flip);
+    expect(f.calls).toHaveLength(1);
+  }),
+);
+
+it.effect("pages label candidates and the bounded Jira assignee search", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => ({
+      body: request.url.includes("/search/jql")
+        ? { issues: [issue], isLast: false, nextPageToken: "next" }
+        : [user],
+    }));
+    const api = yield* f.api;
+    expect(yield* api.listLabelCandidates!({ ...target, limit: 1 })).toMatchObject({
+      items: [{ name: "bug" }],
+      nextCursor: "next",
+    });
+    expect(
+      yield* api.listAssigneeCandidates!({ ...target, limit: 10, cursor: "990" }),
+    ).toMatchObject({ items: [{ id: user.accountId }], nextCursor: null, truncated: true });
+    yield* api.listAssigneeCandidates!({ ...target, cursor: "1000" }).pipe(Effect.flip);
+    expect(f.calls).toHaveLength(2);
+  }),
+);
+
+it.effect("preserves changelog fields outside the old common event kinds", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => ({
+      body: request.url.includes("/changelog?")
+        ? {
+            startAt: 0,
+            total: 1,
+            isLast: true,
+            values: [
+              {
+                id: "h1",
+                author: user,
+                created: issue.fields.created,
+                items: [{ field: "priority", fromString: "Low", toString: "High" }],
+              },
+            ],
+          }
+        : issue,
+    }));
+    const api = yield* f.api;
+    expect(yield* api.getHistory!({ ...target, limit: 1 })).toMatchObject({
+      items: [{ kind: "updated", detail: "priority: Low → High" }],
+      nextCursor: null,
+    });
+  }),
+);
+
+it.effect("creates Jira subtasks with a checked parent and keeps their type available", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => {
+      if (request.method === "POST" && new URL(request.url).pathname.endsWith("/issue"))
+        return { body: { key: "ENG-2" } };
+      if (request.url.includes("/issuetypes/subtask?"))
+        return {
+          body: {
+            startAt: 0,
+            total: 3,
+            fields: [
+              { fieldId: "summary", required: true },
+              { fieldId: "issuetype", required: true },
+              { fieldId: "parent", required: true },
+            ],
+          },
+        };
+      if (request.url.includes("/issuetypes?"))
+        return {
+          body: {
+            startAt: 0,
+            total: 1,
+            issueTypes: [{ id: "subtask", name: "Subtask", subtask: true }],
+          },
+        };
+      if (request.url.includes("/issue/OPS-1"))
+        return {
+          body: {
+            ...issue,
+            key: "OPS-1",
+            fields: { ...issue.fields, project: { id: "30", key: "OPS" } },
+          },
+        };
+      return { body: issue };
+    });
+    const api = yield* f.api;
+    const input = {
+      ...target,
+      title: "Child",
+      body: "",
+      labels: [],
+      assignees: [],
+      issueType: "subtask",
+      parentKey: "ENG-1",
+    };
+    expect(yield* api.create!(input)).toMatchObject({ key: "ENG-2", parentLinked: true });
+    expect(body(f.calls.find((request) => request.method === "POST"))).toMatchObject({
+      fields: { parent: { key: "ENG-1" }, issuetype: { id: "subtask" }, summary: "Child" },
+    });
+    yield* api.create!({ ...input, parentKey: "OPS-1" }).pipe(Effect.flip);
+    expect(f.calls.filter((request) => request.method === "POST")).toHaveLength(1);
+  }),
+);
+
+it.effect.each([[], ["canceled"], ["backlog"], ["canceled", "backlog"]] as const)(
+  "returns no Jira rows or requests for unsupported native categories: %j",
+  (stateCategories) =>
+    Effect.gen(function* () {
+      const f = fakeJira(() => ({ body: { issues: [issue], isLast: true } }));
+      const api = yield* f.api;
+      expect(
+        yield* api.listIssues({
+          ...target,
+          state: "all",
+          involvement: "all",
+          viewer: user.accountId,
+          stateCategories,
+          limit: 1,
+          cursor: "old-page",
+        }),
+      ).toEqual({ items: [], nextCursor: null });
+      expect(f.calls).toHaveLength(0);
+    }),
+);
+
+it.effect.each([
+  { stateCategories: ["canceled", "completed"], native: "done", workflowCategory: "completed" },
+  { stateCategories: ["backlog", "unstarted"], native: "new", workflowCategory: "unstarted" },
+  {
+    stateCategories: ["backlog", "canceled", "started"],
+    native: "indeterminate",
+    workflowCategory: "started",
+  },
+] as const)(
+  "keeps only supported mixed Jira categories and native cursors: %j",
+  ({ stateCategories, native, workflowCategory }) =>
+    Effect.gen(function* () {
+      const f = fakeJira(() => ({
+        body: {
+          issues: [
+            {
+              ...issue,
+              fields: {
+                ...issue.fields,
+                status: {
+                  ...issue.fields.status,
+                  statusCategory: { key: native },
+                },
+              },
+            },
+          ],
+          isLast: false,
+          nextPageToken: "next-native",
+        },
+      }));
+      const api = yield* f.api;
+      const page = yield* api.listIssues({
+        ...target,
+        state: "all",
+        involvement: "all",
+        viewer: user.accountId,
+        stateCategories,
+        limit: 1,
+        cursor: "previous-native",
+      });
+      expect(page.items.map(({ state }) => state.workflowCategory)).toEqual([workflowCategory]);
+      expect(page.nextCursor).toBe("next-native");
+      expect(f.calls).toHaveLength(1);
+      expect(body(f.calls[0])).toMatchObject({
+        jql: `project = "ENG" AND statusCategory IN ("${native}") ORDER BY updated DESC`,
+        nextPageToken: "previous-native",
+      });
+    }),
+);
+
+it.effect("validates Jira project scope before an empty category result and on mixed rows", () =>
+  Effect.gen(function* () {
+    const f = fakeJira(() => ({
+      body: {
+        issues: [
+          {
+            ...issue,
+            fields: { ...issue.fields, project: { id: "21", key: "OPS" } },
+          },
+        ],
+        isLast: true,
+      },
+    }));
+    const api = yield* f.api;
+    const input = {
+      ...target,
+      state: "all" as const,
+      involvement: "all" as const,
+      viewer: user.accountId,
+      limit: 1,
+    };
+    expect(
+      (yield* api.listIssues({ ...input, scope: "", stateCategories: [] }).pipe(Effect.flip))
+        .reason,
+    ).toBe("failed");
+    expect(f.calls).toHaveLength(0);
+    expect(
+      (yield* api
+        .listIssues({ ...input, stateCategories: ["canceled", "started"] })
+        .pipe(Effect.flip)).reason,
+    ).toBe("failed");
+    expect(f.calls).toHaveLength(1);
   }),
 );

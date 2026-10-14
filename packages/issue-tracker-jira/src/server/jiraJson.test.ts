@@ -121,7 +121,12 @@ describe("Jira normalization", () => {
     };
     const result = normalizeJiraIssue(raw, "example.atlassian.net");
     expect(result.labels.map((label) => label.name)).toEqual(labels);
-    expect(result.state).toEqual({ name: "Review", category: "open" });
+    expect(result.state).toEqual({
+      id: "4",
+      name: "Review",
+      category: "open",
+      workflowCategory: "started",
+    });
     expect(result.author?.login).toBe("creator");
     expect(result.assignees[0]?.login).toBe("assignee");
     expect(result.updatedAt).toBe("2026-10-14T11:00:00.000Z");

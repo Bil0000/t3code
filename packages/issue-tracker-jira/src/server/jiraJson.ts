@@ -4,6 +4,9 @@ import type {
   IssueEvent,
   IssueListState,
   IssueInvolvement,
+  IssueWorkflowCategory,
+  IssueListSort,
+  IssueListOrder,
 } from "@t3tools/contracts";
 import type { TrackerIssueSummary } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as Schema from "effect/Schema";
@@ -51,6 +54,10 @@ export const JiraIssue = Schema.Struct({
   ),
   fields: Schema.Struct({
     project: Schema.optional(Schema.Struct({ id: NonEmpty, key: NonEmpty })),
+    parent: Schema.optional(Schema.NullOr(Schema.Struct({ key: NonEmpty }))),
+    issuetype: Schema.optional(
+      Schema.Struct({ id: NonEmpty, name: NonEmpty, subtask: Schema.optional(Schema.Boolean) }),
+    ),
     summary: NonEmpty,
     description: Schema.optional(Schema.Unknown),
     created: NonEmpty,
@@ -206,8 +213,18 @@ export function jiraDate(value: string): string {
   return DateTime.formatIso(DateTime.makeUnsafe(value));
 }
 
-function jiraState(status: typeof JiraStatus.Type): IssueState {
-  return { name: status.name, category: status.statusCategory.key === "done" ? "closed" : "open" };
+export function jiraState(status: typeof JiraStatus.Type): IssueState {
+  return {
+    id: status.id,
+    name: status.name,
+    category: status.statusCategory.key === "done" ? "closed" : "open",
+    workflowCategory:
+      status.statusCategory.key === "done"
+        ? "completed"
+        : status.statusCategory.key === "indeterminate"
+          ? "started"
+          : "unstarted",
+  };
 }
 
 export function normalizeJiraIssue(value: unknown, host: string): TrackerIssueSummary {
@@ -237,16 +254,42 @@ export function buildJql(input: {
   readonly state: IssueListState;
   readonly involvement: IssueInvolvement;
   readonly query?: string | undefined;
-}): string {
+  readonly stateCategories?: ReadonlyArray<IssueWorkflowCategory> | undefined;
+  readonly sort?: IssueListSort | undefined;
+  readonly order?: IssueListOrder | undefined;
+}): string | null {
   const clauses = ["project = " + quoteJiraJql(input.scope)];
-  if (input.state !== "all")
+  if (input.stateCategories !== undefined) {
+    const categories = [
+      ...new Set(
+        input.stateCategories.flatMap((category) =>
+          category === "completed"
+            ? ["done"]
+            : category === "started"
+              ? ["indeterminate"]
+              : category === "unstarted"
+                ? ["new"]
+                : [],
+        ),
+      ),
+    ];
+    if (categories.length === 0) return null;
+    clauses.push("statusCategory IN (" + categories.map(quoteJiraJql).join(", ") + ")");
+  } else if (input.state !== "all")
     clauses.push(input.state === "closed" ? 'statusCategory = "done"' : 'statusCategory != "done"');
   if (input.involvement === "assigned") clauses.push("assignee = currentUser()");
   if (input.involvement === "authored") clauses.push("creator = currentUser()");
   if (input.involvement === "mentioned")
     throw new Error("Jira does not support mention filtering.");
   if (input.query !== undefined) clauses.push("text ~ " + quoteJiraJql(input.query));
-  return clauses.join(" AND ") + " ORDER BY updated DESC";
+  if (input.sort === "comments") throw new Error("Jira does not support sorting by comment count.");
+  return (
+    clauses.join(" AND ") +
+    " ORDER BY " +
+    (input.sort === "created" ? "created" : "updated") +
+    " " +
+    (input.order === "asc" ? "ASC" : "DESC")
+  );
 }
 
 export function jiraEvents(
@@ -274,13 +317,21 @@ export function jiraEvents(
               ? detail === null
                 ? "unassigned"
                 : "assigned"
-              : null;
-      if (!kind) continue;
+              : "updated";
+      if (typeof field !== "string" || field.trim() === "")
+        throw new Error("Invalid Jira history field.");
       const subject = detail ?? (typeof from === "string" && from.trim() ? from : null);
       events.push({
         id: entry.id + ":" + index,
         kind,
-        detail: subject,
+        detail:
+          kind === "updated"
+            ? field +
+              ": " +
+              (typeof from === "string" ? from : "none") +
+              " → " +
+              (typeof to === "string" ? to : "none")
+            : subject,
         actor: entry.author ? jiraActor(entry.author) : null,
         createdAt: jiraDate(entry.created),
       });
