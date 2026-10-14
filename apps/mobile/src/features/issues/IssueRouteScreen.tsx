@@ -1,12 +1,13 @@
 import { RegistryContext } from "@effect/atom-react";
 import { useFocusEffect, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type {
-  IssueComment,
-  IssueDetail,
-  IssueEvent,
-  IssueLinkedPullRequest,
-  IssueReactionContent,
+import {
+  EnvironmentId,
+  type IssueComment,
+  type IssueDetail,
+  type IssueEvent,
+  type IssueLinkedPullRequest,
+  type IssueReactionContent,
 } from "@t3tools/contracts";
 import { use, useCallback, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -26,9 +27,11 @@ import { SymbolView } from "../../components/AppSymbol";
 import { ControlPillMenu } from "../../components/ControlPillMenu";
 import { EmptyState } from "../../components/EmptyState";
 import { MaterialButton } from "../../components/MaterialButton";
+import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { relativeTime } from "../../lib/time";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
+import { useProjects, useServerConfigs } from "../../state/entities";
 import { issueEnvironment } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -40,7 +43,7 @@ import { PullRequestMarkdown } from "../pull-requests/PullRequestMarkdown";
 import { PullRequestAvatar } from "../pull-requests/PullRequestPresentation";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 import { useAndroidWorkspaceBack } from "../workspace/useAndroidWorkspaceNavigation";
-import { issueReactionAllowed, issueTimeline } from "./issueDetail";
+import { issueReactionAllowed, issueTimeline, linkedPullRequestContext } from "./issueDetail";
 import {
   appendOlderIssueComments,
   issueCommentsView,
@@ -58,6 +61,37 @@ function linkedPullRequestStatus(link: IssueLinkedPullRequest) {
   return link.state === null
     ? ({ label: "Unknown", icon: "arrow.triangle.pull", tint: "accent-icon-muted" } as const)
     : pullRequestStatus({ state: link.state, isDraft: link.isDraft });
+}
+
+function LinkedPullRequestRow(props: {
+  readonly link: IssueLinkedPullRequest;
+  readonly environmentId: string;
+  readonly last: boolean;
+}) {
+  const { link } = props;
+  const projects = useProjects();
+  const configs = useServerConfigs();
+  const context = linkedPullRequestContext(
+    link.url,
+    props.environmentId,
+    projects,
+    configs.get(EnvironmentId.make(props.environmentId))?.environment.capabilities,
+  );
+  const openPullRequest = useOpenPullRequest(context ? { context } : undefined);
+  const linkStatus = linkedPullRequestStatus(link);
+  return (
+    <PullRequestCardRow
+      title={link.title}
+      icon={linkStatus.icon}
+      tint={linkStatus.tint}
+      detail={`${link.repository}#${link.number}${link.closesIssue ? " · closes this issue" : ""}`}
+      accessibilityLabel={`Pull request ${link.number}, ${link.title}, ${linkStatus.label}`}
+      last={props.last}
+      onPress={() =>
+        void (context ? openPullRequest(link.url) : tryOpenExternalUrl(link.url, "pull-request"))
+      }
+    />
+  );
 }
 
 function IssueEventRow({ event }: { readonly event: IssueEvent }) {
@@ -123,9 +157,6 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
   const setState = useAtomCommand(issueEnvironment.setState, { reportFailure: false });
   const react = useAtomCommand(issueEnvironment.react, { reportFailure: false });
   const loadComments = useAtomCommand(issueEnvironment.comments, { reportFailure: false });
-  const openPullRequest = useOpenPullRequest({
-    context: { environmentId: params.environmentId, projectId: params.projectId },
-  });
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [older, setOlder] = useState<IssueOlderComments | null>(null);
@@ -302,21 +333,14 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
               : undefined
           }
         />
-        {issue.linkedPullRequests.map((link, index) => {
-          const linkStatus = linkedPullRequestStatus(link);
-          return (
-            <PullRequestCardRow
-              key={link.url}
-              title={link.title}
-              icon={linkStatus.icon}
-              tint={linkStatus.tint}
-              detail={`${link.repository}#${link.number}${link.closesIssue ? " · closes this issue" : ""}`}
-              accessibilityLabel={`Pull request ${link.number}, ${link.title}, ${linkStatus.label}`}
-              last={index === issue.linkedPullRequests.length - 1}
-              onPress={() => void openPullRequest(link.url)}
-            />
-          );
-        })}
+        {issue.linkedPullRequests.map((link, index) => (
+          <LinkedPullRequestRow
+            key={link.url}
+            link={link}
+            environmentId={params.environmentId}
+            last={index === issue.linkedPullRequests.length - 1}
+          />
+        ))}
       </PullRequestCardGroup>
       {issue.body.trim() ? (
         <PullRequestMarkdown markdown={issue.body} />

@@ -1,4 +1,8 @@
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import type {
+  ExecutionEnvironmentCapabilities,
   IssueActor,
   IssueComment,
   IssueDetail,
@@ -95,6 +99,33 @@ export function issueReactionAllowed(
       : access.commentReact &&
         comments.some((comment) => comment.id === subjectId && comment.reactions !== undefined);
   return subjectAllowed && (issue.capabilities.reactionContents?.includes(content) ?? true);
+}
+
+export function linkedPullRequestContext(
+  url: string,
+  environmentId: string,
+  projects: ReadonlyArray<EnvironmentProject>,
+  capabilities: ExecutionEnvironmentCapabilities | undefined,
+) {
+  const link = parseChangeRequestUrl(url);
+  if (link === null || capabilities?.pullRequests !== true) return null;
+  const local = projects.filter((project) => project.environmentId === environmentId);
+  const serves = (
+    project: EnvironmentProject,
+    check: "isChangeRequestInRepository" | "canReadChangeRequestOnHost",
+  ) => {
+    const identity = project.repositoryIdentity;
+    return (
+      identity?.provider !== undefined &&
+      sourceControlClients.get(identity.provider)[check](identity, link)
+    );
+  };
+  const project =
+    local.find((candidate) => serves(candidate, "isChangeRequestInRepository")) ??
+    (capabilities.threadPullRequests === true
+      ? local.find((candidate) => serves(candidate, "canReadChangeRequestOnHost"))
+      : undefined);
+  return project ? { environmentId, projectId: project.id } : null;
 }
 
 export const issueAssigneeId = (actor: IssueActor) => actor.id ?? actor.login;

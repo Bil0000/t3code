@@ -8,6 +8,7 @@ import {
   issueAssigneeId,
   issueCreateBlocked,
   issueTimeline,
+  linkedPullRequestContext,
   resolveIssueType,
 } from "./issueDetail";
 
@@ -403,5 +404,57 @@ describe("issue creation", () => {
         issueTypes: { pending: false, error: null, count: types.length, chosen },
       }),
     ).toBeNull();
+  });
+});
+
+describe("linked pull request destination", () => {
+  const project = (id: string, environmentId: string, provider: string, canonicalKey: string) =>
+    ({
+      id,
+      environmentId,
+      repositoryIdentity: {
+        canonicalKey,
+        provider,
+        owner: canonicalKey.split("/")[1],
+        name: canonicalKey.split("/")[2],
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: `https://${canonicalKey}`,
+        },
+      },
+    }) as never;
+  const linear = { id: "linear", environmentId: "env", repositoryIdentity: null } as never;
+  const lender = project("lender", "env", "gitlab", "gitlab.com/acme/web");
+  const exact = project("exact", "env", "gitlab", "gitlab.com/acme/api");
+  const url = "https://gitlab.com/acme/api/-/merge_requests/7";
+  const both = { repositoryIdentity: true, pullRequests: true, threadPullRequests: true };
+
+  it("prefers the exact repository, then a same-host lender, in this environment only", () => {
+    expect(linkedPullRequestContext(url, "env", [linear, lender, exact], both)).toEqual({
+      environmentId: "env",
+      projectId: "exact",
+    });
+    expect(linkedPullRequestContext(url, "env", [linear, lender], both)).toEqual({
+      environmentId: "env",
+      projectId: "lender",
+    });
+    const foreign = project("foreign", "other", "gitlab", "gitlab.com/acme/api");
+    expect(linkedPullRequestContext(url, "env", [linear, foreign], both)).toBeNull();
+  });
+
+  it("opens on the host when no checkout here can read it", () => {
+    const selfHosted = project("self", "env", "gitlab", "gitlab.acme.dev/acme/api");
+    const github = project("github", "env", "github", "github.com/acme/api");
+    expect(linkedPullRequestContext(url, "env", [linear, selfHosted, github], both)).toBeNull();
+    expect(linkedPullRequestContext(url, "env", [linear], both)).toBeNull();
+    expect(
+      linkedPullRequestContext(url, "env", [exact], { ...both, pullRequests: false }),
+    ).toBeNull();
+    expect(linkedPullRequestContext(url, "env", [exact], undefined)).toBeNull();
+    expect(
+      linkedPullRequestContext(url, "env", [lender], { ...both, threadPullRequests: false }),
+    ).toBeNull();
+    expect(linkedPullRequestContext("https://example.com/notes", "env", [exact], both)).toBeNull();
   });
 });
