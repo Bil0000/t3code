@@ -41,7 +41,6 @@ export function mergeIssueListPage(
   page: ReadonlyArray<IssueListEntry>,
 ): ReadonlyArray<IssueListEntry> {
   if (held.length === 0) return page;
-  if (page.length === 0) return held;
   const byKey = new Map<string, IssueListEntry>();
   for (const entry of held) byKey.set(issueEntryKey(entry), entry);
   for (const entry of page) byKey.set(issueEntryKey(entry), entry);
@@ -101,14 +100,40 @@ export function continueIssueListPage<T extends HeldIssueList>(
   }
   const sentScopes = new Set(Object.keys(sent).map((key) => key.toLowerCase()));
   const cursors = new Set(Object.keys(held.nextCursors).map((key) => key.toLowerCase()));
-  const retried = heldSources(held).filter((source) => sentScopes.has(scopeOf(source, cursors)));
-  const failed = failedScopes(heldSources(held), page.errors, cursors);
+  const sources = [...heldSources(held), ...(page.sources ?? []), ...page.entries];
+  const retried = sources.filter((source) => sentScopes.has(scopeOf(source, cursors)));
+  const failed = failedScopes(sources, page.errors, cursors);
+  const representatives = new Map<string, Pick<IssueListEntry, "projectId" | "projectTitle">>();
+  for (const representative of [...page.entries, ...(page.sources ?? [])]) {
+    const scope = scopeOf(representative, cursors);
+    const key = issueListCursorKey(representative).toLowerCase();
+    if (sentScopes.has(scope) && !failed.has(scope) && !representatives.has(key))
+      representatives.set(key, representative);
+  }
+  const rebind = <Row extends IssueListSource & { readonly projectTitle: string }>(
+    row: Row,
+  ): Row => {
+    const representative = representatives.get(issueListCursorKey(row).toLowerCase());
+    return representative === undefined ||
+      (representative.projectId === row.projectId &&
+        representative.projectTitle === row.projectTitle)
+      ? row
+      : { ...row, projectId: representative.projectId, projectTitle: representative.projectTitle };
+  };
+  const firstKeys = new Set<string>();
+  const rebound = held.entries.map((entry) => {
+    const row = rebind(entry);
+    if (held.firstKeys.has(issueEntryKey(entry))) firstKeys.add(issueEntryKey(row));
+    return row;
+  });
   const kept = Object.entries(held.nextCursors).filter(
     ([key]) => sent[key] === undefined || failed.has(key.toLowerCase()),
   );
   return {
     ...held,
-    entries: mergeIssueListPage(held.entries, page.entries),
+    entries: mergeIssueListPage(rebound, page.entries),
+    firstKeys,
+    sources: held.sources?.map(rebind) ?? page.sources,
     nextCursors: { ...Object.fromEntries(kept), ...page.nextCursors },
     errors: [
       ...held.errors.filter((error) => !retried.some((source) => matchesSource(error, source))),
@@ -149,7 +174,7 @@ export function refreshIssueListPage<T extends HeldIssueList>(
   const remap = (cursors: IssueListCursors) =>
     Object.fromEntries(
       Object.entries(cursors).map(([key, cursor]) => [
-        aliases.get(key.toLowerCase()) ?? key,
+        fresh.nextCursors[key] !== undefined ? key : (aliases.get(key.toLowerCase()) ?? key),
         cursor,
       ]),
     );
