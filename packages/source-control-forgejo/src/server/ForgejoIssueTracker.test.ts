@@ -27,6 +27,12 @@ const ISSUE = {
   is_locked: true,
 };
 
+const CONTACT_LINK = {
+  name: "Support",
+  about: "Get help",
+  url: "https://support.example.test/help",
+};
+
 /** Every endpoint the detail read touches, answered by path; stderr carries the `Link` header. */
 function answer(path: string): { readonly stdout: string; readonly stderr?: string } {
   const [route] = path.split("?");
@@ -492,12 +498,42 @@ describe("ForgejoIssueTracker", () => {
     }),
   );
 
-  it.effect("preserves native structured form fields alongside markdown templates", () =>
+  it.effect.each([false, true])(
+    "preserves a contact-only filing route with blank issues %s",
+    (blankIssuesEnabled) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          return {
+            stdout: encode(
+              input.path.endsWith("issue_config")
+                ? { blank_issues_enabled: blankIssuesEnabled, contact_links: [CONTACT_LINK] }
+                : [],
+            ),
+          };
+        });
+        expect(
+          yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
+        ).toEqual({
+          templates: [],
+          blankIssuesEnabled,
+          contactLinks: [CONTACT_LINK],
+        });
+        expect(requests.map((request) => request.path).sort()).toEqual([
+          "repos/acme/web/issue_config",
+          "repos/acme/web/issue_templates",
+        ]);
+        expect(requests.every((request) => request.method === undefined)).toBe(true);
+      }),
+  );
+
+  it.effect("preserves native structured form fields with contact links", () =>
     Effect.gen(function* () {
       const api = yield* tracker((input) => ({
         stdout: encode(
           input.path.endsWith("issue_config")
-            ? { blank_issues_enabled: false }
+            ? { blank_issues_enabled: false, contact_links: [CONTACT_LINK] }
             : [
                 {
                   file_name: "bug.yml",
@@ -536,6 +572,7 @@ describe("ForgejoIssueTracker", () => {
         yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
       ).toMatchObject({
         blankIssuesEnabled: false,
+        contactLinks: [CONTACT_LINK],
         templates: [
           {
             key: "bug.yml",
@@ -549,6 +586,100 @@ describe("ForgejoIssueTracker", () => {
         ],
       });
     }),
+  );
+
+  it.effect.each([
+    { blank_issues_enabled: false },
+    { blank_issues_enabled: false, contact_links: null },
+    { blank_issues_enabled: false, contact_links: [] },
+  ])("keeps the native blank issue setting without contacts: %s", (config) =>
+    Effect.gen(function* () {
+      const api = yield* tracker((input) => ({
+        stdout: encode(input.path.endsWith("issue_config") ? config : []),
+      }));
+      expect(
+        yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
+      ).toEqual({
+        templates: [],
+        blankIssuesEnabled: false,
+      });
+    }),
+  );
+
+  it.effect.each([
+    { blank_issues_enabled: "false" },
+    { blank_issues_enabled: false, contact_links: [{ name: "Support", url: 1 }] },
+    { blank_issues_enabled: false, contact_links: Array.from({ length: 101 }, () => CONTACT_LINK) },
+  ])("preserves the fallback for invalid native issue config: %s", (config) =>
+    Effect.gen(function* () {
+      const api = yield* tracker((input) => ({
+        stdout: encode(input.path.endsWith("issue_config") ? config : []),
+      }));
+      expect(
+        yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
+      ).toEqual({
+        templates: [],
+        blankIssuesEnabled: true,
+      });
+    }),
+  );
+
+  it.effect("returns safe contact URLs within the shared collection limit", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker((input) => ({
+        stdout: encode(
+          input.path.endsWith("issue_config")
+            ? {
+                blank_issues_enabled: false,
+                contact_links: [
+                  ...Array.from({ length: 96 }, () => CONTACT_LINK),
+                  { ...CONTACT_LINK, url: "http://support.example.test/help" },
+                  { ...CONTACT_LINK, url: "javascript:alert(1)" },
+                  { ...CONTACT_LINK, url: "data:text/html,hello" },
+                  { ...CONTACT_LINK, url: "/relative" },
+                ],
+              }
+            : [],
+        ),
+      }));
+      const result = yield* api.listTemplates!({
+        cwd: "/w",
+        host: "forgejo.test:3000",
+        scope: "acme/web",
+      });
+      expect(result.blankIssuesEnabled).toBe(false);
+      expect(result.contactLinks).toHaveLength(97);
+      expect(result.contactLinks?.at(-1)?.url).toBe("http://support.example.test/help");
+    }),
+  );
+
+  it.effect.each(["not-found", "invalid-response", "authentication", "rate-limit"] as const)(
+    "preserves native issue config %s failures",
+    (reason) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          return input.path.endsWith("issue_config")
+            ? new ForgejoCli.ForgejoCliError({
+                command: "fj",
+                cwd: "/w",
+                reason,
+                detail: "Native config failure.",
+              })
+            : { stdout: "[]" };
+        });
+        const result = yield* Effect.result(
+          api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
+        );
+        if (reason === "authentication" || reason === "rate-limit")
+          expect(result).toMatchObject({
+            failure: { reason: reason === "authentication" ? "unauthenticated" : "rate-limited" },
+          });
+        else expect(result).toMatchObject({ success: { templates: [], blankIssuesEnabled: true } });
+        expect(requests).toHaveLength(2);
+        expect(requests.every((request) => request.method === undefined)).toBe(true);
+      }),
   );
 
   it.effect.each(["42", "99"])("edits a comment only when its native issue URL names %s", (key) =>

@@ -942,18 +942,25 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
               { path: `${repoPath(input.scope)}/issue_config` },
               ForgejoIssueConfig,
             ).pipe(
-              Effect.map((config) => config.blank_issues_enabled !== false),
+              Effect.map((config) => ({
+                blankIssuesEnabled: config.blank_issues_enabled !== false,
+                contactLinks: (config.contact_links ?? []).filter(
+                  ({ url }) =>
+                    URL.canParse(url) && ["http:", "https:"].includes(new URL(url).protocol),
+                ),
+              })),
               Effect.catchIf(
                 (error) => error.reason === "not-found" || error.reason === "failed",
-                () => Effect.succeed(true),
+                () => Effect.succeed({ blankIssuesEnabled: true, contactLinks: [] }),
               ),
             ),
           ],
           { concurrency: 2 },
         ).pipe(
-          Effect.map(([templates, blankIssuesEnabled]) => ({
+          Effect.map(([templates, config]) => ({
             templates: templates.flatMap((template) => forgejoIssueTemplate(template) ?? []),
-            blankIssuesEnabled,
+            blankIssuesEnabled: config.blankIssuesEnabled,
+            ...(config.contactLinks.length === 0 ? {} : { contactLinks: config.contactLinks }),
           })),
         ),
 

@@ -7,11 +7,12 @@
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type {
-  IssueComment,
-  IssueEvent,
-  IssueTemplate,
-  IssueTemplateField,
+import {
+  TrimmedNonEmptyString,
+  type IssueComment,
+  type IssueEvent,
+  type IssueTemplate,
+  type IssueTemplateField,
 } from "@t3tools/contracts";
 import type { TrackerIssueSummary } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
@@ -83,6 +84,17 @@ export const ForgejoIssueTemplate = Schema.Struct({
 
 export const ForgejoIssueConfig = Schema.Struct({
   blank_issues_enabled: Schema.optional(Schema.Boolean),
+  contact_links: Schema.optional(
+    Schema.NullOr(
+      Schema.Array(
+        Schema.Struct({
+          name: TrimmedNonEmptyString,
+          about: Schema.String,
+          url: TrimmedNonEmptyString,
+        }),
+      ).check(Schema.isMaxLength(100)),
+    ),
+  ),
 });
 
 function toIsoUtc(value: string): string {
