@@ -18,7 +18,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   responses: new Map<string, AsyncResult.AsyncResult<IssueListResult, unknown>>(),
   read: vi.fn(),
-  search: { who: "all", status: "open" },
+  search: { who: "all", status: "open" } as Record<string, string>,
+  projects: [] as ReadonlyArray<object>,
   navigate: vi.fn(),
   environments: ["environment-a", "environment-b"].map((environmentId) => ({
     environmentId,
@@ -53,17 +54,13 @@ vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
   };
 });
 vi.mock("~/state/entities", () => ({
-  useProjects: () => [],
+  useProjects: () => state.projects,
   useAllEnvironmentShellsBootstrapped: () => true,
 }));
 vi.mock("~/state/environments", () => ({
   useEnvironments: () => ({ environments: state.environments }),
   useIssuesSupported: () => true,
 }));
-vi.mock("~/state/server", async () => {
-  const { Atom } = await import("effect/reactivity");
-  return { primaryServerKeybindingsAtom: Atom.make([]) };
-});
 vi.mock("~/state/queries", () => ({ useDebouncedValue: (value: string) => value }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => {} }));
@@ -150,6 +147,8 @@ beforeEach(() => {
   localStorage.clear();
   state.responses.clear();
   state.read.mockClear();
+  state.search = { who: "all", status: "open" };
+  state.projects = [];
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -209,4 +208,50 @@ it("keeps both environments' rows and the error after a failed refresh, then rec
   expect(text()).toContain("Issue B reconnected");
   expect(text()).not.toContain("Environment B refresh failed");
   expect(retry()).toBeUndefined();
+});
+
+it("keeps every project selectable while the list is narrowed to one tracker host", async () => {
+  const project = (id: string) => ({
+    id: ProjectId.make(id),
+    environmentId: environmentA,
+    title: id,
+    workspaceRoot: `/work/${id}`,
+  });
+  const source = (id: string, host: string) => ({
+    projectId: ProjectId.make(id),
+    projectTitle: id,
+    tracker: IssueTrackerKind.make("github"),
+    host,
+    scope: `org/${id}`,
+    capabilities: { create: false } as NonNullable<
+      IssueListResult["sources"]
+    >[number]["capabilities"],
+  });
+  state.projects = [project("Project A"), project("Project B")];
+  state.responses.set(
+    environmentA,
+    AsyncResult.success({
+      ...answer([]),
+      sources: [source("Project A", "github.com"), source("Project B", "ghe.example.com")],
+    }),
+  );
+  const projectChoices = async () => {
+    const menu = container.querySelector<HTMLButtonElement>('[aria-label^="Filter by project"]');
+    if (menu === null) return [];
+    await act(async () => menu.click());
+    const choices = [...document.querySelectorAll('[role="menuitemradio"] .truncate')].map(
+      (label) => label.textContent,
+    );
+    await act(async () => menu.click());
+    return choices;
+  };
+  await mount();
+  expect(await projectChoices()).toEqual(["All projects", "Project A", "Project B"]);
+  state.search = { ...state.search, host: "github.com" };
+  state.responses.set(
+    environmentA,
+    AsyncResult.success({ ...answer([]), sources: [source("Project A", "github.com")] }),
+  );
+  await mount();
+  expect(await projectChoices()).toEqual(["All projects", "Project A", "Project B"]);
 });
