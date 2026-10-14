@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { pullRequestFilterProjects } from "../pullRequest/pullRequestProjectFilter.logic";
 import {
+  issueCreateSources,
   issueFilterProjects,
   issuePanelEnvironmentId,
   issueListProjectScope,
@@ -28,6 +29,42 @@ const source = (projectId: string, tracker: string, scope: string) =>
     scope,
     capabilities: {} as IssueCapabilities,
   }) satisfies IssueListSources[number];
+
+describe("issueCreateSources", () => {
+  it("keeps the configured tracker when another tracker on the same host cannot be used", () => {
+    const github = {
+      ...source("main", "github", "acme/web"),
+      host: "shared.example",
+      capabilities: { create: true } as IssueCapabilities,
+    };
+    const gitlab = { ...github, tracker: IssueTrackerKind.make("gitlab") };
+    const answer = {
+      sources: [github, gitlab],
+      trackers: [
+        {
+          tracker: github.tracker,
+          host: github.host,
+          configured: false,
+          projectCount: 1,
+          capabilities: null,
+          detail: "unavailable",
+        },
+        {
+          tracker: gitlab.tracker,
+          host: "SHARED.EXAMPLE",
+          configured: true,
+          projectCount: 1,
+          capabilities: gitlab.capabilities,
+          detail: null,
+        },
+      ],
+    };
+    expect(issueCreateSources(answer)).toEqual([gitlab]);
+    expect(issueCreateSources({ ...answer, trackers: answer.trackers.toReversed() })).toEqual([
+      gitlab,
+    ]);
+  });
+});
 
 describe("issuePanelEnvironmentId", () => {
   const projects = [project("shared", cups), project("shared"), project("only-b")];

@@ -83,3 +83,17 @@ export function issueFilterProjects<Project extends ScopedProject>(
     return [{ ...project, repositoryIdentity }];
   });
 }
+
+export function issueCreateSources(
+  answer: Pick<IssueListResult, "sources" | "trackers">,
+): IssueListSources {
+  return (answer.sources ?? []).filter(
+    (source) =>
+      source.capabilities.create &&
+      answer.trackers.find(
+        (tracker) =>
+          tracker.tracker === source.tracker &&
+          tracker.host.toLowerCase() === source.host.toLowerCase(),
+      )?.configured !== false,
+  );
+}
