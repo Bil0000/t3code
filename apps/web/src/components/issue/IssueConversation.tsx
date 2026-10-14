@@ -73,6 +73,7 @@ export function IssueCommentContent({
           cwd={cwd}
           environmentId={environmentId}
           label="Edit comment"
+          threadRef={threadRef ?? null}
           saving={saving}
           onSave={(next) => void save(next)}
           onCancel={() => setEditing(false)}
