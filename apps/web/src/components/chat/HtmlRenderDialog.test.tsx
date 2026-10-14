@@ -118,14 +118,14 @@ async function renderInline() {
           environmentId: EnvironmentId.make("environment"),
           threadId: ThreadId.make("thread"),
         }}
-        onOpen={() => undefined}
       />,
     ),
   );
 }
 
-it("opens with a fresh URL while keeping the inline page loaded", async () => {
+it("offers only full screen and opens with a fresh URL while keeping the inline page loaded", async () => {
   await renderInline();
+  expect(document.querySelector('[aria-label="Open in panel"]')).toBeNull();
   const inlineFrame = document.querySelector("iframe")!;
   const originalSrc = inlineFrame.src;
   const expandButton = document.querySelector<HTMLButtonElement>(

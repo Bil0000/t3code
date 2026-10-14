@@ -5,11 +5,10 @@ import {
   htmlRenderFrameHeight,
   type HtmlRenderReference,
 } from "@t3tools/shared/htmlRender";
-import { Maximize2Icon, PanelRightIcon } from "lucide-react";
+import { Maximize2Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
-import type { ChatFileAttachment } from "~/types";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { Button } from "../ui/button";
@@ -31,7 +30,6 @@ export function HtmlRenderFrame(props: {
   readonly environmentId: EnvironmentId;
   readonly htmlRender: HtmlRenderReference;
   readonly threadRef: ScopedThreadRef | undefined;
-  readonly onOpen: (attachment: ChatFileAttachment) => void;
   readonly onFullscreenChange?: (fullscreen: boolean) => void;
 }) {
   const { attachmentId, title } = props.htmlRender;
@@ -136,31 +134,6 @@ export function HtmlRenderFrame(props: {
                 <Maximize2Icon className="size-3.5" />
               </TooltipTrigger>
               <TooltipPopup side="left">Open full screen</TooltipPopup>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    aria-label="Open in panel"
-                    size="icon-xs"
-                    variant="glass"
-                    onClick={() =>
-                      props.onOpen({
-                        type: "file",
-                        id: attachmentId,
-                        name: fileName,
-                        mimeType: "text/html",
-                        // Unknown here; the preview leaves it out.
-                        sizeBytes: 0,
-                        htmlRender: true,
-                      })
-                    }
-                  />
-                }
-              >
-                <PanelRightIcon className="size-3.5" />
-              </TooltipTrigger>
-              <TooltipPopup side="left">Open in panel</TooltipPopup>
             </Tooltip>
           </div>
           {expandedSrc !== null ? (
