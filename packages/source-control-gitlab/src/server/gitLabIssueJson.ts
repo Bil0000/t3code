@@ -48,6 +48,7 @@ const RawIssueSchema = Schema.Struct({
   closed_at: Schema.optional(Schema.NullOr(Schema.String)),
   assignees: Schema.optional(Schema.NullOr(Schema.Array(RawUserSchema))),
   labels: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+  milestone: Schema.optional(Schema.NullOr(Schema.Struct({ title: Schema.String }))),
   user_notes_count: Schema.optional(Schema.NullOr(Schema.Int)),
 });
 
@@ -142,6 +143,7 @@ function toSummary(raw: typeof RawIssueSchema.Type): TrackerIssueSummary {
     closedAt: trimmed(raw.closed_at),
     assignees: (raw.assignees ?? []).flatMap((user) => toActor(user) ?? []),
     labels: toLabels(raw.labels),
+    milestone: raw.milestone?.title ?? null,
     commentCount: Math.max(0, raw.user_notes_count ?? 0),
   };
 }

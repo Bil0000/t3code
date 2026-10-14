@@ -2,9 +2,13 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import { IssueDetail } from "@t3tools/contracts";
 
 import * as GitHubApi from "./GitHubApi.ts";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
+
+const decodeDetailWire = Schema.decodeEffect(IssueDetail);
 
 /** A detail answer as GitHub's GraphQL API shapes it, with every section populated once. */
 const DETAIL_FIXTURE = {
@@ -124,6 +128,58 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each([
+    { name: "populated", milestone: { title: "Release 1" } },
+    { name: "native-null", milestone: null },
+    { name: "absent", milestone: undefined },
+  ])("carries $name milestone through detail and the wire", ({ milestone }) =>
+    Effect.gen(function* () {
+      const queries: string[] = [];
+      let restReads = 0;
+      const api = yield* tracker(
+        (query) => {
+          queries.push(query);
+          return JSON.stringify({
+            data: {
+              ...DETAIL_FIXTURE.data,
+              repository: {
+                ...DETAIL_FIXTURE.data.repository,
+                issue: { ...DETAIL_FIXTURE.data.repository.issue, milestone },
+              },
+            },
+          });
+        },
+        () => {
+          restReads++;
+          return {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({ labels: [] }),
+            truncated: false,
+            invalidUtf8: false,
+          };
+        },
+      );
+      const context = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const issue = yield* api.getIssue(context);
+      expect(issue).toHaveProperty("milestone", milestone?.title ?? null);
+      expect(
+        yield* decodeDetailWire({
+          ...issue,
+          ...context,
+          tracker: "github",
+          projectId: "p1",
+          projectTitle: "Web",
+          writable: true,
+          capabilities: api.capabilities,
+        }),
+      ).toHaveProperty("milestone", milestone?.title ?? null);
+      expect(queries).toHaveLength(1);
+      expect(queries[0]).toContain("milestone { title }");
+      expect(restReads).toBe(1);
+    }),
+  );
+
   it.effect.each([
     { role: null, allowed: true },
     { role: undefined, allowed: true },

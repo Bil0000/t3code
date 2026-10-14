@@ -2,10 +2,14 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import { IssueDetail } from "@t3tools/contracts";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabIssueTracker from "./GitLabIssueTracker.ts";
+
+const decodeDetailWire = Schema.decodeEffect(IssueDetail);
 
 const encode = (value: unknown) => JSON.stringify(value);
 
@@ -127,6 +131,40 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each([
+    { name: "populated", milestone: { title: "Release 1" } },
+    { name: "native-null", milestone: null },
+    { name: "absent", milestone: undefined },
+  ])("carries $name milestone through detail and the wire", ({ milestone }) =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        const path = args[1]!;
+        paths.push(path);
+        return path === "projects/acme%2Fweb/issues/42"
+          ? encode({ ...ISSUE, milestone })
+          : answer(path);
+      });
+      const context = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const issue = yield* api.getIssue(context);
+      expect(issue).toHaveProperty("milestone", milestone?.title ?? null);
+      expect(
+        yield* decodeDetailWire({
+          ...issue,
+          ...context,
+          tracker: "gitlab",
+          projectId: "p1",
+          projectTitle: "Web",
+          writable: true,
+          capabilities: api.capabilities,
+        }),
+      ).toHaveProperty("milestone", milestone?.title ?? null);
+      expect(paths).toHaveLength(6);
+      expect(paths.filter((path) => path === "projects/acme%2Fweb/issues/42")).toHaveLength(1);
+      expect(paths.some((path) => path.includes("milestones"))).toBe(false);
+    }),
+  );
+
   it.effect.each([true, false])(
     "keeps native older-note edit permission %s without a viewer",
     (canEdit) =>

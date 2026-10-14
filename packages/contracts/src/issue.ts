@@ -161,6 +161,7 @@ export const IssueSummary = Schema.Struct({
   closedAt: Schema.NullOr(IsoDateTime),
   assignees: Schema.Array(IssueActor),
   labels: Schema.Array(IssueLabel),
+  milestone: Schema.optional(Schema.NullOr(Schema.String)),
   labelsTruncated: Schema.optional(Schema.Boolean),
   commentCount: Schema.NullOr(NonNegativeInt),
 });
