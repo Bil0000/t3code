@@ -104,6 +104,7 @@ import {
   PullRequestStatusMenu,
   PullRequestChecksRow,
   PullRequestBranchRow,
+  PullRequestDeleteBranchRow,
   PullRequestReviewersRow,
 } from "./PullRequestStatusRows";
 import { PullRequestMergeControls } from "./PullRequestMergeControls";
@@ -249,6 +250,7 @@ function PullRequestOverview(props: {
         <Animated.View layout={PR_ROW_LAYOUT}>
           <PullRequestMergeControls pr={pr} params={props.params} stack={props.stack} />
         </Animated.View>
+        <PullRequestDeleteBranchRow pr={pr} params={props.params} />
       </PullRequestCardGroup>
       {pr.labels.length ? (
         <Animated.View layout={PR_ROW_LAYOUT} className="flex-row flex-wrap gap-2">

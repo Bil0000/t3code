@@ -14,7 +14,12 @@ import { PullRequestCardRow } from "./PullRequestControls";
 import { PullRequestAgentRow } from "./PullRequestAgentRow";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
-import { allowedUpdateMethods, PR_ACTION_ICONS, PR_ACTION_LABELS } from "./pullRequestActions";
+import {
+  allowedUpdateMethods,
+  canPerformPullRequestAction,
+  PR_ACTION_ICONS,
+  PR_ACTION_LABELS,
+} from "./pullRequestActions";
 import {
   checkStatus,
   pullRequestBranchSummary,
@@ -25,6 +30,7 @@ import {
 import { pullRequestTarget, type PullRequestParams } from "./usePullRequestDiff";
 import { usePullRequestAction } from "./usePullRequestAction";
 import { usePullRequestAgentActions } from "./usePullRequestAgentActions";
+import { usePullRequestPermissions } from "./usePullRequestPermissions";
 
 type RowProps = { readonly pr: PullRequestDetail; readonly params: PullRequestParams };
 const STATUS_ACTIONS: readonly PullRequestAction[] = [
@@ -223,6 +229,39 @@ export function PullRequestBranchRow(props: RowProps) {
     >
       {row}
     </ControlPillMenu>
+  );
+}
+
+export function PullRequestDeleteBranchRow(props: RowProps) {
+  const action = usePullRequestAction(props.params, props.pr);
+  const { connected } = usePullRequestPermissions(props.params, props.pr);
+  if (!canPerformPullRequestAction(props.pr, "delete-branch")) return null;
+  const repository = props.pr.headRepositoryNameWithOwner ?? props.pr.repository;
+  return (
+    <Animated.View
+      layout={PR_ROW_LAYOUT}
+      exiting={PR_ROW_EXIT}
+      className="border-t border-border-subtle"
+    >
+      <PullRequestCardRow
+        title={PR_ACTION_LABELS["delete-branch"]}
+        icon={PR_ACTION_ICONS["delete-branch"]}
+        destructive={connected}
+        value={action.busy ? "Deleting…" : undefined}
+        detail={connected ? props.pr.headBranch : "Reconnect to delete this branch."}
+        last
+        onPress={
+          action.available("delete-branch")
+            ? () =>
+                action.confirm(
+                  "delete-branch",
+                  PR_ACTION_LABELS["delete-branch"],
+                  `Delete ${props.pr.headBranch} from ${repository}? Local branches and worktrees are not changed.`,
+                )
+            : undefined
+        }
+      />
+    </Animated.View>
   );
 }
 

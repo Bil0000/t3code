@@ -356,6 +356,7 @@ const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
   "disable-auto-merge":
     "You need write access on this repository to stop it being merged for you once it is ready.",
   revert: "You need write access on this repository to open a revert pull request.",
+  "delete-branch": "You need write access on the source repository to delete its branch.",
   "approve-workflows":
     "You need write access on this repository to approve workflows from a fork pull request.",
 };
@@ -2019,6 +2020,14 @@ export const make = Effect.gen(function* () {
   const runAction = (input: PullRequestActionInput): Effect.Effect<string, PullRequestError> =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<string, PullRequestError> => {
+        if (input.action === "delete-branch" && project.api.capabilities.deleteBranch !== true) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "runAction",
+              detail: "This host cannot delete a change request's source branch.",
+            }),
+          );
+        }
         if (
           input.stackNumber !== undefined &&
           (project.api.capabilities.stackActions !== true ||

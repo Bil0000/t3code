@@ -51,7 +51,7 @@ export function usePullRequestAction(params: PullRequestParams, pr: PullRequestD
       { text: "Cancel", style: "cancel" },
       {
         text: title,
-        style: action === "close" ? "destructive" : "default",
+        style: action === "close" || action === "delete-branch" ? "destructive" : "default",
         onPress: () => void perform(action),
       },
     ]);

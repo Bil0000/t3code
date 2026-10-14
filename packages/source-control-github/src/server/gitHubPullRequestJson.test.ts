@@ -1021,6 +1021,7 @@ describe("viewer permission decoding", () => {
       canTriage: false,
       canUpdate: true,
       didAuthor: true,
+      canDeleteBranch: false,
     });
   });
 
@@ -1040,6 +1041,7 @@ describe("viewer permission decoding", () => {
       canTriage: false,
       canUpdate: false,
       didAuthor: false,
+      canDeleteBranch: false,
     });
   });
 
@@ -1053,6 +1055,7 @@ describe("viewer permission decoding", () => {
       canTriage: false,
       canUpdate: true,
       didAuthor: false,
+      canDeleteBranch: false,
     });
   });
 

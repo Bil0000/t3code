@@ -1573,6 +1573,76 @@ it.effect("refreshes every reader before a queued merge confirmation finishes", 
   ),
 );
 
+it.effect("runs branch deletion only when the host and viewer support it, never for a stack", () =>
+  Effect.gen(function* () {
+    let actions = 0;
+    let supported = false;
+    let allowed = true;
+    const base = fakeProvider(SourceControlProviderKind.make("github"));
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        {
+          ...base,
+          capabilities: {
+            ...base.capabilities,
+            actions: ["delete-branch"],
+            stackActions: true,
+            get deleteBranch() {
+              return supported;
+            },
+          },
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: allowed ? ["delete-branch"] : [],
+              comment: true,
+              resolve: true,
+              verdicts: [],
+              requestReviewers: false,
+            }),
+          runAction: (input) =>
+            Effect.sync(() => {
+              assert.strictEqual(input.action, "delete-branch");
+              actions++;
+            }),
+        },
+      ],
+    });
+    const input = {
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      action: "delete-branch" as const,
+    };
+    assert.strictEqual(
+      (yield* Effect.flip(service.runAction(input)))._tag,
+      "PullRequestOperationError",
+    );
+    assert.strictEqual(actions, 0);
+    supported = true;
+    assert.strictEqual(
+      (yield* Effect.flip(
+        service.runAction({
+          ...input,
+          stackNumber: 2,
+          expectedStackHeads: [{ number: 1, headSha: "abc123" }],
+        }),
+      ))._tag,
+      "PullRequestOperationError",
+    );
+    assert.strictEqual(actions, 0);
+    allowed = false;
+    assert.strictEqual(
+      (yield* Effect.flip(service.runAction(input)))._tag,
+      "PullRequestOperationError",
+    );
+    assert.strictEqual(actions, 0);
+    allowed = true;
+    yield* service.runAction(input);
+    assert.strictEqual(actions, 1);
+  }),
+);
+
 it.effect("refuses an action this viewer may not take, and says what access it takes", () =>
   Effect.gen(function* () {
     let ran: string | null = null;

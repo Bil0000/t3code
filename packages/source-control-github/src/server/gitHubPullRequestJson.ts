@@ -546,6 +546,18 @@ const RawViewerFieldsSchema = Schema.Struct({
   viewerDidAuthor: Schema.optional(Schema.Boolean),
 });
 
+const RawHeadBranchAccessSchema = Schema.Struct({
+  headRepository: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nameWithOwner: Schema.optional(Schema.NullOr(Schema.String)),
+        viewerPermission: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+  headRef: Schema.optional(Schema.NullOr(Schema.Struct({ id: Schema.String }))),
+});
+
 const RawThreadCommentsSchema = Schema.Struct({
   totalCount: Schema.optional(Schema.Int),
   pageInfo: Schema.optional(RawPageInfoSchema),
@@ -710,6 +722,7 @@ const RawCoreSchema = Schema.Struct({
       pullRequest: Schema.Struct({
         ...RawDetailSchema.fields,
         ...RawViewerFieldsSchema.fields,
+        ...RawHeadBranchAccessSchema.fields,
         viewerCanUpdateBranch: Schema.Boolean,
         baseRef: Schema.NullOr(
           Schema.Struct({
@@ -830,6 +843,8 @@ export const pullRequestCoreGraphQlQuery = (host: string) => {
       additions deletions changedFiles createdAt updatedAt mergedAt closedAt
       headRefName baseRefName headRefOid isCrossRepository
       headRepositoryOwner { login }
+      headRepository { nameWithOwner viewerPermission }
+      headRef { id }
       author { login avatarUrl ... on User { id name } }
       autoMergeRequest { mergeMethod }
       viewerCanUpdate viewerDidAuthor viewerCanUpdateBranch
@@ -1340,6 +1355,7 @@ export interface GitHubPullRequestDetail extends GitHubPullRequestListItem {
   readonly isCrossRepository?: boolean;
   /** The owner of the head branch's repository; null where `gh` did not say. */
   readonly headRepositoryOwner: string | null;
+  readonly headRepositoryNameWithOwner?: string | null;
   readonly headSha?: string | null;
   readonly body: string;
   readonly changedFiles: number;
@@ -2324,8 +2340,10 @@ export function decodePullRequestCoreJson(
       labels: pr.labels.nodes,
       statusCheckRollup: toCheckContexts(contexts?.nodes ?? []),
     }),
+    headRepositoryNameWithOwner: trimmed(pr.headRepository?.nameWithOwner),
     viewerAccess: {
       canWrite: toCanWrite(repository.viewerPermission),
+      canDeleteBranch: toCanWrite(pr.headRepository?.viewerPermission) && pr.headRef !== null,
       canTriage: toCanTriage(repository.viewerPermission),
       ...toPullRequestViewerFields(pr),
       mergeCapabilities: {
@@ -3147,6 +3165,7 @@ export function buildLabelRequest(labels: ReadonlyArray<string>): {
  */
 export interface GitHubViewerAccess {
   readonly canWrite: boolean;
+  readonly canDeleteBranch?: boolean;
   /**
    * The viewer's role reaches triage, which is the least that may label. Everyone who can write
    * can triage; a triager is the one role that can label without being able to merge.
@@ -3167,7 +3186,10 @@ export interface GitHubViewerAccess {
 export const VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerPermission
-    pullRequest(number: $number) { viewerCanUpdate viewerDidAuthor }
+    pullRequest(number: $number) {
+      viewerCanUpdate viewerDidAuthor
+      headRepository { viewerPermission }
+    }
   }
 }`;
 
@@ -3176,7 +3198,9 @@ const RawViewerPermissionsSchema = Schema.Struct({
     repository: Schema.Struct({
       ...RawRepositoryAccessSchema.fields,
       /** Null for a number that names no pull request the viewer can see. */
-      pullRequest: Schema.NullOr(RawViewerFieldsSchema),
+      pullRequest: Schema.NullOr(
+        Schema.Struct({ ...RawViewerFieldsSchema.fields, ...RawHeadBranchAccessSchema.fields }),
+      ),
     }),
   }),
 });
@@ -3198,6 +3222,7 @@ export function decodeViewerPermissionsJson(
       rebase: repository.rebaseMergeAllowed,
     },
     canWrite: toCanWrite(repository.viewerPermission),
+    canDeleteBranch: toCanWrite(repository.pullRequest?.headRepository?.viewerPermission),
     canTriage: toCanTriage(repository.viewerPermission),
     ...toPullRequestViewerFields(repository.pullRequest),
   });
