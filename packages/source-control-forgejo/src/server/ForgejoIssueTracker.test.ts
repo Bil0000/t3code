@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -136,6 +137,212 @@ function tracker(
 }
 
 describe("ForgejoIssueTracker", () => {
+  it.effect("keeps native closing links under the same mounted host", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((input) => {
+        paths.push(input.path);
+        return {
+          stdout: encode(
+            input.path.includes("timeline")
+              ? [
+                  {
+                    id: 1,
+                    type: "pull_ref",
+                    ref_action: "closes",
+                    created_at: "2026-07-01T00:00:00Z",
+                    ref_issue: {
+                      number: 50,
+                      html_url: "https://forgejo.test:3000/mount/acme/other/pulls/50",
+                      pull_request: { merged: false },
+                    },
+                  },
+                ]
+              : {
+                  number: 50,
+                  title: "Fix",
+                  html_url: "https://forgejo.test:3000/mount/acme/other/pulls/50",
+                  state: "open",
+                  merged: false,
+                },
+          ),
+        };
+      });
+      expect(
+        yield* api.getLinkedPullRequests!({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "mount/acme/web",
+          key: "42",
+          limit: 1,
+        }),
+      ).toMatchObject({ items: [{ repository: "mount/acme/other", closesIssue: true }] });
+      expect(paths).toContain("repos/mount/acme/other/pulls/50");
+    }),
+  );
+
+  it.effect("preserves native structured form fields alongside markdown templates", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker((input) => ({
+        stdout: encode(
+          input.path.endsWith("issue_config")
+            ? { blank_issues_enabled: false }
+            : [
+                {
+                  file_name: "bug.yml",
+                  name: "Bug",
+                  body: [
+                    { type: "markdown", attributes: { value: "Read first" } },
+                    {
+                      type: "textarea",
+                      id: "repro",
+                      attributes: { label: "Steps", render: "shell" },
+                      validations: { required: true },
+                    },
+                    {
+                      type: "dropdown",
+                      id: "version",
+                      attributes: {
+                        label: "Version",
+                        options: ["Stable", "Preview"],
+                        multiple: true,
+                      },
+                    },
+                    {
+                      type: "checkboxes",
+                      id: "agree",
+                      attributes: {
+                        label: "Agree",
+                        options: [{ label: "Checked", required: true }],
+                      },
+                    },
+                  ],
+                },
+              ],
+        ),
+      }));
+      expect(
+        yield* api.listTemplates!({ cwd: "/w", host: "forgejo.test:3000", scope: "acme/web" }),
+      ).toMatchObject({
+        blankIssuesEnabled: false,
+        templates: [
+          {
+            key: "bug.yml",
+            fields: [
+              { kind: "markdown", value: "Read first" },
+              { kind: "textarea", id: "repro", required: true, render: "shell" },
+              { kind: "dropdown", multiple: true, options: ["Stable", "Preview"] },
+              { kind: "checkboxes", options: [{ label: "Checked", required: true }] },
+            ],
+          },
+        ],
+      });
+    }),
+  );
+
+  it.effect.each(["42", "99"])("edits a comment only when its native issue URL names %s", (key) =>
+    Effect.gen(function* () {
+      const writes: ForgejoCli.ForgejoApiInput[] = [];
+      const api = yield* tracker((input) => {
+        if (input.method) {
+          writes.push(input);
+          return { stdout: "{}" };
+        }
+        return {
+          stdout: encode({
+            id: 7,
+            issue_url: `https://forgejo.test:3000/api/v1/repos/acme/web/issues/${key}`,
+          }),
+        };
+      });
+      const result = yield* Effect.result(
+        api.editComment!({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "acme/web",
+          key: "42",
+          commentId: "7",
+          body: "Updated",
+        }),
+      );
+      expect(Result.isSuccess(result)).toBe(key === "42");
+      expect(writes).toEqual(
+        key === "42"
+          ? [
+              {
+                cwd: "/w",
+                host: "forgejo.test:3000",
+                repository: "acme/web",
+                path: "repos/acme/web/issues/comments/7",
+                method: "PATCH",
+                body: { body: "Updated" },
+              },
+            ]
+          : [],
+      );
+    }),
+  );
+
+  it.effect("pages history and organization labels without dropping native continuation", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((input) => {
+        paths.push(input.path);
+        return input.path.includes("timeline")
+          ? {
+              stdout: encode([
+                { id: 1, type: "milestone", created_at: "2026-07-01T00:00:00Z", body: "Release" },
+              ]),
+              stderr: 'link: <https://forgejo.test/next>; rel="next"',
+            }
+          : {
+              stdout: encode([{ id: 1, name: "bug", color: "aabbcc" }]),
+              stderr: 'link: <https://forgejo.test/last>; rel="last"',
+            };
+      });
+      const target = {
+        cwd: "/w",
+        host: "forgejo.test:3000",
+        scope: "acme/web",
+        key: "42",
+        limit: 1,
+      };
+      expect(yield* api.getHistory!(target)).toMatchObject({
+        items: [{ kind: "updated", detail: "Release" }],
+        nextCursor: "2",
+      });
+      const repo = yield* api.listLabelCandidates!(target);
+      expect(repo.nextCursor).toBe("org:1");
+      expect(
+        yield* api.listLabelCandidates!({ ...target, cursor: repo.nextCursor! }),
+      ).toMatchObject({ items: [{ name: "bug" }], nextCursor: null });
+      expect(paths).toContain("orgs/acme/labels?limit=1&page=1");
+    }),
+  );
+
+  it.effect.each([undefined, "julius"])(
+    "does not fetch a viewer just to show older comment edit flags %s",
+    (viewer) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((input) => {
+          paths.push(input.path);
+          return answer(input.path);
+        });
+        const page = yield* api.getComments({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "acme/web",
+          key: "42",
+          cursor: "1",
+          ...(viewer === undefined ? {} : { viewer }),
+        });
+        expect(page.comments[0]?.canEdit).toBe(viewer !== undefined);
+        expect(paths).not.toContain("user");
+        expect(paths).not.toContain("repos/acme/web");
+      }),
+  );
+
   it.effect.each([
     { reacted: true, method: "POST", issueUrl: "https://forgejo.test:3000/acme/web/issues/42" },
     {
@@ -295,6 +502,8 @@ describe("ForgejoIssueTracker", () => {
           author: { login: "julius", name: null, avatarUrl: null },
           body: "Repro attached.",
           createdAt: "2026-07-02T00:00:00.000Z",
+          editedAt: null,
+          canEdit: true,
           url: "https://forgejo.test:3000/acme/web/issues/42#issuecomment-7",
           reactions: [{ content: "thumbs-up", count: 2, actors: ["theo"], viewerHasReacted: true }],
         },
@@ -1039,7 +1248,7 @@ describe("ForgejoIssueTracker", () => {
         cursor: "2",
       });
       expect(paths).toEqual([
-        "repos/acme/web/issues?type=issues&state=open&sort=recentupdate&created_by=julius&limit=50&page=2",
+        "repos/acme/web/issues?type=issues&state=open&created_by=julius&limit=50&page=2",
       ]);
       expect(page.items.map((item) => item.key)).toEqual(["42"]);
       // No `Link` header at all means the server may still have more; a full page carries on.

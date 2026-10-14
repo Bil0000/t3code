@@ -7,7 +7,12 @@
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { IssueComment, IssueEvent, IssueTemplate } from "@t3tools/contracts";
+import type {
+  IssueComment,
+  IssueEvent,
+  IssueTemplate,
+  IssueTemplateField,
+} from "@t3tools/contracts";
 import type { TrackerIssueSummary } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
 import {
@@ -45,6 +50,7 @@ export const ForgejoIssueRepository = Schema.Struct({
 export const ForgejoTimelineEntry = Schema.Struct({
   id: Schema.Int,
   type: Schema.String,
+  ref_action: Schema.optional(Schema.String),
   body: Schema.optional(Schema.NullOr(Schema.String)),
   user: Schema.optional(Schema.NullOr(ForgejoUser)),
   created_at: Schema.String,
@@ -65,6 +71,7 @@ export const ForgejoTimelineEntry = Schema.Struct({
 });
 
 export const ForgejoIssueTemplate = Schema.Struct({
+  body: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
   file_name: Schema.String,
   name: Schema.optional(Schema.NullOr(Schema.String)),
   about: Schema.optional(Schema.NullOr(Schema.String)),
@@ -91,8 +98,8 @@ export function forgejoIssue(issue: typeof ForgejoIssue.Type): TrackerIssueSumma
     author: forgejoActor(issue.user),
     state:
       issue.state === "closed"
-        ? { category: "closed", name: "closed" }
-        : { category: "open", name: "open" },
+        ? { category: "closed", name: "closed", workflowCategory: "completed" }
+        : { category: "open", name: "open", workflowCategory: "unstarted" },
     createdAt: toIsoUtc(issue.created_at),
     updatedAt: toIsoUtc(issue.updated_at),
     closedAt: issue.closed_at ? toIsoUtc(issue.closed_at) : null,
@@ -146,19 +153,86 @@ export function forgejoIssueEvent(entry: typeof ForgejoTimelineEntry.Type): Issu
   }
 }
 
-/** Only markdown templates carry a body; a YAML form is a questionnaire this cannot flatten. */
+const TemplateField = Schema.Struct({
+  type: Schema.Literals(["markdown", "input", "textarea", "dropdown", "checkboxes"]),
+  id: Schema.optional(Schema.String),
+  attributes: Schema.Struct({
+    label: Schema.optional(Schema.String),
+    description: Schema.optional(Schema.String),
+    placeholder: Schema.optional(Schema.String),
+    value: Schema.optional(Schema.String),
+    render: Schema.optional(Schema.String),
+    multiple: Schema.optional(Schema.Boolean),
+    options: Schema.optional(
+      Schema.Array(
+        Schema.Union([
+          Schema.String,
+          Schema.Struct({ label: Schema.String, required: Schema.optional(Schema.Boolean) }),
+        ]),
+      ),
+    ),
+  }),
+  validations: Schema.optional(Schema.Struct({ required: Schema.optional(Schema.Boolean) })),
+});
+const decodeFormFields = Schema.decodeUnknownOption(Schema.Array(TemplateField));
 export function forgejoIssueTemplate(
   template: typeof ForgejoIssueTemplate.Type,
 ): IssueTemplate | null {
-  const key = template.file_name.trim();
-  if (key.length === 0 || !/\.md$/i.test(key)) return null;
-  return {
-    key,
-    name: template.name?.trim() || key,
+  const base = {
+    key: template.file_name,
+    name: template.name?.trim() || template.file_name,
     about: template.about ?? "",
     title: template.title ?? "",
     body: template.content ?? "",
     labels: template.labels ?? [],
     assignees: template.assignees ?? [],
   };
+  if (/\.md$/i.test(template.file_name)) return base;
+  if (!/\.ya?ml$/i.test(template.file_name)) return null;
+  const parsed = Option.getOrUndefined(decodeFormFields(template.body ?? []));
+  if (!parsed || !parsed.length) return null;
+  const fields = parsed.map((field, index): IssueTemplateField => {
+    const attributes = field.attributes;
+    if (field.type === "markdown") return { kind: "markdown", value: attributes.value ?? "" };
+    const common = {
+      id: field.id ?? `field-${index}`,
+      label: attributes.label ?? "",
+      description: attributes.description ?? null,
+      required: field.validations?.required ?? false,
+    };
+    if (field.type === "input")
+      return {
+        ...common,
+        kind: "input",
+        placeholder: attributes.placeholder ?? null,
+        value: attributes.value ?? null,
+      };
+    if (field.type === "textarea")
+      return {
+        ...common,
+        kind: "textarea",
+        placeholder: attributes.placeholder ?? null,
+        value: attributes.value ?? null,
+        render: attributes.render ?? null,
+      };
+    if (field.type === "dropdown")
+      return {
+        ...common,
+        kind: "dropdown",
+        multiple: attributes.multiple ?? false,
+        options: (attributes.options ?? []).map((option) =>
+          typeof option === "string" ? option : option.label,
+        ),
+      };
+    return {
+      ...common,
+      kind: "checkboxes",
+      options: (attributes.options ?? []).map((option) =>
+        typeof option === "string"
+          ? { label: option, required: false }
+          : { label: option.label, required: option.required ?? false },
+      ),
+    };
+  });
+  return { ...base, body: "", fields };
 }

@@ -14,6 +14,8 @@ import * as Schema from "effect/Schema";
 import {
   IssueTrackerKind,
   type IssueCapabilities,
+  type IssueEvent,
+  type IssuePageInput,
   type IssueLinkedPullRequest,
   type IssueViewerPermissions,
 } from "@t3tools/contracts";
@@ -21,6 +23,7 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import {
   IssueTrackerError,
   type IssueTrackerApi,
+  type IssueTarget,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
 import * as ForgejoCli from "./ForgejoCli.ts";
@@ -45,12 +48,22 @@ import {
   forgejoReactions,
 } from "./forgejoPullRequestJson.ts";
 
+const IssueCommentRecord = Schema.Struct({
+  ...ForgejoComment.fields,
+  updated_at: Schema.optional(Schema.String),
+});
 const KIND = IssueTrackerKind.make("forgejo");
 
 const CAPABILITIES: IssueCapabilities = {
   create: true,
   edit: true,
   comment: true,
+  editComment: true,
+  subIssues: false,
+  createSubIssue: false,
+  updateParent: false,
+  listSorts: ["created"],
+  listOrders: ["desc"],
   labels: true,
   assignees: true,
   reactions: true,
@@ -267,13 +280,14 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         }),
       );
 
-    const organizationLabels = (target: Target, operation: string) =>
+    const organizationLabels = (target: Target, operation: string, page = 1, limit = PAGE_SIZE) =>
       readPage(
         target,
         operation,
         `orgs/${encodeURIComponent(target.scope.split("/").at(-2)!)}/labels`,
-        1,
+        page,
         ForgejoLabel,
+        limit,
       ).pipe(
         Effect.catchIf(
           (error) => error.reason === "not-found",
@@ -319,6 +333,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       path: string,
       cursor: string | undefined,
       viewer: string,
+      canWrite = false,
+      active = true,
     ) {
       const offsetMatch = /^offset:(?:([1-9]\d{0,6}):)?([1-9]\d{0,8})$/.exec(cursor ?? "");
       const pageMatch = COMMENT_PAGE_CURSOR.exec(cursor ?? "");
@@ -334,7 +350,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       });
       if (result.stdoutTruncated)
         return yield* refused(operation, "Forgejo response exceeded the output limit.");
-      const decoded = decodeJsonResult(Schema.NullOr(Schema.Array(ForgejoComment)))(result.stdout);
+      const decoded = decodeJsonResult(Schema.NullOr(Schema.Array(IssueCommentRecord)))(
+        result.stdout,
+      );
       if (Result.isFailure(decoded))
         return yield* refused(operation, "Forgejo returned an invalid response.", decoded.failure);
       const rows = decoded.success ?? [];
@@ -362,6 +380,11 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           ).pipe(
             Effect.map((reactions) => ({
               ...forgejoIssueComment(comment),
+              editedAt:
+                comment.updated_at && comment.updated_at !== comment.created_at
+                  ? comment.updated_at
+                  : null,
+              canEdit: active && (canWrite || comment.user?.login === viewer),
               reactions: forgejoReactions(reactions, viewer),
             })),
           ),
@@ -377,7 +400,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
     ): Effect.Effect<ReadonlyArray<IssueLinkedPullRequest>, IssueTrackerError> => {
       const references = new Map<
         string,
-        { readonly repository: string; readonly number: number }
+        { readonly repository: string; readonly number: number; readonly closesIssue: boolean }
       >();
       for (const entry of timeline) {
         const reference = entry.ref_issue;
@@ -388,23 +411,28 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         )
           continue;
         const url = new URL(reference.html_url);
-        const match = /\/([^/]+)\/([^/]+)\/pulls\/([1-9]\d*)\/?$/.exec(url.pathname);
+        const match = /^\/(.+)\/pulls\/([1-9]\d*)\/?$/.exec(url.pathname);
         if (
           !match ||
           !["http:", "https:"].includes(url.protocol) ||
           url.host.toLowerCase() !== target.host.toLowerCase() ||
-          Number(match[3]) !== reference.number
+          Number(match[2]) !== reference.number
         )
           continue;
-        const repository = `${match[1]}/${match[2]}`;
+        const repository = match[1]!;
+        const mount = target.scope.split("/").slice(0, -2).join("/");
+        if (mount !== "" && !repository.startsWith(`${mount}/`)) continue;
         references.set(`${repository}/${reference.number}`, {
           repository,
           number: reference.number,
+          closesIssue:
+            entry.ref_action === "closes" ||
+            references.get(`${repository}/${reference.number}`)?.closesIssue === true,
         });
       }
       return Effect.forEach(
         [...references.values()],
-        ({ repository, number }) =>
+        ({ repository, number, closesIssue }) =>
           read(
             { ...target, scope: repository },
             "getIssue",
@@ -430,8 +458,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                     ? ("closed" as const)
                     : ("open" as const),
                 isDraft: pull.draft ?? false,
-                // Forgejo's timeline cites the pull request without saying whether it closes the issue.
-                closesIssue: false,
+                closesIssue,
               },
             ]),
             Effect.catchIf(
@@ -443,6 +470,45 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       ).pipe(Effect.map((links) => links.flat()));
     };
 
+    const scopedCommentPath = (input: IssueTarget, operation: string, commentId: string) =>
+      Effect.gen(function* () {
+        const { number } = yield* issueTarget(operation, input);
+        if (!/^[1-9]\d*$/.test(commentId))
+          return yield* refused(operation, "The comment id names no Forgejo comment.");
+        const commentPath = `${repoPath(input.scope)}/issues/comments/${commentId}`;
+        const comment = yield* read(
+          input,
+          operation,
+          { path: commentPath },
+          Schema.Struct({ id: Schema.Int, issue_url: Schema.String }),
+        );
+        const url = URL.parse(comment.issue_url);
+        const segments = input.scope.split("/").map(encodeURIComponent);
+        const scopePath = segments.slice(-2).join("/");
+        const mountPath = segments.slice(0, -2).join("/");
+        const issueSuffix = `/${scopePath}/issues/${number}`;
+        const ownerPath = url?.pathname.replace(/\/$/, "");
+        if (
+          String(comment.id) !== commentId ||
+          url === null ||
+          !["http:", "https:"].includes(url.protocol) ||
+          url.host.toLowerCase() !== input.host.toLowerCase() ||
+          !ownerPath?.endsWith(issueSuffix) ||
+          (mountPath !== "" &&
+            ownerPath !== `/${mountPath}${issueSuffix}` &&
+            ownerPath !== `/${mountPath}/api/v1/repos${issueSuffix}`)
+        )
+          return yield* refused(operation, "The comment does not belong to this issue.");
+        return commentPath;
+      });
+
+    const pageInput = (input: Target & IssuePageInput, operation: string) => {
+      const page = parsePage(input.cursor);
+      return page === null
+        ? Effect.fail(refused(operation, "The cursor was not one Forgejo handed out."))
+        : Effect.succeed({ page, limit: Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE) });
+    };
+
     return {
       kind: KIND,
       capabilities: CAPABILITIES,
@@ -450,14 +516,29 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       getViewer: (input) => getViewer({ ...input, scope: "" }, "getViewer"),
 
       listIssues: (input) => {
+        if (
+          (input.sort !== undefined && input.sort !== "created") ||
+          (input.order !== undefined && input.order !== "desc")
+        )
+          return Effect.fail(
+            refused("listIssues", "Forgejo supports newest-created issues first."),
+          );
         const page = parsePage(input.cursor);
         if (page === null) {
           return Effect.fail(refused("listIssues", "The cursor was not one Forgejo handed out."));
         }
+        const open =
+          input.stateCategories === undefined
+            ? input.state !== "closed"
+            : input.stateCategories.includes("unstarted");
+        const closed =
+          input.stateCategories === undefined
+            ? input.state !== "open"
+            : input.stateCategories.includes("completed");
+        if (!open && !closed) return Effect.succeed({ items: [], nextCursor: null });
         const params = new URLSearchParams({
           type: "issues",
-          state: input.state,
-          sort: "recentupdate",
+          state: open && closed ? "all" : open ? "open" : "closed",
         });
         const text = input.query?.trim() ?? "";
         if (text.length > 0) params.set("q", text);
@@ -507,6 +588,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                 issuePath(input.scope, issue.number),
                 undefined,
                 viewer,
+                repository.permissions?.push ?? false,
+                !repository.archived && repository.has_issues !== false,
               ),
               linkedPullRequests(input, timeline.rows),
             ]).pipe(
@@ -534,9 +617,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           COMMENT_PAGE_CURSOR.test(input.cursor);
         return !validCursor
           ? Effect.fail(refused("getComments", "The cursor was not one Forgejo handed out."))
-          : Effect.all([issueTarget("getComments", input), getViewer(input, "getComments")]).pipe(
-              Effect.flatMap(([{ path }, viewer]) =>
-                commentsPage(input, "getComments", path, input.cursor, viewer),
+          : issueTarget("getComments", input).pipe(
+              Effect.flatMap(({ path }) =>
+                commentsPage(input, "getComments", path, input.cursor, input.viewer ?? ""),
               ),
             );
       },
@@ -649,35 +732,10 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
 
       setReaction: (input) =>
         Effect.gen(function* () {
-          const { number, path } = yield* issueTarget("setReaction", input);
+          const { path } = yield* issueTarget("setReaction", input);
           let reactionPath = `${path}/reactions`;
           if (input.subjectId !== undefined) {
-            if (!/^[1-9]\d*$/.test(input.subjectId))
-              return yield* refused("setReaction", "The comment id names no Forgejo comment.");
-            const commentPath = `${repoPath(input.scope)}/issues/comments/${input.subjectId}`;
-            const comment = yield* read(
-              input,
-              "setReaction",
-              { path: commentPath },
-              Schema.Struct({ id: Schema.Int, issue_url: Schema.String }),
-            );
-            const url = URL.parse(comment.issue_url);
-            const segments = input.scope.split("/").map(encodeURIComponent);
-            const scopePath = segments.slice(-2).join("/");
-            const mountPath = segments.slice(0, -2).join("/");
-            const issueSuffix = `/${scopePath}/issues/${number}`;
-            const ownerPath = url?.pathname.replace(/\/$/, "");
-            if (
-              String(comment.id) !== input.subjectId ||
-              url === null ||
-              !["http:", "https:"].includes(url.protocol) ||
-              url.host.toLowerCase() !== input.host.toLowerCase() ||
-              !ownerPath?.endsWith(issueSuffix) ||
-              (mountPath !== "" &&
-                ownerPath !== `/${mountPath}${issueSuffix}` &&
-                ownerPath !== `/${mountPath}/api/v1/repos${issueSuffix}`)
-            )
-              return yield* refused("setReaction", "The comment does not belong to this issue.");
+            const commentPath = yield* scopedCommentPath(input, "setReaction", input.subjectId);
             reactionPath = `${commentPath}/reactions`;
           }
           yield* write(input, "setReaction", {
@@ -685,6 +743,121 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
             method: input.reacted ? "POST" : "DELETE",
             body: { content: FORGEJO_REACTIONS[input.content] },
           });
+        }),
+
+      editComment: (input) =>
+        scopedCommentPath(input, "editComment", input.commentId).pipe(
+          Effect.flatMap((path) =>
+            write(input, "editComment", { path, method: "PATCH", body: { body: input.body } }),
+          ),
+        ),
+
+      getHistory: (input) =>
+        Effect.gen(function* () {
+          const { path } = yield* issueTarget("getHistory", input);
+          const { page, limit } = yield* pageInput(input, "getHistory");
+          const rows = yield* readPage(
+            input,
+            "getHistory",
+            `${path}/timeline`,
+            page,
+            ForgejoTimelineEntry,
+            limit,
+          );
+          return {
+            items: rows.rows.flatMap((row): IssueEvent[] =>
+              row.type === "comment"
+                ? []
+                : [
+                    forgejoIssueEvent(row) ?? {
+                      id: String(row.id),
+                      kind: "updated",
+                      actor: forgejoActor(row.user),
+                      createdAt: row.created_at,
+                      detail: row.body?.trim() || row.type.replaceAll("_", " "),
+                    },
+                  ],
+            ),
+            nextCursor: rows.nextCursor,
+            truncated: !rows.paginationKnown,
+          };
+        }),
+
+      getLinkedPullRequests: (input) =>
+        Effect.gen(function* () {
+          const { path } = yield* issueTarget("getLinkedPullRequests", input);
+          const { page, limit } = yield* pageInput(input, "getLinkedPullRequests");
+          const rows = yield* readPage(
+            input,
+            "getLinkedPullRequests",
+            `${path}/timeline`,
+            page,
+            ForgejoTimelineEntry,
+            limit,
+          );
+          return {
+            items: yield* linkedPullRequests(input, rows.rows),
+            nextCursor: rows.nextCursor,
+            truncated: !rows.paginationKnown,
+          };
+        }),
+
+      listLabelCandidates: (input) =>
+        Effect.gen(function* () {
+          const match = /^(repo|org):([1-9]\d{0,6})$/.exec(input.cursor ?? "repo:1");
+          if (match === null)
+            return yield* refused(
+              "listLabelCandidates",
+              "The cursor was not one Forgejo handed out.",
+            );
+          const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
+          const page = Number(match[2]);
+          const org = match[1] === "org";
+          const rows = yield* org
+            ? organizationLabels(input, "listLabelCandidates", page, limit)
+            : readPage(
+                input,
+                "listLabelCandidates",
+                `${repoPath(input.scope)}/labels`,
+                page,
+                ForgejoLabel,
+                limit,
+              );
+          return {
+            items: rows.rows.map((label) => ({
+              name: label.name,
+              color: label.color ?? null,
+              description: label.description ?? null,
+            })),
+            nextCursor:
+              rows.nextCursor === null
+                ? org
+                  ? null
+                  : "org:1"
+                : `${org ? "org" : "repo"}:${rows.nextCursor}`,
+            truncated: !rows.paginationKnown,
+          };
+        }),
+
+      listAssigneeCandidates: (input) =>
+        Effect.gen(function* () {
+          const { page, limit } = yield* pageInput(input, "listAssigneeCandidates");
+          const rows = yield* readPage(
+            input,
+            "listAssigneeCandidates",
+            `${repoPath(input.scope)}/assignees`,
+            page,
+            ForgejoUser,
+            limit,
+          );
+          return {
+            items: rows.rows.flatMap((user) => {
+              const actor = forgejoActor(user);
+              return actor === null ? [] : [{ ...actor, id: actor.login }];
+            }),
+            nextCursor: rows.nextCursor,
+            truncated: !rows.paginationKnown,
+          };
         }),
 
       listTemplates: (input) =>
