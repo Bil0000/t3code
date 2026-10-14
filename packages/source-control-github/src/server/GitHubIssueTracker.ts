@@ -654,7 +654,11 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
                   Effect.flatMap((response) => {
                     const labels = decodeRestIssueLabelsJson(response.body);
                     return !response.truncated && !response.invalidUtf8 && Result.isSuccess(labels)
-                      ? Effect.succeed({ ...detail, labels: labels.success })
+                      ? Effect.succeed({
+                          ...detail,
+                          labels: labels.success,
+                          labelsTruncated: false,
+                        })
                       : Effect.fail(unreadable("getIssue", response));
                   }),
                 ),

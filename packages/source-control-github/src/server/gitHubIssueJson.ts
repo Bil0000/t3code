@@ -75,7 +75,14 @@ const RawIssueSchema = Schema.Struct({
     Schema.NullOr(Schema.Struct({ totalCount: Schema.optional(Schema.Int) })),
   ),
   assignees: nodes(RawActorSchema),
-  labels: nodes(RawLabelSchema),
+  labels: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawLabelSchema)))),
+        pageInfo: Schema.optional(Schema.NullOr(RawPageInfoSchema)),
+      }),
+    ),
+  ),
   milestone: Schema.optional(Schema.NullOr(Schema.Struct({ title: Schema.String }))),
 });
 
@@ -83,7 +90,7 @@ const RawIssueSchema = Schema.Struct({
 const ISSUE_ROW_BASE_FIELDS = `number title url state stateReason createdAt updatedAt closedAt
   author { login avatarUrl ... on User { name } }
   assignees(first: 20) { nodes { login name avatarUrl } }
-  labels(first: 20) { nodes { name color } }
+  labels(first: 20) { nodes { name color } pageInfo { hasNextPage } }
   milestone { title }`;
 
 const ISSUE_ROW_FIELDS = `${ISSUE_ROW_BASE_FIELDS}
@@ -475,6 +482,7 @@ function toSummary(raw: typeof RawIssueSchema.Type): TrackerIssueSummary {
     closedAt: trimmed(raw.closedAt),
     assignees: toActors(raw.assignees?.nodes),
     labels: toLabels(raw.labels?.nodes),
+    labelsTruncated: raw.labels?.pageInfo?.hasNextPage === true,
     milestone: raw.milestone?.title ?? null,
     commentCount: Math.max(0, raw.comments?.totalCount ?? 0),
   };
