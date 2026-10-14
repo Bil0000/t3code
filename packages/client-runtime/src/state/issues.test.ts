@@ -2,15 +2,25 @@ import type {
   EnvironmentId,
   IssueCapabilities,
   IssueComment,
+  IssueCommentsPageInput,
   IssueListEntry,
   IssueListResult,
   IssueTrackerKind,
   ProjectId,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import * as Effect from "effect/Effect";
+import * as Latch from "effect/Latch";
+import * as Layer from "effect/Layer";
+import { Atom, AtomRegistry } from "effect/reactivity";
+
+import * as EnvironmentRegistry from "../connection/registry.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import * as RpcClient from "../rpc/client.ts";
 
 import {
   continueIssueListPage,
+  createIssueEnvironmentAtoms,
   issueEntryKey,
   issueListCursorsOn,
   issueScopeKey,
@@ -19,6 +29,73 @@ import {
   prependIssueComments,
   refreshIssueListPage,
 } from "./issues.ts";
+
+describe("issue comment requests", () => {
+  it.each([
+    { host: "second.atlassian.net" },
+    { tracker: "github" as IssueTrackerKind },
+    { host: undefined },
+    { cursor: "next" },
+    {},
+  ])("keeps single-flight requests distinct for %j", async (change) => {
+    const input: IssueCommentsPageInput = {
+      projectId: "project-1" as ProjectId,
+      tracker: "jira" as IssueTrackerKind,
+      host: "first.atlassian.net",
+      scope: "ENG",
+      key: "ENG-1",
+      cursor: "older",
+    };
+    const secondInput = { ...input, ...change };
+    const latch = Latch.makeUnsafe();
+    const started = Promise.withResolvers<void>();
+    const calls: IssueCommentsPageInput[] = [];
+    const request = vi.spyOn(RpcClient, "requestGuarded");
+    request.mockImplementation(((_tag: string, payload: IssueCommentsPageInput) =>
+      Effect.sync(() => {
+        calls.push(payload);
+        started.resolve();
+      }).pipe(
+        Effect.andThen(latch.await),
+        Effect.as({ comments: [], nextCursor: JSON.stringify(payload) }),
+      )) as unknown as Parameters<typeof request.mockImplementation>[0]);
+    const environmentRegistry = EnvironmentRegistry.EnvironmentRegistry.of({
+      run: (_environmentId, effect) =>
+        Effect.provideService(
+          effect,
+          EnvironmentSupervisor.EnvironmentSupervisor,
+          {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"],
+        ),
+    } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+    const runtime = Atom.runtime(
+      Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+    );
+    const atoms = createIssueEnvironmentAtoms(runtime);
+    const registry = AtomRegistry.make();
+    const environmentId = "environment-1" as EnvironmentId;
+
+    try {
+      const first = atoms.comments.run(registry, { environmentId, input });
+      await started.promise;
+      const second = atoms.comments.run(registry, { environmentId, input: secondInput });
+      latch.openUnsafe();
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+
+      expect(firstResult).toMatchObject({
+        _tag: "Success",
+        value: { nextCursor: JSON.stringify(input) },
+      });
+      expect(secondResult).toMatchObject({
+        _tag: "Success",
+        value: { nextCursor: JSON.stringify(secondInput) },
+      });
+      expect(calls).toEqual(Object.keys(change).length === 0 ? [input] : [input, secondInput]);
+    } finally {
+      registry.dispose();
+      request.mockRestore();
+    }
+  });
+});
 
 function entry(overrides: Partial<IssueListEntry> & { key: string }): IssueListEntry {
   return {

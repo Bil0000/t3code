@@ -276,8 +276,7 @@ export function createIssueEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: {
         mode: "singleFlight",
-        key: ({ environmentId, input }) =>
-          JSON.stringify([environmentId, input.projectId, input.scope, input.key, input.cursor]),
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
     /** Read when the composer opens: what a scope offers a new issue changes with a commit. */
