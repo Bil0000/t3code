@@ -433,7 +433,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           nextCursor = `offset:${page}:${offset + selected.length}`;
         else if (links !== undefined) {
           if (/rel="?next"?/i.test(links)) nextCursor = String(page + 1);
-        } else if (!offsetMatch) nextCursor = `page:${page + 1}:${last.id}`;
+        } else nextCursor = `page:${page + 1}:${last.id}`;
       }
       const comments = yield* Effect.forEach(
         selected,

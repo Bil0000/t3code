@@ -1705,35 +1705,105 @@ describe("ForgejoIssueTracker", () => {
     }),
   );
 
-  it.effect("slices an unpaged Gitea comments response without repeating the first comments", () =>
-    Effect.gen(function* () {
-      const comments = Array.from({ length: 51 }, (_, index) => ({
-        id: index + 1,
-        body: `Comment ${index + 1}`,
-        user: { login: "julius" },
-        created_at: "2026-07-02T00:00:00Z",
-      }));
-      const paths: string[] = [];
-      const api = yield* tracker((input) => {
-        paths.push(input.path);
-        const route = input.path.split("?")[0]!;
-        if (route === "repos/acme/web/issues/42/comments")
-          return { stdout: encode(comments), stderr: "X-Total-Count: 51" };
-        if (/\/issues\/comments\/\d+\/reactions$/.test(route)) return { stdout: "[]" };
-        return answer(input.path);
-      });
-      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
-      const first = yield* api.getIssue(target);
-      expect(first.comments.map((comment) => comment.id)).toEqual(
-        Array.from({ length: 50 }, (_, index) => String(index + 1)),
-      );
-      expect(first.commentsCursor).toBe("offset:1:50");
-      const second = yield* api.getComments({ ...target, cursor: first.commentsCursor! });
-      expect(second.comments.map((comment) => comment.id)).toEqual(["51"]);
-      expect(second.nextCursor).toBeNull();
-      expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toHaveLength(2);
-      expect(paths.filter((path) => path.endsWith("/comments/51/reactions"))).toHaveLength(1);
-    }),
+  it.effect.each([51, 60])(
+    "slices an unpaged Gitea response with %s comments without repeats",
+    (count) =>
+      Effect.gen(function* () {
+        const comments = Array.from({ length: count }, (_, index) => ({
+          id: index + 1,
+          body: `Comment ${index + 1}`,
+          user: { login: "julius" },
+          created_at: "2026-07-02T00:00:00Z",
+        }));
+        const paths: string[] = [];
+        const api = yield* tracker((input) => {
+          paths.push(input.path);
+          const route = input.path.split("?")[0]!;
+          if (route === "repos/acme/web/issues/42/comments")
+            return { stdout: encode(comments), stderr: `X-Total-Count: ${count}` };
+          if (/\/issues\/comments\/\d+\/reactions$/.test(route)) return { stdout: "[]" };
+          return answer(input.path);
+        });
+        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const first = yield* api.getIssue(target);
+        expect(first.comments.map((comment) => comment.id)).toEqual(
+          Array.from({ length: 50 }, (_, index) => String(index + 1)),
+        );
+        expect(first.commentsCursor).toBe("offset:1:50");
+        const second = yield* api.getComments({ ...target, cursor: first.commentsCursor! });
+        expect(second.comments.map((comment) => comment.id)).toEqual(
+          comments.slice(50).map((comment) => String(comment.id)),
+        );
+        expect(second.nextCursor).toBe(`page:2:${count}`);
+        const last = yield* api.getComments({ ...target, cursor: second.nextCursor! });
+        expect(last.comments).toEqual([]);
+        expect(last.nextCursor).toBeNull();
+        expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toEqual([
+          "repos/acme/web/issues/42/comments?limit=50&page=1",
+          "repos/acme/web/issues/42/comments?limit=50&page=1",
+          "repos/acme/web/issues/42/comments?limit=50&page=2",
+        ]);
+        expect(paths.filter((path) => path.endsWith("/comments/51/reactions"))).toHaveLength(1);
+        expect(
+          paths.filter((path) => /\/issues\/comments\/\d+\/reactions$/.test(path)),
+        ).toHaveLength(count);
+      }),
+  );
+
+  it.effect.each([60, 110])(
+    "continues after every offset slice of a headerless native page with %s comments",
+    (firstCount) =>
+      Effect.gen(function* () {
+        const comments = Array.from({ length: firstCount + 60 }, (_, index) => ({
+          id: index + 1,
+          body: `Comment ${index + 1}`,
+          user: { login: "julius" },
+          created_at: "2026-07-02T00:00:00Z",
+        }));
+        const paths: string[] = [];
+        const api = yield* tracker((input) => {
+          paths.push(input.path);
+          const [route, query] = input.path.split("?");
+          if (route === "repos/acme/web/issues/42/comments") {
+            const page = Number(new URLSearchParams(query).get("page"));
+            return {
+              stdout: encode(
+                page === 1
+                  ? comments.slice(0, firstCount)
+                  : page === 2
+                    ? comments.slice(firstCount)
+                    : [],
+              ),
+            };
+          }
+          if (/\/issues\/comments\/\d+\/reactions$/.test(route!)) return { stdout: "[]" };
+          return answer(input.path);
+        });
+        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const first = yield* api.getIssue(target);
+        const ids = first.comments.map((comment) => comment.id);
+        expect(ids).toEqual(comments.slice(0, 50).map((comment) => String(comment.id)));
+        let cursor = first.commentsCursor;
+        const pages = [...Array.from({ length: Math.ceil(firstCount / 50) - 1 }, () => 1), 2, 2, 3];
+        for (const page of pages) {
+          expect(cursor).not.toBeNull();
+          const result = yield* api.getComments({ ...target, cursor: cursor! });
+          expect(result.comments.length).toBeLessThanOrEqual(50);
+          ids.push(...result.comments.map((comment) => comment.id));
+          cursor = result.nextCursor;
+          expect(paths.findLast((path) => /\/42\/comments(?:\?|$)/.test(path))).toBe(
+            `repos/acme/web/issues/42/comments?limit=50&page=${page}`,
+          );
+        }
+        expect(cursor).toBeNull();
+        expect(ids).toEqual(comments.map((comment) => String(comment.id)));
+        expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toEqual(
+          [1, ...pages].map((page) => `repos/acme/web/issues/42/comments?limit=50&page=${page}`),
+        );
+        expect(
+          paths.filter((path) => /\/issues\/comments\/\d+\/reactions$/.test(path)),
+        ).toHaveLength(comments.length);
+      }),
   );
 
   it.effect("keeps the native page while slicing an oversized later comment page", () =>
