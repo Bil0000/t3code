@@ -61,6 +61,7 @@ import {
 } from "~/components/issue/IssueListFilters";
 import { IssueGlyph, issueTrackerPresentation } from "~/components/issue/issuePresentation";
 import {
+  issueCreateSources,
   issueFilterProjects,
   issueListProjectScope,
   issueListRefreshSource,
@@ -785,11 +786,7 @@ function IssuesRoute() {
     };
     for (const [environmentId, page] of held) {
       if (page.answer.sources !== undefined) {
-        for (const source of page.answer.sources) {
-          const tracker = page.answer.trackers.find(
-            (t) => t.host.toLowerCase() === source.host.toLowerCase(),
-          );
-          if (tracker?.configured === false || !source.capabilities.create) continue;
+        for (const source of issueCreateSources(page.answer)) {
           if (known(environmentId, source.tracker, source.host, source.scope)) continue;
           scopes.push({
             environmentId,
