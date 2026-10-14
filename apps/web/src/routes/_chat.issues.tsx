@@ -28,6 +28,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   AtSignIcon,
   CircleCheckIcon,
+  FolderGit2Icon,
   LayersIcon,
   PenLineIcon,
   Plug2Icon,
@@ -51,14 +52,21 @@ import {
   type IssueListPreferences,
 } from "~/components/issue/issueListPreferences";
 import { IssueGlyph, issueTrackerPresentation } from "~/components/issue/issuePresentation";
+import {
+  issueFilterProjects,
+  issueListProjectScope,
+  type IssueListSources,
+} from "~/components/issue/issueProjectFilter.logic";
 import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDetailPanel";
 import { readableFailure } from "~/components/pullRequest/pullRequestDetail.logic";
 import { PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
 import {
   PullRequestFilterOptionIcon,
   PullRequestSearchInput,
+  pullRequestProjectKey,
   type PullRequestFilterOption,
 } from "~/components/pullRequest/PullRequestListFilters";
+import { pullRequestFilterProjects } from "~/components/pullRequest/pullRequestProjectFilter.logic";
 import { PullRequestsUnavailableState } from "~/components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "~/components/RightPanelTabs";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "~/components/WorkspaceBreadcrumb";
@@ -93,7 +101,7 @@ import {
   type RightPanelSurface,
 } from "~/rightPanelStore";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { useProjects } from "~/state/entities";
+import { useAllEnvironmentShellsBootstrapped, useProjects } from "~/state/entities";
 import { useEnvironments, useIssuesSupported } from "~/state/environments";
 import { issueEnvironment, useIssueList, type IssueListTarget } from "~/state/issues";
 import { useDebouncedValue } from "~/state/queries";
@@ -154,6 +162,8 @@ export const Route = createFileRoute("/_chat/issues")({
       raw.who === "assigned" || raw.who === "authored" || raw.who === "mentioned" ? raw.who : "all",
     status: raw.status === "closed" || raw.status === "all" ? raw.status : "open",
     ...present("host", bounded(raw.host)),
+    ...present<"environmentId", EnvironmentId>("environmentId", bounded(raw.environmentId)),
+    ...present<"projectId", ProjectId>("projectId", bounded(raw.projectId)),
     // Always an own key: the router lays this over the parent route's unvalidated search.
     q: bounded(raw.q),
     ...present<"selectedEnvironmentId", EnvironmentId>(
@@ -189,6 +199,7 @@ function IssuesRoute() {
   const search = Route.useSearch();
   const { environments } = useEnvironments();
   const projects = useProjects();
+  const projectsKnown = useAllEnvironmentShellsBootstrapped();
   const issuesSupported = useIssuesSupported();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   useEscapeToGoBack();
@@ -209,17 +220,45 @@ function IssuesRoute() {
     [environments],
   );
 
+  const capableProjects = useMemo(
+    () =>
+      projects.filter((project) =>
+        capableEnvironments.some((e) => e.environmentId === project.environmentId),
+      ),
+    [projects, capableEnvironments],
+  );
+  const projectScope = useMemo(
+    () =>
+      issueListProjectScope(
+        capableProjects,
+        { projectId: search.projectId, environmentId: search.environmentId },
+        projectsKnown,
+      ),
+    [capableProjects, search.projectId, search.environmentId, projectsKnown],
+  );
+  const scopedProject = projectScope === "waiting" ? null : projectScope;
+  const listedEnvironments = useMemo(
+    () =>
+      projectScope === "waiting"
+        ? []
+        : capableEnvironments.filter(
+            (e) => projectScope === null || e.environmentId === projectScope.environmentId,
+          ),
+    [capableEnvironments, projectScope],
+  );
+
   const debouncedQuery = useDebouncedValue(search.q ?? "", 300);
   const baseInput = useMemo<IssueListInput>(
     () => ({
       state: search.status,
       involvement: search.who,
+      ...(scopedProject ? { projectId: scopedProject.id } : {}),
       ...(search.host ? { host: search.host } : {}),
       ...(debouncedQuery ? { query: debouncedQuery } : {}),
     }),
-    [search.status, search.who, search.host, debouncedQuery],
+    [search.status, search.who, scopedProject, search.host, debouncedQuery],
   );
-  const filterKey = JSON.stringify([capableEnvironments.map((e) => e.environmentId), baseInput]);
+  const filterKey = JSON.stringify([listedEnvironments.map((e) => e.environmentId), baseInput]);
   const [paging, setPaging] = useState<{
     readonly key: string;
     readonly pages: ReadonlyMap<EnvironmentId, HeldPage>;
@@ -231,11 +270,11 @@ function IssuesRoute() {
   const current = paging.key === filterKey ? paging : null;
   const targets = useMemo<ReadonlyArray<IssueListTarget>>(
     () =>
-      capableEnvironments.map((e) => ({
+      listedEnvironments.map((e) => ({
         environmentId: e.environmentId,
         input: { ...baseInput, limit: PAGE_SIZE },
       })),
-    [capableEnvironments, baseInput],
+    [listedEnvironments, baseInput],
   );
   const list = useIssueList(targets);
   const [refreshedPages] = useState(() => new WeakMap<HeldPage, HeldPage>());
@@ -272,6 +311,19 @@ function IssuesRoute() {
     }
     return next;
   }, [list.answers, current, refreshedPages]);
+  const [knownSources] = useState(() => new Map<EnvironmentId, IssueListSources>());
+  const filterProjects = useMemo(() => {
+    if (projectScope === null) {
+      for (const [environmentId, page] of held) {
+        if (page.sources !== undefined) knownSources.set(environmentId, page.sources);
+      }
+    }
+    return pullRequestFilterProjects(
+      issueFilterProjects(capableProjects, knownSources, scopedProject),
+      environmentLabels,
+      scopedProject ?? undefined,
+    );
+  }, [held, projectScope, scopedProject, capableProjects, knownSources, environmentLabels]);
   const heldRef = useRef(held);
   useEffect(() => {
     heldRef.current = held;
@@ -424,6 +476,18 @@ function IssuesRoute() {
       })),
     ];
   }, [groups]);
+  const projectOptions = useMemo<ReadonlyArray<PullRequestFilterOption<string>>>(
+    () => [
+      { value: "", label: "All projects", Icon: LayersIcon },
+      ...filterProjects.map((project) => ({
+        value: pullRequestProjectKey(project),
+        label: project.title,
+        Icon: FolderGit2Icon,
+        project,
+      })),
+    ],
+    [filterProjects],
+  );
   const offeredInvolvements = useMemo(() => {
     const offered = offeredIssueInvolvements(
       groups.map((group) => group.tracker),
@@ -443,6 +507,8 @@ function IssuesRoute() {
             who: next.who ?? previous.who,
             status: next.status ?? previous.status,
             ...(next.host ? { host: next.host } : {}),
+            ...(next.environmentId ? { environmentId: next.environmentId } : {}),
+            ...(next.projectId ? { projectId: next.projectId } : {}),
             q: next.q || undefined,
             ...(next.selectedEnvironmentId
               ? { selectedEnvironmentId: next.selectedEnvironmentId }
@@ -612,6 +678,7 @@ function IssuesRoute() {
       }
       for (const project of projects) {
         if (project.environmentId !== environmentId) continue;
+        if (scopedProject !== null && project.id !== scopedProject.id) continue;
         const identity = project.repositoryIdentity;
         const kind = identity?.provider as SourceControlProviderKind | undefined;
         const scope = sourceControlRepositorySelector(identity);
@@ -634,7 +701,7 @@ function IssuesRoute() {
       }
     }
     return scopes;
-  }, [held, projects]);
+  }, [held, projects, scopedProject]);
   const [createOpen, setCreateOpen] = useState(false);
 
   const showTracker = groups.length > 1;
@@ -645,7 +712,7 @@ function IssuesRoute() {
       title="Issues unavailable"
       error="Update this environment's T3 Code server to browse issues."
     />
-  ) : noneAnswered && list.isPending ? (
+  ) : noneAnswered && (list.isPending || projectScope === "waiting") ? (
     <PullRequestListGhost />
   ) : noneAnswered && list.error ? (
     <PullRequestsUnavailableState
@@ -819,6 +886,22 @@ function IssuesRoute() {
                   options={offeredInvolvements}
                   onChange={(who) => updateSearch({ who })}
                 />
+                {projectOptions.length > 2 || search.projectId ? (
+                  <FilterMenu
+                    label="Filter by project"
+                    value={scopedProject ? pullRequestProjectKey(scopedProject) : ""}
+                    options={projectOptions}
+                    onChange={(key) => {
+                      const project = filterProjects.find(
+                        (candidate) => pullRequestProjectKey(candidate) === key,
+                      );
+                      updateSearch({
+                        projectId: project?.id,
+                        environmentId: project?.environmentId,
+                      });
+                    }}
+                  />
+                ) : null}
                 {hostOptions.length > 2 || search.host ? (
                   <FilterMenu
                     label="Filter by tracker"
