@@ -283,9 +283,13 @@ function identityLogin(value: unknown): string | null {
 
 export function decodeUpdatesJson(
   raw: string,
-): Result.Result<ReadonlyArray<IssueEvent>, DecodeFailure> {
-  return Result.map(decodeUpdatesPage(raw), (page) =>
-    (page.value ?? []).flatMap((entry) => {
+): Result.Result<
+  { readonly events: ReadonlyArray<IssueEvent>; readonly rawCount: number },
+  DecodeFailure
+> {
+  return Result.map(decodeUpdatesPage(raw), (page) => ({
+    rawCount: page.value?.length ?? 0,
+    events: (page.value ?? []).flatMap((entry) => {
       const update = decodeUpdateEntry(entry);
       if (Exit.isFailure(update) || update.value.id === 1) return [];
       const { id, revisedBy, revisedDate } = update.value;
@@ -338,7 +342,7 @@ export function decodeUpdatesJson(
       }
       return events;
     }),
-  );
+  }));
 }
 
 /** A relation that links a pull request, as Azure spells it: `vstfs:///Git/PullRequestId/{project}/{repo}/{id}`. */

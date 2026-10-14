@@ -148,6 +148,7 @@ describe("AzureDevOpsIssueTracker", () => {
         commentCount: 2,
         body: "<p>Typing drops focus.</p>",
         commentsCursor: "next-token",
+        historyTruncated: false,
         viewerPermissions: { setState: true, edit: true, labels: true, assignees: true },
       });
       expect(issue.comments).toEqual([
@@ -181,6 +182,62 @@ describe("AzureDevOpsIssueTracker", () => {
         },
       ]);
     }),
+  );
+
+  it.effect(
+    "marks a full native update page as partial even when most updates have no events",
+    () =>
+      Effect.gen(function* () {
+        for (const total of [101, 100, 99]) {
+          const seen: ReadonlyArray<string>[] = [];
+          const updates = Array.from({ length: total }, (_, index) => ({
+            id: index + 1,
+            rev: 2,
+            revisedDate: "9999-01-01T00:00:00Z",
+            revisedBy: { uniqueName: "theo@acme.test" },
+            fields: {
+              "System.ChangedDate": { newValue: "2026-07-03T00:00:00Z" },
+              ...(index === total - 1
+                ? { "System.State": { oldValue: "Active", newValue: "Resolved" } }
+                : index === 1
+                  ? {
+                      "System.Title": { oldValue: "Old title", newValue: "New title" },
+                      "System.Tags": { oldValue: "", newValue: "bug" },
+                    }
+                  : {}),
+            },
+          }));
+          const api = yield* tracker((args) => {
+            seen.push(args);
+            const resource = args[args.indexOf("--resource") + 1];
+            if (resource === "updates") {
+              const top = Number(args.find((arg) => arg.startsWith("$top="))?.slice(5));
+              return encode({ count: Math.min(top, total), value: updates.slice(0, top) });
+            }
+            return answer(args);
+          });
+          const issue = yield* api.getIssue({
+            cwd: "/w",
+            host: "dev.azure.com",
+            scope: "acme/Web App",
+            key: "7",
+          });
+          expect(issue.historyTruncated).toBe(total >= 100);
+          expect(issue.state).toEqual({ category: "closed", name: "Resolved" });
+          expect(issue.events.map((event) => event.kind)).toEqual(
+            total <= 100 ? ["renamed", "labeled", "closed"] : ["renamed", "labeled"],
+          );
+          expect(issue.events[0]).toMatchObject({
+            id: "update-2-0",
+            actor: { login: "theo@acme.test" },
+            createdAt: "2026-07-03T00:00:00Z",
+            detail: "New title",
+          });
+          expect(seen).toHaveLength(4);
+          expect(seen.filter((args) => args.includes("updates"))).toHaveLength(1);
+          expect(seen.find((args) => args.includes("updates"))).toContain("$top=100");
+        }
+      }),
   );
 
   it.effect("lists the native bulk work-item wrapper in one bounded page", () =>

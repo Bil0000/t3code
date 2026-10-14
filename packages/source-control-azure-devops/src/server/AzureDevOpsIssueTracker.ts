@@ -684,14 +684,15 @@ export const make: Effect.Effect<
             ],
             { concurrency: 3 },
           ).pipe(
-            Effect.map(([conversation, events, links]) => ({
+            Effect.map(([conversation, updates, links]) => ({
               ...scope.item,
               // Nothing cheap names the viewer here; the service already read it per host.
               viewer: null,
               viewerPermissions: VIEWER_PERMISSIONS,
               comments: conversation.comments,
               commentsCursor: conversation.nextCursor,
-              events,
+              events: updates.events,
+              historyTruncated: updates.rawCount >= PAGE_SIZE,
               linkedPullRequests: links,
             })),
           ),
