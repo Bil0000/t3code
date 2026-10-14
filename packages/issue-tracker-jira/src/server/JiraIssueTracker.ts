@@ -786,13 +786,14 @@ export const make = Effect.gen(function* () {
               }),
         };
         if (Object.keys(fields).length === 0) return;
+        const assigneeOnly = input.assignees !== undefined && Object.keys(fields).length === 1;
         yield* jira.request({
           host: input.host,
           operation: "update",
           method: "PUT",
-          path: "/issue/" + encodeURIComponent(input.key),
+          path: "/issue/" + encodeURIComponent(input.key) + (assigneeOnly ? "/assignee" : ""),
           schema: Schema.Undefined,
-          body: { fields },
+          body: assigneeOnly ? { accountId: input.assignees?.[0] ?? null } : { fields },
         });
       }),
     setState: (input) =>

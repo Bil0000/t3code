@@ -273,6 +273,14 @@ it.effect("blocks foreign-project writes and rejects multiple assignees", () =>
     const failure = yield* api.update!({ ...target, labels: ["bug"] }).pipe(Effect.flip);
     expect(failure.reason).toBe("not-found");
     expect(f.calls.every((request) => request.method === "GET")).toBe(true);
+    for (const assignees of [[user.accountId], []]) {
+      f.calls.length = 0;
+      expect((yield* api.update!({ ...target, assignees }).pipe(Effect.flip)).reason).toBe(
+        "not-found",
+      );
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0]?.method).toBe("GET");
+    }
     const many = yield* api.update!({ ...target, assignees: ["one", "two"] }).pipe(Effect.flip);
     expect(many.reason).toBe("failed");
     expect(f.calls).toHaveLength(1);
@@ -616,32 +624,88 @@ it.effect("starts comment paging with the latest comments in ascending display o
   }),
 );
 
-it.effect("checks fresh native permissions then updates with one scope guard and one write", () =>
+it.effect.each([user.accountId, null])(
+  "assigns through native assignment rights without edit permission: %s",
+  (accountId) =>
+    Effect.gen(function* () {
+      const f = fakeJira((request) => {
+        if (request.url.includes("/mypermissions?"))
+          return {
+            body: {
+              permissions: {
+                EDIT_ISSUES: { havePermission: false },
+                ASSIGN_ISSUES: { havePermission: true },
+              },
+            },
+          };
+        if (request.method === "GET") return { body: issue };
+        if (!request.url.endsWith("/issue/ENG-1/assignee")) return { status: 403 };
+        expect(body(request)).toEqual({ accountId });
+        return { status: 204 };
+      });
+      const api = yield* f.api;
+      expect(yield* api.getViewerPermissions(target)).toMatchObject({
+        edit: false,
+        assignees: true,
+      });
+      yield* api.update!({ ...target, assignees: accountId === null ? [] : [accountId] });
+      expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "PUT"]);
+      expect(f.calls[1]?.url).toBe(
+        "https://example.atlassian.net/rest/api/3/issue/ENG-1?fields=project,status",
+      );
+      expect(f.calls[2]?.url).toBe("https://example.atlassian.net/rest/api/3/issue/ENG-1/assignee");
+      expect(body(f.calls[2])).toEqual({ accountId });
+    }),
+);
+
+it.effect("preserves a native assignment denial without retrying or changing endpoints", () =>
   Effect.gen(function* () {
-    const f = fakeJira((request) =>
-      request.method === "PUT"
-        ? { status: 204 }
-        : {
-            body: request.url.includes("/mypermissions?")
-              ? {
-                  permissions: {
-                    EDIT_ISSUES: { havePermission: true },
-                    ASSIGN_ISSUES: { havePermission: true },
-                  },
-                }
-              : issue,
-          },
-    );
+    const f = fakeJira((request) => (request.method === "GET" ? { body: issue } : { status: 403 }));
     const api = yield* f.api;
-    expect((yield* api.getViewerPermissions(target)).edit).toBe(true);
-    yield* api.update!({ ...target, labels: ["triaged"], assignees: ["native-account"] });
-    expect(f.calls).toHaveLength(3);
-    expect(f.calls[1]?.url).toContain("?fields=project,status");
-    expect(body(f.calls[2])).toEqual({
-      fields: { labels: ["triaged"], assignee: { accountId: "native-account" } },
-    });
-    expect(f.calls.some((request) => request.url.includes("/transitions"))).toBe(false);
+    const failure = yield* api.update!({ ...target, assignees: [user.accountId] }).pipe(
+      Effect.flip,
+    );
+    expect(failure).toMatchObject({ operation: "update", reason: "failed" });
+    expect(failure.detail).toContain("403");
+    expect(f.calls.map(({ method }) => method)).toEqual(["GET", "PUT"]);
+    expect(f.calls[1]?.url).toBe("https://example.atlassian.net/rest/api/3/issue/ENG-1/assignee");
+    expect(body(f.calls[1])).toEqual({ accountId: user.accountId });
   }),
+);
+
+it.effect.each([user.accountId, null])(
+  "keeps combined assignment edits on the issue endpoint: %s",
+  (accountId) =>
+    Effect.gen(function* () {
+      const f = fakeJira((request) =>
+        request.method === "PUT"
+          ? { status: 204 }
+          : {
+              body: request.url.includes("/mypermissions?")
+                ? {
+                    permissions: {
+                      EDIT_ISSUES: { havePermission: true },
+                      ASSIGN_ISSUES: { havePermission: true },
+                    },
+                  }
+                : issue,
+            },
+      );
+      const api = yield* f.api;
+      expect((yield* api.getViewerPermissions(target)).edit).toBe(true);
+      yield* api.update!({
+        ...target,
+        labels: ["triaged"],
+        assignees: accountId === null ? [] : [accountId],
+      });
+      expect(f.calls).toHaveLength(3);
+      expect(f.calls[1]?.url).toContain("?fields=project,status");
+      expect(body(f.calls[2])).toEqual({
+        fields: { labels: ["triaged"], assignee: accountId === null ? null : { accountId } },
+      });
+      expect(f.calls[2]?.url).toBe("https://example.atlassian.net/rest/api/3/issue/ENG-1");
+      expect(f.calls.some((request) => request.url.includes("/transitions"))).toBe(false);
+    }),
 );
 
 it.effect("preserves a bodyless 429 and pauses only the refused credential", () =>
