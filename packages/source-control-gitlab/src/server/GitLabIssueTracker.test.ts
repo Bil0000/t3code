@@ -126,6 +126,23 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect("pins every issue read and write to the selected GitLab host", () =>
+    Effect.gen(function* () {
+      const requests: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        requests.push(args);
+        return args.includes("PUT") ? "{}" : answer(args[1]!);
+      });
+      const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web", key: "42" };
+      yield* api.getIssue(target);
+      yield* api.update!({ ...target, title: "Updated title" });
+      expect(requests.length).toBeGreaterThan(1);
+      expect(requests.every((args) => args[args.indexOf("--hostname") + 1] === target.host)).toBe(
+        true,
+      );
+    }),
+  );
+
   it.effect("refuses unsupported mention filtering before making a native request", () =>
     Effect.gen(function* () {
       let requests = 0;

@@ -165,6 +165,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
     const api = (input: {
       readonly cwd: string;
+      readonly host: string;
       readonly operation: string;
       readonly path: string;
       readonly method?: string;
@@ -176,6 +177,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           args: [
             "api",
             input.path,
+            "--hostname",
+            input.host,
             ...(input.method === undefined ? [] : ["--method", input.method]),
             // A JSON body from stdin: argv is visible in process listings, and `glab api --input`
             // sends no Content-Type of its own, which GitLab answers with HTTP 415.
@@ -192,6 +195,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
     const read = <A>(input: {
       readonly cwd: string;
+      readonly host: string;
       readonly operation: string;
       readonly path: string;
       readonly method?: string;
@@ -209,6 +213,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
     const write = (input: {
       readonly cwd: string;
+      readonly host: string;
       readonly operation: string;
       readonly path: string;
       readonly method: string;
@@ -218,10 +223,12 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
     /** The signed-in account; an answer naming nobody is a failure, since every comparison needs a login. */
     const viewer = (input: {
       readonly cwd: string;
+      readonly host: string;
       readonly operation: string;
     }): Effect.Effect<string, IssueTrackerError> =>
       read({
         cwd: input.cwd,
+        host: input.host,
         operation: input.operation,
         path: "user",
         decode: decodeViewerJson,
@@ -262,6 +269,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
     const awards = (input: {
       readonly cwd: string;
+      readonly host: string;
       readonly scope: string;
       readonly number: number;
       readonly operation: string;
@@ -269,6 +277,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
     }) =>
       read({
         cwd: input.cwd,
+        host: input.host,
         operation: input.operation,
         path: "graphql",
         method: "POST",
@@ -285,20 +294,24 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
     const linked = (input: {
       readonly cwd: string;
+      readonly host: string;
       readonly path: string;
       readonly endpoint: "closed_by" | "related_merge_requests";
     }) =>
       read({
         cwd: input.cwd,
+        host: input.host,
         operation: "getIssue",
         path: paged(`${input.path}/${input.endpoint}`, 1),
         decode: (raw) => decodeLinkedMergeRequestsJson(raw, input.endpoint === "closed_by"),
       });
 
     const template =
-      (input: { readonly cwd: string; readonly scope: string }) => (entry: GitLabTemplateEntry) =>
+      (input: { readonly cwd: string; readonly host: string; readonly scope: string }) =>
+      (entry: GitLabTemplateEntry) =>
         read({
           cwd: input.cwd,
+          host: input.host,
           operation: "listTemplates",
           path: `projects/${projectPath(input.scope)}/templates/issues/${encodeURIComponent(entry.key)}`,
           decode: (raw) => decodeTemplateJson(entry, raw),
@@ -308,7 +321,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       kind: KIND,
       capabilities: CAPABILITIES,
 
-      getViewer: (input) => viewer({ cwd: input.cwd, operation: "getViewer" }),
+      getViewer: (input) => viewer({ cwd: input.cwd, host: input.host, operation: "getViewer" }),
 
       listIssues: (input) => {
         if (input.involvement === "mentioned") {
@@ -322,6 +335,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         const text = input.query?.trim() ?? "";
         return read({
           cwd: input.cwd,
+          host: input.host,
           operation: "listIssues",
           path: `projects/${projectPath(input.scope)}/issues?${query([
             ["state", input.state === "open" ? "opened" : input.state],
@@ -350,20 +364,33 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
               [
                 read({
                   cwd: input.cwd,
+                  host: input.host,
                   operation: "getIssue",
                   path,
                   decode: decodeIssueDetailJson,
                 }),
-                viewer({ cwd: input.cwd, operation: "getIssue" }),
+                viewer({ cwd: input.cwd, host: input.host, operation: "getIssue" }),
                 read({
                   cwd: input.cwd,
+                  host: input.host,
                   operation: "getIssue",
                   path: paged(`${path}/resource_label_events`, 1),
                   decode: decodeLabelEventsJson,
                 }),
-                linked({ cwd: input.cwd, path, endpoint: "closed_by" }),
-                linked({ cwd: input.cwd, path, endpoint: "related_merge_requests" }),
-                awards({ cwd: input.cwd, scope: input.scope, number, operation: "getIssue" }),
+                linked({ cwd: input.cwd, host: input.host, path, endpoint: "closed_by" }),
+                linked({
+                  cwd: input.cwd,
+                  host: input.host,
+                  path,
+                  endpoint: "related_merge_requests",
+                }),
+                awards({
+                  cwd: input.cwd,
+                  host: input.host,
+                  scope: input.scope,
+                  number,
+                  operation: "getIssue",
+                }),
               ],
               { concurrency: 4 },
             ),
@@ -396,6 +423,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           Effect.flatMap(({ number }) =>
             awards({
               cwd: input.cwd,
+              host: input.host,
               scope: input.scope,
               number,
               cursor: input.cursor,
@@ -412,6 +440,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           Effect.flatMap((assignee_ids) =>
             read({
               cwd: input.cwd,
+              host: input.host,
               operation: "create",
               path: `projects/${projectPath(input.scope)}/issues`,
               method: "POST",
@@ -436,6 +465,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           Effect.flatMap(({ path }) =>
             write({
               cwd: input.cwd,
+              host: input.host,
               operation: "comment",
               path: `${path}/notes`,
               method: "POST",
@@ -452,6 +482,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           Effect.flatMap(([{ path }, assignee_ids]) =>
             write({
               cwd: input.cwd,
+              host: input.host,
               operation: "update",
               path,
               method: "PUT",
@@ -470,6 +501,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           Effect.flatMap(({ path }) =>
             write({
               cwd: input.cwd,
+              host: input.host,
               operation: "setState",
               path,
               method: "PUT",
@@ -491,6 +523,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             if (input.reacted) {
               return write({
                 cwd: input.cwd,
+                host: input.host,
                 operation: "setReaction",
                 path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
                 method: "POST",
@@ -498,12 +531,13 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             }
             // GitLab deletes an award by its id and takes no emoji name there, so the reader's own
             // award of that name is looked up first. Nothing to delete is success.
-            return viewer({ cwd: input.cwd, operation: "setReaction" }).pipe(
+            return viewer({ cwd: input.cwd, host: input.host, operation: "setReaction" }).pipe(
               Effect.flatMap((login) =>
                 Effect.gen(function* () {
                   for (let page = 1; page <= 10; page++) {
                     const awards = yield* read({
                       cwd: input.cwd,
+                      host: input.host,
                       operation: "setReaction",
                       path: paged(subject, page),
                       decode: (raw) =>
@@ -522,6 +556,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                   ? Effect.void
                   : write({
                       cwd: input.cwd,
+                      host: input.host,
                       operation: "setReaction",
                       path: `${subject}/${own}`,
                       method: "DELETE",
@@ -534,6 +569,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       listTemplates: (input) =>
         read({
           cwd: input.cwd,
+          host: input.host,
           operation: "listTemplates",
           path: `projects/${projectPath(input.scope)}/templates/issues`,
           decode: decodeTemplateEntriesJson,
@@ -550,12 +586,14 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           [
             read({
               cwd: input.cwd,
+              host: input.host,
               operation: "listCandidates",
               path: paged(`projects/${projectPath(input.scope)}/labels`, 1),
               decode: decodeProjectLabelsJson,
             }),
             read({
               cwd: input.cwd,
+              host: input.host,
               operation: "listCandidates",
               path: paged(`projects/${projectPath(input.scope)}/members/all`, 1),
               decode: decodeProjectMembersJson,
