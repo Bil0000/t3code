@@ -47,7 +47,7 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
-import { parseIssueUrl } from "@t3tools/shared/issueUrl";
+import { azureDevOpsIssueScope, parseIssueUrl } from "@t3tools/shared/issueUrl";
 import {
   IssueTrackerError,
   isStandaloneIssueTracker,
@@ -80,11 +80,19 @@ interface SupportedProject extends ProjectTrackerBinding {
  * `organization/project` out of the remote's `organization/project/_git/repository` path. The
  * source control selector answers only the repository name there, which addresses no work item.
  */
-function azureDevOpsProjectScope(displayName: string | undefined): string | null {
+function azureDevOpsProjectScope(host: string, displayName: string | undefined): string | null {
   const segments = (displayName ?? "").split("/").filter((part) => part.length > 0);
   const marker = segments.indexOf("_git");
+  if (host.endsWith(".visualstudio.com")) {
+    if (marker !== 1 && !(marker === 2 && segments[0]?.toLowerCase() === "defaultcollection"))
+      return null;
+    const project = segments[marker - 1];
+    return project
+      ? azureDevOpsIssueScope(host.slice(0, -".visualstudio.com".length), project)
+      : null;
+  }
   const [organization, project] = marker === 2 ? segments : [];
-  return organization && project ? `${organization}/${project}` : null;
+  return organization && project ? azureDevOpsIssueScope(organization, project) : null;
 }
 
 /**
@@ -95,15 +103,17 @@ export function resolveGitHostBinding(
   project: OrchestrationProjectShell,
 ): ProjectTrackerBinding | null {
   const identity = project.repositoryIdentity;
-  const scope =
-    identity?.provider === "azure-devops"
-      ? azureDevOpsProjectScope(identity.displayName)
-      : sourceControlRepositorySelector(identity);
   const kind = identity?.provider;
-  if (!identity || kind === undefined || kind === "unknown" || scope === null) return null;
+  if (!identity || kind === undefined || kind === "unknown") return null;
+  const host = pullRequestHostOf(identity, SourceControlProviderKind.make(kind));
+  const scope =
+    kind === "azure-devops"
+      ? azureDevOpsProjectScope(host, identity.displayName)
+      : sourceControlRepositorySelector(identity);
+  if (scope === null) return null;
   return {
     tracker: IssueTrackerKind.make(kind),
-    host: pullRequestHostOf(identity, SourceControlProviderKind.make(kind)),
+    host,
     scope,
   };
 }
@@ -297,6 +307,14 @@ export const make = Effect.gen(function* () {
         }
         const scope = ref.scope.trim();
         const writable = scope.toLowerCase() === own.scope.toLowerCase();
+        if (
+          own.tracker === "linear" &&
+          own.scope.includes("/") &&
+          (!scope.includes("/") ||
+            scope.split("/")[0]?.toLowerCase() !== own.scope.split("/")[0]?.toLowerCase())
+        ) {
+          return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
+        }
         return Effect.succeed({ ...own, scope, writable });
       }),
     );
@@ -772,15 +790,28 @@ export const make = Effect.gen(function* () {
       const onTracker = supported.filter((project) => project.tracker === parsed.tracker);
       const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
         projects.find((project) => project.project.id === preferredProjectId) ?? projects[0];
-      const own = preferFirst(
-        onTracker.filter((project) => project.scope.toLowerCase() === parsed.scope),
-      );
+      const legacyScope =
+        parsed.workspace === undefined
+          ? undefined
+          : parsed.scope.slice(parsed.workspace.length + 1);
+      const own =
+        preferFirst(onTracker.filter((project) => project.scope.toLowerCase() === parsed.scope)) ??
+        (legacyScope === undefined
+          ? undefined
+          : preferFirst(
+              onTracker.filter(
+                (project) =>
+                  isStandaloneIssueTracker(project.api) &&
+                  !project.scope.includes("/") &&
+                  project.scope.toLowerCase() === legacyScope,
+              ),
+            ));
       const lender =
         own ?? preferFirst(onTracker.filter((project) => !isStandaloneIssueTracker(project.api)));
       if (lender === undefined) {
         return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
       }
-      if (parsed.workspace !== undefined) {
+      if (parsed.workspace !== undefined && !lender.scope.includes("/")) {
         const issue = yield* lender.api
           .getIssue({
             cwd: lender.project.workspaceRoot,

@@ -22,6 +22,7 @@ const user = (id: string, displayName: string) => ({
 });
 const JULIUS = user("usr_julius", "julius");
 const THEO = user("usr_theo", "theo");
+const ORGANIZATION = { id: "org_acme", urlKey: "acme" };
 
 const state = (name: string, type: string, position = 0) => ({
   id: `st_${name.toLowerCase().replaceAll(" ", "-")}`,
@@ -144,11 +145,94 @@ function fakeLinear(
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
 
 describe("LinearIssueTracker", () => {
+  it.effect("rejects the same team key in another workspace without extra native reads", () =>
+    Effect.gen(function* () {
+      const native = issue("ENG-7", {
+        url: "https://linear.app/other/issue/ENG-7",
+        comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        reactions: [],
+        attachments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+      });
+      const other = { id: "org_other", urlKey: "other" };
+      const test = fakeLinear({
+        T3Viewer: () => ({ viewer: JULIUS }),
+        T3Issues: () => ({
+          organization: other,
+          issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        }),
+        T3Issue: () => ({ issue: native }),
+        T3IssueReference: () => ({ issue: native }),
+        T3Comments: () => ({ issue: native }),
+        T3CommentTarget: () => ({ issue: native, comment: { id: "comment", issue: native } }),
+        T3Team: () => ({
+          organization: other,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                templates: { nodes: [] },
+              },
+            ],
+          },
+          issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        }),
+      });
+      const api = yield* test.tracker;
+      const scoped = { ...target, scope: "acme/ENG" };
+      const operations = [
+        [
+          api.listIssues({
+            ...scoped,
+            state: "all",
+            involvement: "all",
+            viewer: JULIUS.id,
+            limit: 20,
+          }),
+          ["T3Issues"],
+        ],
+        [api.create({ ...scoped, title: "New", body: "", labels: [], assignees: [] }), ["T3Team"]],
+        [api.getIssue({ ...scoped, key: "ENG-7" }), ["T3Issue", "T3Viewer"]],
+        [api.getComments({ ...scoped, key: "ENG-7", cursor: "next" }), ["T3Comments", "T3Viewer"]],
+        [api.comment({ ...scoped, key: "ENG-7", body: "Hello" }), ["T3IssueReference"]],
+        [api.getViewerPermissions({ ...scoped, key: "ENG-7" }), ["T3IssueReference"]],
+        [api.update({ ...scoped, key: "ENG-7", title: "Changed" }), ["T3IssueReference"]],
+        [api.setState({ ...scoped, key: "ENG-7", state: "closed" }), ["T3IssueReference"]],
+        [
+          api.setReaction({ ...scoped, key: "ENG-7", content: "heart", reacted: true }),
+          ["T3IssueReference"],
+        ],
+        [
+          api.setReaction({
+            ...scoped,
+            key: "ENG-7",
+            subjectId: "comment",
+            content: "heart",
+            reacted: true,
+          }),
+          ["T3CommentTarget"],
+        ],
+        [api.listCandidates(scoped), ["T3Team"]],
+        [api.listTemplates(scoped), ["T3Team"]],
+      ] as const;
+      for (const [operation, expected] of operations) {
+        test.requests.length = 0;
+        expect((yield* operation.pipe(Effect.flip)).reason).toBe("failed");
+        expect(test.requests.map((request) => request.operation)).toEqual(expected);
+      }
+    }),
+  );
   it.effect("keeps viewer reads small and reports a partial credential catalog", () =>
     Effect.gen(function* () {
       const test = fakeLinear({
         T3Viewer: () => ({ viewer: JULIUS }),
         T3ProbeCredential: () => ({
+          organization: ORGANIZATION,
           viewer: JULIUS,
           teams: {
             nodes: [{ id: "team_eng", key: "ENG", name: "Engineering" }],
@@ -156,6 +240,7 @@ describe("LinearIssueTracker", () => {
           },
         }),
         T3Scope: (variables) => ({
+          organization: ORGANIZATION,
           teams: { nodes: [{ id: "team_hidden", key: variables.key, name: "Hidden team" }] },
         }),
       });
@@ -163,18 +248,57 @@ describe("LinearIssueTracker", () => {
       expect(yield* api.getViewer(target)).toBe(JULIUS.id);
       expect(test.requests[0]?.query).not.toContain("teams(");
       const probe = yield* api.probeCredential("lin_api_probe");
-      expect(probe.accountId).toBe(JULIUS.id);
+      expect(probe.accountId).toBe(`org_acme/${JULIUS.id}`);
       expect(probe.scopesTruncated).toBe(true);
-      expect(probe.scopes).toEqual([{ key: "ENG", name: "Engineering" }]);
+      expect(probe.scopes).toEqual([{ key: "acme/ENG", name: "Engineering" }]);
       expect(test.requests[1]?.query).toContain("teams(first: 250)");
       expect(yield* api.getScope("lin_api_probe", "hidden")).toEqual({
-        key: "HIDDEN",
+        key: "acme/HIDDEN",
         name: "Hidden team",
       });
+      expect(yield* api.getScope("lin_api_probe", "acme/hidden")).toEqual({
+        key: "acme/HIDDEN",
+        name: "Hidden team",
+      });
+      expect(yield* api.getScope("lin_api_probe", "other/hidden")).toBeNull();
       expect(test.requests.map((request) => request.authorization)).toEqual([
         "lin_api_stored",
         "lin_api_probe",
         "lin_api_probe",
+        "lin_api_probe",
+        "lin_api_probe",
+      ]);
+    }),
+  );
+  it.effect("checks workspace again on the existing state query before mutation", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3TeamStates: () => ({
+          organization: { id: "org_other", urlKey: "other" },
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                states: {
+                  nodes: [state("Done", "completed")],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            ],
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      const error = yield* api
+        .setState({ ...target, scope: "acme/ENG", key: "ENG-7", state: "closed" })
+        .pipe(Effect.flip);
+      expect(error.detail).toContain("workspace");
+      expect(test.requests.map((request) => request.operation)).toEqual([
+        "T3IssueReference",
+        "T3TeamStates",
       ]);
     }),
   );
@@ -182,6 +306,7 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const test = fakeLinear({
         T3Issues: () => ({
+          organization: ORGANIZATION,
           issues: {
             nodes: [
               issue("ENG-1", {
@@ -209,33 +334,45 @@ describe("LinearIssueTracker", () => {
       expect(page.nextCursor).toBe("more-issues");
     }),
   );
-  it.effect("writes a comment after an ID-only lookup of the actual team", () =>
-    Effect.gen(function* () {
-      const test = fakeLinear({
-        T3IssueReference: () => ({
-          issue: { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } },
-        }),
-        T3CommentCreate: (variables) => {
-          expect(variables.input).toEqual({ issueId: "iss_native", body: "Comment" });
-          return { commentCreate: { success: true } };
-        },
-      });
-      const api = yield* test.tracker;
-      yield* api.comment({ ...target, key: "eng-7", body: "Comment" });
-      expect(test.requests.map((request) => request.operation)).toEqual([
-        "T3IssueReference",
-        "T3CommentCreate",
-      ]);
-      expect(test.requests[0]?.query).not.toMatch(
-        /history|attachments|comments|labels|description/u,
-      );
-    }),
+  it.effect.each(["ENG", "acme/ENG"])(
+    "writes a comment with scope %s after one small lookup",
+    (scope) =>
+      Effect.gen(function* () {
+        const test = fakeLinear({
+          T3IssueReference: () => ({
+            issue: {
+              id: "iss_native",
+              identifier: "ENG-7",
+              url: "https://linear.app/acme/issue/ENG-7",
+              team: { key: "ENG" },
+            },
+          }),
+          T3CommentCreate: (variables) => {
+            expect(variables.input).toEqual({ issueId: "iss_native", body: "Comment" });
+            return { commentCreate: { success: true } };
+          },
+        });
+        const api = yield* test.tracker;
+        yield* api.comment({ ...target, scope, key: "eng-7", body: "Comment" });
+        expect(test.requests.map((request) => request.operation)).toEqual([
+          "T3IssueReference",
+          "T3CommentCreate",
+        ]);
+        expect(test.requests[0]?.query).not.toMatch(
+          /history|attachments|comments|labels|description/u,
+        );
+      }),
   );
   it.effect("rejects a moved issue before a comment write", () =>
     Effect.gen(function* () {
       const test = fakeLinear({
         T3IssueReference: () => ({
-          issue: { id: "iss_native", identifier: "OTHER-7", team: { key: "OTHER" } },
+          issue: {
+            id: "iss_native",
+            identifier: "OTHER-7",
+            url: "https://linear.app/acme/issue/OTHER-7",
+            team: { key: "OTHER" },
+          },
         }),
       });
       const api = yield* test.tracker;
@@ -247,7 +384,12 @@ describe("LinearIssueTracker", () => {
   );
   it.effect("resolves issue and comment in one small query before a reaction", () =>
     Effect.gen(function* () {
-      const reference = { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } };
+      const reference = {
+        id: "iss_native",
+        identifier: "ENG-7",
+        url: "https://linear.app/acme/issue/ENG-7",
+        team: { key: "ENG" },
+      };
       const test = fakeLinear({
         T3CommentTarget: () => ({
           issue: reference,
@@ -279,10 +421,20 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const test = fakeLinear({
         T3CommentTarget: () => ({
-          issue: { id: "iss_eng", identifier: "ENG-7", team: { key: "ENG" } },
+          issue: {
+            id: "iss_eng",
+            identifier: "ENG-7",
+            url: "https://linear.app/acme/issue/ENG-7",
+            team: { key: "ENG" },
+          },
           comment: {
             id: "cmt_foreign",
-            issue: { id: "iss_other", identifier: "OTHER-7", team: { key: "OTHER" } },
+            issue: {
+              id: "iss_other",
+              identifier: "OTHER-7",
+              url: "https://linear.app/acme/issue/OTHER-7",
+              team: { key: "OTHER" },
+            },
           },
         }),
       });
@@ -306,7 +458,12 @@ describe("LinearIssueTracker", () => {
       for (const key of ["OPS-7", "ENG-7"]) {
         const test = fakeLinear({
           T3IssueReference: () => ({
-            issue: { id: "iss_ops", identifier: "OPS-7", team: { key: "OPS" } },
+            issue: {
+              id: "iss_ops",
+              identifier: "OPS-7",
+              url: "https://linear.app/acme/issue/OPS-7",
+              team: { key: "OPS" },
+            },
           }),
           T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
         });
@@ -340,12 +497,18 @@ describe("LinearIssueTracker", () => {
           issue: {
             id: "iss_ops",
             identifier: "OPS-7",
+            url: "https://linear.app/acme/issue/OPS-7",
             team: { key: "OPS" },
             comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
           },
         }),
         T3IssueReference: () => ({
-          issue: { id: "iss_ops", identifier: "OPS-7", team: { key: "OPS" } },
+          issue: {
+            id: "iss_ops",
+            identifier: "OPS-7",
+            url: "https://linear.app/acme/issue/OPS-7",
+            team: { key: "OPS" },
+          },
         }),
       });
       const api = yield* test.tracker;
@@ -365,7 +528,12 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const test = fakeLinear({
         T3IssueReference: () => ({
-          issue: { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } },
+          issue: {
+            id: "iss_native",
+            identifier: "ENG-7",
+            url: "https://linear.app/acme/issue/ENG-7",
+            team: { key: "ENG" },
+          },
         }),
         T3IssueUpdate: (variables) => {
           expect(variables).toEqual({ id: "iss_native", input: { title: "Changed" } });
@@ -566,7 +734,12 @@ describe("LinearIssueTracker", () => {
     Effect.gen(function* () {
       const test = fakeLinear({
         T3IssueReference: () => ({
-          issue: { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } },
+          issue: {
+            id: "iss_native",
+            identifier: "ENG-7",
+            url: "https://linear.app/acme/issue/ENG-7",
+            team: { key: "ENG" },
+          },
         }),
         T3Viewer: () => Response.json({ errors: [{ message: "Unavailable" }] }, { status: 500 }),
         T3IssueReactions: () => ({
@@ -585,7 +758,7 @@ describe("LinearIssueTracker", () => {
       ]);
     }),
   );
-  it.effect("lists a team's issues as summaries keyed by identifier", () =>
+  it.effect.each(["ENG", "acme/ENG"])("lists summaries with scope %s in one request", (scope) =>
     Effect.gen(function* () {
       const { tracker, requests } = fakeLinear({
         T3Viewer: () => ({ viewer: JULIUS, teams: { nodes: [] } }),
@@ -596,6 +769,7 @@ describe("LinearIssueTracker", () => {
             assignee: { id: { eq: "usr_julius" } },
           });
           return {
+            organization: ORGANIZATION,
             issues: {
               nodes: [
                 issue("ENG-2", {
@@ -615,6 +789,7 @@ describe("LinearIssueTracker", () => {
 
       const page = yield* api.listIssues({
         ...target,
+        scope,
         state: "open",
         involvement: "assigned",
         viewer: "usr_julius",
@@ -754,10 +929,11 @@ describe("LinearIssueTracker", () => {
     }),
   );
 
-  it.effect("shows member names while assigning through native IDs", () =>
+  it.effect.each(["ENG", "acme/ENG"])("uses native team and member IDs with scope %s", (scope) =>
     Effect.gen(function* () {
       const test = fakeLinear({
         T3Team: () => ({
+          organization: ORGANIZATION,
           teams: {
             nodes: [
               {
@@ -781,21 +957,51 @@ describe("LinearIssueTracker", () => {
           issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
         }),
         T3IssueReference: () => ({
-          issue: { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } },
+          issue: {
+            id: "iss_native",
+            identifier: "ENG-7",
+            url: "https://linear.app/acme/issue/ENG-7",
+            team: { key: "ENG" },
+          },
         }),
         T3IssueUpdate: (variables) => {
           expect(variables).toEqual({ id: "iss_native", input: { assigneeId: "usr_display" } });
           return { issueUpdate: { success: true } };
         },
+        T3IssueCreate: (variables) => {
+          expect(variables.input).toMatchObject({ teamId: "team_eng", assigneeId: "usr_display" });
+          return {
+            issueCreate: {
+              success: true,
+              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+            },
+          };
+        },
       });
       const api = yield* test.tracker;
-      const candidates = yield* api.listCandidates(target);
+      const scoped = { ...target, scope };
+      const candidates = yield* api.listCandidates(scoped);
       expect(candidates.assignees.map(({ id, login }) => ({ id, login }))).toEqual([
         { id: "usr_display", login: "Display Name" },
         { id: "usr_name", login: "Full Name" },
         { id: "usr_id", login: "usr_id" },
       ]);
-      yield* api.update({ ...target, key: "ENG-7", assignees: [candidates.assignees[0]!.id] });
+      yield* api.update({ ...scoped, key: "ENG-7", assignees: [candidates.assignees[0]!.id] });
+      yield* api.create({
+        ...scoped,
+        title: "New",
+        body: "",
+        labels: [],
+        assignees: [candidates.assignees[0]!.id],
+      });
+      expect(test.requests.map((request) => request.operation)).toEqual([
+        "T3Team",
+        "T3IssueReference",
+        "T3Team",
+        "T3IssueUpdate",
+        "T3Team",
+        "T3IssueCreate",
+      ]);
     }),
   );
   it.effect("closes through the team's completed state and reports a missing key", () =>
@@ -804,6 +1010,7 @@ describe("LinearIssueTracker", () => {
       const { tracker } = fakeLinear(
         {
           T3TeamStates: () => ({
+            organization: ORGANIZATION,
             teams: {
               nodes: [
                 {
@@ -841,9 +1048,15 @@ describe("LinearIssueTracker", () => {
 
       const connected = fakeLinear({
         T3IssueReference: () => ({
-          issue: { id: "iss_native", identifier: "ENG-1", team: { key: "ENG" } },
+          issue: {
+            id: "iss_native",
+            identifier: "ENG-1",
+            url: "https://linear.app/acme/issue/ENG-1",
+            team: { key: "ENG" },
+          },
         }),
         T3TeamStates: () => ({
+          organization: ORGANIZATION,
           teams: {
             nodes: [
               {

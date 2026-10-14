@@ -2453,6 +2453,212 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect.each([
+    {
+      name: "changed workspace",
+      scope: "eng",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
+      nativeUrl: "https://linear.app/workspace-b/issue/ENG-1/new-title",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
+      name: "changed issue key",
+      scope: "eng",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-2/new-title",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
+      name: "invalid saved URL",
+      scope: "eng",
+      savedUrl: "https://linear.app/workspace-a/team/ENG",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-1/new-title",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
+      name: "invalid native URL",
+      scope: "eng",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/team/ENG",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
+      name: "saved URL key mismatch",
+      scope: "eng",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-2/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-1/new-title",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
+      name: "changed title",
+      scope: "eng",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-1/new-title",
+      refreshes: true,
+      alreadyLinked: true,
+    },
+    {
+      name: "canonical workspace mismatch",
+      scope: "workspace-b/eng",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-1/new-title",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
+      name: "canonical changed title",
+      scope: "workspace-a/eng",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-1/new-title",
+      refreshes: true,
+      alreadyLinked: true,
+    },
+  ])("checks saved Linear issue identity: $name", (testCase) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make(`runtime-linear-link-${testCase.name}`);
+      const projectId = ProjectId.make(`linear-link-project-${testCase.name}`);
+      const ref = {
+        tracker: IssueTrackerKind.make("linear"),
+        host: "linear.app",
+        scope: testCase.scope,
+        key: "ENG-1",
+        projectId,
+      };
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`linear-link-create-${testCase.name}`),
+        threadId,
+        projectId,
+        title: "Linear issue links",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.issue.link",
+        commandId: CommandId.make(`linear-link-${testCase.name}`),
+        threadId,
+        ...ref,
+        url: testCase.savedUrl,
+        source: "manual",
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          let reads = 0;
+          const context = yield* Layer.build(
+            Layer.mergeAll(
+              Layer.mock(IssueService.IssueService)({
+                detail: () =>
+                  Effect.sync(() => {
+                    reads++;
+                    return {
+                      ...ref,
+                      projectTitle: "Linear project",
+                      displayKey: "ENG-1",
+                      title: "Current issue title",
+                      state: { category: "open" as const, name: "Open" },
+                      url: testCase.nativeUrl,
+                      author: null,
+                      createdAt: "2026-10-01T00:00:00.000Z",
+                      updatedAt: "2026-10-01T00:00:00.000Z",
+                      closedAt: null,
+                      assignees: [],
+                      labels: [],
+                      commentCount: 0,
+                      writable: true,
+                      capabilities: {
+                        create: false,
+                        edit: false,
+                        comment: false,
+                        labels: false,
+                        assignees: false,
+                        reactions: false,
+                        templates: false,
+                        linkedPullRequests: false,
+                        events: false,
+                        search: false,
+                        states: [],
+                        closeReasons: [],
+                      },
+                      viewerPermissions: {
+                        setState: false,
+                        comment: false,
+                        edit: false,
+                        labels: false,
+                        assignees: false,
+                      },
+                      viewer: null,
+                      body: "",
+                      comments: [],
+                      commentsCursor: null,
+                      events: [],
+                      linkedPullRequests: [],
+                    };
+                  }),
+              }),
+              Layer.succeed(
+                Crypto.Crypto,
+                Crypto.make({
+                  randomBytes: (size) => new Uint8Array(size).fill(1),
+                  digest: (_algorithm, data) => Effect.succeed(data),
+                }),
+              ),
+            ),
+          );
+          const serviceContext = yield* Layer.build(ThreadIssueService.layer).pipe(
+            Effect.provide(context),
+          );
+          const service = Context.get(serviceContext, ThreadIssueService.ThreadIssueService);
+          const before = yield* orchestrator.getThreadProjection(threadId);
+          const duplicate = yield* service
+            .link({ threadId, ref, url: testCase.nativeUrl, source: "manual" })
+            .pipe(Effect.result);
+          if (testCase.alreadyLinked) {
+            assert.equal(duplicate._tag, "Success");
+            if (duplicate._tag === "Success") {
+              assert.deepEqual(duplicate.success, { alreadyLinked: true });
+            }
+          } else {
+            assert.equal(duplicate._tag, "Failure");
+            if (duplicate._tag === "Failure") {
+              assert.instanceOf(duplicate.failure, Orchestrator.OrchestratorCommandRejectedError);
+              if (duplicate.failure._tag === "OrchestratorCommandRejectedError") {
+                assert.deepEqual(
+                  duplicate.failure.cause,
+                  new Error("Unlink the existing Linear issue before linking a different issue."),
+                );
+              }
+            }
+          }
+          assert.deepEqual(yield* orchestrator.getThreadProjection(threadId), before);
+          assert.equal(reads, 0);
+          yield* service.refresh(threadId);
+          yield* service.drain;
+          const after = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(reads, 1);
+          if (testCase.refreshes) {
+            assert.equal(after.thread.issues?.[0]?.snapshot?.title, "Current issue title");
+          } else {
+            assert.deepEqual(after, before);
+          }
+          assert.equal(after.thread.issues?.[0]?.url, testCase.savedUrl);
+          assert.deepEqual(yield* service.unlink({ threadId, key: ref }), { wasLinked: true });
+          assert.deepEqual((yield* orchestrator.getThreadShell(threadId))?.issues, []);
+        }),
+      );
+    }),
+  );
+
   it.effect("starts, records, and stops a pull request watch", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

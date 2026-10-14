@@ -47,6 +47,8 @@ const LinearTeam = Schema.Struct({
   name: Schema.String,
 });
 type LinearTeam = typeof LinearTeam.Type;
+const LinearOrganization = Schema.Struct({ id: Schema.String, urlKey: Schema.String });
+type LinearOrganization = typeof LinearOrganization.Type;
 
 /** `type` is one of Linear's categories: triage, backlog, unstarted, started, completed, canceled. */
 export const LinearWorkflowState = Schema.Struct({
@@ -163,6 +165,7 @@ type LinearIssueDetail = typeof LinearIssueDetail.Type;
 const LinearIssueReference = Schema.Struct({
   id: Schema.String,
   identifier: Schema.String,
+  url: Schema.String,
   team: Schema.Struct({ key: Schema.String }),
 });
 export type LinearIssueReference = typeof LinearIssueReference.Type;
@@ -191,9 +194,11 @@ const VIEWER_QUERY = `query T3Viewer {
 }`;
 const PROBE_QUERY = `query T3ProbeCredential {
   viewer { ${USER_FIELDS} }
+  organization { id urlKey }
   teams(first: 250) { nodes { id key name } pageInfo { hasNextPage endCursor } }
 }`;
 const LIST_QUERY = `query T3Issues($first: Int!, $after: String, $filter: IssueFilter!) {
+  organization { id urlKey }
   issues(first: $first, after: $after, filter: $filter, orderBy: updatedAt) {
     nodes { ${ISSUE_FIELDS} labels(first: 20, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor } } }
     pageInfo { hasNextPage endCursor }
@@ -222,23 +227,25 @@ const ISSUE_QUERY = `query T3Issue($id: String!, $comments: Int!) {
   }
 }`;
 const ISSUE_REFERENCE_QUERY = `query T3IssueReference($id: String!) {
-  issue(id: $id) { id identifier team { key } }
+  issue(id: $id) { id identifier url team { key } }
 }`;
 const COMMENT_TARGET_QUERY = `query T3CommentTarget($id: String!, $commentId: String!) {
-  issue(id: $id) { id identifier team { key } }
-  comment(id: $commentId) { id issue { id identifier team { key } } }
+  issue(id: $id) { id identifier url team { key } }
+  comment(id: $commentId) { id issue { id identifier url team { key } } }
 }`;
 const TEAM_STATES_QUERY = `query T3TeamStates($key: String!) {
+  organization { id urlKey }
   teams(first: 1, filter: { key: { eq: $key } }) {
     nodes { id key name states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
   }
 }`;
 const SCOPE_QUERY = `query T3Scope($key: String!) {
+  organization { id urlKey }
   teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name } }
 }`;
 const COMMENTS_QUERY = `query T3Comments($id: String!, $first: Int!, $after: String) {
   issue(id: $id) {
-    id identifier team { key }
+    id identifier url team { key }
     comments(first: $first, after: $after, orderBy: createdAt) {
       nodes { ${COMMENT_FIELDS} }
       pageInfo { hasNextPage endCursor }
@@ -246,6 +253,7 @@ const COMMENTS_QUERY = `query T3Comments($id: String!, $first: Int!, $after: Str
   }
 }`;
 const TEAM_QUERY = `query T3Team($key: String!) {
+  organization { id urlKey }
   teams(first: 1, filter: { key: { eq: $key } }) {
     nodes {
       id key name
@@ -297,8 +305,15 @@ const Envelope = Schema.Struct({
 const ViewerData = Schema.Struct({
   viewer: LinearUser,
 });
-const ProbeData = Schema.Struct({ viewer: LinearUser, teams: Connection(LinearTeam) });
-const ListData = Schema.Struct({ issues: Connection(LinearIssue) });
+const ProbeData = Schema.Struct({
+  viewer: LinearUser,
+  organization: LinearOrganization,
+  teams: Connection(LinearTeam),
+});
+const ListData = Schema.Struct({
+  organization: LinearOrganization,
+  issues: Connection(LinearIssue),
+});
 const IssueData = Schema.Struct({ issue: Schema.NullOr(LinearIssueDetail) });
 const IssueReferenceData = Schema.Struct({ issue: Schema.NullOr(LinearIssueReference) });
 const CommentTargetData = Schema.Struct({
@@ -308,9 +323,13 @@ const CommentTargetData = Schema.Struct({
   ),
 });
 const TeamStatesData = Schema.Struct({
+  organization: LinearOrganization,
   teams: Schema.Struct({ nodes: Schema.Array(LinearTeamStates) }),
 });
-const ScopeData = Schema.Struct({ teams: Schema.Struct({ nodes: Schema.Array(LinearTeam) }) });
+const ScopeData = Schema.Struct({
+  organization: LinearOrganization,
+  teams: Schema.Struct({ nodes: Schema.Array(LinearTeam) }),
+});
 const CommentsData = Schema.Struct({
   issue: Schema.NullOr(
     Schema.Struct({ ...LinearIssueReference.fields, comments: Connection(LinearComment) }),
@@ -325,6 +344,7 @@ const LinearTeamDetail = Schema.Struct({
 });
 type LinearTeamDetail = typeof LinearTeamDetail.Type;
 const TeamData = Schema.Struct({
+  organization: LinearOrganization,
   teams: Schema.Struct({ nodes: Schema.Array(LinearTeamDetail) }),
   issueLabels: Connection(LinearLabel),
 });
@@ -346,6 +366,7 @@ const ReactionsData = Schema.Struct({
 
 /** The team with the workspace-wide labels that any of its issues may also carry. */
 export interface LinearTeamScope {
+  readonly organization: LinearOrganization;
   readonly team: LinearTeamDetail;
   readonly workspaceLabels: ReadonlyArray<LinearLabel>;
   /** Linear had more than one page of something; a missing label or member may still exist. */
@@ -361,6 +382,7 @@ export class LinearApi extends Context.Service<
     readonly probeCredential: (token: string) => Effect.Effect<
       {
         readonly viewer: LinearUser;
+        readonly organization: LinearOrganization;
         readonly teams: ReadonlyArray<LinearTeam>;
         readonly scopesTruncated: boolean;
       },
@@ -369,13 +391,20 @@ export class LinearApi extends Context.Service<
     readonly getScope: (
       key: string,
       token: string,
-    ) => Effect.Effect<LinearTeam | null, IssueTrackerError>;
+    ) => Effect.Effect<
+      (LinearTeam & { readonly organization: LinearOrganization }) | null,
+      IssueTrackerError
+    >;
     readonly listIssues: (input: {
       readonly filter: Record<string, unknown>;
       readonly first: number;
       readonly after?: string | undefined;
     }) => Effect.Effect<
-      { readonly nodes: ReadonlyArray<LinearIssue>; readonly nextCursor: string | null },
+      {
+        readonly organization: LinearOrganization;
+        readonly nodes: ReadonlyArray<LinearIssue>;
+        readonly nextCursor: string | null;
+      },
       IssueTrackerError
     >;
     /** Null when Linear has no issue by that identifier, or the credential cannot see it. */
@@ -392,7 +421,10 @@ export class LinearApi extends Context.Service<
     ) => Effect.Effect<typeof CommentTargetData.Type, IssueTrackerError>;
     readonly getTeamStates: (
       key: string,
-    ) => Effect.Effect<typeof LinearTeamStates.Type | null, IssueTrackerError>;
+    ) => Effect.Effect<
+      (typeof LinearTeamStates.Type & { readonly organization: LinearOrganization }) | null,
+      IssueTrackerError
+    >;
     readonly getComments: (input: {
       readonly identifier: string;
       readonly first: number;
@@ -588,13 +620,18 @@ export const make = Effect.gen(function* () {
     execute("probeCredential", PROBE_QUERY, {}, ProbeData, token).pipe(
       Effect.map((data) => ({
         viewer: data.viewer,
+        organization: data.organization,
         teams: data.teams.nodes,
         scopesTruncated: data.teams.pageInfo.hasNextPage,
       })),
     );
   const getScope: LinearApi["Service"]["getScope"] = (key, token) =>
     execute("getScope", SCOPE_QUERY, { key }, ScopeData, token).pipe(
-      Effect.map((data) => data.teams.nodes[0] ?? null),
+      Effect.map((data) =>
+        data.teams.nodes[0] === undefined
+          ? null
+          : { ...data.teams.nodes[0], organization: data.organization },
+      ),
     );
 
   const listIssues: LinearApi["Service"]["listIssues"] = (input) =>
@@ -609,6 +646,7 @@ export const make = Effect.gen(function* () {
       ListData,
     ).pipe(
       Effect.map((data) => ({
+        organization: data.organization,
         nodes: data.issues.nodes,
         nextCursor: data.issues.pageInfo.hasNextPage ? data.issues.pageInfo.endCursor : null,
       })),
@@ -650,7 +688,11 @@ export const make = Effect.gen(function* () {
     );
   const getTeamStates: LinearApi["Service"]["getTeamStates"] = (key) =>
     execute("getTeamStates", TEAM_STATES_QUERY, { key }, TeamStatesData).pipe(
-      Effect.map((data) => data.teams.nodes[0] ?? null),
+      Effect.map((data) =>
+        data.teams.nodes[0] === undefined
+          ? null
+          : { ...data.teams.nodes[0], organization: data.organization },
+      ),
     );
 
   const getComments: LinearApi["Service"]["getComments"] = (input) =>
@@ -679,6 +721,7 @@ export const make = Effect.gen(function* () {
         const team = data.teams.nodes[0];
         if (team === undefined) return null;
         return {
+          organization: data.organization,
           team,
           workspaceLabels: data.issueLabels.nodes,
           truncated:

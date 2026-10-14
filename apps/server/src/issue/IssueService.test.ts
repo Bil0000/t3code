@@ -188,6 +188,45 @@ function makeService(input: {
 }
 
 describe("resolveGitHostBinding", () => {
+  it.each([
+    { host: "acme.visualstudio.com", repository: "platform/_git/repo", scope: "acme/platform" },
+    {
+      host: "acme.visualstudio.com",
+      repository: "DefaultCollection/My%20Project/_git/repo",
+      scope: "acme/My Project",
+    },
+    { host: "dev.azure.com", repository: "acme/My%20Project/_git/repo", scope: "acme/My Project" },
+    {
+      host: "dev.azure.com",
+      repository: "acme/My%2520Project/_git/repo",
+      scope: "acme/My%20Project",
+    },
+  ])(
+    "resolves native Azure project scope from $host/$repository",
+    ({ host, repository, scope }) => {
+      const original = project({ id: "p", provider: "azure-devops", host, repository });
+      const identity = structuredClone(original.repositoryIdentity);
+      expect(IssueService.resolveGitHostBinding(original)).toEqual({
+        tracker: "azure-devops",
+        host,
+        scope,
+      });
+      expect(original.repositoryIdentity).toEqual(identity);
+    },
+  );
+
+  it.each([
+    "acme/My%2FProject/_git/repo",
+    "acme/My%5CProject/_git/repo",
+    "acme/My%ZZProject/_git/repo",
+    "Ac%2Fme/project/_git/repo",
+  ])("refuses invalid Azure scope encoding in %s", (repository) => {
+    expect(
+      IssueService.resolveGitHostBinding(
+        project({ id: "p", provider: "azure-devops", host: "dev.azure.com", repository }),
+      ),
+    ).toBeNull();
+  });
   it("scopes Azure DevOps work items to the project rather than the repository", () => {
     expect(
       IssueService.resolveGitHostBinding(
@@ -1016,7 +1055,120 @@ it.effect.each([{ assignees: [] }, { assignees: ["alice"] }])(
     }),
 );
 
-it.effect("resolves a Linear URL through its exact team and verifies the native workspace", () =>
+it.effect("resolves a canonical Linear scope without an extra issue read", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const service = yield* makeService({
+      projects: [project({ id: "legacy" }), project({ id: "other" }), project({ id: "web" })],
+      trackers: [
+        fakeStandaloneTracker({
+          listIssues: () => Effect.die("URL resolution must not list issues"),
+          getIssue: (input) =>
+            Effect.sync(() => {
+              calls.push(`read ${input.scope}`);
+              return { ...issue(input.key), url: "https://linear.app/acme/issue/ENG-123/title" };
+            }),
+          comment: (input) =>
+            Effect.sync(() => {
+              calls.push(`comment ${input.scope}`);
+            }),
+          setState: (input) =>
+            Effect.sync(() => {
+              calls.push(`state ${input.scope}`);
+            }),
+        }),
+      ],
+      bindings: {
+        legacy: { tracker: LINEAR, scope: "ENG" },
+        other: { tracker: LINEAR, scope: "other/ENG" },
+        web: { tracker: LINEAR, scope: "acme/ENG" },
+      },
+    });
+    const ref = yield* service.resolveUrl(
+      "https://linear.app/Acme/issue/ENG-123/title",
+      ProjectId.make("legacy"),
+    );
+    expect(ref).toEqual({
+      projectId: "web",
+      tracker: LINEAR,
+      host: "linear.app",
+      scope: "acme/ENG",
+      key: "ENG-123",
+      writable: true,
+    });
+    expect(calls).toEqual([]);
+    expect(yield* service.detail(ref)).toMatchObject({ writable: true, scope: "acme/ENG" });
+    yield* service.comment({ ...ref, body: "Hello" });
+    yield* service.setState({ ...ref, state: "closed" });
+    expect(calls).toEqual(["read acme/ENG", "comment acme/ENG", "state acme/ENG"]);
+  }),
+);
+
+it.effect(
+  "rejects stale Linear refs after a canonical workspace binding replaces a bare team",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: [project({ id: "web" })],
+        trackers: [
+          fakeStandaloneTracker({
+            getIssue: () => Effect.die("Stale refs must not read issues"),
+            getComments: () => Effect.die("Stale refs must not read comments"),
+            getViewerPermissions: () => Effect.die("Stale refs must not read permissions"),
+            comment: () => Effect.die("Stale refs must not write comments"),
+          }),
+        ],
+        bindings: { web: { tracker: LINEAR, scope: "new-workspace/ENG" } },
+      });
+      for (const scope of ["ENG", "old-workspace/ENG"]) {
+        const ref = { projectId: ProjectId.make("web"), tracker: LINEAR, scope, key: "ENG-123" };
+        for (const operation of [
+          service.detail(ref),
+          service.comments({ ...ref, cursor: "next" }),
+          service.comment({ ...ref, body: "Hello" }),
+        ]) {
+          expect(yield* Effect.flip(operation)).toMatchObject({ _tag: "IssueUnavailableError" });
+        }
+      }
+      expect(
+        yield* Effect.flip(service.resolveUrl("https://linear.app/old-workspace/issue/ENG-123")),
+      ).toMatchObject({ _tag: "IssueUnavailableError" });
+    }),
+);
+
+it.effect("keeps another Linear team in the bound workspace read-only", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "web" })],
+      trackers: [
+        fakeStandaloneTracker({
+          getIssue: (input) => {
+            expect(input.scope).toBe("Acme/QA");
+            return Effect.succeed(issue(input.key));
+          },
+          getViewerPermissions: () => Effect.die("Foreign team writes must not read permissions"),
+          comment: () => Effect.die("Foreign team must not write comments"),
+        }),
+      ],
+      bindings: { web: { tracker: LINEAR, scope: "acme/ENG" } },
+    });
+    const ref = {
+      projectId: ProjectId.make("web"),
+      tracker: LINEAR,
+      scope: "Acme/QA",
+      key: "QA-123",
+    };
+    expect(yield* service.detail(ref)).toMatchObject({
+      writable: false,
+    });
+    expect(yield* Effect.flip(service.comment({ ...ref, body: "Hello" }))).toMatchObject({
+      _tag: "IssueOperationError",
+      reason: "read-only",
+    });
+  }),
+);
+
+it.effect("resolves a legacy Linear team binding and verifies the native workspace", () =>
   Effect.gen(function* () {
     let reads = 0;
     const writes: string[] = [];
@@ -1199,4 +1351,67 @@ it.effect("resolves a configured Forgejo source before a GitHub-looking hostname
       writable: true,
     });
   }),
+);
+
+it.effect.each([
+  {
+    host: "dev.azure.com",
+    repository: "acme/My%20Project/_git/repo",
+    url: "https://dev.azure.com/acme/My%20Project/_workitems/edit/7",
+  },
+  {
+    host: "acme.visualstudio.com",
+    repository: "My%20Project/_git/repo",
+    url: "https://acme.visualstudio.com/My%20Project/_workitems/edit/7",
+  },
+  {
+    host: "acme.visualstudio.com",
+    repository: "DefaultCollection/My%20Project/_git/repo",
+    url: "https://acme.visualstudio.com/DefaultCollection/My%20Project/_workitems/edit/7",
+  },
+])(
+  "uses the decoded Azure project for list, detail, writes and URL refs from $host/$repository",
+  ({ host, repository, url }) =>
+    Effect.gen(function* () {
+      const azure = IssueTrackerKind.make("azure-devops");
+      const scopes: string[] = [];
+      const service = yield* makeService({
+        projects: [project({ id: "web", provider: "azure-devops", host, repository })],
+        trackers: [
+          fakeTracker({
+            kind: azure,
+            listIssues: (input) =>
+              Effect.sync(() => {
+                scopes.push(input.scope);
+                return { items: [{ ...issue("7"), url }], nextCursor: null };
+              }),
+            getIssue: (input) =>
+              Effect.sync(() => {
+                scopes.push(input.scope);
+                return { ...issue(input.key), url };
+              }),
+            update: (input) =>
+              Effect.sync(() => {
+                scopes.push(input.scope);
+              }),
+          }),
+        ],
+      });
+      const listed = yield* service.list({ state: "open" });
+      expect(listed.entries[0]).toMatchObject({ tracker: azure, host, scope: "acme/My Project" });
+      const ref = yield* service.resolveUrl(url);
+      expect(ref).toMatchObject({
+        tracker: azure,
+        host,
+        scope: "acme/My Project",
+        key: "7",
+        writable: true,
+      });
+      expect(yield* service.detail(ref)).toMatchObject({
+        writable: true,
+        scope: "acme/My Project",
+      });
+      yield* service.update({ ...ref, title: "Changed" });
+      expect(scopes).toEqual(["acme/My Project", "acme/My Project", "acme/My Project"]);
+    }),
 );

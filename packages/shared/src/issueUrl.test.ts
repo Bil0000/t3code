@@ -35,12 +35,49 @@ describe("parseIssueUrl", () => {
       { tracker: "azure-devops", host: "dev.azure.com", scope: "org/project", key: "55" },
     ],
     [
+      "https://dev.azure.com/Acme/My%20Project/_workitems/edit/55",
+      { tracker: "azure-devops", host: "dev.azure.com", scope: "acme/my project", key: "55" },
+    ],
+    [
+      "https://acme.visualstudio.com/platform/_workitems/edit/55",
+      { tracker: "azure-devops", host: "acme.visualstudio.com", scope: "acme/platform", key: "55" },
+    ],
+    [
+      "https://acme.visualstudio.com/DefaultCollection/My%20Project/_workitems/edit/55",
+      {
+        tracker: "azure-devops",
+        host: "acme.visualstudio.com",
+        scope: "acme/my project",
+        key: "55",
+      },
+    ],
+    [
+      "https://dev.azure.com/acme/My%2520Project/_workitems/edit/55",
+      { tracker: "azure-devops", host: "dev.azure.com", scope: "acme/my%20project", key: "55" },
+    ],
+    [
       "https://codeberg.org/forgejo/forgejo/issues/3",
       { tracker: "forgejo", host: "codeberg.org", scope: "forgejo/forgejo", key: "3" },
     ],
     [
       "https://linear.app/acme/issue/ENG-123/fix-the-bug?view=all#comment",
-      { tracker: "linear", host: "linear.app", scope: "eng", key: "ENG-123", workspace: "acme" },
+      {
+        tracker: "linear",
+        host: "linear.app",
+        scope: "acme/eng",
+        key: "ENG-123",
+        workspace: "acme",
+      },
+    ],
+    [
+      "https://linear.app/Other-Workspace/issue/eng-123",
+      {
+        tracker: "linear",
+        host: "linear.app",
+        scope: "other-workspace/eng",
+        key: "ENG-123",
+        workspace: "other-workspace",
+      },
     ],
     [
       "https://tenant.atlassian.net/browse/ENG-123?focusedCommentId=42",
@@ -63,6 +100,11 @@ describe("parseIssueUrl", () => {
     "https://tenant.atlassian.net/browse/ENG-123/another-path",
     "https://tenant.atlassian.net.evil.test/browse/ENG-123",
     "https://example.com/browse/ENG-123",
+    "https://dev.azure.com/acme/My%2FProject/_workitems/edit/55",
+    "https://dev.azure.com/acme/My%5CProject/_workitems/edit/55",
+    "https://dev.azure.com/acme/My%ZZProject/_workitems/edit/55",
+    "https://acme.visualstudio.com/My%2FProject/_workitems/edit/55",
+    "https://acme.visualstudio.com/DefaultCollection/My%ZZProject/_workitems/edit/55",
     "javascript:alert(1)",
     "not a url",
   ])("leaves %s alone", (url) => {

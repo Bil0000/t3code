@@ -13,6 +13,19 @@ export interface IssueLink {
   readonly workspace?: string;
 }
 
+export function azureDevOpsIssueScope(organization: string, project: string): string | null {
+  try {
+    const parts = [organization, project].map(decodeURIComponent);
+    return parts.every(
+      (part) => part.trim().length > 0 && !part.includes("/") && !part.includes("\\"),
+    )
+      ? parts.join("/")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The host itself, one of its subdomains, or an install named after the provider. */
 function isHostOf(hostname: string, apex: string, label?: string): boolean {
   if (hostname === apex || hostname.endsWith(`.${apex}`)) return true;
@@ -52,7 +65,13 @@ export function parseIssueUrl(
     const key = match?.[2];
     const scope = match?.[3];
     return workspace && key && scope
-      ? { tracker: "linear", host, scope: scope.toLowerCase(), key: key.toUpperCase(), workspace }
+      ? {
+          tracker: "linear",
+          host,
+          scope: `${workspace}/${scope}`.toLowerCase(),
+          key: key.toUpperCase(),
+          workspace: workspace.toLowerCase(),
+        }
       : null;
   }
   if (host.endsWith(".atlassian.net")) {
@@ -72,8 +91,16 @@ export function parseIssueUrl(
   // path the project binding writes, which a work item URL does not carry, so the organisation
   // and project stand in for it; the service matches by host and prefix.
   if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
-    const match = /^\/([^/]+\/[^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/u.exec(url.pathname);
-    return claim("azure-devops", host, match);
+    const legacy = host.endsWith(".visualstudio.com");
+    const match = legacy
+      ? /^\/(?:DefaultCollection\/)?([^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/iu.exec(url.pathname)
+      : /^\/([^/]+\/[^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/u.exec(url.pathname);
+    const [organization, project] = legacy
+      ? [host.slice(0, -".visualstudio.com".length), match?.[1]]
+      : (match?.[1]?.split("/") ?? []);
+    const scope = organization && project ? azureDevOpsIssueScope(organization, project) : null;
+    const issue = claim("azure-devops", host, match);
+    return issue && scope ? { ...issue, scope: scope.toLowerCase() } : null;
   }
   // GitHub, and any Enterprise install: /{owner}/{repo}/issues/{n}
   const twoSegments = /^\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
