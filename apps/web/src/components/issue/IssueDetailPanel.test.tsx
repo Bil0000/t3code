@@ -168,6 +168,139 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
 const decodeCommentPageInput = Schema.decodeUnknownSync(IssueCommentsPageInput);
 
+it.each(["success", "comment-failure", "close-failure", "linear", "no-state-permission", "closed"])(
+  "posts before closing with a comment and preserves partial success (%s)",
+  async (kind) => {
+    const previousDetail = state.detail;
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    state.allowed = true;
+    state.toast.mockReset();
+    state.candidatesRead.mockReset();
+    state.write
+      .mockReset()
+      .mockImplementation(async ({ input }) =>
+        (kind === "comment-failure" && input.body !== undefined) ||
+        (kind === "close-failure" && input.state !== undefined)
+          ? { _tag: "Failure", cause: Cause.fail(new Error("Native write denied")) }
+          : { _tag: "Success" },
+      );
+    const environmentId = EnvironmentId.make("environment");
+    const reference = {
+      projectId: ProjectId.make("project"),
+      tracker: IssueTrackerKind.make(kind === "linear" ? "linear" : "github"),
+      host: kind === "linear" ? "linear.app" : "github.com",
+      scope: "org/repo",
+      key: "1",
+    };
+    const generic = [
+      { category: "open" as const, name: "open" },
+      { category: "closed" as const, name: "closed" },
+    ];
+    const states =
+      kind === "linear"
+        ? [
+            { category: "open" as const, name: "Todo", id: "todo" },
+            { category: "closed" as const, name: "Done", id: "native-done" },
+          ]
+        : generic;
+    state.detail = {
+      ...state.detail,
+      ...reference,
+      state: kind === "closed" ? generic[1]! : states[0]!,
+      states,
+      writable: true,
+      comments: [],
+      commentsCursor: null,
+      reactions: undefined,
+      viewerPermissions: {
+        ...state.detail.viewerPermissions,
+        comment: true,
+        setState: kind !== "no-state-permission",
+      },
+      capabilities: {
+        ...state.detail.capabilities,
+        states: generic,
+        closeReasons: ["completed", "not-planned"],
+        comment: true,
+        events: false,
+        linkedPullRequests: false,
+      },
+    };
+    const updated = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          <IssueDetailPanel
+            environmentId={environmentId}
+            reference={reference}
+            onUpdated={updated}
+          />,
+        ),
+      );
+      const close = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Close with comment",
+      );
+      if (kind === "no-state-permission" || kind === "closed") {
+        expect(close).toBeUndefined();
+        expect(state.write).not.toHaveBeenCalled();
+        return;
+      }
+      expect(close).toBeDefined();
+      expect(close!.disabled).toBe(true);
+      const input = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Add a comment"]',
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+          input,
+          "Keep this comment",
+        );
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => close!.click());
+      expect(state.write.mock.calls[0]![0]).toEqual({
+        environmentId,
+        input: { ...reference, body: "Keep this comment" },
+      });
+      if (kind === "comment-failure") {
+        expect(state.write).toHaveBeenCalledOnce();
+        expect(input.value).toBe("Keep this comment");
+        expect(updated).not.toHaveBeenCalled();
+      } else {
+        expect(state.write).toHaveBeenCalledTimes(2);
+        expect(state.write.mock.calls[1]![0]).toEqual({
+          environmentId,
+          input: {
+            ...reference,
+            state: kind === "linear" ? "native-done" : "closed",
+            ...(kind === "linear" ? {} : { closeReason: "completed" }),
+          },
+        });
+        expect(input.value).toBe("");
+        expect(updated).toHaveBeenCalledOnce();
+        if (kind === "close-failure")
+          expect(state.toast).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "error",
+              title: "The comment was posted, but the issue could not be closed",
+            }),
+          );
+        await act(async () => close!.click());
+        expect(state.write).toHaveBeenCalledTimes(2);
+      }
+      expect(state.candidatesRead).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.detail = previousDetail;
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
 it.each(["none", "matched", "foreign-repository", "other-environment"])(
   "keeps a Linear linked MR on its supported native destination (%s)",
   async (kind) => {
@@ -757,6 +890,95 @@ describe("native issue state controls", () => {
       environmentId,
       input: { ...reference("jira"), state: "review-id" },
     });
+  });
+  it("closes Jira with a comment only after native state retry and a successful post", async () => {
+    state.allowed = true;
+    state.candidates.error = "Project states unavailable";
+    state.detail = {
+      ...state.detail,
+      tracker: "jira",
+      writable: true,
+      state: { category: "open", name: "Todo", id: "todo-id" },
+      states: [{ category: "open", name: "Todo", id: "todo-id" }],
+      capabilities: { ...state.detail.capabilities, comment: true, closeReasons: ["completed"] },
+      viewerPermissions: { ...state.detail.viewerPermissions, comment: true, setState: true },
+    };
+    let finishPost!: (result: { _tag: "Success" }) => void;
+    const posted = new Promise<{ _tag: "Success" }>((resolve) => {
+      finishPost = resolve;
+    });
+    state.write
+      .mockReset()
+      .mockImplementation(async ({ input }) =>
+        input.body === undefined ? { _tag: "Success" } : posted,
+      );
+    await act(async () => render("jira"));
+    expect(state.candidatesRead).not.toHaveBeenCalled();
+    const input = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Add a comment"]',
+    )!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+        input,
+        "Ready to close",
+      );
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const trigger = buttons().find((button) => button.textContent === "Close with comment")!;
+    await act(async () =>
+      trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    expect(state.candidatesRead).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        projectId: reference("jira").projectId,
+        tracker: "jira",
+        host: "native.example",
+        scope: "ENG",
+      },
+    });
+    const items = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(document.body.textContent).toContain("Project states unavailable");
+    expect(state.write).not.toHaveBeenCalled();
+    expect(input.value).toBe("Ready to close");
+    await act(async () =>
+      items()
+        .find((item) => item.textContent === "Retry")!
+        .click(),
+    );
+    expect(state.candidates.refresh).toHaveBeenCalledOnce();
+    state.candidates = {
+      ...state.candidates,
+      error: null,
+      data: {
+        states: [
+          state.detail.state,
+          { category: "closed", name: "Done", id: "10003" },
+          { category: "closed", name: "Canceled", id: "10004" },
+        ],
+      },
+    };
+    await act(async () => render("jira"));
+    expect(items().map((item) => item.textContent)).toEqual(["Done", "Canceled"]);
+    await act(async () =>
+      items()
+        .find((item) => item.textContent === "Done")!
+        .click(),
+    );
+    expect(state.write).toHaveBeenCalledOnce();
+    expect(state.write.mock.calls[0]![0]).toEqual({
+      environmentId,
+      input: { ...reference("jira"), body: "Ready to close" },
+    });
+    expect(
+      buttons().find((button) => button.textContent?.startsWith("Change state"))!.disabled,
+    ).toBe(true);
+    await act(async () => finishPost({ _tag: "Success" }));
+    expect(state.write.mock.calls[1]![0]).toEqual({
+      environmentId,
+      input: { ...reference("jira"), state: "10003" },
+    });
+    expect(input.value).toBe("");
   });
   it.each(["linear", "github"])(
     "uses close reasons only for generic closed states (%s)",

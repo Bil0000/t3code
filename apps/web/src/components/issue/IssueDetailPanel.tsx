@@ -17,6 +17,7 @@ import type {
   IssueReaction,
   IssueReactionContent,
   IssueRef,
+  IssueState,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -475,7 +476,7 @@ function IssueDetailContent({
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const setState = useAtomCommand(issueEnvironment.setState, { reportFailure: false });
   const [draft, setDraft] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<"comment" | "close" | null>(null);
   const [editing, setEditing] = useState<"title" | "body" | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -488,9 +489,10 @@ function IssueDetailContent({
     (IssuePickerConfirmed & { items: ReadonlyArray<IssueActor> }) | null
   >(null);
   const [stateMenuOpen, setStateMenuOpen] = useState(false);
+  const [closeCommentMenuOpen, setCloseCommentMenuOpen] = useState(false);
   const needsStateCandidates = detail?.tracker === "jira" && (detail.states?.length ?? 0) <= 1;
   const stateCandidates = useEnvironmentQuery(
-    stateMenuOpen &&
+    (stateMenuOpen || closeCommentMenuOpen) &&
       needsStateCandidates &&
       canWrite &&
       detail?.writable &&
@@ -585,13 +587,19 @@ function IssueDetailContent({
     setOlder(appendOlderIssueComments(detail, heldComments, result.value));
   };
 
-  const submitComment = async () => {
+  const submitComment = async (closeTo?: IssueState) => {
     const body = draft.trim();
-    if (body.length === 0 || submitting) return;
-    setSubmitting(true);
+    if (
+      !canComment ||
+      body.length === 0 ||
+      submitting !== null ||
+      (closeTo !== undefined && (!canSetState || changingState))
+    )
+      return;
+    setSubmitting(closeTo === undefined ? "comment" : "close");
     const result = await comment({ environmentId, input: { ...reference, body: draft } });
-    setSubmitting(false);
     if (result._tag === "Failure") {
+      setSubmitting(null);
       toastManager.add({
         type: "error",
         title: "The comment could not be posted",
@@ -600,6 +608,23 @@ function IssueDetailContent({
       return;
     }
     setDraft("");
+    if (closeTo !== undefined) {
+      const closeReason =
+        detail.tracker === "github" && closeTo.id === undefined && closeTo.name === "closed"
+          ? (detail.capabilities.closeReasons.find((reason) => reason === "completed") ??
+            detail.capabilities.closeReasons[0])
+          : undefined;
+      const closed = await setState({
+        environmentId,
+        input: {
+          ...reference,
+          state: closeTo.id ?? closeTo.name,
+          ...(closeReason === undefined ? {} : { closeReason }),
+        },
+      });
+      reportIssueResult(closed, "The comment was posted, but the issue could not be closed");
+    }
+    setSubmitting(null);
     onUpdated?.();
   };
 
@@ -620,7 +645,7 @@ function IssueDetailContent({
   };
 
   const moveTo = async (state: string, closeReason?: string) => {
-    if (changingState) return;
+    if (changingState || submitting === "close") return;
     setChangingState(true);
     const result = await setState({
       environmentId,
@@ -681,7 +706,7 @@ function IssueDetailContent({
         <Button
           size="xs"
           variant="outline"
-          disabled={changingState}
+          disabled={changingState || submitting === "close"}
           onClick={() => void moveTo(openingStates[0]!.id ?? openingStates[0]!.name)}
         >
           {issueStateActionLabel(openingStates[0]!)}
@@ -694,7 +719,7 @@ function IssueDetailContent({
         <Button
           size="xs"
           variant="outline"
-          disabled={changingState}
+          disabled={changingState || submitting === "close"}
           onClick={() => void moveTo(closingStates[0]!.id ?? closingStates[0]!.name)}
         >
           {issueStateActionLabel(closingStates[0]!)}
@@ -704,7 +729,15 @@ function IssueDetailContent({
       (closingStates.length > 0 && detail.capabilities.closeReasons.length > 0) ||
       otherStates.length > 1 ? (
         <Menu open={stateMenuOpen} onOpenChange={setStateMenuOpen}>
-          <MenuTrigger render={<Button size="xs" variant="outline" disabled={changingState} />}>
+          <MenuTrigger
+            render={
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={changingState || submitting === "close"}
+              />
+            }
+          >
             {!needsStateCandidates && otherStates.every((state) => state.name === "closed")
               ? "Close"
               : "Change state"}
@@ -752,6 +785,52 @@ function IssueDetailContent({
       ) : null}
     </span>
   ) : null;
+
+  const closeCommentNeedsMenu = needsStateCandidates || closingStates.length > 1;
+  const closeCommentButton = (
+    <Button
+      type="button"
+      size="sm"
+      variant="destructive-outline"
+      disabled={submitting !== null || changingState || draft.trim().length === 0}
+      onClick={closeCommentNeedsMenu ? undefined : () => void submitComment(closingStates[0])}
+    >
+      {submitting === "close" ? "Closing..." : "Close with comment"}
+    </Button>
+  );
+  const closeCommentControl =
+    canComment &&
+    canSetState &&
+    detail.state.category === "open" &&
+    (needsStateCandidates || closingStates.length > 0) ? (
+      closeCommentNeedsMenu ? (
+        <Menu open={closeCommentMenuOpen} onOpenChange={setCloseCommentMenuOpen}>
+          <MenuTrigger render={closeCommentButton} />
+          <MenuPopup align="end">
+            {needsStateCandidates && stateCandidates.error !== null ? (
+              <>
+                <MenuItem disabled>States could not be read. {stateCandidates.error}</MenuItem>
+                <MenuItem closeOnClick={false} onClick={stateCandidates.refresh}>
+                  Retry
+                </MenuItem>
+              </>
+            ) : needsStateCandidates &&
+              (stateCandidates.isPending || stateCandidates.data === null) ? (
+              <MenuItem disabled>Loading states…</MenuItem>
+            ) : closingStates.length === 0 ? (
+              <MenuItem disabled>No closing states are available.</MenuItem>
+            ) : null}
+            {closingStates.map((state) => (
+              <MenuItem key={state.id ?? state.name} onClick={() => void submitComment(state)}>
+                {state.name}
+              </MenuItem>
+            ))}
+          </MenuPopup>
+        </Menu>
+      ) : (
+        closeCommentButton
+      )
+    ) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1203,7 +1282,7 @@ function IssueDetailContent({
             aria-label="Add a comment"
             placeholder={canComment ? "Leave a comment" : (blocked ?? "You cannot comment here.")}
             value={draft}
-            disabled={!canComment || submitting}
+            disabled={!canComment || submitting !== null}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -1212,14 +1291,15 @@ function IssueDetailContent({
               }
             }}
           />
-          <div className="flex justify-end">
+          <div className="flex flex-wrap justify-end gap-2">
+            {closeCommentControl}
             <Button
               type="submit"
               size="sm"
-              disabled={!canComment || submitting || draft.trim().length === 0}
+              disabled={!canComment || submitting !== null || draft.trim().length === 0}
             >
               <SendIcon aria-hidden className="size-3.5" />
-              {submitting ? "Posting…" : "Comment"}
+              {submitting === "comment" ? "Posting…" : "Comment"}
             </Button>
           </div>
         </form>
