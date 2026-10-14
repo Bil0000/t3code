@@ -123,6 +123,73 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect(
+    "marks a listed label subset and clears the flag after authoritative detail hydration",
+    () =>
+      Effect.gen(function* () {
+        const labels = Array.from({ length: 21 }, (_, index) => ({
+          name: `label-${index + 1}`,
+          color: "abcdef",
+        }));
+        const native = {
+          ...DETAIL_FIXTURE.data.repository.issue,
+          labels: { nodes: labels.slice(0, 20), pageInfo: { hasNextPage: true } },
+        };
+        const queries: string[] = [];
+        let restReads = 0;
+        const api = yield* tracker(
+          (query) => {
+            queries.push(query);
+            return JSON.stringify(
+              query.includes("search(")
+                ? { data: { search: { nodes: [native], pageInfo: { hasNextPage: false } } } }
+                : {
+                    data: {
+                      ...DETAIL_FIXTURE.data,
+                      repository: { ...DETAIL_FIXTURE.data.repository, issue: native },
+                    },
+                  },
+            );
+          },
+          () => {
+            restReads++;
+            return {
+              status: 200,
+              headers: {},
+              body: JSON.stringify({ labels }),
+              truncated: false,
+              invalidUtf8: false,
+            };
+          },
+        );
+        const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const page = yield* api.listIssues({
+          ...target,
+          query: "focus",
+          state: "all",
+          involvement: "all",
+          viewer: "julius",
+          limit: 50,
+        });
+        expect(page.items[0]?.labels).toHaveLength(20);
+        expect(page.items[0]?.labelsTruncated).toBe(true);
+        expect(restReads).toBe(0);
+        const detail = yield* api.getIssue(target);
+        expect(detail.labels).toHaveLength(21);
+        expect(detail.labels[20]?.name).toBe("label-21");
+        expect(detail.labelsTruncated).toBe(false);
+        expect(detail.viewerPermissions.labels).toBe(true);
+        expect(queries).toHaveLength(2);
+        expect(
+          queries.every(
+            (query) =>
+              query.includes("pageInfo { hasNextPage }") && query.includes("labels(first: 20)"),
+          ),
+        ).toBe(true);
+        expect(restReads).toBe(1);
+      }),
+  );
+
   it.effect.each(["labels", "assignees"] as const)(
     "refuses success when GitHub omits the requested %s update",
     (field) =>
