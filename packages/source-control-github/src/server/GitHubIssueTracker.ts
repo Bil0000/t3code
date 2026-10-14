@@ -33,6 +33,7 @@ import { readGitHubIssueTemplateFiles } from "./gitHubIssueTemplates.ts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 
 import * as GitHubApi from "./GitHubApi.ts";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import {
   ADD_REACTION_GRAPHQL_MUTATION,
   gitHubReactionContent,
@@ -686,6 +687,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
               decode: decodeIssueViewerPermissionsJson,
             }),
           ),
+          Effect.provideService(SourceControlRateLimit.Interactive, true),
         ),
 
       editComment: (input) =>
@@ -699,6 +701,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
               variables: { id, body: input.body },
             }),
           ),
+          Effect.provideService(SourceControlRateLimit.Interactive, true),
         ),
 
       getHierarchy: (input) =>
@@ -739,7 +742,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
           yield* restRead(input, "setParent", `${path}/sub_issue`, Schema.Unknown, "DELETE", {
             sub_issue_id: child.id,
           });
-        }),
+        }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
 
       getHistory: (input) =>
         restIssue(input, "getHistory").pipe(
@@ -925,7 +928,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
                   Effect.orElseSucceed(() => false),
                 );
           return { ...created, parentLinked };
-        }),
+        }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
 
       comment: (input) =>
         restIssue(input, "comment").pipe(
@@ -940,6 +943,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
               })
               .pipe(Effect.asVoid, Effect.mapError(fail("comment"))),
           ),
+          Effect.provideService(SourceControlRateLimit.Interactive, true),
         ),
 
       update: (input) =>
@@ -948,7 +952,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
           ...(input.body === undefined ? {} : { body: input.body }),
           ...(input.labels === undefined ? {} : { labels: input.labels }),
           ...(input.assignees === undefined ? {} : { assignees: input.assignees }),
-        }),
+        }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
 
       setState: (input) =>
         patchIssue(input, "setState", {
@@ -956,7 +960,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
           ...(input.state === "closed" && input.closeReason !== undefined
             ? { state_reason: CLOSE_REASON[input.closeReason] }
             : {}),
-        }),
+        }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
 
       setReaction: (input) =>
         (input.subjectId === undefined
@@ -987,6 +991,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
               variables: { subjectId, content: gitHubReactionContent(input.content) },
             }),
           ),
+          Effect.provideService(SourceControlRateLimit.Interactive, true),
         ),
 
       listTemplates: (input) => {
