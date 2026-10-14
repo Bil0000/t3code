@@ -182,6 +182,7 @@ export const ISSUE_DETAIL_GRAPHQL_QUERY = `query($owner: String!, $name: String!
         nodes { number title url state isDraft repository { nameWithOwner } }
       }
       timelineItems(last: ${PAGE_SIZE}, itemTypes: [CLOSED_EVENT, REOPENED_EVENT, LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, RENAMED_TITLE_EVENT, CROSS_REFERENCED_EVENT]) {
+        pageInfo { hasPreviousPage }
         nodes {
           __typename
           ... on ClosedEvent { id createdAt actor { login avatarUrl } }
@@ -219,6 +220,7 @@ const RawDetailSchema = Schema.Struct({
           timelineItems: Schema.optional(
             Schema.NullOr(
               Schema.Struct({
+                pageInfo: Schema.optional(RawPageInfoSchema),
                 nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
               }),
             ),
@@ -586,6 +588,7 @@ export interface GitHubIssueDetail extends TrackerIssueSummary {
   readonly comments: ReadonlyArray<IssueComment>;
   readonly commentsCursor: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
+  readonly historyTruncated?: boolean;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
 }
 
@@ -633,6 +636,7 @@ export function decodeIssueDetailJson(
     comments: toComments(issue.comments, viewer),
     commentsCursor: previousCursorOf(issue.comments?.pageInfo),
     events,
+    historyTruncated: issue.timelineItems?.pageInfo?.hasPreviousPage === true,
     linkedPullRequests: [...links.values()],
   });
 }

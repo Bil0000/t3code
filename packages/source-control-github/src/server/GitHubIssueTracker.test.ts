@@ -6,7 +6,7 @@ import * as GitHubApi from "./GitHubApi.ts";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 
 /** A detail answer as GitHub's GraphQL API shapes it, with every section populated once. */
-const DETAIL_RESPONSE = JSON.stringify({
+const DETAIL_FIXTURE = {
   data: {
     viewer: { login: "julius" },
     repository: {
@@ -99,7 +99,8 @@ const DETAIL_RESPONSE = JSON.stringify({
       },
     },
   },
-});
+};
+const DETAIL_RESPONSE = JSON.stringify(DETAIL_FIXTURE);
 
 function tracker(
   graphql: (query: string, variables: unknown) => string,
@@ -248,6 +249,7 @@ describe("GitHubIssueTracker", () => {
           comment: true,
         },
         commentsCursor: "Y3Vyc29y",
+        historyTruncated: false,
       });
       // The viewer is left out of `actors` and shown as "You"; an empty group is dropped.
       expect(issue.comments[0]?.reactions).toEqual([
@@ -271,6 +273,49 @@ describe("GitHubIssueTracker", () => {
         ["referenced", "acme/web#50"],
         ["closed", null],
       ]);
+    }),
+  );
+
+  it.effect("reports whether a capped timeline has older events", () =>
+    Effect.gen(function* () {
+      for (const hasPreviousPage of [true, false]) {
+        const queries: string[] = [];
+        const api = yield* tracker((query) => {
+          queries.push(query);
+          return JSON.stringify({
+            data: {
+              ...DETAIL_FIXTURE.data,
+              repository: {
+                ...DETAIL_FIXTURE.data.repository,
+                issue: {
+                  ...DETAIL_FIXTURE.data.repository.issue,
+                  timelineItems: {
+                    pageInfo: { hasPreviousPage },
+                    nodes: Array.from({ length: 100 }, (_, index) => ({
+                      __typename: "ClosedEvent",
+                      id: `CE_${index}`,
+                      createdAt: "2026-07-03T00:00:00Z",
+                      actor: null,
+                    })),
+                  },
+                },
+              },
+            },
+          });
+        });
+        const issue = yield* api.getIssue({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          key: "42",
+        });
+        expect(issue.historyTruncated).toBe(hasPreviousPage);
+        expect(issue.events).toHaveLength(100);
+        expect(queries).toHaveLength(1);
+        expect(queries[0]).toMatch(
+          /timelineItems\(last: 100,[^)]*\)\s*\{\s*pageInfo\s*\{\s*hasPreviousPage\s*\}/,
+        );
+      }
     }),
   );
 
