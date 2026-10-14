@@ -16,6 +16,26 @@ export const issuePickerConfirmed = Atom.family((_key: string) =>
   Atom.make<IssuePickerConfirmed | null>(null).pipe(Atom.setIdleTTL(5 * 60_000)),
 );
 
+export const issuePickerPending = Atom.family((_key: string) => Atom.make<string | null>(null));
+
+export async function writeIssuePicker(
+  registry: AtomRegistry.AtomRegistry,
+  key: string,
+  id: string,
+  write: () => Promise<IssuePickerConfirmed>,
+) {
+  const pending = issuePickerPending(key);
+  if (registry.get(pending) !== null) return;
+  const release = registry.mount(pending);
+  registry.set(pending, id);
+  try {
+    registry.set(issuePickerConfirmed(key), await write());
+  } finally {
+    registry.set(pending, null);
+    release();
+  }
+}
+
 export const issuePickerKey = (
   environmentId: string,
   issue: Parameters<typeof issueEntryKey>[0],

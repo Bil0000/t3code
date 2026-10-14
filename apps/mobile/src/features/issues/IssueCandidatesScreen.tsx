@@ -1,7 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { use, useEffect, useMemo, useRef, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
@@ -22,7 +22,9 @@ import {
   issuePickerConfirmed,
   issuePickerIds,
   issuePickerKey,
+  issuePickerPending,
   nextIssuePickerIds,
+  writeIssuePicker,
 } from "./issuePicker";
 import type { IssueAssigneeCandidate } from "@t3tools/contracts";
 import type { IssueParams } from "./issueSelection";
@@ -61,7 +63,6 @@ export function IssueCandidatesScreen({
   const result = useEnvironmentQuery(issueEnvironment.candidates(scope));
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const [query, setQuery] = useState("");
-  const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pickerKey = issuePickerKey(
     target.environmentId,
@@ -69,13 +70,13 @@ export function IssueCandidatesScreen({
     params.kind,
   );
   const confirmed = useAtomValue(issuePickerConfirmed(pickerKey));
+  const pending = useAtomValue(issuePickerPending(pickerKey));
   const held = issue ? heldIssuePicker(issue, params.kind, confirmed, target.environmentId) : null;
   useEffect(() => {
     if (issue && confirmed !== held) {
       clearAcknowledgedIssuePicker(registry, pickerKey, issue, params.kind, target.environmentId);
     }
   }, [registry, pickerKey, issue, confirmed, held, params.kind, target.environmentId]);
-  const inFlight = useRef(false);
   const title = labels ? "Labels" : "Assignees";
   const rows = useMemo((): Row[] => {
     if (!issue) return [];
@@ -132,29 +133,22 @@ export function IssueCandidatesScreen({
       }));
   }, [issue, labels, query, result.data, held, target.environmentId]);
   const toggle = async (row: Row) => {
-    if (!allowed || !issue || inFlight.current) return;
-    inFlight.current = true;
-    setPending(row.id);
+    if (!allowed || !issue) return;
     setError(null);
     try {
-      const ids = nextIssuePickerIds(issue, params.kind, held, row.id, target.environmentId);
-      const response = await update({
-        ...target,
-        input: { ...target.input, [params.kind]: ids },
+      await writeIssuePicker(registry, pickerKey, row.id, async () => {
+        const latest = registry.get(issuePickerConfirmed(pickerKey));
+        const ids = nextIssuePickerIds(issue, params.kind, latest, row.id, target.environmentId);
+        const response = await update({
+          ...target,
+          input: { ...target.input, [params.kind]: ids },
+        });
+        if (response._tag === "Failure") throw squashAtomCommandFailure(response);
+        markIssueTargetWritten(registry, params);
+        return { base: issue, ids, environmentId: target.environmentId, kind: params.kind };
       });
-      if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-      registry.set(issuePickerConfirmed(pickerKey), {
-        base: issue,
-        ids,
-        environmentId: target.environmentId,
-        kind: params.kind,
-      });
-      markIssueTargetWritten(registry, params);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `Couldn't update ${title.toLowerCase()}.`);
-    } finally {
-      inFlight.current = false;
-      setPending(null);
     }
   };
   return (

@@ -8,7 +8,9 @@ import {
   issuePickerConfirmed,
   issuePickerIds,
   issuePickerKey,
+  issuePickerPending,
   nextIssuePickerIds,
+  writeIssuePicker,
   type IssuePickerConfirmed,
 } from "./issuePicker";
 
@@ -371,6 +373,51 @@ describe("issue picker confirmed set across sheet close and reopen", () => {
     } finally {
       registry.dispose();
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("issue picker write across sheet close and reopen", () => {
+  it("refuses a second write while the first is pending, then writes from its confirmed set", async () => {
+    const registry = AtomRegistry.make({ defaultIdleTTL: 1, timeoutResolution: 1 });
+    const stale = detail();
+    const key = issuePickerKey(environmentId, stale, "labels");
+    const sent: string[][] = [];
+    const toggle = (id: string, gate: Promise<void>) =>
+      writeIssuePicker(registry, key, id, async () => {
+        const next = pick(stale, "labels", registry.get(issuePickerConfirmed(key)), id);
+        sent.push([...next.ids]);
+        await gate;
+        return next;
+      });
+    try {
+      const first = Promise.withResolvers<void>();
+      const open = registry.mount(issuePickerConfirmed(key));
+      const ui = toggle("ui", first.promise);
+      open();
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+
+      const reopen = registry.mount(issuePickerConfirmed(key));
+      expect(registry.get(issuePickerPending(key))).toBe("ui");
+      await toggle("docs", Promise.resolve());
+      expect(registry.get(issuePickerPending(issuePickerKey("other", stale, "labels")))).toBeNull();
+      first.resolve();
+      await ui;
+      expect(registry.get(issuePickerPending(key))).toBeNull();
+      await toggle("docs", Promise.resolve());
+      expect(sent).toEqual([
+        ["bug", "ui"],
+        ["bug", "ui", "docs"],
+      ]);
+
+      const failed = toggle("test", Promise.reject(new Error("write failed")));
+      expect(registry.get(issuePickerPending(key))).toBe("test");
+      await expect(failed).rejects.toThrow("write failed");
+      expect(registry.get(issuePickerPending(key))).toBeNull();
+      expect(registry.get(issuePickerConfirmed(key))!.ids).toEqual(["bug", "ui", "docs"]);
+      reopen();
+    } finally {
+      registry.dispose();
     }
   });
 });
