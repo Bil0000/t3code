@@ -7,6 +7,7 @@ import {
   type IssueTrackerProjectBinding,
   type OrchestrationProjectShell,
   type ProjectId,
+  type IssueViewerPermissions,
 } from "@t3tools/contracts";
 import {
   IssueTrackerError,
@@ -23,6 +24,14 @@ import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
 const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
+const JIRA = IssueTrackerKind.make("jira");
+const permissions = {
+  setState: true,
+  comment: true,
+  edit: true,
+  labels: true,
+  assignees: true,
+} satisfies IssueViewerPermissions;
 
 /** A standalone tracker shaped like Linear: its own host, team keys for scopes, `ENG-1` keys. */
 function fakeStandaloneTracker(
@@ -127,7 +136,7 @@ function fakeTracker(overrides: Partial<IssueTrackerApi> = {}): IssueTrackerApi 
     listIssues: () => Effect.succeed({ items: [], nextCursor: null }),
     getIssue: (input) => Effect.succeed(issue(input.key)),
     getComments: () => Effect.succeed({ comments: [], nextCursor: null }),
-    getViewerPermissions: () => Effect.die("unused"),
+    getViewerPermissions: () => Effect.succeed(permissions),
     comment: () => Effect.void,
     update: () => Effect.void,
     setState: () => Effect.void,
@@ -139,18 +148,20 @@ function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly trackers: ReadonlyArray<IssueTrackerApi>;
   readonly bindings?: Record<string, IssueTrackerProjectBinding>;
+  readonly resolveRepository?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
   return IssueService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
-          list: Effect.succeed(
-            new Map(
-              Object.entries(input.bindings ?? {}).map(([id, binding]) => [
-                id as ProjectId,
-                binding,
-              ]),
-            ),
+          list: Effect.sync(
+            () =>
+              new Map(
+                Object.entries(input.bindings ?? {}).map(([id, binding]) => [
+                  id as ProjectId,
+                  binding,
+                ]),
+              ),
           ),
         }),
         Layer.succeed(
@@ -163,7 +174,13 @@ function makeService(input: {
             Effect.succeed(Option.fromNullishOr(input.projects.find((p) => p.id === projectId))),
         }),
         Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-          resolve: () => Effect.succeed(null),
+          resolve:
+            input.resolveRepository ??
+            ((cwd) =>
+              Effect.succeed(
+                input.projects.find((project) => project.workspaceRoot === cwd)
+                  ?.repositoryIdentity ?? null,
+              )),
         }),
       ),
     ),
@@ -300,7 +317,15 @@ describe("IssueService", () => {
         ["web", "1"],
       ]);
       expect(result.nextCursors).toEqual({ "github.com acme/web": "next" });
-      expect(result.errors).toEqual([{ projectId: "api", projectTitle: "api", message: "boom" }]);
+      expect(result.errors).toEqual([
+        {
+          projectId: "api",
+          projectTitle: "api",
+          tracker: GITHUB,
+          host: "github.com",
+          message: "boom",
+        },
+      ]);
       expect(result.viewers).toEqual({ "github.com": "julius" });
       expect(result.trackers).toEqual([
         expect.objectContaining({ host: "github.com", projectCount: 3, configured: true }),
@@ -398,3 +423,595 @@ describe("IssueService with a standalone tracker", () => {
     }),
   );
 });
+
+describe("IssueService write permissions", () => {
+  it.effect.each([
+    { field: "edit" as const, input: { title: "Changed" } },
+    { field: "edit" as const, input: { body: "Changed" } },
+    { field: "labels" as const, input: { labels: [] } },
+    { field: "assignees" as const, input: { assignees: [] } },
+    { field: "labels" as const, input: { title: "Changed", labels: [] } },
+    { field: "assignees" as const, input: { labels: [], assignees: [] } },
+  ])("checks fresh permission before updating $field", ({ field, input }) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      let writes = 0;
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({
+            getViewerPermissions: () =>
+              Effect.sync(() => {
+                reads++;
+                return { ...permissions, [field]: false };
+              }),
+            update: () =>
+              Effect.sync(() => {
+                writes++;
+              }),
+          }),
+        ],
+      });
+      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      expect((yield* service.detail(ref)).viewerPermissions[field]).toBe(true);
+      const denied = yield* Effect.flip(service.update({ ...ref, ...input }));
+      expect(denied._tag).toBe("IssueOperationError");
+      expect(reads).toBe(1);
+      expect(writes).toBe(0);
+    }),
+  );
+
+  it.effect.each(["comment", "setState"] as const)(
+    "checks fresh %s permission before writing",
+    (operation) =>
+      Effect.gen(function* () {
+        let reads = 0;
+        let writes = 0;
+        const write = () =>
+          Effect.sync(() => {
+            writes++;
+          });
+        const service = yield* makeService({
+          projects: [project({ id: "web", repository: "acme/web" })],
+          trackers: [
+            fakeTracker({
+              getViewerPermissions: () =>
+                Effect.sync(() => {
+                  reads++;
+                  return { ...permissions, [operation]: false };
+                }),
+              comment: write,
+              setState: write,
+            }),
+          ],
+        });
+        const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+        const denied = yield* Effect.flip(
+          operation === "comment"
+            ? service.comment({ ...ref, body: "Hello" })
+            : service.setState({ ...ref, state: "closed" }),
+        );
+        expect(denied._tag).toBe("IssueOperationError");
+        expect(reads).toBe(1);
+        expect(writes).toBe(0);
+      }),
+  );
+
+  it.effect("checks an update once and only needs permissions for its present fields", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      let writes = 0;
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({
+            getViewerPermissions: () =>
+              Effect.sync(() => {
+                reads++;
+                return { ...permissions, edit: false, comment: false, setState: false };
+              }),
+            update: () =>
+              Effect.sync(() => {
+                writes++;
+              }),
+          }),
+        ],
+      });
+      yield* service.update({
+        projectId: "web" as ProjectId,
+        tracker: GITHUB,
+        scope: "acme/web",
+        key: "1",
+        labels: [],
+        assignees: [],
+      });
+      expect(reads).toBe(1);
+      expect(writes).toBe(1);
+    }),
+  );
+
+  it.effect("preserves native permission probe failures without writing", () =>
+    Effect.gen(function* () {
+      let writes = 0;
+      const error = new IssueTrackerError({
+        tracker: GITHUB,
+        operation: "getViewerPermissions",
+        reason: "rate-limited",
+        detail: "Try again later.",
+        retryAt: 1234,
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({
+            getViewerPermissions: () => Effect.fail(error),
+            update: () =>
+              Effect.sync(() => {
+                writes++;
+              }),
+          }),
+        ],
+      });
+      const denied = yield* Effect.flip(
+        service.update({
+          projectId: "web" as ProjectId,
+          tracker: GITHUB,
+          scope: "acme/web",
+          key: "1",
+          title: "Changed",
+        }),
+      );
+      expect(denied).toMatchObject({
+        _tag: "IssueOperationError",
+        reason: "rate-limited",
+        detail: error.detail,
+        retryAt: 1234,
+        cause: error,
+      });
+      expect(writes).toBe(0);
+    }),
+  );
+
+  it.effect("does not write through a standalone binding changed during permission lookup", () =>
+    Effect.gen(function* () {
+      let writes = 0;
+      const bindings: Record<string, IssueTrackerProjectBinding> = {
+        web: { tracker: LINEAR, scope: "ENG" },
+      };
+      const service = yield* makeService({
+        projects: [project({ id: "web" })],
+        bindings,
+        trackers: [
+          fakeStandaloneTracker({
+            getViewerPermissions: () =>
+              Effect.sync(() => {
+                bindings.web = { tracker: LINEAR, scope: "OPS" };
+                return permissions;
+              }),
+            update: () =>
+              Effect.sync(() => {
+                writes++;
+              }),
+          }),
+        ],
+      });
+      const denied = yield* Effect.flip(
+        service.update({
+          projectId: "web" as ProjectId,
+          tracker: LINEAR,
+          scope: "ENG",
+          key: "ENG-1",
+          title: "Changed",
+        }),
+      );
+      expect(denied).toMatchObject({ _tag: "IssueOperationError", reason: "read-only" });
+      expect(writes).toBe(0);
+    }),
+  );
+});
+
+it.effect("shares the viewer probe per host within each list call", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "web", repository: "acme/web" }),
+        project({ id: "api", repository: "acme/api" }),
+      ],
+      trackers: [
+        fakeTracker({
+          getViewer: () =>
+            Effect.yieldNow.pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  reads++;
+                  return "julius";
+                }),
+              ),
+            ),
+        }),
+      ],
+    });
+    yield* service.list({ state: "open" });
+    expect(reads).toBe(1);
+    yield* service.list({ state: "open" });
+    expect(reads).toBe(2);
+  }),
+);
+
+it.effect("returns project sources without reading a tracker API", () =>
+  Effect.gen(function* () {
+    const unused = () => Effect.die("Sources must not probe providers");
+    const service = yield* makeService({
+      projects: [project({ id: "web", repository: "acme/web" })],
+      bindings: { web: { tracker: LINEAR, scope: "ENG" } },
+      trackers: [fakeTracker({ getViewer: unused }), fakeStandaloneTracker({ getViewer: unused })],
+    });
+    expect(yield* service.sources("web" as ProjectId)).toEqual([
+      { tracker: GITHUB, host: "github.com", scope: "acme/web" },
+      { tracker: LINEAR, host: "linear.app", scope: "ENG" },
+    ]);
+  }),
+);
+
+it.effect("refreshes a cached repository identity before a permitted write", () =>
+  Effect.gen(function* () {
+    let refreshes = 0;
+    let writes = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "web", repository: "acme/web" })],
+      resolveRepository: (_cwd, options) =>
+        Effect.sync(() => {
+          expect(options?.refresh).toBe(true);
+          refreshes++;
+          return project({ id: "web", repository: "acme/api" }).repositoryIdentity ?? null;
+        }),
+      trackers: [
+        fakeTracker({
+          update: () =>
+            Effect.sync(() => {
+              writes++;
+            }),
+        }),
+      ],
+    });
+    const denied = yield* Effect.flip(
+      service.update({
+        projectId: "web" as ProjectId,
+        tracker: GITHUB,
+        scope: "acme/web",
+        key: "1",
+        title: "Changed",
+      }),
+    );
+    expect(denied).toMatchObject({ _tag: "IssueOperationError", reason: "read-only" });
+    expect(refreshes).toBe(1);
+    expect(writes).toBe(0);
+  }),
+);
+
+it.effect("uses a standalone binding's verified site and refuses references to another site", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const base = fakeStandaloneTracker({
+      getIssue: (input) =>
+        Effect.sync(() => {
+          reads++;
+          expect(input.host).toBe("example.atlassian.net");
+          return issue(input.key);
+        }),
+    });
+    const api: StandaloneIssueTrackerApi = {
+      ...base,
+      kind: JIRA,
+      standalone: { ...base.standalone, tracker: JIRA, host: null },
+      probeCredential: () => Effect.die("Source resolution must not probe credentials"),
+    };
+    const service = yield* makeService({
+      projects: [project({ id: "web" })],
+      trackers: [api],
+      bindings: { web: { tracker: JIRA, scope: "ENG", host: "example.atlassian.net" } },
+    });
+    expect(yield* service.sources("web" as ProjectId)).toEqual([
+      { tracker: JIRA, scope: "ENG", host: "example.atlassian.net" },
+    ]);
+    const ref = { projectId: "web" as ProjectId, tracker: JIRA, scope: "ENG", key: "ENG-1" };
+    expect(yield* service.detail({ ...ref, host: "example.atlassian.net" })).toMatchObject({
+      writable: true,
+    });
+    expect(
+      yield* Effect.flip(service.detail({ ...ref, host: "other.atlassian.net" })),
+    ).toMatchObject({ _tag: "IssueUnavailableError" });
+    expect(reads).toBe(1);
+    const missingHost = yield* makeService({
+      projects: [project({ id: "web" })],
+      trackers: [api],
+      bindings: { web: { tracker: JIRA, scope: "ENG" } },
+    });
+    expect(yield* missingHost.sources("web" as ProjectId)).toEqual([]);
+  }),
+);
+
+it.effect(
+  "offers and forwards a native issue type without requiring label or assignee support",
+  () =>
+    Effect.gen(function* () {
+      const base = fakeTracker();
+      let selected: string | undefined;
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({
+            capabilities: {
+              ...base.capabilities,
+              labels: false,
+              assignees: false,
+              createIssueTypes: true,
+            },
+            listCandidates: () =>
+              Effect.succeed({
+                labels: [],
+                assignees: [],
+                issueTypes: [{ id: "10001", name: "Bug" }],
+                truncated: false,
+              }),
+            create: (input) =>
+              Effect.sync(() => {
+                selected = input.issueType;
+                return { key: "1", displayKey: "#1", url: "https://github.com/acme/web/issues/1" };
+              }),
+          }),
+        ],
+      });
+      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web" };
+      expect((yield* service.candidates(ref)).issueTypes).toEqual([{ id: "10001", name: "Bug" }]);
+      yield* service.create({
+        ...ref,
+        title: "Fix",
+        body: "",
+        labels: [],
+        assignees: [],
+        issueType: "10001",
+      });
+      expect(selected).toBe("10001");
+    }),
+);
+
+it.effect("refuses a selected issue type when the tracker does not support it", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "web", repository: "acme/web" })],
+      trackers: [
+        fakeTracker({ create: () => Effect.die("Unsupported type must not reach create") }),
+      ],
+    });
+    const error = yield* Effect.flip(
+      service.create({
+        projectId: "web" as ProjectId,
+        tracker: GITHUB,
+        scope: "acme/web",
+        title: "Fix",
+        body: "",
+        labels: [],
+        assignees: [],
+        issueType: "10001",
+      }),
+    );
+    expect(error).toMatchObject({ _tag: "IssueOperationError" });
+  }),
+);
+
+it.effect(
+  "returns empty source facts and attributes failures to the actual tracker without extra reads",
+  () =>
+    Effect.gen(function* () {
+      let viewerReads = 0;
+      let listReads = 0;
+      const api = fakeStandaloneTracker({
+        getViewer: () =>
+          Effect.sync(() => {
+            viewerReads++;
+            return "native-1";
+          }),
+        listIssues: () =>
+          Effect.sync(() => {
+            listReads++;
+          }).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new IssueTrackerError({
+                  tracker: LINEAR,
+                  operation: "list",
+                  reason: "failed",
+                  detail: "Team unavailable.",
+                }),
+              ),
+            ),
+          ),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "web" })],
+        trackers: [api],
+        bindings: { web: { tracker: LINEAR, scope: "ENG" } },
+      });
+      const result = yield* service.list({ state: "open" });
+      expect(result.entries).toEqual([]);
+      expect(result.sources).toEqual([
+        {
+          projectId: "web",
+          projectTitle: "web",
+          tracker: LINEAR,
+          host: "linear.app",
+          scope: "ENG",
+          capabilities: api.capabilities,
+        },
+      ]);
+      expect(result.errors).toEqual([
+        {
+          projectId: "web",
+          projectTitle: "web",
+          tracker: LINEAR,
+          host: "linear.app",
+          message: "Team unavailable.",
+        },
+      ]);
+      expect(viewerReads).toBe(1);
+      expect(listReads).toBe(1);
+    }),
+);
+
+it.effect(
+  "refuses unsupported involvement before any native read while keeping older capabilities",
+  () =>
+    Effect.gen(function* () {
+      for (const declared of [true, false]) {
+        let reads = 0;
+        const base = fakeTracker();
+        const service = yield* makeService({
+          projects: [project({ id: "web", repository: "acme/web" })],
+          trackers: [
+            fakeTracker({
+              capabilities: {
+                ...base.capabilities,
+                ...(declared ? { involvements: ["all"] as const } : {}),
+              },
+              getViewer: () =>
+                Effect.sync(() => {
+                  reads++;
+                  return "Alex";
+                }),
+              listIssues: () =>
+                Effect.sync(() => {
+                  reads++;
+                  return { items: [], nextCursor: null };
+                }),
+            }),
+          ],
+        });
+        const result = yield* service.list({ state: "open", involvement: "mentioned" });
+        expect(reads).toBe(declared ? 0 : 2);
+        expect(result.errors.length).toBe(declared ? 1 : 0);
+        if (declared)
+          expect(result.errors[0]).toMatchObject({ tracker: GITHUB, host: "github.com" });
+      }
+    }),
+);
+
+it.effect.each(["create", "react"] as const)(
+  "refreshes cached repository ownership before %s",
+  (operation) =>
+    Effect.gen(function* () {
+      let writes = 0;
+      let refreshes = 0;
+      const base = fakeTracker();
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        resolveRepository: (_cwd, options) =>
+          Effect.sync(() => {
+            expect(options?.refresh).toBe(true);
+            refreshes++;
+            return project({ id: "web", repository: "acme/api" }).repositoryIdentity ?? null;
+          }),
+        trackers: [
+          fakeTracker({
+            capabilities: { ...base.capabilities, reactions: true },
+            create: () =>
+              Effect.sync(() => {
+                writes++;
+                return { key: "2", displayKey: "#2", url: issue("2").url };
+              }),
+            setReaction: () =>
+              Effect.sync(() => {
+                writes++;
+              }),
+          }),
+        ],
+      });
+      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      const denied = yield* Effect.flip(
+        operation === "create"
+          ? service.create({ ...ref, title: "New", body: "", labels: [], assignees: [] })
+          : service.react({ ...ref, content: "heart", reacted: true }),
+      );
+      expect(denied).toMatchObject({ _tag: "IssueOperationError", reason: "read-only" });
+      expect(refreshes).toBe(1);
+      expect(writes).toBe(0);
+    }),
+);
+
+it.effect.each(["create", "update"] as const)(
+  "rejects too many assignees before native %s calls",
+  (operation) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      let writes = 0;
+      const base = fakeTracker();
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({
+            capabilities: { ...base.capabilities, maxAssignees: 1 },
+            getViewerPermissions: () =>
+              Effect.sync(() => {
+                reads++;
+                return permissions;
+              }),
+            create: () =>
+              Effect.sync(() => {
+                writes++;
+                return { key: "2", displayKey: "#2", url: issue("2").url };
+              }),
+            update: () =>
+              Effect.sync(() => {
+                writes++;
+              }),
+          }),
+        ],
+      });
+      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      const denied = yield* Effect.flip(
+        operation === "create"
+          ? service.create({
+              ...ref,
+              title: "New",
+              body: "",
+              labels: [],
+              assignees: ["alice", "bob"],
+            })
+          : service.update({ ...ref, assignees: ["alice", "bob"] }),
+      );
+      expect(denied._tag).toBe("IssueOperationError");
+      expect(reads).toBe(0);
+      expect(writes).toBe(0);
+    }),
+);
+
+it.effect.each([{ assignees: [] }, { assignees: ["alice"] }])(
+  "preserves valid assignee arrays, including clear: $assignees",
+  ({ assignees }) =>
+    Effect.gen(function* () {
+      const written: ReadonlyArray<string>[] = [];
+      const base = fakeTracker();
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({
+            capabilities: { ...base.capabilities, maxAssignees: 1 },
+            create: (input) =>
+              Effect.sync(() => {
+                written.push(input.assignees);
+                return { key: "2", displayKey: "#2", url: issue("2").url };
+              }),
+            update: (input) =>
+              Effect.sync(() => {
+                written.push(input.assignees ?? []);
+              }),
+          }),
+        ],
+      });
+      const ref = { projectId: "web" as ProjectId, tracker: GITHUB, scope: "acme/web", key: "1" };
+      yield* service.create({ ...ref, title: "New", body: "", labels: [], assignees });
+      yield* service.update({ ...ref, assignees });
+      expect(written).toEqual([assignees, assignees]);
+    }),
+);

@@ -2,6 +2,7 @@ import {
   threadIssueKeysEqual,
   type IssueDetail,
   type IssueRef,
+  type IssueTrackerKind,
   type OrchestrationV2ThreadShell,
   type ProjectId,
   type ThreadId,
@@ -11,7 +12,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as IssueService from "../../../issue/IssueService.ts";
-import { resolveGitHostBinding } from "../../../issue/IssueService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -21,6 +21,7 @@ import {
   IssueLinkFailedError,
   IssueProjectNotFoundError,
   IssueProjectRequiredError,
+  IssueSourceSelectionError,
   IssuesToolkit,
   IssueTargetIncompleteError,
   type IssueTargetInput,
@@ -36,7 +37,6 @@ interface ResolvedTarget extends IssueRef {
   readonly writable: boolean;
 }
 
-/** What the tools report from a thread shell; exported so the shape is testable without a layer. */
 function listThreadIssues(
   thread: Pick<OrchestrationV2ThreadShell, "issues">,
 ): ListThreadIssuesResult {
@@ -93,16 +93,38 @@ const make = Effect.gen(function* () {
   const requireProject = Effect.fn("IssuesToolkit.requireProject")(function* (
     requested: ProjectId | undefined,
   ) {
+    yield* McpInvocationContext.requireMcpCapability("issues");
     const projectId = requested ?? (yield* callerThread())?.projectId;
     if (projectId === undefined) return yield* new IssueProjectRequiredError();
     const project = yield* projects
       .getShell(projectId)
       .pipe(Effect.mapError((cause) => new IssueLinkFailedError({ cause })));
-    const binding = Option.isSome(project) ? resolveGitHostBinding(project.value) : null;
-    if (Option.isNone(project) || binding === null) {
+    if (Option.isNone(project)) {
       return yield* new IssueProjectNotFoundError({ projectId });
     }
-    return { project: project.value, binding };
+    return { project: project.value };
+  });
+
+  const requireSource = Effect.fn("IssuesToolkit.requireSource")(function* (
+    requestedProject: ProjectId | undefined,
+    requestedTracker: IssueTrackerKind | undefined,
+  ) {
+    const { project } = yield* requireProject(requestedProject);
+    const sources = yield* issues.sources(project.id);
+    if (sources.length === 0)
+      return yield* new IssueProjectNotFoundError({ projectId: project.id });
+    const matches =
+      requestedTracker === undefined
+        ? sources
+        : sources.filter((source) => source.tracker === requestedTracker);
+    const binding = matches.length === 1 ? matches[0] : undefined;
+    if (binding === undefined)
+      return yield* new IssueSourceSelectionError({
+        projectId: project.id,
+        ...(requestedTracker === undefined ? {} : { tracker: requestedTracker }),
+        sources,
+      });
+    return { project, binding };
   });
 
   /**
@@ -113,13 +135,14 @@ const make = Effect.gen(function* () {
   const resolveTarget = Effect.fn("IssuesToolkit.resolveTarget")(function* (
     input: IssueTargetInput,
   ) {
+    yield* McpInvocationContext.requireMcpCapability("issues");
     if (input.url !== undefined) {
       const preferred = input.projectId ?? (yield* callerThread())?.projectId;
       const resolved = yield* issues.resolveUrl(input.url, preferred);
       return { ...resolved, url: input.url } satisfies ResolvedTarget;
     }
     if (input.key === undefined) return yield* new IssueTargetIncompleteError();
-    const { project, binding } = yield* requireProject(input.projectId);
+    const { project, binding } = yield* requireSource(input.projectId, input.tracker);
     return {
       projectId: project.id,
       tracker: binding.tracker,
@@ -236,7 +259,7 @@ const make = Effect.gen(function* () {
     ),
     create_issue: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
-        const { project, binding } = yield* requireProject(input.projectId);
+        const { project, binding } = yield* requireSource(input.projectId, input.tracker);
         const created = yield* issues.create({
           projectId: project.id,
           ...binding,
@@ -244,14 +267,19 @@ const make = Effect.gen(function* () {
           body: input.body ?? "",
           labels: input.labels ?? [],
           assignees: input.assignees ?? [],
+          ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
         });
         return {
           projectId: project.id,
           ...binding,
-          key: created.key,
-          url: created.url,
-          displayKey: created.displayKey,
+          ...created,
         };
+      }),
+    ),
+    read_issue_candidates: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const { project, binding } = yield* requireSource(input.projectId, input.tracker);
+        return yield* issues.candidates({ projectId: project.id, ...binding });
       }),
     ),
     comment_on_issue: McpToolAccess.writesWithCapability((input) =>

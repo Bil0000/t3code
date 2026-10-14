@@ -8,6 +8,8 @@ import {
   ChatImageAttachment,
   CommandId,
   EnvironmentId,
+  IssueTrackerKind,
+  ProjectId,
   NodeId,
   OrchestratorMcpThreadReadResult,
   ProviderDriverKind,
@@ -17,11 +19,13 @@ import {
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ThreadShell,
+  type IssueCreateInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Ref from "effect/Ref";
 import { McpAttachmentInput } from "./attachment/input.ts";
 import { McpSchema, McpServer, Tool } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
@@ -41,6 +45,9 @@ import * as ThreadManagement from "../../orchestration-v2/ThreadManagementServic
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as IssueService from "../../issue/IssueService.ts";
+import * as ThreadIssueService from "../../orchestration-v2/ThreadIssueService.ts";
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
@@ -74,6 +81,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
 };
 import { PullRequestsToolkit } from "./pullRequests/tools.ts";
 import { IssuesToolkit } from "./issues/tools.ts";
+import * as IssuesHandlers from "./issues/handlers.ts";
 import { HtmlToolkit } from "./html/tools.ts";
 import {
   resolveT3McpToolDefinition,
@@ -430,6 +438,129 @@ const clientScope = (
   issuedAt: 0,
   capabilities: new Set(["orchestration", "worktree", "pull-requests", "issues"]),
 });
+
+it.effect("registers native issue choices and guards reads and typed creation with warnings", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("mcp-issue-project");
+    const binding = {
+      tracker: IssueTrackerKind.make("jira"),
+      host: "example.atlassian.net",
+      scope: "ENG",
+    };
+    const candidates = {
+      labels: [],
+      assignees: [],
+      issueTypes: [
+        { id: "10001", name: "Bug" },
+        { id: "10002", name: "Task" },
+      ],
+      truncated: false,
+    };
+    const warnings = [
+      "The issue was created, but the tracker could not apply the requested labels.",
+    ];
+    const created = yield* Ref.make<ReadonlyArray<IssueCreateInput>>([]);
+    const candidateReads = yield* Ref.make(0);
+    const services = Layer.mergeAll(
+      Layer.mock(Orchestrator.OrchestratorV2)({}),
+      Layer.mock(ThreadIssueService.ThreadIssueService)({}),
+      Layer.mock(ProjectService.ProjectService)({
+        getShell: () =>
+          Effect.succeedSome({
+            id: projectId,
+            title: "Issues",
+            workspaceRoot: "/fixture",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-10-14T00:00:00Z",
+            updatedAt: "2026-10-14T00:00:00Z",
+          }),
+      }),
+      Layer.mock(IssueService.IssueService)({
+        sources: () =>
+          Effect.succeed([
+            { tracker: IssueTrackerKind.make("github"), host: "github.com", scope: "owner/repo" },
+            binding,
+          ]),
+        candidates: () =>
+          Ref.update(candidateReads, (count) => count + 1).pipe(Effect.as(candidates)),
+        create: (input) =>
+          Ref.update(created, (calls) => [...calls, input]).pipe(
+            Effect.as({
+              key: "ENG-1",
+              displayKey: "ENG-1",
+              url: "https://example.atlassian.net/browse/ENG-1",
+              warnings,
+            }),
+          ),
+      }),
+      McpToolAccessTestkit.liveThreadsLayer,
+    );
+    yield* Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const definition = server.tools.find(({ tool }) => tool.name === "read_issue_candidates");
+      expect(definition?.tool.annotations?.readOnlyHint).toBe(true);
+      const call = (
+        name: string,
+        args: Record<string, unknown>,
+        invocation: McpInvocationContext.McpInvocationScope,
+      ) =>
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+      const readOnly = clientScope("read-only");
+      const denied = yield* call(
+        "read_issue_candidates",
+        { projectId, tracker: binding.tracker },
+        { ...readOnly, capabilities: new Set<never>() },
+      );
+      expect(denied.isError).toBe(true);
+      expect(denied.content).toEqual([
+        { type: "text", text: "MCP credential does not grant the issues capability." },
+      ]);
+      expect(yield* Ref.get(candidateReads)).toBe(0);
+      const read = yield* call(
+        "read_issue_candidates",
+        { projectId, tracker: binding.tracker },
+        readOnly,
+      );
+      expect(read.isError).toBe(false);
+      expect(read.structuredContent).toEqual(candidates);
+      const refused = yield* call(
+        "create_issue",
+        { projectId, tracker: binding.tracker, title: "Issue", issueType: "10001" },
+        readOnly,
+      );
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toEqual([
+        {
+          type: "text",
+          text: "This tool changes the environment, and this MCP client was approved for read-only access.",
+        },
+      ]);
+      expect(yield* Ref.get(created)).toEqual([]);
+      const filed = yield* call(
+        "create_issue",
+        { projectId, tracker: binding.tracker, title: "Issue", issueType: "10002" },
+        clientScope("full-access"),
+      );
+      expect(filed.isError).toBe(false);
+      expect(filed.structuredContent).toMatchObject({ warnings });
+      expect((yield* Ref.get(created))[0]).toMatchObject({ ...binding, issueType: "10002" });
+      expect(yield* Ref.get(candidateReads)).toBe(1);
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.toolkitRegistration(IssuesToolkit, IssuesHandlers.layer).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(services),
+        ),
+      ),
+    );
+  }),
+);
 
 it.effect("a client caller targets any thread within its ceiling and cannot act as a thread", () =>
   Effect.gen(function* () {

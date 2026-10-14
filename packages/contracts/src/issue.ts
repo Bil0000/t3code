@@ -10,6 +10,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { PullRequestActor, PullRequestLabel, PullRequestState } from "./pullRequest.ts";
+import { SourceControlProviderKind } from "./sourceControl.ts";
 
 /**
  * Which tracker an issue lives in. Git hosts reuse their `SourceControlProviderKind` spelling
@@ -23,7 +24,10 @@ export const IssueTrackerKind = TrimmedNonEmptyString.check(
 ).pipe(Schema.brand("IssueTrackerKind"));
 export type IssueTrackerKind = typeof IssueTrackerKind.Type;
 
-export const IssueActor = PullRequestActor;
+export const IssueActor = Schema.Struct({
+  ...PullRequestActor.fields,
+  id: Schema.optional(TrimmedNonEmptyString),
+});
 export type IssueActor = typeof IssueActor.Type;
 
 export const IssueLabel = PullRequestLabel;
@@ -120,6 +124,7 @@ export const IssueSummary = Schema.Struct({
   closedAt: Schema.NullOr(IsoDateTime),
   assignees: Schema.Array(IssueActor),
   labels: Schema.Array(IssueLabel),
+  labelsTruncated: Schema.optional(Schema.Boolean),
   commentCount: NonNegativeInt,
 });
 export type IssueSummary = typeof IssueSummary.Type;
@@ -139,6 +144,7 @@ export const IssueComment = Schema.Struct({
   url: Schema.NullOr(Schema.String),
   /** Absent from a tracker with no reactions, which differs from none on this comment. */
   reactions: Schema.optional(Schema.Array(IssueReaction)),
+  reactionsTruncated: Schema.optional(Schema.Boolean),
 });
 export type IssueComment = typeof IssueComment.Type;
 
@@ -172,6 +178,8 @@ export type IssueEvent = typeof IssueEvent.Type;
 
 /** A change request the tracker says closes or mentions this issue. */
 export const IssueLinkedPullRequest = Schema.Struct({
+  provider: Schema.optional(SourceControlProviderKind),
+  host: Schema.optional(TrimmedNonEmptyString),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   title: TrimmedNonEmptyString,
@@ -189,11 +197,13 @@ export type IssueLinkedPullRequest = typeof IssueLinkedPullRequest.Type;
  */
 export const IssueCapabilities = Schema.Struct({
   create: Schema.Boolean,
+  createIssueTypes: Schema.optional(Schema.Boolean),
   /** Title and body can be rewritten after filing. */
   edit: Schema.Boolean,
   comment: Schema.Boolean,
   labels: Schema.Boolean,
   assignees: Schema.Boolean,
+  maxAssignees: Schema.optional(PositiveInt),
   /** Reactions can be read and written on the issue and its comments. */
   reactions: Schema.Boolean,
   /** The scope offers starting points for a new issue. */
@@ -204,6 +214,9 @@ export const IssueCapabilities = Schema.Struct({
   events: Schema.Boolean,
   /** The tracker narrows a listing by free text itself. */
   search: Schema.Boolean,
+  involvements: Schema.optional(
+    Schema.Array(IssueInvolvement).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+  ),
   /**
    * The states this tracker can be asked to move an issue into, by name. A git host offers
    * `open` and `closed`; a workflow tracker offers its own columns. Empty means state cannot be
@@ -241,11 +254,13 @@ export const IssueDetail = Schema.Struct({
   viewer: Schema.NullOr(TrimmedNonEmptyString),
   body: Schema.String,
   reactions: Schema.optional(Schema.Array(IssueReaction)),
+  reactionsTruncated: Schema.optional(Schema.Boolean),
   comments: Schema.Array(IssueComment),
   /** Where older comments carry on; null once the conversation is whole. */
   commentsCursor: Schema.NullOr(TrimmedNonEmptyString),
   events: Schema.Array(IssueEvent),
   linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
+  historyTruncated: Schema.optional(Schema.Boolean),
 });
 export type IssueDetail = typeof IssueDetail.Type;
 
@@ -300,10 +315,24 @@ export const IssueListProjectError = Schema.Struct({
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,
+  tracker: Schema.optional(IssueTrackerKind),
+  host: Schema.optional(TrimmedNonEmptyString),
 });
 export type IssueListProjectError = typeof IssueListProjectError.Type;
 
 export const IssueListResult = Schema.Struct({
+  sources: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        projectId: ProjectId,
+        projectTitle: TrimmedNonEmptyString,
+        tracker: IssueTrackerKind,
+        host: TrimmedNonEmptyString,
+        scope: TrimmedNonEmptyString,
+        capabilities: IssueCapabilities,
+      }),
+    ),
+  ),
   /** The signed-in account per host, which is what involvement compares against. */
   viewers: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
   trackers: Schema.Array(IssueTrackerSummary),
@@ -328,6 +357,7 @@ export const IssueCreateInput = Schema.Struct({
   body: IssueBody,
   labels: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(50)),
   assignees: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(25)),
+  issueType: Schema.optional(TrimmedNonEmptyString),
 });
 export type IssueCreateInput = typeof IssueCreateInput.Type;
 
@@ -335,6 +365,7 @@ export const IssueCreateResult = Schema.Struct({
   key: TrimmedNonEmptyString,
   displayKey: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
+  warnings: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(10))),
 });
 export type IssueCreateResult = typeof IssueCreateResult.Type;
 
@@ -427,6 +458,14 @@ export type IssueAssigneeCandidate = typeof IssueAssigneeCandidate.Type;
 export const IssueCandidates = Schema.Struct({
   labels: Schema.Array(IssueLabelCandidate),
   assignees: Schema.Array(IssueAssigneeCandidate),
+  issueTypes: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: TrimmedNonEmptyString,
+        name: TrimmedNonEmptyString,
+      }),
+    ).check(Schema.isMaxLength(100)),
+  ),
   /** The tracker has more than were read, so somebody missing is not necessarily ineligible. */
   truncated: Schema.Boolean,
 });
@@ -555,7 +594,7 @@ export const StandaloneIssueTrackerDescriptor = Schema.Struct({
   tracker: IssueTrackerKind,
   displayName: TrimmedNonEmptyString,
   /** Where the tracker is served from; what `IssueRef.host` carries for its issues. */
-  host: TrimmedNonEmptyString,
+  host: Schema.NullOr(TrimmedNonEmptyString),
   /** What the tracker calls its container, in the singular: "team" on Linear, "project" on Jira. */
   scopeNoun: TrimmedNonEmptyString,
   credential: Schema.Struct({
@@ -563,6 +602,15 @@ export const StandaloneIssueTrackerDescriptor = Schema.Struct({
     label: TrimmedNonEmptyString,
     /** Where to mint one, or null when the tracker has no stable page for it. */
     helpUrl: Schema.NullOr(TrimmedNonEmptyString),
+    fields: Schema.optional(
+      Schema.Array(
+        Schema.Struct({
+          key: TrimmedNonEmptyString,
+          label: TrimmedNonEmptyString,
+          secret: Schema.Boolean,
+        }),
+      ).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+    ),
   }),
 });
 export type StandaloneIssueTrackerDescriptor = typeof StandaloneIssueTrackerDescriptor.Type;
@@ -571,6 +619,7 @@ export type StandaloneIssueTrackerDescriptor = typeof StandaloneIssueTrackerDesc
 export const IssueTrackerProjectBinding = Schema.Struct({
   tracker: IssueTrackerKind,
   scope: TrimmedNonEmptyString,
+  host: Schema.optional(TrimmedNonEmptyString),
 });
 export type IssueTrackerProjectBinding = typeof IssueTrackerProjectBinding.Type;
 
@@ -594,6 +643,7 @@ export const IssueTrackerConnection = Schema.Struct({
   /** Why a stored credential did not work, when it did not. */
   detail: Schema.NullOr(TrimmedNonEmptyString),
   scopes: Schema.Array(IssueTrackerScope),
+  scopesTruncated: Schema.optional(Schema.Boolean),
 });
 export type IssueTrackerConnection = typeof IssueTrackerConnection.Type;
 

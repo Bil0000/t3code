@@ -42,6 +42,7 @@ import {
   type IssueTemplateList,
   type IssueTrackerSummary,
   type IssueUpdateInput,
+  type IssueViewerPermissions,
   type OrchestrationProjectShell,
   type ProjectId,
 } from "@t3tools/contracts";
@@ -148,6 +149,9 @@ const unsupported = (operation: string, what: string) =>
 export class IssueService extends Context.Service<
   IssueService,
   {
+    readonly sources: (
+      projectId: ProjectId,
+    ) => Effect.Effect<ReadonlyArray<ProjectTrackerBinding>, IssueError>;
     readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
     readonly comments: (
@@ -195,7 +199,9 @@ export const make = Effect.gen(function* () {
         const binding = bound.get(project.id);
         const api = binding === undefined ? null : registry.get(binding.tracker);
         if (binding === undefined || api === null || !isStandaloneIssueTracker(api)) return null;
-        return { tracker: binding.tracker, host: api.standalone.host, scope: binding.scope };
+        const host = binding.host ?? api.standalone.host;
+        if (host === null) return null;
+        return { tracker: binding.tracker, host: host.trim().toLowerCase(), scope: binding.scope };
       }),
       Effect.orElseSucceed(() => null),
     );
@@ -203,11 +209,14 @@ export const make = Effect.gen(function* () {
   /** Where a project's issues live: its git host's tracker, its bound standalone one, or both. */
   const resolveProjectTracker = (
     project: OrchestrationProjectShell,
+    refreshRepository = false,
   ): Effect.Effect<ReadonlyArray<ProjectTrackerBinding>> =>
     Effect.all([
-      (project.repositoryIdentity != null
-        ? Effect.succeed(project.repositoryIdentity)
-        : repositoryIdentities.resolve(project.workspaceRoot)
+      (refreshRepository
+        ? repositoryIdentities.resolve(project.workspaceRoot, { refresh: true })
+        : project.repositoryIdentity != null
+          ? Effect.succeed(project.repositoryIdentity)
+          : repositoryIdentities.resolve(project.workspaceRoot)
       ).pipe(
         Effect.map((repositoryIdentity) =>
           resolveGitHostBinding({ ...project, repositoryIdentity }),
@@ -219,6 +228,7 @@ export const make = Effect.gen(function* () {
   const listProjects = (filter: {
     readonly projectId?: IssueListInput["projectId"];
     readonly host?: string | undefined;
+    readonly refreshRepository?: boolean;
   }) =>
     (filter.projectId === undefined
       ? projects.listShells()
@@ -236,7 +246,7 @@ export const make = Effect.gen(function* () {
         Effect.forEach(
           shells,
           (project) =>
-            resolveProjectTracker(project).pipe(
+            resolveProjectTracker(project, filter.refreshRepository).pipe(
               Effect.map((bindings) => bindings.map((binding) => ({ project, ...binding }))),
             ),
           { concurrency: SCOPE_CONCURRENCY },
@@ -273,8 +283,9 @@ export const make = Effect.gen(function* () {
    */
   const requireProject = (
     ref: IssueScopeRef,
+    refreshRepository = false,
   ): Effect.Effect<SupportedProject & { readonly writable: boolean }, IssueError> =>
-    listProjects({ projectId: ref.projectId }).pipe(
+    listProjects({ projectId: ref.projectId, refreshRepository }).pipe(
       Effect.flatMap(({ supported }) => {
         const own = supported.find((candidate) => candidate.tracker === ref.tracker);
         if (own === undefined) {
@@ -290,10 +301,58 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const requireWritable = (ref: IssueScopeRef, operation: string) =>
-    requireProject(ref).pipe(
+  const requireWritable = (ref: IssueScopeRef, operation: string, refreshRepository = false) => {
+    const api = registry.get(ref.tracker);
+    return requireProject(
+      ref,
+      refreshRepository && api !== null && !isStandaloneIssueTracker(api),
+    ).pipe(
       Effect.flatMap((project) =>
         project.writable ? Effect.succeed(project) : Effect.fail(readOnly(operation)),
+      ),
+    );
+  };
+
+  const requirePermissions = (
+    project: SupportedProject,
+    ref: IssueRef,
+    operation: string,
+    allowed: (permissions: IssueViewerPermissions) => boolean,
+  ) =>
+    project.api
+      .getViewerPermissions({
+        cwd: project.project.workspaceRoot,
+        host: project.host,
+        scope: project.scope,
+        key: ref.key,
+      })
+      .pipe(
+        Effect.mapError(toIssueError(operation)),
+        Effect.flatMap((permissions) =>
+          !allowed(permissions)
+            ? Effect.fail(
+                new IssueOperationError({
+                  operation,
+                  detail: "The signed-in account cannot make this change.",
+                }),
+              )
+            : requireWritable(ref, operation, !isStandaloneIssueTracker(project.api)).pipe(
+                Effect.flatMap((current) =>
+                  current.tracker === project.tracker &&
+                  current.host === project.host &&
+                  current.scope === project.scope &&
+                  current.project.workspaceRoot === project.project.workspaceRoot
+                    ? Effect.void
+                    : Effect.fail(readOnly(operation)),
+                ),
+              ),
+        ),
+      );
+
+  const sources: IssueService["Service"]["sources"] = (projectId) =>
+    listProjects({ projectId }).pipe(
+      Effect.map(({ supported }) =>
+        supported.map(({ tracker, host, scope }) => ({ tracker, host, scope })),
       ),
     );
 
@@ -309,19 +368,24 @@ export const make = Effect.gen(function* () {
       }
       const continuing = input.cursors;
       const viewers = new Map<string, string>();
+      const viewerReads = new Map<string, Effect.Effect<string, IssueTrackerError>>();
       const trackers = new Map<string, IssueTrackerSummary>();
       const entries: IssueListEntry[] = [];
       const errors: IssueListProjectError[] = [];
       const nextCursors: Record<string, string> = {};
 
       const viewerFor = (project: SupportedProject) =>
-        Effect.suspend(() => {
-          const known = viewers.get(project.host);
-          return known === undefined
-            ? project.api
+        Effect.gen(function* () {
+          let read = viewerReads.get(project.host);
+          if (read === undefined) {
+            read = yield* Effect.cached(
+              project.api
                 .getViewer({ cwd: project.project.workspaceRoot, host: project.host })
-                .pipe(Effect.tap((viewer) => Effect.sync(() => viewers.set(project.host, viewer))))
-            : Effect.succeed(known);
+                .pipe(Effect.tap((viewer) => Effect.sync(() => viewers.set(project.host, viewer)))),
+            );
+            viewerReads.set(project.host, read);
+          }
+          return yield* read;
         });
 
       // Every project counts, including worktrees of a scope read once below.
@@ -353,6 +417,20 @@ export const make = Effect.gen(function* () {
           Effect.gen(function* () {
             // A continuation names the scopes it wants; one not named has nothing to add.
             if (continuing !== undefined && continuing[key] === undefined) return;
+            const involvement = input.involvement ?? "all";
+            if (
+              project.api.capabilities.involvements !== undefined &&
+              !project.api.capabilities.involvements.includes(involvement)
+            ) {
+              errors.push({
+                projectId: project.project.id,
+                projectTitle: project.project.title,
+                tracker: project.tracker,
+                host: project.host,
+                message: `This tracker does not support ${involvement} issue lists.`,
+              });
+              return;
+            }
             const cursor = continuing?.[key];
             const page = yield* viewerFor(project).pipe(
               Effect.flatMap((viewer) =>
@@ -361,7 +439,7 @@ export const make = Effect.gen(function* () {
                   host: project.host,
                   scope: project.scope,
                   state: input.state,
-                  involvement: input.involvement ?? "all",
+                  involvement,
                   viewer,
                   limit,
                   query: input.query,
@@ -375,6 +453,8 @@ export const make = Effect.gen(function* () {
               errors.push({
                 projectId: project.project.id,
                 projectTitle: project.project.title,
+                tracker: project.tracker,
+                host: project.host,
                 message: page.failure.detail,
               });
               return;
@@ -406,6 +486,14 @@ export const make = Effect.gen(function* () {
       }
       entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       return {
+        sources: supported.map((project) => ({
+          projectId: project.project.id,
+          projectTitle: project.project.title,
+          tracker: project.tracker,
+          host: project.host,
+          scope: project.scope,
+          capabilities: project.api.capabilities,
+        })),
         viewers: Object.fromEntries(viewers),
         trackers: [...trackers.values()],
         entries,
@@ -474,8 +562,12 @@ export const make = Effect.gen(function* () {
     requireProject(input).pipe(
       Effect.flatMap((project) =>
         project.api.listCandidates === undefined ||
-        !(project.api.capabilities.labels || project.api.capabilities.assignees)
-          ? Effect.fail(unsupported("candidates", "labels or assignees"))
+        !(
+          project.api.capabilities.labels ||
+          project.api.capabilities.assignees ||
+          project.api.capabilities.createIssueTypes
+        )
+          ? Effect.fail(unsupported("candidates", "labels, assignees, or issue types"))
           : project.api
               .listCandidates({
                 cwd: project.project.workspaceRoot,
@@ -487,21 +579,32 @@ export const make = Effect.gen(function* () {
     );
 
   const create: IssueService["Service"]["create"] = (input) =>
-    requireWritable(input, "create").pipe(
+    requireWritable(input, "create", true).pipe(
       Effect.flatMap((project) =>
         project.api.create === undefined || !project.api.capabilities.create
           ? Effect.fail(unsupported("create", "filing issues"))
-          : project.api
-              .create({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                title: input.title,
-                body: input.body,
-                labels: input.labels,
-                assignees: input.assignees,
-              })
-              .pipe(Effect.mapError(toIssueError("create"))),
+          : input.issueType !== undefined && !project.api.capabilities.createIssueTypes
+            ? Effect.fail(unsupported("create", "selecting an issue type"))
+            : project.api.capabilities.maxAssignees !== undefined &&
+                input.assignees.length > project.api.capabilities.maxAssignees
+              ? Effect.fail(
+                  new IssueOperationError({
+                    operation: "create",
+                    detail: "The issue has more assignees than this tracker allows.",
+                  }),
+                )
+              : project.api
+                  .create({
+                    cwd: project.project.workspaceRoot,
+                    host: project.host,
+                    scope: project.scope,
+                    title: input.title,
+                    body: input.body,
+                    labels: input.labels,
+                    assignees: input.assignees,
+                    ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
+                  })
+                  .pipe(Effect.mapError(toIssueError("create"))),
       ),
     );
 
@@ -515,15 +618,24 @@ export const make = Effect.gen(function* () {
         }
         return project.api.comment === undefined || !project.api.capabilities.comment
           ? Effect.fail(unsupported("comment", "comments"))
-          : project.api
-              .comment({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                key: input.key,
-                body: input.body,
-              })
-              .pipe(Effect.mapError(toIssueError("comment")));
+          : requirePermissions(
+              project,
+              input,
+              "comment",
+              (permissions) => permissions.comment,
+            ).pipe(
+              Effect.andThen(
+                project.api
+                  .comment({
+                    cwd: project.project.workspaceRoot,
+                    host: project.host,
+                    scope: project.scope,
+                    key: input.key,
+                    body: input.body,
+                  })
+                  .pipe(Effect.mapError(toIssueError("comment"))),
+              ),
+            );
       }),
     );
 
@@ -544,18 +656,41 @@ export const make = Effect.gen(function* () {
           return Effect.fail(unsupported("update", "labels"));
         if (input.assignees !== undefined && !capabilities.assignees)
           return Effect.fail(unsupported("update", "assignees"));
-        return project.api
-          .update({
-            cwd: project.project.workspaceRoot,
-            host: project.host,
-            scope: project.scope,
-            key: input.key,
-            title: input.title,
-            body: input.body,
-            labels: input.labels,
-            assignees: input.assignees,
-          })
-          .pipe(Effect.mapError(toIssueError("update")));
+        if (
+          input.assignees !== undefined &&
+          capabilities.maxAssignees !== undefined &&
+          input.assignees.length > capabilities.maxAssignees
+        )
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "update",
+              detail: "The issue has more assignees than this tracker allows.",
+            }),
+          );
+        return requirePermissions(
+          project,
+          input,
+          "update",
+          (permissions) =>
+            (!wantsWords || permissions.edit) &&
+            (input.labels === undefined || permissions.labels) &&
+            (input.assignees === undefined || permissions.assignees),
+        ).pipe(
+          Effect.andThen(
+            project.api
+              .update({
+                cwd: project.project.workspaceRoot,
+                host: project.host,
+                scope: project.scope,
+                key: input.key,
+                title: input.title,
+                body: input.body,
+                labels: input.labels,
+                assignees: input.assignees,
+              })
+              .pipe(Effect.mapError(toIssueError("update"))),
+          ),
+        );
       }),
     );
 
@@ -571,21 +706,30 @@ export const make = Effect.gen(function* () {
           (target.category !== "closed" || !capabilities.closeReasons.includes(input.closeReason))
         )
           return Effect.fail(unsupported("setState", `the close reason "${input.closeReason}"`));
-        return project.api
-          .setState({
-            cwd: project.project.workspaceRoot,
-            host: project.host,
-            scope: project.scope,
-            key: input.key,
-            state: input.state,
-            closeReason: input.closeReason,
-          })
-          .pipe(Effect.mapError(toIssueError("setState")));
+        return requirePermissions(
+          project,
+          input,
+          "setState",
+          (permissions) => permissions.setState,
+        ).pipe(
+          Effect.andThen(
+            project.api
+              .setState({
+                cwd: project.project.workspaceRoot,
+                host: project.host,
+                scope: project.scope,
+                key: input.key,
+                state: input.state,
+                closeReason: input.closeReason,
+              })
+              .pipe(Effect.mapError(toIssueError("setState"))),
+          ),
+        );
       }),
     );
 
   const react: IssueService["Service"]["react"] = (input) =>
-    requireWritable(input, "react").pipe(
+    requireWritable(input, "react", true).pipe(
       Effect.flatMap((project) =>
         project.api.setReaction === undefined || !project.api.capabilities.reactions
           ? Effect.fail(unsupported("react", "reactions"))
@@ -635,6 +779,7 @@ export const make = Effect.gen(function* () {
     });
 
   return IssueService.of({
+    sources,
     list,
     detail,
     comments,

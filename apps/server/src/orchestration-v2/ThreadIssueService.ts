@@ -80,7 +80,8 @@ function sameSnapshot(left: ThreadIssueSnapshot | null, right: ThreadIssueSnapsh
     left.title === right.title &&
     left.state.category === right.state.category &&
     left.state.name === right.state.name &&
-    left.state.closeReason === right.state.closeReason
+    left.state.closeReason === right.state.closeReason &&
+    left.syncedAt === right.syncedAt
   );
 }
 

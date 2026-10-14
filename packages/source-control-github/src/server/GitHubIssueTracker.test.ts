@@ -101,17 +101,116 @@ const DETAIL_RESPONSE = JSON.stringify({
   },
 });
 
-function tracker(graphql: (query: string, variables: unknown) => string) {
+function tracker(
+  graphql: (query: string, variables: unknown) => string,
+  rest: (input: GitHubApi.GitHubRestInput) => GitHubApi.GitHubRestResponse = () => ({
+    status: 200,
+    headers: {},
+    body: JSON.stringify({ labels: [{ name: "bug", color: "d73a4a" }] }),
+    truncated: false,
+    invalidUtf8: false,
+  }),
+) {
   return GitHubIssueTracker.make.pipe(
     Effect.provide(
       Layer.mock(GitHubApi.GitHubApi)({
         graphql: ({ query, variables }) => Effect.succeed(graphql(query, variables)),
+        rest: (input) => Effect.succeed(rest(input)),
       }),
     ),
   );
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect("refuses reactions on a comment outside the selected issue", () =>
+    Effect.gen(function* () {
+      for (const reacted of [true, false]) {
+        const queries: string[] = [];
+        const api = yield* tracker((query, variables) => {
+          queries.push(query);
+          expect(variables).toEqual({
+            owner: "acme",
+            name: "web",
+            number: 42,
+            commentId: "IC_foreign",
+          });
+          return JSON.stringify({
+            data: {
+              repository: { issue: { id: "I_selected" } },
+              node: { issue: { id: "I_foreign" } },
+            },
+          });
+        });
+        const error = yield* Effect.flip(
+          api.setReaction!({
+            cwd: "/w",
+            host: "github.com",
+            scope: "acme/web",
+            key: "42",
+            subjectId: "IC_foreign",
+            content: "thumbs-up",
+            reacted,
+          }),
+        );
+        expect(error.detail).toBe("The comment does not belong to the selected issue.");
+        expect(queries).toHaveLength(1);
+        expect(queries[0]).not.toContain("mutation");
+      }
+    }),
+  );
+
+  it.effect("keeps every native issue label when an edit replaces the label set", () =>
+    Effect.gen(function* () {
+      const labels = Array.from({ length: 121 }, (_, index) => ({
+        name: `label-${index}`,
+        color: "abc123",
+      }));
+      const requests: GitHubApi.GitHubRestInput[] = [];
+      const api = yield* tracker(
+        () => DETAIL_RESPONSE,
+        (input) => {
+          requests.push(input);
+          return {
+            status: 200,
+            headers: {},
+            body: JSON.stringify({ labels }),
+            truncated: false,
+            invalidUtf8: false,
+          };
+        },
+      );
+      const context = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const issue = yield* api.getIssue(context);
+      expect(issue.labels).toEqual(labels);
+      yield* api.getViewerPermissions(context);
+      yield* api.update!({ ...context, labels: issue.labels.map((label) => label.name) });
+      expect(requests.map((request) => [request.method ?? "GET", request.path])).toEqual([
+        ["GET", "repos/acme/web/issues/42"],
+        ["PATCH", "repos/acme/web/issues/42"],
+      ]);
+      expect(requests[1]?.body).toEqual({ labels: labels.map((label) => label.name) });
+    }),
+  );
+
+  it.effect("refuses an incomplete native label response", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker(
+        () => DETAIL_RESPONSE,
+        () => ({
+          status: 200,
+          headers: {},
+          body: '{"labels":[]}',
+          truncated: true,
+          invalidUtf8: false,
+        }),
+      );
+      const error = yield* Effect.flip(
+        api.getIssue({ cwd: "/w", host: "github.com", scope: "acme/web", key: "42" }),
+      );
+      expect(error.reason).toBe("failed");
+    }),
+  );
+
   it.effect("maps a detail read to the neutral issue shape", () =>
     Effect.gen(function* () {
       let seen: unknown;

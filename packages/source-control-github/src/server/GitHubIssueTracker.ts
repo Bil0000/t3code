@@ -32,6 +32,7 @@ import {
   decodeIssueCommentScopeJson,
   decodeIssueCommentsJson,
   decodeIssueDetailJson,
+  decodeRestIssueLabelsJson,
   decodeIssueNodeIdJson,
   decodeIssueSearchJson,
   decodeIssueTemplatesJson,
@@ -61,6 +62,7 @@ const CAPABILITIES: IssueCapabilities = {
   linkedPullRequests: true,
   events: true,
   search: true,
+  involvements: ["all", "assigned", "authored", "mentioned"],
   states: [
     { category: "open", name: "open" },
     { category: "closed", name: "closed" },
@@ -320,18 +322,30 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
 
       getIssue: (input) =>
         restIssue(input, "getIssue").pipe(
-          Effect.flatMap(({ owner, name, number }) =>
+          Effect.flatMap(({ owner, name, number, path }) =>
             graphqlRead({
               host: input.host,
               operation: "getIssue",
               query: ISSUE_DETAIL_GRAPHQL_QUERY,
               variables: { owner, name, number },
               decode: decodeIssueDetailJson,
-            }),
-          ),
-          Effect.filterOrFail(
-            (detail) => detail !== null,
-            () => notFound("getIssue"),
+            }).pipe(
+              Effect.filterOrFail(
+                (detail) => detail !== null,
+                () => notFound("getIssue"),
+              ),
+              Effect.flatMap((detail) =>
+                api.rest({ host: input.host, operation: "getIssue", path }).pipe(
+                  Effect.mapError(fail("getIssue")),
+                  Effect.flatMap((response) => {
+                    const labels = decodeRestIssueLabelsJson(response.body);
+                    return !response.truncated && !response.invalidUtf8 && Result.isSuccess(labels)
+                      ? Effect.succeed({ ...detail, labels: labels.success })
+                      : Effect.fail(unreadable("getIssue", response));
+                  }),
+                ),
+              ),
+            ),
           ),
         ),
 

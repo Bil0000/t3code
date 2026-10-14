@@ -51,6 +51,7 @@ const CAPABILITIES: IssueCapabilities = {
   comment: true,
   labels: true,
   assignees: true,
+  maxAssignees: 1,
   // On comments only; a work item itself takes none, and `setReaction` says so.
   reactions: true,
   // Azure has no issue templates. Its work item types are picked here, not by the reader.
@@ -58,6 +59,7 @@ const CAPABILITIES: IssueCapabilities = {
   linkedPullRequests: true,
   events: true,
   search: true,
+  involvements: ["all", "assigned", "authored"],
   states: [
     { category: "open", name: "New" },
     { category: "open", name: "To Do" },
@@ -347,6 +349,7 @@ export const make: Effect.Effect<
     readonly cwd: string;
     readonly operation: string;
     readonly organization: string;
+    readonly project: string;
     readonly number: number;
   }): Effect.Effect<AzureDevOpsWorkItem, IssueTrackerError> =>
     read({
@@ -371,19 +374,56 @@ export const make: Effect.Effect<
         (item) => item !== null,
         () => notFound(input.operation),
       ),
+      Effect.flatMap((item) => {
+        if (item.project?.toLowerCase() === input.project.toLowerCase())
+          return Effect.succeed(item);
+        if (!/^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i.test(input.project))
+          return Effect.fail(notFound(input.operation));
+        return read({
+          cwd: input.cwd,
+          operation: input.operation,
+          args: [
+            "devops",
+            "project",
+            "show",
+            "--organization",
+            input.organization,
+            "--project",
+            input.project,
+          ],
+          decode: decodeAs(
+            Schema.decodeUnknownResult(Schema.Struct({ id: Schema.String, name: Schema.String })),
+          ),
+        }).pipe(
+          Effect.filterOrFail(
+            (project) =>
+              project.id.toLowerCase() === input.project.toLowerCase() &&
+              project.name.toLowerCase() === item.project?.toLowerCase(),
+            () => notFound(input.operation),
+          ),
+          Effect.as(item),
+        );
+      }),
     );
 
   /** The work item as `az` addresses it, or a not-found for a key that names no id. */
   const target = (
     operation: string,
-    input: { readonly host: string; readonly scope: string; readonly key: string },
+    input: {
+      readonly cwd: string;
+      readonly host: string;
+      readonly scope: string;
+      readonly key: string;
+    },
   ) =>
     scoped(operation, input).pipe(
       Effect.flatMap((scope) => {
         const number = parseNumber(input.key);
         return number === null
           ? Effect.fail(notFound(operation))
-          : Effect.succeed({ ...scope, number });
+          : workItem({ ...scope, number, cwd: input.cwd, operation }).pipe(
+              Effect.map((item) => ({ ...scope, number, item })),
+            );
       }),
     );
 
@@ -537,6 +577,10 @@ export const make: Effect.Effect<
       ),
 
     listIssues: (input) => {
+      if (input.involvement === "mentioned")
+        return Effect.fail(
+          refused("listIssues", "Azure DevOps does not support a mentioned filter."),
+        );
       const cursor = input.cursor === undefined ? undefined : parseCursor(input.cursor);
       if (cursor === null) {
         return Effect.fail(
@@ -595,9 +639,13 @@ export const make: Effect.Effect<
                     decode: decodeWorkItemsJson,
                   }).pipe(
                     Effect.map((items) => {
-                      const last = items.at(-1);
+                      const indexed = new Map(items.map((item) => [item.key, item]));
+                      const ordered = ids
+                        .slice(0, limit)
+                        .flatMap(({ id }) => indexed.get(String(id)) ?? []);
+                      const last = ordered.at(-1);
                       return {
-                        items,
+                        items: ordered,
                         nextCursor:
                           ids.length > limit && last !== undefined
                             ? `${last.updatedAt}|${last.key}`
@@ -614,38 +662,38 @@ export const make: Effect.Effect<
     getIssue: (input) =>
       target("getIssue", input).pipe(
         Effect.flatMap((scope) =>
-          workItem({ ...scope, cwd: input.cwd, operation: "getIssue" }).pipe(
-            Effect.flatMap((item) =>
-              Effect.all(
-                [
-                  comments({ ...scope, cwd: input.cwd, operation: "getIssue" }),
-                  read({
-                    cwd: input.cwd,
-                    operation: "getIssue",
-                    args: invokeArgs({
-                      ...scope,
-                      resource: "updates",
-                      route: [`id=${scope.number}`],
-                      query: [`$top=${PAGE_SIZE}`],
-                    }),
-                    decode: decodeUpdatesJson,
-                  }),
-                  linkedPullRequests({ cwd: input.cwd, organization: scope.organization, item }),
-                ],
-                { concurrency: 3 },
-              ).pipe(
-                Effect.map(([conversation, events, links]) => ({
-                  ...item,
-                  // Nothing cheap names the viewer here; the service already read it per host.
-                  viewer: null,
-                  viewerPermissions: VIEWER_PERMISSIONS,
-                  comments: conversation.comments,
-                  commentsCursor: conversation.nextCursor,
-                  events,
-                  linkedPullRequests: links,
-                })),
-              ),
-            ),
+          Effect.all(
+            [
+              comments({ ...scope, cwd: input.cwd, operation: "getIssue" }),
+              read({
+                cwd: input.cwd,
+                operation: "getIssue",
+                args: invokeArgs({
+                  ...scope,
+                  resource: "updates",
+                  route: [`id=${scope.number}`],
+                  query: [`$top=${PAGE_SIZE}`],
+                }),
+                decode: decodeUpdatesJson,
+              }),
+              linkedPullRequests({
+                cwd: input.cwd,
+                organization: scope.organization,
+                item: scope.item,
+              }),
+            ],
+            { concurrency: 3 },
+          ).pipe(
+            Effect.map(([conversation, events, links]) => ({
+              ...scope.item,
+              // Nothing cheap names the viewer here; the service already read it per host.
+              viewer: null,
+              viewerPermissions: VIEWER_PERMISSIONS,
+              comments: conversation.comments,
+              commentsCursor: conversation.nextCursor,
+              events,
+              linkedPullRequests: links,
+            })),
           ),
         ),
       ),

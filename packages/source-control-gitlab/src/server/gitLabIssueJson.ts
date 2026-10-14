@@ -16,12 +16,14 @@ import type {
   IssueEventKind,
   IssueLabel,
   IssueLabelCandidate,
+  IssueReactionContent,
   IssueLinkedPullRequest,
   IssueTemplate,
   PullRequestState,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import type { TrackerIssueSummary } from "@t3tools/issue-tracker-core/server/IssueTracker";
+import { decodeAwardEmojiJson, decodeOwnAwardIdJson } from "./gitLabMergeRequestJson.ts";
 
 /** GitLab's ceiling on `per_page`, which is what every bounded read asks for. */
 export const PAGE_SIZE = 100;
@@ -47,15 +49,6 @@ const RawIssueSchema = Schema.Struct({
   assignees: Schema.optional(Schema.NullOr(Schema.Array(RawUserSchema))),
   labels: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
   user_notes_count: Schema.optional(Schema.NullOr(Schema.Int)),
-});
-
-const RawNoteSchema = Schema.Struct({
-  id: Schema.Int,
-  body: Schema.optional(Schema.NullOr(Schema.String)),
-  author: Schema.optional(Schema.NullOr(RawUserSchema)),
-  created_at: Schema.String,
-  /** True for the notes GitLab writes itself ("closed", "assigned to @x"), which are events. */
-  system: Schema.optional(Schema.Boolean),
 });
 
 const RawLabelEventSchema = Schema.Struct({
@@ -97,7 +90,6 @@ const RawTemplateSchema = Schema.Struct({ content: Schema.optional(Schema.NullOr
 const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeIssue = decodeJsonResult(RawIssueSchema);
 const decodeIssueEntry = Schema.decodeUnknownExit(RawIssueSchema);
-const decodeNoteEntry = Schema.decodeUnknownExit(RawNoteSchema);
 const decodeLabelEventEntry = Schema.decodeUnknownExit(RawLabelEventSchema);
 const decodeLinkedMergeRequestEntry = Schema.decodeUnknownExit(RawLinkedMergeRequestSchema);
 const decodeProjectLabelEntry = Schema.decodeUnknownExit(RawProjectLabelSchema);
@@ -117,7 +109,12 @@ function toActor(raw: typeof RawUserSchema.Type | null | undefined): IssueActor 
   const login = trimmed(raw?.username);
   return login === null
     ? null
-    : { login, name: trimmed(raw?.name), avatarUrl: trimmed(raw?.avatar_url) };
+    : {
+        ...(raw?.id === undefined ? {} : { id: String(raw.id) }),
+        login,
+        name: trimmed(raw?.name),
+        avatarUrl: trimmed(raw?.avatar_url),
+      };
 }
 
 /** GitLab returns label names only on an issue, so there is no colour to carry. */
@@ -219,49 +216,60 @@ function toSystemEvent(
 interface GitLabIssueNotes {
   readonly comments: ReadonlyArray<IssueComment>;
   readonly events: ReadonlyArray<IssueEvent>;
-  readonly rawCount: number;
 }
 
-/** One page of notes, split into what people wrote and what GitLab wrote about the issue. */
-export function decodeIssueNotesJson(raw: string): Result.Result<GitLabIssueNotes, DecodeFailure> {
-  return Result.map(decodeUnknownList(raw), (rows) => {
-    const comments: IssueComment[] = [];
-    const events: IssueEvent[] = [];
-    for (const entry of rows) {
-      const note = decodeNoteEntry(entry);
-      if (Exit.isFailure(note)) continue;
-      const value = note.value;
-      const body = value.body ?? "";
-      if (value.system === true) {
-        const event = toSystemEvent(body);
-        if (event === null) continue;
-        events.push({
-          // Notes and label events are numbered separately, so each carries where it came from.
-          id: `note-${value.id}`,
-          kind: event.kind,
-          actor: toActor(value.author),
-          createdAt: value.created_at,
-          detail: event.detail,
-        });
-        continue;
-      }
-      comments.push({
-        id: String(value.id),
-        author: toActor(value.author),
-        body,
-        createdAt: value.created_at,
-        url: null,
+function toIssueNotes(
+  rows: ReadonlyArray<typeof RawGraphNoteSchema.Type | null>,
+): GitLabIssueNotes {
+  const comments: IssueComment[] = [];
+  const events: IssueEvent[] = [];
+  for (const note of rows) {
+    if (note === null) continue;
+    const id = nativeId(note.id);
+    if (id === undefined) continue;
+    const body = note.body ?? "";
+    const author = toActor(
+      note.author === undefined || note.author === null
+        ? note.author
+        : {
+            id: nativeId(note.author.id),
+            username: note.author.username,
+            name: note.author.name,
+            avatar_url: note.author.avatarUrl,
+          },
+    );
+    if (note.system === true) {
+      const event = toSystemEvent(body);
+      if (event === null) continue;
+      events.push({
+        id: `note-${id}`,
+        kind: event.kind,
+        actor: author,
+        createdAt: note.createdAt,
+        detail: event.detail,
       });
+      continue;
     }
-    return { comments, events, rawCount: rows.length };
-  });
+    comments.push({
+      id: String(id),
+      author,
+      body,
+      createdAt: note.createdAt,
+      url: null,
+    });
+  }
+  return { comments, events };
 }
 
 export function decodeLabelEventsJson(
   raw: string,
-): Result.Result<ReadonlyArray<IssueEvent>, DecodeFailure> {
-  return Result.map(decodeUnknownList(raw), (rows) =>
-    rows.flatMap((entry) => {
+): Result.Result<
+  { readonly events: ReadonlyArray<IssueEvent>; readonly rawCount: number },
+  DecodeFailure
+> {
+  return Result.map(decodeUnknownList(raw), (rows) => ({
+    rawCount: rows.length,
+    events: rows.flatMap((entry) => {
       const event = decodeLabelEventEntry(entry);
       if (Exit.isFailure(event)) return [];
       const action = event.value.action.trim().toLowerCase();
@@ -276,7 +284,7 @@ export function decodeLabelEventsJson(
         },
       ];
     }),
-  );
+  }));
 }
 
 function toPullRequestState(value: string | null | undefined): PullRequestState {
@@ -400,11 +408,90 @@ export const ISSUE_AWARD_EMOJI_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: Stri
   currentUser { username }
   project(fullPath: $fullPath) {
     mergeRequest: issue(iid: $iid) {
-      awardEmoji { nodes { name user { username } } }
+      awardEmoji(first: ${PAGE_SIZE}) { pageInfo { hasNextPage } nodes { name user { username } } }
       notes(first: ${PAGE_SIZE}, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        nodes { id awardEmoji { nodes { name user { username } } } }
+        nodes {
+          id body createdAt system
+          author { id username name avatarUrl }
+          awardEmoji(first: ${PAGE_SIZE}) { pageInfo { hasNextPage } nodes { name user { username } } }
+        }
       }
     }
   }
 }`;
+
+const RawAwardPageInfoSchema = Schema.optional(
+  Schema.NullOr(
+    Schema.Struct({
+      pageInfo: Schema.optional(Schema.Struct({ hasNextPage: Schema.Boolean })),
+    }),
+  ),
+);
+const RawGraphNoteSchema = Schema.Struct({
+  id: Schema.String,
+  body: Schema.optional(Schema.NullOr(Schema.String)),
+  createdAt: Schema.String,
+  system: Schema.optional(Schema.Boolean),
+  author: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        id: Schema.optional(Schema.String),
+        username: Schema.String,
+        name: Schema.optional(Schema.NullOr(Schema.String)),
+        avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+  awardEmoji: RawAwardPageInfoSchema,
+});
+const decodeIssueAwardPage = decodeJsonResult(
+  Schema.Struct({
+    data: Schema.Struct({
+      project: Schema.Struct({
+        mergeRequest: Schema.Struct({
+          awardEmoji: RawAwardPageInfoSchema,
+          notes: Schema.Struct({ nodes: Schema.Array(Schema.NullOr(RawGraphNoteSchema)) }),
+        }),
+      }),
+    }),
+  }),
+);
+
+function nativeId(id: string | undefined): number | undefined {
+  const value = id?.split("/").at(-1);
+  return value !== undefined && /^[1-9]\d*$/.test(value) ? Number(value) : undefined;
+}
+
+export function decodeIssueAwardPageJson(raw: string) {
+  return Result.flatMap(decodeIssueAwardPage(raw), ({ data }) =>
+    Result.map(decodeAwardEmojiJson(raw), (awards) => {
+      const issue = data.project.mergeRequest;
+      const notes = toIssueNotes(issue.notes.nodes);
+      const partialNotes = new Set(
+        issue.notes.nodes.flatMap((note) =>
+          note?.awardEmoji?.pageInfo?.hasNextPage === true ? [String(nativeId(note.id))] : [],
+        ),
+      );
+      return {
+        ...awards,
+        events: notes.events,
+        reactionsTruncated: issue.awardEmoji?.pageInfo?.hasNextPage === true,
+        comments: notes.comments.map((comment) => ({
+          ...comment,
+          reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+          ...(partialNotes.has(comment.id) ? { reactionsTruncated: true } : {}),
+        })),
+      };
+    }),
+  );
+}
+
+export function decodeIssueOwnAwardPageJson(
+  raw: string,
+  input: { readonly content: IssueReactionContent; readonly viewer: string },
+) {
+  return Result.flatMap(decodeUnknownList(raw), (rows) =>
+    Result.map(decodeOwnAwardIdJson(raw, input), (id) => ({ id, rawCount: rows.length })),
+  );
+}

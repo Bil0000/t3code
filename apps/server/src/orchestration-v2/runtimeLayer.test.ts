@@ -31,7 +31,9 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -69,6 +71,8 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
 import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as IssueService from "../issue/IssueService.ts";
+import * as ThreadIssueService from "./ThreadIssueService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
@@ -2125,6 +2129,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
   it.effect("retains multiple pull requests and dismissed stack members through rebuilds", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
       const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
       const threadId = ThreadId.make("runtime-multiple-pull-requests");
       yield* orchestrator.dispatch({
@@ -2158,6 +2163,41 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         linked?.pullRequests?.map(({ host, repository, number }) => ({ host, repository, number })),
         [1, 2].map((number) => ({ host: "github.com", repository: "pingdotgg/t3code", number })),
       );
+      const initialProjection = yield* orchestrator.getThreadProjection(threadId);
+      yield* TestClock.adjust("1 minute");
+      const refreshedAt = DateTime.formatIso(yield* DateTime.now);
+      const pullRequestSnapshot = {
+        state: "open" as const,
+        title: "Pull request",
+        headBranch: "feature",
+        baseBranch: "main",
+        isDraft: false,
+        updatedAt: null,
+        syncedAt: refreshedAt,
+      };
+      const synchronized = yield* orchestrator.dispatch({
+        type: "thread.pull-request-link.sync",
+        commandId: CommandId.make("multi-pr-snapshot-sync"),
+        threadId,
+        ...key,
+        number: 1,
+        snapshot: pullRequestSnapshot,
+        stack: null,
+      });
+      assert.equal(synchronized.storedEvents[0]?.event.type, "thread.pull-request-link-updated");
+      const persisted = yield* projections.getThread(threadId);
+      assert.deepEqual(persisted.pullRequests?.[0]?.snapshot, pullRequestSnapshot);
+      assert.deepEqual(persisted.updatedAt, linked?.updatedAt);
+      const projected = ProjectionStore.applyToProjection(
+        initialProjection,
+        synchronized.storedEvents[0]!.event,
+      );
+      assert.deepEqual(projected.thread.pullRequests?.[0]?.snapshot, pullRequestSnapshot);
+      assert.deepEqual(projected.updatedAt, linked?.updatedAt);
+      assert.deepEqual(
+        (yield* orchestrator.getThreadShell(threadId))?.updatedAt,
+        linked?.updatedAt,
+      );
       yield* orchestrator.dispatch({
         type: "thread.pull-request.unlink",
         commandId: CommandId.make("multi-pr-dismiss"),
@@ -2165,6 +2205,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         ...key,
         number: 2,
       });
+      assert.deepEqual((yield* projections.getThread(threadId)).updatedAt, yield* DateTime.now);
       yield* orchestrator.dispatch({
         type: "thread.pull-request.unlink",
         commandId: CommandId.make("multi-pr-unlink"),
@@ -2216,6 +2257,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
   it.effect("links an issue, syncs its snapshot, and unlinks it", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
       const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
       const threadId = ThreadId.make("runtime-issue-links");
       const projectId = ProjectId.make("issue-link-project");
@@ -2297,6 +2339,107 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.deepEqual(synced?.issues?.[0]?.snapshot, snapshot);
       // A snapshot write is server bookkeeping, not thread activity.
       assert.deepEqual(synced?.updatedAt, linked?.updatedAt);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          let reads = 0;
+          const context = yield* Layer.build(
+            Layer.mergeAll(
+              Layer.mock(IssueService.IssueService)({
+                detail: () =>
+                  Effect.sync(() => {
+                    reads++;
+                    return {
+                      ...key,
+                      projectId,
+                      projectTitle: "Issue project",
+                      displayKey: snapshot.displayKey,
+                      title: snapshot.title,
+                      state: snapshot.state,
+                      url: "https://github.com/pingdotgg/t3code/issues/42",
+                      author: null,
+                      createdAt: snapshot.syncedAt,
+                      updatedAt: snapshot.syncedAt,
+                      closedAt: null,
+                      assignees: [],
+                      labels: [],
+                      commentCount: 0,
+                      writable: true,
+                      capabilities: {
+                        create: false,
+                        edit: false,
+                        comment: false,
+                        labels: false,
+                        assignees: false,
+                        reactions: false,
+                        templates: false,
+                        linkedPullRequests: false,
+                        events: false,
+                        search: false,
+                        states: [snapshot.state],
+                        closeReasons: [],
+                      },
+                      viewerPermissions: {
+                        setState: false,
+                        comment: false,
+                        edit: false,
+                        labels: false,
+                        assignees: false,
+                      },
+                      viewer: null,
+                      body: "",
+                      comments: [],
+                      commentsCursor: null,
+                      events: [],
+                      linkedPullRequests: [],
+                    };
+                  }),
+              }),
+              Layer.succeed(
+                Crypto.Crypto,
+                Crypto.make({
+                  randomBytes: (size) => new Uint8Array(size).fill(1),
+                  digest: (_algorithm, data) => Effect.succeed(data),
+                }),
+              ),
+            ),
+          );
+          const serviceContext = yield* Layer.build(ThreadIssueService.layer).pipe(
+            Effect.provide(context),
+          );
+          const service = Context.get(serviceContext, ThreadIssueService.ThreadIssueService);
+          const initialProjection = yield* orchestrator.getThreadProjection(threadId);
+          const refreshedAt = "2026-09-17T00:06:00.000Z";
+          yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe(refreshedAt)));
+          yield* service.refresh(threadId, { staleOnly: true });
+          yield* service.drain;
+          const refreshed = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(refreshed.thread.issues?.[0]?.snapshot, {
+            ...snapshot,
+            syncedAt: refreshedAt,
+          });
+          assert.deepEqual((yield* projections.getThread(threadId)).updatedAt, linked?.updatedAt);
+          const projected = ProjectionStore.applyToProjection(initialProjection, {
+            id: EventId.make("issue-refresh-projection"),
+            type: "thread.issue-synced",
+            threadId,
+            occurredAt: DateTime.makeUnsafe(refreshedAt),
+            payload: refreshed.thread,
+          });
+          assert.deepEqual(
+            projected.thread.issues?.[0]?.snapshot,
+            refreshed.thread.issues?.[0]?.snapshot,
+          );
+          assert.deepEqual(projected.updatedAt, linked?.updatedAt);
+          assert.deepEqual(
+            (yield* orchestrator.getThreadShell(threadId))?.updatedAt,
+            linked?.updatedAt,
+          );
+          yield* TestClock.adjust("4 minutes");
+          yield* service.refresh(threadId, { staleOnly: true });
+          yield* service.drain;
+          assert.equal(reads, 1);
+        }),
+      );
       yield* orchestrator.dispatch({
         type: "thread.issue.unlink",
         commandId: CommandId.make("issue-unlink"),
@@ -2306,6 +2449,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* worker.drain();
       assert.deepEqual((yield* orchestrator.getThreadShell(threadId))?.issues, []);
       assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).thread.issues, []);
+      assert.deepEqual((yield* projections.getThread(threadId)).updatedAt, yield* DateTime.now);
     }),
   );
 

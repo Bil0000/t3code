@@ -86,9 +86,10 @@ function answer(args: ReadonlyArray<string>): string {
         },
         {
           id: 2,
-          revisedDate: "2026-07-03T00:00:00Z",
+          revisedDate: "9999-01-01T00:00:00Z",
           revisedBy: { uniqueName: "theo@acme.test" },
           fields: {
+            "System.ChangedDate": { newValue: "2026-07-03T00:00:00Z" },
             "System.State": { oldValue: "Active", newValue: "Resolved" },
             "System.Tags": { oldValue: "ui", newValue: "bug; ui" },
           },
@@ -164,6 +165,10 @@ describe("AzureDevOpsIssueTracker", () => {
         ["closed", "Resolved"],
         ["labeled", "bug"],
       ]);
+      expect(issue.events.map((event) => event.createdAt)).toEqual([
+        "2026-07-03T00:00:00Z",
+        "2026-07-03T00:00:00Z",
+      ]);
       expect(issue.linkedPullRequests).toEqual([
         {
           repository: "Web App/web",
@@ -176,6 +181,148 @@ describe("AzureDevOpsIssueTracker", () => {
         },
       ]);
     }),
+  );
+
+  it.effect("lists the native bulk work-item wrapper in one bounded page", () =>
+    Effect.gen(function* () {
+      const seen: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        seen.push(args);
+        const resource = args[args.indexOf("--resource") + 1];
+        if (resource === "wiql") return encode({ workItems: [{ id: 7 }, { id: 8 }] });
+        if (resource === "workitems") return encode({ count: 1, value: [WORK_ITEM] });
+        throw new Error(`Unexpected resource ${resource}`);
+      });
+      const page = yield* api.listIssues({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        state: "all",
+        involvement: "all",
+        viewer: "julius@acme.test",
+        limit: 1,
+      });
+      expect(page.items.map((item) => item.key)).toEqual(["7"]);
+      expect(page.nextCursor).toBe("2026-07-03T00:00:00Z|7");
+      expect(seen).toHaveLength(2);
+      expect(seen[1]).toContain("ids=7");
+    }),
+  );
+
+  it.effect("keeps WIQL ordering and its cursor when native bulk rows arrive by ID", () =>
+    Effect.gen(function* () {
+      const seen: ReadonlyArray<string>[] = [];
+      const rows = [1, 2, 3].map((id) => ({
+        ...WORK_ITEM,
+        id,
+        fields: { ...WORK_ITEM.fields, "System.ChangedDate": `2026-07-0${id}T00:00:00Z` },
+      }));
+      let queries = 0;
+      const api = yield* tracker((args) => {
+        seen.push(args);
+        const resource = args[args.indexOf("--resource") + 1];
+        if (resource === "wiql")
+          return encode({
+            workItems: (++queries === 1 ? [3, 2, 1] : [1]).map((id) => ({ id })),
+          });
+        if (resource === "workitems")
+          return encode({
+            count: queries === 1 ? 2 : 1,
+            value: queries === 1 ? [rows[1], rows[2]] : [rows[0]],
+          });
+        throw new Error(`Unexpected resource ${resource}`);
+      });
+      const target = {
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        state: "all" as const,
+        involvement: "all" as const,
+        viewer: "julius@acme.test",
+        limit: 2,
+      };
+      const first = yield* api.listIssues(target);
+      expect(first.items.map((item) => item.key)).toEqual(["3", "2"]);
+      expect(first.nextCursor).toBe("2026-07-02T00:00:00Z|2");
+      const second = yield* api.listIssues({ ...target, cursor: first.nextCursor! });
+      expect(second.items.map((item) => item.key)).toEqual(["1"]);
+      expect(second.nextCursor).toBeNull();
+      expect(seen).toHaveLength(4);
+    }),
+  );
+
+  it.effect("refuses the unsupported mentioned filter before any Azure request", () =>
+    Effect.gen(function* () {
+      let requests = 0;
+      const api = yield* tracker(() => {
+        requests += 1;
+        return encode({ workItems: [] });
+      });
+      const error = yield* Effect.flip(
+        api.listIssues({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          state: "all",
+          involvement: "mentioned",
+          viewer: "julius@acme.test",
+          limit: 10,
+        }),
+      );
+      expect(error.detail).toContain("mentioned");
+      expect(requests).toBe(0);
+      expect(api.capabilities.maxAssignees).toBe(1);
+      expect(api.capabilities.involvements).toEqual(["all", "assigned", "authored"]);
+    }),
+  );
+
+  it.effect.each(["update", "setState", "getIssue", "getComments"] as const)(
+    "rejects a foreign native project before %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const seen: ReadonlyArray<string>[] = [];
+        const api = yield* tracker((args) => {
+          seen.push(args);
+          return answer(args);
+        });
+        const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Other", key: "7" };
+        const task =
+          operation === "update"
+            ? api.update!({ ...target, title: "Changed title" })
+            : operation === "setState"
+              ? api.setState!({ ...target, state: "New" })
+              : operation === "getComments"
+                ? api.getComments({ ...target, cursor: "next-token" })
+                : api.getIssue(target);
+        const error = yield* Effect.flip(task);
+        expect(error.reason).toBe("not-found");
+        expect(seen).toHaveLength(1);
+        expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
+      }),
+  );
+
+  it.effect.each(["web app", "a0000000-0000-0000-0000-000000000001"])(
+    "accepts the native project identity for configured scope %s before writing",
+    (project) =>
+      Effect.gen(function* () {
+        const seen: ReadonlyArray<string>[] = [];
+        const api = yield* tracker((args) => {
+          seen.push(args);
+          if (args.slice(0, 3).join(" ") === "devops project show")
+            return encode({ id: "a0000000-0000-0000-0000-000000000001", name: "Web App" });
+          return answer(args);
+        });
+        yield* api.update!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: `acme/${project}`,
+          key: "7",
+          title: "Changed title",
+        });
+        expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
+        expect(seen.at(-1)?.slice(0, 3)).toEqual(["boards", "work-item", "update"]);
+        expect(seen).toHaveLength(project === "web app" ? 2 : 3);
+      }),
   );
 
   it.effect("refuses a scope that is not organization/project without a request", () =>

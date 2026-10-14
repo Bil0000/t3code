@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type IssueDetail,
+  type IssueCandidates,
   type OrchestrationProjectShell,
   type ThreadIssueLink,
 } from "@t3tools/contracts";
@@ -30,6 +31,23 @@ import { IssuesToolkit } from "./tools.ts";
 const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_ID = ThreadId.make("thread-1");
 const GITHUB = IssueTrackerKind.make("github");
+const LINEAR = IssueTrackerKind.make("linear");
+const gitHostSource: IssueService.ProjectTrackerBinding = {
+  tracker: GITHUB,
+  host: "github.com",
+  scope: "T3Tools/T3Code",
+};
+const standaloneSource: IssueService.ProjectTrackerBinding = {
+  tracker: LINEAR,
+  host: "linear.app",
+  scope: "ENG",
+};
+const jiraSource: IssueService.ProjectTrackerBinding = {
+  tracker: IssueTrackerKind.make("jira"),
+  host: "example.atlassian.net",
+  scope: "ENG",
+};
+const candidates: IssueCandidates = { labels: [], assignees: [], truncated: false };
 
 const invocation = (
   capabilities: ReadonlyArray<McpInvocationContext.McpCapability>,
@@ -133,20 +151,57 @@ const detail: IssueDetail = {
   linkedPullRequests: [],
 };
 
+const standaloneDetail: IssueDetail = {
+  ...detail,
+  ...standaloneSource,
+  key: "ENG-7",
+  displayKey: "ENG-7",
+  url: "https://linear.app/team/issue/ENG-7/seven",
+};
+
 const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   issues: ReadonlyArray<ThreadIssueLink> = [],
+  options: {
+    readonly project?: OrchestrationProjectShell;
+    readonly sources?: ReadonlyArray<IssueService.ProjectTrackerBinding>;
+    readonly detail?: IssueDetail;
+  } = {},
 ) {
   const links = yield* Ref.make<ReadonlyArray<ThreadIssueService.LinkThreadIssueInput>>([]);
+  const calls = yield* Ref.make<ReadonlyArray<{ operation: string; input: unknown }>>([]);
+  const record = <A>(operation: string, input: unknown, result: A) =>
+    Ref.update(calls, (recorded) => [...recorded, { operation, input }]).pipe(Effect.as(result));
+  const currentProject = options.project ?? project;
+  const currentDetail = options.detail ?? detail;
   const layerDependencies = Layer.mergeAll(
     Layer.mock(ProjectService.ProjectService)({
-      getShell: (id) => Effect.succeed(id === PROJECT_ID ? Option.some(project) : Option.none()),
-      listShells: () => Effect.succeed([project]),
+      getShell: (id) =>
+        Effect.succeed(id === PROJECT_ID ? Option.some(currentProject) : Option.none()),
+      listShells: () => Effect.succeed([currentProject]),
     }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       getThreadShell: (id) => Effect.succeed(id === THREAD_ID ? makeThread(issues) : null),
     }),
     Layer.mock(IssueService.IssueService)({
-      detail: () => Effect.succeed(detail),
+      sources: () => Effect.succeed(options.sources ?? [gitHostSource]),
+      list: (input) =>
+        record("list", input, {
+          viewers: {},
+          trackers: [],
+          entries: [currentDetail],
+          errors: [],
+          nextCursors: {},
+        }),
+      create: (input) =>
+        record("create", input, {
+          key: currentDetail.key,
+          displayKey: currentDetail.displayKey,
+          url: currentDetail.url,
+        }),
+      detail: (input) => record("detail", input, currentDetail),
+      candidates: (input) => record("candidates", input, candidates),
+      comment: (input) => record("comment", input, undefined),
+      setState: (input) => record("setState", input, undefined),
       resolveUrl: (url) =>
         Effect.succeed({
           projectId: PROJECT_ID,
@@ -187,10 +242,154 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(layerDependencies),
     );
-  return { links, call };
+  return { links, call, calls };
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect("guards candidate reads with source selection and the issues capability", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], { sources: [gitHostSource, jiraSource] });
+      const ambiguous = yield* harness.call("read_issue_candidates", {}).pipe(Effect.flip);
+      expect(ambiguous).toMatchObject({
+        _tag: "IssueSourceSelectionError",
+        sources: [gitHostSource, jiraSource],
+      });
+      const unbound = yield* harness
+        .call("read_issue_candidates", { tracker: LINEAR })
+        .pipe(Effect.flip);
+      expect(unbound).toMatchObject({ _tag: "IssueSourceSelectionError", tracker: LINEAR });
+      const denied = yield* harness
+        .call("read_issue_candidates", { projectId: PROJECT_ID, tracker: jiraSource.tracker }, [])
+        .pipe(Effect.flip);
+      expect(denied).toMatchObject({ _tag: "McpCapabilityUnavailableError", capability: "issues" });
+      expect(yield* Ref.get(harness.calls)).toEqual([]);
+      expect(yield* harness.call("read_issue_candidates", { tracker: jiraSource.tracker })).toEqual(
+        candidates,
+      );
+      expect(yield* Ref.get(harness.calls)).toEqual([
+        { operation: "candidates", input: { projectId: PROJECT_ID, ...jiraSource } },
+      ]);
+    }),
+  );
+
+  it.effect("lists and uses the only standalone source without a Git remote", () =>
+    Effect.gen(function* () {
+      const { repositoryIdentity: _repositoryIdentity, ...standaloneProject } = project;
+      const harness = yield* makeHarness([], {
+        project: standaloneProject,
+        sources: [standaloneSource],
+        detail: standaloneDetail,
+      });
+      const listed = yield* harness.call("list_issues", {});
+      expect(listed.issues).toMatchObject([{ tracker: LINEAR, scope: "ENG", key: "ENG-7" }]);
+      const created = yield* harness.call("create_issue", { title: "New issue" });
+      expect(created).toMatchObject({ tracker: LINEAR, host: "linear.app", scope: "ENG" });
+      const read = yield* harness.call("read_issue", { key: "ENG-7" });
+      expect(read).toMatchObject({ tracker: LINEAR, host: "linear.app", scope: "ENG" });
+      yield* harness.call("comment_on_issue", { key: "ENG-7", body: "Comment" });
+      yield* harness.call("set_issue_state", { key: "ENG-7", state: "Done" });
+      yield* harness.call("link_issue", { key: "ENG-7" });
+      expect(yield* Ref.get(harness.calls)).toEqual([
+        { operation: "list", input: { projectId: PROJECT_ID, state: "open" } },
+        {
+          operation: "create",
+          input: {
+            projectId: PROJECT_ID,
+            ...standaloneSource,
+            title: "New issue",
+            body: "",
+            labels: [],
+            assignees: [],
+          },
+        },
+        {
+          operation: "detail",
+          input: { projectId: PROJECT_ID, ...standaloneSource, key: "ENG-7" },
+        },
+        {
+          operation: "comment",
+          input: { projectId: PROJECT_ID, ...standaloneSource, key: "ENG-7", body: "Comment" },
+        },
+        {
+          operation: "setState",
+          input: { projectId: PROJECT_ID, ...standaloneSource, key: "ENG-7", state: "Done" },
+        },
+        {
+          operation: "detail",
+          input: { projectId: PROJECT_ID, ...standaloneSource, key: "ENG-7" },
+        },
+      ]);
+      expect((yield* Ref.get(harness.links))[0]).toMatchObject({
+        ref: { projectId: PROJECT_ID, ...standaloneSource, key: "ENG-7" },
+        url: standaloneDetail.url,
+      });
+    }),
+  );
+
+  it.effect("requires a tracker before reading or creating when two sources are bound", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], { sources: [gitHostSource, standaloneSource] });
+      const read = yield* harness.call("read_issue", { key: "7" }).pipe(Effect.flip);
+      const create = yield* harness
+        .call("create_issue", { title: "Choose the tracker" })
+        .pipe(Effect.flip);
+      for (const error of [read, create])
+        expect(error).toMatchObject({
+          _tag: "IssueSourceSelectionError",
+          projectId: PROJECT_ID,
+          sources: [gitHostSource, standaloneSource],
+        });
+      expect(yield* Ref.get(harness.calls)).toEqual([]);
+    }),
+  );
+
+  it.effect("uses the explicit standalone tracker on a project with a Git tracker too", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], {
+        sources: [gitHostSource, standaloneSource],
+        detail: standaloneDetail,
+      });
+      const created = yield* harness.call("create_issue", {
+        tracker: LINEAR,
+        title: "Standalone issue",
+      });
+      expect(created).toMatchObject({ tracker: LINEAR, host: "linear.app", scope: "ENG" });
+      const read = yield* harness.call("read_issue", { tracker: LINEAR, key: "ENG-7" });
+      expect(read).toMatchObject({ tracker: LINEAR, scope: "ENG" });
+      yield* harness.call("link_issue", { tracker: LINEAR, key: "ENG-7" });
+      expect((yield* Ref.get(harness.calls))[0]).toEqual({
+        operation: "create",
+        input: {
+          projectId: PROJECT_ID,
+          ...standaloneSource,
+          title: "Standalone issue",
+          body: "",
+          labels: [],
+          assignees: [],
+        },
+      });
+      expect((yield* Ref.get(harness.links))[0]?.ref.tracker).toBe(LINEAR);
+    }),
+  );
+
+  it.effect("rejects an unbound tracker instead of using the remaining source", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], {
+        sources: [standaloneSource],
+        detail: standaloneDetail,
+      });
+      const error = yield* harness
+        .call("create_issue", { tracker: GITHUB, title: "Wrong tracker" })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "IssueSourceSelectionError",
+        tracker: GITHUB,
+        sources: [standaloneSource],
+      });
+      expect(yield* Ref.get(harness.calls)).toEqual([]);
+    }),
+  );
+
   it.effect("refuses a credential without the issues capability", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -198,6 +397,45 @@ describe("issue toolkit handlers", () => {
         .call("list_thread_issues", {}, ["pull-requests"])
         .pipe(Effect.flip);
       expect(error).toMatchObject({ _tag: "McpCapabilityUnavailableError", capability: "issues" });
+    }),
+  );
+
+  it.effect("refuses explicit projects and URLs without the issues capability", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const capabilities = ["pull-requests"] as const;
+      const errors = yield* Effect.all([
+        harness.call("list_issues", { projectId: PROJECT_ID }, capabilities).pipe(Effect.flip),
+        harness
+          .call("read_issue", { projectId: PROJECT_ID, key: "7" }, capabilities)
+          .pipe(Effect.flip),
+        harness
+          .call("read_issue", { projectId: PROJECT_ID, url: detail.url }, capabilities)
+          .pipe(Effect.flip),
+        harness
+          .call("create_issue", { projectId: PROJECT_ID, title: "Issue" }, capabilities)
+          .pipe(Effect.flip),
+        harness
+          .call(
+            "comment_on_issue",
+            { projectId: PROJECT_ID, url: detail.url, body: "Comment" },
+            capabilities,
+          )
+          .pipe(Effect.flip),
+        harness
+          .call(
+            "set_issue_state",
+            { projectId: PROJECT_ID, key: "7", state: "closed" },
+            capabilities,
+          )
+          .pipe(Effect.flip),
+      ]);
+      for (const error of errors)
+        expect(error).toMatchObject({
+          _tag: "McpCapabilityUnavailableError",
+          capability: "issues",
+        });
+      expect(yield* Ref.get(harness.calls)).toEqual([]);
     }),
   );
 

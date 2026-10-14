@@ -371,6 +371,9 @@ const decodeTemplates = decodeJsonResult(RawTemplatesSchema);
 const decodeTemplate = Schema.decodeUnknownExit(RawTemplateSchema);
 const decodeTimelineItem = Schema.decodeUnknownExit(RawTimelineItemSchema);
 const decodeCreatedIssue = decodeJsonResult(RawCreatedIssueSchema);
+const decodeRestIssueLabels = decodeJsonResult(
+  Schema.Struct({ labels: Schema.Array(RawLabelSchema) }),
+);
 const decodeViewerLogin = decodeJsonResult(
   Schema.Struct({ data: Schema.Struct({ viewer: Schema.Struct({ login: Schema.String }) }) }),
 );
@@ -632,6 +635,12 @@ export function decodeIssueDetailJson(
     events,
     linkedPullRequests: [...links.values()],
   });
+}
+
+export function decodeRestIssueLabelsJson(
+  raw: string,
+): Result.Result<ReadonlyArray<IssueLabel>, DecodeFailure> {
+  return Result.map(decodeRestIssueLabels(raw), (issue) => toLabels(issue.labels));
 }
 
 export function decodeIssueCommentsJson(

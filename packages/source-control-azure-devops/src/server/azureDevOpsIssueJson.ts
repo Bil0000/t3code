@@ -66,7 +66,9 @@ const WorkItem = Schema.Struct({
 });
 
 const decodeWorkItemEntry = Schema.decodeUnknownExit(WorkItem);
-const decodeUnknownList = decodeJsonResult(Schema.NullOr(Schema.Array(Schema.Unknown)));
+const decodeWorkItemsPage = decodeJsonResult(
+  Schema.Struct({ value: Schema.Array(Schema.Unknown) }),
+);
 const decodeWorkItem = decodeJsonResult(WorkItem);
 
 type DecodeFailure =
@@ -157,8 +159,8 @@ function toWorkItem(raw: typeof WorkItem.Type): AzureDevOpsWorkItem | null {
 export function decodeWorkItemsJson(
   raw: string,
 ): Result.Result<ReadonlyArray<AzureDevOpsWorkItem>, DecodeFailure> {
-  return Result.map(decodeUnknownList(raw.trim().length === 0 ? "[]" : raw), (rows) =>
-    (rows ?? []).flatMap((entry) => {
+  return Result.map(decodeWorkItemsPage(raw), (page) =>
+    page.value.flatMap((entry) => {
       const item = decodeWorkItemEntry(entry);
       if (Exit.isFailure(item)) return [];
       return toWorkItem(item.value) ?? [];
@@ -279,10 +281,6 @@ function identityLogin(value: unknown): string | null {
   return Exit.isSuccess(decoded) ? (toActor(decoded.value)?.login ?? null) : null;
 }
 
-/**
- * The timeline, read out of each revision's field changes. Azure reads `9999-01-01` as the changed
- * date of the newest revision, so the revision's own date is what every event carries.
- */
 export function decodeUpdatesJson(
   raw: string,
 ): Result.Result<ReadonlyArray<IssueEvent>, DecodeFailure> {
@@ -292,13 +290,15 @@ export function decodeUpdatesJson(
       if (Exit.isFailure(update) || update.value.id === 1) return [];
       const { id, revisedBy, revisedDate } = update.value;
       const fields = update.value.fields ?? {};
+      const changedAt = fields["System.ChangedDate"]?.newValue;
+      const createdAt = typeof changedAt === "string" ? changedAt : revisedDate;
       const events: IssueEvent[] = [];
       const add = (kind: IssueEvent["kind"], detail: string | null) =>
         events.push({
           id: `update-${id}-${events.length}`,
           kind,
           actor: toActor(revisedBy),
-          createdAt: revisedDate,
+          createdAt,
           detail,
         });
       const state = fields["System.State"];
