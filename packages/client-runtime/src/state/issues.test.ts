@@ -452,6 +452,72 @@ describe("issue list continuations", () => {
   });
 });
 
+describe("issue representative changes", () => {
+  it("drops the old owner's tail and restarts its cursor, while keeping failed and unrelated sources", () => {
+    const old = entry({ key: "1" });
+    const tail = entry({ key: "2" });
+    const other = entry({ key: "9", scope: "acme/other", projectId: "other" as ProjectId });
+    const replacement = entry({ key: "1", projectId: "replacement" as ProjectId });
+    const scope = "github github.com acme/app";
+    const otherScope = "github github.com acme/other";
+    const held = {
+      entries: [old, tail, other],
+      firstKeys: new Set([old, other].map(issueEntryKey)),
+      firstCursors: { [scope]: "2", [otherScope]: "o2" },
+      nextCursors: { [scope]: "3", [otherScope]: "o2" },
+      errors: [],
+    };
+    const fresh = {
+      entries: [replacement],
+      sources: [
+        { ...replacement, capabilities: {} as IssueCapabilities },
+        { ...other, capabilities: {} as IssueCapabilities },
+      ],
+      nextCursors: { [scope]: "2" },
+      errors: [
+        {
+          projectId: other.projectId,
+          projectTitle: "App",
+          tracker: other.tracker,
+          host: other.host,
+          message: "down",
+        },
+      ],
+    };
+    const refreshed = refreshIssueListPage(held, fresh);
+    expect(refreshed.entries).toHaveLength(2);
+    expect(refreshed.entries).toEqual(expect.arrayContaining([replacement, other]));
+    expect(refreshed.nextCursors).toEqual({ [scope]: "2", [otherScope]: "o2" });
+    const continued = continueIssueListPage(
+      refreshed,
+      { [scope]: "2" },
+      { entries: [entry({ ...replacement, key: "2" })], nextCursors: {}, errors: [] },
+      refreshed.firstCursors,
+    );
+    expect(continued.entries.map(({ projectId, key }) => [projectId, key]).toSorted()).toEqual([
+      [other.projectId, "9"],
+      ["replacement", "1"],
+      ["replacement", "2"],
+    ]);
+    const failed = refreshIssueListPage(held, {
+      ...fresh,
+      entries: [],
+      errors: [
+        {
+          projectId: replacement.projectId,
+          projectTitle: "App",
+          tracker: replacement.tracker,
+          host: replacement.host,
+          message: "down",
+        },
+        ...fresh.errors,
+      ],
+    });
+    expect(failed.entries).toEqual(held.entries);
+    expect(failed.nextCursors).toEqual(held.nextCursors);
+  });
+});
+
 describe("refreshIssueListPage", () => {
   const rows = (from: number, to: number, scope = "acme/app") =>
     Array.from({ length: to - from + 1 }, (_, index) =>
