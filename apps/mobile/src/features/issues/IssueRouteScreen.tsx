@@ -188,7 +188,14 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
   const loadOlder = () =>
     run(async () => {
       if (!cursor) return;
-      const response = await loadComments({ ...target, input: { ...target.input, cursor } });
+      const response = await loadComments({
+        ...target,
+        input: {
+          ...target.input,
+          cursor,
+          ...(issue.viewer === null ? {} : { viewer: issue.viewer }),
+        },
+      });
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
       setOlder((current) => appendOlderIssueComments(issue, current, response.value));
     }, "Couldn't load older comments");

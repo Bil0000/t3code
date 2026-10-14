@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import {
   IssueActor,
   IssueCandidates,
+  IssueCommentsPageInput,
   IssueUpdateInput,
   ProjectId,
   IssueTrackerKind,
@@ -37,4 +38,18 @@ it("encodes a full label replacement without dropping an issue's existing labels
     labels: Array.from({ length: 121 }, (_, index) => `label-${index}`),
   };
   expect(encodeUpdate(input)).toEqual(input);
+});
+
+it("accepts older comment requests and preserves an optional viewer", () => {
+  const decode = Schema.decodeSync(IssueCommentsPageInput);
+  const input = {
+    projectId: ProjectId.make("project-1"),
+    tracker: IssueTrackerKind.make("linear"),
+    scope: "ENG",
+    key: "ENG-1",
+    cursor: "older",
+  };
+  expect(decode(input)).toEqual(input);
+  expect(decode({ ...input, viewer: "account-123" })).toEqual({ ...input, viewer: "account-123" });
+  expect(() => decode({ ...input, viewer: " " })).toThrow();
 });

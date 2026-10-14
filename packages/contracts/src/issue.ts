@@ -269,6 +269,7 @@ export type IssueDetail = typeof IssueDetail.Type;
 /** Older comments, one page past a cursor the detail or a previous page handed over. */
 export const IssueCommentsPageInput = Schema.Struct({
   ...IssueRef.fields,
+  viewer: Schema.optional(TrimmedNonEmptyString),
   cursor: TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
 });
 export type IssueCommentsPageInput = typeof IssueCommentsPageInput.Type;
