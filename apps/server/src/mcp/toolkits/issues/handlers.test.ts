@@ -15,11 +15,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import type { Tool } from "effect/ai";
 
 import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
 import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
+import { decodeIssueSearchJson } from "@t3tools/source-control-github/server/gitHubIssueJson";
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
@@ -428,6 +430,44 @@ describe("issue toolkit handlers", () => {
           "update",
         ]);
       }),
+  );
+
+  it.effect("keeps GitHub's twenty-label subset marked partial in registered list output", () =>
+    Effect.gen(function* () {
+      const nativeLabels = Array.from({ length: 21 }, (_, index) => ({
+        name: `label-${index + 1}`,
+        color: "abcdef",
+      }));
+      const native = Result.getOrThrow(
+        decodeIssueSearchJson(
+          JSON.stringify({
+            data: {
+              search: {
+                nodes: [
+                  {
+                    number: 7,
+                    title: detail.title,
+                    url: detail.url,
+                    createdAt: detail.createdAt,
+                    updatedAt: detail.updatedAt,
+                    labels: { nodes: nativeLabels.slice(0, 20), pageInfo: { hasNextPage: true } },
+                  },
+                ],
+                pageInfo: { hasNextPage: false },
+              },
+            },
+          }),
+        ),
+      );
+      const harness = yield* makeHarness([], { detail: { ...detail, ...native.items[0]! } });
+      const listed = yield* harness.call("list_issues", {});
+      const issue = listed.issues[0]!;
+      expect(issue.labelsTruncated).toBe(true);
+      expect(issue.labels).toEqual(nativeLabels.slice(0, 20).map((label) => label.name));
+      expect(issue.labelDetails).toEqual(nativeLabels.slice(0, 20));
+      expect(issue.labels).not.toContain("label-21");
+      expect((yield* Ref.get(harness.calls)).map((call) => call.operation)).toEqual(["list"]);
+    }),
   );
 
   it.effect("reports partial current labels and keeps name-only trackers compatible", () =>
