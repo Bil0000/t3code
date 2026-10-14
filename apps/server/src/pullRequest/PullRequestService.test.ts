@@ -4547,6 +4547,104 @@ it.effect("fills in the line counts for the rows it is given", () =>
   }),
 );
 it.effect(
+  "resolves each repository once per stats batch and resolves it again on the next read",
+  () =>
+    Effect.gen(function* () {
+      let resolutions = 0;
+      const identity = project({
+        id: "p1",
+        title: "web",
+        workspaceRoot: "/a",
+        repository: "acme/web",
+      }).repositoryIdentity!;
+      const service = yield* makeService({
+        projects: [project({ id: "p1", title: "web", workspaceRoot: "/a" })],
+        resolveRepositoryIdentity: () =>
+          Effect.sync(() => {
+            resolutions++;
+            return identity;
+          }),
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            listChangeRequestStats: ({ changeRequests }) =>
+              Effect.succeed(
+                changeRequests.map((ref) => ({ ...ref, additions: 12, deletions: 3 })),
+              ),
+          }),
+        ],
+      });
+      const refs = Array.from({ length: 99 }, (_, index) => ({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: index + 1,
+      }));
+      assert.strictEqual((yield* service.listStats({ refs })).stats.length, 99);
+      assert.strictEqual(resolutions, 2);
+      yield* service.listStats({ refs });
+      assert.strictEqual(resolutions, 3);
+    }),
+);
+
+it.effect("reuses recent detail checks without extending their freshness window", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: () => Effect.succeed(hostedChangeRequest("body")),
+          getChangeRequestChecks: () =>
+            Effect.sync(() => {
+              reads++;
+              return { state: "open" as const, checks: [] };
+            }),
+        }),
+      ],
+    });
+    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const detail = yield* service.detail(ref);
+    assert.deepStrictEqual(yield* service.checks(ref), {
+      state: detail.state,
+      checks: detail.checks,
+    });
+    assert.strictEqual(reads, 0);
+    yield* TestClock.adjust("14 seconds");
+    yield* service.checks(ref);
+    assert.strictEqual(reads, 0);
+    yield* TestClock.adjust("1 second");
+    yield* service.checks(ref);
+    assert.strictEqual(reads, 1);
+    yield* service.invalidate({ reference: ref });
+    yield* service.checks(ref);
+    assert.strictEqual(reads, 2);
+  }),
+);
+it.effect("keeps other providers' checks failures separate from partial detail", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "acme/web",
+          provider: "bitbucket",
+          host: "bitbucket.org",
+        }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("bitbucket"), {
+          getChangeRequest: () => Effect.succeed(hostedChangeRequest("partial detail")),
+          getChangeRequestChecks: () => Effect.fail(requestFailed),
+        }),
+      ],
+    });
+    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    yield* service.detail(ref);
+    assert.instanceOf(yield* Effect.flip(service.checks(ref)), PullRequestOperationError);
+  }),
+);
+it.effect(
   "reuses counts across overlapping pages until expiry, explicit invalidation, or a reference changes",
   () =>
     Effect.gen(function* () {

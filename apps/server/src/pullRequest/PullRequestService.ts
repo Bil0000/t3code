@@ -3543,9 +3543,32 @@ export const make = Effect.gen(function* () {
     withRoutingCredential,
     list,
     listStats: (input) =>
-      Effect.forEach(input.refs, (ref) => canonicalRef(ref).pipe(Effect.option)).pipe(
-        Effect.flatMap((refs) => listStats({ ...input, refs: refs.flatMap(Option.toArray) })),
-      ),
+      Effect.gen(function* () {
+        const routes = new Map<string, Option.Option<PullRequestRef>>();
+        const refs = yield* Effect.forEach(input.refs, (ref) =>
+          Effect.gen(function* () {
+            const key = [
+              ref.projectId,
+              ref.host === undefined ? "" : `host:${ref.host.trim().toLowerCase()}`,
+              ref.repository.trim().toLowerCase(),
+            ]
+              .map(encodeURIComponent)
+              .join(":");
+            let route = routes.get(key);
+            if (route === undefined) {
+              route = yield* canonicalRef(ref).pipe(Effect.option);
+              routes.set(key, route);
+            }
+            return Option.map(route, (canonical) => ({
+              ...ref,
+              projectId: canonical.projectId,
+              host: canonical.host,
+              repository: canonical.repository,
+            }));
+          }),
+        );
+        return yield* listStats({ ...input, refs: refs.flatMap(Option.toArray) });
+      }),
     summary: credentialCached(summary),
     stack: credentialCached(stack),
     subscribeMerges: PubSub.subscribe(mergedPullRequests).pipe(
@@ -3560,7 +3583,25 @@ export const make = Effect.gen(function* () {
     ),
     refreshAfterTurn,
     detail: credentialCached(detail),
-    checks: credentialCached((input) => Cache.get(checksCache, refCacheKey(input))),
+    checks: credentialCached((input) =>
+      Effect.gen(function* () {
+        const key = refCacheKey(input);
+        const cached = yield* Cache.getSuccess(checksCache, key);
+        if (Option.isSome(cached)) return cached.value;
+        const detail = yield* Cache.getSuccess(detailCache, key);
+        const now = yield* Clock.currentTimeMillis;
+        if (
+          Option.isSome(detail) &&
+          detail.value.provider === "github" &&
+          detail.value.observedAt !== undefined &&
+          now - detail.value.observedAt < Duration.toMillis(CHECKS_CACHE_TTL) &&
+          registry.get(detail.value.provider)?.getChangeRequestChecks !== undefined
+        ) {
+          return { state: detail.value.state, checks: detail.value.checks };
+        }
+        return yield* Cache.get(checksCache, key);
+      }),
+    ),
     watchFingerprint: credentialCached((input) =>
       Cache.get(watchFingerprintCache, refCacheKey(input)),
     ),
