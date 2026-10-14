@@ -248,7 +248,7 @@ import {
   threadContextReference,
 } from "~/lib/composerContextRecords";
 import { matchComposerThreadItems } from "@t3tools/client-runtime/composerThreadItems";
-import { THREAD_CONTEXT_DROP_EVENT, threadContextDropTargetProps } from "./threadContextDrag";
+import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
 import { readThreadShell, useThreadShells } from "~/state/entities";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
@@ -6386,82 +6386,55 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
   );
 
-  useEffect(() => {
-    const form = composerFormRef.current;
-    if (!form) return;
-    let active = true;
-    const targetKey = attachmentTargetKey;
-    const onThreadDrop = (event: Event) => {
-      const refs = (event as CustomEvent<ReadonlyArray<ScopedThreadRef>>).detail;
-      const records = refs.flatMap((ref) => {
-        if (ref.environmentId !== environmentId) {
-          void importDroppedThread(
-            ref,
-            () => active && attachmentTargetKeyRef.current === targetKey,
-          );
-          return [];
-        }
-        const shell = readThreadShell(ref);
-        return shell ? [threadContextRecord(ref, shell.title)] : [];
-      });
-      if (records.length === 0) return;
-      if (questionAttachmentTarget !== null) {
-        const canAnswer =
-          canOperateThread &&
-          !isConnecting &&
-          !isComposerApprovalState &&
-          !activePendingIsResponding &&
-          activePendingProgress?.activeQuestion?.allowCustomAnswer !== false;
-        const text = `${records
-          .map((record) => formatInlineContextReference(threadContextReference(record)))
-          .join(" ")} `;
-        const snapshot = readComposerSnapshot();
-        const cursor = snapshot.expandedCursor;
-        const leadingSpace = cursor > 0 && !/\s/.test(snapshot.value[cursor - 1] ?? "");
-        const inserted =
-          canAnswer &&
-          applyPromptReplacement(
-            cursor,
-            extendReplacementRangeForTrailingSpace(snapshot.value, cursor, text),
-            leadingSpace ? ` ${text}` : text,
-          );
-        if (!inserted) {
-          toastManager.add({
-            type: "error",
-            title: "Unable to add thread",
-            description: "The composer is busy; try again once it is ready.",
-          });
-          return;
-        }
-        addComposerDraftThreadContexts(questionAttachmentTarget, records, {
-          appendReference: false,
-        });
-        if (isComposerCollapsedMobile) expandMobileComposer();
-      } else {
-        addComposerDraftThreadContexts(composerDraftTarget, records);
+  useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs, isActive) => {
+    const records = refs.flatMap((ref) => {
+      if (ref.environmentId !== environmentId) {
+        void importDroppedThread(
+          ref,
+          () => isActive() && attachmentTargetKeyRef.current === attachmentTargetKey,
+        );
+        return [];
       }
-    };
-    form.addEventListener(THREAD_CONTEXT_DROP_EVENT, onThreadDrop);
-    return () => {
-      active = false;
-      form.removeEventListener(THREAD_CONTEXT_DROP_EVENT, onThreadDrop);
-    };
-  }, [
-    activePendingIsResponding,
-    activePendingProgress?.activeQuestion?.allowCustomAnswer,
-    addComposerDraftThreadContexts,
-    applyPromptReplacement,
-    attachmentTargetKey,
-    canOperateThread,
-    composerDraftTarget,
-    environmentId,
-    expandMobileComposer,
-    isComposerApprovalState,
-    isComposerCollapsedMobile,
-    isConnecting,
-    questionAttachmentTarget,
-    readComposerSnapshot,
-  ]);
+      const shell = readThreadShell(ref);
+      return shell ? [threadContextRecord(ref, shell.title)] : [];
+    });
+    if (records.length === 0) return;
+    if (questionAttachmentTarget !== null) {
+      const canAnswer =
+        canOperateThread &&
+        !isConnecting &&
+        !isComposerApprovalState &&
+        !activePendingIsResponding &&
+        activePendingProgress?.activeQuestion?.allowCustomAnswer !== false;
+      const text = `${records
+        .map((record) => formatInlineContextReference(threadContextReference(record)))
+        .join(" ")} `;
+      const snapshot = readComposerSnapshot();
+      const cursor = snapshot.expandedCursor;
+      const leadingSpace = cursor > 0 && !/\s/.test(snapshot.value[cursor - 1] ?? "");
+      const inserted =
+        canAnswer &&
+        applyPromptReplacement(
+          cursor,
+          extendReplacementRangeForTrailingSpace(snapshot.value, cursor, text),
+          leadingSpace ? ` ${text}` : text,
+        );
+      if (!inserted) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add thread",
+          description: "The composer is busy; try again once it is ready.",
+        });
+        return;
+      }
+      addComposerDraftThreadContexts(questionAttachmentTarget, records, {
+        appendReference: false,
+      });
+      if (isComposerCollapsedMobile) expandMobileComposer();
+    } else {
+      addComposerDraftThreadContexts(composerDraftTarget, records);
+    }
+  });
 
   const onComposerMentionDragLeaveCapture = (event: React.DragEvent<HTMLFormElement>) => {
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
