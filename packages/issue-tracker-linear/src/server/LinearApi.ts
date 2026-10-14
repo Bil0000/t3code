@@ -16,6 +16,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { IssueTrackerKind } from "@t3tools/contracts";
@@ -305,6 +306,9 @@ const Envelope = Schema.Struct({
 const ViewerData = Schema.Struct({
   viewer: LinearUser,
 });
+const decodeViewerId = Schema.decodeUnknownOption(
+  Schema.Struct({ viewer: Schema.Struct({ id: Schema.String }) }),
+);
 const ProbeData = Schema.Struct({
   viewer: LinearUser,
   organization: LinearOrganization,
@@ -496,6 +500,14 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const rateLimits = yield* RateLimit.SourceControlRateLimit;
   const rateKey = { provider: KIND, host: new URL(config.apiUrl).host };
+  const identities = new Map<string, string>();
+  const endpoints = new Map<string, Set<string>>();
+  const scopeFor = (identity: string, endpoint?: string) =>
+    endpoint === undefined ? identity : `${identity}\0endpoint:${endpoint}`;
+  const checkLimit = (identity: string, endpoint?: string, allowPaused = false) =>
+    rateLimits
+      .check(rateKey, { allowPaused })
+      .pipe(Effect.provideService(RateLimit.CredentialScope, scopeFor(identity, endpoint)));
 
   const storedToken = (operation: string) =>
     host.credentials
@@ -517,15 +529,45 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<S["Type"], IssueTrackerError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const key = token ?? (yield* storedToken(operation));
-      const credentialScope = yield* crypto
+      const fingerprint = yield* crypto
         .digest("SHA-256", new TextEncoder().encode(key))
         .pipe(Effect.map(Hex.encode), Effect.orDie);
-      const lease = yield* rateLimits.check(rateKey).pipe(
-        Effect.provideService(RateLimit.CredentialScope, credentialScope),
-        Effect.mapError((error) =>
-          fail(operation, "rate-limited", error.detail, { retryAt: error.retryAt }),
+      const credentialScope = identities.get(fingerprint) ?? fingerprint;
+      const scopes = [undefined, ...(endpoints.get(document) ?? [])];
+      const checks = yield* Effect.forEach(scopes, (scope) =>
+        checkLimit(credentialScope, scope).pipe(Effect.result),
+      );
+      const paused = checks.flatMap((result) =>
+        result._tag === "Failure" ? [result.failure.retryAt] : [],
+      );
+      if (paused.length > 0)
+        return yield* fail(operation, "rate-limited", "Linear's rate limit was reached.", {
+          retryAt: Math.max(...paused),
+        });
+      const leases = new Map(
+        checks.flatMap((result, index) =>
+          result._tag === "Success" ? [[scopes[index], result.success] as const] : [],
         ),
       );
+      const leaseFor = (scope?: string) => {
+        const identity = identities.get(fingerprint) ?? fingerprint;
+        const lease = identity === credentialScope ? leases.get(scope) : undefined;
+        return lease === undefined
+          ? checkLimit(identity, scope, true).pipe(Effect.orDie)
+          : Effect.succeed(lease);
+      };
+      const recordLimit = (scope?: string, retryAt?: number) =>
+        Effect.gen(function* () {
+          const lease = yield* leaseFor(scope);
+          yield* rateLimits
+            .recordRateLimit({ ...rateKey, lease, retryAt })
+            .pipe(
+              Effect.provideService(
+                RateLimit.CredentialScope,
+                scopeFor(identities.get(fingerprint) ?? fingerprint, scope),
+              ),
+            );
+        });
       const response = yield* httpClient
         .execute(
           HttpClientRequest.post(config.apiUrl).pipe(
@@ -541,19 +583,42 @@ export const make = Effect.gen(function* () {
           ),
         );
       const now = yield* Clock.currentTimeMillis;
-      const resetTimes = ["requests", "complexity", "endpoint-requests"].flatMap((window) => {
+      const exhausted = ["requests", "complexity", "endpoint-requests"].filter((window) => {
+        const remaining = response.headers[`x-ratelimit-${window}-remaining`]?.trim();
+        return remaining !== undefined && /^-?\d+$/u.test(remaining) && Number(remaining) <= 0;
+      });
+      const resetAt = (window: string) => {
         const value = response.headers[`x-ratelimit-${window}-reset`];
         const reset = value === undefined || !/^\d+$/u.test(value.trim()) ? NaN : Number(value);
-        return Number.isSafeInteger(reset) && reset > now ? [reset] : [];
-      });
+        return Number.isSafeInteger(reset) && reset > now ? reset : undefined;
+      };
       const retryAfter = RateLimit.retryAtFromHeader(response.headers["retry-after"], now);
-      const retryTimes = [...resetTimes, ...(retryAfter === undefined ? [] : [retryAfter])];
-      const retryAt = retryTimes.length === 0 ? undefined : Math.max(...retryTimes);
+      const latestReset = (windows: ReadonlyArray<string>) => {
+        const resets = windows.flatMap((window) => {
+          const reset = resetAt(window);
+          return reset === undefined ? [] : [reset];
+        });
+        if (retryAfter !== undefined) resets.push(retryAfter);
+        return resets.length === 0 ? undefined : Math.max(...resets);
+      };
+      const namedEndpoint = response.headers["x-ratelimit-endpoint-name"]?.trim() || undefined;
+      if (namedEndpoint !== undefined) {
+        const names = endpoints.get(document) ?? new Set<string>();
+        names.add(namedEndpoint);
+        endpoints.set(document, names);
+      }
+      const recordLimits = (unknown = false) =>
+        Effect.gen(function* () {
+          const globalWindows = exhausted.filter((window) => window !== "endpoint-requests");
+          if (globalWindows.length > 0) yield* recordLimit(undefined, latestReset(globalWindows));
+          if (exhausted.includes("endpoint-requests"))
+            yield* recordLimit(namedEndpoint, latestReset(["endpoint-requests"]));
+          if (unknown && exhausted.length === 0) yield* recordLimit(undefined, retryAfter);
+        });
+      const retryAt = latestReset(exhausted);
       const rateLimited = () =>
         Effect.gen(function* () {
-          yield* rateLimits
-            .recordRateLimit({ ...rateKey, lease, ...(retryAt === undefined ? {} : { retryAt }) })
-            .pipe(Effect.provideService(RateLimit.CredentialScope, credentialScope));
+          yield* recordLimits(true);
           return yield* fail(
             operation,
             "rate-limited",
@@ -566,6 +631,7 @@ export const make = Effect.gen(function* () {
         return yield* fail(operation, "unauthenticated", "Linear rejected the API key.");
       }
       const envelope = yield* HttpClientResponse.schemaBodyJson(Envelope)(response).pipe(
+        Effect.tapError(() => recordLimits()),
         Effect.mapError((cause) =>
           fail(
             operation,
@@ -584,6 +650,7 @@ export const make = Effect.gen(function* () {
         envelope.data === undefined ||
         envelope.data === null
       ) {
+        yield* recordLimits();
         return yield* fail(
           operation,
           "failed",
@@ -591,13 +658,40 @@ export const make = Effect.gen(function* () {
         );
       }
       const decoded = yield* Schema.decodeEffect(data)(envelope.data).pipe(
+        Effect.tapError(() => recordLimits()),
         Effect.mapError((cause) =>
           fail(operation, "failed", "Linear returned an unexpected response.", { cause }),
         ),
       );
-      yield* rateLimits
-        .recordSuccess({ ...rateKey, lease })
-        .pipe(Effect.provideService(RateLimit.CredentialScope, credentialScope));
+      const viewer = decodeViewerId(decoded);
+      if (Option.isSome(viewer) && identities.get(fingerprint) !== viewer.value.viewer.id) {
+        identities.set(fingerprint, viewer.value.viewer.id);
+        for (const scope of [
+          undefined,
+          ...new Set([...endpoints.values()].flatMap((names) => [...names])),
+        ]) {
+          const previous = yield* checkLimit(credentialScope, scope).pipe(Effect.result);
+          if (previous._tag === "Failure") yield* recordLimit(scope, previous.failure.retryAt);
+        }
+        for (const scope of scopes)
+          yield* checkLimit(viewer.value.viewer.id, scope).pipe(
+            Effect.mapError((error) =>
+              fail(operation, "rate-limited", error.detail, { retryAt: error.retryAt }),
+            ),
+          );
+      }
+      yield* recordLimits();
+      for (const scope of [undefined, ...(endpoints.get(document) ?? [])]) {
+        const lease = yield* leaseFor(scope);
+        yield* rateLimits
+          .recordSuccess({ ...rateKey, lease })
+          .pipe(
+            Effect.provideService(
+              RateLimit.CredentialScope,
+              scopeFor(identities.get(fingerprint) ?? fingerprint, scope),
+            ),
+          );
+      }
       return decoded;
     });
 

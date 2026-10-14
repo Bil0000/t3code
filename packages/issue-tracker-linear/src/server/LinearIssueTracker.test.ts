@@ -614,7 +614,7 @@ describe("LinearIssueTracker", () => {
       );
     }),
   );
-  it.effect("uses native epoch milliseconds and the latest quota reset", () =>
+  it.effect("uses only exhausted native windows for the reset", () =>
     Effect.gen(function* () {
       const now = 1_750_000_000_000;
       yield* TestClock.setTime(now);
@@ -624,8 +624,12 @@ describe("LinearIssueTracker", () => {
             status: 429,
             headers: {
               "x-ratelimit-requests-reset": String(now + 30_000),
-              "x-ratelimit-complexity-reset": String(now + 60_000),
+              "x-ratelimit-requests-remaining": "10",
+              "x-ratelimit-complexity-reset": String(now + 3_600_000),
+              "x-ratelimit-complexity-remaining": "10",
               "x-ratelimit-endpoint-requests-reset": String(now + 90_000),
+              "x-ratelimit-endpoint-requests-remaining": "0",
+              "x-ratelimit-endpoint-name": "native-viewer-limit",
               "retry-after": "5",
             },
           }),
@@ -657,35 +661,206 @@ describe("LinearIssueTracker", () => {
       expect(error.retryAt).toBe(now + 20_000);
     }),
   );
-  it.effect("blocks native requests until reset and isolates a changed token", () =>
+  it.effect("shares pauses across verified same-user keys and isolates another user", () =>
     Effect.gen(function* () {
       const now = 1_750_000_000_000;
       yield* TestClock.setTime(now);
       let limited = true;
       const test = fakeLinear({
+        T3ProbeCredential: () => ({
+          viewer: test.requests.at(-1)?.authorization === "lin_api_other" ? THEO : JULIUS,
+          organization: ORGANIZATION,
+          teams: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        }),
         T3Viewer: () =>
           limited
             ? new Response("limited", {
                 status: 429,
-                headers: { "x-ratelimit-requests-reset": String(now + 60_000) },
+                headers: {
+                  "x-ratelimit-requests-reset": String(now + 60_000),
+                  "x-ratelimit-requests-remaining": "0",
+                },
               })
-            : { viewer: JULIUS, teams: { nodes: [] } },
+            : { viewer: test.requests.at(-1)?.authorization === "lin_api_other" ? THEO : JULIUS },
       });
       const native = yield* test.api;
+      yield* native.probeCredential("lin_api_stored");
+      yield* native.probeCredential("lin_api_changed");
       yield* native.viewer().pipe(Effect.flip);
       limited = false;
       expect((yield* native.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
-      expect(test.requests).toHaveLength(1);
+      expect(test.requests).toHaveLength(3);
       test.setToken("lin_api_changed");
-      expect((yield* native.viewer()).viewer.id).toBe(JULIUS.id);
-      expect(test.requests).toHaveLength(2);
+      expect((yield* native.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+      expect(test.requests).toHaveLength(3);
+      expect((yield* native.probeCredential("lin_api_unseen").pipe(Effect.flip)).reason).toBe(
+        "rate-limited",
+      );
+      expect(test.requests).toHaveLength(4);
+      yield* native.probeCredential("lin_api_other");
+      test.setToken("lin_api_other");
+      yield* native.viewer();
+      expect(test.requests).toHaveLength(6);
       test.setToken("lin_api_stored");
       expect((yield* native.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
-      expect(test.requests).toHaveLength(2);
+      expect(test.requests).toHaveLength(6);
       yield* TestClock.adjust("60 seconds");
       expect((yield* native.viewer()).viewer.id).toBe(JULIUS.id);
-      expect(test.requests).toHaveLength(3);
+      expect(test.requests).toHaveLength(7);
     }),
+  );
+  it.effect("pauses a named endpoint without blocking viewer or unrelated operations", () =>
+    Effect.gen(function* () {
+      const now = 1_750_000_000_000;
+      yield* TestClock.setTime(now);
+      let limited = true;
+      const test = fakeLinear({
+        T3Viewer: () => ({ viewer: JULIUS }),
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3CommentCreate: () => ({ commentCreate: { success: true } }),
+        T3Issues: () =>
+          limited
+            ? Response.json(
+                { errors: [{ message: "Limited", extensions: { code: "RATELIMITED" } }] },
+                {
+                  status: 400,
+                  headers: {
+                    "x-ratelimit-requests-remaining": "100",
+                    "x-ratelimit-requests-reset": String(now + 3_600_000),
+                    "x-ratelimit-complexity-remaining": "100",
+                    "x-ratelimit-complexity-reset": String(now + 3_600_000),
+                    "x-ratelimit-endpoint-requests-remaining": "0",
+                    "x-ratelimit-endpoint-requests-reset": String(now + 60_000),
+                    "x-ratelimit-endpoint-name": "native-issue-list-limit",
+                  },
+                },
+              )
+            : {
+                organization: ORGANIZATION,
+                issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              },
+      });
+      const native = yield* test.api;
+      expect((yield* native.listIssues({ filter: {}, first: 20 }).pipe(Effect.flip)).retryAt).toBe(
+        now + 60_000,
+      );
+      limited = false;
+      yield* native.viewer();
+      yield* native.getIssueReference("ENG-7");
+      yield* native.createComment({ issueId: "iss_native", body: "Comment" });
+      expect((yield* native.listIssues({ filter: {}, first: 20 }).pipe(Effect.flip)).reason).toBe(
+        "rate-limited",
+      );
+      expect(test.requests).toHaveLength(4);
+      yield* TestClock.adjust("60 seconds");
+      yield* native.listIssues({ filter: {}, first: 20 });
+      expect(test.requests).toHaveLength(5);
+    }),
+  );
+  it.effect("records zero remaining quota on a successful response before another request", () =>
+    Effect.gen(function* () {
+      const now = 1_750_000_000_000;
+      yield* TestClock.setTime(now);
+      const test = fakeLinear({
+        T3Viewer: () =>
+          Response.json(
+            { data: { viewer: JULIUS } },
+            {
+              headers: {
+                "x-ratelimit-requests-remaining": "0",
+                "x-ratelimit-requests-reset": String(now + 60_000),
+                "x-ratelimit-complexity-remaining": "10",
+                "x-ratelimit-complexity-reset": String(now + 3_600_000),
+              },
+            },
+          ),
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+      });
+      const native = yield* test.api;
+      yield* native.viewer();
+      expect((yield* native.getIssueReference("ENG-7").pipe(Effect.flip)).retryAt).toBe(
+        now + 60_000,
+      );
+      expect(test.requests).toHaveLength(1);
+      yield* TestClock.adjust("60 seconds");
+      yield* native.getIssueReference("ENG-7");
+      expect(test.requests).toHaveLength(2);
+    }),
+  );
+  it.effect(
+    "shares a learned native endpoint across documents and keeps successful zero quotas",
+    () =>
+      Effect.gen(function* () {
+        const now = 1_750_000_000_000;
+        yield* TestClock.setTime(now);
+        const nativeIssue = issue("ENG-7", {
+          comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        });
+        const headers = {
+          "x-ratelimit-endpoint-name": "native-common-limit",
+          "x-ratelimit-endpoint-requests-reset": String(now + 30_000),
+        };
+        const test = fakeLinear({
+          T3Comments: () =>
+            Response.json(
+              { data: { issue: nativeIssue } },
+              { headers: { ...headers, "x-ratelimit-endpoint-requests-remaining": "5" } },
+            ),
+          T3IssueReference: () =>
+            Response.json(
+              { data: { issue: nativeIssue } },
+              { headers: { ...headers, "x-ratelimit-endpoint-requests-remaining": "0" } },
+            ),
+          T3Viewer: () => ({ viewer: JULIUS }),
+        });
+        const native = yield* test.api;
+        const input = { identifier: "ENG-7", first: 50, after: "next" };
+        yield* native.getComments(input);
+        yield* native.getIssueReference("ENG-7");
+        expect((yield* native.getComments(input).pipe(Effect.flip)).retryAt).toBe(now + 30_000);
+        yield* native.viewer();
+        expect((yield* native.getComments(input).pipe(Effect.flip)).reason).toBe("rate-limited");
+        expect(test.requests).toHaveLength(3);
+        yield* TestClock.adjust("30 seconds");
+        yield* native.getComments(input);
+        expect(test.requests).toHaveLength(4);
+      }),
+  );
+  it.effect.each([false, true])(
+    "uses a conservative global pause when endpoint identity is missing: %s",
+    (endpointOnly) =>
+      Effect.gen(function* () {
+        const now = 1_750_000_000_000;
+        yield* TestClock.setTime(now);
+        let limited = true;
+        const pauseSeconds = endpointOnly ? 60 : 30;
+        const test = fakeLinear({
+          T3Viewer: () =>
+            limited
+              ? new Response("", {
+                  status: 429,
+                  headers: {
+                    "x-ratelimit-requests-reset": String(now + 3_600_000),
+                    ...(endpointOnly
+                      ? {
+                          "x-ratelimit-requests-remaining": "10",
+                          "x-ratelimit-endpoint-requests-remaining": "0",
+                          "x-ratelimit-endpoint-requests-reset": String(now + 60_000),
+                        }
+                      : {}),
+                  },
+                })
+              : { viewer: JULIUS },
+        });
+        const native = yield* test.api;
+        expect((yield* native.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+        limited = false;
+        expect((yield* native.viewer().pipe(Effect.flip)).retryAt).toBe(now + pauseSeconds * 1_000);
+        expect(test.requests).toHaveLength(1);
+        yield* TestClock.adjust(`${pauseSeconds} seconds`);
+        yield* native.viewer();
+        expect(test.requests).toHaveLength(2);
+      }),
   );
   it.effect("records GraphQL rate limits before any later HTTP request", () =>
     Effect.gen(function* () {
