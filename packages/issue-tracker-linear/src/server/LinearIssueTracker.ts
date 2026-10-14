@@ -408,12 +408,13 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       if (first === undefined) return Effect.succeed(null);
       if (rest.length > 0)
         return Effect.fail(failed(operation, "A Linear issue has one assignee at most."));
-      const member = scope.team.members.nodes.find(
-        (user) =>
-          user.id === first ||
-          user.email?.toLowerCase() === first.toLowerCase() ||
-          user.displayName?.toLowerCase() === first.toLowerCase(),
-      );
+      const member =
+        scope.team.members.nodes.find((user) => user.id === first) ??
+        scope.team.members.nodes.find(
+          (user) =>
+            user.email?.toLowerCase() === first.toLowerCase() ||
+            user.displayName?.toLowerCase() === first.toLowerCase(),
+        );
       return member === undefined
         ? Effect.fail(failed(operation, `"${first}" is not a member of this Linear team.`))
         : Effect.succeed(member.id);
@@ -661,11 +662,13 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       listCandidates: (input) =>
         requireTeam("listCandidates", input.scope).pipe(
           Effect.map((scope) => ({
-            labels: [...scope.team.labels.nodes, ...scope.workspaceLabels].map((label) => ({
-              name: label.name,
-              color: label.color,
-              description: label.description ?? null,
-            })),
+            labels: [...scope.team.labels.nodes, ...scope.workspaceLabels]
+              .filter((label) => label.archivedAt == null)
+              .map((label) => ({
+                name: label.name,
+                color: label.color,
+                description: label.description ?? null,
+              })),
             assignees: scope.team.members.nodes.map(toActor),
             truncated: scope.truncated,
           })),

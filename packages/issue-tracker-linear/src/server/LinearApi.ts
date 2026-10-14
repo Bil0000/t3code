@@ -65,6 +65,7 @@ const LinearLabel = Schema.Struct({
   name: Schema.String,
   color: Schema.NullOr(Schema.String),
   description: Schema.optional(Schema.NullOr(Schema.String)),
+  archivedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 type LinearLabel = typeof LinearLabel.Type;
 
@@ -259,13 +260,13 @@ const TEAM_QUERY = `query T3Team($key: String!) {
     nodes {
       id key name
       states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } }
-      labels(first: 250) { nodes { ${LABEL_FIELDS} description } pageInfo { hasNextPage endCursor } }
+      labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt } pageInfo { hasNextPage endCursor } }
       members(first: 250) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } }
       templates { nodes { id name description content type hasFormFields templateData } }
     }
   }
-  issueLabels(first: 250, filter: { team: { null: true } }) {
-    nodes { ${LABEL_FIELDS} description } pageInfo { hasNextPage endCursor }
+  issueLabels(first: 250, includeArchived: true, filter: { team: { null: true } }) {
+    nodes { ${LABEL_FIELDS} description archivedAt } pageInfo { hasNextPage endCursor }
   }
 }`;
 const ISSUE_CREATE_MUTATION = `mutation T3IssueCreate($input: IssueCreateInput!) {

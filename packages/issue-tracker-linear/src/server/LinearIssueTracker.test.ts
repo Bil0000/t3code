@@ -1119,6 +1119,7 @@ describe("LinearIssueTracker", () => {
                 labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: {
                   nodes: [
+                    user("usr_imposter", "usr_display"),
                     user("usr_display", "  Display Name  "),
                     { ...user("usr_name", "  Full Name  "), displayName: "  " },
                     { ...user("usr_id", "  "), displayName: null },
@@ -1157,17 +1158,18 @@ describe("LinearIssueTracker", () => {
       const scoped = { ...target, scope };
       const candidates = yield* api.listCandidates(scoped);
       expect(candidates.assignees.map(({ id, login }) => ({ id, login }))).toEqual([
+        { id: "usr_imposter", login: "usr_display" },
         { id: "usr_display", login: "Display Name" },
         { id: "usr_name", login: "Full Name" },
         { id: "usr_id", login: "usr_id" },
       ]);
-      yield* api.update({ ...scoped, key: "ENG-7", assignees: [candidates.assignees[0]!.id] });
+      yield* api.update({ ...scoped, key: "ENG-7", assignees: ["usr_display"] });
       yield* api.create({
         ...scoped,
         title: "New",
         body: "",
         labels: [],
-        assignees: [candidates.assignees[0]!.id],
+        assignees: ["usr_display"],
       });
       expect(test.requests.map((request) => request.operation)).toEqual([
         "T3Team",
@@ -1178,6 +1180,65 @@ describe("LinearIssueTracker", () => {
         "T3IssueCreate",
       ]);
     }),
+  );
+  it.effect(
+    "retains archived labels during a whole-set edit but offers only active candidates",
+    () =>
+      Effect.gen(function* () {
+        const old = { id: "lbl_old", name: "Old", color: null, archivedAt: "2026-01-01T00:00:00Z" };
+        const bug = { id: "lbl_bug", name: "Bug", color: null, archivedAt: null };
+        const workspaceOld = { ...old, id: "lbl_workspace_old", name: "WorkspaceOld" };
+        const test = fakeLinear({
+          T3IssueReference: () => ({ issue: issue("ENG-7") }),
+          T3Team: () => ({
+            organization: ORGANIZATION,
+            teams: {
+              nodes: [
+                {
+                  id: "team_eng",
+                  key: "ENG",
+                  name: "Engineering",
+                  states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                  labels: {
+                    nodes: test.requests
+                      .at(-1)
+                      ?.query.includes("labels(first: 250, includeArchived: true)")
+                      ? [old, bug]
+                      : [bug],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                  members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                  templates: { nodes: [] },
+                },
+              ],
+            },
+            issueLabels: {
+              nodes: test.requests
+                .at(-1)
+                ?.query.includes("issueLabels(first: 250, includeArchived: true")
+                ? [workspaceOld]
+                : [],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          }),
+          T3IssueUpdate: (variables) => {
+            expect(variables.input).toEqual({ labelIds: [old.id, bug.id, workspaceOld.id] });
+            return { issueUpdate: { success: true } };
+          },
+        });
+        const api = yield* test.tracker;
+        const scoped = { ...target, scope: "acme/ENG" };
+        yield* api.update({ ...scoped, key: "ENG-7", labels: ["Old", "Bug", "WorkspaceOld"] });
+        expect((yield* api.listCandidates(scoped)).labels.map((label) => label.name)).toEqual([
+          "Bug",
+        ]);
+        expect(test.requests.map((request) => request.operation)).toEqual([
+          "T3IssueReference",
+          "T3Team",
+          "T3IssueUpdate",
+          "T3Team",
+        ]);
+      }),
   );
   it.effect("closes through the team's completed state and reports a missing key", () =>
     Effect.gen(function* () {
