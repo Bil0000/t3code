@@ -53,6 +53,14 @@ export function issueAccess(
     grants.setState &&
     detail.viewerPermissions.setState &&
     detail.capabilities.states.length > 0;
+  const closeReasons = statesAllowed
+    ? detail.capabilities.closeReasons.filter(
+        (reason) => detail.state.category !== "closed" || reason !== detail.state.closeReason,
+      )
+    : [];
+  const categoryOnly = detail?.capabilities.states.every(
+    (state) => state.name.toLowerCase() === state.category,
+  );
   return {
     react: reactionsAllowed && detail.capabilities.reactions,
     commentReact:
@@ -72,11 +80,14 @@ export function issueAccess(
       detail.capabilities.assignees &&
       detail.viewerPermissions.assignees,
     states: statesAllowed
-      ? detail.capabilities.states.filter(
-          (state) => state.name.toLowerCase() !== detail.state.name.toLowerCase(),
+      ? detail.capabilities.states.filter((state) =>
+          categoryOnly
+            ? state.category !== detail.state.category ||
+              (state.category === "closed" && closeReasons.length > 0)
+            : state.name.toLowerCase() !== detail.state.name.toLowerCase(),
         )
       : [],
-    closeReasons: statesAllowed ? detail.capabilities.closeReasons : [],
+    closeReasons,
   };
 }
 

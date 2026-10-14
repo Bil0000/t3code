@@ -170,6 +170,56 @@ describe("issue access", () => {
     expect(issueAccess(detail(), grants).labels).toBe(true);
   });
 
+  it("offers only real moves when a tracker lists generic open and closed states", () => {
+    const generic = (state: IssueDetail["state"], closeReasons: ReadonlyArray<string>) => {
+      const issue = detail();
+      return issueAccess(
+        {
+          ...issue,
+          state,
+          capabilities: {
+            ...issue.capabilities,
+            states: [
+              { category: "open", name: "open" },
+              { category: "closed", name: "closed" },
+            ],
+            closeReasons,
+          },
+        },
+        grants,
+      );
+    };
+    expect(generic({ category: "open", name: "In Progress" }, [])).toMatchObject({
+      states: [{ category: "closed", name: "closed" }],
+      closeReasons: [],
+    });
+    expect(generic({ category: "closed", name: "Done" }, [])).toMatchObject({
+      states: [{ category: "open", name: "open" }],
+      closeReasons: [],
+    });
+    expect(generic({ category: "open", name: "open" }, ["completed"]).states).toEqual([
+      { category: "closed", name: "closed" },
+    ]);
+    expect(
+      generic({ category: "closed", name: "Done", closeReason: "completed" }, [
+        "completed",
+        "canceled",
+      ]),
+    ).toMatchObject({
+      states: [
+        { category: "open", name: "open" },
+        { category: "closed", name: "closed" },
+      ],
+      closeReasons: ["canceled"],
+    });
+    expect(
+      generic({ category: "closed", name: "closed" }, ["completed", "not-planned"]).closeReasons,
+    ).toEqual(["completed", "not-planned"]);
+    expect(
+      generic({ category: "closed", name: "Done", closeReason: "completed" }, ["completed"]).states,
+    ).toEqual([{ category: "open", name: "open" }]);
+  });
+
   it("does not offer state changes or close reasons when the viewer cannot set state", () => {
     const issue = detail();
     expect(
