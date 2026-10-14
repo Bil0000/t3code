@@ -4854,6 +4854,92 @@ it.effect(
     }),
 );
 
+it.effect("serves held activity during refresh and records the refreshed conversation", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let calls = 0;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequestActivity: () =>
+            Effect.gen(function* () {
+              calls += 1;
+              if (calls > 1) {
+                yield* Deferred.succeed(started, undefined);
+                yield* Deferred.await(release);
+              }
+              return {
+                comments: [],
+                commentCount: calls,
+                commentsTruncated: false,
+                reviewThreads: [],
+                commits: [],
+              };
+            }),
+        }),
+      ],
+    });
+    assert.strictEqual((yield* service.activity(reference)).commentCount, 1);
+    yield* TestClock.adjust("61 seconds");
+    const held = yield* service.activity(reference).pipe(Effect.forkChild);
+    yield* Deferred.await(started);
+    yield* Effect.yieldNow;
+    assert.isDefined(held.pollUnsafe());
+    assert.strictEqual((yield* Fiber.join(held)).commentCount, 1);
+    assert.strictEqual((yield* service.activity(reference)).commentCount, 1);
+    assert.strictEqual(calls, 2);
+    const strict = yield* service
+      .activity({ ...reference, allowStale: false })
+      .pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    assert.isUndefined(strict.pollUnsafe());
+    yield* Deferred.succeed(release, undefined);
+    assert.strictEqual((yield* Fiber.join(strict)).commentCount, 2);
+    assert.strictEqual((yield* service.activity(reference)).commentCount, 2);
+    assert.strictEqual(calls, 2);
+  }),
+);
+
+it.effect("keeps held activity after a failed refresh and drops it after invalidation", () =>
+  Effect.gen(function* () {
+    let failing = false;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequestActivity: () =>
+            failing
+              ? Effect.fail(requestFailed)
+              : Effect.succeed({
+                  comments: [],
+                  commentCount: 7,
+                  commentsTruncated: false,
+                  reviewThreads: [],
+                  commits: [],
+                }),
+        }),
+      ],
+    });
+    yield* service.activity(reference);
+    yield* TestClock.adjust("61 seconds");
+    failing = true;
+    assert.strictEqual(
+      (yield* Effect.flip(service.activity({ ...reference, allowStale: false })))._tag,
+      "PullRequestOperationError",
+    );
+    assert.strictEqual((yield* service.activity(reference)).commentCount, 7);
+    yield* service.invalidate({ reference });
+    assert.strictEqual(
+      (yield* Effect.flip(service.activity(reference)))._tag,
+      "PullRequestOperationError",
+    );
+  }),
+);
+
 it.effect("shares linked summaries and reuses them for display without asking the host again", () =>
   Effect.gen(function* () {
     let calls = 0;
@@ -4913,7 +4999,14 @@ it.effect("shares linked summaries and reuses them for display without asking th
 
 it.effect("keeps routed reads separate when the GitHub account changes", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail", "checks", "diff", "filesViewed"] as const) {
+    for (const operation of [
+      "summary",
+      "detail",
+      "activity",
+      "checks",
+      "diff",
+      "filesViewed",
+    ] as const) {
       let failing = false;
       let calls = 0;
       const read = () =>
@@ -4943,6 +5036,16 @@ it.effect("keeps routed reads separate when the GitHub account changes", () =>
             getChangeRequestSummary: read,
             getChangeRequestChecks: read,
             getChangeRequest: read,
+            getChangeRequestActivity: () =>
+              read().pipe(
+                Effect.as({
+                  comments: [],
+                  commentCount: 1,
+                  commentsTruncated: false,
+                  reviewThreads: [],
+                  commits: [],
+                }),
+              ),
             getDiff: () =>
               read().pipe(
                 Effect.as({ patch: "private patch", truncated: false, nextCursor: null }),
@@ -4975,6 +5078,7 @@ it.effect("isolates routed caches for two credentials belonging to the same acco
     for (const operation of [
       "summary",
       "detail",
+      "activity",
       "checks",
       "diff",
       "preview",
@@ -5015,6 +5119,16 @@ it.effect("isolates routed caches for two credentials belonging to the same acco
                 }),
               ),
             getChangeRequest: read,
+            getChangeRequestActivity: () =>
+              read().pipe(
+                Effect.as({
+                  comments: [],
+                  commentCount: 1,
+                  commentsTruncated: false,
+                  reviewThreads: [],
+                  commits: [],
+                }),
+              ),
             getChangeRequestChecks: read,
             getChangeRequestSummary: read,
             getDiff: () =>

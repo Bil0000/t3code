@@ -2782,6 +2782,7 @@ export const make = Effect.gen(function* () {
   };
   const lastGoodSummary = makeLastGoodRead<PullRequestSummary>(DETAIL_CACHE_CAPACITY);
   const lastGoodDetail = makeLastGoodRead<PullRequestDetail>(DETAIL_CACHE_CAPACITY);
+  const lastGoodActivity = makeLastGoodRead<PullRequestActivity>(DETAIL_CACHE_CAPACITY);
 
   // Epochs are the invalidation mechanism: a key carries its scope's epoch, so bumping the
   // epoch strands every entry made under the old one — no enumerating a cache whose keys
@@ -3263,7 +3264,10 @@ export const make = Effect.gen(function* () {
   };
   const activity: PullRequestService["Service"]["activity"] = (input) => {
     const key = refCacheKey(input);
-    return Cache.get(activityCache, key);
+    const read = Cache.get(activityCache, key);
+    return input.allowStale === false
+      ? read.pipe(Effect.tap((value) => lastGoodActivity.record(key, value)))
+      : lastGoodActivity.serveHeld(key, read, "revalidate");
   };
 
   const diffCache = yield* Cache.makeWith(

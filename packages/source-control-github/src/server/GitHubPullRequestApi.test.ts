@@ -63,9 +63,6 @@ const mockedExecute = vi.fn<(call: ApiCall) => ApiAnswer>();
 const defaultCredential = (host: string) =>
   Effect.succeed({ token: Redacted.make("token"), fingerprint: `${host}:token` });
 const mockedCredential = vi.fn(defaultCredential);
-const mockedStackMemberships = vi.fn<(call: ApiCall) => ApiAnswer>(() =>
-  Effect.succeed(output('{"data":{}}')),
-);
 
 /**
  * A transport that answers from the mocks above but spends the real GraphQL quota from each
@@ -83,11 +80,7 @@ const mockApi = Layer.effect(
               allowReserve: input.allowReserve ?? interactive,
             }),
           ),
-          Effect.andThen(() =>
-            (input.query.includes("query PullRequestStackMemberships")
-              ? mockedStackMemberships
-              : mockedExecute)({ kind: "graphql", ...input }),
-          ),
+          Effect.andThen(() => mockedExecute({ kind: "graphql", ...input })),
           Effect.tap((answer) => quota.observe(input.host, answer.headers)),
           Effect.map((answer) => answer.body),
         ),
@@ -466,7 +459,6 @@ const nodeIdAnswer = (id: string) => ({ data: { repository: { pullRequest: { id 
 
 afterEach(() => {
   mockedExecute.mockReset();
-  mockedStackMemberships.mockReset();
   mockedCredential.mockReset();
   mockedCredential.mockImplementation(defaultCredential);
 });
@@ -1404,29 +1396,24 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
-  it.effect("enriches only the visible fallback rows after filtering and widening", () =>
+  it.effect("keeps stack badges in filtered fallback rows without a second read", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(emptySearch()));
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(listedPullRequests(3, 1, () => ({ isDraft: true })))),
       );
       mockedExecute.mockReturnValueOnce(
-        Effect.succeed(output(listedPullRequests(6, 1, (number) => ({ isDraft: number < 4 })))),
-      );
-      mockedStackMemberships.mockReturnValueOnce(
         Effect.succeed(
           output(
-            encodeJson({
-              data: {
-                s0: {
-                  pullRequest: {
+            listedPullRequests(6, 1, (number) => ({
+              isDraft: number < 4,
+              ...(number === 4
+                ? {
                     stack: { number: 3, size: 2, baseRefName: "main" },
                     stackEntry: { position: 1 },
-                  },
-                },
-                s1: { pullRequest: { stack: null, stackEntry: null } },
-              },
-            }),
+                  }
+                : {}),
+            })),
           ),
         ),
       );
@@ -1446,43 +1433,28 @@ layer("GitHubPullRequestApi.layer", (it) => {
       expect(batch.items[1]?.stack).toBeUndefined();
       expect(batch.truncated).toBe(true);
       expect(batch.continues).toBe(false);
-      expect(mockedStackMemberships).toHaveBeenCalledTimes(1);
-      const membership = mockedStackMemberships.mock.calls[0]?.[0];
-      const numbers = Object.entries(
-        membership?.kind === "graphql" ? (membership.variables ?? {}) : {},
-      )
-        .filter(([name]) => name.endsWith("_number"))
-        .map(([, number]) => number);
-      expect(numbers).toEqual([4, 5]);
+      expect(mockedExecute).toHaveBeenCalledTimes(3);
+      for (const [call] of mockedExecute.mock.calls) {
+        expect(call.kind === "graphql" && call.query.includes("stackEntry { position }")).toBe(
+          true,
+        );
+      }
     }),
   );
 
-  it.effect("batches membership reads and keeps successful rows when one chunk fails", () =>
+  it.effect("includes stack badges in a search page without serial enrichment", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(27, 1))));
-      mockedStackMemberships.mockImplementation((input) =>
-        input.kind === "graphql" && Object.values(input.variables ?? {}).includes(26)
-          ? Effect.fail(
-              new GitHubApi.GitHubApiResponseError({
-                host: "github.com",
-                operation: "listPullRequestStackMemberships",
-                status: 502,
-              }),
-            )
-          : Effect.succeed(
-              output(
-                encodeJson({
-                  data: {
-                    s0: {
-                      pullRequest: {
-                        stack: { number: 3, size: 2, baseRefName: "main" },
-                        stackEntry: { position: 1 },
-                      },
-                    },
-                  },
-                }),
-              ),
-            ),
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          searchPage([
+            {
+              ...searchItem(7, "acme/web", "2026-07-03T00:00:00Z"),
+              stack: { number: 3, size: 2, baseRefName: "main" },
+              stackEntry: { position: 1 },
+            },
+            searchItem(8, "acme/web", "2026-07-02T00:00:00Z"),
+          ]),
+        ),
       );
       const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
       const batch = yield* cli.listPullRequests({
@@ -1492,16 +1464,87 @@ layer("GitHubPullRequestApi.layer", (it) => {
         state: "open",
         involvement: "all",
         viewer: "bilal",
-        limit: 26,
+        limit: 1,
       });
-      expect(batch.items.map((item) => item.number)).toEqual(
-        Array.from({ length: 26 }, (_, i) => i + 1),
-      );
+      expect(batch.items.map((item) => item.number)).toEqual([7]);
       expect(batch.items[0]?.stack).toEqual({ number: 3, size: 2, base: "main", position: 1 });
-      expect(batch.items[25]?.stack).toBeUndefined();
       expect(batch.truncated).toBe(true);
       expect(batch.continues).toBe(true);
-      expect(mockedStackMemberships).toHaveBeenCalledTimes(2);
+      expect(mockedExecute).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("keeps listing rows when optional stack fields are unavailable", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.fail(
+          new GitHubApi.GitHubApiResponseError({
+            host: "github.com",
+            operation: "listPullRequests",
+            status: 200,
+            githubErrors: ["Field 'stack' does not exist on type 'PullRequest'"],
+          }),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(1, 7))));
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const batch = yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 2,
+      });
+      expect(batch.items.map((item) => item.number)).toEqual([7]);
+      expect(mockedExecute).toHaveBeenCalledTimes(2);
+      expect(mockedExecute.mock.calls[1]?.[0]).toMatchObject({
+        kind: "graphql",
+        query: expect.not.stringContaining("stackEntry"),
+      });
+    }),
+  );
+
+  it.effect("does not retry authentication or rate failures without stack fields", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      for (const error of [
+        new GitHubApi.GitHubApiAuthenticationError({
+          host: "github.com",
+          operation: "listPullRequests",
+        }),
+        new GitHubApi.GitHubApiRateLimitError({
+          host: "github.com",
+          operation: "listPullRequests",
+        }),
+        new GitHubApi.GitHubApiResponseError({
+          host: "github.com",
+          operation: "listPullRequests",
+          status: 200,
+          githubErrors: ["Resource not accessible by integration"],
+        }),
+        new GitHubApi.GitHubApiResponseError({
+          host: "github.com",
+          operation: "listPullRequests",
+          status: 502,
+        }),
+      ]) {
+        mockedExecute.mockReturnValueOnce(Effect.fail(error));
+        const result = yield* Effect.result(
+          cli.listPullRequests({
+            cwd: "/w",
+            repository: "acme/web",
+            host: "github.com",
+            state: "open",
+            involvement: "all",
+            viewer: "bilal",
+            limit: 2,
+          }),
+        );
+        expect(result._tag).toBe("Failure");
+      }
+      expect(mockedExecute).toHaveBeenCalledTimes(4);
     }),
   );
 
@@ -1523,7 +1566,6 @@ layer("GitHubPullRequestApi.layer", (it) => {
       const enterprise = yield* cli.listPullRequests({ ...input, host: "github.acme.test" });
       expect(empty.items).toEqual([]);
       expect(enterprise.items.map((item) => item.number)).toEqual([7]);
-      expect(mockedStackMemberships).not.toHaveBeenCalled();
     }),
   );
 
@@ -2625,9 +2667,88 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect(
+    "returns an empty workflow list without waiting for head scope and cancels that read",
+    () =>
+      Effect.gen(function* () {
+        const headsStarted = yield* Deferred.make<void>();
+        const runsReturned = yield* Deferred.make<void>();
+        const headsCancelled = yield* Deferred.make<void>();
+        mockedExecute.mockImplementation((call) =>
+          call.kind === "graphql"
+            ? Deferred.succeed(headsStarted, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.ensuring(Deferred.succeed(headsCancelled, undefined)),
+              )
+            : Deferred.await(headsStarted).pipe(
+                Effect.andThen(Deferred.succeed(runsReturned, undefined)),
+                Effect.as(output(encodeJson(workflowRuns([])))),
+              ),
+        );
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const read = yield* cli
+          .listWorkflowRunsRequiringApproval({
+            cwd: "/w",
+            repository: "acme/web",
+            host: "github.com",
+            number: 7,
+            headSha: "abc123",
+            headBranch: "feat/page",
+            headRepositoryOwner: "octocat",
+            isCrossRepository: true,
+          })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(runsReturned);
+        yield* Effect.yieldNow;
+        assert.isDefined(read.pollUnsafe());
+        expect(yield* Fiber.join(read)).toEqual([]);
+        assert.isTrue(yield* Deferred.isDone(headsCancelled));
+      }),
+  );
+
+  it.effect("waits for head scope when a workflow needs approval", () =>
+    Effect.gen(function* () {
+      const headsStarted = yield* Deferred.make<void>();
+      const runsReturned = yield* Deferred.make<void>();
+      const releaseHeads = yield* Deferred.make<void>();
+      mockedExecute.mockImplementation((call) =>
+        call.kind === "graphql"
+          ? Deferred.succeed(headsStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseHeads)),
+              Effect.as(output(encodeJson(heads([7, 8])))),
+            )
+          : Deferred.await(headsStarted).pipe(
+              Effect.andThen(Deferred.succeed(runsReturned, undefined)),
+              Effect.as(output(encodeJson(workflowRuns([10])))),
+            ),
+      );
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const read = yield* Effect.flip(
+        cli.listWorkflowRunsRequiringApproval({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          headSha: "abc123",
+          headBranch: "feat/page",
+          headRepositoryOwner: "octocat",
+          isCrossRepository: true,
+        }),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(runsReturned);
+      yield* Effect.yieldNow;
+      assert.isUndefined(read.pollUnsafe());
+      yield* Deferred.succeed(releaseHeads, undefined);
+      expect(yield* Fiber.join(read)).toMatchObject({
+        _tag: "GitHubWorkflowApprovalRefusedError",
+        reason: "head-not-unique",
+      });
+    }),
+  );
+
   it.effect("refuses workflow approval when one head belongs to several pull requests", () =>
     Effect.gen(function* () {
-      workflowApprovalRoutes(() => crossRepositoryDetail(), heads([7, 8]), workflowRuns([]));
+      workflowApprovalRoutes(() => crossRepositoryDetail(), heads([7, 8]), workflowRuns([10]));
       const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
@@ -2663,7 +2784,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
         hasNextPage: true,
         endCursor: "same",
       } as never;
-      workflowApprovalRoutes(() => crossRepositoryDetail(), repeating, workflowRuns([]));
+      workflowApprovalRoutes(() => crossRepositoryDetail(), repeating, workflowRuns([10]));
       const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
       const error = yield* Effect.flip(
@@ -3936,6 +4057,8 @@ layer("GitHubPullRequestApi.layer", (it) => {
       // The first page asks from the beginning; the next carries on from where it stopped.
       expect(varsAt(0)["cursor"]).toBeNull();
       expect(varsAt(1)["cursor"]).toBe("Y3Vyc29yOjE");
+      expect(varsAt(0)["head"]).toBe(true);
+      expect(varsAt(1)["head"]).toBe(false);
       expect(conversation.comments.map((comment) => comment.id)).toEqual(["c1", "c2"]);
       assert.isFalse(conversation.truncated);
     }),

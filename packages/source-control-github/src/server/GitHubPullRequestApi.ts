@@ -7,6 +7,7 @@ import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -91,8 +92,6 @@ import {
   buildPullRequestStatsGraphQlQuery,
   buildPullRequestSummariesGraphQlQuery,
   buildPullRequestWatchFingerprintsGraphQlQuery,
-  buildPullRequestStackMembershipsGraphQlQuery,
-  decodePullRequestStackMembershipsJson,
   pullRequestSearchGraphQlQuery,
   PULL_REQUEST_SEARCH_MAX_ROWS,
   PULL_REQUEST_FILES_VIEWED_GRAPHQL_QUERY,
@@ -1654,9 +1653,9 @@ export const make = Effect.gen(function* () {
 
   const listWorkflowRunsRequiringApproval: GitHubPullRequestApi["Service"]["listWorkflowRunsRequiringApproval"] =
     (input) =>
-      Effect.all(
-        [
-          listHeadsByBranch(input).pipe(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const head = yield* listHeadsByBranch(input).pipe(
             Effect.flatMap(
               ({
                 heads,
@@ -1697,8 +1696,10 @@ export const make = Effect.gen(function* () {
                 return Effect.succeed(exactHeads[0]);
               },
             ),
-          ),
-          listActionRequiredRuns(input).pipe(
+            Effect.result,
+            Effect.forkScoped,
+          );
+          const runs = yield* listActionRequiredRuns(input).pipe(
             Effect.flatMap((runs) =>
               runs.length > workflowApprovalLimit
                 ? Effect.fail(
@@ -1712,10 +1713,12 @@ export const make = Effect.gen(function* () {
                   )
                 : Effect.succeed(runs),
             ),
-          ),
-        ],
-        { concurrency: 2 },
-      ).pipe(Effect.map(([, runs]) => runs));
+          );
+          if (runs.length === 0) return runs;
+          yield* Fiber.join(head).pipe(Effect.flatMap(Effect.fromResult));
+          return runs;
+        }),
+      );
 
   /** One pull request's summary, through the same aliased query the batch uses. */
   const viewPullRequestSummary = (input: PullRequestSummaryRead) => {
@@ -1926,16 +1929,19 @@ export const make = Effect.gen(function* () {
       const read = (
         continues: boolean,
         requestedRows = input.limit + 1,
-      ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestApiError> =>
-        collect(requestedRows, (after, rows) =>
-          continues
+      ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestApiError> => {
+        const page = (
+          after: string | null,
+          rows: number,
+          includeStacks = input.host === "github.com",
+        ): Effect.Effect<GitHubPullRequestListPage, GitHubPullRequestApiError> =>
+          (continues
             ? graphqlRead({
                 cwd: input.cwd,
                 host: input.host,
                 operation: "listPullRequests",
-                // The reader's own words are in the query.
                 variables: { q: query, after },
-                query: pullRequestSearchGraphQlQuery(rows, false, true),
+                query: pullRequestSearchGraphQlQuery(rows, includeStacks, true),
                 decode: decodePullRequestSearchJson,
               })
             : graphqlRead({
@@ -1943,10 +1949,20 @@ export const make = Effect.gen(function* () {
                 host: input.host,
                 operation: "listPullRequests",
                 variables: { owner, name, states: LIST_STATES[input.state], after },
-                query: pullRequestListGraphQlQuery(rows),
+                query: pullRequestListGraphQlQuery(rows, includeStacks),
                 decode: decodePullRequestListJson,
-              }),
-        ).pipe(
+              })
+          ).pipe(
+            Effect.catchTags({
+              GitHubApiResponseError: (error) =>
+                includeStacks &&
+                error.status === 200 &&
+                error.githubErrors?.some((message) => /\b(?:stack|stackEntry)\b/i.test(message))
+                  ? page(after, rows, false)
+                  : Effect.fail(error),
+            }),
+          );
+        return collect(requestedRows, page).pipe(
           Effect.flatMap(({ items: rawItems, rawCount, truncated: cutShort }) => {
             const items = continues
               ? rawItems
@@ -1973,6 +1989,7 @@ export const make = Effect.gen(function* () {
             });
           }),
         );
+      };
       // GitHub does not index every repository for search, and one it will not search answers
       // with no rows rather than with an error — so an empty listing is read again from the
       // repository's own list. Those rows come back newest-created first, an order no `updated:`
@@ -1996,47 +2013,6 @@ export const make = Effect.gen(function* () {
           (batch) => batch.items.length > 0 || input.cursor !== undefined || hasQuery,
           () => read(false),
         ),
-        Effect.flatMap((batch) => {
-          // Match the search query's host support, and enrich only rows that survived paging.
-          if (input.host !== "github.com" || batch.items.length === 0) return Effect.succeed(batch);
-          const chunks: Array<ReadonlyArray<GitHubPullRequestListItem>> = [];
-          for (let start = 0; start < batch.items.length; start += STAT_ALIASES_PER_REQUEST) {
-            chunks.push(batch.items.slice(start, start + STAT_ALIASES_PER_REQUEST));
-          }
-          return Effect.forEach(
-            chunks,
-            (chunk) => {
-              const document = buildPullRequestStackMembershipsGraphQlQuery(
-                input.repository,
-                chunk.map((item) => item.number),
-              );
-              if (document === null) return Effect.succeed(chunk);
-              return graphqlRead({
-                cwd: input.cwd,
-                host: input.host,
-                operation: "listPullRequestStackMemberships",
-                ...document,
-                decode: decodePullRequestStackMembershipsJson,
-              }).pipe(
-                Effect.map((memberships) =>
-                  chunk.map((item, index) => {
-                    const stack = memberships.get(index);
-                    return stack === undefined ? item : { ...item, stack };
-                  }),
-                ),
-                // Optional badges must not take down a listing that already read successfully.
-                Effect.catch(() =>
-                  Effect.logWarning("Pull request stack membership enrichment failed", {
-                    operation: "listPullRequestStackMemberships",
-                    host: input.host,
-                    rows: chunk.length,
-                  }).pipe(Effect.as(chunk)),
-                ),
-              );
-            },
-            { concurrency: STAT_REQUEST_CONCURRENCY },
-          ).pipe(Effect.map((chunks) => ({ ...batch, items: chunks.flat() })));
-        }),
       );
     },
 
@@ -2297,7 +2273,7 @@ export const make = Effect.gen(function* () {
             cwd: input.cwd,
             host: input.host,
             operation: "listReviewThreadComments",
-            variables: { owner, name, number: input.number, cursor },
+            variables: { owner, name, number: input.number, cursor, head: cursor === null },
             query: REVIEW_THREADS_GRAPHQL_QUERY,
             decode: decodeReviewThreadsJson,
           });
@@ -2324,8 +2300,6 @@ export const make = Effect.gen(function* () {
           for (const login of read.botLogins) botLogins.add(login);
           for (const [login, avatarUrl] of read.avatarsByLogin)
             avatarsByLogin.set(login, avatarUrl);
-          // The roster, the commits and the viewer's standing travel with every page, and the
-          // first one already carries all of them.
           if (page === 0) {
             reviewers = read.reviewers;
             reactions = read.reactions;

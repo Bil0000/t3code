@@ -273,13 +273,6 @@ const RawStatsSchema = Schema.Struct({
   ),
 });
 
-const RawStackMembershipsSchema = Schema.Struct({
-  data: Schema.Record(
-    Schema.String,
-    Schema.NullOr(Schema.Struct({ pullRequest: Schema.NullOr(RawStackMembershipSchema) })),
-  ),
-});
-
 /** How many of a reaction's people the hover names before it counts the rest. */
 const REACTORS_PER_GROUP = 10;
 
@@ -984,7 +977,7 @@ function pullRequestRowSelection(includeStacks: boolean, includeStats: boolean):
         isDraft
         mergeable
         reviewDecision
-        latestReviews(first: 20) { nodes { state author { login } } }
+        latestReviews(first: 20) { nodes { state } }
         ${includeStats ? "additions deletions" : ""}
         createdAt
         updatedAt
@@ -1018,7 +1011,7 @@ function pullRequestRowSelection(includeStacks: boolean, includeStats: boolean):
  * view entirely. This query gives back the newest hundred, which is what a reader scoping a diff
  * wants, and stands in for the `gh` list wherever it came back non-empty.
  */
-export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String, $head: Boolean!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -1039,6 +1032,7 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
           }
         }
       }
+      ... @include(if: $head) {
       viewerCanUpdate
       viewerDidAuthor
       author { __typename login avatarUrl }
@@ -1074,6 +1068,7 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
             authors(first: 3) { nodes { name avatarUrl user { login } } }
           }
         }
+      }
       }
     }
   }
@@ -1988,36 +1983,6 @@ export function buildPullRequestStatsGraphQlQuery(
     changeRequests,
     "additions deletions",
   );
-}
-
-/** Stack membership for the visible rows of a per-repository listing. */
-export function buildPullRequestStackMembershipsGraphQlQuery(
-  repository: string,
-  numbers: ReadonlyArray<number>,
-): GraphQlDocument | null {
-  return aliasedPullRequestsDocument(
-    "PullRequestStackMemberships",
-    "s",
-    numbers.map((number) => ({ repository, number })),
-    STACK_MEMBERSHIP_SELECTION,
-  );
-}
-
-const decodeStackMemberships = decodeJsonResult(RawStackMembershipsSchema);
-
-export function decodePullRequestStackMembershipsJson(
-  raw: string,
-): Result.Result<ReadonlyMap<number, PullRequestStackMembership>, DecodeFailure> {
-  const decoded = decodeStackMemberships(raw);
-  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
-  const memberships = new Map<number, PullRequestStackMembership>();
-  for (const [alias, value] of Object.entries(decoded.success.data)) {
-    const index = /^s(\d+)$/.exec(alias)?.[1];
-    if (index === undefined || value?.pullRequest == null) continue;
-    const stack = toStackMembership(value.pullRequest);
-    if (stack !== undefined) memberships.set(Number(index), stack);
-  }
-  return Result.succeed(memberships);
 }
 
 /**
