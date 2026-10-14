@@ -1204,7 +1204,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
-const layerWsIssuesRpc = ServerWsIssuesRpcGroup.toLayer(
+export const layerWsIssuesRpc = ServerWsIssuesRpcGroup.toLayer(
   Effect.gen(function* () {
     const issues = yield* IssueService.IssueService;
     const threadIssues = yield* ThreadIssueService.ThreadIssueService;
@@ -1231,7 +1231,8 @@ const layerWsIssuesRpc = ServerWsIssuesRpcGroup.toLayer(
       [WS_METHODS.issuesAssigneeCandidates]: (input) => issues.assigneeCandidates(input),
       [WS_METHODS.issuesEditComment]: (input) => issues.editComment(input),
       [WS_METHODS.issuesSetParent]: (input) => issues.setParent(input),
-      [WS_METHODS.issuesRefreshThreadLinks]: (input) => threadIssues.refresh(input.threadId),
+      [WS_METHODS.issuesRefreshThreadLinks]: (input) =>
+        threadIssues.refresh(input.threadId, { staleOnly: true }),
 
       [WS_METHODS.issueTrackersList]: () => issueTrackers.list,
       [WS_METHODS.issueTrackersConnect]: (input) => issueTrackers.connect(input),

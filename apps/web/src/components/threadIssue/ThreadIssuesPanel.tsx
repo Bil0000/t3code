@@ -1,4 +1,5 @@
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useEnvironmentScope } from "~/state/session";
 import { threadIssueKeyOf, type ScopedThreadRef, type ThreadIssueLink } from "@t3tools/contracts";
 import {
@@ -116,6 +117,9 @@ function ThreadIssueRow({
 export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef }) {
   const environmentId = threadRef.environmentId;
   const thread = useThreadShell(threadRef);
+  const canRefresh = useAtomValue(
+    issueEnvironment.refreshThreadLinks.permissionAtom(environmentId),
+  );
   const refresh = useAtomCommand(issueEnvironment.refreshThreadLinks, {
     reportFailure: false,
   });
@@ -126,21 +130,18 @@ export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef })
   const refreshedThread = useRef<string | null>(null);
   const threadKey = `${environmentId}:${threadRef.threadId}`;
   const refreshLinks = useCallback(() => {
+    if (!canRefresh) return;
     void refresh({ environmentId, input: { threadId: threadRef.threadId } }).then((result) => {
       if (refreshedThread.current !== threadKey) return;
       setRefreshError(result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null);
     });
-  }, [environmentId, refresh, threadKey, threadRef.threadId]);
+  }, [canRefresh, environmentId, refresh, threadKey, threadRef.threadId]);
   useEffect(() => {
     refreshedThread.current = threadKey;
     setRefreshError(null);
     refreshLinks();
   }, [refreshLinks, threadKey]);
-  useIssueViewRefresh(
-    refreshLinks,
-    [{ environmentId, input: { projectId: thread?.projectId } }],
-    threadKey,
-  );
+  useIssueViewRefresh(refreshLinks, [], threadKey);
 
   const items = thread?.issues ?? [];
   const openIssue = (link: ThreadIssueLink) =>

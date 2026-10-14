@@ -7,6 +7,9 @@ import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   type ApplicationStoredEvent,
+  AuthOrchestrationOperateScope,
+  WsIssuesRpcGroup,
+  WS_METHODS,
   EnvironmentId,
   CheckpointId,
   CheckpointRef,
@@ -47,6 +50,11 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as RpcTest from "effect/rpc/RpcTest";
+import * as RpcAuthorization from "../auth/RpcAuthorization.ts";
+import { rpcInstrumentationLayer } from "../observability/RpcInstrumentation.ts";
+import * as IssueTrackerConnections from "../issue/IssueTrackerConnections.ts";
+import { layerWsIssuesRpc } from "../ws.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
@@ -2362,6 +2370,13 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const threadId = ThreadId.make(`issue-mcp-budget-${target}`);
         const projectId = ProjectId.make(`issue-mcp-project-${target}`);
+        yield* seedProject({
+          projectId,
+          title: "Issue project",
+          workspaceRoot: "/workspace/issues",
+          defaultModelSelection: modelSelection,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
         yield* orchestrator.dispatch({
           type: "thread.create",
           commandId: CommandId.make(`issue-mcp-create-${target}`),
@@ -2426,9 +2441,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           events: [],
           linkedPullRequests: [],
         };
-        const events = yield* Queue.unbounded<OrchestrationV2DomainEvent | null>();
+        const events = yield* Queue.unbounded<
+          OrchestrationV2DomainEvent | { handled: Deferred.Deferred<void> }
+        >();
         const handled = yield* Deferred.make<void>();
         let reads = 0;
+        let nonce = 0;
         const dependencies = Layer.mergeAll(
           Layer.succeed(
             Orchestrator.OrchestratorV2,
@@ -2452,14 +2470,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                         payload: thread,
                         issueOperation: "link",
                       });
-                      yield* Queue.offer(events, null);
+                      yield* Queue.offer(events, { handled });
                     }),
                   ),
                 ),
               streamDomainEvents: Stream.fromQueue(events).pipe(
                 Stream.mapEffect((event) =>
-                  event === null
-                    ? Deferred.succeed(handled, undefined).pipe(Effect.as(null))
+                  "handled" in event
+                    ? Deferred.succeed(event.handled, undefined).pipe(Effect.as(null))
                     : Effect.succeed(event),
                 ),
                 Stream.filter((event) => event !== null),
@@ -2500,7 +2518,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.succeed(
             Crypto.Crypto,
             Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
+              randomBytes: (size) => new Uint8Array(size).fill(++nonce),
               digest: (_algorithm, data) => Effect.succeed(data),
             }),
           ),
@@ -2552,6 +2570,69 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             assert.deepEqual(yield* orchestrator.getThreadProjection(threadId), linked);
             yield* service.drain;
             assert.equal(reads, target === "key" ? 2 : 1);
+            if (target === "key") {
+              const rpc = yield* RpcTest.makeClient(WsIssuesRpcGroup).pipe(
+                Effect.provide(
+                  Layer.mergeAll(
+                    layerWsIssuesRpc.pipe(
+                      Layer.provide(
+                        Layer.mergeAll(
+                          Layer.succeedContext(context),
+                          Layer.mock(IssueTrackerConnections.IssueTrackerConnections)({}),
+                        ),
+                      ),
+                    ),
+                    RpcAuthorization.layer([AuthOrchestrationOperateScope]),
+                    rpcInstrumentationLayer,
+                  ),
+                ),
+              );
+              yield* TestClock.adjust("6 minutes");
+              const visited = yield* Deferred.make<void>();
+              yield* Queue.offer(events, {
+                id: EventId.make("issue-budget-visited"),
+                type: "thread.visited",
+                threadId,
+                occurredAt: yield* DateTime.now,
+                payload: linked.thread,
+              });
+              yield* Queue.offer(events, { handled: visited });
+              yield* Deferred.await(visited);
+              yield* service.drain;
+              assert.equal(reads, 3);
+              yield* rpc[WS_METHODS.issuesRefreshThreadLinks]({ threadId });
+              yield* service.drain;
+              assert.equal(reads, 3);
+
+              yield* orchestrator.dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make("issue-budget-turn"),
+                createdBy: "user",
+                creationSource: "web",
+                threadId,
+                messageId: MessageId.make("issue-budget-message"),
+                text: "Work",
+                attachments: [],
+                dispatchMode: { type: "start_immediately" },
+              });
+              const run = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+              const completed = yield* Deferred.make<void>();
+              yield* Queue.offer(events, {
+                id: EventId.make("issue-budget-completed"),
+                type: "run.updated",
+                threadId,
+                runId: run.id,
+                occurredAt: yield* DateTime.now,
+                payload: { ...run, status: "completed" },
+              });
+              yield* Queue.offer(events, { handled: completed });
+              yield* Deferred.await(completed);
+              yield* service.drain;
+              assert.equal(reads, 4);
+              yield* rpc[WS_METHODS.issuesRefreshThreadLinks]({ threadId });
+              yield* service.drain;
+              assert.equal(reads, 4);
+            }
           }),
         );
       }),
