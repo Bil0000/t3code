@@ -658,6 +658,7 @@ export const make = Effect.gen(function* () {
             scope: project.scope,
             key: input.key,
             cursor: input.cursor,
+            ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
           })
           .pipe(Effect.mapError(toIssueError("comments"))),
       ),

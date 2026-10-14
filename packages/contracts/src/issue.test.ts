@@ -8,6 +8,7 @@ import { WS_METHODS } from "./rpc.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
+  IssueCommentsPageInput,
   IssueLabelCandidatesPage,
   IssueState,
   IssuePageInput,
@@ -27,6 +28,7 @@ import {
 } from "./issue.ts";
 
 const decodeDescriptor = Schema.decodeEffect(StandaloneIssueTrackerDescriptor);
+const decodeComments = Schema.decodeUnknownSync(IssueCommentsPageInput);
 const decodeActor = Schema.decodeEffect(IssueActor);
 const decodeCreate = Schema.decodeEffect(IssueCreateInput);
 const decodeCreated = Schema.decodeEffect(IssueCreateResult);
@@ -253,4 +255,20 @@ it("keeps URL resolution direct and protected by the read grant", () => {
   assert.deepEqual(clientRpcRequiredScopes(WS_METHODS.issuesResolveUrl, input), [
     AuthOrchestrationReadScope,
   ]);
+});
+
+it("preserves optional comment-page viewer context while accepting older clients", () => {
+  const input = {
+    projectId: "project",
+    tracker: "linear",
+    host: "linear.app",
+    scope: "acme/ENG",
+    key: "ENG-7",
+    cursor: "older",
+  };
+  expect(decodeComments(input)).toEqual(input);
+  expect(decodeComments({ ...input, viewer: "native-viewer" })).toEqual({
+    ...input,
+    viewer: "native-viewer",
+  });
 });

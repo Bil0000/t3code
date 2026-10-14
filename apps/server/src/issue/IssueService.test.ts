@@ -3,6 +3,12 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Crypto from "effect/Crypto";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
+import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
+import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
 import {
   IssueTrackerKind,
   IssueUpdateInput,
@@ -2075,5 +2081,105 @@ it.effect.each([{ sort: "comments" as const }, { order: "asc" as const }])(
       const result = yield* service.list({ state: "open", ...selection });
       expect(result.entries).toEqual([]);
       expect(result.errors).toHaveLength(1);
+    }),
+);
+
+it.effect(
+  "keeps older Linear comment flags through the real service and driver without viewer reads",
+  () =>
+    Effect.gen(function* () {
+      const operations: string[] = [];
+      const user = {
+        id: "native-viewer",
+        name: "Viewer",
+        displayName: "Viewer",
+        email: "fake@example.test",
+        avatarUrl: null,
+      };
+      const http = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.sync(() => {
+            const body = request.body;
+            const payload = JSON.parse(
+              body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : "{}",
+            ) as { query: string };
+            operations.push(/^(?:query|mutation) (\w+)/.exec(payload.query)?.[1] ?? "unknown");
+            return HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify({
+                  data: {
+                    issue: {
+                      id: "issue-id",
+                      identifier: "ENG-7",
+                      url: "https://linear.app/acme/issue/ENG-7",
+                      team: { key: "ENG" },
+                      comments: {
+                        nodes: [
+                          {
+                            id: "comment-id",
+                            body: "Owned",
+                            createdAt: "2026-10-01T00:00:00.000Z",
+                            url: null,
+                            user,
+                            reactions: [{ id: "reaction-id", emoji: "👍", user }],
+                          },
+                        ],
+                        pageInfo: { hasNextPage: false, endCursor: null },
+                      },
+                    },
+                  },
+                }),
+                { headers: { "content-type": "application/json" } },
+              ),
+            );
+          }),
+        ),
+      );
+      const driver = yield* LinearIssueTracker.make.pipe(
+        Effect.provide(
+          LinearApi.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                http,
+                RateLimit.layer,
+                Layer.succeed(
+                  IssueTrackerHost.IssueTrackerHost,
+                  IssueTrackerHost.IssueTrackerHost.of({
+                    credentials: { get: () => Effect.succeed(Option.some("fake-token")) },
+                  }),
+                ),
+                Layer.succeed(
+                  Crypto.Crypto,
+                  Crypto.make({
+                    randomBytes: (size) => new Uint8Array(size).fill(1),
+                    digest: (_algorithm, data) => Effect.succeed(data),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      const service = yield* makeService({
+        projects: [project({ id: "web" })],
+        trackers: [driver],
+        bindings: { web: { tracker: LINEAR, scope: "acme/ENG" } },
+      });
+      for (const viewer of [undefined, user.id]) {
+        const result = yield* service.comments({
+          projectId: ProjectId.make("web"),
+          tracker: LINEAR,
+          host: "linear.app",
+          scope: "acme/ENG",
+          key: "ENG-7",
+          cursor: "older",
+          ...(viewer === undefined ? {} : { viewer }),
+        });
+        expect(result.comments[0]?.canEdit).toBe(viewer !== undefined);
+        expect(result.comments[0]?.reactions?.[0]?.viewerHasReacted).toBe(viewer !== undefined);
+      }
+      expect(operations).toEqual(["T3Comments", "T3Comments"]);
     }),
 );

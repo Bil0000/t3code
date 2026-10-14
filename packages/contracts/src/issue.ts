@@ -318,6 +318,7 @@ export type IssueDetail = typeof IssueDetail.Type;
 export const IssueCommentsPageInput = Schema.Struct({
   ...IssueRef.fields,
   cursor: TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
+  viewer: Schema.optional(TrimmedNonEmptyString),
 });
 export type IssueCommentsPageInput = typeof IssueCommentsPageInput.Type;
 

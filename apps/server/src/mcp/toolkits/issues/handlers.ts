@@ -434,10 +434,15 @@ const make = Effect.gen(function* () {
             scope: input.scope,
             key: input.key,
             cursor: input.cursor,
+            ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
           });
         }
         const target = yield* resolveTarget(input);
-        return yield* issues.comments({ ...refOf(target), cursor: input.cursor });
+        return yield* issues.comments({
+          ...refOf(target),
+          cursor: input.cursor,
+          ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
+        });
       }),
     ),
     create_issue: McpToolAccess.writesWithCapability((input) =>

@@ -69,6 +69,7 @@ describe("issue comment requests", () => {
     { tracker: "github" as IssueTrackerKind },
     { host: undefined },
     { cursor: "next" },
+    { viewer: "native-viewer" },
     {},
   ])("keeps single-flight requests distinct for %j", async (change) => {
     const input: IssueCommentsPageInput = {

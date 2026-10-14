@@ -350,12 +350,13 @@ const ReadIssueTool = Tool.make("read_issue", {
 
 const ReadIssueCommentsTool = Tool.make("read_issue_comments", {
   description:
-    "Read one bounded page of older issue comments. Pass commentsCursor from read_issue or nextCursor from this tool as cursor. Reuse the returned projectId, tracker, host, scope and key to avoid resolving the issue again, or pass its URL. A null nextCursor means there are no older comments.",
+    "Read one bounded page of older issue comments. Pass commentsCursor from read_issue or nextCursor from this tool as cursor. Reuse the returned projectId, tracker, host, scope and key to avoid resolving the issue again, or pass its URL. Pass viewer from read_issue for comment and reaction display flags; it does not grant write access. A null nextCursor means there are no older comments.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     host: IssueCommentsPageInput.fields.host,
     scope: Schema.optional(IssueCommentsPageInput.fields.scope),
     cursor: IssueCommentsPageInput.fields.cursor,
+    viewer: IssueCommentsPageInput.fields.viewer,
   }),
   success: IssueCommentsPage,
   failure: IssueToolError,

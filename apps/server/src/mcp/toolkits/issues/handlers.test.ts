@@ -375,6 +375,41 @@ describe("issue toolkit handlers", () => {
     }),
   );
 
+  it.effect("carries the detail viewer through explicit and shorthand comment continuations", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], { detail: { ...detail, viewer: "native-viewer" } });
+      const read = yield* harness.call("read_issue", { key: "7" });
+      expect(read.viewer).toBe("native-viewer");
+      for (const target of [{ projectId: PROJECT_ID, ...gitHostSource, key: "7" }, { key: "7" }]) {
+        yield* harness.call("read_issue_comments", {
+          ...target,
+          cursor: "older",
+          viewer: read.viewer ?? undefined,
+        });
+      }
+      expect(
+        (yield* Ref.get(harness.calls))
+          .filter((call) => call.operation === "comments")
+          .map((call) => call.input),
+      ).toEqual([
+        {
+          projectId: PROJECT_ID,
+          ...gitHostSource,
+          key: "7",
+          cursor: "older",
+          viewer: "native-viewer",
+        },
+        {
+          projectId: PROJECT_ID,
+          ...gitHostSource,
+          key: "7",
+          cursor: "older",
+          viewer: "native-viewer",
+        },
+      ]);
+    }),
+  );
+
   it.effect("guards comment pages and preserves provider permission and cursor failures", () =>
     Effect.gen(function* () {
       const input = { projectId: PROJECT_ID, ...standaloneSource, key: "ENG-7", cursor: "page" };
