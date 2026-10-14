@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as FileSystem from "effect/FileSystem";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
@@ -121,6 +122,429 @@ function tracker(onExecute: (args: ReadonlyArray<string>) => string) {
 }
 
 describe("AzureDevOpsIssueTracker", () => {
+  it.effect.each([true, false])(
+    "reads candidates in four calls and labels in one with inline states %s",
+    (inline) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const api = yield* tracker((args) => {
+          calls += 1;
+          if (args[1] === "project")
+            return encode({ id: "project", name: "Web App", defaultTeam: { id: "team" } });
+          if (args[1] === "team") return encode([]);
+          const resource = args[args.indexOf("--resource") + 1];
+          if (resource === "tags") return encode({ value: [{ name: "bug" }] });
+          if (resource === "workitemtypes")
+            return encode({
+              value: Array.from({ length: 100 }, (_, index) => ({
+                name: `Type ${index}`,
+                ...(inline
+                  ? { states: [{ name: `Review ${index}`, category: "InProgress" }] }
+                  : {}),
+              })),
+            });
+          throw new Error(`Unexpected ${resource}`);
+        });
+        const scope = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App" };
+        const candidates = yield* api.listCandidates!(scope);
+        expect(candidates.states).toHaveLength(inline ? 100 : 0);
+        if (inline)
+          expect(candidates.states?.[99]).toMatchObject({
+            name: "Review 99",
+            workflowCategory: "started",
+          });
+        expect(candidates.truncated).toBe(!inline);
+        expect(calls).toBe(4);
+        calls = 0;
+        expect((yield* api.listLabelCandidates!(scope)).items).toMatchObject([{ name: "bug" }]);
+        expect(calls).toBe(1);
+      }),
+  );
+
+  it.effect(
+    "keeps custom states scoped to the current detail with one workflow call and no viewer read",
+    () =>
+      Effect.gen(function* () {
+        let calls = 0;
+        let workflowReads = 0;
+        const api = yield* tracker((args) => {
+          calls += 1;
+          if (args[0] === "boards")
+            return encode({
+              ...WORK_ITEM,
+              relations: [],
+              fields: {
+                ...WORK_ITEM.fields,
+                "System.WorkItemType": "Bug",
+                "System.State": "Review",
+              },
+            });
+          const resource = args[args.indexOf("--resource") + 1];
+          if (resource === "workitemtypestates") {
+            workflowReads += 1;
+            expect(args).toContain("type=Bug");
+            return encode({
+              value: [
+                { name: "Review", category: "InProgress" },
+                { name: "Shipped", category: "Completed" },
+              ],
+            });
+          }
+          return answer(args);
+        });
+        const detail = yield* api.getIssue({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+        });
+        expect(detail.state).toMatchObject({
+          name: "Review",
+          id: "Review",
+          workflowCategory: "started",
+        });
+        expect(detail.states?.map((state) => state.name)).toEqual(["Review", "Shipped"]);
+        expect(detail.viewer).toBeNull();
+        expect(workflowReads).toBe(1);
+        expect(calls).toBe(4);
+      }),
+  );
+
+  it.effect("bounds cross-project hierarchy reads and keeps the next raw relation page", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const api = yield* tracker((args) => {
+        calls += 1;
+        if (args[0] === "boards")
+          return encode({
+            ...WORK_ITEM,
+            relations: [
+              {
+                rel: "System.LinkTypes.Hierarchy-Reverse",
+                url: "https://dev.azure.com/acme/_apis/wit/workItems/4",
+              },
+              ...Array.from({ length: 15 }, (_, index) => ({
+                rel: "System.LinkTypes.Hierarchy-Forward",
+                url: `https://dev.azure.com/acme/_apis/wit/workItems/${index + 20}`,
+              })),
+            ],
+          });
+        const resource = args[args.indexOf("--resource") + 1];
+        if (resource === "workitems")
+          return encode({
+            value: args
+              .find((arg) => arg.startsWith("ids="))!
+              .slice(4)
+              .split(",")
+              .map((key) => ({
+                ...WORK_ITEM,
+                id: Number(key),
+                fields: {
+                  ...WORK_ITEM.fields,
+                  "System.TeamProject": `Project ${key}`,
+                  "System.WorkItemType": "Bug",
+                  "System.State": "Review",
+                },
+              })),
+          });
+        if (resource === "workitemtypes")
+          return encode({
+            value: [{ name: "Bug", states: [{ name: "Review", category: "InProgress" }] }],
+          });
+        throw new Error(`Unexpected ${resource}`);
+      });
+      const target = {
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        limit: 100,
+      };
+      const first = yield* api.getHierarchy!(target);
+      expect(first.parent?.key).toBe("4");
+      expect(first.children.items.map((item) => item.key)).toEqual(
+        Array.from({ length: 10 }, (_, index) => String(index + 20)),
+      );
+      expect(first.children.nextCursor).toBe("10");
+      expect(calls).toBe(13);
+      calls = 0;
+      const second = yield* api.getHierarchy!({ ...target, cursor: first.children.nextCursor! });
+      expect(second.children.items.map((item) => item.key)).toEqual(["30", "31", "32", "33", "34"]);
+      expect(second.children.nextCursor).toBeNull();
+      expect(calls).toBe(8);
+    }),
+  );
+
+  it.effect("lists a project GUID through its native project name", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker((args) => {
+        if (args[1] === "project")
+          return encode({
+            id: "a0000000-0000-0000-0000-000000000001",
+            name: "Web App",
+            defaultTeam: { id: "team" },
+          });
+        const resource = args[args.indexOf("--resource") + 1];
+        expect(args).toContain("project=Web App");
+        return resource === "wiql"
+          ? encode({ workItems: [{ id: 7 }] })
+          : encode({ value: [WORK_ITEM] });
+      });
+      expect(
+        yield* api.listIssues({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/a0000000-0000-0000-0000-000000000001",
+          state: "all",
+          involvement: "all",
+          viewer: "julius",
+          limit: 1,
+        }),
+      ).toMatchObject({ items: [{ key: "7" }] });
+    }),
+  );
+
+  it.effect.each(["all", "open"] as const)(
+    "uses one inline workflow read for a list page across 100 native types in state %s",
+    (state) =>
+      Effect.gen(function* () {
+        let workflowReads = 0;
+        let calls = 0;
+        const api = yield* tracker((args) => {
+          calls += 1;
+          const resource = args[args.indexOf("--resource") + 1];
+          if (resource === "wiql")
+            return encode({ workItems: Array.from({ length: 101 }, (_, id) => ({ id: id + 7 })) });
+          if (resource === "workitems")
+            return encode({
+              value: Array.from({ length: 100 }, (_, index) => ({
+                ...WORK_ITEM,
+                id: index + 7,
+                fields: {
+                  ...WORK_ITEM.fields,
+                  "System.WorkItemType": `Type ${index}`,
+                  "System.TeamProject": index % 2 === 0 ? "Web App" : "WEB APP",
+                  "System.State": "Review",
+                },
+              })),
+            });
+          if (resource === "workitemtypes") {
+            workflowReads += 1;
+            return encode({
+              value: Array.from({ length: 100 }, (_, index) => ({
+                name: `Type ${index}`,
+                states: [
+                  { name: "Review", category: "InProgress" },
+                  { name: "Shipped", category: "Completed" },
+                ],
+              })),
+            });
+          }
+          throw new Error(`Unexpected ${resource}`);
+        });
+        const page = yield* api.listIssues({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          state,
+          involvement: "all",
+          viewer: "julius@acme.test",
+          sort: "comments",
+          order: "asc",
+          limit: 100,
+        });
+        expect(page.items.map((item) => item.state)).toEqual(
+          Array.from({ length: 100 }, () => ({
+            category: "open",
+            name: "Review",
+            id: "Review",
+            workflowCategory: "started",
+          })),
+        );
+        expect(JSON.parse(page.nextCursor!)).toEqual({
+          sort: "comments",
+          order: "asc",
+          value: 2,
+          id: 106,
+        });
+        expect(workflowReads).toBe(1);
+        expect(calls).toBe(3);
+      }),
+  );
+
+  it.effect("creates with native template fields and changes a parent under a revision check", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const patches: unknown[] = [];
+      const item = {
+        ...WORK_ITEM,
+        rev: 6,
+        fields: { ...WORK_ITEM.fields, "System.WorkItemType": "Bug" },
+        relations: [
+          {
+            rel: "System.LinkTypes.Hierarchy-Reverse",
+            url: "https://dev.azure.com/acme/_apis/wit/workItems/4",
+          },
+        ],
+      };
+      const api = yield* AzureDevOpsIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeFileSystem.layer,
+            Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+              execute: ({ args }) =>
+                Effect.gen(function* () {
+                  const resource = args[args.indexOf("--resource") + 1];
+                  const inFile = args.indexOf("--in-file");
+                  if (inFile >= 0) {
+                    expect(args[args.indexOf("--media-type") + 1]).toBe(
+                      "application/json-patch+json",
+                    );
+                    patches.push(
+                      JSON.parse(yield* fs.readFileString(args[inFile + 1]!).pipe(Effect.orDie)),
+                    );
+                    return TestSourceControlHost.processOutput(encode({ ...item, id: 55 }));
+                  }
+                  if (args[0] === "boards") {
+                    const id = Number(args[args.indexOf("--id") + 1]);
+                    return TestSourceControlHost.processOutput(
+                      encode({
+                        ...item,
+                        id,
+                        url: `https://dev.azure.com/acme/_apis/wit/workItems/${id}`,
+                      }),
+                    );
+                  }
+                  if (args[0] === "devops" && args[1] === "project")
+                    return TestSourceControlHost.processOutput(
+                      encode({ id: "project-id", name: "Web App", defaultTeam: { id: "team-id" } }),
+                    );
+                  if (resource === "workitemtypes")
+                    return TestSourceControlHost.processOutput(
+                      encode({ value: [{ name: "Bug" }] }),
+                    );
+                  if (resource === "templates")
+                    return TestSourceControlHost.processOutput(
+                      encode({
+                        id: "bug-template",
+                        name: "Bug",
+                        workItemTypeName: "Bug",
+                        fields: { "System.Title": "Default title", "Custom.Priority": "High" },
+                      }),
+                    );
+                  throw new Error(`Unexpected ${args.join(" ")}`);
+                }),
+            }),
+          ),
+        ),
+      );
+      const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+      expect(
+        yield* api.create!({
+          ...target,
+          title: "User title",
+          body: "Body",
+          labels: [],
+          assignees: [],
+          templateKey: "bug-template",
+          parentKey: "8",
+        }),
+      ).toMatchObject({ key: "55", parentLinked: true });
+      expect(patches[0]).toEqual(
+        expect.arrayContaining([
+          { op: "add", path: "/fields/System.Title", value: "User title" },
+          { op: "add", path: "/fields/Custom.Priority", value: "High" },
+          {
+            op: "add",
+            path: "/relations/-",
+            value: {
+              rel: "System.LinkTypes.Hierarchy-Reverse",
+              url: "https://dev.azure.com/acme/_apis/wit/workItems/8",
+            },
+          },
+        ]),
+      );
+      yield* api.setParent!({ ...target, parentKey: "8" });
+      yield* api.setParent!({ ...target, parentKey: null });
+      expect(patches[1]).toEqual([
+        { op: "test", path: "/rev", value: 6 },
+        { op: "remove", path: "/relations/0" },
+        {
+          op: "add",
+          path: "/relations/-",
+          value: {
+            rel: "System.LinkTypes.Hierarchy-Reverse",
+            url: "https://dev.azure.com/acme/_apis/wit/workItems/8",
+          },
+        },
+      ]);
+      expect(patches[2]).toEqual([
+        { op: "test", path: "/rev", value: 6 },
+        { op: "remove", path: "/relations/0" },
+      ]);
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("pages child relations into their own projects", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker((args) => {
+        if (args[0] === "boards")
+          return encode({
+            ...WORK_ITEM,
+            relations: [8, 9].map((id) => ({
+              rel: "System.LinkTypes.Hierarchy-Forward",
+              url: `https://dev.azure.com/acme/_apis/wit/workItems/${id}`,
+            })),
+          });
+        expect(args).toContain("ids=9");
+        return encode({
+          value: [
+            {
+              ...WORK_ITEM,
+              id: 9,
+              fields: { ...WORK_ITEM.fields, "System.TeamProject": "Other App" },
+            },
+          ],
+        });
+      });
+      expect(
+        yield* api.getHierarchy!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          cursor: "1",
+          limit: 1,
+        }),
+      ).toMatchObject({
+        parent: null,
+        children: { items: [{ scope: "acme/Other App", key: "9" }], nextCursor: null },
+      });
+    }),
+  );
+
+  it.effect("lets the native token decide comment edit rights when the viewer is unknown", () =>
+    Effect.gen(function* () {
+      const paths: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        paths.push(args);
+        if (args[0] === "boards") return encode(WORK_ITEM);
+        return encode({ id: 1, createdBy: { uniqueName: "someone@acme.test" } });
+      });
+      yield* api.editComment!({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        commentId: "1",
+        body: "Changed",
+      });
+      expect(paths).toHaveLength(2);
+      expect(paths.flat()).not.toContain("profiles");
+      expect(paths.flat()).toContain("PATCH");
+    }),
+  );
+
   it("skips malformed artifact relation escaping", () => {
     expect(
       pullRequestNumberOf({
@@ -264,6 +688,8 @@ describe("AzureDevOpsIssueTracker", () => {
           author: { login: "julius@acme.test", name: "Julius", avatarUrl: null },
           body: "Repro attached.",
           createdAt: "2026-07-02T00:00:00Z",
+          editedAt: null,
+          canEdit: false,
           url: null,
           reactions: [{ content: "thumbs-up", count: 2, actors: [], viewerHasReacted: true }],
         },
@@ -353,7 +779,8 @@ describe("AzureDevOpsIssueTracker", () => {
       const api = yield* tracker((args) => {
         seen.push(args);
         const resource = args[args.indexOf("--resource") + 1];
-        if (resource === "wiql") return encode({ workItems: [{ id: 7 }, { id: 8 }] });
+        if (resource === "wiql")
+          return encode({ workItems: [{ id: 7 }, { id: 8 }], asOf: "2026-07-04T00:00:00Z" });
         if (resource === "workitems") return encode({ count: 1, value: [WORK_ITEM] });
         throw new Error(`Unexpected resource ${resource}`);
       });
@@ -370,6 +797,7 @@ describe("AzureDevOpsIssueTracker", () => {
       expect(page.nextCursor).toBe("2026-07-03T00:00:00Z|7");
       expect(seen).toHaveLength(2);
       expect(seen[1]).toContain("ids=7");
+      expect(seen[1]).toContain("asOf=2026-07-04T00:00:00Z");
     }),
   );
 

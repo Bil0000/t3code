@@ -44,6 +44,7 @@ const IdentityValue = Schema.NullOr(Schema.Union([Identity, Schema.String]));
 
 const Fields = Schema.Struct({
   "System.CommentCount": Schema.optional(Schema.NullOr(Schema.Int)),
+  "System.WorkItemType": Schema.optional(Schema.NullOr(Schema.String)),
   "System.Title": Schema.optional(Schema.NullOr(Schema.String)),
   "System.State": Schema.optional(Schema.NullOr(Schema.String)),
   "System.CreatedDate": Schema.optional(Schema.NullOr(Schema.String)),
@@ -59,6 +60,7 @@ const Fields = Schema.Struct({
 const Relation = Schema.Struct({ rel: Schema.String, url: Schema.String });
 
 const WorkItem = Schema.Struct({
+  rev: Schema.optional(Schema.Int),
   id: Schema.Int,
   url: Schema.optional(Schema.NullOr(Schema.String)),
   fields: Schema.optional(Schema.NullOr(Fields)),
@@ -128,6 +130,9 @@ function toLabels(tags: string | null | undefined): ReadonlyArray<IssueLabel> {
 
 export interface AzureDevOpsWorkItem extends TrackerIssueSummary {
   readonly body: string;
+  readonly workItemType: string | null;
+  readonly revision: number | null;
+  readonly nativeUrl: string | null;
   readonly project: string | null;
   readonly relations: ReadonlyArray<typeof Relation.Type>;
 }
@@ -158,6 +163,9 @@ function toWorkItem(raw: typeof WorkItem.Type): AzureDevOpsWorkItem | null {
     labels: toLabels(fields["System.Tags"]),
     commentCount: Math.max(0, fields["System.CommentCount"] ?? 0),
     body: fields["System.Description"] ?? "",
+    workItemType: fields["System.WorkItemType"] ?? null,
+    revision: raw.rev ?? null,
+    nativeUrl: raw.url ?? null,
     project,
     relations: raw.relations ?? [],
   };
@@ -201,6 +209,7 @@ const Comment = Schema.Struct({
   id: Schema.Int,
   text: Schema.optional(Schema.NullOr(Schema.String)),
   createdDate: Schema.String,
+  modifiedDate: Schema.optional(Schema.String),
   createdBy: Schema.optional(Schema.NullOr(Identity)),
   isDeleted: Schema.optional(Schema.Boolean),
   reactions: Schema.optional(
@@ -243,6 +252,7 @@ function toReactions(raw: (typeof Comment.Type)["reactions"]): ReadonlyArray<Iss
 
 export function decodeCommentsJson(
   raw: string,
+  viewer?: string,
 ): Result.Result<
   { readonly comments: ReadonlyArray<IssueComment>; readonly nextCursor: string | null },
   DecodeFailure
@@ -257,6 +267,13 @@ export function decodeCommentsJson(
           author: toActor(comment.value.createdBy),
           body: comment.value.text ?? "",
           createdAt: comment.value.createdDate,
+          editedAt:
+            comment.value.modifiedDate && comment.value.modifiedDate !== comment.value.createdDate
+              ? comment.value.modifiedDate
+              : null,
+          canEdit:
+            viewer !== undefined &&
+            toActor(comment.value.createdBy)?.login.toLowerCase() === viewer.toLowerCase(),
           url: null,
           reactions: toReactions(comment.value.reactions),
         },
@@ -271,7 +288,9 @@ const FieldChange = Schema.Struct({
   newValue: Schema.optional(Schema.Unknown),
 });
 
+const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const Update = Schema.Struct({
+  relations: Schema.optional(Schema.Unknown),
   id: Schema.Int,
   revisedDate: Schema.String,
   revisedBy: Schema.optional(Schema.NullOr(Identity)),
@@ -299,7 +318,8 @@ export function decodeUpdatesJson(
     rawCount: page.value?.length ?? 0,
     events: (page.value ?? []).flatMap((entry) => {
       const update = decodeUpdateEntry(entry);
-      if (Exit.isFailure(update) || update.value.id === 1) return [];
+      if (Exit.isFailure(update) || (update.value.id === 1 && update.value.relations === undefined))
+        return [];
       const { id, revisedBy, revisedDate } = update.value;
       const fields = update.value.fields ?? {};
       const changedAt = fields["System.ChangedDate"]?.newValue;
@@ -348,6 +368,26 @@ export function decodeUpdatesJson(
           if (after !== null) add("assigned", after);
         }
       }
+      if (
+        update.value.relations !== undefined ||
+        Object.keys(fields).some(
+          (name) =>
+            ![
+              "System.State",
+              "System.Title",
+              "System.Tags",
+              "System.AssignedTo",
+              "System.ChangedDate",
+            ].includes(name),
+        )
+      )
+        add(
+          "updated",
+          encodeUpdate({
+            fields,
+            ...(update.value.relations === undefined ? {} : { relations: update.value.relations }),
+          }),
+        );
       return events;
     }),
   }));
