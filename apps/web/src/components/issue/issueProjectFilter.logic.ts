@@ -15,6 +15,20 @@ interface ScopedProject {
 
 export type IssueListSources = NonNullable<IssueListResult["sources"]>;
 
+export function issuePanelEnvironmentId(
+  projects: ReadonlyArray<ScopedProject>,
+  target: {
+    readonly environmentId?: EnvironmentId | undefined;
+    readonly projectId?: string | undefined;
+  } | null,
+): EnvironmentId | null {
+  return (
+    target?.environmentId ??
+    findScopedProject(projects, undefined, target?.projectId)?.environmentId ??
+    null
+  );
+}
+
 export function issueListRefreshSource(
   environmentId: EnvironmentId,
   listedEnvironmentIds: ReadonlyArray<EnvironmentId>,

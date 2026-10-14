@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { pullRequestFilterProjects } from "../pullRequest/pullRequestProjectFilter.logic";
 import {
   issueFilterProjects,
+  issuePanelEnvironmentId,
   issueListProjectScope,
   issueListRefreshSource,
   type IssueListSources,
@@ -27,6 +28,33 @@ const source = (projectId: string, tracker: string, scope: string) =>
     scope,
     capabilities: {} as IssueCapabilities,
   }) satisfies IssueListSources[number];
+
+describe("issuePanelEnvironmentId", () => {
+  const projects = [project("shared", cups), project("shared"), project("only-b")];
+
+  it("opens an environment-less target on its sole owner instead of the first environment", () => {
+    expect(issuePanelEnvironmentId(projects, { projectId: "only-b" })).toBe(nucbox);
+  });
+
+  it("keeps the explicit environment when project IDs repeat or the project is gone", () => {
+    expect(issuePanelEnvironmentId(projects, { projectId: "shared", environmentId: nucbox })).toBe(
+      nucbox,
+    );
+    expect(issuePanelEnvironmentId(projects, { projectId: "only-b", environmentId: cups })).toBe(
+      cups,
+    );
+    expect(issuePanelEnvironmentId(projects, { projectId: "gone", environmentId: nucbox })).toBe(
+      nucbox,
+    );
+  });
+
+  it("does not guess an environment for ambiguous, stale, or missing project IDs", () => {
+    expect(issuePanelEnvironmentId(projects, { projectId: "shared" })).toBeNull();
+    expect(issuePanelEnvironmentId(projects, { projectId: "gone" })).toBeNull();
+    expect(issuePanelEnvironmentId(projects, {})).toBeNull();
+    expect(issuePanelEnvironmentId(projects, null)).toBeNull();
+  });
+});
 
 describe("issueListRefreshSource", () => {
   const main = source("main", "github", "pingdotgg/t3code");
