@@ -824,7 +824,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           host: input.host,
           operation: "listTemplates",
           path: `projects/${projectPath(input.scope)}/templates/issues`,
-          decode: decodeTemplateEntriesJson,
+          decode: (raw) => decodeTemplateEntriesJson(raw, input.metadataOnly === true),
         }).pipe(
           Effect.flatMap((entries) => {
             if (!input.metadataOnly)

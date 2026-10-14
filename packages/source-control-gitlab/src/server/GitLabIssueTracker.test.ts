@@ -132,11 +132,19 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 
 describe("GitLabIssueTracker", () => {
   it.effect.each([
-    { name: "missing content", raw: "{}", truncated: false },
-    { name: "null content", raw: '{"content":null}', truncated: false },
-    { name: "invalid JSON", raw: "{", truncated: false },
-    { name: "truncated content", raw: '{"content":"Partial body"}', truncated: true },
-  ])("refuses selected template $name without returning a blank template", (input) =>
+    { mode: "body", name: "missing content", raw: "{}", truncated: false },
+    { mode: "body", name: "null content", raw: '{"content":null}', truncated: false },
+    { mode: "body", name: "wrong content type", raw: '{"content":42}', truncated: false },
+    { mode: "body", name: "invalid JSON", raw: "{", truncated: false },
+    { mode: "body", name: "truncated content", raw: '{"content":"Partial body"}', truncated: true },
+    { mode: "catalog", name: "null", raw: "null", truncated: false },
+    { mode: "catalog", name: "wrong shape", raw: "{}", truncated: false },
+    { mode: "catalog", name: "missing key", raw: '[{"key":"Bug"},{}]', truncated: false },
+    { mode: "catalog", name: "null key", raw: '[{"key":null}]', truncated: false },
+    { mode: "catalog", name: "blank key", raw: '[{"key":" "}]', truncated: false },
+    { mode: "catalog", name: "invalid JSON", raw: "[", truncated: false },
+    { mode: "catalog", name: "truncated", raw: '[{"key":"Bug"}]', truncated: true },
+  ])("refuses unreadable template $mode: $name", (input) =>
     Effect.gen(function* () {
       let calls = 0;
       const api = yield* GitLabIssueTracker.make.pipe(
@@ -159,7 +167,7 @@ describe("GitLabIssueTracker", () => {
             cwd: "/w",
             host: "gitlab.com",
             scope: "acme/web",
-            templateKey: "Bug",
+            ...(input.mode === "body" ? { templateKey: "Bug" } : { metadataOnly: true }),
           }),
         ),
       ).toMatchObject({ operation: "listTemplates", reason: "failed" });
@@ -348,7 +356,11 @@ describe("GitLabIssueTracker", () => {
       const api = yield* tracker((args) => {
         paths.push(args[1]!);
         return args[1]!.endsWith("/templates/issues")
-          ? encode(Array.from({ length: 100 }, (_, index) => ({ key: `Key ${index}` })))
+          ? encode([
+              {},
+              { key: " " },
+              ...Array.from({ length: 101 }, (_, index) => ({ key: `Key ${index}` })),
+            ])
           : encode({ content: "Native body" });
       });
       const result = yield* api.listTemplates!({
@@ -357,6 +369,9 @@ describe("GitLabIssueTracker", () => {
         scope: "acme/web",
       });
       expect(result.templates).toHaveLength(20);
+      expect(result.templates.map((entry) => entry.key)).toEqual(
+        Array.from({ length: 20 }, (_, index) => `Key ${index}`),
+      );
       expect(
         result.templates.every(
           (template) => template.body === "Native body" && template.contentDeferred !== true,

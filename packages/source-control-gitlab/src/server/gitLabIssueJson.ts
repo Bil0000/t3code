@@ -82,7 +82,7 @@ const RawProjectLabelSchema = Schema.Struct({
 
 /** A row of `GET /projects/:id/templates/issues`, which names a template but carries none of it. */
 const RawTemplateEntrySchema = Schema.Struct({
-  key: Schema.String,
+  key: Schema.String.check(Schema.isPattern(/\S/)),
   name: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
@@ -96,6 +96,7 @@ const decodeLinkedMergeRequestEntry = Schema.decodeUnknownExit(RawLinkedMergeReq
 const decodeProjectLabelEntry = Schema.decodeUnknownExit(RawProjectLabelSchema);
 const decodeUserEntry = Schema.decodeUnknownExit(RawUserSchema);
 const decodeTemplateEntry = Schema.decodeUnknownExit(RawTemplateEntrySchema);
+const decodeTemplateEntries = decodeJsonResult(Schema.Array(RawTemplateEntrySchema));
 const decodeTemplate = decodeJsonResult(RawTemplateSchema);
 
 type DecodeFailure =
@@ -377,8 +378,9 @@ export interface GitLabTemplateEntry {
 
 export function decodeTemplateEntriesJson(
   raw: string,
+  strict = false,
 ): Result.Result<ReadonlyArray<GitLabTemplateEntry>, DecodeFailure> {
-  return Result.map(decodeUnknownList(raw), (rows) =>
+  return Result.map(strict ? decodeTemplateEntries(raw) : decodeUnknownList(raw), (rows) =>
     rows.flatMap((entry) => {
       const template = decodeTemplateEntry(entry);
       if (Exit.isFailure(template)) return [];
