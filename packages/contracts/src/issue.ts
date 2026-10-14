@@ -30,7 +30,10 @@ export const IssueActor = Schema.Struct({
 });
 export type IssueActor = typeof IssueActor.Type;
 
-export const IssueLabel = PullRequestLabel;
+export const IssueLabel = Schema.Struct({
+  ...PullRequestLabel.fields,
+  id: Schema.optional(TrimmedNonEmptyString),
+});
 export type IssueLabel = typeof IssueLabel.Type;
 
 /**
@@ -400,7 +403,7 @@ export const IssueUpdateInput = Schema.Struct({
   ...IssueRef.fields,
   title: Schema.optional(IssueTitle),
   body: Schema.optional(IssueBody),
-  labels: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(50))),
+  labels: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(25))),
 });
 export type IssueUpdateInput = typeof IssueUpdateInput.Type;

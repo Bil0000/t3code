@@ -9,6 +9,7 @@ import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
   IssueCapabilities,
+  IssueCandidates,
   IssueCreateInput,
   IssueCreateResult,
   IssueLinkedPullRequest,
@@ -25,6 +26,18 @@ const decodeActor = Schema.decodeEffect(IssueActor);
 const decodeCreate = Schema.decodeEffect(IssueCreateInput);
 const decodeCreated = Schema.decodeEffect(IssueCreateResult);
 const decodeBinding = Schema.decodeEffect(IssueTrackerProjectBinding);
+
+it("preserves native label IDs in candidates and accepts older labels", () => {
+  const candidates = {
+    labels: [
+      { name: "Bug", color: null, description: null, id: "label-123" },
+      { name: "Old", color: null, description: null },
+    ],
+    assignees: [],
+    truncated: false,
+  };
+  assert.deepEqual(Schema.decodeSync(IssueCandidates)(candidates), candidates);
+});
 
 it("accepts older reaction capabilities and preserves native comment limits", () => {
   const decode = Schema.decodeUnknownSync(IssueCapabilities);
@@ -145,7 +158,7 @@ it.effect("preserves a created issue and warnings about native fields that were 
 
 it("keeps URL resolution direct and protected by the read grant", () => {
   const input = { url: "https://github.com/acme/web/issues/1", projectId: ProjectId.make("web") };
-  assert.deepEqual(Schema.decodeSync(IssueResolveUrlInput)(input), input);
+  expect(Schema.decodeSync(IssueResolveUrlInput)(input)).toEqual(input);
   const result = {
     projectId: ProjectId.make("web"),
     tracker: IssueTrackerKind.make("github"),
@@ -154,8 +167,8 @@ it("keeps URL resolution direct and protected by the read grant", () => {
     key: "1",
     writable: true,
   };
-  assert.deepEqual(Schema.decodeSync(IssueResolvedUrl)(result), result);
-  assert.deepEqual(clientRpcRequiredScopes(WS_METHODS.issuesResolveUrl, input), [
+  expect(Schema.decodeSync(IssueResolvedUrl)(result)).toEqual(result);
+  expect(clientRpcRequiredScopes(WS_METHODS.issuesResolveUrl, input)).toEqual([
     AuthOrchestrationReadScope,
   ]);
 });

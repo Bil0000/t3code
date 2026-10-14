@@ -1,9 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import {
   IssueTrackerKind,
+  IssueUpdateInput,
   type IssueTrackerProjectBinding,
   type OrchestrationProjectShell,
   ProjectId,
@@ -26,6 +28,7 @@ import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
 const JIRA = IssueTrackerKind.make("jira");
+const decodeUpdate = Schema.decodeEffect(IssueUpdateInput);
 const permissions = {
   setState: true,
   comment: true,
@@ -248,6 +251,34 @@ describe("resolveGitHostBinding", () => {
 });
 
 describe("IssueService", () => {
+  it.effect("keeps a complete native label set through the update contract", () =>
+    Effect.gen(function* () {
+      const labels = Array.from({ length: 121 }, (_, index) => `label-${index}`);
+      let written: ReadonlyArray<string> | undefined;
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({
+            update: (input) =>
+              Effect.sync(() => {
+                written = input.labels;
+              }),
+          }),
+        ],
+      });
+      const input = yield* decodeUpdate({
+        projectId: ProjectId.make("web"),
+        tracker: GITHUB,
+        host: "github.com",
+        scope: "acme/web",
+        key: "1",
+        labels,
+      });
+      yield* service.update(input);
+      expect(written).toEqual(labels);
+    }),
+  );
+
   it.effect("reads another repository on the same host but refuses to write to it", () =>
     Effect.gen(function* () {
       const writes: string[] = [];
