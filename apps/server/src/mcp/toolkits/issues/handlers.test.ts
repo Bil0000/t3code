@@ -12,12 +12,18 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import type { Tool } from "effect/ai";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
+import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import * as JiraApi from "@t3tools/issue-tracker-jira/server/JiraApi";
+import * as JiraIssueTracker from "@t3tools/issue-tracker-jira/server/JiraIssueTracker";
 
 import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
 import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
@@ -311,6 +317,256 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect.each([
+    { tracker: LINEAR, key: "ENG-7" },
+    { tracker: LINEAR, key: "eng-7" },
+    { tracker: IssueTrackerKind.make("jira"), key: "ops-7" },
+  ])("links accepted native $tracker/$key through registered MCP", (input) =>
+    Effect.gen(function* () {
+      const linear = input.tracker === LINEAR;
+      const canonical = input.key.toUpperCase();
+      const source = {
+        tracker: input.tracker,
+        host: linear ? "linear.app" : "example.atlassian.net",
+        scope: linear ? "acme/ENG" : "OPS",
+      };
+      const url = linear
+        ? `https://linear.app/acme/issue/${canonical}`
+        : `https://example.atlassian.net/browse/${canonical}`;
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const nativeReads: string[] = [];
+      const crypto = Layer.succeed(
+        Crypto.Crypto,
+        Crypto.make({
+          randomBytes: (size) => new Uint8Array(size).fill(1),
+          digest: (_algorithm, data) => Effect.succeed(data),
+        }),
+      );
+      const nativeDependencies = Layer.mergeAll(
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              let response: unknown;
+              if (linear) {
+                if (request.body._tag !== "Uint8Array") throw new Error("Expected GraphQL body");
+                const body = JSON.parse(new TextDecoder().decode(request.body.body)) as {
+                  readonly query: string;
+                  readonly variables: { readonly id: string };
+                };
+                const operation = /^(?:query|mutation) (\w+)/.exec(body.query)?.[1];
+                expect(["T3Issue", "T3Viewer"]).toContain(operation);
+                nativeReads.push(operation!);
+                if (operation === "T3Issue") expect(body.variables.id).toBe(canonical);
+                response = {
+                  data:
+                    operation === "T3Viewer"
+                      ? {
+                          viewer: {
+                            id: "viewer",
+                            name: "Viewer",
+                            displayName: "Viewer",
+                            email: null,
+                          },
+                        }
+                      : {
+                          issue: {
+                            id: "issue",
+                            identifier: canonical,
+                            number: 7,
+                            title: "Seven",
+                            url,
+                            description: "Body",
+                            createdAt: detail.createdAt,
+                            updatedAt: detail.updatedAt,
+                            completedAt: null,
+                            canceledAt: null,
+                            state: { id: "started", name: "Started", type: "started" },
+                            creator: null,
+                            assignee: null,
+                            team: { key: "ENG" },
+                            labels: empty,
+                            comments: empty,
+                            history: empty,
+                            attachments: empty,
+                            reactions: [],
+                          },
+                        },
+                };
+              } else {
+                const path = new URL(request.url).pathname.replace(/^\/rest\/api\/3/, "");
+                nativeReads.push(path);
+                expect([`/issue/${input.key}`, "/myself", "/mypermissions"]).toContain(path);
+                response =
+                  path === "/myself"
+                    ? { accountId: "viewer", displayName: "Viewer" }
+                    : path === "/mypermissions"
+                      ? { permissions: {} }
+                      : {
+                          key: canonical,
+                          changelog: { startAt: 0, total: 0, histories: [] },
+                          fields: {
+                            project: { id: "1", key: "OPS" },
+                            summary: "Seven",
+                            created: detail.createdAt,
+                            updated: detail.updatedAt,
+                            status: {
+                              id: "1",
+                              name: "Started",
+                              statusCategory: { key: "indeterminate" },
+                            },
+                            comment: { total: 0, comments: [] },
+                          },
+                        };
+              }
+              return HttpClientResponse.fromWeb(
+                request,
+                new Response(JSON.stringify(response), {
+                  headers: { "content-type": "application/json" },
+                }),
+              );
+            }),
+          ),
+        ),
+        Layer.succeed(
+          IssueTrackerHost.IssueTrackerHost,
+          IssueTrackerHost.IssueTrackerHost.of({
+            credentials: {
+              get: () =>
+                Effect.succeed(
+                  Option.some(
+                    linear
+                      ? "fake-linear-token"
+                      : JSON.stringify({
+                          site: source.host,
+                          email: "fake@example.test",
+                          token: "fake-jira-token",
+                        }),
+                  ),
+                ),
+            },
+          }),
+        ),
+        RateLimit.layer,
+        crypto,
+      );
+      const api = yield* linear
+        ? LinearIssueTracker.make.pipe(
+            Effect.provide(LinearApi.layer.pipe(Layer.provide(nativeDependencies))),
+          )
+        : JiraIssueTracker.make.pipe(
+            Effect.provideServiceEffect(
+              JiraApi.JiraApi,
+              JiraApi.make.pipe(Effect.provide(nativeDependencies)),
+            ),
+          );
+      let reads = 0;
+      let dispatches = 0;
+      const dependencies = Layer.mergeAll(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadShell: () => Effect.succeed(makeThread([])),
+          dispatch: (command) =>
+            Effect.sync(() => {
+              expect(command).toMatchObject({
+                type: "thread.issue.link",
+                key: input.key,
+                snapshot: { displayKey: canonical, title: "Seven" },
+              });
+              dispatches++;
+              return { sequence: dispatches, storedEvents: [] };
+            }),
+        }),
+        Layer.mock(ProjectService.ProjectService)({
+          getShell: () => Effect.succeed(Option.some(project)),
+        }),
+        Layer.mock(IssueService.IssueService)({
+          sources: () => Effect.succeed([source]),
+          detail: (ref) =>
+            Effect.sync(() => {
+              reads++;
+            }).pipe(
+              Effect.andThen(
+                api.getIssue({
+                  cwd: project.workspaceRoot,
+                  host: ref.host!,
+                  scope: ref.scope,
+                  key: ref.key,
+                }),
+              ),
+              Effect.map((native) => {
+                expect(native.key).toBe(canonical);
+                return {
+                  ...native,
+                  ...ref,
+                  key: native.key,
+                  host: source.host,
+                  projectTitle: project.title,
+                  writable: true,
+                  capabilities: api.capabilities,
+                };
+              }),
+              Effect.mapError(
+                (error) => new IssueOperationError({ operation: "detail", detail: error.detail }),
+              ),
+            ),
+        }),
+        McpToolAccessTestkit.liveThreadsLayer,
+        crypto,
+      );
+      const threadIssues = yield* ThreadIssueService.ThreadIssueService.pipe(
+        Effect.provide(ThreadIssueService.layer.pipe(Layer.provide(dependencies))),
+      );
+      const toolkit = yield* IssuesToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(IssuesHandlers.layer).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                dependencies,
+                Layer.succeed(ThreadIssueService.ThreadIssueService, threadIssues),
+              ),
+            ),
+          ),
+        ),
+      );
+      const result = yield* toolkit
+        .handle("link_issue", { tracker: input.tracker, key: input.key })
+        .pipe(
+          Stream.unwrap,
+          Stream.runCollect,
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["issues"])),
+          Effect.provideService(ThreadIssueService.ThreadIssueService, threadIssues),
+          Effect.provide(dependencies),
+        );
+      expect(result.at(-1)?.result).toMatchObject({ key: input.key, url, alreadyLinked: false });
+      yield* threadIssues.drain;
+      expect(reads).toBe(1);
+      expect(dispatches).toBe(1);
+      expect(nativeReads.sort()).toEqual(
+        linear ? ["T3Issue", "T3Viewer"] : [`/issue/${input.key}`, "/mypermissions", "/myself"],
+      );
+    }),
+  );
+
+  it.effect.each([standaloneSource, jiraSource])(
+    "unlinks saved $tracker identifiers across case without resolving a source",
+    (source) =>
+      Effect.gen(function* () {
+        for (const [savedKey, requestedKey] of [
+          ["eng-7", "ENG-7"],
+          ["ENG-7", "eng-7"],
+        ] as const) {
+          const link = { ...savedLink, ...source, key: savedKey };
+          const harness = yield* makeHarness([link], { sources: [] });
+          expect(
+            yield* harness.call("unlink_issue", { tracker: source.tracker, key: requestedKey }),
+          ).toMatchObject({ wasLinked: true, key: savedKey });
+          expect(yield* Ref.get(harness.unlinks)).toEqual([{ threadId: THREAD_ID, key: link }]);
+          expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+          expect(yield* Ref.get(harness.calls)).toEqual([]);
+        }
+      }),
+  );
+
   it.effect(
     "reads a deferred template catalog then the selected body through the registered tool",
     () =>

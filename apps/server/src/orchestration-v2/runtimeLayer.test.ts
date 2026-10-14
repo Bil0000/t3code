@@ -2880,6 +2880,52 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
 
   it.effect.each([
     {
+      name: "lowercase saved Linear identifier",
+      key: "eng-1",
+      scope: "workspace-a/eng",
+      savedUrl: "https://linear.app/workspace-a/issue/eng-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-1/new-title",
+      refreshes: true,
+      alreadyLinked: true,
+    },
+    {
+      name: "lowercase saved Jira identifier",
+      tracker: "jira",
+      key: "ops-1",
+      scope: "OPS",
+      savedUrl: "https://example.atlassian.net/browse/ops-1",
+      nativeUrl: "https://example.atlassian.net/browse/OPS-1",
+      refreshes: true,
+      alreadyLinked: true,
+    },
+    {
+      name: "lowercase foreign workspace",
+      key: "eng-1",
+      scope: "workspace-a/eng",
+      savedUrl: "https://linear.app/workspace-a/issue/eng-1/old-title",
+      nativeUrl: "https://linear.app/workspace-b/issue/ENG-1/new-title",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
+      name: "lowercase foreign host",
+      key: "eng-1",
+      scope: "workspace-a/eng",
+      savedUrl: "https://linear.app/workspace-a/issue/eng-1/old-title",
+      nativeUrl: "https://other.example.com/workspace-a/issue/ENG-1/new-title",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
+      name: "lowercase foreign issue key",
+      key: "eng-1",
+      scope: "workspace-a/eng",
+      savedUrl: "https://linear.app/workspace-a/issue/eng-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-2/new-title",
+      refreshes: false,
+      alreadyLinked: false,
+    },
+    {
       name: "changed workspace",
       scope: "eng",
       savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
@@ -2943,16 +2989,16 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       refreshes: true,
       alreadyLinked: true,
     },
-  ])("checks saved Linear issue identity: $name", (testCase) =>
+  ])("checks saved native issue identity: $name", (testCase) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const threadId = ThreadId.make(`runtime-linear-link-${testCase.name}`);
       const projectId = ProjectId.make(`linear-link-project-${testCase.name}`);
       const ref = {
-        tracker: IssueTrackerKind.make("linear"),
-        host: "linear.app",
+        tracker: IssueTrackerKind.make(testCase.tracker ?? "linear"),
+        host: testCase.tracker === "jira" ? "example.atlassian.net" : "linear.app",
         scope: testCase.scope,
-        key: "ENG-1",
+        key: testCase.key ?? "ENG-1",
         projectId,
       };
       yield* orchestrator.dispatch({
@@ -2977,6 +3023,16 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         url: testCase.savedUrl,
         source: "manual",
       });
+      yield* orchestrator.dispatch({
+        type: "thread.issue.link",
+        commandId: CommandId.make(`linear-link-duplicate-${testCase.name}`),
+        threadId,
+        ...ref,
+        key: ref.key.toUpperCase(),
+        url: testCase.savedUrl,
+        source: "agent",
+      });
+      assert.equal((yield* orchestrator.getThreadShell(threadId))?.issues?.length, 1);
       yield* Effect.scoped(
         Effect.gen(function* () {
           let reads = 0;
@@ -2988,8 +3044,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                     reads++;
                     return {
                       ...ref,
+                      key: ref.key.toUpperCase(),
                       projectTitle: "Linear project",
-                      displayKey: "ENG-1",
+                      displayKey: ref.key.toUpperCase(),
                       title: "Current issue title",
                       state: { category: "open" as const, name: "Open" },
                       url: testCase.nativeUrl,
@@ -3046,7 +3103,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           const service = Context.get(serviceContext, ThreadIssueService.ThreadIssueService);
           const before = yield* orchestrator.getThreadProjection(threadId);
           const duplicate = yield* service
-            .link({ threadId, ref, url: testCase.nativeUrl, source: "manual" })
+            .link({
+              threadId,
+              ref: { ...ref, key: ref.key.toUpperCase() },
+              url: testCase.nativeUrl,
+              source: "manual",
+            })
             .pipe(Effect.result);
           if (testCase.alreadyLinked) {
             assert.equal(duplicate._tag, "Success");
@@ -3077,7 +3139,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             assert.deepEqual(after, before);
           }
           assert.equal(after.thread.issues?.[0]?.url, testCase.savedUrl);
-          assert.deepEqual(yield* service.unlink({ threadId, key: ref }), { wasLinked: true });
+          assert.deepEqual(
+            yield* service.unlink({ threadId, key: { ...ref, key: ref.key.toUpperCase() } }),
+            { wasLinked: true },
+          );
           assert.deepEqual((yield* orchestrator.getThreadShell(threadId))?.issues, []);
           const detail = yield* Context.get(context, IssueService.IssueService).detail(ref);
           const relinked = yield* service
@@ -3096,6 +3161,22 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           );
           yield* service.drain;
           assert.equal(reads, 2);
+          if (testCase.refreshes && testCase.key !== undefined) {
+            const old = before.thread.issues![0]!;
+            const current = yield* orchestrator.getThreadProjection(threadId);
+            assert.equal(current.thread.issues![0]!.linkedAt, old.linkedAt);
+            yield* orchestrator.dispatch({
+              type: "thread.issue-link.sync",
+              commandId: CommandId.make(`native-key-old-generation-${testCase.name}`),
+              threadId,
+              ...ref,
+              key: ref.key.toUpperCase(),
+              linkId: old.linkId!,
+              linkedAt: old.linkedAt,
+              snapshot: { ...current.thread.issues![0]!.snapshot!, title: "Old generation" },
+            });
+            assert.deepEqual(yield* orchestrator.getThreadProjection(threadId), current);
+          }
         }),
       );
     }),

@@ -26,6 +26,8 @@ import {
   IssueResolvedUrl,
   IssueSummary,
   IssueTrackerKind,
+  threadIssueKeyOf,
+  threadIssueKeysEqual,
   IssueTrackerProjectBinding,
   StandaloneIssueTrackerDescriptor,
 } from "./issue.ts";
@@ -335,4 +337,42 @@ it("accepts saved issue links without generation IDs and preserves new IDs", () 
     ...link,
     linkId: "link-command",
   });
+});
+
+it.each(["linear", "jira"])("compares %s native issue identifiers without case", (tracker) => {
+  const lower = {
+    tracker: IssueTrackerKind.make(tracker),
+    host: "Example.com",
+    scope: "acme/ENG",
+    key: "eng-7",
+  };
+  const upper = { ...lower, host: "example.com", scope: "ACME/eng", key: "ENG-7" };
+  expect(threadIssueKeyOf(lower)).toBe(threadIssueKeyOf(upper));
+  expect(threadIssueKeysEqual(lower, upper)).toBe(true);
+  for (const other of [
+    { host: "other.example.com" },
+    { scope: "other/ENG" },
+    { key: "ENG-8" },
+    { tracker: IssueTrackerKind.make("plugin") },
+  ]) {
+    expect(threadIssueKeysEqual(lower, { ...upper, ...other })).toBe(false);
+  }
+});
+
+it("keeps plugin key case and numeric tracker keys exact", () => {
+  const key = {
+    tracker: IssueTrackerKind.make("plugin"),
+    host: "example.com",
+    scope: "acme/web",
+    key: "Ticket-a",
+  };
+  expect(threadIssueKeysEqual(key, { ...key, key: "TICKET-A" })).toBe(false);
+  for (const tracker of ["github", "gitlab", "forgejo", "azure-devops"]) {
+    const numeric = { ...key, tracker: IssueTrackerKind.make(tracker), key: "7" };
+    expect(threadIssueKeysEqual(numeric, { ...numeric, key: " 7 " })).toBe(true);
+    expect(threadIssueKeysEqual(numeric, { ...numeric, key: "07" })).toBe(false);
+    expect(threadIssueKeysEqual({ ...numeric, key: "Ab-7" }, { ...numeric, key: "AB-7" })).toBe(
+      false,
+    );
+  }
 });
