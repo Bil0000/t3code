@@ -459,14 +459,24 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       return { comments, nextCursor };
     });
 
-    /** Pull requests the timeline shows citing this issue, each read once for its state. */
+    /** Pull requests the timeline shows citing this issue. */
     const linkedPullRequests = (
       target: Target,
       timeline: ReadonlyArray<typeof ForgejoTimelineEntry.Type>,
+      issueUrl?: string,
     ): Effect.Effect<ReadonlyArray<IssueLinkedPullRequest>, IssueTrackerError> => {
+      const currentMount = URL.parse(issueUrl ?? "")
+        ?.pathname.match(/^(.*)\/[^/]+\/[^/]+\/issues\/[1-9]\d*\/?$/)?.[1]
+        ?.replace(/^\//, "");
       const references = new Map<
         string,
-        { readonly repository: string; readonly number: number; readonly closesIssue: boolean }
+        {
+          readonly repository: string;
+          readonly number: number;
+          readonly closesIssue: boolean;
+          readonly url: string;
+          readonly mount: string;
+        }
       >();
       for (const entry of timeline) {
         const reference = entry.ref_issue;
@@ -486,11 +496,12 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         )
           continue;
         const repository = match[1]!;
-        const mount = target.scope.split("/").slice(0, -2).join("/");
-        if (mount !== "" && !repository.startsWith(`${mount}/`)) continue;
+        const mount = repository.split("/").slice(0, -2).join("/");
         references.set(`${repository}/${reference.number}`, {
           repository,
           number: reference.number,
+          url: reference.html_url,
+          mount,
           closesIssue:
             entry.ref_action === "closes" ||
             references.get(`${repository}/${reference.number}`)?.closesIssue === true,
@@ -498,8 +509,20 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       }
       return Effect.forEach(
         [...references.values()],
-        ({ repository, number, closesIssue }) =>
-          read(
+        ({ repository, number, closesIssue, url, mount }) => {
+          if (mount !== currentMount)
+            return Effect.succeed<ReadonlyArray<IssueLinkedPullRequest>>([
+              {
+                repository,
+                number,
+                title: `#${number}`,
+                url,
+                state: null,
+                isDraft: false,
+                closesIssue,
+              },
+            ]);
+          return read(
             { ...target, scope: repository },
             "getIssue",
             { path: `${repoPath(repository)}/pulls/${number}` },
@@ -531,7 +554,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
               (error) => error.reason === "not-found",
               () => Effect.succeed([]),
             ),
-          ),
+          );
+        },
         { concurrency: 2 },
       ).pipe(Effect.map((links) => links.flat()));
     };
@@ -657,7 +681,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                 repository.permissions?.push ?? false,
                 !repository.archived && repository.has_issues !== false,
               ),
-              linkedPullRequests(input, timeline.rows),
+              linkedPullRequests(input, timeline.rows, issue.html_url),
             ]).pipe(
               Effect.map(([conversation, links]) => ({
                 ...forgejoIssue(issue),
