@@ -2,10 +2,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as AzureDevOpsIssueTracker from "./AzureDevOpsIssueTracker.ts";
+import { decodeWorkItemJson, decodeWorkItemsJson } from "./azureDevOpsIssueJson.ts";
 
 const encode = (value: unknown) => JSON.stringify(value);
 
@@ -115,6 +117,41 @@ function tracker(onExecute: (args: ReadonlyArray<string>) => string) {
 }
 
 describe("AzureDevOpsIssueTracker", () => {
+  it.each([
+    [
+      "https://dev.azure.com/acme/_apis/wit/workItems/7",
+      "https://dev.azure.com/acme/Web%20App/_workitems/edit/7",
+    ],
+    [
+      "https://dev.azure.com/acme/Web%20App/_apis/wit/workItems/7",
+      "https://dev.azure.com/acme/Web%20App/_workitems/edit/7",
+    ],
+    [
+      "https://acme.visualstudio.com/_apis/wit/workItems/7",
+      "https://acme.visualstudio.com/Web%20App/_workitems/edit/7",
+    ],
+    [
+      "https://acme.visualstudio.com/Web%20App/_apis/wit/workItems/7",
+      "https://acme.visualstudio.com/Web%20App/_workitems/edit/7",
+    ],
+    [
+      "https://acme.visualstudio.com/DefaultCollection/_apis/wit/workItems/7",
+      "https://acme.visualstudio.com/DefaultCollection/Web%20App/_workitems/edit/7",
+    ],
+    [
+      "https://acme.visualstudio.com/DefaultCollection/Web%20App/_apis/wit/workItems/7",
+      "https://acme.visualstudio.com/DefaultCollection/Web%20App/_workitems/edit/7",
+    ],
+    ["not a URL", null],
+    ["https://[acme/_apis/wit/workItems/7", null],
+  ])("decodes native work-item URLs for detail, create and lists: %s", (url, expected) => {
+    const item = { ...WORK_ITEM, url };
+    const detail = Result.getOrThrow(decodeWorkItemJson(encode(item)));
+    const list = Result.getOrThrow(decodeWorkItemsJson(encode({ value: [item] })));
+    expect(detail?.url ?? null).toBe(expected);
+    expect(list.map((row) => row.url)).toEqual(expected === null ? [] : [expected]);
+  });
+
   it.effect("maps a work item, its conversation and revisions to the neutral issue shape", () =>
     Effect.gen(function* () {
       const seen: string[][] = [];

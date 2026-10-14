@@ -89,8 +89,16 @@ function browserUrl(
   project: string | null,
 ): string | null {
   if (apiUrl === null || apiUrl === undefined || project === null) return null;
-  const match = /^(https?:\/\/[^/]+\/[^/]+)\/(?:[^/]+\/)?_apis\/wit\/workItems\//i.exec(apiUrl);
-  return match === null ? null : `${match[1]}/${encodeURIComponent(project)}/_workitems/edit/${id}`;
+  const url = URL.parse(apiUrl);
+  if (url === null || (url.protocol !== "https:" && url.protocol !== "http:")) return null;
+  const match = (
+    url.hostname.endsWith(".visualstudio.com")
+      ? /^\/(DefaultCollection\/)?(?:[^/]+\/)?_apis\/wit\/workItems\//i
+      : /^\/([^/]+\/)(?:[^/]+\/)?_apis\/wit\/workItems\//i
+  ).exec(url.pathname);
+  return match === null
+    ? null
+    : `${url.origin}/${match[1] ?? ""}${encodeURIComponent(project)}/_workitems/edit/${id}`;
 }
 
 function toActor(value: typeof IdentityValue.Type | undefined): IssueActor | null {
