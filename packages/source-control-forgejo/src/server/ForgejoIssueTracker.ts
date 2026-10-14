@@ -270,7 +270,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       readPage(
         target,
         operation,
-        `orgs/${encodeURIComponent(target.scope.split("/")[0]!)}/labels`,
+        `orgs/${encodeURIComponent(target.scope.split("/").at(-2)!)}/labels`,
         1,
         ForgejoLabel,
       ).pipe(
@@ -488,7 +488,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                 getRepository(input, "getIssue"),
                 getViewer(input, "getIssue"),
                 readPage(input, "getIssue", `${path}/timeline`, 1, ForgejoTimelineEntry),
-                readArray(input, "getIssue", `${path}/reactions`, ForgejoReaction),
+                readPage(input, "getIssue", `${path}/reactions`, 1, ForgejoReaction),
               ],
               { concurrency: 3 },
             ),
@@ -509,7 +509,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                 body: issue.body ?? "",
                 viewer,
                 viewerPermissions: permissions(repository),
-                reactions: forgejoReactions(reactions, viewer),
+                reactions: forgejoReactions(reactions.rows, viewer),
+                reactionsTruncated: !reactions.paginationKnown || reactions.nextCursor !== null,
                 comments: conversation.comments,
                 commentsCursor: conversation.nextCursor,
                 events: timeline.rows.flatMap((entry) => forgejoIssueEvent(entry) ?? []),
@@ -641,23 +642,44 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         ),
 
       setReaction: (input) =>
-        issueTarget("setReaction", input).pipe(
-          Effect.flatMap(({ path }) => {
-            if (input.subjectId !== undefined && !/^[1-9]\d*$/.test(input.subjectId)) {
-              return Effect.fail(
-                refused("setReaction", "The comment id names no Forgejo comment."),
-              );
-            }
-            return write(input, "setReaction", {
-              path:
-                input.subjectId === undefined
-                  ? `${path}/reactions`
-                  : `${repoPath(input.scope)}/issues/comments/${input.subjectId}/reactions`,
-              method: input.reacted ? "POST" : "DELETE",
-              body: { content: FORGEJO_REACTIONS[input.content] },
-            });
-          }),
-        ),
+        Effect.gen(function* () {
+          const { number, path } = yield* issueTarget("setReaction", input);
+          let reactionPath = `${path}/reactions`;
+          if (input.subjectId !== undefined) {
+            if (!/^[1-9]\d*$/.test(input.subjectId))
+              return yield* refused("setReaction", "The comment id names no Forgejo comment.");
+            const commentPath = `${repoPath(input.scope)}/issues/comments/${input.subjectId}`;
+            const comment = yield* read(
+              input,
+              "setReaction",
+              { path: commentPath },
+              Schema.Struct({ id: Schema.Int, issue_url: Schema.String }),
+            );
+            const url = URL.parse(comment.issue_url);
+            const segments = input.scope.split("/").map(encodeURIComponent);
+            const scopePath = segments.slice(-2).join("/");
+            const mountPath = segments.slice(0, -2).join("/");
+            const issueSuffix = `/${scopePath}/issues/${number}`;
+            const ownerPath = url?.pathname.replace(/\/$/, "");
+            if (
+              String(comment.id) !== input.subjectId ||
+              url === null ||
+              !["http:", "https:"].includes(url.protocol) ||
+              url.host.toLowerCase() !== input.host.toLowerCase() ||
+              !ownerPath?.endsWith(issueSuffix) ||
+              (mountPath !== "" &&
+                ownerPath !== `/${mountPath}${issueSuffix}` &&
+                ownerPath !== `/${mountPath}/api/v1/repos${issueSuffix}`)
+            )
+              return yield* refused("setReaction", "The comment does not belong to this issue.");
+            reactionPath = `${commentPath}/reactions`;
+          }
+          yield* write(input, "setReaction", {
+            path: reactionPath,
+            method: input.reacted ? "POST" : "DELETE",
+            body: { content: FORGEJO_REACTIONS[input.content] },
+          });
+        }),
 
       listTemplates: (input) =>
         Effect.all(

@@ -136,6 +136,125 @@ function tracker(
 }
 
 describe("ForgejoIssueTracker", () => {
+  it.effect.each([
+    { reacted: true, method: "POST", issueUrl: "https://forgejo.test:3000/acme/web/issues/42" },
+    {
+      reacted: false,
+      method: "DELETE",
+      issueUrl: "https://forgejo.test:3000/api/v1/repos/acme/web/issues/42",
+    },
+    {
+      reacted: true,
+      method: "POST",
+      issueUrl: "https://forgejo.test:3000/forgejo/acme/web/issues/42",
+    },
+    {
+      reacted: true,
+      method: "POST",
+      scope: "forgejo/maria/project",
+      issueUrl: "https://forgejo.test:3000/forgejo/maria/project/issues/42",
+    },
+    {
+      reacted: false,
+      method: "DELETE",
+      scope: "forgejo/maria/project",
+      issueUrl: "https://forgejo.test:3000/forgejo/api/v1/repos/maria/project/issues/42",
+    },
+  ])(
+    "checks comment ownership before $method reaction",
+    ({ reacted, method, issueUrl, scope = "acme/web" }) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          return {
+            stdout: encode({ id: 7, issue_url: issueUrl }),
+          };
+        });
+        yield* api.setReaction!({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope,
+          key: "42",
+          subjectId: "7",
+          content: "thumbs-up",
+          reacted,
+        });
+        expect(requests).toMatchObject([
+          { path: `repos/${scope}/issues/comments/7` },
+          { path: `repos/${scope}/issues/comments/7/reactions`, method, body: { content: "+1" } },
+        ]);
+        expect(requests[0]?.method).toBeUndefined();
+      }),
+  );
+
+  it.effect.each([
+    { issue_url: "https://forgejo.test:3000/acme/web/issues/41" },
+    { issue_url: "https://forgejo.test:3000/acme/other/issues/42" },
+    { issue_url: "https://other.test:3000/acme/web/issues/42" },
+    { issue_url: "https://forgejo.test/acme/web/issues/42" },
+    { issue_url: "https://forgejo.test:3000/acme/web/pulls/42" },
+    { issue_url: "not a URL" },
+    { issue_url: "" },
+    {},
+    { id: 8, issue_url: "https://forgejo.test:3000/acme/web/issues/42" },
+    { issue_url: "https://forgejo.test:3000/acme/web/issues/42", stdoutTruncated: true },
+  ])("refuses comment reactions when native ownership is wrong or unknown: %s", (ownership) =>
+    Effect.gen(function* () {
+      const requests: ForgejoCli.ForgejoApiInput[] = [];
+      const api = yield* tracker((input) => {
+        requests.push(input);
+        return {
+          stdout: encode({ id: 7, ...ownership }),
+          stdoutTruncated: "stdoutTruncated" in ownership && ownership.stdoutTruncated,
+        };
+      });
+      for (const reacted of [true, false]) {
+        yield* Effect.flip(
+          api.setReaction!({
+            cwd: "/w",
+            host: "forgejo.test:3000",
+            scope: "acme/web",
+            key: "42",
+            subjectId: "7",
+            content: "thumbs-up",
+            reacted,
+          }),
+        );
+      }
+      expect(requests.map((input) => input.path)).toEqual([
+        "repos/acme/web/issues/comments/7",
+        "repos/acme/web/issues/comments/7",
+      ]);
+      expect(requests.every((input) => input.method === undefined)).toBe(true);
+    }),
+  );
+
+  it.effect.each([true, false])("keeps whole-issue reactions at one write: reacted=%s", (reacted) =>
+    Effect.gen(function* () {
+      const requests: ForgejoCli.ForgejoApiInput[] = [];
+      const api = yield* tracker((input) => {
+        requests.push(input);
+        return { stdout: "{}" };
+      });
+      yield* api.setReaction!({
+        cwd: "/w",
+        host: "forgejo.test:3000",
+        scope: "acme/web",
+        key: "42",
+        content: "thumbs-up",
+        reacted,
+      });
+      expect(requests).toMatchObject([
+        {
+          path: "repos/acme/web/issues/42/reactions",
+          method: reacted ? "POST" : "DELETE",
+          body: { content: "+1" },
+        },
+      ]);
+    }),
+  );
+
   it.effect("joins the issue, timeline and conversation into the neutral issue shape", () =>
     Effect.gen(function* () {
       const hosts = new Set<string | undefined>();
@@ -167,6 +286,7 @@ describe("ForgejoIssueTracker", () => {
           assignees: true,
         },
         reactions: [{ content: "eyes", count: 1, actors: ["theo"], viewerHasReacted: false }],
+        reactionsTruncated: true,
         commentsCursor: "2",
       });
       expect(issue.comments).toEqual([
@@ -196,6 +316,45 @@ describe("ForgejoIssueTracker", () => {
         },
       ]);
     }),
+  );
+
+  it.effect.each([false, true])(
+    "marks native issue reaction page partial only when needed: %s",
+    (partial) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((input) => {
+          paths.push(input.path);
+          if (input.path.startsWith("repos/acme/web/issues/42/reactions"))
+            return {
+              stdout: encode(
+                partial
+                  ? Array.from({ length: 50 }, (_, index) => ({
+                      content: "eyes",
+                      user: { login: `user${index}` },
+                    }))
+                  : [{ content: "eyes", user: { login: "julius" } }],
+              ),
+              stderr: partial
+                ? 'Link: <https://forgejo.test:3000/api/v1/repos/acme/web/issues/42/reactions?page=2>; rel="next"'
+                : 'Link: <https://forgejo.test:3000/api/v1/repos/acme/web/issues/42/reactions?page=1>; rel="last"',
+            };
+          return answer(input.path);
+        });
+        const issue = yield* api.getIssue({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "acme/web",
+          key: "42",
+        });
+        expect(issue.reactionsTruncated).toBe(partial);
+        expect(issue.reactions).toMatchObject([
+          { content: "eyes", count: partial ? 50 : 1, viewerHasReacted: !partial },
+        ]);
+        expect(
+          paths.filter((path) => path.startsWith("repos/acme/web/issues/42/reactions")),
+        ).toEqual(["repos/acme/web/issues/42/reactions?limit=50&page=1"]);
+      }),
   );
 
   it.effect("keeps unknown issue-unit controls available without using code push permission", () =>
@@ -555,6 +714,76 @@ describe("ForgejoIssueTracker", () => {
           expect(yield* result).toMatchObject({ labels: [{ name: "bug" }], truncated: true });
         else expect(yield* Effect.flip(result)).toMatchObject({ reason: "rate-limited" });
       }),
+  );
+
+  it.effect.each(["create", "update"] as const)(
+    "uses the native organization owner for mounted %s and candidates",
+    (operation) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.method)
+            return { stdout: encode({ ...ISSUE, labels: [{ id: 91, name: "Org" }] }) };
+          if (input.path.startsWith("orgs/maria/labels"))
+            return { stdout: encode([{ id: 91, name: "Org" }]) };
+          if (input.path === "repos/forgejo/maria/project/issues/42")
+            return { stdout: encode(ISSUE) };
+          if (
+            input.path.startsWith("repos/forgejo/maria/project/labels") ||
+            input.path.startsWith("repos/forgejo/maria/project/assignees")
+          )
+            return { stdout: "[]" };
+          throw new Error(`unexpected path ${input.path}`);
+        });
+        const target = {
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "forgejo/maria/project",
+          key: "42",
+        };
+        expect(yield* api.listCandidates!(target)).toMatchObject({ labels: [{ name: "Org" }] });
+        requests.length = 0;
+        if (operation === "create")
+          yield* api.create!({ ...target, title: "New", body: "", labels: ["Org"], assignees: [] });
+        else yield* api.update!({ ...target, labels: ["Org"] });
+        expect(requests.filter((request) => request.path.startsWith("orgs/"))).toMatchObject([
+          { path: "orgs/maria/labels?limit=50&page=1" },
+        ]);
+        expect(requests.filter((request) => request.method)).toMatchObject([
+          { body: { labels: [91] } },
+        ]);
+        expect(requests).toHaveLength(operation === "create" ? 3 : 4);
+      }),
+  );
+
+  it.effect.each([
+    "https://forgejo.test:3000/forgejo/maria/other/issues/42",
+    "https://forgejo.test:3000/forgejo/maria/project/issues/41",
+    "https://other.test:3000/forgejo/maria/project/issues/42",
+    "https://forgejo.test:3000/other/maria/project/issues/42",
+    "https://forgejo.test:3000/other/api/v1/repos/maria/project/issues/42",
+  ])("refuses mounted reaction owner mismatch: %s", (issue_url) =>
+    Effect.gen(function* () {
+      const requests: ForgejoCli.ForgejoApiInput[] = [];
+      const api = yield* tracker((input) => {
+        requests.push(input);
+        return { stdout: encode({ id: 7, issue_url }) };
+      });
+      yield* Effect.flip(
+        api.setReaction!({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "forgejo/maria/project",
+          key: "42",
+          subjectId: "7",
+          content: "thumbs-up",
+          reacted: true,
+        }),
+      );
+      expect(requests).toMatchObject([{ path: "repos/forgejo/maria/project/issues/comments/7" }]);
+      expect(requests[0]?.method).toBeUndefined();
+    }),
   );
 
   it.effect.each([
