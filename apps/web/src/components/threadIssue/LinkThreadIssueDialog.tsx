@@ -8,6 +8,7 @@ import {
   type IssueListEntry,
   type IssueListCursors,
   type ScopedThreadRef,
+  type ThreadIssueSnapshot,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import { useState } from "react";
@@ -167,6 +168,7 @@ function LinkThreadIssueDialog({
     setPendingKey(ref.key);
     setError(null);
     let url = nativeUrl;
+    let snapshot: ThreadIssueSnapshot | undefined;
     if (url === undefined) {
       const detail = await executeAtomQuery(
         appAtomRegistry,
@@ -179,10 +181,23 @@ function LinkThreadIssueDialog({
         return;
       }
       url = detail.value.url;
+      snapshot = {
+        displayKey: detail.value.displayKey,
+        title: detail.value.title,
+        state: detail.value.state,
+        syncedAt: new Date().toISOString(),
+      };
     }
     const result = await link({
       environmentId,
-      input: { threadId: threadRef.threadId, ...ref, host: ref.host, url, source: "manual" },
+      input: {
+        threadId: threadRef.threadId,
+        ...ref,
+        host: ref.host,
+        url,
+        source: "manual",
+        ...(snapshot === undefined ? {} : { snapshot }),
+      },
     });
     setPendingKey(null);
     if (result._tag === "Failure") {
