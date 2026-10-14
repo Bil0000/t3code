@@ -528,6 +528,113 @@ describe("ForgejoIssueTracker", () => {
       }),
   );
 
+  it.effect.each(["mount-a/acme/web", "acme/web"])(
+    "keeps linked pull request installation identity for scope %s",
+    (scope) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const urls = [
+          "https://forgejo.test:3000/mount-a/acme/web/pulls/50",
+          "https://forgejo.test:3000/mount-b/acme/web/pulls/50",
+          "https://forgejo.test:3000/mount-a/other/repo/pulls/50",
+          "https://forgejo.test:3000/mount-b/other/repo/pulls/50",
+        ];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          const route = input.path.split("?")[0]!;
+          if (route === `repos/${scope}/issues/42`)
+            return {
+              stdout: encode({
+                ...ISSUE,
+                html_url: "https://forgejo.test:3000/mount-a/acme/web/issues/42",
+              }),
+            };
+          if (route === `repos/${scope}/issues/42/timeline`)
+            return {
+              stdout: encode(
+                [
+                  ...urls,
+                  urls[1]!,
+                  "https://other.test/mount-a/acme/web/pulls/50",
+                  "invalid",
+                  "https://forgejo.test:3000/mount-a/acme/web/pulls/51",
+                ].map((url, index) => ({
+                  id: index + 1,
+                  type: "pull_ref",
+                  created_at: "2026-07-02T00:00:00Z",
+                  ref_issue: { number: 50, html_url: url, pull_request: { merged: false } },
+                })),
+              ),
+            };
+          if (route.includes("/pulls/")) {
+            const other = route.includes("other/repo");
+            return {
+              stdout: encode({
+                number: 50,
+                title: other ? "Other A fix" : "A fix",
+                html_url: urls[other ? 2 : 0],
+                state: "closed",
+                merged: true,
+              }),
+            };
+          }
+          return answer(input.path.replace(`repos/${scope}`, "repos/acme/web"));
+        });
+        const issue = yield* api.getIssue({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope,
+          key: "42",
+        });
+        expect(issue.linkedPullRequests).toMatchObject([
+          {
+            repository: "mount-a/acme/web",
+            number: 50,
+            title: "A fix",
+            url: urls[0],
+            state: "merged",
+          },
+          {
+            repository: "mount-b/acme/web",
+            number: 50,
+            title: "#50",
+            url: urls[1],
+            state: null,
+            isDraft: false,
+          },
+          {
+            repository: "mount-a/other/repo",
+            number: 50,
+            title: "Other A fix",
+            url: urls[2],
+            state: "merged",
+          },
+          {
+            repository: "mount-b/other/repo",
+            number: 50,
+            title: "#50",
+            url: urls[3],
+            state: null,
+            isDraft: false,
+          },
+        ]);
+        expect(requests.filter((request) => request.path.includes("/pulls/"))).toEqual([
+          {
+            cwd: "/w",
+            host: "forgejo.test:3000",
+            repository: "mount-a/acme/web",
+            path: "repos/mount-a/acme/web/pulls/50",
+          },
+          {
+            cwd: "/w",
+            host: "forgejo.test:3000",
+            repository: "mount-a/other/repo",
+            path: "repos/mount-a/other/repo/pulls/50",
+          },
+        ]);
+      }),
+  );
+
   it.effect("marks native timeline continuation without walking its next page", () =>
     Effect.gen(function* () {
       const paths: string[] = [];
