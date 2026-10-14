@@ -13,6 +13,7 @@ import type {
   IssueReaction,
   IssueReactionContent,
   IssueRef,
+  IssueState,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -652,8 +653,17 @@ export function IssueDetailPanel({
   const canSetState = may(detail.capabilities.states.length > 0, detail.viewerPermissions.setState);
   const tracker = issueTrackerPresentation(detail.tracker);
   const reactionOwner = `${environmentId}\u0000${issueEntryKey(detail)}\u0000${detail.viewer ?? ""}`;
+  const isCurrentState = (state: IssueState) =>
+    state.category === detail.state.category &&
+    (state.name === detail.state.name || state.name === state.category);
+  const closeReasonsFor = (state: IssueState) =>
+    state.category === "closed"
+      ? detail.capabilities.closeReasons.filter(
+          (reason) => !isCurrentState(state) || reason !== detail.state.closeReason,
+        )
+      : [];
   const otherStates = detail.capabilities.states.filter(
-    (state) => state.category !== detail.state.category || state.name !== detail.state.name,
+    (state) => !isCurrentState(state) || closeReasonsFor(state).length > 0,
   );
   const closingStates = otherStates.filter((state) => state.category === "closed");
   const openingStates = otherStates.filter((state) => state.category === "open");
@@ -764,7 +774,7 @@ export function IssueDetailPanel({
           <MenuPopup align="end">
             {otherStates.flatMap((state) =>
               state.category === "closed" && detail.capabilities.closeReasons.length > 0
-                ? detail.capabilities.closeReasons.map((reason) => (
+                ? closeReasonsFor(state).map((reason) => (
                     <MenuItem
                       key={`${state.name}:${reason}`}
                       onClick={() => void moveTo(state.name, reason)}
