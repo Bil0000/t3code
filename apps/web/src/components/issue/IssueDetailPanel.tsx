@@ -1048,7 +1048,12 @@ function IssueDetailContent({
                 <section className="flex flex-col gap-1">
                   <h3 className="text-xs text-muted-foreground">Linked pull requests</h3>
                   {linkedPages.items.map((link) => {
-                    const target = linkedPullRequestTarget(link, reference);
+                    const target = linkedPullRequestTarget(
+                      link,
+                      reference,
+                      environmentId,
+                      projects,
+                    );
                     return (
                       <LinkedPullRequestRow
                         key={link.url}

@@ -1,4 +1,5 @@
 import type {
+  EnvironmentId,
   IssueActor,
   IssueComment,
   IssueDetail,
@@ -15,6 +16,9 @@ import type {
 } from "@t3tools/contracts";
 import { issueEntryKey, prependIssueComments } from "@t3tools/client-runtime/state/issues";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { findProjectOnChangeRequestHost } from "../../lib/openPullRequestLink";
 import { PULL_REQUEST_REACTION_ORDER } from "../pullRequest/pullRequestReactions.logic";
 
 export function issueStateActionLabel(state: IssueState): string {
@@ -233,14 +237,25 @@ export function issueAssigneeOptions(
 export function linkedPullRequestTarget(
   link: IssueLinkedPullRequest,
   reference: IssueRef,
+  environmentId: EnvironmentId,
+  projects: ReadonlyArray<EnvironmentProject>,
 ): IssueLinkedPullRequestTarget | null {
-  const trackerProvider = sourceControlClients.find(reference.tracker)?.kind;
-  const provider = link.provider ?? trackerProvider;
-  if (provider === undefined) return null;
-  const host = link.host ?? (provider === trackerProvider ? reference.host : undefined);
+  const provider = sourceControlClients.find(link.provider ?? reference.tracker)?.kind;
+  const parsed = parseChangeRequestUrl(link.url);
+  if (provider === undefined || parsed === null) return null;
+  const project = findProjectOnChangeRequestHost(
+    projects.filter(
+      (project) =>
+        project.environmentId === environmentId &&
+        project.repositoryIdentity?.provider === provider,
+    ),
+    parsed,
+  );
+  if (project === undefined) return null;
+  const host = parsed.authority ?? link.host ?? parsed.host;
   return {
-    projectId: reference.projectId,
-    ...(host === undefined ? {} : { host }),
+    projectId: project.id,
+    host,
     repository: link.repository,
     number: link.number,
     url: link.url,

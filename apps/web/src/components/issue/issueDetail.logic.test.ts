@@ -7,7 +7,8 @@ import type {
   IssueReaction,
   IssueReactionContent,
 } from "@t3tools/contracts";
-import { IssueTrackerKind, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -110,6 +111,26 @@ describe("nextIssueAssignees", () => {
 });
 
 describe("linkedPullRequestTarget", () => {
+  const environmentId = EnvironmentId.make("environment");
+  const checkout: EnvironmentProject = {
+    environmentId,
+    id: ProjectId.make("git-checkout"),
+    title: "Git checkout",
+    workspaceRoot: "/repo",
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-10-14T00:00:00Z",
+    updatedAt: "2026-10-14T00:00:00Z",
+    repositoryIdentity: {
+      provider: "github",
+      canonicalKey: "github.com/acme/web",
+      locator: {
+        source: "git-remote",
+        remoteName: "origin",
+        remoteUrl: "https://github.com/acme/web.git",
+      },
+    },
+  };
   const link: IssueLinkedPullRequest = {
     repository: "acme/web",
     number: 7,
@@ -127,9 +148,11 @@ describe("linkedPullRequestTarget", () => {
       linkedPullRequestTarget(
         { ...link, provider: "github" as SourceControlProviderKind, host: "github.com" },
         ref("linear", "linear.app"),
+        environmentId,
+        [checkout],
       ),
     ).toEqual({
-      projectId: "p",
+      projectId: "git-checkout",
       host: "github.com",
       repository: "acme/web",
       number: 7,
@@ -138,13 +161,92 @@ describe("linkedPullRequestTarget", () => {
   });
 
   it("falls back to a git tracker's own kind and host", () => {
-    expect(linkedPullRequestTarget(link, ref("gitlab", "gitlab.example.com"))).toMatchObject({
+    const gitlab = {
+      ...checkout,
+      repositoryIdentity: {
+        ...checkout.repositoryIdentity!,
+        provider: "gitlab",
+        canonicalKey: "gitlab.example.com/acme/web",
+        locator: {
+          source: "git-remote" as const,
+          remoteName: "origin",
+          remoteUrl: "https://gitlab.example.com/acme/web.git",
+        },
+      },
+    };
+    expect(
+      linkedPullRequestTarget(
+        { ...link, url: "https://gitlab.example.com/acme/web/-/merge_requests/7" },
+        ref("gitlab", "gitlab.example.com"),
+        environmentId,
+        [gitlab],
+      ),
+    ).toMatchObject({
+      projectId: "git-checkout",
       host: "gitlab.example.com",
     });
   });
 
   it("does not guess for a standalone tracker without a provider", () => {
-    expect(linkedPullRequestTarget(link, ref("linear", "linear.app"))).toBeNull();
+    expect(
+      linkedPullRequestTarget(link, ref("linear", "linear.app"), environmentId, [checkout]),
+    ).toBeNull();
+  });
+
+  it.each([
+    "none",
+    "other-environment",
+    "other-provider",
+    "unsupported-provider",
+    "other-host",
+    "matched",
+    "foreign-repository",
+  ])("routes a Linear-linked GitLab MR only through a supported destination (%s)", (kind) => {
+    const native = {
+      ...link,
+      provider: (kind === "unsupported-provider"
+        ? "unsupported"
+        : "gitlab") as SourceControlProviderKind,
+      host: "gitlab.example.com",
+      url: "https://gitlab.example.com/acme/web/-/merge_requests/7",
+    };
+    const host = kind === "other-host" ? "other.gitlab.example.com" : native.host;
+    const repository = kind === "foreign-repository" ? "acme/local" : native.repository;
+    const project: EnvironmentProject = {
+      ...checkout,
+      environmentId: kind === "other-environment" ? EnvironmentId.make("elsewhere") : environmentId,
+      repositoryIdentity: {
+        provider:
+          kind === "other-provider"
+            ? "github"
+            : kind === "unsupported-provider"
+              ? "unsupported"
+              : "gitlab",
+        canonicalKey: `${host}/${repository}`,
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: `https://${host}/${repository}.git`,
+        },
+      },
+    };
+    const target = linkedPullRequestTarget(
+      native,
+      ref("linear", "linear.app"),
+      environmentId,
+      kind === "none" ? [] : [project],
+    );
+    expect(target).toEqual(
+      kind === "matched" || kind === "foreign-repository"
+        ? {
+            projectId: checkout.id,
+            host: native.host,
+            repository: native.repository,
+            number: native.number,
+            url: native.url,
+          }
+        : null,
+    );
   });
 });
 

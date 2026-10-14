@@ -7,6 +7,7 @@ import {
   IssueTrackerKind,
   ProjectId,
   IssueCommentsPageInput,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import type {
   IssueState,
@@ -14,6 +15,7 @@ import type {
   IssueReaction,
   IssueLinkedPullRequestsPage,
 } from "@t3tools/contracts";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { RegistryContext } from "@effect/atom-react";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
@@ -75,6 +77,7 @@ const state = vi.hoisted(() => ({
     },
   },
   write: vi.fn(),
+  projects: [] as EnvironmentProject[],
   allowed: true,
   toast: vi.fn(),
   candidatesRead: vi.fn(),
@@ -85,7 +88,7 @@ const state = vi.hoisted(() => ({
     refresh: vi.fn(),
   },
 }));
-vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
+vi.mock("~/state/entities", () => ({ useProjects: () => state.projects }));
 vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   const pages = Atom.family((_key: string) =>
@@ -164,6 +167,126 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
 const decodeCommentPageInput = Schema.decodeUnknownSync(IssueCommentsPageInput);
+
+it.each(["none", "matched", "foreign-repository", "other-environment"])(
+  "keeps a Linear linked MR on its supported native destination (%s)",
+  async (kind) => {
+    const previousDetail = state.detail;
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const environmentId = EnvironmentId.make("environment");
+    const reference = {
+      projectId: ProjectId.make("linear-workspace"),
+      tracker: IssueTrackerKind.make("linear"),
+      host: "linear.app",
+      scope: "ENG",
+      key: "ENG-1",
+    };
+    const repository = kind === "foreign-repository" ? "acme/local" : "acme/web";
+    state.projects =
+      kind === "none"
+        ? []
+        : [
+            {
+              environmentId:
+                kind === "other-environment" ? EnvironmentId.make("other") : environmentId,
+              id: ProjectId.make("gitlab-checkout"),
+              title: "GitLab checkout",
+              workspaceRoot: "/repo",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: "2026-10-14T00:00:00Z",
+              updatedAt: "2026-10-14T00:00:00Z",
+              repositoryIdentity: {
+                provider: "gitlab",
+                canonicalKey: `gitlab.example.com/${repository}`,
+                locator: {
+                  source: "git-remote",
+                  remoteName: "origin",
+                  remoteUrl: `https://gitlab.example.com/${repository}.git`,
+                },
+              },
+            },
+          ];
+    state.detail = {
+      ...state.detail,
+      ...reference,
+      comments: [],
+      commentsCursor: null,
+      reactions: undefined,
+      capabilities: {
+        ...state.detail.capabilities,
+        states: [],
+        linkedPullRequests: true,
+        events: false,
+      },
+    };
+    const url = "https://gitlab.example.com/acme/web/-/merge_requests/7";
+    const { issueEnvironment } =
+      await vi.importActual<typeof import("~/state/issues")>("~/state/issues");
+    const page = issueEnvironment.linkedPullRequests({
+      environmentId,
+      input: reference,
+    }) as Atom.Writable<AsyncResult.AsyncResult<IssueLinkedPullRequestsPage, unknown>>;
+    appAtomRegistry.set(
+      page,
+      AsyncResult.success({
+        items: [
+          {
+            provider: SourceControlProviderKind.make("gitlab"),
+            host: "gitlab.example.com",
+            repository: "acme/web",
+            number: 7,
+            title: "Linked MR",
+            url,
+            state: "open",
+            isDraft: false,
+            closesIssue: false,
+          },
+        ],
+        nextCursor: null,
+      }),
+    );
+    const select = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          <RegistryContext.Provider value={appAtomRegistry}>
+            <IssueDetailPanel
+              environmentId={environmentId}
+              reference={reference}
+              onSelectPullRequest={select}
+            />
+          </RegistryContext.Provider>,
+        ),
+      );
+      if (kind === "matched" || kind === "foreign-repository") {
+        const row = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+          button.textContent?.includes("Linked MR"),
+        )!;
+        await act(async () => row.click());
+        expect(select).toHaveBeenCalledExactlyOnceWith({
+          projectId: "gitlab-checkout",
+          host: "gitlab.example.com",
+          repository: "acme/web",
+          number: 7,
+          url,
+        });
+      } else {
+        expect(container.querySelector(`a[href="${url}"]`)).not.toBeNull();
+        expect(select).not.toHaveBeenCalled();
+      }
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.detail = previousDetail;
+      state.projects = [];
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it.each(["viewer-a", null])(
   "clears issue and comment reaction confirmation on viewer switch before ACK (%s)",
