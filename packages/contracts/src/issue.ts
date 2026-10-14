@@ -279,20 +279,12 @@ export const IssueCommentsPage = Schema.Struct({
 });
 export type IssueCommentsPage = typeof IssueCommentsPage.Type;
 
-/** Where each scope a listing already reached carries on, keyed `"<host> <scope>"`. */
-export function issueTrackerHostKey(source: {
-  readonly tracker: string;
-  readonly host: string;
-}): string {
-  return `${source.tracker} ${source.host.toLowerCase()}`;
-}
-
 export function issueListCursorKey(source: {
   readonly tracker: string;
   readonly host: string;
   readonly scope: string;
 }): string {
-  return `${issueTrackerHostKey(source)} ${source.scope}`;
+  return `${source.tracker} ${source.host.toLowerCase()} ${source.scope}`;
 }
 
 export const IssueListCursors = Schema.Record(

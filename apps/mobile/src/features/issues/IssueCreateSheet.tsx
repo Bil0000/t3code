@@ -264,6 +264,9 @@ export function IssueCreateSheet({
           <MaterialButton label="Retry templates" tone="text" onPress={templatesQuery.refresh} />
         </View>
       ) : null}
+      {scope?.createIssueTypes === true && candidatesQuery.error ? (
+        <MaterialButton label="Retry issue types" tone="text" onPress={candidatesQuery.refresh} />
+      ) : null}
       {error ? (
         <Text selectable className="text-sm text-danger-foreground">
           {error}

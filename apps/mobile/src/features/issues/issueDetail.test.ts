@@ -387,4 +387,21 @@ describe("issue creation", () => {
       }),
     ).toBeNull();
   });
+  it("unblocks creation when an issue type retry succeeds and keeps the chosen type", () => {
+    const failed = { pending: false, error: "Read failed", count: 0, chosen: null };
+    expect(issueCreateBlocked({ ...input, issueTypes: failed })).toBe(
+      "Issue types could not be read: Read failed",
+    );
+    expect(issueCreateBlocked({ ...input, issueTypes: { ...failed, pending: true } })).toBe(
+      "Loading issue types…",
+    );
+    const types = [{ id: "bug" }, { id: "task" }];
+    const chosen = resolveIssueType(types, "task");
+    expect(
+      issueCreateBlocked({
+        ...input,
+        issueTypes: { pending: false, error: null, count: types.length, chosen },
+      }),
+    ).toBeNull();
+  });
 });
