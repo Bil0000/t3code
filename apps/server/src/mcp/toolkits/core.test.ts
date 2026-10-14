@@ -22,6 +22,7 @@ import {
   type OrchestrationV2ThreadShell,
   type IssueCreateInput,
   type IssueCommentsPageInput,
+  type IssueDetail,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
@@ -449,8 +450,64 @@ it.effect("registers native issue choices and guards reads and typed creation wi
       host: "example.atlassian.net",
       scope: "ENG",
     };
-    const candidates = {
+    const entry = {
+      projectId,
+      ...binding,
+      key: "ENG-1",
+      url: "https://example.atlassian.net/browse/ENG-1",
+      displayKey: "ENG-1",
+      title: "Issue",
+      state: { category: "open", name: "Open" },
+      author: null,
+      assignees: [],
       labels: [],
+      updatedAt: "2026-10-14T00:00:00Z",
+    };
+    const currentLabels = [{ id: "W", name: "Bug", color: null }];
+    const nativeDetail: IssueDetail = {
+      ...entry,
+      projectTitle: "Issues",
+      tracker: IssueTrackerKind.make("linear"),
+      host: "linear.app",
+      url: "https://linear.app/acme/issue/ENG-1",
+      state: { category: "open", name: "Open" },
+      labels: currentLabels,
+      commentCount: 0,
+      createdAt: "2026-10-14T00:00:00Z",
+      closedAt: null,
+      writable: true,
+      capabilities: {
+        create: true,
+        edit: true,
+        comment: true,
+        labels: true,
+        assignees: true,
+        reactions: false,
+        templates: false,
+        linkedPullRequests: true,
+        events: true,
+        search: true,
+        states: [],
+        closeReasons: [],
+      },
+      viewerPermissions: {
+        setState: true,
+        comment: true,
+        edit: true,
+        labels: true,
+        assignees: true,
+      },
+      viewer: null,
+      body: "",
+      comments: [],
+      commentsCursor: null,
+      events: [],
+      linkedPullRequests: [],
+    };
+    const labelPageTruncated = yield* Ref.make(false);
+    const issueReads = yield* Ref.make<ReadonlyArray<string>>([]);
+    const candidates = {
+      labels: [{ id: "T", name: "Bug", color: null, description: null }],
       assignees: [],
       issueTypes: [
         { id: "10001", name: "Bug" },
@@ -498,7 +555,24 @@ it.effect("registers native issue choices and guards reads and typed creation wi
           Effect.succeed([
             { tracker: IssueTrackerKind.make("github"), host: "github.com", scope: "owner/repo" },
             binding,
+            { tracker: nativeDetail.tracker, host: nativeDetail.host, scope: nativeDetail.scope },
           ]),
+        detail: () =>
+          Ref.update(issueReads, (calls) => [...calls, "detail"]).pipe(
+            Effect.andThen(Ref.get(labelPageTruncated)),
+            Effect.map((labelsTruncated) => ({ ...nativeDetail, labelsTruncated })),
+          ),
+        list: () =>
+          Ref.update(issueReads, (calls) => [...calls, "list"]).pipe(
+            Effect.andThen(Ref.get(labelPageTruncated)),
+            Effect.map((labelsTruncated) => ({
+              entries: [{ ...nativeDetail, labelsTruncated }],
+              viewers: {},
+              trackers: [],
+              errors: [],
+              nextCursors: {},
+            })),
+          ),
         candidates: () =>
           Ref.update(candidateReads, (count) => count + 1).pipe(Effect.as(candidates)),
         comments: (input) =>
@@ -534,19 +608,6 @@ it.effect("registers native issue choices and guards reads and typed creation wi
       const server = yield* McpServer.McpServer;
       const definition = server.tools.find(({ tool }) => tool.name === "read_issue_candidates");
       expect(definition?.tool.annotations?.readOnlyHint).toBe(true);
-      const entry = {
-        projectId,
-        ...binding,
-        key: "ENG-1",
-        url: "https://example.atlassian.net/browse/ENG-1",
-        displayKey: "ENG-1",
-        title: "Issue",
-        state: { category: "open", name: "Open" },
-        author: null,
-        assignees: [],
-        labels: [],
-        updatedAt: "2026-10-14T00:00:00Z",
-      };
       const validateList = new AjvJsonSchemaValidator().getValidator(
         server.tools.find(({ tool }) => tool.name === "list_issues")!.tool
           .outputSchema! as JsonSchemaType,
@@ -572,20 +633,7 @@ it.effect("registers native issue choices and guards reads and typed creation wi
             ...entry,
             writable: true,
             viewer: null,
-            capabilities: {
-              create: true,
-              edit: true,
-              comment: true,
-              labels: true,
-              assignees: true,
-              reactions: false,
-              templates: false,
-              linkedPullRequests: true,
-              events: true,
-              search: true,
-              states: [],
-              closeReasons: [],
-            },
+            capabilities: nativeDetail.capabilities,
             createdAt: entry.updatedAt,
             closedAt: null,
             body: "",
@@ -615,6 +663,28 @@ it.effect("registers native issue choices and guards reads and typed creation wi
             Effect.provideService(McpSchema.McpServerClient, client),
           );
       const readOnly = clientScope("read-only");
+      for (const labelsTruncated of [false, true]) {
+        yield* Ref.set(labelPageTruncated, labelsTruncated);
+        const read = yield* call(
+          "read_issue",
+          { projectId, tracker: nativeDetail.tracker, key: nativeDetail.key },
+          readOnly,
+        );
+        const listed = yield* call("list_issues", { projectId }, readOnly);
+        expect(read.isError).toBe(false);
+        expect(listed.isError).toBe(false);
+        expect(read.structuredContent).toMatchObject({
+          labels: ["Bug"],
+          labelDetails: currentLabels,
+          labelsTruncated,
+        });
+        expect(listed.structuredContent).toMatchObject({
+          issues: [{ labels: ["Bug"], labelDetails: currentLabels, labelsTruncated }],
+        });
+        expect(validateRead(read.structuredContent).valid).toBe(true);
+        expect(validateList(listed.structuredContent).valid).toBe(true);
+      }
+      expect(yield* Ref.get(issueReads)).toEqual(["detail", "list", "detail", "list"]);
       const commentDefinition = server.tools.find(
         ({ tool }) => tool.name === "read_issue_comments",
       );

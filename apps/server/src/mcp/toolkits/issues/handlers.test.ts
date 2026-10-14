@@ -18,6 +18,9 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import type { Tool } from "effect/ai";
 
+import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
+import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
+
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
@@ -276,6 +279,96 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect("preserves an archived Linear label ID when replacing labels from read and list", () =>
+    Effect.gen(function* () {
+      const oldBug = { id: "W", name: "Bug", color: null, archivedAt: "2026-01-01T00:00:00Z" };
+      const teamBug = { id: "T", name: "Bug", color: null };
+      const other = { id: "O", name: "Other", color: null };
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const writes: Record<string, unknown>[] = [];
+      const native = yield* LinearIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(LinearApi.LinearApi)({
+            getIssueReference: () =>
+              Effect.succeed({
+                id: "issue",
+                identifier: "ENG-7",
+                team: { key: "ENG" },
+                url: standaloneDetail.url,
+              }),
+            getTeam: () =>
+              Effect.succeed({
+                organization: { id: "workspace", urlKey: "acme", templates: empty },
+                team: {
+                  id: "team",
+                  key: "ENG",
+                  name: "Engineering",
+                  states: empty,
+                  labels: { ...empty, nodes: [teamBug, other] },
+                  members: empty,
+                  templates: empty,
+                  ancestors: [],
+                },
+                workspaceLabels: [oldBug],
+                templates: [],
+                templatesTruncated: false,
+                labelsTruncated: false,
+                truncated: false,
+              }),
+            updateIssue: (_id, patch) =>
+              Effect.sync(() => {
+                writes.push(patch);
+              }),
+          }),
+        ),
+      );
+      const available = yield* native.listCandidates!({
+        cwd: "/fake",
+        host: "linear.app",
+        scope: "ENG",
+      });
+      expect(available.labels.map((label) => label.id)).toEqual(["T", "O"]);
+      const harness = yield* makeHarness([], {
+        sources: [standaloneSource],
+        detail: { ...standaloneDetail, labels: [oldBug], labelsTruncated: false },
+      });
+      const read = yield* harness.call("read_issue", { key: "ENG-7" });
+      const listed = yield* harness.call("list_issues", {});
+      const target = { cwd: "/fake", host: "linear.app", scope: "ENG", key: "ENG-7" };
+      const failed = yield* native.update!({ ...target, labels: [...read.labels, other.id] }).pipe(
+        Effect.flip,
+      );
+      expect(failed.detail).toContain("ambiguous");
+      expect(writes).toEqual([]);
+      for (const output of [read, listed.issues[0]!]) {
+        expect(output.labels).toEqual(["Bug"]);
+        const selected =
+          output.labelDetails?.map((label) => label.id ?? label.name) ?? output.labels;
+        yield* native.update!({ ...target, labels: [...selected, other.id] });
+      }
+      expect(writes).toEqual([{ labelIds: ["W", "O"] }, { labelIds: ["W", "O"] }]);
+      expect((yield* Ref.get(harness.calls)).map((call) => call.operation)).toEqual([
+        "detail",
+        "list",
+      ]);
+    }),
+  );
+
+  it.effect("retains name-only labels and omits unknown truncation", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], {
+        detail: { ...detail, labels: [{ name: "Bug", color: null }] },
+      });
+      const read = yield* harness.call("read_issue", { key: "7" });
+      const listed = yield* harness.call("list_issues", {});
+      for (const output of [read, listed.issues[0]!]) {
+        expect(output.labels).toEqual(["Bug"]);
+        expect(output.labelDetails).toEqual([{ name: "Bug", color: null }]);
+        expect(output).not.toHaveProperty("labelsTruncated");
+      }
+    }),
+  );
+
   it.effect("continues two older comment pages without reading or resolving the issue again", () =>
     Effect.gen(function* () {
       const olderComment = {

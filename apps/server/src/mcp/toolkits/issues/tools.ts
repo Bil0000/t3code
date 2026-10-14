@@ -183,6 +183,8 @@ export const IssueEntry = Schema.Struct({
   author: Schema.NullOr(Schema.String),
   assignees: Schema.Array(Schema.String),
   labels: Schema.Array(Schema.String),
+  labelDetails: Schema.optional(IssueSummary.fields.labels),
+  labelsTruncated: IssueSummary.fields.labelsTruncated,
   updatedAt: Schema.String,
   commentCount: IssueSummary.fields.commentCount,
 });
@@ -208,6 +210,8 @@ export const ReadIssueResult = Schema.Struct({
   author: Schema.NullOr(Schema.String),
   assignees: Schema.Array(Schema.String),
   labels: Schema.Array(Schema.String),
+  labelDetails: Schema.optional(IssueDetail.fields.labels),
+  labelsTruncated: IssueDetail.fields.labelsTruncated,
   createdAt: Schema.String,
   updatedAt: Schema.String,
   closedAt: Schema.NullOr(Schema.String),
@@ -279,7 +283,7 @@ const LINK_EVERY_ISSUE =
 
 const ListIssuesTool = Tool.make("list_issues", {
   description:
-    "List issues across a project's configured issue sources, newest updated first. Omit projectId for this thread's project. Each issue includes its tracker; pass tracker with key to other issue tools. Pass the returned nextCursors back as cursors for the next slice.",
+    "List issues across a project's configured issue sources, newest updated first. Omit projectId for this thread's project. Each issue includes its tracker; pass tracker with key to other issue tools. Pass the returned nextCursors back as cursors for the next slice. Use current labelDetails IDs to preserve labels, including archived labels absent from candidates. If labelsTruncated is true, do not replace labels from this partial set.",
   parameters: Schema.Struct({
     projectId: Schema.optional(
       ProjectId.annotate({ description: "Project to list. Omit for this thread's project." }),
@@ -305,7 +309,7 @@ const ListIssuesTool = Tool.make("list_issues", {
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
+    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. Use current labelDetails IDs to preserve labels, including archived labels absent from candidates. If labelsTruncated is true, do not replace labels from this partial set. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
   parameters: IssueTargetInput,
   success: ReadIssueResult,
   failure: IssueToolError,
