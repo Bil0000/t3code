@@ -294,6 +294,37 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect("rejects omitted replacement arrays before writes and permits explicit clearing", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      for (const tool of ["set_issue_labels", "set_issue_assignees"] as const) {
+        const result = yield* harness.call(tool, { key: "7" } as never).pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+      }
+      expect(yield* Ref.get(harness.calls)).toEqual([]);
+      yield* harness.call("set_issue_labels", { key: "7", labels: [] });
+      yield* harness.call("set_issue_assignees", { key: "7", assignees: [] });
+      expect((yield* Ref.get(harness.calls)).map((call) => call.input)).toEqual([
+        { projectId: PROJECT_ID, ...gitHostSource, key: "7", labels: [] },
+        { projectId: PROJECT_ID, ...gitHostSource, key: "7", assignees: [] },
+      ]);
+    }),
+  );
+
+  it.effect("retains all 121 existing labels through the registered replacement tool", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const labels = Array.from({ length: 121 }, (_, index) => `label-${index}`);
+      yield* harness.call("set_issue_labels", { key: "7", labels });
+      expect(yield* Ref.get(harness.calls)).toEqual([
+        {
+          operation: "update",
+          input: { projectId: PROJECT_ID, ...gitHostSource, key: "7", labels },
+        },
+      ]);
+    }),
+  );
+
   it.effect("continues two older comment pages without reading or resolving the issue again", () =>
     Effect.gen(function* () {
       const olderComment = {

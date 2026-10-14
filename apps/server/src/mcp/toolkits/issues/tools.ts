@@ -660,7 +660,10 @@ const SetIssueReaction = Tool.make("set_issue_reaction", {
 
 const SetIssueLabels = Tool.make("set_issue_labels", {
   description: "Replace the labels on an issue.",
-  parameters: Schema.Struct({ ...IssueTargetInput.fields, labels: IssueCreateInput.fields.labels }),
+  parameters: Schema.Struct({
+    ...IssueTargetInput.fields,
+    labels: Schema.Array(TrimmedNonEmptyString),
+  }),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
