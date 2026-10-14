@@ -220,6 +220,7 @@ const make = Effect.gen(function* () {
                       Effect.flatMap((restored) => (restored ? Effect.void : Effect.fail(cause))),
                     ),
                   ),
+                  Effect.tapError(() => bindings.removeTracker(api.kind)),
                 );
               }
               const updatedAt = DateTime.formatIso(yield* DateTime.now);

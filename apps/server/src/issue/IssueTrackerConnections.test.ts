@@ -264,6 +264,34 @@ it.effect.each([
   }),
 );
 
+it.effect("clears same-account bindings when replacement and rollback both fail", () =>
+  Effect.gen(function* () {
+    const identity = {
+      account: "Account",
+      accountId: "account",
+      host: "shared.example",
+      scopes: [{ key: "TEAM", name: "Team" }],
+    };
+    const fixture = yield* makeFixture({
+      stored: "old-token",
+      projectExists: true,
+      probe: Effect.succeed(identity),
+      credentialWriteFailure: "after",
+      credentialRestoreFailure: "before",
+    });
+    fixture.saved.set(projectId, { ...binding, host: "shared.example" });
+    const otherProject = ProjectId.make("other-project");
+    const otherBinding = { tracker: IssueTrackerKind.make("other"), scope: "OTHER" };
+    fixture.saved.set(otherProject, otherBinding);
+    assert.equal(
+      (yield* fixture.service.connect({ tracker, token: "new-token" }).pipe(Effect.flip)).reason,
+      "failed",
+    );
+    assert.deepEqual(fixture.saved, new Map([[otherProject, otherBinding]]));
+    assert.deepEqual(fixture.credentials, ["new-token"]);
+  }),
+);
+
 it.effect("removes a partially stored credential when the first connection fails", () =>
   Effect.gen(function* () {
     const fixture = yield* makeFixture({
