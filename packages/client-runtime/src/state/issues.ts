@@ -88,7 +88,7 @@ const scopeOf = (source: IssueListSource, cursors: ReadonlySet<string>) => {
 const heldSources = (held: HeldIssueList) => held.sources ?? held.entries;
 const matchesSource = (error: IssueListPage["errors"][number], source: IssueListSource) =>
   error.projectId === source.projectId &&
-  error.host?.toLowerCase() === source.host.toLowerCase() &&
+  (error.host === undefined || error.host.toLowerCase() === source.host.toLowerCase()) &&
   (error.tracker === undefined || error.tracker === source.tracker);
 
 function failedScopes(

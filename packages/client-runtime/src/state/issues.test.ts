@@ -211,6 +211,26 @@ describe("mergeIssueListPage", () => {
 });
 
 describe("issue list continuations", () => {
+  it("keeps a failed scope's cursor when an older server omits error host and tracker", () => {
+    const held = {
+      entries: [entry({ key: "1" })],
+      nextCursors: { "github.com acme/app": "2" },
+      firstCursors: { "github.com acme/app": "2" },
+      firstKeys: new Set([issueEntryKey(entry({ key: "1" }))]),
+      errors: [],
+    };
+    const failed = {
+      entries: [],
+      nextCursors: {},
+      errors: [{ projectId: "project-1" as ProjectId, projectTitle: "App", message: "down" }],
+    };
+    const continued = continueIssueListPage(held, held.nextCursors, failed, held.firstCursors);
+    expect(continued.nextCursors).toEqual(held.nextCursors);
+    const refreshed = refreshIssueListPage(held, failed);
+    expect(refreshed.entries).toEqual(held.entries);
+    expect(refreshed.nextCursors).toEqual(held.nextCursors);
+  });
+
   const cursors = {
     "github.com acme/app": "a",
     "github.com acme/other": "b",
