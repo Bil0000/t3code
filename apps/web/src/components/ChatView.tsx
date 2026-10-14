@@ -1,4 +1,5 @@
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
+import { withIssueThreadHandoff } from "./issue/useIssueThreadHandoff";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -9321,6 +9322,9 @@ export default function ChatView(props: ChatViewProps) {
       );
       return;
     }
+    const pendingIssueUrl = useComposerDraftStore
+      .getState()
+      .getComposerDraft(composerDraftTarget)?.pendingIssueUrl;
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !sendQueuesBehindSetup && (!isServerThread || activeMessageCount === 0);
     const baseBranchForWorktree =
@@ -9685,6 +9689,13 @@ export default function ChatView(props: ChatViewProps) {
                 }
                 throw error;
               }
+              await withIssueThreadHandoff(
+                Promise.resolve(result),
+                composerDraftTarget,
+                scopeThreadRef(environmentId, targetThreadId),
+                activeProject.id,
+                pendingIssueUrl,
+              );
               startedCount += 1;
             } catch (error) {
               if (requestMayHaveStarted && !uncertainMultipleSubmissionsRef.current.has(retryKey)) {
@@ -9758,6 +9769,14 @@ export default function ChatView(props: ChatViewProps) {
         }
         if (failedSelections.length === 0 && turnUsesAttachmentUploads) {
           releaseDraftAttachments(composerAttachmentsSnapshot);
+        }
+        if (
+          failedSelections.length === 0 &&
+          pendingIssueUrl &&
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+            ?.pendingIssueUrl === pendingIssueUrl
+        ) {
+          useComposerDraftStore.getState().setPendingIssueUrl(composerDraftTarget, undefined);
         }
       } catch (error) {
         failedSelections.push(...multipleModelSelections);
@@ -10095,7 +10114,13 @@ export default function ChatView(props: ChatViewProps) {
           );
         }
       }
-      const startResult = await startPromise;
+      const startResult = await withIssueThreadHandoff(
+        startPromise,
+        composerDraftTarget,
+        scopeThreadRef(environmentId, threadIdForSend),
+        activeProject.id,
+        pendingIssueUrl,
+      );
       if (startResult._tag === "Failure") {
         failure = startResult;
       } else {

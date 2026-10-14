@@ -234,6 +234,7 @@ type PersistedTerminalContextDraft = typeof PersistedTerminalContextDraft.Type;
 
 const PersistedComposerThreadDraftState = Schema.Struct({
   prompt: Schema.String,
+  pendingIssueUrl: Schema.optionalKey(Schema.String),
   attachments: Schema.Array(PersistedComposerImageAttachment),
   files: Schema.optionalKey(Schema.Array(PersistedComposerDraftFileAttachment)),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
@@ -387,6 +388,7 @@ const contextInsertionHandlers = new Map<string, ComposerContextInsertionHandler
 
 export interface ComposerThreadDraftState {
   prompt: string;
+  pendingIssueUrl?: string | undefined;
   images: ComposerImageAttachment[];
   files: ComposerFileAttachment[];
   nonPersistedImageIds: string[];
@@ -431,6 +433,7 @@ export function composerDraftHasUserContent(
     return false;
   }
   return (
+    draft.pendingIssueUrl !== undefined ||
     draft.prompt.trim().length > 0 ||
     draft.images.length > 0 ||
     draft.files.length > 0 ||
@@ -591,6 +594,7 @@ interface ComposerDraftStoreState {
   clearDraftThread: (threadRef: ComposerThreadTarget) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
   setPrompt: (threadRef: ComposerThreadTarget, prompt: string) => void;
+  setPendingIssueUrl: (threadRef: ComposerThreadTarget, url: string | undefined) => void;
   setTerminalContexts: (threadRef: ComposerThreadTarget, contexts: TerminalContextDraft[]) => void;
   setModelSelection: (
     threadRef: ComposerThreadTarget,
@@ -972,6 +976,7 @@ function normalizeTerminalContextsForThread(
 
 function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   return (
+    draft.pendingIssueUrl === undefined &&
     draft.prompt.length === 0 &&
     draft.images.length === 0 &&
     draft.files.length === 0 &&
@@ -1945,6 +1950,10 @@ function normalizePersistedDraftsByThreadId(
       continue;
     }
     const draftCandidate = draftValue as PersistedComposerThreadDraftState;
+    const pendingIssueUrl =
+      typeof draftCandidate.pendingIssueUrl === "string"
+        ? draftCandidate.pendingIssueUrl
+        : undefined;
     const promptCandidate = typeof draftCandidate.prompt === "string" ? draftCandidate.prompt : "";
     const attachments = Array.isArray(draftCandidate.attachments)
       ? draftCandidate.attachments.flatMap((entry) => {
@@ -2082,6 +2091,7 @@ function normalizePersistedDraftsByThreadId(
     const hasModelData =
       Object.keys(modelSelectionByProvider).length > 0 || activeProvider !== null;
     if (
+      pendingIssueUrl === undefined &&
       promptCandidate.length === 0 &&
       attachments.length === 0 &&
       files.length === 0 &&
@@ -2109,6 +2119,7 @@ function normalizePersistedDraftsByThreadId(
             })();
     nextDraftsByThreadKey[normalizedThreadKey] = {
       prompt,
+      ...(pendingIssueUrl !== undefined ? { pendingIssueUrl } : {}),
       attachments,
       ...(files.length > 0 ? { files } : {}),
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
@@ -2132,6 +2143,7 @@ function normalizePersistedDraftsByThreadId(
 
 function persistedComposerDraftHasUserContent(draft: PersistedComposerThreadDraftState): boolean {
   return (
+    draft.pendingIssueUrl !== undefined ||
     draft.prompt.trim().length > 0 ||
     draft.attachments.length > 0 ||
     (draft.files?.length ?? 0) > 0 ||
@@ -2218,6 +2230,7 @@ export function partializeComposerDraftStoreState(
     const hasModelData =
       Object.keys(draft.modelSelectionByProvider).length > 0 || draft.activeProvider !== null;
     if (
+      draft.pendingIssueUrl === undefined &&
       draft.prompt.length === 0 &&
       draft.persistedAttachments.length === 0 &&
       draft.files.length === 0 &&
@@ -2233,6 +2246,7 @@ export function partializeComposerDraftStoreState(
     }
     const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
       prompt: draft.prompt,
+      ...(draft.pendingIssueUrl !== undefined ? { pendingIssueUrl: draft.pendingIssueUrl } : {}),
       attachments: draft.persistedAttachments,
       ...(draft.files.length > 0
         ? {
@@ -2552,6 +2566,9 @@ function toHydratedThreadDraft(
       ...files.map(fileContextReference),
     ]),
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
+    ...(persistedDraft.pendingIssueUrl !== undefined
+      ? { pendingIssueUrl: persistedDraft.pendingIssueUrl }
+      : {}),
     files,
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
@@ -3087,6 +3104,22 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftsByThreadKey[threadKey] = nextDraft;
             }
             return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        setPendingIssueUrl: (threadRef, url) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          set((state) => {
+            const current = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            if (current.pendingIssueUrl === url) return state;
+            const nextDraft = { ...current, pendingIssueUrl: url };
+            const draftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) {
+              delete draftsByThreadKey[threadKey];
+            } else {
+              draftsByThreadKey[threadKey] = nextDraft;
+            }
+            return { draftsByThreadKey };
           });
         },
         setPrompt: (threadRef, prompt) => {
