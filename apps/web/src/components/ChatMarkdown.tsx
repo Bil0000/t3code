@@ -2740,6 +2740,7 @@ function useChatMarkdownState({
       cwd,
       diffThemeName,
       environmentId,
+      explicitEnvironmentId,
       expandMedia,
       fileLinkChip,
       githubMedia,
@@ -2774,6 +2775,7 @@ function useChatMarkdownState({
       cwd,
       diffThemeName,
       environmentId,
+      explicitEnvironmentId,
       expandMedia,
       fileLinkChip,
       githubMedia,
@@ -2933,6 +2935,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       canOperatePreview,
       cwd,
       environmentId,
+      explicitEnvironmentId,
       imageBaseDir,
       markdownFileLinkMetaByHref,
       threadRef,
@@ -3048,7 +3051,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             if (
               !href ||
               openChangeRequestLink(event, href, undefined, environmentId ?? undefined) ||
-              openIssueLink(event, href, environmentId ?? undefined)
+              openIssueLink(event, href, explicitEnvironmentId ?? environmentId ?? undefined)
             ) {
               return;
             }
