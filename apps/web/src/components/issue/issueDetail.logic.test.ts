@@ -20,6 +20,9 @@ import {
   issueDisplayLabel,
   issueLabelOptions,
   nextIssueLabels,
+  issuePickerIds,
+  heldIssuePicker,
+  type IssuePickerConfirmed,
   linkedPullRequestTarget,
   nextIssueAssignees,
 } from "./issueDetail.logic";
@@ -30,28 +33,29 @@ const actor = (login: string, id: string) => ({ login, name: null, avatarUrl: nu
 
 describe("nextIssueAssignees", () => {
   it("adds by native id and keeps every existing assignee, seen in candidates or not", () => {
-    expect(
-      nextIssueAssignees([actor("alice", "11"), actor("ghost", "99")], actor("bob", "22")),
-    ).toEqual(["11", "99", "22"]);
+    expect(nextIssueAssignees(["11", "99"], "22")).toEqual(["11", "99", "22"]);
   });
 
   it("falls back to the login where the tracker gives no id", () => {
     expect(
       nextIssueAssignees(
-        [{ login: "octocat", name: null, avatarUrl: null }],
-        actor("hubot", "hubot"),
+        issuePickerIds(
+          detail({ assignees: [{ login: "octocat", name: null, avatarUrl: null }] }),
+          "assignees",
+          null,
+          "environment",
+        ),
+        "hubot",
       ),
     ).toEqual(["octocat", "hubot"]);
   });
 
   it("removes the candidate when it is already assigned", () => {
-    expect(
-      nextIssueAssignees([actor("Ada", "acc-1"), actor("Bo", "acc-2")], actor("Ada", "acc-1")),
-    ).toEqual(["acc-2"]);
+    expect(nextIssueAssignees(["acc-1", "acc-2"], "acc-1")).toEqual(["acc-2"]);
   });
 
   it("replaces the assignee on a single-assignee tracker", () => {
-    expect(nextIssueAssignees([actor("Ada", "acc-1")], actor("Bo", "acc-2"), 1)).toEqual(["acc-2"]);
+    expect(nextIssueAssignees(["acc-1"], "acc-2", 1)).toEqual(["acc-2"]);
   });
 });
 
@@ -134,7 +138,7 @@ describe("issueAssigneeOptions", () => {
       "",
     );
     expect(options.map((option) => option.id)).toEqual(["ACC-1", "acc-2", "octocat"]);
-    expect(nextIssueAssignees([actor("Ada", "acc-1")], options[0]!)).toEqual([]);
+    expect(nextIssueAssignees(["acc-1"], options[0]!.id)).toEqual([]);
   });
 
   it("searches current assignees by native id", () => {
@@ -316,13 +320,99 @@ it("keeps workspace and team labels with equal names distinct during native writ
     "other",
     "workspace-W",
   ]);
-  expect(nextIssueLabels([workspace], other)).toEqual(["workspace-W", "other"]);
-  expect(nextIssueLabels([workspace], team)).toEqual(["workspace-W", "team-T"]);
-  expect(nextIssueLabels([workspace, team], team)).toEqual(["workspace-W"]);
-  expect(nextIssueLabels([workspace, team], workspace)).toEqual(["team-T"]);
-  expect(nextIssueLabels([workspace, other], workspace)).toEqual(["other"]);
-  expect(nextIssueLabels([{ name: "Bug", color: null }], { name: "Other", color: null })).toEqual([
-    "Bug",
-    "Other",
-  ]);
+  expect(nextIssueLabels([workspace.id], other.id)).toEqual(["workspace-W", "other"]);
+  expect(nextIssueLabels([workspace.id], team.id)).toEqual(["workspace-W", "team-T"]);
+  expect(nextIssueLabels([workspace.id, team.id], team.id)).toEqual(["workspace-W"]);
+  expect(nextIssueLabels([workspace.id, team.id], workspace.id)).toEqual(["team-T"]);
+  expect(nextIssueLabels([workspace.id, other.id], workspace.id)).toEqual(["other"]);
+  expect(
+    nextIssueLabels(
+      issuePickerIds(
+        detail({ labels: [{ name: "Bug", color: null }] }),
+        "labels",
+        null,
+        "environment",
+      ),
+      "Other",
+    ),
+  ).toEqual(["Bug", "Other"]);
+});
+
+describe("whole issue picker sets before native acknowledgement", () => {
+  const environmentId = "environment";
+  const workspace = { id: "W", name: "Bug", color: null };
+  const team = { id: "T", name: "Bug", color: null };
+  const other = { id: "Other", name: "Other", color: null };
+
+  it("retains a native label set across a late first response, another pick, and a failed reversal", () => {
+    const base = detail({ labels: [workspace] });
+    const first: IssuePickerConfirmed = {
+      base,
+      environmentId,
+      kind: "labels",
+      ids: nextIssueLabels(issuePickerIds(base, "labels", null, environmentId), "Other"),
+    };
+    const sent = nextIssueLabels(issuePickerIds(base, "labels", first, environmentId), "T");
+    expect(sent).toEqual(["W", "Other", "T"]);
+    const late = { ...base, labels: [workspace, other] };
+    const second: IssuePickerConfirmed = { base, environmentId, kind: "labels", ids: sent };
+    expect(issuePickerIds(late, "labels", second, environmentId)).toEqual(["W", "Other", "T"]);
+    expect(nextIssueLabels(issuePickerIds(late, "labels", second, environmentId), "Other")).toEqual(
+      ["W", "T"],
+    );
+    expect(issuePickerIds({ ...late }, "labels", second, environmentId)).toEqual([
+      "W",
+      "Other",
+      "T",
+    ]);
+    const acknowledged = { ...late, labels: [team, other, workspace] };
+    expect(heldIssuePicker(acknowledged, "labels", second, environmentId)).toBeNull();
+  });
+
+  it("retains assignees across the same late-read sequence and keeps native case-insensitive removal", () => {
+    const base = detail({ assignees: [actor("one", "W")] });
+    const first: IssuePickerConfirmed = {
+      base,
+      environmentId,
+      kind: "assignees",
+      ids: nextIssueAssignees(issuePickerIds(base, "assignees", null, environmentId), "Other"),
+    };
+    const sent = nextIssueAssignees(issuePickerIds(base, "assignees", first, environmentId), "T");
+    expect(sent).toEqual(["W", "Other", "T"]);
+    const late = { ...base, assignees: [actor("one", "W"), actor("other", "Other")] };
+    const second: IssuePickerConfirmed = { base, environmentId, kind: "assignees", ids: sent };
+    expect(
+      nextIssueAssignees(issuePickerIds(late, "assignees", second, environmentId), "OTHER"),
+    ).toEqual(["W", "T"]);
+    expect(issuePickerIds(late, "assignees", second, environmentId)).toEqual(["W", "Other", "T"]);
+    expect(
+      heldIssuePicker(
+        { ...late, assignees: [actor("team", "t"), ...late.assignees] },
+        "assignees",
+        second,
+        environmentId,
+      ),
+    ).toBeNull();
+  });
+
+  it.each([
+    { tracker: IssueTrackerKind.make("jira") },
+    { host: "another.test" },
+    { projectId: ProjectId.make("another") },
+    { scope: "other/repo" },
+    { key: "other" },
+  ])("ignores an old write completion on another issue context %j", (patch) => {
+    const base = detail({ labels: [workspace] });
+    const completed: IssuePickerConfirmed = {
+      base,
+      environmentId,
+      kind: "labels",
+      ids: ["W", "Other"],
+    };
+    expect(issuePickerIds({ ...base, ...patch }, "labels", completed, environmentId)).toEqual([
+      "W",
+    ]);
+    expect(heldIssuePicker(base, "labels", completed, "another-environment")).toBeNull();
+    expect(heldIssuePicker(base, "assignees", completed, environmentId)).toBeNull();
+  });
 });

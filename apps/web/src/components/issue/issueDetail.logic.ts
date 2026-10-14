@@ -99,20 +99,17 @@ export const issueAssigneeId = (actor: IssueActor) => actor.id ?? actor.login;
 
 const sameId = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
 
-export function isIssueAssignee(current: ReadonlyArray<IssueActor>, id: string): boolean {
-  return current.some((actor) => sameId(issueAssigneeId(actor), id));
+export function isIssueAssignee(current: ReadonlyArray<string>, id: string): boolean {
+  return current.some((currentId) => sameId(currentId, id));
 }
 
 export function nextIssueAssignees(
-  current: ReadonlyArray<IssueActor>,
-  candidate: IssueAssigneeCandidate,
+  ids: ReadonlyArray<string>,
+  id: string,
   maxAssignees?: number,
 ): string[] {
-  const ids = current.map(issueAssigneeId);
-  if (ids.some((id) => sameId(id, candidate.id))) {
-    return ids.filter((id) => !sameId(id, candidate.id));
-  }
-  return maxAssignees === 1 ? [candidate.id] : [...ids, candidate.id];
+  if (isIssueAssignee(ids, id)) return ids.filter((currentId) => !sameId(currentId, id));
+  return maxAssignees === 1 ? [id] : [...ids, id];
 }
 
 const matches = (needle: string, ...fields: ReadonlyArray<string | null | undefined>) =>
@@ -122,13 +119,54 @@ export function issueLabelId(label: Pick<IssueLabel, "id" | "name">): string {
   return label.id ?? label.name;
 }
 
-export function nextIssueLabels(
-  current: ReadonlyArray<IssueLabel>,
-  candidate: IssueLabel,
-): string[] {
-  const ids = current.map(issueLabelId);
-  const id = issueLabelId(candidate);
+export function nextIssueLabels(ids: ReadonlyArray<string>, id: string): string[] {
   return ids.includes(id) ? ids.filter((selected) => selected !== id) : [...ids, id];
+}
+
+type IssuePickerKind = "labels" | "assignees";
+
+export type IssuePickerConfirmed = {
+  readonly base: IssueDetail;
+  readonly environmentId: string;
+  readonly kind: IssuePickerKind;
+  readonly ids: ReadonlyArray<string>;
+};
+
+const nativeIssuePickerIds = (issue: IssueDetail, kind: IssuePickerKind) =>
+  kind === "labels" ? issue.labels.map(issueLabelId) : issue.assignees.map(issueAssigneeId);
+
+export function heldIssuePicker(
+  issue: IssueDetail,
+  kind: IssuePickerKind,
+  confirmed: IssuePickerConfirmed | null,
+  environmentId: string,
+): IssuePickerConfirmed | null {
+  if (
+    confirmed === null ||
+    confirmed.environmentId !== environmentId ||
+    confirmed.kind !== kind ||
+    confirmed.base.tracker !== issue.tracker ||
+    issueEntryKey(confirmed.base) !== issueEntryKey(issue)
+  )
+    return null;
+  if (confirmed.base === issue) return confirmed;
+  const native = nativeIssuePickerIds(issue, kind);
+  const wanted = new Set(confirmed.ids.map((id) => (kind === "assignees" ? id.toLowerCase() : id)));
+  return native.length === confirmed.ids.length &&
+    native.every((id) => wanted.has(kind === "assignees" ? id.toLowerCase() : id))
+    ? null
+    : confirmed;
+}
+
+export function issuePickerIds(
+  issue: IssueDetail,
+  kind: IssuePickerKind,
+  confirmed: IssuePickerConfirmed | null,
+  environmentId: string,
+): ReadonlyArray<string> {
+  return (
+    heldIssuePicker(issue, kind, confirmed, environmentId)?.ids ?? nativeIssuePickerIds(issue, kind)
+  );
 }
 
 export function issueLabelOptions(

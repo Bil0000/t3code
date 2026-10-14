@@ -79,6 +79,8 @@ import {
   issueDisplayLabel,
   issueLabelOptions,
   issueLabelId,
+  issuePickerIds,
+  heldIssuePicker,
   nextIssueLabels,
   issueSupportsReactions,
   offeredIssueReactionContents,
@@ -88,6 +90,7 @@ import {
   nextIssueAssignees,
   type IssueLinkedPullRequestTarget,
   type IssueOlderComments,
+  type IssuePickerConfirmed,
 } from "./issueDetail.logic";
 
 /**
@@ -328,7 +331,7 @@ export function IssueReactionBar({
 }
 
 /** Label and assignee pickers read the scope's candidates once, when they open. */
-function IssueLabelPicker({
+export function IssueLabelPicker({
   environmentId,
   reference,
   detail,
@@ -346,11 +349,15 @@ function IssueLabelPicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState<IssuePickerConfirmed | null>(null);
   const candidatesQuery = useEnvironmentQuery(
     open ? issueEnvironment.candidates({ environmentId, input: reference }) : null,
   );
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
-  const applied = new Set(detail.labels.map(issueLabelId));
+  const held = heldIssuePicker(detail, "labels", confirmed, environmentId);
+  if (held !== confirmed) setConfirmed(held);
+  const selectedIds = issuePickerIds(detail, "labels", held, environmentId);
+  const applied = new Set(selectedIds);
   const candidates = useMemo(
     () => issueLabelOptions(detail.labels, candidatesQuery.data?.labels ?? [], query),
     [detail.labels, candidatesQuery.data, query],
@@ -358,7 +365,7 @@ function IssueLabelPicker({
   const toggle = async (candidate: IssueLabelCandidate) => {
     if (pending !== null) return;
     setPending(issueLabelId(candidate));
-    const labels = nextIssueLabels(detail.labels, candidate);
+    const labels = nextIssueLabels(selectedIds, issueLabelId(candidate));
     const result = await update({ environmentId, input: { ...reference, labels } });
     setPending(null);
     if (result._tag === "Failure") {
@@ -369,6 +376,7 @@ function IssueLabelPicker({
       });
       return;
     }
+    setConfirmed({ base: detail, ids: labels, environmentId, kind: "labels" });
     onUpdated?.();
   };
   return (
@@ -419,7 +427,7 @@ function IssueLabelPicker({
   );
 }
 
-function IssueAssigneePicker({
+export function IssueAssigneePicker({
   environmentId,
   reference,
   detail,
@@ -437,10 +445,14 @@ function IssueAssigneePicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState<IssuePickerConfirmed | null>(null);
   const candidatesQuery = useEnvironmentQuery(
     open ? issueEnvironment.candidates({ environmentId, input: reference }) : null,
   );
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
+  const held = heldIssuePicker(detail, "assignees", confirmed, environmentId);
+  if (held !== confirmed) setConfirmed(held);
+  const selectedIds = issuePickerIds(detail, "assignees", held, environmentId);
   const candidates = useMemo(
     () => issueAssigneeOptions(detail.assignees, candidatesQuery.data?.assignees ?? [], query),
     [detail.assignees, candidatesQuery.data, query],
@@ -449,8 +461,8 @@ function IssueAssigneePicker({
     if (pending !== null) return;
     setPending(candidate.id);
     const assignees = nextIssueAssignees(
-      detail.assignees,
-      candidate,
+      selectedIds,
+      candidate.id,
       detail.capabilities.maxAssignees,
     );
     const result = await update({ environmentId, input: { ...reference, assignees } });
@@ -463,6 +475,7 @@ function IssueAssigneePicker({
       });
       return;
     }
+    setConfirmed({ base: detail, ids: assignees, environmentId, kind: "assignees" });
     onUpdated?.();
   };
   return (
@@ -491,7 +504,7 @@ function IssueAssigneePicker({
       {(candidate) => (
         <>
           <PullRequestActorLabel actor={candidate} tooltip={false} className="min-w-0 flex-1" />
-          {isIssueAssignee(detail.assignees, candidate.id) ? (
+          {isIssueAssignee(selectedIds, candidate.id) ? (
             <CheckIcon aria-label="Assigned" className="size-3.5 shrink-0" />
           ) : null}
         </>
