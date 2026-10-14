@@ -6,7 +6,7 @@ import {
   IssueTrackerKind,
   type IssueTrackerProjectBinding,
   type OrchestrationProjectShell,
-  type ProjectId,
+  ProjectId,
   type IssueViewerPermissions,
 } from "@t3tools/contracts";
 import {
@@ -1014,4 +1014,189 @@ it.effect.each([{ assignees: [] }, { assignees: ["alice"] }])(
       yield* service.update({ ...ref, assignees });
       expect(written).toEqual([assignees, assignees]);
     }),
+);
+
+it.effect("resolves a Linear URL through its exact team and verifies the native workspace", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const writes: string[] = [];
+    const api = fakeStandaloneTracker({
+      listIssues: () => Effect.die("URL resolution must not list issues"),
+      getIssue: (input) =>
+        Effect.sync(() => {
+          reads++;
+          expect(input.scope).toBe("ENG");
+          return { ...issue(input.key), url: "https://linear.app/acme/issue/ENG-123/native-title" };
+        }),
+      comment: (input) =>
+        Effect.sync(() => {
+          writes.push(`comment ${input.scope} ${input.key}`);
+        }),
+      setState: (input) =>
+        Effect.sync(() => {
+          writes.push(`state ${input.scope} ${input.key}`);
+        }),
+    });
+    const service = yield* makeService({
+      projects: [project({ id: "other" }), project({ id: "web" })],
+      trackers: [api],
+      bindings: { other: { tracker: LINEAR, scope: "QA" }, web: { tracker: LINEAR, scope: "ENG" } },
+    });
+    const ref = yield* service.resolveUrl(
+      "https://linear.app/acme/issue/ENG-123/older-title",
+      ProjectId.make("other"),
+    );
+    expect(ref).toEqual({
+      projectId: "web",
+      tracker: LINEAR,
+      host: "linear.app",
+      scope: "ENG",
+      key: "ENG-123",
+      writable: true,
+    });
+    yield* service.comment({ ...ref, body: "Hello" });
+    yield* service.setState({ ...ref, state: "closed" });
+    expect(writes).toEqual(["comment ENG ENG-123", "state ENG ENG-123"]);
+    expect(
+      yield* Effect.flip(
+        service.resolveUrl("https://linear.app/another-workspace/issue/ENG-123/title"),
+      ),
+    ).toMatchObject({ _tag: "IssueOperationError", reason: "not-found" });
+    expect(reads).toBe(2);
+  }),
+);
+
+it.effect(
+  "resolves Jira URL refs for reads and writes only on the configured tenant and project",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const writes: string[] = [];
+      const base = fakeStandaloneTracker({
+        listIssues: () => Effect.die("URL resolution must not list issues"),
+        getIssue: (input) =>
+          Effect.sync(() => {
+            reads++;
+            expect(input.host).toBe("tenant.atlassian.net");
+            expect(input.scope).toBe("ENG");
+            return { ...issue(input.key), url: `https://tenant.atlassian.net/browse/${input.key}` };
+          }),
+        comment: (input) =>
+          Effect.sync(() => {
+            writes.push(`comment ${input.scope} ${input.key}`);
+          }),
+        setState: (input) =>
+          Effect.sync(() => {
+            writes.push(`state ${input.scope} ${input.key}`);
+          }),
+      });
+      const api: StandaloneIssueTrackerApi = {
+        ...base,
+        kind: JIRA,
+        standalone: { ...base.standalone, tracker: JIRA, host: null },
+      };
+      const service = yield* makeService({
+        projects: [project({ id: "web" })],
+        trackers: [api],
+        bindings: { web: { tracker: JIRA, scope: "ENG", host: "tenant.atlassian.net" } },
+      });
+      const ref = yield* service.resolveUrl(
+        "https://tenant.atlassian.net/browse/ENG-123?focusedCommentId=1",
+      );
+      expect(ref).toEqual({
+        projectId: "web",
+        tracker: JIRA,
+        host: "tenant.atlassian.net",
+        scope: "ENG",
+        key: "ENG-123",
+        writable: true,
+      });
+      expect(reads).toBe(0);
+      yield* service.detail(ref);
+      yield* service.comment({ ...ref, body: "Hello" });
+      yield* service.setState({ ...ref, state: "closed" });
+      expect(writes).toEqual(["comment ENG ENG-123", "state ENG ENG-123"]);
+      for (const url of [
+        "https://other.atlassian.net/browse/ENG-123",
+        "https://tenant.atlassian.net/browse/QA-123",
+      ]) {
+        expect(yield* Effect.flip(service.resolveUrl(url))).toMatchObject({
+          _tag: "IssueUnavailableError",
+        });
+      }
+      expect(reads).toBe(1);
+    }),
+);
+
+it.effect("does not lend a standalone project's credentials to an unbound team", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "web" })],
+      trackers: [
+        fakeStandaloneTracker({ getIssue: () => Effect.die("Unbound team must not read") }),
+      ],
+      bindings: { web: { tracker: LINEAR, scope: "ENG" } },
+    });
+    expect(
+      yield* Effect.flip(service.resolveUrl("https://linear.app/acme/issue/QA-123/title")),
+    ).toMatchObject({ _tag: "IssueUnavailableError" });
+  }),
+);
+
+it.effect(
+  "recognizes a configured GitHub Enterprise hostname and keeps foreign repositories read-only",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web", host: "git.acme.test" })],
+        trackers: [
+          fakeTracker({ listIssues: () => Effect.die("URL resolution must not list issues") }),
+        ],
+      });
+      expect(yield* service.resolveUrl("https://git.acme.test/acme/web/issues/7")).toEqual({
+        projectId: "web",
+        tracker: GITHUB,
+        host: "git.acme.test",
+        scope: "acme/web",
+        key: "7",
+        writable: true,
+      });
+      expect(yield* service.resolveUrl("https://git.acme.test/acme/other/issues/7")).toMatchObject({
+        scope: "acme/other",
+        writable: false,
+      });
+      expect(
+        yield* Effect.flip(service.resolveUrl("https://other.acme.test/acme/web/issues/7")),
+      ).toMatchObject({ _tag: "IssueOperationError", reason: "not-found" });
+    }),
+);
+
+it.effect("resolves a configured Forgejo source before a GitHub-looking hostname", () =>
+  Effect.gen(function* () {
+    const forgejo = IssueTrackerKind.make("forgejo");
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "web",
+          repository: "acme/web",
+          host: "github.company.net",
+          provider: "forgejo",
+        }),
+      ],
+      trackers: [
+        fakeTracker({
+          kind: forgejo,
+          listIssues: () => Effect.die("URL resolution must not list issues"),
+        }),
+      ],
+    });
+    expect(yield* service.resolveUrl("https://github.company.net/acme/web/issues/7")).toEqual({
+      projectId: "web",
+      tracker: forgejo,
+      host: "github.company.net",
+      scope: "acme/web",
+      key: "7",
+      writable: true,
+    });
+  }),
 );

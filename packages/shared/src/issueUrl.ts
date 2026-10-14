@@ -10,6 +10,7 @@ export interface IssueLink {
   readonly host: string;
   readonly scope: string;
   readonly key: string;
+  readonly workspace?: string;
 }
 
 /** The host itself, one of its subdomains, or an install named after the provider. */
@@ -26,11 +27,11 @@ function isHostOf(hostname: string, apex: string, label?: string): boolean {
  * trusted on any hostname; `/issues/` is generic enough that it is only believed from a GitHub-ish
  * or Forgejo-ish host, since Forgejo and Gitea write it on any domain.
  *
- * Standalone trackers (Linear's `linear.app/<team>/issue/ENG-123`, Jira's `/browse/ENG-123`)
- * are not recognised yet: their scope is a team or project key the URL only partly carries, so
- * resolving one needs the project binding that layer adds.
  */
-export function parseIssueUrl(targetUrl: string): IssueLink | null {
+export function parseIssueUrl(
+  targetUrl: string,
+  configuredHost?: { readonly tracker: string; readonly host: string },
+): IssueLink | null {
   let url: URL;
   try {
     url = new URL(targetUrl);
@@ -39,6 +40,30 @@ export function parseIssueUrl(targetUrl: string): IssueLink | null {
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
   const host = url.hostname.toLowerCase();
+  const configuredTracker =
+    configuredHost?.host.trim().toLowerCase() === host ? configuredHost.tracker : undefined;
+
+  if (host === "linear.app") {
+    if (url.protocol !== "https:" || url.port !== "") return null;
+    const match = /^\/([^/]+)\/issue\/(([A-Za-z][A-Za-z0-9]*)-[1-9]\d*)(?:\/[^/]+)?\/?$/u.exec(
+      url.pathname,
+    );
+    const workspace = match?.[1];
+    const key = match?.[2];
+    const scope = match?.[3];
+    return workspace && key && scope
+      ? { tracker: "linear", host, scope: scope.toLowerCase(), key: key.toUpperCase(), workspace }
+      : null;
+  }
+  if (host.endsWith(".atlassian.net")) {
+    if (url.protocol !== "https:" || url.port !== "") return null;
+    const match = /^\/browse\/(([A-Za-z][A-Za-z0-9_]*)-[1-9]\d*)\/?$/u.exec(url.pathname);
+    const key = match?.[1];
+    const scope = match?.[2];
+    return key && scope
+      ? { tracker: "jira", host, scope: scope.toLowerCase(), key: key.toUpperCase() }
+      : null;
+  }
 
   // GitLab, self-hosted included: /{group}/[{subgroup}/...]{repo}/-/issues/{n}
   const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
@@ -52,7 +77,11 @@ export function parseIssueUrl(targetUrl: string): IssueLink | null {
   }
   // GitHub, and any Enterprise install: /{owner}/{repo}/issues/{n}
   const twoSegments = /^\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
-  if (twoSegments && isHostOf(host, "github.com", "github")) {
+  if (
+    twoSegments &&
+    (configuredTracker === "github" ||
+      (configuredTracker === undefined && isHostOf(host, "github.com", "github")))
+  ) {
     return claim("github", host, twoSegments);
   }
   // Forgejo and Gitea write the same shape on arbitrary self-hosted domains, including nested
@@ -60,9 +89,11 @@ export function parseIssueUrl(targetUrl: string): IssueLink | null {
   const forgejo = /^\/([^/]+(?:\/[^/]+)+)\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
   if (
     forgejo &&
-    (isHostOf(host, "codeberg.org") ||
-      isHostOf(host, "forgejo.org", "forgejo") ||
-      isHostOf(host, "gitea.com", "gitea"))
+    (configuredTracker === "forgejo" ||
+      (configuredTracker === undefined &&
+        (isHostOf(host, "codeberg.org") ||
+          isHostOf(host, "forgejo.org", "forgejo") ||
+          isHostOf(host, "gitea.com", "gitea"))))
   ) {
     return claim("forgejo", host, forgejo);
   }

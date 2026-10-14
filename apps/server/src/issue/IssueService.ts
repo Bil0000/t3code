@@ -749,7 +749,19 @@ export const make = Effect.gen(function* () {
 
   const resolveUrl: IssueService["Service"]["resolveUrl"] = (url, preferredProjectId) =>
     Effect.gen(function* () {
-      const parsed = parseIssueUrl(url);
+      const target = yield* Effect.try({
+        try: () => new URL(url),
+        catch: () =>
+          new IssueOperationError({
+            operation: "resolveUrl",
+            reason: "not-found",
+            detail: "This is not a recognised issue URL.",
+          }),
+      });
+      const { supported } = yield* listProjects({ host: target.hostname.toLowerCase() });
+      const parsed =
+        supported.map((project) => parseIssueUrl(url, project)).find((link) => link !== null) ??
+        parseIssueUrl(url);
       if (parsed === null) {
         return yield* new IssueOperationError({
           operation: "resolveUrl",
@@ -757,16 +769,41 @@ export const make = Effect.gen(function* () {
           detail: "This is not a recognised issue URL.",
         });
       }
-      const { supported } = yield* listProjects({ host: parsed.host });
       const onTracker = supported.filter((project) => project.tracker === parsed.tracker);
       const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
         projects.find((project) => project.project.id === preferredProjectId) ?? projects[0];
       const own = preferFirst(
         onTracker.filter((project) => project.scope.toLowerCase() === parsed.scope),
       );
-      const lender = own ?? preferFirst(onTracker);
+      const lender =
+        own ?? preferFirst(onTracker.filter((project) => !isStandaloneIssueTracker(project.api)));
       if (lender === undefined) {
         return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+      }
+      if (parsed.workspace !== undefined) {
+        const issue = yield* lender.api
+          .getIssue({
+            cwd: lender.project.workspaceRoot,
+            host: lender.host,
+            scope: lender.scope,
+            key: parsed.key,
+          })
+          .pipe(Effect.mapError(toIssueError("resolveUrl")));
+        const canonical = parseIssueUrl(issue.url);
+        if (
+          canonical === null ||
+          canonical.tracker !== parsed.tracker ||
+          canonical.host !== parsed.host ||
+          canonical.scope !== parsed.scope ||
+          canonical.key !== parsed.key ||
+          canonical.workspace !== parsed.workspace
+        ) {
+          return yield* new IssueOperationError({
+            operation: "resolveUrl",
+            reason: "not-found",
+            detail: "This URL does not match the issue returned by the configured tracker.",
+          });
+        }
       }
       return {
         projectId: lender.project.id,
