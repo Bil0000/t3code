@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { issueScopeKey } from "@t3tools/client-runtime/state/issues";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
@@ -54,6 +55,10 @@ export interface IssueCreateScope {
 
 const BLANK = "__blank__";
 
+function createScopeKey(entry: IssueCreateScope) {
+  return issueScopeKey(entry.environmentId, { ...entry.scope, host: entry.scope.host ?? "" });
+}
+
 /**
  * One text box with a draft in it, on any tracker: a chosen template fills the title, body,
  * labels and assignees, and the writer takes it from there. Templates are read when the dialog
@@ -73,8 +78,9 @@ export function IssueCreateDialog({
   onOpenChange: (open: boolean) => void;
   onCreated: (scope: IssueCreateScope, result: IssueCreateResult) => void;
 }) {
-  const [scopeIndex, setScopeIndex] = useState(0);
-  const scope = scopes[Math.min(scopeIndex, scopes.length - 1)] ?? null;
+  const [scopeKey, setScopeKey] = useState(() => (scopes[0] ? createScopeKey(scopes[0]) : null));
+  if (scopeKey === null && scopes[0]) setScopeKey(createScopeKey(scopes[0]));
+  const scope = scopes.find((entry) => createScopeKey(entry) === scopeKey) ?? null;
   const [templateKey, setTemplateKey] = useState<string>(BLANK);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -139,6 +145,7 @@ export function IssueCreateDialog({
 
   const missing = missingRequiredTemplateFields(fields, values);
   const blocked =
+    (scope === null && scopes.length > 0 ? "Choose a project to file this issue." : null) ??
     issueCreateBlocked({
       hasScope: scope !== null,
       canWrite,
@@ -159,7 +166,8 @@ export function IssueCreateDialog({
               chosen: chosenIssueType,
             }
           : null,
-    }) ?? (missing.length > 0 ? `Fill in ${missing.join(", ")}.` : null);
+    }) ??
+    (missing.length > 0 ? `Fill in ${missing.join(", ")}.` : null);
 
   const submit = async () => {
     if (scope === null || pending || blocked !== null) return;
@@ -214,14 +222,14 @@ export function IssueCreateDialog({
         </DialogHeader>
         <DialogPanel>
           <div className="flex flex-wrap gap-3">
-            {scopes.length > 1 ? (
+            {scopes.length > 1 || (scopes.length > 0 && scope === null) ? (
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <Label htmlFor="issue-create-scope">Project</Label>
                 <Select
-                  value={String(scopeIndex)}
+                  value={scope === null ? null : scopeKey}
                   onValueChange={(value) => {
                     if (value === null) return;
-                    setScopeIndex(Number(value));
+                    setScopeKey(value);
                     setTemplateKey(BLANK);
                     setExtras({ labels: [], assignees: [] });
                     setIssueType(null);
@@ -229,15 +237,12 @@ export function IssueCreateDialog({
                 >
                   <SelectTrigger id="issue-create-scope" size="sm" aria-label="Project">
                     <SelectValue>
-                      {scope ? `${scope.projectTitle} · ${scope.scope.scope}` : ""}
+                      {scope ? `${scope.projectTitle} · ${scope.scope.scope}` : "Choose a project"}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
-                    {scopes.map((entry, index) => (
-                      <SelectItem
-                        key={`${entry.environmentId}:${entry.scope.projectId}`}
-                        value={String(index)}
-                      >
+                    {scopes.map((entry) => (
+                      <SelectItem key={createScopeKey(entry)} value={createScopeKey(entry)}>
                         {entry.projectTitle} · {entry.scope.scope}
                       </SelectItem>
                     ))}
