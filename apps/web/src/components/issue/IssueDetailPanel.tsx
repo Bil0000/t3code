@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { prependIssueComments } from "@t3tools/client-runtime/state/issues";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { AuthOrchestrationOperateScope, threadIssueKeysEqual } from "@t3tools/contracts";
 import type {
@@ -74,6 +73,8 @@ import {
   issueTrackerPresentation,
 } from "./issuePresentation";
 import {
+  appendOlderIssueComments,
+  issueCommentsView,
   issueAssigneeId,
   issueAssigneeOptions,
   issueDisplayLabel,
@@ -82,6 +83,7 @@ import {
   linkedPullRequestTarget,
   nextIssueAssignees,
   type IssueLinkedPullRequestTarget,
+  type IssueOlderComments,
 } from "./issueDetail.logic";
 
 /**
@@ -562,11 +564,7 @@ export function IssueDetailPanel({
     projects.find((p) => p.environmentId === environmentId && p.id === reference.projectId)
       ?.workspaceRoot ?? "";
 
-  const [older, setOlder] = useState<{
-    readonly seed: string | null;
-    readonly comments: ReadonlyArray<IssueComment>;
-    readonly cursor: string | null;
-  } | null>(null);
+  const [older, setOlder] = useState<IssueOlderComments | null>(null);
   const loadComments = useAtomCommand(issueEnvironment.comments, { reportFailure: false });
   const [loadingOlder, setLoadingOlder] = useState(false);
   const comment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
@@ -592,10 +590,7 @@ export function IssueDetailPanel({
     return <PullRequestDetailGhost />;
   }
 
-  // Older pages are tied to the cursor the detail was read with; a refreshed detail starts over.
-  const olderComments = older?.seed === detail.commentsCursor ? older.comments : [];
-  const nextCursor = older?.seed === detail.commentsCursor ? older.cursor : detail.commentsCursor;
-  const comments = prependIssueComments(detail.comments, olderComments);
+  const { comments, cursor: nextCursor, held: heldComments } = issueCommentsView(detail, older);
   const timeline: ReadonlyArray<TimelineItem> = [
     ...comments.map((c): TimelineItem => ({ kind: "comment", at: c.createdAt, comment: c })),
     ...detail.events.map((e): TimelineItem => ({ kind: "event", at: e.createdAt, event: e })),
@@ -629,11 +624,7 @@ export function IssueDetailPanel({
       toastManager.add({ type: "error", title: "Older comments could not be read" });
       return;
     }
-    setOlder({
-      seed: detail.commentsCursor,
-      comments: prependIssueComments(olderComments, result.value.comments),
-      cursor: result.value.nextCursor,
-    });
+    setOlder(appendOlderIssueComments(detail, heldComments, result.value));
   };
 
   const submitComment = async () => {

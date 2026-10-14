@@ -1,5 +1,7 @@
 import type {
   IssueActor,
+  IssueComment,
+  IssueDetail,
   IssueAssigneeCandidate,
   IssueLabel,
   IssueLabelCandidate,
@@ -7,7 +9,48 @@ import type {
   IssueRef,
   PullRequestRef,
 } from "@t3tools/contracts";
+import { issueEntryKey, prependIssueComments } from "@t3tools/client-runtime/state/issues";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+
+export type IssueOlderComments = {
+  readonly issue: string;
+  readonly seed: string | null;
+  readonly firstIds: ReadonlyArray<string>;
+  readonly comments: ReadonlyArray<IssueComment>;
+  readonly cursor: string | null;
+};
+
+export function issueCommentsView(detail: IssueDetail, older: IssueOlderComments | null) {
+  const held =
+    older?.issue === issueEntryKey(detail) &&
+    older.seed === detail.commentsCursor &&
+    older.firstIds.length === detail.comments.length &&
+    older.firstIds.every((id, index) => id === detail.comments[index]?.id)
+      ? older
+      : null;
+  return {
+    comments: prependIssueComments(detail.comments, held?.comments ?? []),
+    cursor: held ? held.cursor : detail.commentsCursor,
+    held,
+  };
+}
+
+export function appendOlderIssueComments(
+  detail: IssueDetail,
+  older: IssueOlderComments | null,
+  page: { readonly comments: ReadonlyArray<IssueComment>; readonly nextCursor: string | null },
+): IssueOlderComments {
+  return {
+    issue: issueEntryKey(detail),
+    seed: detail.commentsCursor,
+    firstIds: detail.comments.map((comment) => comment.id),
+    comments: prependIssueComments(
+      issueCommentsView(detail, older).held?.comments ?? [],
+      page.comments,
+    ),
+    cursor: page.nextCursor,
+  };
+}
 
 export type IssueLinkedPullRequestTarget = Pick<
   PullRequestRef,

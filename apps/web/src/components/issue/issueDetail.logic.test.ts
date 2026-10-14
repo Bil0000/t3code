@@ -1,12 +1,17 @@
 import type {
+  IssueComment,
+  IssueDetail,
   IssueLinkedPullRequest,
   IssueRef,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
+import { IssueTrackerKind, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  appendOlderIssueComments,
   issueAssigneeOptions,
+  issueCommentsView,
   issueDisplayLabel,
   issueLabelOptions,
   linkedPullRequestTarget,
@@ -130,5 +135,127 @@ describe("issueAssigneeOptions", () => {
         (option) => option.login,
       ),
     ).toEqual(["Ada"]);
+  });
+});
+
+const comment = (id: string, reactions?: IssueComment["reactions"]): IssueComment => ({
+  id,
+  author: null,
+  body: id,
+  createdAt: "2026-10-01T00:00:00Z",
+  url: null,
+  ...(reactions === undefined ? {} : { reactions }),
+});
+
+function detail(patch: Partial<IssueDetail> = {}): IssueDetail {
+  return {
+    tracker: IssueTrackerKind.make("github"),
+    host: "github.com",
+    scope: "org/repo",
+    key: "1",
+    displayKey: "#1",
+    projectId: ProjectId.make("project"),
+    projectTitle: "Project",
+    title: "Issue",
+    url: "https://example.com/issue",
+    author: null,
+    state: { category: "open", name: "Open" },
+    createdAt: "2026-10-01T00:00:00Z",
+    updatedAt: "2026-10-01T00:00:00Z",
+    closedAt: null,
+    assignees: [],
+    labels: [],
+    commentCount: 3,
+    writable: true,
+    viewer: "viewer",
+    body: "",
+    comments: [comment("c3")],
+    commentsCursor: "page-2",
+    events: [],
+    linkedPullRequests: [],
+    capabilities: {
+      create: true,
+      edit: true,
+      comment: true,
+      labels: true,
+      assignees: true,
+      reactions: true,
+      templates: false,
+      linkedPullRequests: false,
+      events: false,
+      search: true,
+      states: [],
+      closeReasons: [],
+    },
+    viewerPermissions: { setState: true, comment: true, edit: true, labels: true, assignees: true },
+    ...patch,
+  };
+}
+
+const heart = [{ content: "heart" as const, count: 1, actors: [], viewerHasReacted: false }];
+describe("older issue comments across detail re-reads", () => {
+  const first = detail();
+  const loaded = appendOlderIssueComments(first, null, {
+    comments: [comment("c2", heart)],
+    nextCursor: "page-3",
+  });
+
+  it("keeps loaded pages when a new detail has the same first-page IDs and cursor", () => {
+    const refreshed = detail({
+      title: "Renamed",
+      comments: [{ ...comment("c3", heart), body: "Updated" }],
+    });
+    const view = issueCommentsView(refreshed, loaded);
+    expect(view.held).toBe(loaded);
+    expect(view.comments.map((each) => each.id)).toEqual(["c2", "c3"]);
+    expect(view.comments[1]).toEqual(refreshed.comments[0]);
+    expect(view.cursor).toBe("page-3");
+  });
+
+  it("restarts a shifted Jira head with the same offset and eventually includes every boundary comment", () => {
+    const comments = (from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, index) => comment(String(from + index)));
+    const before = detail({
+      tracker: IssueTrackerKind.make("jira"),
+      host: "workspace.atlassian.net",
+      scope: "PROJ",
+      comments: comments(101, 150),
+      commentsCursor: "50",
+      commentCount: 150,
+    });
+    const loaded = appendOlderIssueComments(before, null, {
+      comments: comments(51, 100),
+      nextCursor: "100",
+    });
+    const after = { ...before, comments: comments(102, 151), commentCount: 151 };
+    const shifted = issueCommentsView(after, loaded);
+    expect(shifted.held).toBeNull();
+    expect(shifted.cursor).toBe("50");
+    expect(shifted.comments).toHaveLength(50);
+    const page2 = appendOlderIssueComments(after, shifted.held, {
+      comments: comments(52, 101),
+      nextCursor: "100",
+    });
+    const page3 = appendOlderIssueComments(after, page2, {
+      comments: comments(2, 51),
+      nextCursor: "150",
+    });
+    const page4 = appendOlderIssueComments(after, page3, {
+      comments: comments(1, 1),
+      nextCursor: null,
+    });
+    const complete = issueCommentsView(after, page4);
+    expect(complete.comments.map((each) => each.id)).toEqual(
+      comments(1, 151).map((each) => each.id),
+    );
+    expect(complete.cursor).toBeNull();
+  });
+
+  it("drops them when the first page now ends elsewhere or the issue is another one", () => {
+    const moved = issueCommentsView(detail({ commentsCursor: "page-2b" }), loaded);
+    expect(moved.comments.map((each) => each.id)).toEqual(["c3"]);
+    expect(moved.cursor).toBe("page-2b");
+    const other = issueCommentsView(detail({ key: "2" }), loaded);
+    expect(other.comments.map((each) => each.id)).toEqual(["c3"]);
   });
 });
