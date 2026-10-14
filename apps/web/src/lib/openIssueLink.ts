@@ -1,11 +1,13 @@
 import { pullRequestHostOf, SourceControlProviderKind } from "@t3tools/contracts";
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { parseIssueUrl } from "@t3tools/shared/issueUrl";
+import { useNavigate } from "@tanstack/react-router";
 import { type MouseEvent, useCallback } from "react";
 
+import { readIssueListPreferences } from "../components/issue/issueListPreferences";
 import { toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
-import { useRightPanelStore } from "../rightPanelStore";
+import { ISSUES_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
 import { useProjects, useServerConfigs, useThreadShell } from "../state/entities";
 import { issueEnvironment } from "../state/issues";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -21,6 +23,7 @@ export function useOpenIssueLink(
   targetUrl: string,
   targetEnvironmentId?: EnvironmentId,
 ) => boolean {
+  const navigate = useNavigate();
   const serverConfigs = useServerConfigs();
   const projects = useProjects();
   const thread = useThreadShell(threadRef ?? null);
@@ -28,8 +31,8 @@ export function useOpenIssueLink(
   return useCallback(
     (event, targetUrl, targetEnvironmentId) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
-      const resolvedPanelRef = panelRef ?? threadRef;
-      const environmentId = targetEnvironmentId ?? resolvedPanelRef?.environmentId;
+      const resolvedPanelRef = threadRef ?? (panelRef && ISSUES_PANEL_REF);
+      const environmentId = targetEnvironmentId ?? threadRef?.environmentId;
       if (resolvedPanelRef === undefined || environmentId === undefined) return false;
       if (serverConfigs.get(environmentId)?.environment.capabilities.issues !== true) return false;
       const candidate =
@@ -74,12 +77,26 @@ export function useOpenIssueLink(
             key: reference.key,
             url: targetUrl,
           });
+          if (threadRef === undefined) {
+            await navigate({
+              to: "/issues",
+              search: {
+                ...readIssueListPreferences(),
+                selectedEnvironmentId: environmentId,
+                selectedProjectId: reference.projectId,
+                ...(reference.host === undefined ? {} : { selectedHost: reference.host }),
+                tracker: reference.tracker,
+                scope: reference.scope,
+                key: reference.key,
+              },
+            });
+          }
         })
         .catch(() => {
           toastManager.add({ type: "error", title: "The link could not be opened" });
         });
       return true;
     },
-    [panelRef, projects, resolveUrl, serverConfigs, thread, threadRef],
+    [navigate, panelRef, projects, resolveUrl, serverConfigs, thread, threadRef],
   );
 }
