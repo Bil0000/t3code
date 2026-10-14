@@ -294,6 +294,31 @@ returns to your inbox.
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.
 
+## Issues
+
+Open **Issues** from the sidebar or command palette to work with GitHub, GitLab,
+Azure DevOps, Forgejo/Gitea, Linear, and Jira Cloud issues. Repository trackers use
+that project's source control login. Filter or sort the list, then use **Load more**
+to read another page.
+
+For Linear or Jira Cloud, connect an account under **Settings → Source control →
+Issue trackers**, then bind a T3 project to a Linear team or Jira project. Jira needs
+your site URL, account email, and API token. Credentials stay on the environment
+that owns the project.
+
+Select an issue to read its conversation, history, and any linked pull requests. You
+can create issues, edit comments, change native workflow states, labels, and assignees,
+and use reactions or templates when the tracker and your account allow them. Some
+trackers also support parent issues and subissues. Issues outside a project's own
+scope are read-only.
+
+Link an issue to a thread to keep its current state with your work. You can also
+start a thread from an issue, show linked issues from the command palette, and
+remove a link without changing the issue. Linked issues refresh when you view them
+and when a turn ends. Agents can use the same issue tools.
+
+Changing issues requires the connection’s `source-control:write` scope.
+
 ## GitHub stacks
 
 The Pull Requests page shows each PR's position in its GitHub stack. Open the stack badge in a
