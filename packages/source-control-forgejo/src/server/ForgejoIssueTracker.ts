@@ -81,6 +81,8 @@ const CAPABILITIES: IssueCapabilities = {
 
 /** Forgejo's own ceiling on a page, which a self-hosted server may lower. */
 const PAGE_SIZE = 50;
+const LABEL_LOOKUP_LIMIT = 5;
+const LABEL_PAGE_LIMIT = 3;
 /** Comment reactions are a request each, so only the first page's are read with the detail. */
 const COMMENT_REACTION_LIMIT = 50;
 const COMMENT_PAGE_CURSOR = /^page:([1-9]\d{0,6}):([1-9]\d*)$/;
@@ -218,25 +220,69 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         `${repoPath(target.scope)}/labels?limit=${PAGE_SIZE}`,
         ForgejoLabel,
       );
-      if (
-        path !== undefined &&
-        wanted.some((name) => !labels.some((label) => label.name === name))
-      ) {
+      const missing = () => wanted.filter((name) => !labels.some((label) => label.name === name));
+      if (path !== undefined && missing().length > 0) {
         const issue = yield* getIssue(target, operation, path);
         labels = [...labels, ...(issue.labels ?? [])];
       }
-      if (wanted.some((name) => !labels.some((label) => label.name === name))) {
+      let organizationNext: string | null = null;
+      if (missing().length > 0) {
         const organization = yield* organizationLabels(target, operation);
         labels = [...labels, ...organization.rows];
+        organizationNext = organization.nextCursor;
+      }
+      const catalogs = [
+        `${repoPath(target.scope)}/labels`,
+        `orgs/${encodeURIComponent(target.scope.split("/").at(-2)!)}/labels`,
+      ];
+      for (const [index, catalog] of catalogs.entries()) {
+        if (index === 1 && organizationNext === null) continue;
+        for (let page = 2; page <= LABEL_PAGE_LIMIT && missing().length > 0; page++) {
+          const result = yield* index === 0
+            ? readPage(target, operation, catalog, page, ForgejoLabel)
+            : organizationLabels(target, operation, page);
+          labels = [...labels, ...result.rows];
+          if (result.nextCursor === null) break;
+        }
+      }
+      const unresolved = missing();
+      if (unresolved.length > LABEL_LOOKUP_LIMIT)
+        return yield* refused(
+          operation,
+          "At most five labels outside the first native pages can be resolved per write. No fields were changed.",
+        );
+      for (const name of unresolved) {
+        if (/^[+-]?\d+$/.test(name) || name === "." || name === "..") continue;
+        for (const catalog of catalogs) {
+          const label = yield* read(
+            target,
+            operation,
+            { path: `${catalog}/${encodeURIComponent(name)}` },
+            ForgejoLabel,
+          ).pipe(
+            Effect.catchIf(
+              (error) => error.reason === "not-found",
+              () => Effect.succeed(null),
+            ),
+          );
+          if (label === null) continue;
+          if (label.name !== name || label.id < 1)
+            return yield* refused(
+              operation,
+              "Forgejo returned a different native label than requested. No fields were changed.",
+            );
+          labels = [...labels, label];
+          break;
+        }
       }
       const ids = wanted.flatMap((name) => {
         const label = labels.find((candidate) => candidate.name === name);
         return label ? [label.id] : [];
       });
-      if (ids.length !== wanted.length)
+      if (ids.length !== wanted.length || ids.some((id) => id < 1))
         return yield* refused(
           operation,
-          "A requested label was not in the native label page. No fields were changed.",
+          "A requested label was not in the bounded native label catalog. No fields were changed.",
         );
       return [...new Set(ids)];
     });

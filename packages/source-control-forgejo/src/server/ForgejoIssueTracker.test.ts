@@ -137,6 +137,181 @@ function tracker(
 }
 
 describe("ForgejoIssueTracker", () => {
+  it.effect.each(["rate-limit", "wrong-label", "invalid-id"] as const)(
+    "refuses native label fallback %s before any fields change",
+    (failure) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.path === "repos/acme/web/issues/42") return { stdout: encode(ISSUE) };
+          if (input.path.split("?")[0]!.endsWith("/labels"))
+            return {
+              stdout: encode([
+                failure === "invalid-id" ? { id: 0, name: "later" } : { id: 3, name: "bug" },
+              ]),
+              stderr: 'Link: <https://forgejo.test/labels?page=2>; rel="next"',
+            };
+          if (failure === "rate-limit")
+            return new ForgejoCli.ForgejoCliError({
+              command: "fj",
+              cwd: "/w",
+              reason: "rate-limit",
+              detail: "Native quota reached.",
+            });
+          return { stdout: encode({ id: 99, name: "different-label" }) };
+        });
+        const error = yield* Effect.flip(
+          api.update!({
+            cwd: "/w",
+            host: "forgejo.test:3000",
+            scope: "acme/web",
+            key: "42",
+            title: "Changed",
+            labels: ["later"],
+          }),
+        );
+        expect(error.reason).toBe(failure === "rate-limit" ? "rate-limited" : "failed");
+        expect(requests).toHaveLength(failure === "invalid-id" ? 1 : 8);
+        expect(requests.filter((request) => request.method)).toEqual([]);
+      }),
+  );
+
+  it.effect.each(["large-catalog", "lookup-limit", "over-budget"] as const)(
+    "bounds native label requests for %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const names = Array.from(
+          { length: mode === "lookup-limit" ? 5 : 121 },
+          (_, index) => `${mode === "large-catalog" ? "known" : "later"}-${index}`,
+        );
+        const native = names.map((name, index) => ({ id: index + 1001, name }));
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.method) return { stdout: encode(ISSUE) };
+          if (input.path === "repos/acme/web/issues/42") return { stdout: encode(ISSUE) };
+          const [route, query] = input.path.split("?");
+          if (route!.endsWith("/labels")) {
+            const page = Number(new URLSearchParams(query).get("page") ?? "1");
+            return {
+              stdout: encode(
+                mode === "large-catalog" && route!.startsWith("repos/")
+                  ? native.slice((page - 1) * 50, page * 50)
+                  : Array.from({ length: 50 }, (_, index) => ({
+                      id: index + 501,
+                      name: `other-${index}`,
+                    })),
+              ),
+              stderr: `Link: <https://forgejo.test/labels?page=${page + 1}>; rel="next"`,
+            };
+          }
+          if (mode === "lookup-limit" && route!.startsWith("orgs/"))
+            return { stdout: encode(native.find((label) => route!.endsWith(`/${label.name}`))) };
+          return new ForgejoCli.ForgejoCliError({
+            command: "fj",
+            cwd: "/w",
+            reason: "not-found",
+            detail: "No scoped label.",
+          });
+        });
+        const result = yield* Effect.result(
+          api.update!({
+            cwd: "/w",
+            host: "forgejo.test:3000",
+            scope: "acme/web",
+            key: "42",
+            title: "Changed title",
+            labels: names,
+          }),
+        );
+        expect(Result.isSuccess(result)).toBe(mode !== "over-budget");
+        expect(requests).toHaveLength(mode === "lookup-limit" ? 19 : 7);
+        expect(requests.some((request) => request.path.includes("page=4"))).toBe(false);
+        const writes = requests.filter((request) => request.method);
+        if (mode === "over-budget") {
+          expect(writes).toEqual([]);
+          expect(requests.filter((request) => /\/labels\/[^/?]+$/.test(request.path))).toEqual([]);
+          if (Result.isFailure(result))
+            expect(result.failure).toMatchObject({
+              _tag: "IssueTrackerError",
+              detail: expect.stringContaining("At most five"),
+            });
+        } else expect(writes.at(-1)?.body).toEqual({ labels: native.map((label) => label.id) });
+      }),
+  );
+
+  it.effect.each([
+    { source: "repo", name: "later-label" },
+    { source: "org", name: "later-label" },
+    { source: "repo", name: "12" },
+    { source: "org", name: "12" },
+  ] as const)(
+    "resolves selectable page-two $source label $name for create and update",
+    ({ source, name }) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const later = { id: 93, name };
+        const first = Array.from({ length: 50 }, (_, index) => ({
+          id: index + 1,
+          name: `label-${index + 1}`,
+        }));
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.method) return { stdout: encode({ ...ISSUE, labels: [later], assignees: [] }) };
+          if (input.path === "repos/acme/web/issues/42") return { stdout: encode(ISSUE) };
+          const [route, query] = input.path.split("?");
+          const org = route!.startsWith("orgs/");
+          if (route!.endsWith("/labels")) {
+            const page = Number(new URLSearchParams(query).get("page") ?? "1");
+            const rows =
+              org && source !== "org"
+                ? []
+                : page === 1
+                  ? first
+                  : (org ? "org" : "repo") === source && page === 2
+                    ? [later]
+                    : [];
+            return {
+              stdout: encode(rows),
+              stderr: `Link: <https://forgejo.test/labels?page=${page === 1 && rows.length ? 2 : page}>; rel="${page === 1 && rows.length ? "next" : "last"}"`,
+            };
+          }
+          return new ForgejoCli.ForgejoCliError({
+            command: "fj",
+            cwd: "/w",
+            reason: "not-found",
+            detail: "No such scoped label.",
+          });
+        });
+        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        expect(
+          (yield* api.listLabelCandidates!({ ...target, cursor: `${source}:2` })).items,
+        ).toMatchObject([{ name }]);
+        for (const operation of ["create", "update"] as const) {
+          requests.length = 0;
+          if (operation === "create")
+            yield* api.create!({
+              ...target,
+              title: "New",
+              body: "",
+              labels: [name],
+              assignees: [],
+            });
+          else yield* api.update!({ ...target, labels: [name] });
+          expect(requests.filter((request) => request.method)).toMatchObject([
+            { body: { labels: [93] } },
+          ]);
+          expect(requests.length).toBe(
+            (source === "repo" ? 4 : 5) + (operation === "update" ? 1 : 0),
+          );
+          expect(requests.some((request) => request.path.includes("page=3"))).toBe(false);
+          if (name === "12")
+            expect(requests.some((request) => request.path.endsWith("/labels/12"))).toBe(false);
+        }
+      }),
+  );
+
   it.effect("keeps native closing links under the same mounted host", () =>
     Effect.gen(function* () {
       const paths: string[] = [];
@@ -770,6 +945,13 @@ describe("ForgejoIssueTracker", () => {
         const paths: string[] = [];
         const api = yield* tracker((input) => {
           paths.push(input.path);
+          if (/\/labels\/[^/?]+$/.test(input.path))
+            return new ForgejoCli.ForgejoCliError({
+              command: "fj",
+              cwd: "/w",
+              reason: "not-found",
+              detail: "No such scoped label.",
+            });
           if (input.method) {
             writes.push(input.path);
             return { stdout: encode(ISSUE) };
@@ -798,8 +980,8 @@ describe("ForgejoIssueTracker", () => {
         );
         expect(error.detail).toContain("label");
         expect(writes).toEqual([]);
-        expect(paths).toHaveLength(operation === "create" ? 2 : 3);
-        expect(paths.some((path) => path.includes("page=2"))).toBe(false);
+        expect(paths).toHaveLength(operation === "create" ? 8 : 9);
+        expect(paths.some((path) => path.includes("page=4"))).toBe(false);
       }),
   );
 
