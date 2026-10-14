@@ -86,7 +86,7 @@ const RawTemplateEntrySchema = Schema.Struct({
   name: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-const RawTemplateSchema = Schema.Struct({ content: Schema.optional(Schema.NullOr(Schema.String)) });
+const RawTemplateSchema = Schema.Struct({ content: Schema.String });
 
 const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeIssue = decodeJsonResult(RawIssueSchema);
@@ -398,7 +398,7 @@ export function decodeTemplateJson(
     name: entry.name,
     about: "",
     title: "",
-    body: template.content ?? "",
+    body: template.content,
     labels: [],
     assignees: [],
   }));

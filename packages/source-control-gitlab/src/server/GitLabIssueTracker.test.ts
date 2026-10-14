@@ -132,6 +132,241 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 
 describe("GitLabIssueTracker", () => {
   it.effect.each([
+    { name: "missing content", raw: "{}", truncated: false },
+    { name: "null content", raw: '{"content":null}', truncated: false },
+    { name: "invalid JSON", raw: "{", truncated: false },
+    { name: "truncated content", raw: '{"content":"Partial body"}', truncated: true },
+  ])("refuses selected template $name without returning a blank template", (input) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const api = yield* GitLabIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(GitLabCli.GitLabCli)({
+            execute: () =>
+              Effect.sync(() => {
+                calls++;
+                return {
+                  ...TestSourceControlHost.processOutput(input.raw),
+                  stdoutTruncated: input.truncated,
+                };
+              }),
+          }),
+        ),
+      );
+      expect(
+        yield* Effect.flip(
+          api.listTemplates!({
+            cwd: "/w",
+            host: "gitlab.com",
+            scope: "acme/web",
+            templateKey: "Bug",
+          }),
+        ),
+      ).toMatchObject({ operation: "listTemplates", reason: "failed" });
+      expect(calls).toBe(1);
+    }),
+  );
+
+  it.effect.each(["404", "rate-limit"] as const)(
+    "keeps native selected template %s errors typed",
+    (kind) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const context = {
+          command: "glab" as const,
+          operation: "execute" as const,
+          cwd: "/w",
+          cause: new Error(kind === "404" ? "HTTP 404 Not Found" : "HTTP 429 Rate limit"),
+        };
+        const native =
+          kind === "404"
+            ? new GitLabCli.GitLabCliCommandError(context)
+            : new GitLabCli.GitLabCliRateLimitError(context);
+        const api = yield* GitLabIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mock(GitLabCli.GitLabCli)({
+              execute: () => {
+                calls++;
+                return Effect.fail(native);
+              },
+            }),
+          ),
+        );
+        const error = yield* Effect.flip(
+          api.listTemplates!({
+            cwd: "/w",
+            host: "gitlab.com",
+            scope: "acme/web",
+            templateKey: "Unknown",
+          }),
+        );
+        expect(error).toMatchObject({
+          operation: "listTemplates",
+          reason: kind === "404" ? "failed" : "rate-limited",
+          cause: native,
+        });
+        expect(calls).toBe(1);
+      }),
+  );
+
+  it.effect("refuses ambiguous template modes before a native request", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const api = yield* tracker(() => {
+        calls++;
+        return "[]";
+      });
+      expect(
+        yield* Effect.flip(
+          api.listTemplates!({
+            cwd: "/w",
+            host: "gitlab.com",
+            scope: "acme/web",
+            metadataOnly: true,
+            templateKey: "Bug",
+          }),
+        ),
+      ).toMatchObject({ operation: "listTemplates", reason: "failed" });
+      expect(calls).toBe(0);
+    }),
+  );
+
+  it.effect("keeps a native empty template body loaded rather than deferred", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker(() => encode({ content: "" }));
+      const result = yield* api.listTemplates!({
+        cwd: "/w",
+        host: "gitlab.com",
+        scope: "acme/web",
+        templateKey: "Empty",
+      });
+      expect(result.templates[0]).toMatchObject({ key: "Empty", body: "" });
+      expect(result.templates[0]?.contentDeferred).not.toBe(true);
+    }),
+  );
+
+  it.effect.each([21, 100])("reads all %s deferred template choices in one native call", (count) =>
+    Effect.gen(function* () {
+      const entries = Array.from({ length: count }, (_, index) => ({
+        key: `Key ${index}`,
+        name: `Name ${index}`,
+      }));
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        paths.push(args[1]!);
+        expect(args[args.indexOf("--hostname") + 1]).toBe("git.acme.test");
+        return encode(entries);
+      });
+      expect(
+        yield* api.listTemplates!({
+          cwd: "/w",
+          host: "git.acme.test",
+          scope: "acme/web",
+          metadataOnly: true,
+        }),
+      ).toEqual({
+        templates: entries.map((entry) => ({
+          ...entry,
+          about: "",
+          title: "",
+          body: "",
+          labels: [],
+          assignees: [],
+          contentDeferred: true,
+        })),
+        blankIssuesEnabled: true,
+      });
+      expect(paths).toEqual(["projects/acme%2Fweb/templates/issues"]);
+    }),
+  );
+
+  it.effect("refuses an over-limit catalog before any template body reads", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        paths.push(args[1]!);
+        return args[1]!.endsWith("/templates/issues")
+          ? encode(Array.from({ length: 101 }, (_, index) => ({ key: `Key ${index}` })))
+          : encode({ content: "Native body" });
+      });
+      expect(
+        yield* Effect.flip(
+          api.listTemplates!({
+            cwd: "/w",
+            host: "gitlab.com",
+            scope: "acme/web",
+            metadataOnly: true,
+          }),
+        ),
+      ).toMatchObject({
+        operation: "listTemplates",
+        reason: "failed",
+        detail: "This project exceeds the supported template limit of 100.",
+      });
+      expect(paths).toEqual(["projects/acme%2Fweb/templates/issues"]);
+    }),
+  );
+
+  it.effect("loads only the exact selected native template with no catalog or viewer read", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        paths.push(args[1]!);
+        expect(args[args.indexOf("--hostname") + 1]).toBe("git.acme.test");
+        return encode({
+          name: "Native override",
+          content: "## From the closest group template\nEdit this body.",
+        });
+      });
+      const result = yield* api.listTemplates!({
+        cwd: "/w",
+        host: "git.acme.test",
+        scope: "acme/web",
+        templateKey: "Bug / UI",
+      });
+      expect(result).toEqual({
+        templates: [
+          {
+            key: "Bug / UI",
+            name: "Bug / UI",
+            about: "",
+            title: "",
+            body: "## From the closest group template\nEdit this body.",
+            labels: [],
+            assignees: [],
+          },
+        ],
+        blankIssuesEnabled: true,
+      });
+      expect(paths).toEqual(["projects/acme%2Fweb/templates/issues/Bug%20%2F%20UI"]);
+    }),
+  );
+
+  it.effect("keeps the legacy inline template request bounded at twenty bodies", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        paths.push(args[1]!);
+        return args[1]!.endsWith("/templates/issues")
+          ? encode(Array.from({ length: 100 }, (_, index) => ({ key: `Key ${index}` })))
+          : encode({ content: "Native body" });
+      });
+      const result = yield* api.listTemplates!({
+        cwd: "/w",
+        host: "gitlab.com",
+        scope: "acme/web",
+      });
+      expect(result.templates).toHaveLength(20);
+      expect(
+        result.templates.every(
+          (template) => template.body === "Native body" && template.contentDeferred !== true,
+        ),
+      ).toBe(true);
+      expect(paths).toHaveLength(21);
+    }),
+  );
+
+  it.effect.each([
     { name: "populated", milestone: { title: "Release 1" } },
     { name: "native-null", milestone: null },
     { name: "absent", milestone: undefined },

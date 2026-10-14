@@ -223,8 +223,12 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           ...(input.body === undefined ? {} : { stdin: encodeBody(input.body) }),
         })
         .pipe(
-          Effect.map((result) => result.stdout.trim()),
           Effect.mapError(fail(input.operation)),
+          Effect.flatMap((result) =>
+            input.operation === "listTemplates" && result.stdoutTruncated
+              ? Effect.fail(unreadable(input.operation, "truncated-template-response"))
+              : Effect.succeed(result.stdout.trim()),
+          ),
         );
 
     const read = <A>(input: {
@@ -806,20 +810,50 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           }),
         ),
 
-      listTemplates: (input) =>
-        read({
+      listTemplates: (input) => {
+        if (input.metadataOnly && input.templateKey !== undefined)
+          return Effect.fail(
+            refused("listTemplates", "Choose a template catalog or one template body."),
+          );
+        if (input.templateKey !== undefined)
+          return template(input)({ key: input.templateKey, name: input.templateKey }).pipe(
+            Effect.map((loaded) => ({ templates: [loaded], blankIssuesEnabled: true })),
+          );
+        return read({
           cwd: input.cwd,
           host: input.host,
           operation: "listTemplates",
           path: `projects/${projectPath(input.scope)}/templates/issues`,
           decode: decodeTemplateEntriesJson,
         }).pipe(
-          Effect.flatMap((entries) =>
-            Effect.forEach(entries.slice(0, TEMPLATE_LIMIT), template(input), { concurrency: 4 }),
-          ),
+          Effect.flatMap((entries) => {
+            if (!input.metadataOnly)
+              return Effect.forEach(entries.slice(0, TEMPLATE_LIMIT), template(input), {
+                concurrency: 4,
+              });
+            if (entries.length > 100)
+              return Effect.fail(
+                refused(
+                  "listTemplates",
+                  "This project exceeds the supported template limit of 100.",
+                ),
+              );
+            return Effect.succeed(
+              entries.map((entry) => ({
+                ...entry,
+                about: "",
+                title: "",
+                body: "",
+                labels: [],
+                assignees: [],
+                contentDeferred: true,
+              })),
+            );
+          }),
           // GitLab has no switch that forbids an issue filed from nothing.
           Effect.map((templates) => ({ templates, blankIssuesEnabled: true })),
-        ),
+        );
+      },
 
       listCandidates: (input) =>
         Effect.all(
