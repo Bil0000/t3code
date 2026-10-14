@@ -572,7 +572,7 @@ function IssueDetailContent({
     setLoadingOlder(true);
     const result = await loadComments({
       environmentId,
-      input: { ...reference, cursor: nextCursor },
+      input: { ...reference, cursor: nextCursor, viewer: detail.viewer ?? undefined },
     });
     setLoadingOlder(false);
     if (result._tag === "Failure") {

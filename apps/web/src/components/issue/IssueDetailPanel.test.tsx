@@ -2,8 +2,14 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { EnvironmentId, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
-import type { IssueState } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IssueTrackerKind,
+  ProjectId,
+  IssueCommentsPageInput,
+} from "@t3tools/contracts";
+import type { IssueState, IssueComment } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -19,6 +25,7 @@ const state = vi.hoisted(() => ({
     body: "",
     url: "https://github.com/org/repo/issues/1",
     author: null,
+    viewer: null as string | null,
     state: { category: "open", name: "open" } as IssueState,
     states: undefined as ReadonlyArray<IssueState> | undefined,
     createdAt: "2026-10-14T00:00:00Z",
@@ -26,8 +33,8 @@ const state = vi.hoisted(() => ({
     closedAt: null,
     labels: [],
     assignees: [],
-    comments: [],
-    commentsCursor: null,
+    comments: [] as ReadonlyArray<IssueComment>,
+    commentsCursor: null as string | null,
     events: [],
     linkedPullRequests: [],
     commentCount: 0,
@@ -52,6 +59,7 @@ const state = vi.hoisted(() => ({
       subIssues: false,
       updateParent: false,
       createSubIssue: false,
+      editComment: false,
       states: [] as ReadonlyArray<IssueState>,
       closeReasons: [],
     },
@@ -75,6 +83,9 @@ vi.mock("./useIssueThreadHandoff", () => ({
   useIssueThreadHandoff: () => ({ pending: false, start: vi.fn() }),
 }));
 vi.mock("./IssueHistory", () => ({ IssueHistory: () => null }));
+vi.mock("../pullRequest/PullRequestCommentBody", () => ({
+  PullRequestCommentBody: ({ text }: { text: string }) => <div>{text}</div>,
+}));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: (atom: { kind: string } | null) =>
     atom?.kind === "states"
@@ -104,6 +115,7 @@ vi.mock("~/state/issues", async () => {
       update: command,
       setState: command,
       setParent: command,
+      editComment: command,
     },
     useIssueHierarchy: () => ({
       extra: null,
@@ -123,6 +135,9 @@ vi.mock("~/state/issues", async () => {
   };
 });
 import { IssueDetailPanel } from "./IssueDetailPanel";
+
+const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
+const decodeCommentPageInput = Schema.decodeUnknownSync(IssueCommentsPageInput);
 
 it("can comment after switching from History to an issue without history support", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -447,4 +462,92 @@ describe("native issue state controls", () => {
       expect(state.write).toHaveBeenCalledOnce();
     },
   );
+});
+
+it.each([
+  { tracker: "linear", viewer: "viewer-123" },
+  { tracker: "jira", viewer: "viewer-123" },
+  { tracker: "linear", viewer: null },
+])("roundtrips cached viewer context for older comments (%j)", async ({ tracker, viewer }) => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.write.mockReset().mockImplementation(async ({ input }) => {
+    const wire = encodeCommentPageInput(input);
+    const decoded = decodeCommentPageInput(wire);
+    const owned = decoded.viewer === "viewer-123";
+    expect(decoded.viewer).toBe(viewer ?? undefined);
+    return {
+      _tag: "Success",
+      value: {
+        comments: [
+          {
+            id: "older-own-comment",
+            author: { id: "viewer-123", login: "me", name: null, avatarUrl: null },
+            body: "Older own comment",
+            createdAt: "2026-10-01T00:00:00Z",
+            url: null,
+            canEdit: owned,
+            reactions: [{ content: "thumbs-up", count: 1, actors: [], viewerHasReacted: owned }],
+          },
+        ],
+        nextCursor: null,
+      },
+    };
+  });
+  state.detail = {
+    ...state.detail,
+    tracker,
+    key: "ENG-1",
+    viewer,
+    comments: [],
+    commentsCursor: "older",
+    capabilities: {
+      ...state.detail.capabilities,
+      editComment: true,
+      reactions: tracker === "linear",
+      subIssues: false,
+      events: false,
+    },
+  };
+  const environmentId = EnvironmentId.make("environment");
+  const reference = {
+    projectId: ProjectId.make("project"),
+    tracker: IssueTrackerKind.make(tracker),
+    host: "native.example",
+    scope: "ENG",
+    key: "ENG-1",
+  };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+    );
+    const load = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Load older comments",
+    )!;
+    await act(async () => load.click());
+    expect(state.write).toHaveBeenCalledOnce();
+    expect(state.write).toHaveBeenCalledWith({
+      environmentId,
+      input: { ...reference, cursor: "older", viewer: viewer ?? undefined },
+    });
+    expect(container.textContent).toContain("Older own comment");
+    const edit = container.querySelector<HTMLButtonElement>('button[aria-label="Edit comment"]');
+    expect(edit !== null).toBe(viewer !== null);
+    if (tracker === "linear")
+      expect(
+        container.querySelector('button[aria-label^="thumbs up,"]')!.getAttribute("aria-pressed"),
+      ).toBe(String(viewer !== null));
+    if (edit !== null) {
+      await act(async () => edit.click());
+      expect(
+        container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Edit comment"]')?.value,
+      ).toBe("Older own comment");
+    }
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
 });
