@@ -9,9 +9,11 @@ import type {
   IssueTrackerKind,
   ProjectId,
 } from "@t3tools/contracts";
-import { AuthOrchestrationReadScope } from "@t3tools/contracts";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { AuthOrchestrationReadScope, AuthSourceControlWriteScope } from "@t3tools/contracts";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -20,10 +22,13 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcClient from "../rpc/client.ts";
 import * as Session from "./session.ts";
+import { executeAtomQuery } from "./runtime.ts";
 
 import {
   continueIssueListPage,
   createIssueEnvironmentAtoms,
+  createIssueSourceRefreshQueue,
+  readIssueListSourcePage,
   issueEntryKey,
   issueListCursorsOn,
   issueScopeKey,
@@ -157,6 +162,215 @@ describe("issue comment requests", () => {
       request.mockRestore();
     }
   });
+});
+
+function issueReadHarness() {
+  const supervisor = {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+  const runtime = Atom.runtime(
+    Layer.mergeAll(
+      Layer.succeed(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      Layer.succeed(
+        EnvironmentRegistry.EnvironmentRegistry,
+        EnvironmentRegistry.EnvironmentRegistry.of({
+          run: (_environmentId, effect) =>
+            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+      ),
+    ),
+  );
+  const session = Atom.make(
+    AsyncResult.success({
+      authenticated: true,
+      auth: {
+        policy: "remote-reachable",
+        bootstrapMethods: [],
+        sessionMethods: [],
+        sessionCookieName: "test",
+      },
+      scopes: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
+      permissions: [AuthOrchestrationReadScope, AuthSourceControlWriteScope],
+    } satisfies AuthSessionState),
+  );
+  const sessions = Session.createEnvironmentSessionAtoms(runtime);
+  const sessionFactory = vi
+    .spyOn(Session, "createEnvironmentSessionAtoms")
+    .mockReturnValue({ ...sessions, sessionStateAtom: () => session });
+  const registry = AtomRegistry.make();
+  return {
+    runtime,
+    atoms: createIssueEnvironmentAtoms(runtime),
+    registry,
+    dispose: () => {
+      registry.dispose();
+      sessionFactory.mockRestore();
+    },
+  };
+}
+
+const issueListResult = (title: string): IssueListResult => ({
+  entries: [entry({ key: "1", title })],
+  viewers: {},
+  trackers: [],
+  nextCursors: {},
+  errors: [],
+});
+
+describe("post-write issue reads", () => {
+  it.effect("keeps identical page reads separate after two writes", () =>
+    Effect.gen(function* () {
+      const { atoms, registry, dispose } = issueReadHarness();
+      const started = Deferred.makeUnsafe<void>();
+      const firstResponse = Deferred.makeUnsafe<IssueListResult>();
+      let calls = 0;
+      const request = vi.spyOn(RpcClient, "requestGuarded");
+      request.mockImplementation((() =>
+        Effect.suspend(() => {
+          calls += 1;
+          if (calls === 1) {
+            Deferred.doneUnsafe(started, Exit.void);
+            return Deferred.await(firstResponse);
+          }
+          return Effect.succeed(issueListResult("After second write"));
+        })) as unknown as Parameters<typeof request.mockImplementation>[0]);
+      const target = {
+        environmentId: "environment-1" as EnvironmentId,
+        input: { state: "open" as const, projectId: "project-1" as ProjectId },
+      };
+      try {
+        const first = atoms.listPage.run(registry, target);
+        yield* Deferred.await(started);
+        const second = atoms.listPage.run(registry, target);
+        Deferred.doneUnsafe(firstResponse, Exit.succeed(issueListResult("After first write")));
+        expect(yield* Effect.promise(() => first)).toMatchObject({
+          _tag: "Success",
+          value: { entries: [{ title: "After first write" }] },
+        });
+        expect(yield* Effect.promise(() => second)).toMatchObject({
+          _tag: "Success",
+          value: { entries: [{ title: "After second write" }] },
+        });
+        expect(calls).toBe(2);
+      } finally {
+        dispose();
+        request.mockRestore();
+      }
+    }),
+  );
+
+  it.effect.each(["full first", "scoped first", "two writes"])(
+    "keeps the newest source after %s",
+    (order) =>
+      Effect.gen(function* () {
+        const { atoms, runtime, registry, dispose } = issueReadHarness();
+        const fullStarted = Deferred.makeUnsafe<void>();
+        const sourceStarted = Deferred.makeUnsafe<void>();
+        const rejectedSource = Deferred.makeUnsafe<void>();
+        const oldFull = Deferred.makeUnsafe<IssueListResult>();
+        const oldSource = Deferred.makeUnsafe<IssueListResult>();
+        let fullCalls = 0;
+        let sourceCalls = 0;
+        let revision = 1;
+        const cached = Atom.make({
+          answer: null as IssueListResult | null,
+          page: issueListResult("Before writes"),
+        });
+        const request = vi.spyOn(RpcClient, "requestGuarded");
+        request.mockImplementation(((tag: string, input: { projectId?: string }) =>
+          Effect.suspend(() => {
+            if (tag === "issues.setState") return Effect.void;
+            if (input.projectId === undefined) {
+              fullCalls += 1;
+              if (fullCalls === 1) return Effect.succeed(issueListResult("Before writes"));
+              Deferred.doneUnsafe(fullStarted, Exit.void);
+              return Deferred.await(oldFull);
+            }
+            sourceCalls += 1;
+            if (sourceCalls === 1) {
+              Deferred.doneUnsafe(sourceStarted, Exit.void);
+              return Deferred.await(oldSource);
+            }
+            return Effect.succeed(
+              order === "two writes"
+                ? { ...issueListResult("Newest write"), entries: [] }
+                : issueListResult("Newest write"),
+            );
+          })) as unknown as Parameters<typeof request.mockImplementation>[0]);
+        const query = runtime.atom(RpcClient.requestGuarded("issues.list", { state: "open" }));
+        const visible = Atom.make((get) => {
+          const full = get(query);
+          const stored = get(cached);
+          return full._tag === "Success" && full.value !== stored.answer ? full.value : stored.page;
+        });
+        const queue = createIssueSourceRefreshQueue();
+        let writes = 0;
+        const write = () =>
+          atoms.setState.run(registry, {
+            environmentId: "environment-1" as EnvironmentId,
+            input: {
+              projectId: "project-1" as ProjectId,
+              tracker: "github" as IssueTrackerKind,
+              scope: "acme/app",
+              key: String(++writes),
+              state: "closed",
+            },
+          });
+        const committed: string[] = [];
+        const read = async () => {
+          const startedRevision = revision;
+          const response = await readIssueListSourcePage(registry, query, () =>
+            atoms.listPage.run(registry, {
+              environmentId: "environment-1" as EnvironmentId,
+              input: { state: "open", projectId: "project-1" as ProjectId },
+            }),
+          );
+          if (revision !== startedRevision) return;
+          if (!response.isCurrent()) {
+            Deferred.doneUnsafe(rejectedSource, Exit.void);
+            void queue("source", read);
+            return;
+          }
+          if (response.result._tag === "Success") {
+            registry.set(cached, { answer: response.answer, page: response.result.value });
+            committed.push(response.result.value.entries[0]?.title ?? "empty");
+          }
+        };
+        try {
+          yield* Effect.promise(() => executeAtomQuery(registry, query));
+          if (order === "two writes") expect((yield* Effect.promise(write))._tag).toBe("Success");
+          const refresh = queue("source", read);
+          yield* Deferred.await(sourceStarted);
+          if (order === "two writes") {
+            expect((yield* Effect.promise(write))._tag).toBe("Success");
+            revision += 1;
+            void queue("source", read);
+          } else {
+            const full = executeAtomQuery(registry, query, { refresh: true });
+            yield* Deferred.await(fullStarted);
+            if (order === "full first") {
+              Deferred.doneUnsafe(oldFull, Exit.succeed(issueListResult("Old full read")));
+              yield* Effect.promise(() => full);
+            } else {
+              Deferred.doneUnsafe(oldSource, Exit.succeed(issueListResult("After write")));
+              yield* Deferred.await(rejectedSource);
+              expect(registry.get(visible).entries[0]?.title).toBe("Before writes");
+              Deferred.doneUnsafe(oldFull, Exit.succeed(issueListResult("Old full read")));
+              yield* Effect.promise(() => full);
+            }
+          }
+          Deferred.doneUnsafe(oldSource, Exit.succeed(issueListResult("After write")));
+          yield* Effect.promise(() => refresh);
+          if (order === "two writes") expect(registry.get(visible).entries).toEqual([]);
+          else expect(registry.get(visible).entries[0]?.title).toBe("Newest write");
+          expect(committed).toEqual([order === "two writes" ? "empty" : "Newest write"]);
+          expect(writes).toBe(order === "two writes" ? 2 : 0);
+          expect(sourceCalls).toBe(2);
+          expect(fullCalls).toBe(order === "two writes" ? 1 : 2);
+        } finally {
+          dispose();
+          request.mockRestore();
+        }
+      }),
+  );
 });
 
 function entry(overrides: Partial<IssueListEntry> & { key: string }): IssueListEntry {
@@ -559,6 +773,29 @@ describe("refreshIssueListPage", () => {
     firstKeys: new Set([...rows(1, 50), ...rows(201, 250, "acme/other")].map(issueEntryKey)),
     errors: [] as IssueListResult["errors"],
   };
+
+  it("removes every changed tail row when source writes share one trailing refresh", () => {
+    const next = refreshIssueListPage(
+      loaded,
+      {
+        entries: rows(1, 50),
+        nextCursors: { "github.com acme/app": "2" },
+        errors: [],
+      },
+      {
+        source: {
+          tracker: "github",
+          projectId: "project-1",
+          host: "github.com",
+          scope: "acme/app",
+        },
+        removed: new Set(["60", "61"].map((key) => issueEntryKey(entry({ key })))),
+      },
+    );
+    expect(next.entries.filter((row) => row.scope === "acme/app")).toHaveLength(98);
+    expect(next.entries.some((row) => row.key === "60" || row.key === "61")).toBe(false);
+    expect(next.entries.filter((row) => row.scope === "acme/other")).toHaveLength(50);
+  });
 
   it("keeps a continued scope's tail and cursor under a fresh first page", () => {
     const next = refreshIssueListPage(loaded, {

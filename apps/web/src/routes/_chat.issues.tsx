@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   continueIssueListPage,
+  createIssueSourceRefreshQueue,
+  readIssueListSourcePage,
   issueEntryKey,
   issueListCursorsOn,
   issueScopeKey,
@@ -106,6 +108,7 @@ import {
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "~/state/entities";
 import { useEnvironments, useIssuesSupported } from "~/state/environments";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { issueEnvironment, useIssueList, type IssueListTarget } from "~/state/issues";
 import { useDebouncedValue } from "~/state/queries";
 import { primaryServerKeybindingsAtom } from "~/state/server";
@@ -267,9 +270,6 @@ function IssuesRoute() {
     readonly pages: ReadonlyMap<EnvironmentId, HeldPage>;
   }>({ key: filterKey, pages: new Map() });
   const filterKeyRef = useRef(filterKey);
-  useEffect(() => {
-    filterKeyRef.current = filterKey;
-  }, [filterKey]);
   const current = paging.key === filterKey ? paging : null;
   const targets = useMemo<ReadonlyArray<IssueListTarget>>(
     () =>
@@ -377,51 +377,93 @@ function IssuesRoute() {
     );
   };
 
+  const [queueSourceRefresh] = useState(createIssueSourceRefreshQueue);
+  const sourceWrites = useRef(new Map<string, { revision: number; removed: Set<string> }>());
+  const sourceRevision = useRef(0);
+  useEffect(() => {
+    filterKeyRef.current = filterKey;
+    sourceWrites.current.clear();
+  }, [filterKey, filterKeyRef]);
   const refreshSource = async (
     environmentId: EnvironmentId,
     source: IssueScopeRef,
     removedKey?: string,
   ) => {
-    const page = held.get(environmentId);
-    const canonical = issueListRefreshSource(
-      environmentId,
-      listedEnvironments.map((environment) => environment.environmentId),
-      baseInput,
-      source,
-      page,
-    );
-    if (canonical === null) return;
-    if (!page || canonical.host === undefined) {
-      list.refresh();
-      return;
-    }
-    const scope = {
-      projectId: canonical.projectId,
-      tracker: canonical.tracker,
-      host: canonical.host,
-      scope: canonical.scope,
-    };
     const key = filterKey;
-    const result = await loadPage({
-      environmentId,
-      input: {
-        ...baseInput,
+    const lane = JSON.stringify([
+      key,
+      issueScopeKey(environmentId, { ...source, host: source.host ?? "" }),
+    ]);
+    const previous = sourceWrites.current.get(lane);
+    const write = { revision: ++sourceRevision.current, removed: new Set(previous?.removed) };
+    if (removedKey !== undefined) write.removed.add(removedKey);
+    sourceWrites.current.set(lane, write);
+    const isCurrentWrite = () =>
+      key === filterKeyRef.current && sourceWrites.current.get(lane)?.revision === write.revision;
+    return queueSourceRefresh(lane, async function readSource() {
+      if (!isCurrentWrite()) return;
+      const page = heldRef.current.get(environmentId);
+      const canonical = issueListRefreshSource(
+        environmentId,
+        listedEnvironments.map((environment) => environment.environmentId),
+        baseInput,
+        source,
+        page,
+      );
+      if (canonical === null) return;
+      if (!page || canonical.host === undefined) {
+        list.refresh();
+        return;
+      }
+      const scope = {
         projectId: canonical.projectId,
+        tracker: canonical.tracker,
         host: canonical.host,
-        limit: PAGE_SIZE,
-      },
+        scope: canonical.scope,
+      };
+      const query = issueEnvironment.list({
+        environmentId,
+        input: { ...baseInput, limit: PAGE_SIZE },
+      });
+      const read = await readIssueListSourcePage(appAtomRegistry, query, () =>
+        loadPage({
+          environmentId,
+          input: {
+            ...baseInput,
+            projectId: canonical.projectId,
+            host: canonical.host,
+            limit: PAGE_SIZE,
+          },
+        }),
+      );
+      if (read.result._tag === "Failure" || !isCurrentWrite()) return;
+      const result = read.result.value;
+      if (!read.isCurrent()) {
+        void queueSourceRefresh(lane, readSource);
+        return;
+      }
+      storePage(key, environmentId, (latest) => {
+        if (!isCurrentWrite()) return latest;
+        if (!read.isCurrent()) {
+          void queueSourceRefresh(lane, readSource);
+          return latest;
+        }
+        const refreshed = refreshIssueListPage(latest, result, {
+          source: scope,
+          removed: new Set([...write.removed].map((key) => issueEntryKey({ ...scope, key }))),
+        });
+        if (
+          !result.errors.some(
+            (error) =>
+              error.projectId === scope.projectId &&
+              (error.tracker === undefined || error.tracker === scope.tracker) &&
+              (error.host === undefined || error.host.toLowerCase() === scope.host.toLowerCase()),
+          )
+        )
+          sourceWrites.current.set(lane, { revision: write.revision, removed: new Set() });
+        return { ...refreshed, answer: read.answer ?? latest.answer };
+      });
     });
-    if (result._tag === "Failure") return;
-    storePage(key, environmentId, (latest) =>
-      latest.answer === page.answer
-        ? refreshIssueListPage(latest, result.value, {
-            source: scope,
-            ...(removedKey === undefined
-              ? {}
-              : { removed: issueEntryKey({ ...scope, key: removedKey }) }),
-          })
-        : latest,
-    );
   };
 
   // Rows grouped per tracker account, so a tracker that cannot be read says so where its rows
