@@ -310,6 +310,7 @@ function identityLogin(value: unknown): string | null {
 
 export function decodeUpdatesJson(
   raw: string,
+  states?: ReadonlyArray<IssueState>,
 ): Result.Result<
   { readonly events: ReadonlyArray<IssueEvent>; readonly rawCount: number },
   DecodeFailure
@@ -335,15 +336,15 @@ export function decodeUpdatesJson(
         });
       const state = fields["System.State"];
       if (typeof state?.oldValue === "string" && typeof state.newValue === "string") {
-        const was = toIssueState(state.oldValue);
-        const now = toIssueState(state.newValue);
+        const was = states?.find((candidate) => candidate.name === state.oldValue);
+        const now = states?.find((candidate) => candidate.name === state.newValue);
         add(
-          was.category === now.category
+          was === undefined || now === undefined || was.category === now.category
             ? "state-changed"
             : now.category === "closed"
               ? "closed"
               : "reopened",
-          now.name,
+          state.newValue,
         );
       }
       const title = fields["System.Title"];

@@ -122,6 +122,85 @@ function tracker(onExecute: (args: ReadonlyArray<string>) => string) {
 }
 
 describe("AzureDevOpsIssueTracker", () => {
+  it.effect.each([
+    {
+      before: "Active",
+      after: "Resolved",
+      beforeCategory: "InProgress",
+      afterCategory: "Resolved",
+      kind: "state-changed",
+    },
+    {
+      before: "Resolved",
+      after: "Closed",
+      beforeCategory: "Resolved",
+      afterCategory: "Completed",
+      kind: "closed",
+    },
+    {
+      before: "Review",
+      after: "Shipped",
+      beforeCategory: "InProgress",
+      afterCategory: "Completed",
+      kind: "closed",
+    },
+    {
+      before: "Closed",
+      after: "Review",
+      beforeCategory: "Completed",
+      afterCategory: "InProgress",
+      kind: "reopened",
+    },
+  ])("uses existing native detail workflow for history $before -> $after", (transition) =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        const resource = args[args.indexOf("--resource") + 1];
+        paths.push(resource ?? args[0]!);
+        if (args[0] === "boards")
+          return encode({
+            ...WORK_ITEM,
+            relations: [],
+            fields: {
+              ...WORK_ITEM.fields,
+              "System.WorkItemType": "Bug",
+              "System.State": transition.after,
+            },
+          });
+        if (resource === "workitemtypestates")
+          return encode({
+            value: [
+              { name: transition.before, category: transition.beforeCategory },
+              { name: transition.after, category: transition.afterCategory },
+            ],
+          });
+        if (resource === "updates")
+          return encode({
+            value: [
+              {
+                id: 2,
+                revisedDate: "2026-07-03T00:00:00Z",
+                fields: {
+                  "System.State": { oldValue: transition.before, newValue: transition.after },
+                },
+              },
+            ],
+          });
+        return answer(args);
+      });
+      const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+      const detail = yield* api.getIssue(target);
+      expect(detail.events).toMatchObject([{ kind: transition.kind, detail: transition.after }]);
+      expect(paths).toHaveLength(4);
+      expect(paths.filter((path) => path === "workitemtypestates")).toHaveLength(1);
+      paths.length = 0;
+      const history = yield* api.getHistory!(target);
+      expect(history.items).toMatchObject([{ kind: "state-changed", detail: transition.after }]);
+      expect(paths).toHaveLength(2);
+      expect(paths).not.toContain("workitemtypestates");
+    }),
+  );
+
   it.effect.each([true, false])(
     "reads candidates in four calls and labels in one with inline states %s",
     (inline) =>
@@ -701,9 +780,8 @@ describe("AzureDevOpsIssueTracker", () => {
           reactions: [{ content: "thumbs-up", count: 2, actors: [], viewerHasReacted: true }],
         },
       ]);
-      // The first revision is the creation; a state move across the category line is a close.
       expect(issue.events.map((event) => [event.kind, event.detail])).toEqual([
-        ["closed", "Resolved"],
+        ["state-changed", "Resolved"],
         ["labeled", "bug"],
       ]);
       expect(issue.events.map((event) => event.createdAt)).toEqual([
@@ -765,7 +843,7 @@ describe("AzureDevOpsIssueTracker", () => {
           expect(issue.historyTruncated).toBe(total >= 100);
           expect(issue.state).toEqual({ category: "closed", name: "Resolved" });
           expect(issue.events.map((event) => event.kind)).toEqual(
-            total <= 100 ? ["renamed", "labeled", "closed"] : ["renamed", "labeled"],
+            total <= 100 ? ["renamed", "labeled", "state-changed"] : ["renamed", "labeled"],
           );
           expect(issue.events[0]).toMatchObject({
             id: "update-2-0",

@@ -1080,7 +1080,7 @@ export const make: Effect.Effect<
                   route: [`id=${scope.number}`],
                   query: [`$top=${PAGE_SIZE}`],
                 }),
-                decode: decodeUpdatesJson,
+                decode: (raw) => Result.succeed(raw),
               }),
               itemWorkflow({ ...scope, cwd: input.cwd }, scope.item),
               linkedPullRequests({
@@ -1091,18 +1091,25 @@ export const make: Effect.Effect<
             ],
             { concurrency: 3 },
           ).pipe(
-            Effect.map(([conversation, updates, workflow, links]) => ({
-              ...workflow.item,
-              states: workflow.states,
-              // Nothing cheap names the viewer here; the service already read it per host.
-              viewer: input.viewer ?? null,
-              viewerPermissions: VIEWER_PERMISSIONS,
-              comments: conversation.comments,
-              commentsCursor: conversation.nextCursor,
-              events: updates.events,
-              historyTruncated: updates.rawCount >= PAGE_SIZE,
-              linkedPullRequests: links,
-            })),
+            Effect.flatMap(([conversation, rawUpdates, workflow, links]) => {
+              const updates = decodeUpdatesJson(
+                rawUpdates,
+                scope.item.workItemType === null ? undefined : workflow.states,
+              );
+              if (Result.isFailure(updates)) return Effect.fail(unreadable("getIssue", rawUpdates));
+              return Effect.succeed({
+                ...workflow.item,
+                states: workflow.states,
+                // Nothing cheap names the viewer here; the service already read it per host.
+                viewer: input.viewer ?? null,
+                viewerPermissions: VIEWER_PERMISSIONS,
+                comments: conversation.comments,
+                commentsCursor: conversation.nextCursor,
+                events: updates.success.events,
+                historyTruncated: updates.success.rawCount >= PAGE_SIZE,
+                linkedPullRequests: links,
+              });
+            }),
           ),
         ),
       ),
