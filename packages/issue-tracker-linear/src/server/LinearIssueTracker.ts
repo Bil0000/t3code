@@ -616,6 +616,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           );
         return Effect.gen(function* () {
           const scope = yield* requireScope("listIssues", input.scope);
+          if (input.stateCategories?.length === 0) return { items: [], nextCursor: null };
           const filter: Record<string, unknown> = {
             team: { key: { eq: scope.team } },
             ...involvementFilter(input),

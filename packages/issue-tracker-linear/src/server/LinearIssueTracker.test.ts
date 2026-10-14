@@ -1724,6 +1724,66 @@ describe("LinearIssueTracker", () => {
   });
 });
 
+it.effect.each(["acme/ENG", ""])("validates scope before an empty category filter: %s", (scope) =>
+  Effect.gen(function* () {
+    const test = fakeLinear({
+      T3Issues: () => ({
+        organization: ORGANIZATION,
+        issues: {
+          nodes: [issue("ENG-7")],
+          pageInfo: { hasNextPage: true, endCursor: "next-native" },
+        },
+      }),
+    });
+    const api = yield* test.tracker;
+    const request = api.listIssues({
+      ...target,
+      scope,
+      state: "closed",
+      involvement: "all",
+      viewer: JULIUS.id,
+      limit: 20,
+      cursor: "previous-native",
+      stateCategories: [],
+    });
+    if (scope === "") expect((yield* request.pipe(Effect.flip)).reason).toBe("failed");
+    else expect(yield* request).toEqual({ items: [], nextCursor: null });
+    expect(test.requests).toHaveLength(0);
+  }),
+);
+
+it.effect("keeps all states and the native cursor when category filtering is omitted", () =>
+  Effect.gen(function* () {
+    const test = fakeLinear({
+      T3Issues: () => ({
+        organization: ORGANIZATION,
+        issues: {
+          nodes: [issue("ENG-7"), issue("ENG-8", { state: state("Done", "completed") })],
+          pageInfo: { hasNextPage: true, endCursor: "next-native" },
+        },
+      }),
+    });
+    const api = yield* test.tracker;
+    const page = yield* api.listIssues({
+      ...target,
+      state: "all",
+      involvement: "all",
+      viewer: JULIUS.id,
+      limit: 20,
+      cursor: "previous-native",
+    });
+    expect(page.items.map(({ key }) => key)).toEqual(["ENG-7", "ENG-8"]);
+    expect(page.nextCursor).toBe("next-native");
+    expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Issues"]);
+    expect(test.requests[0]?.variables).toMatchObject({
+      first: 20,
+      after: "previous-native",
+      filter: { team: { key: { eq: "ENG" } } },
+    });
+    expect(test.requests[0]?.variables.filter).not.toHaveProperty("state");
+  }),
+);
+
 it.effect("pages native workflow filters and ascending order without a viewer read", () =>
   Effect.gen(function* () {
     const test = fakeLinear({
