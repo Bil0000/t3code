@@ -45,6 +45,12 @@ import {
 } from "./checkpointDiff.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import {
+  ThreadIssueKey,
+  ThreadIssueLink,
+  ThreadIssueLinkSource,
+  ThreadIssueSnapshot,
+} from "./issue.ts";
+import {
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
   ThreadPullRequestKey,
@@ -378,6 +384,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   /** Pull request discovered from the thread's current branch. */
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Issues linked to this thread; optional so pre-linking servers still decode. */
+  issues: Schema.optional(Schema.Array(ThreadIssueLink)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
@@ -1767,6 +1775,12 @@ export const OrchestrationV2DomainEvent = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.issue-synced"),
+    issueOperation: Schema.optional(Schema.Literals(["link", "unlink", "sync"])),
+    payload: OrchestrationV2AppThread,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
   }),
@@ -1945,6 +1959,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   /** Pull request discovered from the thread's current branch. */
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Issues linked to this thread; optional so pre-linking servers still decode. */
+  issues: Schema.optional(Schema.Array(ThreadIssueLink)),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2592,6 +2608,12 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("thread.issue-synced"),
+    issueOperation: Schema.optional(Schema.Literals(["link", "unlink", "sync"])),
+    payload: OrchestrationV2AppThreadJson,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
   }),
@@ -2875,6 +2897,29 @@ export const OrchestrationV2Command = Schema.Union([
     ...ThreadPullRequestKey.fields,
     snapshot: ThreadPullRequestSnapshot,
     stack: Schema.NullOr(ThreadPullRequestStack),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.issue.link"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    ...ThreadIssueKey.fields,
+    projectId: ProjectId,
+    url: TrimmedNonEmptyString,
+    source: ThreadIssueLinkSource,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.issue.unlink"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    ...ThreadIssueKey.fields,
+  }),
+  /** Server-written tracker state for a linked issue; leaves `updatedAt` alone. */
+  Schema.Struct({
+    type: Schema.Literal("thread.issue-link.sync"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    ...ThreadIssueKey.fields,
+    snapshot: ThreadIssueSnapshot,
   }),
   /** Start or stop the server watching a linked pull request for this thread's agent. */
   Schema.Struct({
