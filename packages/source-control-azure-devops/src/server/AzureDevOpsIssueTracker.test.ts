@@ -122,6 +122,81 @@ function tracker(onExecute: (args: ReadonlyArray<string>) => string) {
 }
 
 describe("AzureDevOpsIssueTracker", () => {
+  it.effect.each(["states", "create-template", "list-templates", "edit-comment"] as const)(
+    "uses a CLI-accepted preview version for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const revisions: string[] = [];
+        const api = yield* tracker((args) => {
+          const versionIndex = args.indexOf("--api-version");
+          if (versionIndex >= 0) {
+            const version = args[versionIndex + 1]!;
+            expect(Number.isFinite(Number(version.replace("-preview", "")))).toBe(true);
+            const resource = args[args.indexOf("--resource") + 1];
+            if (
+              resource === "templates" ||
+              resource === "workitemtypestates" ||
+              resource === "comments"
+            ) {
+              expect(version).toBe("7.1-preview");
+              const revision = args.find((arg) => arg.startsWith("api-version="));
+              expect(revision).toBe(
+                resource === "comments" ? "api-version=7.1-preview.4" : "api-version=7.1-preview.1",
+              );
+              expect(args).toContain("--query-parameters");
+              revisions.push(revision!);
+            }
+          }
+          if (args[0] === "boards")
+            return encode({
+              ...WORK_ITEM,
+              relations: [],
+              fields: {
+                ...WORK_ITEM.fields,
+                "System.WorkItemType": "Bug",
+                "System.State": "Review",
+              },
+            });
+          if (args[1] === "project")
+            return encode({ id: "project", name: "Web App", defaultTeam: { id: "team" } });
+          const resource = args[args.indexOf("--resource") + 1];
+          if (resource === "workitemtypestates")
+            return encode({ value: [{ name: "Review", category: "InProgress" }] });
+          if (resource === "workitemtypes") return encode({ value: [{ name: "Bug" }] });
+          if (resource === "workitems") return encode(WORK_ITEM);
+          if (resource === "templates")
+            return encode(
+              args.some((arg) => arg.startsWith("templateId="))
+                ? { id: "template", name: "Bug", workItemTypeName: "Bug", fields: {} }
+                : { value: [{ id: "template" }] },
+            );
+          if (resource === "comments") return encode({ comments: [] });
+          if (resource === "updates") return encode({ value: [] });
+          throw new Error(`Unexpected native resource ${resource}`);
+        });
+        const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+        if (operation === "states")
+          expect((yield* api.getIssue(target)).states?.[0]?.name).toBe("Review");
+        else if (operation === "create-template")
+          expect(
+            (yield* api.create!({
+              ...target,
+              title: "New",
+              body: "",
+              labels: [],
+              assignees: [],
+              templateKey: "template",
+            })).key,
+          ).toBe("7");
+        else if (operation === "list-templates")
+          expect((yield* api.listTemplates!(target)).templates[0]?.key).toBe("template");
+        else yield* api.editComment!({ ...target, commentId: "1", body: "Changed" });
+        expect(revisions).toHaveLength(
+          operation === "list-templates" ? 2 : operation === "states" ? 2 : 1,
+        );
+      }),
+  );
+
   it.effect.each([
     {
       before: "Active",

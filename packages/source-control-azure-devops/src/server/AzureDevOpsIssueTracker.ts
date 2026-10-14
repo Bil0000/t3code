@@ -605,7 +605,8 @@ export const make: Effect.Effect<
         ...input,
         resource: "workitemtypestates",
         route: [`type=${type}`],
-        apiVersion: "7.1-preview.1",
+        apiVersion: "7.1-preview",
+        query: ["api-version=7.1-preview.1"],
       }),
       decode: decodeAs(
         Schema.decodeUnknownResult(
@@ -764,7 +765,8 @@ export const make: Effect.Effect<
         project: project.id,
         resource: "templates",
         route: [`team=${project.defaultTeam.id}`, `templateId=${key}`],
-        apiVersion: "7.1-preview.1",
+        apiVersion: "7.1-preview",
+        query: ["api-version=7.1-preview.1"],
       }),
       decode: decodeAs(Schema.decodeUnknownResult(WorkItemTemplate)),
     });
@@ -1147,8 +1149,8 @@ export const make: Effect.Effect<
             resource: "comments",
             route,
             method: "PATCH",
-            apiVersion: "7.1-preview.4",
-            query: ["format=markdown"],
+            apiVersion: "7.1-preview",
+            query: ["format=markdown", "api-version=7.1-preview.4"],
           }),
           body: { text: input.body },
         });
@@ -1277,7 +1279,8 @@ export const make: Effect.Effect<
             project: project.id,
             resource: "templates",
             route: [`team=${project.defaultTeam.id}`],
-            apiVersion: "7.1-preview.1",
+            apiVersion: "7.1-preview",
+            query: ["api-version=7.1-preview.1"],
           }),
           decode: decodeAs(
             Schema.decodeUnknownResult(
