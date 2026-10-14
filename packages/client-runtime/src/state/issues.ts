@@ -165,9 +165,19 @@ export function refreshIssueListPage<T extends HeldIssueList>(
       "",
   };
   const aliases = new Map<string, string>();
+  const legacyTrackers = new Map<string, string | null>();
+  for (const each of sources) {
+    const legacy = `${each.host} ${each.scope}`.toLowerCase();
+    const tracker = legacyTrackers.get(legacy);
+    legacyTrackers.set(
+      legacy,
+      tracker === undefined || tracker === each.tracker ? each.tracker : null,
+    );
+  }
   for (const each of sources) {
     const qualified = issueListCursorKey(each);
     const legacy = `${each.host} ${each.scope}`;
+    if (legacyTrackers.get(legacy.toLowerCase()) === null) continue;
     if (fresh.nextCursors[qualified] !== undefined) aliases.set(legacy.toLowerCase(), qualified);
     else if (fresh.nextCursors[legacy] !== undefined) aliases.set(qualified.toLowerCase(), legacy);
   }

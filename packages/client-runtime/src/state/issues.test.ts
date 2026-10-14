@@ -428,6 +428,82 @@ describe("issue list continuations", () => {
 });
 
 describe("issue representative changes", () => {
+  it.each([true, false])(
+    "keeps a single tracker's tail when cursor format changes: %s",
+    (qualified) => {
+      const first = entry({ key: "1", updatedAt: "2026-10-02T00:00:00.000Z" });
+      const tail = entry({ key: "2" });
+      const oldKey = qualified ? "github.com acme/app" : "github github.com acme/app";
+      const freshKey = qualified ? "github github.com acme/app" : "github.com acme/app";
+      const held = {
+        entries: [first, tail],
+        firstKeys: new Set([issueEntryKey(first)]),
+        firstCursors: { [oldKey]: "2" },
+        nextCursors: { [oldKey]: "3" },
+        errors: [],
+      };
+      const refreshed = refreshIssueListPage(held, {
+        entries: [first],
+        nextCursors: { [freshKey]: "2" },
+        errors: [],
+      });
+      expect(refreshed.entries).toEqual(held.entries);
+      expect(refreshed.firstCursors).toEqual({ [freshKey]: "2" });
+      expect(refreshed.nextCursors).toEqual({ [freshKey]: "3" });
+    },
+  );
+
+  it.each([
+    { failed: false, sources: true },
+    { failed: false, sources: false },
+    { failed: true, sources: true },
+    { failed: true, sources: false },
+  ])(
+    "keeps mixed tracker cursors separate when GitHub has no fresh cursor: %j",
+    ({ failed, sources }) => {
+      const github = entry({ key: "1" });
+      const tail = entry({ key: "2" });
+      const gitlab = entry({ key: "9", tracker: "gitlab" as IssueTrackerKind });
+      const legacy = "github.com acme/app";
+      const qualified = "gitlab github.com acme/app";
+      const held = {
+        entries: [github, tail, gitlab],
+        ...(sources
+          ? {
+              sources: [github, gitlab].map((row) => ({
+                ...row,
+                capabilities: {} as IssueCapabilities,
+              })),
+            }
+          : {}),
+        firstKeys: new Set([github, gitlab].map(issueEntryKey)),
+        firstCursors: { [qualified]: "o2", [legacy]: "2" },
+        nextCursors: { [qualified]: "o2", [legacy]: "3" },
+        errors: [],
+      };
+      const fresh = {
+        entries: failed ? [gitlab] : [github, gitlab],
+        ...(sources ? { sources: held.sources } : {}),
+        nextCursors: { [qualified]: "o2" },
+        errors: failed
+          ? [
+              {
+                projectId: github.projectId,
+                projectTitle: github.projectTitle,
+                tracker: github.tracker,
+                host: github.host,
+                message: "down",
+              },
+            ]
+          : [],
+      };
+      const refreshed = refreshIssueListPage(held, fresh);
+      expect(refreshed.nextCursors).toEqual(failed ? held.nextCursors : { [qualified]: "o2" });
+      expect(refreshed.firstCursors).toEqual(failed ? held.firstCursors : { [qualified]: "o2" });
+      expect(refreshed.entries).toEqual(failed ? held.entries : [github, gitlab]);
+    },
+  );
+
   it.each([
     { cursor: "github github.com acme/app", sources: true },
     { cursor: "github github.com acme/app", sources: false },
