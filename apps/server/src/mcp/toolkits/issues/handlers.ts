@@ -1,4 +1,5 @@
 import {
+  IssueOperationError,
   threadIssueKeysEqual,
   type IssueDetail,
   type IssueRef,
@@ -154,7 +155,10 @@ const make = Effect.gen(function* () {
     } satisfies ResolvedTarget;
   });
 
-  const identityOf = (target: ResolvedTarget, detail?: Pick<IssueDetail, "url">) => ({
+  const identityOf = (
+    target: Omit<ResolvedTarget, "writable">,
+    detail?: Pick<IssueDetail, "url">,
+  ) => ({
     projectId: target.projectId,
     tracker: target.tracker,
     host: target.host,
@@ -317,14 +321,31 @@ const make = Effect.gen(function* () {
     unlink_issue: writesThread((input) =>
       Effect.gen(function* () {
         const thread = yield* requireThread(input.threadId);
-        const target = yield* resolveTarget({
-          ...input,
-          projectId: input.projectId ?? thread.projectId,
-        });
-        const existing = (thread.issues ?? []).find((link) => threadIssueKeysEqual(link, target));
+        const matches = (thread.issues ?? []).filter((link) =>
+          input.url !== undefined
+            ? link.url === input.url
+            : input.key !== undefined &&
+              link.key === input.key &&
+              link.projectId === (input.projectId ?? thread.projectId) &&
+              (input.tracker === undefined || link.tracker === input.tracker),
+        );
+        if (matches.length > 1)
+          return yield* new IssueOperationError({
+            operation: "unlink",
+            detail:
+              "Multiple saved issue links match. Pass projectId, tracker and key, or a unique url from list_thread_issues.",
+          });
+        const target =
+          matches[0] ??
+          (yield* resolveTarget({
+            ...input,
+            projectId: input.projectId ?? thread.projectId,
+          }));
+        const existing =
+          matches[0] ?? (thread.issues ?? []).find((link) => threadIssueKeysEqual(link, target));
         if (existing === undefined) return { ...identityOf(target), wasLinked: false };
         const { wasLinked } = yield* threadIssues
-          .unlink({ threadId: thread.id, key: target })
+          .unlink({ threadId: thread.id, key: existing })
           .pipe(Effect.catchCause(linkFailure));
         return { ...identityOf(target), url: existing.url, wasLinked };
       }),

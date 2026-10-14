@@ -159,6 +159,16 @@ const standaloneDetail: IssueDetail = {
   url: "https://linear.app/team/issue/ENG-7/seven",
 };
 
+const savedLink: ThreadIssueLink = {
+  projectId: PROJECT_ID,
+  ...gitHostSource,
+  key: "7",
+  url: detail.url,
+  source: "manual",
+  linkedAt: "2026-08-10T00:00:00.000Z",
+  snapshot: null,
+};
+
 const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   issues: ReadonlyArray<ThreadIssueLink> = [],
   options: {
@@ -168,6 +178,8 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   } = {},
 ) {
   const links = yield* Ref.make<ReadonlyArray<ThreadIssueService.LinkThreadIssueInput>>([]);
+  const unlinks = yield* Ref.make<ReadonlyArray<ThreadIssueService.UnlinkThreadIssueInput>>([]);
+  const resolutions = yield* Ref.make<ReadonlyArray<string>>([]);
   const calls = yield* Ref.make<ReadonlyArray<{ operation: string; input: unknown }>>([]);
   const record = <A>(operation: string, input: unknown, result: A) =>
     Ref.update(calls, (recorded) => [...recorded, { operation, input }]).pipe(Effect.as(result));
@@ -183,7 +195,10 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       getThreadShell: (id) => Effect.succeed(id === THREAD_ID ? makeThread(issues) : null),
     }),
     Layer.mock(IssueService.IssueService)({
-      sources: () => Effect.succeed(options.sources ?? [gitHostSource]),
+      sources: () =>
+        Ref.update(resolutions, (recorded) => [...recorded, "sources"]).pipe(
+          Effect.as(options.sources ?? [gitHostSource]),
+        ),
       list: (input) =>
         record("list", input, {
           viewers: {},
@@ -203,21 +218,26 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       comment: (input) => record("comment", input, undefined),
       setState: (input) => record("setState", input, undefined),
       resolveUrl: (url) =>
-        Effect.succeed({
-          projectId: PROJECT_ID,
-          tracker: GITHUB,
-          host: "github.com",
-          scope: "t3tools/t3code",
-          key: url.split("/").at(-1)!,
-          writable: true,
-        }),
+        Ref.update(resolutions, (recorded) => [...recorded, "resolveUrl"]).pipe(
+          Effect.as({
+            projectId: PROJECT_ID,
+            tracker: GITHUB,
+            host: "github.com",
+            scope: "t3tools/t3code",
+            key: url.split("/").at(-1)!,
+            writable: true,
+          }),
+        ),
     }),
     Layer.mock(ThreadIssueService.ThreadIssueService)({
       link: (input) =>
         Ref.update(links, (recorded) => [...recorded, input]).pipe(
           Effect.as({ alreadyLinked: false }),
         ),
-      unlink: () => Effect.succeed({ wasLinked: true }),
+      unlink: (input) =>
+        Ref.update(unlinks, (recorded) => [...recorded, input]).pipe(
+          Effect.as({ wasLinked: true }),
+        ),
     }),
     McpToolAccessTestkit.liveThreadsLayer,
   );
@@ -242,7 +262,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(layerDependencies),
     );
-  return { links, call, calls };
+  return { links, unlinks, resolutions, call, calls };
 });
 
 describe("issue toolkit handlers", () => {
@@ -478,6 +498,119 @@ describe("issue toolkit handlers", () => {
       expect(result.url).toBe(detail.url);
       expect(result.scope).toBe("T3Tools/T3Code");
       expect((yield* Ref.get(harness.links))[0]?.url).toBe(detail.url);
+    }),
+  );
+
+  it.effect("unlinks a saved key after its source is disconnected or changed", () =>
+    Effect.gen(function* () {
+      for (const sources of [
+        [],
+        [standaloneSource],
+        [{ ...gitHostSource, scope: "T3Tools/Other" }],
+      ]) {
+        const harness = yield* makeHarness([savedLink], { sources });
+        const result = yield* harness.call("unlink_issue", { tracker: GITHUB, key: "7" });
+        expect(result).toMatchObject({ ...gitHostSource, url: savedLink.url, wasLinked: true });
+        expect(yield* Ref.get(harness.unlinks)).toEqual([{ threadId: THREAD_ID, key: savedLink }]);
+        expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+        expect(yield* Ref.get(harness.calls)).toEqual([]);
+      }
+    }),
+  );
+
+  it.effect("unlinks only the saved URL on a disconnected host", () =>
+    Effect.gen(function* () {
+      const otherHost = {
+        ...savedLink,
+        host: "git.example.com",
+        url: "https://git.example.com/T3Tools/T3Code/issues/7",
+      };
+      const harness = yield* makeHarness([savedLink, otherHost], { sources: [] });
+      const result = yield* harness.call("unlink_issue", { url: otherHost.url });
+      expect(result).toMatchObject({ host: otherHost.host, url: otherHost.url, wasLinked: true });
+      expect(yield* Ref.get(harness.unlinks)).toEqual([{ threadId: THREAD_ID, key: otherHost }]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+    }),
+  );
+
+  it.effect("requires a saved URL when a key matches multiple tracker identities", () =>
+    Effect.gen(function* () {
+      const otherHost = {
+        ...savedLink,
+        host: "git.example.com",
+        url: "https://git.example.com/T3Tools/T3Code/issues/7",
+      };
+      const otherScope = {
+        ...savedLink,
+        scope: "T3Tools/Other",
+        url: "https://github.com/T3Tools/Other/issues/7",
+      };
+      const harness = yield* makeHarness([savedLink, otherHost, otherScope]);
+      const error = yield* harness
+        .call("unlink_issue", { tracker: GITHUB, key: "7" })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "IssueOperationError", operation: "unlink" });
+      expect(error.message).toContain("url");
+      expect(yield* Ref.get(harness.unlinks)).toEqual([]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+      yield* harness.call("unlink_issue", { url: otherScope.url });
+      expect(yield* Ref.get(harness.unlinks)).toEqual([{ threadId: THREAD_ID, key: otherScope }]);
+    }),
+  );
+
+  it.effect("keeps saved key matches within the requested project and tracker", () =>
+    Effect.gen(function* () {
+      const otherProject = { ...savedLink, projectId: ProjectId.make("project-2") };
+      const otherTracker = { ...savedLink, ...standaloneSource };
+      const harness = yield* makeHarness([otherProject, otherTracker, savedLink], { sources: [] });
+      const ambiguous = yield* harness.call("unlink_issue", { key: "7" }).pipe(Effect.flip);
+      expect(ambiguous).toMatchObject({ _tag: "IssueOperationError", operation: "unlink" });
+      yield* harness.call("unlink_issue", { tracker: GITHUB, key: "7" });
+      yield* harness.call("unlink_issue", {
+        projectId: otherProject.projectId,
+        tracker: GITHUB,
+        key: "7",
+      });
+      expect(yield* Ref.get(harness.unlinks)).toEqual([
+        { threadId: THREAD_ID, key: savedLink },
+        { threadId: THREAD_ID, key: otherProject },
+      ]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+    }),
+  );
+
+  it.effect("keeps the issues capability check before unlinking a saved link", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([savedLink]);
+      const error = yield* harness
+        .call("unlink_issue", { url: savedLink.url }, [])
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "McpCapabilityUnavailableError", capability: "issues" });
+      expect(yield* Ref.get(harness.unlinks)).toEqual([]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses a saved URL that matches more than one link", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([
+        savedLink,
+        { ...savedLink, projectId: ProjectId.make("project-2") },
+      ]);
+      const error = yield* harness.call("unlink_issue", { url: savedLink.url }).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "IssueOperationError", operation: "unlink" });
+      expect(yield* Ref.get(harness.unlinks)).toEqual([]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+    }),
+  );
+
+  it.effect("keeps an unlinked issue idempotent through normal target resolution", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const result = yield* harness.call("unlink_issue", { url: detail.url });
+      expect(result).toMatchObject({ url: detail.url, wasLinked: false });
+      expect(yield* Ref.get(harness.unlinks)).toEqual([]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual(["resolveUrl"]);
     }),
   );
 
