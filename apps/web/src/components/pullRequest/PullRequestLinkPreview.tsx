@@ -51,7 +51,7 @@ export function PullRequestLinkPreview({
   const [resolvingClick, setResolvingClick] = useState(false);
   const detailQuery = useEnvironmentQuery(
     open
-      ? pullRequestEnvironment.detail({
+      ? pullRequestEnvironment.preview({
           environmentId: target.environmentId,
           input: target.input,
         })
