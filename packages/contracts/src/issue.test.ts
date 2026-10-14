@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
+  IssueCapabilities,
   IssueCreateInput,
   IssueCreateResult,
   IssueLinkedPullRequest,
@@ -19,6 +20,34 @@ const decodeActor = Schema.decodeEffect(IssueActor);
 const decodeCreate = Schema.decodeEffect(IssueCreateInput);
 const decodeCreated = Schema.decodeEffect(IssueCreateResult);
 const decodeBinding = Schema.decodeEffect(IssueTrackerProjectBinding);
+
+it("accepts older reaction capabilities and preserves native comment limits", () => {
+  const decode = Schema.decodeUnknownSync(IssueCapabilities);
+  const capabilities = {
+    create: true,
+    edit: true,
+    comment: true,
+    labels: true,
+    assignees: true,
+    reactions: true,
+    templates: false,
+    linkedPullRequests: true,
+    events: true,
+    search: true,
+    states: [],
+    closeReasons: [],
+  };
+  expect(decode(capabilities)).toEqual(capabilities);
+  const native = {
+    ...capabilities,
+    reactions: false,
+    commentReactions: true,
+    reactionContents: ["thumbs-up", "thumbs-down", "heart", "hooray", "laugh", "confused"],
+  };
+  expect(decode(native)).toEqual(native);
+  expect(() => decode({ ...native, reactionContents: ["like"] })).toThrow();
+  expect(() => decode({ ...native, reactionContents: Array(9).fill("heart") })).toThrow();
+});
 
 it("keeps unknown comment totals nullable and known totals non-negative integers", () => {
   const decode = Schema.decodeUnknownSync(IssueSummary.fields.commentCount);

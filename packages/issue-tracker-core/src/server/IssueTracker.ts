@@ -171,10 +171,6 @@ export interface IssueTrackerApi {
     },
   ) => Effect.Effect<void, IssueTrackerError>;
 
-  /**
-   * Adds a reaction or takes it back. `subjectId` is a comment id as the detail carried it;
-   * absent means the issue itself. Only called when `capabilities.reactions` is true.
-   */
   readonly setReaction?: (
     input: IssueTarget & {
       readonly subjectId?: string | undefined;

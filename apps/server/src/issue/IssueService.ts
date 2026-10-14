@@ -752,23 +752,34 @@ export const make = Effect.gen(function* () {
     );
 
   const react: IssueService["Service"]["react"] = (input) =>
-    requireWritable(input, "react", true).pipe(
-      Effect.flatMap((project) =>
-        project.api.setReaction === undefined || !project.api.capabilities.reactions
-          ? Effect.fail(unsupported("react", "reactions"))
-          : project.api
-              .setReaction({
-                cwd: project.project.workspaceRoot,
-                host: project.host,
-                scope: project.scope,
-                key: input.key,
-                subjectId: input.subjectId,
-                content: input.content,
-                reacted: input.reacted,
-              })
-              .pipe(Effect.mapError(toIssueError("react"))),
-      ),
-    );
+    Effect.gen(function* () {
+      const api = registry.get(input.tracker);
+      if (api === null) return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+      const { capabilities } = api;
+      const supported =
+        input.subjectId === undefined
+          ? capabilities.reactions
+          : (capabilities.commentReactions ?? capabilities.reactions);
+      if (api.setReaction === undefined || !supported)
+        return yield* unsupported("react", "reactions");
+      if (
+        capabilities.reactionContents !== undefined &&
+        !capabilities.reactionContents.includes(input.content)
+      )
+        return yield* unsupported("react", `the reaction "${input.content}"`);
+      const project = yield* requireWritable(input, "react", true);
+      yield* api
+        .setReaction({
+          cwd: project.project.workspaceRoot,
+          host: project.host,
+          scope: project.scope,
+          key: input.key,
+          subjectId: input.subjectId,
+          content: input.content,
+          reacted: input.reacted,
+        })
+        .pipe(Effect.mapError(toIssueError("react")));
+    });
 
   const resolveUrl: IssueService["Service"]["resolveUrl"] = (url, preferredProjectId) =>
     Effect.gen(function* () {

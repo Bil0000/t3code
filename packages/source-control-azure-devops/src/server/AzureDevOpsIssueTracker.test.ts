@@ -152,6 +152,63 @@ describe("AzureDevOpsIssueTracker", () => {
     expect(list.map((row) => row.url)).toEqual(expected === null ? [] : [expected]);
   });
 
+  it.effect("declares only native comment reactions", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker(() => {
+        throw new Error("Capabilities must not call Azure");
+      });
+      expect(api.capabilities).toMatchObject({
+        reactions: false,
+        commentReactions: true,
+        reactionContents: ["thumbs-up", "thumbs-down", "heart", "hooray", "laugh", "confused"],
+      });
+    }),
+  );
+
+  it.effect.each([
+    { content: "thumbs-up", native: "like" },
+    { content: "thumbs-down", native: "dislike" },
+    { content: "heart", native: "heart" },
+    { content: "hooray", native: "hooray" },
+    { content: "laugh", native: "smile" },
+    { content: "confused", native: "confused" },
+  ] as const)("adds and removes native comment reaction $native", ({ content, native }) =>
+    Effect.gen(function* () {
+      const seen: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        seen.push(args);
+        return args[0] === "boards" ? encode(WORK_ITEM) : "{}";
+      });
+      for (const reacted of [true, false]) {
+        yield* api.setReaction!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          subjectId: "12",
+          content,
+          reacted,
+        });
+      }
+      expect(seen).toHaveLength(4);
+      for (const [index, method] of [
+        [1, "PUT"],
+        [3, "DELETE"],
+      ] as const) {
+        expect(seen[index]).toEqual(
+          expect.arrayContaining([
+            "commentsReactions",
+            "workItemId=7",
+            "commentId=12",
+            `reactionType=${native}`,
+            method,
+            "api-version=7.1-preview.1",
+          ]),
+        );
+      }
+    }),
+  );
+
   it.effect("maps a work item, its conversation and revisions to the neutral issue shape", () =>
     Effect.gen(function* () {
       const seen: string[][] = [];

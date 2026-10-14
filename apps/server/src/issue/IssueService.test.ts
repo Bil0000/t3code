@@ -8,6 +8,7 @@ import {
   type OrchestrationProjectShell,
   ProjectId,
   type IssueViewerPermissions,
+  type IssueReactionContent,
 } from "@t3tools/contracts";
 import {
   IssueTrackerError,
@@ -934,6 +935,131 @@ it.effect(
           expect(result.errors[0]).toMatchObject({ tracker: GITHUB, host: "github.com" });
       }
     }),
+);
+
+it.effect.each([
+  { subjectId: undefined, content: "heart" },
+  { subjectId: "12", content: "rocket" },
+  { subjectId: "12", content: "eyes" },
+] satisfies ReadonlyArray<{ subjectId: string | undefined; content: IssueReactionContent }>)(
+  "rejects unsupported reaction $content on $subjectId before native reads",
+  ({ subjectId, content }) =>
+    Effect.gen(function* () {
+      const azure = IssueTrackerKind.make("azure-devops");
+      const base = fakeTracker();
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "web",
+            provider: azure,
+            host: "dev.azure.com",
+            repository: "acme/Web App/_git/web",
+          }),
+        ],
+        resolveRepository: () =>
+          Effect.die("Unsupported reactions must not refresh the repository"),
+        trackers: [
+          fakeTracker({
+            kind: azure,
+            capabilities: {
+              ...base.capabilities,
+              reactions: false,
+              commentReactions: true,
+              reactionContents: [
+                "thumbs-up",
+                "thumbs-down",
+                "heart",
+                "hooray",
+                "laugh",
+                "confused",
+              ],
+            },
+            getViewer: () => Effect.die("Unsupported reactions must not read the viewer"),
+            getIssue: () => Effect.die("Unsupported reactions must not read the issue"),
+            getViewerPermissions: () =>
+              Effect.die("Unsupported reactions must not read permissions"),
+            setReaction: () => Effect.die("Unsupported reactions must not write"),
+          }),
+        ],
+      });
+      const refused = yield* Effect.flip(
+        service.react({
+          projectId: "web" as ProjectId,
+          tracker: azure,
+          scope: "acme/Web App",
+          key: "7",
+          subjectId,
+          content,
+          reacted: true,
+        }),
+      );
+      expect(refused).toMatchObject({
+        _tag: "IssueOperationError",
+        operation: "react",
+        detail: expect.stringContaining("does not support"),
+      });
+    }),
+);
+
+it.effect.each([
+  { reactions: false, commentReactions: true, reactionContents: ["heart"] },
+  { reactions: true },
+] as const)("writes supported comment reactions with one repository refresh", (capabilities) =>
+  Effect.gen(function* () {
+    const azure = IssueTrackerKind.make("azure-devops");
+    const shell = project({
+      id: "web",
+      provider: azure,
+      host: "dev.azure.com",
+      repository: "acme/Web App/_git/web",
+    });
+    let refreshes = 0;
+    const writes: unknown[] = [];
+    const base = fakeTracker();
+    const service = yield* makeService({
+      projects: [shell],
+      resolveRepository: (_cwd, options) =>
+        Effect.sync(() => {
+          expect(options?.refresh).toBe(true);
+          refreshes++;
+          return shell.repositoryIdentity ?? null;
+        }),
+      trackers: [
+        fakeTracker({
+          kind: azure,
+          capabilities: { ...base.capabilities, ...capabilities },
+          getViewer: () => Effect.die("Reactions must not read the viewer"),
+          getIssue: () => Effect.die("Reactions must not read the issue"),
+          getViewerPermissions: () => Effect.die("Reactions must not read permissions"),
+          setReaction: (input) =>
+            Effect.sync(() => {
+              writes.push(input);
+            }),
+        }),
+      ],
+    });
+    yield* service.react({
+      projectId: "web" as ProjectId,
+      tracker: azure,
+      scope: "acme/Web App",
+      key: "7",
+      subjectId: "12",
+      content: "heart",
+      reacted: false,
+    });
+    expect(refreshes).toBe(1);
+    expect(writes).toEqual([
+      {
+        cwd: "/w/web",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        subjectId: "12",
+        content: "heart",
+        reacted: false,
+      },
+    ]);
+  }),
 );
 
 it.effect.each(["create", "react"] as const)(

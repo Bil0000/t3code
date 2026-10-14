@@ -61,7 +61,6 @@ import {
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import {
   applyPendingPullRequestReactions,
-  PULL_REQUEST_REACTION_ORDER,
   pullRequestReactionEmoji,
   pullRequestReactionName,
   pullRequestReactionTooltip,
@@ -74,11 +73,13 @@ import {
 } from "./issuePresentation";
 import {
   appendOlderIssueComments,
-  issueCommentsView,
   issueAssigneeId,
+  issueCommentsView,
   issueAssigneeOptions,
   issueDisplayLabel,
   issueLabelOptions,
+  issueSupportsReactions,
+  offeredIssueReactionContents,
   isIssueAssignee,
   linkedPullRequestTarget,
   nextIssueAssignees,
@@ -186,29 +187,41 @@ const REACTION_PILL_CLASS =
   "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
 
 /** The pull-request reaction bar's shape, routed to the issue tracker instead of the host. */
-function IssueReactionBar({
+export function IssueReactionBar({
   reactions,
   canReact,
+  contents,
   subjectId,
   environmentId,
   reference,
 }: {
   reactions: ReadonlyArray<IssueReaction>;
   canReact: boolean;
+  contents: ReadonlyArray<IssueReactionContent> | undefined;
   subjectId?: string | undefined;
   environmentId: EnvironmentId;
   reference: IssueRef;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pending, setPending] = useState<ReadonlyMap<IssueReactionContent, boolean>>(new Map());
+  const [busy, setBusy] = useState<ReadonlySet<IssueReactionContent>>(new Set());
   const react = useAtomCommand(issueEnvironment.react, { reportFailure: false });
   const shown = applyPendingPullRequestReactions(reactions, pending);
 
+  const offered = offeredIssueReactionContents(contents);
+
   const toggle = async (content: IssueReactionContent, reacted: boolean) => {
+    if (!canReact || !offered.includes(content) || busy.has(content)) return;
+    setBusy((current) => new Set([...current, content]));
     setPending((current) => new Map([...current, [content, reacted]]));
     const result = await react({
       environmentId,
       input: { ...reference, ...(subjectId === undefined ? {} : { subjectId }), content, reacted },
+    });
+    setBusy((current) => {
+      const next = new Set(current);
+      next.delete(content);
+      return next;
     });
     setPending((current) => {
       const next = new Map(current);
@@ -231,13 +244,17 @@ function IssueReactionBar({
                 type="button"
                 aria-pressed={reaction.viewerHasReacted}
                 aria-label={`${pullRequestReactionName(reaction.content)}, ${reaction.count}`}
-                disabled={!canReact}
+                disabled={
+                  !canReact || !offered.includes(reaction.content) || busy.has(reaction.content)
+                }
                 className={cn(
                   REACTION_PILL_CLASS,
                   reaction.viewerHasReacted
                     ? "border-primary/60 bg-primary/10 text-foreground"
                     : "border-border/70 bg-muted/40 text-muted-foreground",
-                  canReact ? "hover:border-primary/60" : "cursor-default",
+                  canReact && offered.includes(reaction.content)
+                    ? "hover:border-primary/60"
+                    : "cursor-default",
                 )}
                 onClick={() => void toggle(reaction.content, !reaction.viewerHasReacted)}
               />
@@ -249,7 +266,7 @@ function IssueReactionBar({
           <TooltipPopup side="top">{pullRequestReactionTooltip(reaction)}</TooltipPopup>
         </Tooltip>
       ))}
-      {canReact ? (
+      {canReact && offered.length > 0 ? (
         <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
           <PopoverTrigger
             render={
@@ -267,7 +284,7 @@ function IssueReactionBar({
           </PopoverTrigger>
           <PopoverPopup align="start" side="top" padding="compact">
             <div className="flex items-center gap-0.5">
-              {PULL_REQUEST_REACTION_ORDER.map((content) => {
+              {offered.map((content) => {
                 const reacted =
                   shown.find((reaction) => reaction.content === content)?.viewerHasReacted ?? false;
                 return (
@@ -275,6 +292,7 @@ function IssueReactionBar({
                     key={content}
                     type="button"
                     aria-pressed={reacted}
+                    disabled={busy.has(content)}
                     aria-label={pullRequestReactionName(content)}
                     className={cn(
                       "flex size-7 items-center justify-center rounded-md text-base outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
@@ -604,6 +622,7 @@ export function IssueDetailPanel({
   const canLabel = may(detail.capabilities.labels, detail.viewerPermissions.labels);
   const canAssign = may(detail.capabilities.assignees, detail.viewerPermissions.assignees);
   const canReact = blocked === null && detail.capabilities.reactions;
+  const canReactToComment = blocked === null && issueSupportsReactions(detail.capabilities, true);
   const canSetState = may(detail.capabilities.states.length > 0, detail.viewerPermissions.setState);
   const tracker = issueTrackerPresentation(detail.tracker);
   const otherStates = detail.capabilities.states.filter(
@@ -919,6 +938,7 @@ export function IssueDetailPanel({
               <IssueReactionBar
                 reactions={detail.reactions}
                 canReact={canReact}
+                contents={detail.capabilities.reactionContents}
                 environmentId={environmentId}
                 reference={reference}
               />
@@ -1005,10 +1025,12 @@ export function IssueDetailPanel({
                     environmentId={environmentId}
                     threadRef={threadRef}
                   />
-                  {item.comment.reactions !== undefined ? (
+                  {item.comment.reactions !== undefined ||
+                  issueSupportsReactions(detail.capabilities, true) ? (
                     <IssueReactionBar
-                      reactions={item.comment.reactions}
-                      canReact={canReact}
+                      reactions={item.comment.reactions ?? []}
+                      canReact={canReactToComment}
+                      contents={detail.capabilities.reactionContents}
                       subjectId={item.comment.id}
                       environmentId={environmentId}
                       reference={reference}

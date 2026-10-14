@@ -52,8 +52,9 @@ const CAPABILITIES: IssueCapabilities = {
   labels: true,
   assignees: true,
   maxAssignees: 1,
-  // On comments only; a work item itself takes none, and `setReaction` says so.
-  reactions: true,
+  reactions: false,
+  commentReactions: true,
+  reactionContents: ["thumbs-up", "thumbs-down", "heart", "hooray", "laugh", "confused"],
   // Azure has no issue templates. Its work item types are picked here, not by the reader.
   templates: false,
   linkedPullRequests: true,

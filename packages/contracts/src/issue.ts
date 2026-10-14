@@ -204,8 +204,11 @@ export const IssueCapabilities = Schema.Struct({
   labels: Schema.Boolean,
   assignees: Schema.Boolean,
   maxAssignees: Schema.optional(PositiveInt),
-  /** Reactions can be read and written on the issue and its comments. */
   reactions: Schema.Boolean,
+  commentReactions: Schema.optional(Schema.Boolean),
+  reactionContents: Schema.optional(
+    Schema.Array(IssueReactionContent).check(Schema.isMaxLength(8)),
+  ),
   /** The scope offers starting points for a new issue. */
   templates: Schema.Boolean,
   /** The tracker reports linked change requests of its own accord. */

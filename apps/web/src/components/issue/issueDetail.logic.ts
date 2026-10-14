@@ -1,5 +1,7 @@
 import type {
   IssueActor,
+  IssueCapabilities,
+  IssueReactionContent,
   IssueComment,
   IssueDetail,
   IssueAssigneeCandidate,
@@ -11,6 +13,25 @@ import type {
 } from "@t3tools/contracts";
 import { issueEntryKey, prependIssueComments } from "@t3tools/client-runtime/state/issues";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+
+import { PULL_REQUEST_REACTION_ORDER } from "../pullRequest/pullRequestReactions.logic";
+
+export function issueSupportsReactions(
+  capabilities: Pick<IssueCapabilities, "reactions" | "commentReactions">,
+  comment: boolean,
+): boolean {
+  return comment
+    ? (capabilities.commentReactions ?? capabilities.reactions)
+    : capabilities.reactions;
+}
+
+export function offeredIssueReactionContents(
+  contents: ReadonlyArray<IssueReactionContent> | undefined,
+) {
+  return PULL_REQUEST_REACTION_ORDER.filter(
+    (content) => contents === undefined || contents.includes(content),
+  );
+}
 
 export type IssueOlderComments = {
   readonly issue: string;

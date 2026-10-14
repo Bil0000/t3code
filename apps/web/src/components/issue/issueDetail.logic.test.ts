@@ -12,6 +12,8 @@ import {
   appendOlderIssueComments,
   issueAssigneeOptions,
   issueCommentsView,
+  issueSupportsReactions,
+  offeredIssueReactionContents,
   issueDisplayLabel,
   issueLabelOptions,
   linkedPullRequestTarget,
@@ -257,5 +259,20 @@ describe("older issue comments across detail re-reads", () => {
     expect(moved.cursor).toBe("page-2b");
     const other = issueCommentsView(detail({ key: "2" }), loaded);
     expect(other.comments.map((each) => each.id)).toEqual(["c3"]);
+  });
+});
+
+describe("issue reaction capabilities", () => {
+  it("allows Azure comment reactions without offering issue reactions", () => {
+    const azure = { reactions: false, commentReactions: true };
+    expect(issueSupportsReactions(azure, false)).toBe(false);
+    expect(issueSupportsReactions(azure, true)).toBe(true);
+    expect(offeredIssueReactionContents(["thumbs-up"])).toEqual(["thumbs-up"]);
+  });
+  it("honors an explicit comment restriction and older tracker capabilities", () => {
+    expect(issueSupportsReactions({ reactions: true, commentReactions: false }, true)).toBe(false);
+    expect(issueSupportsReactions({ reactions: true }, true)).toBe(true);
+    expect(offeredIssueReactionContents([])).toEqual([]);
+    expect(offeredIssueReactionContents(undefined)).toHaveLength(8);
   });
 });
