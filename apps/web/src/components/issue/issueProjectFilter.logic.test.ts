@@ -5,6 +5,7 @@ import { pullRequestFilterProjects } from "../pullRequest/pullRequestProjectFilt
 import {
   issueFilterProjects,
   issueListProjectScope,
+  issueListRefreshSource,
   type IssueListSources,
 } from "./issueProjectFilter.logic";
 
@@ -26,6 +27,46 @@ const source = (projectId: string, tracker: string, scope: string) =>
     scope,
     capabilities: {} as IssueCapabilities,
   }) satisfies IssueListSources[number];
+
+describe("issueListRefreshSource", () => {
+  const main = source("main", "github", "pingdotgg/t3code");
+  const alias = source("checkout", "github", "pingdotgg/t3code");
+  const held = { entries: [], sources: [main] };
+
+  it("skips source writes outside the selected environment, project, or tracker host", () => {
+    const input = { state: "open" as const, projectId: main.projectId, host: main.host };
+    expect(issueListRefreshSource(cups, [nucbox], input, main, held)).toBeNull();
+    expect(
+      issueListRefreshSource(nucbox, [nucbox], input, source("other", "github", "org/other"), held),
+    ).toBeNull();
+    expect(
+      issueListRefreshSource(nucbox, [nucbox], input, source("other", "jira", "T3"), held),
+    ).toBeNull();
+    expect(
+      issueListRefreshSource(
+        nucbox,
+        [nucbox],
+        { state: "all", host: "acme.atlassian.net" },
+        main,
+        held,
+      ),
+    ).toBeNull();
+  });
+
+  it("refreshes a worktree alias through the held project without changing native identity", () => {
+    const canonical = issueListRefreshSource(
+      nucbox,
+      [nucbox],
+      { state: "closed", involvement: "assigned", projectId: main.projectId, host: "GITHUB.COM" },
+      alias,
+      held,
+    );
+    expect(canonical).toEqual({ ...alias, projectId: main.projectId });
+    expect(issueListRefreshSource(nucbox, [nucbox], { state: "all" }, alias, held)).toEqual(
+      canonical,
+    );
+  });
+});
 
 describe("issueListProjectScope", () => {
   const projects = [project("main"), project("main", cups), project("solo", cups)];

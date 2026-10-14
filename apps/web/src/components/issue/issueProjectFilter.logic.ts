@@ -1,4 +1,10 @@
-import type { EnvironmentId, IssueListResult, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  IssueListInput,
+  IssueListResult,
+  IssueScopeRef,
+  ProjectId,
+} from "@t3tools/contracts";
 
 import { findScopedProject } from "../pullRequest/pullRequestList.logic";
 
@@ -8,6 +14,26 @@ interface ScopedProject {
 }
 
 export type IssueListSources = NonNullable<IssueListResult["sources"]>;
+
+export function issueListRefreshSource(
+  environmentId: EnvironmentId,
+  listedEnvironmentIds: ReadonlyArray<EnvironmentId>,
+  input: IssueListInput,
+  source: IssueScopeRef,
+  held: Pick<IssueListResult, "entries" | "sources"> | undefined,
+): IssueScopeRef | null {
+  if (!listedEnvironmentIds.includes(environmentId)) return null;
+  const matches = (candidate: IssueScopeRef) =>
+    candidate.tracker === source.tracker &&
+    candidate.host?.toLowerCase() === source.host?.toLowerCase() &&
+    candidate.scope.toLowerCase() === source.scope.toLowerCase();
+  const representative = held?.entries.find(matches) ?? held?.sources?.find(matches);
+  const canonical = representative ? { ...source, projectId: representative.projectId } : source;
+  return (input.projectId === undefined || input.projectId === canonical.projectId) &&
+    (input.host === undefined || input.host.toLowerCase() === canonical.host?.toLowerCase())
+    ? canonical
+    : null;
+}
 
 export function issueListProjectScope<Project extends ScopedProject>(
   projects: ReadonlyArray<Project>,

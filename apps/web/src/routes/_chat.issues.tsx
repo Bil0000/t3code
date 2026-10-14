@@ -55,6 +55,7 @@ import { IssueGlyph, issueTrackerPresentation } from "~/components/issue/issuePr
 import {
   issueFilterProjects,
   issueListProjectScope,
+  issueListRefreshSource,
   type IssueListSources,
 } from "~/components/issue/issueProjectFilter.logic";
 import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDetailPanel";
@@ -380,22 +381,37 @@ function IssuesRoute() {
     removedKey?: string,
   ) => {
     const page = held.get(environmentId);
-    if (!page || source.host === undefined) {
+    const canonical = issueListRefreshSource(
+      environmentId,
+      listedEnvironments.map((environment) => environment.environmentId),
+      baseInput,
+      source,
+      page,
+    );
+    if (canonical === null) return;
+    if (!page || canonical.host === undefined) {
       list.refresh();
       return;
     }
-    const scope = { projectId: source.projectId, host: source.host, scope: source.scope };
+    const scope = { projectId: canonical.projectId, host: canonical.host, scope: canonical.scope };
     const key = filterKey;
     const result = await loadPage({
       environmentId,
-      input: { ...baseInput, projectId: source.projectId, host: source.host, limit: PAGE_SIZE },
+      input: {
+        ...baseInput,
+        projectId: canonical.projectId,
+        host: canonical.host,
+        limit: PAGE_SIZE,
+      },
     });
     if (result._tag === "Failure") return;
     storePage(key, environmentId, (latest) =>
       latest.answer === page.answer
         ? refreshIssueListPage(latest, result.value, {
             source: scope,
-            ...(removedKey === undefined ? {} : { removed: removedKey }),
+            ...(removedKey === undefined
+              ? {}
+              : { removed: issueEntryKey({ ...scope, key: removedKey }) }),
           })
         : latest,
     );
@@ -1017,11 +1033,7 @@ function IssuesRoute() {
                       ...(renderedSurface.host ? { host: renderedSurface.host } : {}),
                       scope: renderedSurface.scope,
                     },
-                    issueEntryKey({
-                      ...renderedSurface,
-                      host: renderedSurface.host ?? "",
-                      projectId: renderedSurface.projectId as ProjectId,
-                    }),
+                    renderedSurface.key,
                   )
                 }
               />
