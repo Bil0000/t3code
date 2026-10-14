@@ -128,7 +128,10 @@ function userName(user: LinearApi.LinearUser): string {
 }
 
 /** Linear's connections report no totals, so a listing shows no comment count. */
-function toSummary(issue: LinearApi.LinearIssue, commentCount = 0): TrackerIssueSummary {
+function toSummary(
+  issue: LinearApi.LinearIssue,
+  commentCount: TrackerIssueSummary["commentCount"] = null,
+): TrackerIssueSummary {
   return {
     key: issue.identifier,
     displayKey: issue.identifier,
@@ -235,7 +238,12 @@ function toLinkedPullRequests(
         number: Number(match[3]),
         title: attachment.title.trim() || attachment.url,
         url: attachment.url,
-        state: status === "merged" ? "merged" : status === "closed" ? "closed" : "open",
+        state:
+          status === "open" || status === "closed" || status === "merged"
+            ? status
+            : status === "draft"
+              ? "open"
+              : null,
         isDraft: status === "draft" || attachment.metadata?.draft === true,
         closesIssue: false,
       } as const,
@@ -436,7 +444,10 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           const issue = yield* requireIssueReference("getIssue", input.scope, nativeIssue);
           const reactions = toReactions(issue.reactions, viewer);
           return {
-            ...toSummary(issue, issue.comments.nodes.length),
+            ...toSummary(
+              issue,
+              issue.comments.pageInfo.hasNextPage ? null : issue.comments.nodes.length,
+            ),
             body: issue.description ?? "",
             viewer,
             viewerPermissions: VIEWER_PERMISSIONS,

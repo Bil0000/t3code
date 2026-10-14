@@ -1,4 +1,4 @@
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -7,6 +7,8 @@ import {
   IssueActor,
   IssueCreateInput,
   IssueCreateResult,
+  IssueLinkedPullRequest,
+  IssueSummary,
   IssueTrackerKind,
   IssueTrackerProjectBinding,
   StandaloneIssueTrackerDescriptor,
@@ -17,6 +19,26 @@ const decodeActor = Schema.decodeEffect(IssueActor);
 const decodeCreate = Schema.decodeEffect(IssueCreateInput);
 const decodeCreated = Schema.decodeEffect(IssueCreateResult);
 const decodeBinding = Schema.decodeEffect(IssueTrackerProjectBinding);
+
+it("keeps unknown comment totals nullable and known totals non-negative integers", () => {
+  const decode = Schema.decodeUnknownSync(IssueSummary.fields.commentCount);
+  expect(decode(null)).toBeNull();
+  expect(decode(0)).toBe(0);
+  expect(decode(101)).toBe(101);
+  expect(() => decode(-1)).toThrow();
+  expect(() => decode(1.5)).toThrow();
+  expect(Schema.toJsonSchemaDocument(IssueSummary.fields.commentCount).schema).toMatchObject({
+    anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+  });
+});
+
+it("accepts unknown linked pull request states while preserving known states", () => {
+  const decode = Schema.decodeUnknownSync(IssueLinkedPullRequest.fields.state);
+  for (const state of [null, "open", "closed", "merged"]) {
+    expect(decode(state)).toBe(state);
+  }
+  expect(() => decode("unknown")).toThrow();
+});
 
 it.effect("decodes a tracker that needs a site and several credential fields", () =>
   Effect.gen(function* () {

@@ -3,9 +3,11 @@ import {
   IssueCandidates,
   IssueCreateInput,
   IssueCreateResult as IssueTrackerCreateResult,
+  IssueLinkedPullRequest,
   IssueListState,
   IssueOperationError,
   IssueState,
+  IssueSummary,
   IssueTrackerKind,
   IssueUnavailableError,
   McpCapabilityUnavailableError,
@@ -179,7 +181,7 @@ export const IssueEntry = Schema.Struct({
   assignees: Schema.Array(Schema.String),
   labels: Schema.Array(Schema.String),
   updatedAt: Schema.String,
-  commentCount: Schema.Int,
+  commentCount: IssueSummary.fields.commentCount,
 });
 export type IssueEntry = typeof IssueEntry.Type;
 
@@ -220,7 +222,7 @@ export const ReadIssueResult = Schema.Struct({
     Schema.Struct({
       url: Schema.String,
       title: Schema.String,
-      state: Schema.String,
+      state: IssueLinkedPullRequest.fields.state,
       closesIssue: Schema.Boolean,
     }),
   ),

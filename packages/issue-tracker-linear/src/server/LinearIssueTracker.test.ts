@@ -205,7 +205,7 @@ describe("LinearIssueTracker", () => {
       expect(test.requests[0]?.variables.first).toBe(100);
       expect(test.requests[0]?.query).toContain("labels(first: 20, includeArchived: true)");
       expect(page.items[0]?.labelsTruncated).toBe(true);
-      expect(page.items.map((item) => item.commentCount)).toEqual([0, 0]);
+      expect(page.items.map((item) => item.commentCount)).toEqual([null, null]);
       expect(page.nextCursor).toBe("more-issues");
     }),
   );
@@ -430,6 +430,7 @@ describe("LinearIssueTracker", () => {
       });
       const api = yield* test.tracker;
       const detail = yield* api.getIssue({ ...target, key: "ENG-7" });
+      expect(detail.commentCount).toBe(1);
       expect(detail.labelsTruncated).toBe(true);
       expect(detail.historyTruncated).toBe(true);
       expect(detail.reactionsTruncated).toBe(true);
@@ -637,7 +638,7 @@ describe("LinearIssueTracker", () => {
 
   it.effect("reads an issue with its comments, reactions, history and linked pull requests", () =>
     Effect.gen(function* () {
-      const { tracker } = fakeLinear({
+      const { tracker, requests } = fakeLinear({
         T3Viewer: () => ({ viewer: JULIUS, teams: { nodes: [] } }),
         T3Issue: () => ({
           issue: issue("ENG-7", {
@@ -668,6 +669,19 @@ describe("LinearIssueTracker", () => {
                   sourceType: "github",
                   metadata: { status: "merged" },
                 },
+                ...[
+                  null,
+                  {},
+                  { status: "unknown" },
+                  { status: "open" },
+                  { status: "draft" },
+                  { status: "closed" },
+                ].map((metadata, index) => ({
+                  url: `https://gitlab.com/acme/web/-/merge_requests/${index + 1}`,
+                  title: `Change ${index + 1}`,
+                  sourceType: "gitlab",
+                  metadata,
+                })),
                 { url: "https://example.test/doc", title: "Doc", sourceType: null, metadata: null },
               ],
             },
@@ -694,6 +708,8 @@ describe("LinearIssueTracker", () => {
       });
       const api = yield* tracker;
       const detail = yield* api.getIssue({ ...target, key: "eng-7" });
+      expect(detail.commentCount).toBeNull();
+      expect(requests.filter((request) => request.operation === "T3Issue")).toHaveLength(1);
       expect(detail.author).toMatchObject({ id: JULIUS.id, login: "julius" });
       expect(detail.assignees[0]).toMatchObject({ id: THEO.id, login: "theo" });
       expect(detail.comments[0]?.author).toMatchObject({ id: THEO.id, login: "theo" });
@@ -719,6 +735,18 @@ describe("LinearIssueTracker", () => {
           number: 12,
           state: "merged",
         }),
+        ...[null, null, null, "open", "open", "closed"].map((state, index) =>
+          expect.objectContaining({
+            provider: "gitlab",
+            host: "gitlab.com",
+            repository: "acme/web",
+            number: index + 1,
+            title: `Change ${index + 1}`,
+            url: `https://gitlab.com/acme/web/-/merge_requests/${index + 1}`,
+            state,
+            isDraft: index === 4,
+          }),
+        ),
       ]);
 
       const missing = yield* Effect.flip(api.getIssue({ ...target, key: "123" }));

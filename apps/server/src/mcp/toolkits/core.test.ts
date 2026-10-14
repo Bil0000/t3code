@@ -500,6 +500,73 @@ it.effect("registers native issue choices and guards reads and typed creation wi
       const server = yield* McpServer.McpServer;
       const definition = server.tools.find(({ tool }) => tool.name === "read_issue_candidates");
       expect(definition?.tool.annotations?.readOnlyHint).toBe(true);
+      const entry = {
+        projectId,
+        ...binding,
+        key: "ENG-1",
+        url: "https://example.atlassian.net/browse/ENG-1",
+        displayKey: "ENG-1",
+        title: "Issue",
+        state: { category: "open", name: "Open" },
+        author: null,
+        assignees: [],
+        labels: [],
+        updatedAt: "2026-10-14T00:00:00Z",
+      };
+      const validateList = new AjvJsonSchemaValidator().getValidator(
+        server.tools.find(({ tool }) => tool.name === "list_issues")!.tool
+          .outputSchema! as JsonSchemaType,
+      );
+      for (const [commentCount, valid] of [
+        [null, true],
+        [0, true],
+        [101, true],
+        [-1, false],
+        [1.5, false],
+      ]) {
+        expect(
+          validateList({ issues: [{ ...entry, commentCount }], nextCursors: {}, errors: [] }).valid,
+        ).toBe(valid);
+      }
+      const validateRead = new AjvJsonSchemaValidator().getValidator(
+        server.tools.find(({ tool }) => tool.name === "read_issue")!.tool
+          .outputSchema! as JsonSchemaType,
+      );
+      for (const state of [null, "open", "closed", "merged"]) {
+        expect(
+          validateRead({
+            ...entry,
+            writable: true,
+            capabilities: {
+              create: true,
+              edit: true,
+              comment: true,
+              labels: true,
+              assignees: true,
+              reactions: false,
+              templates: false,
+              linkedPullRequests: true,
+              events: true,
+              search: true,
+              states: [],
+              closeReasons: [],
+            },
+            createdAt: entry.updatedAt,
+            closedAt: null,
+            body: "",
+            comments: [],
+            commentsTruncated: true,
+            linkedPullRequests: [
+              {
+                url: "https://github.com/acme/web/pull/1",
+                title: "Change",
+                state,
+                closesIssue: false,
+              },
+            ],
+          }).valid,
+        ).toBe(true);
+      }
       const call = (
         name: string,
         args: Record<string, unknown>,

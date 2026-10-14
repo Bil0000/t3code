@@ -125,7 +125,7 @@ export const IssueSummary = Schema.Struct({
   assignees: Schema.Array(IssueActor),
   labels: Schema.Array(IssueLabel),
   labelsTruncated: Schema.optional(Schema.Boolean),
-  commentCount: NonNegativeInt,
+  commentCount: Schema.NullOr(NonNegativeInt),
 });
 export type IssueSummary = typeof IssueSummary.Type;
 
@@ -184,7 +184,7 @@ export const IssueLinkedPullRequest = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
-  state: PullRequestState,
+  state: Schema.NullOr(PullRequestState),
   isDraft: Schema.Boolean,
   /** Merging it closes this issue, rather than only citing it. */
   closesIssue: Schema.Boolean,

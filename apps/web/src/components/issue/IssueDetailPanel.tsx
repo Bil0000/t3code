@@ -59,6 +59,7 @@ import {
   PullRequestMetaLine,
   PullRequestStateGlyph,
 } from "../pullRequest/pullRequestPresentation";
+import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import {
   applyPendingPullRequestReactions,
   PULL_REQUEST_REACTION_ORDER,
@@ -507,7 +508,14 @@ function LinkedPullRequestRow({
 }) {
   const body = (
     <>
-      <PullRequestStateGlyph state={link.state} isDraft={link.isDraft} />
+      {link.state === null ? (
+        <PullRequestGlyph.pullRequest
+          aria-hidden
+          className="size-4 shrink-0 text-muted-foreground"
+        />
+      ) : (
+        <PullRequestStateGlyph state={link.state} isDraft={link.isDraft} />
+      )}
       <span className="min-w-0 flex-1 truncate text-sm">{link.title}</span>
       <span className="shrink-0 font-mono text-xs text-muted-foreground">
         {link.repository}#{link.number}
@@ -954,7 +962,7 @@ export function IssueDetailPanel({
           <section className="flex flex-col gap-3">
             <h3 className="text-xs text-muted-foreground">
               Activity
-              {detail.commentCount > 0
+              {detail.commentCount !== null && detail.commentCount > 0
                 ? ` · ${detail.commentCount} ${detail.commentCount === 1 ? "comment" : "comments"}`
                 : ""}
             </h3>

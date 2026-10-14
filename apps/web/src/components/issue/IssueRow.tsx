@@ -75,7 +75,7 @@ function IssueRowImpl({
                   ))}
                 </span>
               ) : null}
-              {entry.commentCount > 0 ? (
+              {entry.commentCount !== null && entry.commentCount > 0 ? (
                 <span className="inline-flex items-center gap-0.5 tabular-nums">
                   <MessageSquareIcon aria-hidden className="size-3" />
                   {entry.commentCount}
