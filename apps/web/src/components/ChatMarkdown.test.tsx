@@ -33,14 +33,20 @@ import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
-import { PULL_REQUESTS_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
+import { ISSUES_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
 import { PullRequestMarkdown } from "./pullRequest/PullRequestMarkdown";
 import { PullRequestCommentBody } from "./pullRequest/PullRequestCommentBody";
 import { PullRequestMarkdownEditor } from "./pullRequest/PullRequestMarkdownEditor";
 
 const issueLinks = vi.hoisted(() => ({
   resolve: vi.fn(),
+  navigate: vi.fn(),
   enabled: false,
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => issueLinks.navigate,
 }));
 
 vi.mock("../connection/runtime", async () => {
@@ -203,6 +209,7 @@ describe("pull request Markdown issue destinations", () => {
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     issueLinks.enabled = true;
+    issueLinks.navigate.mockReset();
     issueLinks.resolve.mockReset().mockReturnValue({
       projectId: ProjectId.make("resolved-project"),
       tracker: "github",
@@ -279,7 +286,7 @@ describe("pull request Markdown issue destinations", () => {
         environmentId,
         input: { url, ...(surface === "same environment" ? { projectId: "project-a" } : {}) },
       });
-      const panelRef = surface === "standalone" ? PULL_REQUESTS_PANEL_REF : threadRef;
+      const panelRef = surface === "standalone" ? ISSUES_PANEL_REF : threadRef;
       const panels = useRightPanelStore.getState().byThreadKey;
       expect(Object.keys(panels)).toEqual([scopedThreadKey(panelRef)]);
       expect(panels[scopedThreadKey(panelRef)]?.surfaces).toEqual([
@@ -294,6 +301,16 @@ describe("pull request Markdown issue destinations", () => {
           url,
         }),
       ]);
+      if (surface === "standalone") {
+        expect(issueLinks.navigate).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            to: "/issues",
+            search: expect.objectContaining({ selectedEnvironmentId: environmentId }),
+          }),
+        );
+      } else {
+        expect(issueLinks.navigate).not.toHaveBeenCalled();
+      }
     },
   );
 });
