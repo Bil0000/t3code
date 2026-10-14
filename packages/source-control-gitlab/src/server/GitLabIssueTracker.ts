@@ -501,10 +501,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             }),
           ),
           Effect.map((page) => ({
-            comments: page.comments.map((comment) => ({
-              ...comment,
-              canEdit: input.viewer === undefined ? false : (comment.canEdit ?? false),
-            })),
+            comments: page.comments,
             nextCursor: page.nextCursor,
           })),
         ),

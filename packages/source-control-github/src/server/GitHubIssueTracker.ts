@@ -673,13 +673,6 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
               decode: decodeIssueCommentsJson,
             }),
           ),
-          Effect.map((page) => ({
-            ...page,
-            comments: page.comments.map((comment) => ({
-              ...comment,
-              canEdit: input.viewer === undefined ? false : (comment.canEdit ?? false),
-            })),
-          })),
         ),
 
       getViewerPermissions: (input) =>

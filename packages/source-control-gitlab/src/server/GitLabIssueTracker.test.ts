@@ -127,6 +127,47 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each([true, false])(
+    "keeps native older-note edit permission %s without a viewer",
+    (canEdit) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args, stdin) => {
+          paths.push(args[1]!);
+          expect(stdin).toContain("adminNote");
+          return encode({
+            data: {
+              project: {
+                mergeRequest: {
+                  notes: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [
+                      {
+                        id: "gid://gitlab/Note/7",
+                        body: "Older",
+                        author: { username: "other" },
+                        createdAt: "2026-07-02T00:00:00Z",
+                        userPermissions: { adminNote: canEdit },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          });
+        });
+        const page = yield* api.getComments({
+          cwd: "/w",
+          host: "gitlab.com",
+          scope: "acme/web",
+          key: "42",
+          cursor: "older",
+        });
+        expect(page.comments[0]?.canEdit).toBe(canEdit);
+        expect(paths).toEqual(["graphql"]);
+      }),
+  );
+
   it.effect.each([
     { state: "open", event: "reopen" },
     { state: "closed", event: "close" },

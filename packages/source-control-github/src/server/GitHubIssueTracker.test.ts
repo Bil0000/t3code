@@ -124,6 +124,49 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each([true, false])(
+    "keeps native older-comment edit permission %s without a viewer",
+    (canEdit) =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const api = yield* tracker(
+          (query) => {
+            reads += 1;
+            expect(query).toContain("viewerCanUpdate");
+            return JSON.stringify({
+              data: {
+                repository: {
+                  issue: {
+                    comments: {
+                      pageInfo: { hasPreviousPage: false, startCursor: null },
+                      nodes: [
+                        {
+                          ...DETAIL_FIXTURE.data.repository.issue.comments.nodes[0],
+                          viewerCanUpdate: canEdit,
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            });
+          },
+          () => {
+            throw new Error("Unexpected extra REST read");
+          },
+        );
+        const page = yield* api.getComments({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          key: "42",
+          cursor: "older",
+        });
+        expect(page.comments[0]?.canEdit).toBe(canEdit);
+        expect(reads).toBe(1);
+      }),
+  );
+
   it.effect.each([
     { categories: ["canceled"] as const, keys: ["8"], reason: 'reason:"not planned"' },
     { categories: ["completed"] as const, keys: ["9"], reason: "reason:completed" },
