@@ -122,6 +122,7 @@ function tracker(
         readonly stdout: string;
         readonly stderr?: string;
         readonly stdoutTruncated?: boolean;
+        readonly repositoryUrl?: string;
       }
     | ForgejoCli.ForgejoCliError,
 ) {
@@ -131,10 +132,11 @@ function tracker(
         api: (input) => {
           const result = onApi(input);
           if (isForgejoCliError(result)) return Effect.fail(result);
-          const { stdout, stderr, stdoutTruncated } = result;
+          const { stdout, stderr, stdoutTruncated, repositoryUrl } = result;
           return Effect.succeed({
             ...TestSourceControlHost.processOutput(stdout, { stderr: stderr ?? "" }),
             stdoutTruncated: stdoutTruncated ?? false,
+            ...(repositoryUrl === undefined ? {} : { repositoryUrl }),
           });
         },
       }),
@@ -590,6 +592,7 @@ describe("ForgejoIssueTracker", () => {
       const api = yield* tracker((input) => {
         requests.push(input);
         return {
+          repositoryUrl: "https://forgejo.test:3000/mount/acme/web",
           stdout: encode(
             input.path.endsWith("issue_config")
               ? { blank_issues_enabled: false, contact_links: [CONTACT_LINK] }
@@ -623,6 +626,42 @@ describe("ForgejoIssueTracker", () => {
         "repos/mount/acme/web/issue_templates",
       ]);
       expect(requests.every((request) => request.method === undefined)).toBe(true);
+    }),
+  );
+
+  it.effect("refuses a native form destination without a resolved repository URL", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((input) => {
+        paths.push(input.path);
+        return {
+          stdout: encode(
+            input.path.endsWith("issue_config")
+              ? { blank_issues_enabled: false }
+              : [
+                  {
+                    file_name: ".forgejo/ISSUE_TEMPLATE/incident.yaml",
+                    body: [{ type: "unknown" }],
+                  },
+                ],
+          ),
+        };
+      });
+      const error = yield* Effect.flip(
+        api.listTemplates!({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "acme/web",
+        }),
+      );
+      expect(error).toMatchObject({
+        reason: "failed",
+        detail: expect.stringContaining("repository URL"),
+      });
+      expect(paths.sort()).toEqual([
+        "repos/acme/web/issue_config",
+        "repos/acme/web/issue_templates",
+      ]);
     }),
   );
 

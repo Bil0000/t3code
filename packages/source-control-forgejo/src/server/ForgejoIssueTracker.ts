@@ -176,12 +176,12 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         ),
       );
 
-    const read = <A>(
+    const readWithRepository = <A>(
       target: Target,
       operation: string,
       input: Omit<ForgejoCli.ForgejoApiInput, "cwd" | "repository" | "host">,
       schema: Schema.Codec<A, unknown, never, never>,
-    ): Effect.Effect<A, IssueTrackerError> =>
+    ) =>
       request(target, operation, input).pipe(
         Effect.flatMap((result) => {
           if (result.stdoutTruncated) {
@@ -189,12 +189,20 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           }
           const decoded = decodeJsonResult(schema)(result.stdout);
           return Result.isSuccess(decoded)
-            ? Effect.succeed(decoded.success)
+            ? Effect.succeed({ value: decoded.success, repositoryUrl: result.repositoryUrl })
             : Effect.fail(
                 refused(operation, "Forgejo returned an invalid response.", decoded.failure),
               );
         }),
       );
+
+    const read = <A>(
+      target: Target,
+      operation: string,
+      input: Omit<ForgejoCli.ForgejoApiInput, "cwd" | "repository" | "host">,
+      schema: Schema.Codec<A, unknown, never, never>,
+    ) =>
+      readWithRepository(target, operation, input, schema).pipe(Effect.map(({ value }) => value));
 
     const readArray = <A>(
       target: Target,
@@ -953,11 +961,11 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       listTemplates: (input) =>
         Effect.all(
           [
-            readArray(
+            readWithRepository(
               input,
               "listTemplates",
-              `${repoPath(input.scope)}/issue_templates`,
-              ForgejoIssueTemplate,
+              { path: `${repoPath(input.scope)}/issue_templates` },
+              Schema.NullOr(Schema.Array(ForgejoIssueTemplate)),
             ),
             // A repository with no config leaves the blank issue where Forgejo puts it.
             read(
@@ -981,31 +989,36 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           ],
           { concurrency: 2 },
         ).pipe(
-          Effect.map(([templates, config]) => {
-            const converted = templates.map((template) => ({
+          Effect.flatMap(([{ value: templates, repositoryUrl }, config]) => {
+            const converted = (templates ?? []).map((template) => ({
               template,
               editable: forgejoIssueTemplate(template),
             }));
-            const externalTemplates = converted.flatMap(({ template, editable }) => {
-              if (editable !== null || !/\.ya?ml$/i.test(template.file_name)) return [];
-              const url = new URL(
-                `https://${input.host}/${input.scope.split("/").map(encodeURIComponent).join("/")}/issues/new`,
+            const external = converted.filter(
+              ({ template, editable }) => editable === null && /\.ya?ml$/i.test(template.file_name),
+            );
+            if (external.length > 0 && repositoryUrl === undefined)
+              return Effect.fail(
+                refused(
+                  "listTemplates",
+                  "Forgejo did not return the resolved repository URL for its native forms.",
+                ),
               );
+            const externalTemplates = external.map(({ template }) => {
+              const url = new URL(`${repositoryUrl}/issues/new`);
               url.searchParams.set("template", template.file_name);
-              return [
-                {
-                  name: template.name?.trim() || template.file_name,
-                  about: template.about ?? "",
-                  url: url.href,
-                },
-              ];
+              return {
+                name: template.name?.trim() || template.file_name,
+                about: template.about ?? "",
+                url: url.href,
+              };
             });
-            return {
+            return Effect.succeed({
               templates: converted.flatMap(({ editable }) => editable ?? []),
               ...(externalTemplates.length === 0 ? {} : { externalTemplates }),
               blankIssuesEnabled: config.blankIssuesEnabled,
               ...(config.contactLinks.length === 0 ? {} : { contactLinks: config.contactLinks }),
-            };
+            });
           }),
         ),
 
