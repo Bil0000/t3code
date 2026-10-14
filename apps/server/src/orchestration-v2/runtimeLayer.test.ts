@@ -13,6 +13,7 @@ import {
   ContextTransferId,
   EventId,
   IssueTrackerKind,
+  IssueOperationError,
   MessageId,
   NodeId,
   RuntimeRequestId,
@@ -2252,6 +2253,98 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         "manual",
       );
     }),
+  );
+
+  it.effect.each(["link", "sync"] as const)(
+    "refreshes an empty issue snapshot only for a link event: %s",
+    (issueOperation) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const threadId = ThreadId.make(`issue-refresh-${issueOperation}`);
+        const projectId = ProjectId.make("issue-refresh-project");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`issue-refresh-create-${issueOperation}`),
+          createdBy: "user",
+          creationSource: "web",
+          threadId,
+          projectId,
+          title: "Issue refresh",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.issue.link",
+          commandId: CommandId.make(`issue-refresh-link-${issueOperation}`),
+          threadId,
+          projectId,
+          tracker: IssueTrackerKind.make("github"),
+          host: "github.com",
+          scope: "pingdotgg/t3code",
+          key: "1",
+          url: "https://github.com/pingdotgg/t3code/issues/1",
+          source: "manual",
+        });
+        const thread = (yield* orchestrator.getThreadProjection(threadId)).thread;
+        const handled = yield* Deferred.make<void>();
+        let reads = 0;
+        const dependencies = Layer.mergeAll(
+          Layer.succeed(
+            Orchestrator.OrchestratorV2,
+            Orchestrator.OrchestratorV2.of({
+              ...orchestrator,
+              streamDomainEvents: Stream.concat(
+                Stream.make({
+                  id: EventId.make(`issue-refresh-event-${issueOperation}`),
+                  type: "thread.issue-synced" as const,
+                  threadId,
+                  occurredAt: yield* DateTime.now,
+                  payload: thread,
+                  issueOperation,
+                }),
+                Stream.fromEffect(Deferred.succeed(handled, undefined)),
+              ).pipe(Stream.filter((event) => typeof event !== "boolean")),
+            }),
+          ),
+          Layer.mock(IssueService.IssueService)({
+            detail: () =>
+              Effect.sync(() => {
+                reads++;
+              }).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new IssueOperationError({
+                      operation: "detail",
+                      detail: "Tracker unavailable.",
+                    }),
+                  ),
+                ),
+              ),
+          }),
+          Layer.succeed(
+            Crypto.Crypto,
+            Crypto.make({
+              randomBytes: (size) => new Uint8Array(size).fill(1),
+              digest: (_algorithm, data) => Effect.succeed(data),
+            }),
+          ),
+        );
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              ThreadIssueService.layer.pipe(Layer.provide(dependencies)),
+            );
+            const service = Context.get(context, ThreadIssueService.ThreadIssueService);
+            yield* service.start();
+            yield* Deferred.await(handled);
+            yield* service.drain;
+            assert.equal(reads, issueOperation === "link" ? 1 : 0);
+          }),
+        );
+      }),
   );
 
   it.effect("links an issue, syncs its snapshot, and unlinks it", () =>

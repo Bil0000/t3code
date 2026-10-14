@@ -254,7 +254,8 @@ const make = Effect.gen(function* () {
     switch (event.type) {
       // A link made from a client (web dispatches the command directly) has no snapshot yet.
       case "thread.issue-synced":
-        return (event.payload.issues ?? []).some((link) => link.snapshot === null)
+        return event.issueOperation === "link" &&
+          (event.payload.issues ?? []).some((link) => link.snapshot === null)
           ? worker.enqueue({ threadId: event.threadId, staleOnly: true })
           : Effect.void;
       case "thread.visited":

@@ -3371,6 +3371,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       command,
     )({
       type: eventType,
+      ...(command.type === "thread.issue.link"
+        ? { issueOperation: "link" as const }
+        : command.type === "thread.issue.unlink"
+          ? { issueOperation: "unlink" as const }
+          : command.type === "thread.issue-link.sync"
+            ? { issueOperation: "sync" as const }
+            : {}),
       threadId: command.threadId,
       providerInstanceId: updatedThread.providerInstanceId,
       occurredAt: now,
