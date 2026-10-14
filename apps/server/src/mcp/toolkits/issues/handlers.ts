@@ -366,6 +366,7 @@ const make = Effect.gen(function* () {
             ...(entry.labelsTruncated === undefined
               ? {}
               : { labelsTruncated: entry.labelsTruncated }),
+            ...(entry.milestone === undefined ? {} : { milestone: entry.milestone }),
             updatedAt: entry.updatedAt,
             commentCount: entry.commentCount,
           })),
@@ -398,6 +399,7 @@ const make = Effect.gen(function* () {
           ...(detail.labelsTruncated === undefined
             ? {}
             : { labelsTruncated: detail.labelsTruncated }),
+          ...(detail.milestone === undefined ? {} : { milestone: detail.milestone }),
           createdAt: detail.createdAt,
           updatedAt: detail.updatedAt,
           closedAt: detail.closedAt,

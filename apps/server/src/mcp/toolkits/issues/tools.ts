@@ -202,6 +202,7 @@ export const IssueEntry = Schema.Struct({
   labels: Schema.Array(Schema.String),
   labelDetails: Schema.optional(IssueSummary.fields.labels),
   labelsTruncated: IssueSummary.fields.labelsTruncated,
+  milestone: IssueSummary.fields.milestone,
   updatedAt: Schema.String,
   commentCount: IssueSummary.fields.commentCount,
 });
@@ -231,6 +232,7 @@ export const ReadIssueResult = Schema.Struct({
   labels: Schema.Array(Schema.String),
   labelDetails: Schema.optional(IssueDetail.fields.labels),
   labelsTruncated: IssueDetail.fields.labelsTruncated,
+  milestone: IssueDetail.fields.milestone,
   createdAt: Schema.String,
   updatedAt: Schema.String,
   closedAt: Schema.NullOr(Schema.String),

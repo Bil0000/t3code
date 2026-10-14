@@ -317,6 +317,26 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect.each(["Release 1", null, undefined])(
+    "keeps native milestone %s in registered reads without extra calls",
+    (milestone) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness([], {
+          detail: milestone === undefined ? detail : { ...detail, milestone },
+        });
+        const read = yield* harness.call("read_issue", { key: "7" });
+        const listed = yield* harness.call("list_issues", {});
+        for (const output of [read, listed.issues[0]!]) {
+          if (milestone === undefined) expect(output).not.toHaveProperty("milestone");
+          else expect(output).toHaveProperty("milestone", milestone);
+        }
+        expect((yield* Ref.get(harness.calls)).map((call) => call.operation)).toEqual([
+          "detail",
+          "list",
+        ]);
+      }),
+  );
+
   it.effect.each([
     { tracker: LINEAR, key: "ENG-7" },
     { tracker: LINEAR, key: "eng-7" },
