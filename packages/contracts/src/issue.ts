@@ -30,7 +30,10 @@ export const IssueActor = Schema.Struct({
 });
 export type IssueActor = typeof IssueActor.Type;
 
-export const IssueLabel = PullRequestLabel;
+export const IssueLabel = Schema.Struct({
+  ...PullRequestLabel.fields,
+  id: Schema.optional(TrimmedNonEmptyString),
+});
 export type IssueLabel = typeof IssueLabel.Type;
 
 /**

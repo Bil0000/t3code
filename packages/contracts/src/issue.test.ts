@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
+  IssueLabelCandidatesPage,
   IssueState,
   IssuePageInput,
   IssueHierarchyPage,
@@ -30,6 +31,7 @@ const decodePage = Schema.decodeUnknownSync(IssuePageInput);
 const decodeHierarchy = Schema.decodeUnknownSync(IssueHierarchyPage);
 const decodeTemplate = Schema.decodeUnknownSync(IssueTemplate);
 const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
+const decodeLabelPage = Schema.decodeUnknownSync(IssueLabelCandidatesPage);
 
 it("accepts older reaction capabilities and preserves native comment limits", () => {
   const decode = Schema.decodeUnknownSync(IssueCapabilities);
@@ -215,4 +217,16 @@ it("keeps structured template fields and contact links beside body templates", (
     contributingGuidelinesUrl: "https://example.com/contributing",
   };
   expect(decodeTemplates(list)).toEqual(list);
+});
+
+it("preserves distinct native label IDs when labels have the same name", () => {
+  const page = {
+    items: [
+      { id: "team-label-id", name: "Bug", color: null },
+      { id: "workspace-label-id", name: "Bug", color: null, description: "Workspace label" },
+      { name: "Help", color: "123456" },
+    ],
+    nextCursor: null,
+  };
+  expect(decodeLabelPage(page)).toEqual(page);
 });
