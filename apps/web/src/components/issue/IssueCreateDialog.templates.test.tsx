@@ -572,3 +572,72 @@ it.each(["labels", "assignees"])(
     });
   },
 );
+
+it.each(["deferred", "inline"])(
+  "replaces untouched text after switching fully loaded %s templates",
+  async (mode) => {
+    if (mode === "inline")
+      state.read.mockResolvedValue({
+        blankIssuesEnabled: false,
+        templates: [template("0"), template("1")],
+      });
+    await render();
+    await choose("Template", "Template 0");
+    expect(field("title").value).toBe("Title 0");
+    expect(field("body").value).toBe("Body 0");
+    await choose("Template", "Template 1");
+    await act(async () => createButton().click());
+    expect(state.create).toHaveBeenCalledExactlyOnceWith({
+      environmentId: source.environmentId,
+      input: {
+        ...source.scope,
+        title: "Title 1",
+        body: "Body 1",
+        templateKey: "1",
+        labels: [],
+        assignees: [],
+      },
+    });
+    expect(state.read.mock.calls.map(([target]) => target.input.templateKey)).toEqual(
+      mode === "inline" ? [undefined] : [undefined, "0", "1"],
+    );
+  },
+);
+
+it.each([
+  { kind: "title" as const, value: "My title" },
+  { kind: "title" as const, value: "" },
+  { kind: "body" as const, value: "My body" },
+  { kind: "body" as const, value: "" },
+])(
+  "keeps a manually changed $kind after switching templates (value=$value)",
+  async ({ kind, value }) => {
+    await render();
+    await choose("Template", "Template 0");
+    await type(kind, "Edited text");
+    await type(kind, value);
+    await choose("Template", "Template 1");
+    expect(field(kind).value).toBe(value);
+    expect(field(kind === "title" ? "body" : "title").value).toBe(
+      kind === "title" ? "Body 1" : "Title 1",
+    );
+    if (kind === "title" && value === "") {
+      await attemptCreate();
+      expect(state.create).not.toHaveBeenCalled();
+      await type("title", "Final title");
+    }
+    await act(async () => createButton().click());
+    expect(state.create).toHaveBeenCalledExactlyOnceWith({
+      environmentId: source.environmentId,
+      input: {
+        ...source.scope,
+        title: kind === "title" ? value || "Final title" : "Title 1",
+        body: kind === "body" ? value : "Body 1",
+        templateKey: "1",
+        labels: [],
+        assignees: [],
+      },
+    });
+    expect(state.read).toHaveBeenCalledTimes(3);
+  },
+);

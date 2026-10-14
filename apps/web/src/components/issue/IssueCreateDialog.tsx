@@ -84,6 +84,8 @@ export function IssueCreateDialog({
   const [templateKey, setTemplateKey] = useState<string>(BLANK);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [titleEdited, setTitleEdited] = useState(false);
+  const [bodyEdited, setBodyEdited] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<{
     scopeKey: string;
     key: string;
@@ -183,6 +185,8 @@ export function IssueCreateDialog({
     setTemplateDraft(null);
     setTitle("");
     setBody("");
+    setTitleEdited(false);
+    setBodyEdited(false);
     setExtras({ labels: [], assignees: [] });
     setIssueType(null);
     setValues({});
@@ -199,8 +203,8 @@ export function IssueCreateDialog({
         ? {
             scopeKey: createScopeKey(scope),
             key: next,
-            title: title.trim().length === 0,
-            body: body.trim().length === 0,
+            title: !titleEdited,
+            body: !bodyEdited,
             labels: true,
             assignees: true,
           }
@@ -428,6 +432,7 @@ export function IssueCreateDialog({
               value={title}
               disabled={pending}
               onChange={(event) => {
+                setTitleEdited(true);
                 setTemplateDraft((held) => (held ? { ...held, title: false } : null));
                 setTitle(event.target.value);
               }}
@@ -445,6 +450,7 @@ export function IssueCreateDialog({
                 value={body}
                 disabled={pending}
                 onChange={(event) => {
+                  setBodyEdited(true);
                   setTemplateDraft((held) => (held ? { ...held, body: false } : null));
                   setBody(event.target.value);
                 }}
