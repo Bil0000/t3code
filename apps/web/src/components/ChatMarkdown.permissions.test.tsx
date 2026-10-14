@@ -85,6 +85,7 @@ vi.mock("../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => false,
   useServerConfigs: () => new Map([[threadRef.environmentId, serverConfig]]),
   readThreadShell: () => ({ linkedPullRequest: state.linkedPullRequest }),
+  useThreadShell: () => ({ projectId: linkedPullRequest.projectId }),
   useProjects: () => [{ id: linkedPullRequest.projectId, environmentId: threadRef.environmentId }],
 }));
 vi.mock("../rightPanelStore", () => ({
