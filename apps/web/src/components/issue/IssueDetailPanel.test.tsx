@@ -61,7 +61,7 @@ const state = vi.hoisted(() => ({
       createSubIssue: false,
       editComment: false,
       states: [] as ReadonlyArray<IssueState>,
-      closeReasons: [],
+      closeReasons: [] as ReadonlyArray<string>,
     },
   },
   write: vi.fn(),
@@ -337,6 +337,7 @@ describe("native issue state controls", () => {
         ...state.detail.capabilities,
         subIssues: false,
         createSubIssue: false,
+        closeReasons: [],
         states: [
           { category: "open", name: "open" },
           { category: "closed", name: "closed" },
@@ -434,6 +435,49 @@ describe("native issue state controls", () => {
       input: { ...reference("jira"), state: "review-id" },
     });
   });
+  it.each(["linear", "github"])(
+    "uses close reasons only for generic closed states (%s)",
+    async (tracker) => {
+      state.detail = {
+        ...state.detail,
+        tracker,
+        capabilities: {
+          ...state.detail.capabilities,
+          closeReasons:
+            tracker === "linear" ? ["completed", "canceled"] : ["completed", "not_planned"],
+        },
+      };
+      if (tracker === "linear")
+        state.detail = {
+          ...state.detail,
+          state: { category: "open", name: "Todo", id: "todo-id" },
+          states: [
+            { category: "open", name: "Todo", id: "todo-id" },
+            { category: "closed", name: "Done", id: "done-id" },
+          ],
+        };
+      await act(async () => render(tracker));
+      const trigger = buttons().find((button) =>
+        button.textContent?.startsWith(tracker === "linear" ? "Change state" : "Close"),
+      )!;
+      await act(async () =>
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+      );
+      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (element) => element.textContent === (tracker === "linear" ? "Done" : "Close as completed"),
+      );
+      expect(item).toBeDefined();
+      await act(async () => item!.click());
+      expect(state.write).toHaveBeenCalledWith({
+        environmentId,
+        input: {
+          ...reference(tracker),
+          state: tracker === "linear" ? "done-id" : "closed",
+          ...(tracker === "github" ? { closeReason: "completed" } : {}),
+        },
+      });
+    },
+  );
   it.each(["github", "gitlab"])(
     "keeps generic state writes and capability guards (%s)",
     async (tracker) => {

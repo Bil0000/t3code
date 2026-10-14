@@ -722,7 +722,10 @@ function IssueDetailContent({
               <MenuItem disabled>No other states are available.</MenuItem>
             ) : null}
             {otherStates.flatMap((state) =>
-              state.category === "closed" && detail.capabilities.closeReasons.length > 0
+              state.category === "closed" &&
+              state.id === undefined &&
+              state.name === "closed" &&
+              detail.capabilities.closeReasons.length > 0
                 ? detail.capabilities.closeReasons.map((reason) => (
                     <MenuItem
                       key={`${state.id ?? state.name}:${reason}`}
