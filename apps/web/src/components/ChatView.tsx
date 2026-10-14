@@ -9357,6 +9357,16 @@ export default function ChatView(props: ChatViewProps) {
         promptForSend,
       )
       .trim();
+    const submittedDraft = {
+      prompt: messageTextForSend,
+      pendingIssueUrl,
+      images: composerImagesSnapshot,
+      files: composerFilesSnapshot,
+      terminalContexts: composerTerminalContextsSnapshot,
+      previewAnnotations: composerPreviewAnnotationsSnapshot,
+      reviewComments: composerReviewCommentsSnapshot,
+      threadContexts: composerThreadContextsSnapshot,
+    };
     // Records bind attachments by the id each side knows: the local id for the optimistic
     // row, the upload id (or local id on the data-URL path) on the wire; the server
     // rebinds them to the persisted id.
@@ -9786,21 +9796,14 @@ export default function ChatView(props: ChatViewProps) {
         );
       } finally {
         const restoreFailedDraft = () => {
-          setMultipleModelSelections(failedSelections);
           if (clearedDraft) {
-            setComposerDraftPrompt(composerDraftTarget, messageTextForSend);
-            addComposerDraftImages(
-              composerDraftTarget,
-              composerImagesSnapshot.map(cloneComposerImageForRetry),
-            );
-            addComposerDraftFiles(composerDraftTarget, composerFilesSnapshot);
-            setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
-            setComposerDraftPreviewAnnotations(
-              composerDraftTarget,
-              composerPreviewAnnotationsSnapshot,
-            );
-            setComposerDraftReviewComments(composerDraftTarget, composerReviewCommentsSnapshot);
-            setComposerDraftThreadContexts(composerDraftTarget, composerThreadContextsSnapshot);
+            const restored = useComposerDraftStore
+              .getState()
+              .restoreSubmittedDraft(composerDraftTarget, {
+                ...submittedDraft,
+                images: composerImagesSnapshot.map(cloneComposerImageForRetry),
+              });
+            if (!restored) return false;
             if (composerRef.current && currentRouteThreadKeyRef.current === routeThreadKey) {
               promptRef.current = messageTextForSend;
               composerRef.current.resetCursorState({
@@ -9813,6 +9816,8 @@ export default function ChatView(props: ChatViewProps) {
               });
             }
           }
+          setMultipleModelSelections(failedSelections);
+          return true;
         };
         if (failedSelections.length > 0) {
           if (canRestoreDraft() && composerRef.current) {
@@ -9834,7 +9839,9 @@ export default function ChatView(props: ChatViewProps) {
                       sendInFlightRef.current ||
                       composerDraftHasUserContent(
                         useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
-                      )
+                        pendingIssueUrl,
+                      ) ||
+                      !restoreFailedDraft()
                     ) {
                       toastManager.update(recoveryToastId, {
                         description:
@@ -9842,7 +9849,6 @@ export default function ChatView(props: ChatViewProps) {
                       });
                       return;
                     }
-                    restoreFailedDraft();
                     void navigate({ to: "/draft/$draftId", params: { draftId } });
                     toastManager.close(recoveryToastId);
                   },
@@ -10180,11 +10186,12 @@ export default function ChatView(props: ChatViewProps) {
         clearBackgroundDraftSubmissionByRef(scopeThreadRef(environmentId, threadIdForSend));
       }
       if (
-        backgroundDraftOpened
-          ? !composerDraftHasUserContent(
-              useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
-            )
-          : promptRef.current.length === 0 &&
+        !composerDraftHasUserContent(
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+          pendingIssueUrl,
+        ) &&
+        (backgroundDraftOpened ||
+          (promptRef.current.length === 0 &&
             composerImagesRef.current.length === 0 &&
             composerFilesRef.current.length === 0 &&
             composerTerminalContextsRef.current.length === 0 &&
@@ -10193,33 +10200,34 @@ export default function ChatView(props: ChatViewProps) {
             (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments
               .length ?? 0) === 0 &&
             (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.threadContexts
-              .length ?? 0) === 0
+              .length ?? 0) === 0))
       ) {
-        setOptimisticUserMessages((existing) => {
-          const removed = existing.filter((message) => message.id === messageIdForSend);
-          for (const message of removed) {
-            revokeUserMessagePreviewUrls(message);
-          }
-          const next = existing.filter((message) => message.id !== messageIdForSend);
-          return next.length === existing.length ? existing : next;
-        });
-        promptRef.current = messageTextForSend;
         const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
-        composerImagesRef.current = retryComposerImages;
-        composerFilesRef.current = composerFilesSnapshot;
-        composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
-        setComposerDraftPrompt(composerDraftTarget, messageTextForSend);
-        addComposerDraftImages(composerDraftTarget, retryComposerImages);
-        addComposerDraftFiles(composerDraftTarget, composerFilesSnapshot);
-        setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
-        setComposerDraftPreviewAnnotations(composerDraftTarget, composerPreviewAnnotationsSnapshot);
-        setComposerDraftReviewComments(composerDraftTarget, composerReviewCommentsSnapshot);
-        setComposerDraftThreadContexts(composerDraftTarget, composerThreadContextsSnapshot);
-        composerRef.current?.resetCursorState({
-          cursor: collapseExpandedComposerCursor(messageTextForSend, messageTextForSend.length),
-          prompt: messageTextForSend,
-          detectTrigger: true,
-        });
+        const restored = useComposerDraftStore
+          .getState()
+          .restoreSubmittedDraft(composerDraftTarget, {
+            ...submittedDraft,
+            images: retryComposerImages,
+          });
+        if (restored) {
+          setOptimisticUserMessages((existing) => {
+            const removed = existing.filter((message) => message.id === messageIdForSend);
+            for (const message of removed) {
+              revokeUserMessagePreviewUrls(message);
+            }
+            const next = existing.filter((message) => message.id !== messageIdForSend);
+            return next.length === existing.length ? existing : next;
+          });
+          promptRef.current = messageTextForSend;
+          composerImagesRef.current = retryComposerImages;
+          composerFilesRef.current = composerFilesSnapshot;
+          composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
+          composerRef.current?.resetCursorState({
+            cursor: collapseExpandedComposerCursor(messageTextForSend, messageTextForSend.length),
+            prompt: messageTextForSend,
+            detectTrigger: true,
+          });
+        }
       }
       if (!isAtomCommandInterrupted(failure)) {
         const error = squashAtomCommandFailure(failure);

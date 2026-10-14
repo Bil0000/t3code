@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  ChatAttachmentId,
   EnvironmentId,
   IssueResolvedUrl,
   IssueTrackerKind,
@@ -33,6 +34,8 @@ const state = vi.hoisted(() => ({
   toast: vi.fn(),
   deniedEnvironment: "",
   launchError: null as Error | null,
+  launchWait: null as Promise<void> | null,
+  launchStarted: () => {},
   linkError: null as Error | null,
   resolveError: null as Error | null,
   resolvedProject: "",
@@ -85,6 +88,8 @@ vi.mock("~/connection/runtime", async () => {
       state.calls.push({ environmentId, method, input });
       if (method === ORCHESTRATION_V2_WS_METHODS.launchThread) {
         yield* decodeLaunch(input);
+        state.launchStarted();
+        if (state.launchWait) yield* Effect.promise(() => state.launchWait!);
         if (state.launchError) return yield* Effect.fail(state.launchError);
         return { sequence: 1 };
       }
@@ -156,6 +161,9 @@ vi.mock("~/state/threads", async () => {
 
 import {
   DraftId,
+  beginBackgroundDraftSubmissionByRef,
+  clearBackgroundDraftSubmissionByRef,
+  composerDraftHasUserContent,
   finalizePromotedDraftThreadByRef,
   restoreFailedBackgroundDraftThread,
   useComposerDraftStore,
@@ -208,6 +216,8 @@ beforeEach(async () => {
   state.toast.mockReset();
   state.deniedEnvironment = state.resolvedProject = "";
   state.launchError = state.linkError = state.resolveError = null;
+  state.launchWait = null;
+  state.launchStarted = () => {};
   state.resolveWait = null;
   state.resolveStarted = () => {};
   state.newThread.mockReset().mockImplementation(() => {
@@ -246,6 +256,13 @@ function send(target: Awaited<ReturnType<typeof solve>>, targetThreadId = thread
   const store = useComposerDraftStore.getState();
   const url = store.getComposerDraft(draftId)?.pendingIssueUrl;
   const text = store.getComposerDraft(draftId)?.prompt || "Retry solving the issue";
+  const attachments = (store.getComposerDraft(draftId)?.files ?? []).map((file) => ({
+    type: "file" as const,
+    id: ChatAttachmentId.make(file.id),
+    name: file.name,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+  }));
   store.clearComposerContent(draftId);
   return withIssueThreadHandoff(
     threadEnvironment.startTurn.run(appAtomRegistry, {
@@ -258,7 +275,7 @@ function send(target: Awaited<ReturnType<typeof solve>>, targetThreadId = thread
           messageId: MessageId.make("message"),
           role: "user",
           text,
-          attachments: [],
+          attachments,
         },
         bootstrap: {
           createThread: {
@@ -330,6 +347,88 @@ it("keeps the issue after failed creation and links on retry with a replacement 
   state.launchError = null;
   expect((await send(target, retryThreadId))._tag).toBe("Success");
   expect(state.calls.at(-1)?.input.threadId).toBe(retryThreadId);
+});
+
+it.each([
+  ["background", "none"],
+  ["manual", "none"],
+  ["active", "none"],
+  ["background", "url"],
+  ["manual", "url"],
+  ["active", "url"],
+  ["background", "prompt"],
+  ["manual", "prompt"],
+  ["background", "attachment"],
+  ["manual", "attachment"],
+] as const)("recovers %s Solve sends while preserving newer %s content", async (mode, newer) => {
+  const target = await solve(environmentB);
+  const store = useComposerDraftStore.getState();
+  const file = new File(["original notes"], "notes.txt", { type: "text/plain" });
+  store.addFiles(draftId, [
+    {
+      type: "file",
+      id: "submitted-file",
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      file,
+    },
+  ]);
+  const submitted = store.getComposerDraft(draftId)!;
+  const draft = store.getDraftSession(draftId)!;
+  const launched = deferred();
+  const release = deferred();
+  state.launchStarted = launched.resolve;
+  state.launchWait = release.promise;
+  state.launchError = new Error("Create failed");
+  if (mode === "background") beginBackgroundDraftSubmissionByRef(target.threadRef);
+  const sending = send(target, mode === "manual" ? ThreadId.make("model-thread") : threadId);
+  await launched.promise;
+  if (mode !== "active") {
+    if (mode === "background") store.markDraftThreadPromoting(draftId, target.threadRef);
+    store.setLogicalProjectDraftThreadId(
+      "logical",
+      scopeProjectRef(environmentB, projectB),
+      DraftId.make("fresh-draft"),
+    );
+    store.setPrompt(DraftId.make("fresh-draft"), "Work in the fresh composer");
+  }
+  if (newer === "url") store.setPendingIssueUrl(draftId, "https://github.com/acme/web/issues/8");
+  if (newer === "prompt") store.setPrompt(draftId, "New work");
+  if (newer === "attachment")
+    store.addFiles(draftId, [{ ...submitted.files[0]!, id: "new-file", name: "new-notes.txt" }]);
+  const beforeRecovery = store.getComposerDraft(draftId);
+  expect(composerDraftHasUserContent(beforeRecovery)).toBe(true);
+  release.resolve();
+  expect((await sending)._tag).toBe("Failure");
+  if (mode === "background") {
+    restoreFailedBackgroundDraftThread(draftId, draft, ThreadId.make("retry-thread"));
+    clearBackgroundDraftSubmissionByRef(target.threadRef);
+  }
+  expect(store.restoreSubmittedDraft(draftId, submitted)).toBe(newer === "none");
+  const restored = store.getComposerDraft(draftId);
+  if (newer === "none") {
+    expect(restored?.prompt).toBe(submitted.prompt);
+    expect(restored?.files).toEqual(submitted.files);
+    expect(restored?.pendingIssueUrl).toBe(detail.url);
+  } else {
+    expect(restored).toBe(beforeRecovery);
+  }
+  if (mode !== "active")
+    expect(store.getComposerDraft(DraftId.make("fresh-draft"))?.prompt).toBe(
+      "Work in the fresh composer",
+    );
+  expect(state.calls).toHaveLength(1);
+  expect(state.calls[0]).toMatchObject({
+    environmentId: environmentB,
+    input: {
+      projectId: projectB,
+      initialMessage: {
+        text: submitted.prompt,
+        attachments: [{ id: "submitted-file", name: "notes.txt" }],
+      },
+    },
+  });
 });
 
 it.each(["permission", "binding", "resolve", "link"])(

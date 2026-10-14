@@ -428,12 +428,13 @@ export interface ComposerThreadDraftState {
  */
 export function composerDraftHasUserContent(
   draft: ComposerThreadDraftState | null | undefined,
+  submittedPendingIssueUrl?: string,
 ): boolean {
   if (!draft) {
     return false;
   }
   return (
-    draft.pendingIssueUrl !== undefined ||
+    (draft.pendingIssueUrl !== undefined && draft.pendingIssueUrl !== submittedPendingIssueUrl) ||
     draft.prompt.trim().length > 0 ||
     draft.images.length > 0 ||
     draft.files.length > 0 ||
@@ -719,6 +720,20 @@ interface ComposerDraftStoreState {
     attachments: PersistedComposerImageAttachment[],
   ) => Promise<void>;
   clearComposerContent: (threadRef: ComposerThreadTarget) => void;
+  restoreSubmittedDraft: (
+    threadRef: ComposerThreadTarget,
+    submitted: Pick<
+      ComposerThreadDraftState,
+      | "prompt"
+      | "images"
+      | "files"
+      | "terminalContexts"
+      | "previewAnnotations"
+      | "reviewComments"
+      | "threadContexts"
+      | "pendingIssueUrl"
+    >,
+  ) => boolean;
   /**
    * Clears the prompt text and attachments, preserving terminal /
    * element contexts, preview annotations, and review comments. Used by the
@@ -4215,6 +4230,24 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           });
           await Promise.resolve();
           verifyPersistedAttachments(threadKey, attachments, set);
+        },
+        restoreSubmittedDraft: (threadRef, submitted) => {
+          const store = get();
+          if (
+            composerDraftHasUserContent(
+              store.getComposerDraft(threadRef),
+              submitted.pendingIssueUrl,
+            )
+          )
+            return false;
+          store.setPrompt(threadRef, submitted.prompt);
+          store.addImages(threadRef, submitted.images);
+          store.addFiles(threadRef, submitted.files);
+          store.setTerminalContexts(threadRef, submitted.terminalContexts);
+          store.setPreviewAnnotations(threadRef, submitted.previewAnnotations);
+          store.setReviewComments(threadRef, submitted.reviewComments);
+          store.setThreadContexts(threadRef, submitted.threadContexts);
+          return true;
         },
         clearComposerContent: (threadRef) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
