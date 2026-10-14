@@ -34,6 +34,7 @@ import { issueEnvironment } from "~/state/issues";
 import { useProjects, useThreadShell } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
+import { serverEnvironment } from "~/state/server";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -602,6 +603,7 @@ export function IssueDetailPanel({
   const detail = detailQuery.data;
   const canWrite = useAtomValue(issueEnvironment.comment.permissionAtom(environmentId));
   const projects = useProjects();
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const cwd =
     projects.find((p) => p.environmentId === environmentId && p.id === reference.projectId)
       ?.workspaceRoot ?? "";
@@ -986,7 +988,13 @@ export function IssueDetailPanel({
             <section className="flex flex-col gap-1">
               <h3 className="text-xs text-muted-foreground">Linked pull requests</h3>
               {detail.linkedPullRequests.map((link) => {
-                const target = linkedPullRequestTarget(link, reference);
+                const target = linkedPullRequestTarget(
+                  link,
+                  reference,
+                  environmentId,
+                  projects,
+                  serverConfig?.environment.capabilities,
+                );
                 return (
                   <LinkedPullRequestRow
                     key={link.url}

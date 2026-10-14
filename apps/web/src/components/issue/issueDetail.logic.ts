@@ -1,4 +1,6 @@
 import type {
+  EnvironmentId,
+  ExecutionEnvironmentCapabilities,
   IssueActor,
   IssueCapabilities,
   IssueReactionContent,
@@ -14,6 +16,13 @@ import type {
 } from "@t3tools/contracts";
 import { issueEntryKey, prependIssueComments } from "@t3tools/client-runtime/state/issues";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
+import {
+  findProjectForChangeRequest,
+  findProjectOnChangeRequestHost,
+} from "../../lib/openPullRequestLink";
 
 import { PULL_REQUEST_REACTION_ORDER } from "../pullRequest/pullRequestReactions.logic";
 
@@ -200,15 +209,30 @@ export function issueAssigneeOptions(
 export function linkedPullRequestTarget(
   link: IssueLinkedPullRequest,
   reference: IssueRef,
+  environmentId: EnvironmentId,
+  projects: ReadonlyArray<EnvironmentProject>,
+  capabilities:
+    | Pick<ExecutionEnvironmentCapabilities, "pullRequests" | "threadPullRequests">
+    | undefined,
 ): IssueLinkedPullRequestTarget | null {
-  const trackerProvider = sourceControlClients.find(reference.tracker)?.kind;
-  const provider = link.provider ?? trackerProvider;
-  if (provider === undefined) return null;
-  const host = link.host ?? (provider === trackerProvider ? reference.host : undefined);
+  const provider = sourceControlClients.find(link.provider ?? reference.tracker)?.kind;
+  const parsed = parseChangeRequestUrl(link.url);
+  if (provider === undefined || parsed === null || capabilities?.pullRequests !== true) return null;
+  const lends = capabilities.threadPullRequests === true;
+  const candidates = projects.filter(
+    (project) =>
+      project.environmentId === environmentId && project.repositoryIdentity?.provider === provider,
+  );
+  const project = lends
+    ? findProjectOnChangeRequestHost(candidates, parsed)
+    : findProjectForChangeRequest(candidates, parsed);
+  if (project === undefined) return null;
   return {
-    projectId: reference.projectId,
-    ...(host === undefined ? {} : { host }),
-    repository: link.repository,
+    projectId: project.id,
+    ...(lends ? { host: parsed.authority ?? parsed.host } : {}),
+    repository: lends
+      ? parsed.repository
+      : (sourceControlRepositorySelector(project.repositoryIdentity) ?? parsed.repository),
     number: link.number,
     url: link.url,
   };

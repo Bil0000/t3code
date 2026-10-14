@@ -7,7 +7,8 @@ import type {
   IssueRef,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { IssueTrackerKind, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -60,6 +61,30 @@ describe("nextIssueAssignees", () => {
 });
 
 describe("linkedPullRequestTarget", () => {
+  const environmentId = EnvironmentId.make("environment");
+  const lending = { pullRequests: true, threadPullRequests: true };
+  const checkout = (provider: string, host: string, repository: string): EnvironmentProject => ({
+    environmentId,
+    id: ProjectId.make(`${provider}-checkout`),
+    title: "Checkout",
+    workspaceRoot: "/repo",
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-10-14T00:00:00Z",
+    updatedAt: "2026-10-14T00:00:00Z",
+    repositoryIdentity: {
+      provider,
+      canonicalKey: `${host}/${repository}`,
+      displayName: repository,
+      locator: {
+        source: "git-remote",
+        remoteName: "origin",
+        remoteUrl: `https://${host}/${repository}.git`,
+      },
+    },
+  });
+  const github = checkout("github", "github.com", "acme/web");
+  const gitlab = checkout("gitlab", "gitlab.example.com", "acme/web");
   const link: IssueLinkedPullRequest = {
     repository: "acme/web",
     number: 7,
@@ -69,17 +94,27 @@ describe("linkedPullRequestTarget", () => {
     isDraft: false,
     closesIssue: false,
   };
+  const mergeRequest = {
+    ...link,
+    provider: "gitlab" as SourceControlProviderKind,
+    host: "gitlab.example.com",
+    url: "https://gitlab.example.com/acme/web/-/merge_requests/7",
+  };
   const ref = (tracker: string, host?: string): IssueRef =>
     ({ projectId: "p", tracker, ...(host ? { host } : {}), scope: "s", key: "1" }) as IssueRef;
+  const linear = ref("linear", "linear.app");
 
   it("routes with the link's own provider and host, never the tracker's", () => {
     expect(
       linkedPullRequestTarget(
         { ...link, provider: "github" as SourceControlProviderKind, host: "github.com" },
-        ref("linear", "linear.app"),
+        linear,
+        environmentId,
+        [github],
+        lending,
       ),
     ).toEqual({
-      projectId: "p",
+      projectId: github.id,
       host: "github.com",
       repository: "acme/web",
       number: 7,
@@ -88,13 +123,79 @@ describe("linkedPullRequestTarget", () => {
   });
 
   it("falls back to a git tracker's own kind and host", () => {
-    expect(linkedPullRequestTarget(link, ref("gitlab", "gitlab.example.com"))).toMatchObject({
-      host: "gitlab.example.com",
-    });
+    expect(
+      linkedPullRequestTarget(
+        { ...link, url: mergeRequest.url },
+        ref("gitlab", "gitlab.example.com"),
+        environmentId,
+        [gitlab],
+        lending,
+      ),
+    ).toMatchObject({ projectId: gitlab.id, host: "gitlab.example.com" });
   });
 
   it("does not guess for a standalone tracker without a provider", () => {
-    expect(linkedPullRequestTarget(link, ref("linear", "linear.app"))).toBeNull();
+    expect(linkedPullRequestTarget(link, linear, environmentId, [github], lending)).toBeNull();
+  });
+
+  it("opens a Linear-linked GitLab merge request on the GitLab checkout, not the Linear project", () => {
+    expect(
+      linkedPullRequestTarget(mergeRequest, linear, environmentId, [github, gitlab], lending),
+    ).toEqual({
+      projectId: gitlab.id,
+      host: "gitlab.example.com",
+      repository: "acme/web",
+      number: 7,
+      url: mergeRequest.url,
+    });
+  });
+
+  it.each([
+    ["no checkout", [github], lending],
+    [
+      "a checkout on another environment",
+      [{ ...gitlab, environmentId: EnvironmentId.make("elsewhere") }],
+      lending,
+    ],
+    ["a checkout on another host", [checkout("gitlab", "other.example.com", "acme/web")], lending],
+    ["a server without pull requests", [gitlab], { pullRequests: false, threadPullRequests: true }],
+    ["an old server", [gitlab], undefined],
+    [
+      "an exact-only server and another repository",
+      [checkout("gitlab", "gitlab.example.com", "acme/local")],
+      { pullRequests: true },
+    ],
+  ])("keeps the link external with %s", (_, projects, capabilities) => {
+    expect(
+      linkedPullRequestTarget(mergeRequest, linear, environmentId, projects, capabilities),
+    ).toBeNull();
+  });
+
+  it("lends another checkout on the host only where the server reads any repository there", () => {
+    const local = checkout("gitlab", "gitlab.example.com", "acme/local");
+    expect(
+      linkedPullRequestTarget(mergeRequest, linear, environmentId, [local], lending),
+    ).toMatchObject({ projectId: local.id, repository: "acme/web" });
+  });
+
+  it("names an exact-only server's checkout by its own repository and leaves the host out", () => {
+    expect(
+      linkedPullRequestTarget(mergeRequest, linear, environmentId, [gitlab], {
+        pullRequests: true,
+      }),
+    ).toEqual({ projectId: gitlab.id, repository: "acme/web", number: 7, url: mergeRequest.url });
+  });
+
+  it("keeps a malformed native URL external", () => {
+    expect(
+      linkedPullRequestTarget(
+        { ...mergeRequest, url: "https://gitlab.example.com/acme/web" },
+        linear,
+        environmentId,
+        [gitlab],
+        lending,
+      ),
+    ).toBeNull();
   });
 });
 
