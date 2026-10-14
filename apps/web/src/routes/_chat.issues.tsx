@@ -377,7 +377,7 @@ function IssuesRoute() {
   }, [list.answers, current, refreshedPages]);
   const [knownSources] = useState(() => new Map<EnvironmentId, IssueListSources>());
   const filterProjects = useMemo(() => {
-    if (projectScope === null) {
+    if (projectScope === null && !search.host) {
       for (const [environmentId, page] of held) {
         if (page.sources !== undefined) knownSources.set(environmentId, page.sources);
       }
@@ -387,7 +387,15 @@ function IssuesRoute() {
       environmentLabels,
       scopedProject ?? undefined,
     );
-  }, [held, projectScope, scopedProject, capableProjects, knownSources, environmentLabels]);
+  }, [
+    held,
+    projectScope,
+    search.host,
+    scopedProject,
+    capableProjects,
+    knownSources,
+    environmentLabels,
+  ]);
   const heldRef = useRef(held);
   useEffect(() => {
     heldRef.current = held;
