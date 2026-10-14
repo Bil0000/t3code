@@ -273,7 +273,6 @@ describe("LinearIssueTracker", () => {
         [api.getIssue({ ...scoped, key: "ENG-7" }), ["T3Issue", "T3Viewer"]],
         [api.getComments({ ...scoped, key: "ENG-7", cursor: "next" }), ["T3Comments"]],
         [api.comment({ ...scoped, key: "ENG-7", body: "Hello" }), ["T3IssueReference"]],
-        [api.getViewerPermissions({ ...scoped, key: "ENG-7" }), ["T3IssueReference"]],
         [api.update({ ...scoped, key: "ENG-7", title: "Changed" }), ["T3IssueReference"]],
         [api.setState({ ...scoped, key: "ENG-7", state: "closed" }), ["T3IssueReference"]],
         [
@@ -592,9 +591,12 @@ describe("LinearIssueTracker", () => {
         (yield* api.getComments({ ...target, key: "ENG-7", cursor: "next" }).pipe(Effect.flip))
           .reason,
       ).toBe("failed");
-      expect(
-        (yield* api.getViewerPermissions({ ...target, key: "ENG-7" }).pipe(Effect.flip)).reason,
-      ).toBe("failed");
+      const before = test.requests.length;
+      expect(yield* api.getViewerPermissions({ ...target, key: "ENG-7" })).toMatchObject({
+        comment: true,
+        edit: true,
+      });
+      expect(test.requests).toHaveLength(before);
     }),
   );
   it.effect("edits a moved identifier with the verified native issue UUID", () =>
@@ -2373,6 +2375,89 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
             ({ operation }) => operation.includes("Create") || operation.includes("Update"),
           ),
         ).toBe(false);
+      }
+    }),
+);
+
+it.effect.each(["comment", "update", "state", "parent", "clearParent"] as const)(
+  "does not duplicate Linear issue reads after static permission lookup: %s",
+  (operation) =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3IssueReference: (variables) => ({ issue: issue(String(variables.id)) }),
+        T3TeamStates: () => ({
+          organization: ORGANIZATION,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                states: {
+                  nodes: [state("Done", "completed")],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            ],
+          },
+        }),
+        T3CommentCreate: () => ({ commentCreate: { success: true } }),
+        T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      });
+      const api = yield* test.tracker;
+      const input = { ...target, scope: "acme/ENG", key: "ENG-7" };
+      expect(yield* api.getViewerPermissions(input)).toMatchObject({
+        comment: true,
+        edit: true,
+        setState: true,
+      });
+      expect(test.requests).toHaveLength(0);
+      const actions = {
+        comment: api.comment({ ...input, body: "Comment" }),
+        update: api.update({ ...input, title: "Changed" }),
+        state: api.setState({ ...input, state: "closed" }),
+        parent: api.setParent({ ...input, parentKey: "ENG-8" }),
+        clearParent: api.setParent({ ...input, parentKey: null }),
+      };
+      yield* actions[operation];
+      expect(test.requests.map(({ operation: name }) => name)).toEqual([
+        "T3IssueReference",
+        ...(operation === "state"
+          ? ["T3TeamStates"]
+          : operation === "parent"
+            ? ["T3IssueReference"]
+            : []),
+        operation === "comment" ? "T3CommentCreate" : "T3IssueUpdate",
+      ]);
+    }),
+);
+
+it.effect.each(["team", "workspace"] as const)(
+  "static Linear permissions never bypass native write scope guards: %s",
+  (foreign) =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3IssueReference: () => ({
+          issue:
+            foreign === "team"
+              ? issue("OPS-7")
+              : issue("ENG-7", { url: "https://linear.app/other/issue/ENG-7" }),
+        }),
+      });
+      const api = yield* test.tracker;
+      const input = { ...target, scope: "acme/ENG", key: "ENG-7" };
+      yield* api.getViewerPermissions(input);
+      expect(test.requests).toHaveLength(0);
+      for (const action of [
+        api.comment({ ...input, body: "Comment" }),
+        api.update({ ...input, title: "Changed" }),
+        api.setState({ ...input, state: "closed" }),
+        api.setParent({ ...input, parentKey: "ENG-8" }),
+        api.setParent({ ...input, parentKey: null }),
+      ]) {
+        test.requests.length = 0;
+        expect((yield* action.pipe(Effect.flip)).reason).toBe("failed");
+        expect(test.requests.map(({ operation }) => operation)).toEqual(["T3IssueReference"]);
       }
     }),
 );

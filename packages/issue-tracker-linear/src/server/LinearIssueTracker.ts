@@ -712,10 +712,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           };
         }),
 
-      getViewerPermissions: (input) =>
-        resolveIssue("getViewerPermissions", input.key, input.scope).pipe(
-          Effect.as(VIEWER_PERMISSIONS),
-        ),
+      getViewerPermissions: () => Effect.succeed(VIEWER_PERMISSIONS),
 
       create: (input) =>
         Effect.gen(function* () {
