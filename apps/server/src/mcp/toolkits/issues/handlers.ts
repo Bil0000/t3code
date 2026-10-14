@@ -252,6 +252,7 @@ const make = Effect.gen(function* () {
             createdAt: comment.createdAt,
           })),
           commentsTruncated: detail.commentsCursor !== null,
+          commentsCursor: detail.commentsCursor,
           linkedPullRequests: detail.linkedPullRequests.map((pullRequest) => ({
             url: pullRequest.url,
             title: pullRequest.title,
@@ -259,6 +260,23 @@ const make = Effect.gen(function* () {
             closesIssue: pullRequest.closesIssue,
           })),
         };
+      }),
+    ),
+    read_issue_comments: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        if (input.tracker !== undefined && input.scope !== undefined && input.key !== undefined) {
+          const { project } = yield* requireProject(input.projectId);
+          return yield* issues.comments({
+            projectId: project.id,
+            tracker: input.tracker,
+            ...(input.host === undefined ? {} : { host: input.host }),
+            scope: input.scope,
+            key: input.key,
+            cursor: input.cursor,
+          });
+        }
+        const target = yield* resolveTarget(input);
+        return yield* issues.comments({ ...refOf(target), cursor: input.cursor });
       }),
     ),
     create_issue: McpToolAccess.writesWithCapability((input) =>

@@ -9,6 +9,7 @@ import {
   CommandId,
   EnvironmentId,
   IssueTrackerKind,
+  IssueOperationError,
   ProjectId,
   NodeId,
   OrchestratorMcpThreadReadResult,
@@ -20,6 +21,7 @@ import {
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ThreadShell,
   type IssueCreateInput,
+  type IssueCommentsPageInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
@@ -461,6 +463,21 @@ it.effect("registers native issue choices and guards reads and typed creation wi
     ];
     const created = yield* Ref.make<ReadonlyArray<IssueCreateInput>>([]);
     const candidateReads = yield* Ref.make(0);
+    const commentReads = yield* Ref.make<ReadonlyArray<IssueCommentsPageInput>>([]);
+    const comments = {
+      comments: [
+        {
+          id: "native-comment-id",
+          author: null,
+          body: "Older comment",
+          createdAt: "2026-10-14T00:00:00Z",
+          url: "https://example.atlassian.net/browse/ENG-1#comment-1",
+          reactions: [],
+          reactionsTruncated: false,
+        },
+      ],
+      nextCursor: "next-comment-page",
+    };
     const services = Layer.mergeAll(
       Layer.mock(Orchestrator.OrchestratorV2)({}),
       Layer.mock(ThreadIssueService.ThreadIssueService)({}),
@@ -484,6 +501,23 @@ it.effect("registers native issue choices and guards reads and typed creation wi
           ]),
         candidates: () =>
           Ref.update(candidateReads, (count) => count + 1).pipe(Effect.as(candidates)),
+        comments: (input) =>
+          Ref.update(commentReads, (calls) => [...calls, input]).pipe(
+            Effect.flatMap(() =>
+              input.cursor === "denied"
+                ? Effect.fail(
+                    new IssueOperationError({
+                      operation: "comments",
+                      detail: "Tracker permission denied",
+                    }),
+                  )
+                : Effect.succeed(
+                    input.cursor === "next-comment-page"
+                      ? { comments: [], nextCursor: null }
+                      : comments,
+                  ),
+            ),
+          ),
         create: (input) =>
           Ref.update(created, (calls) => [...calls, input]).pipe(
             Effect.as({
@@ -556,6 +590,7 @@ it.effect("registers native issue choices and guards reads and typed creation wi
             body: "",
             comments: [],
             commentsTruncated: true,
+            commentsCursor: "older-comment-page",
             linkedPullRequests: [
               {
                 url: "https://github.com/acme/web/pull/1",
@@ -579,6 +614,54 @@ it.effect("registers native issue choices and guards reads and typed creation wi
             Effect.provideService(McpSchema.McpServerClient, client),
           );
       const readOnly = clientScope("read-only");
+      const commentDefinition = server.tools.find(
+        ({ tool }) => tool.name === "read_issue_comments",
+      );
+      expect(commentDefinition?.tool.annotations?.readOnlyHint).toBe(true);
+      const validateComments = new AjvJsonSchemaValidator().getValidator(
+        commentDefinition!.tool.outputSchema! as JsonSchemaType,
+      );
+      const commentInput = { projectId, ...binding, key: "ENG-1", cursor: "older-comment-page" };
+      const commentDenied = yield* call("read_issue_comments", commentInput, {
+        ...readOnly,
+        capabilities: new Set<never>(),
+      });
+      expect(commentDenied.isError).toBe(true);
+      expect(yield* Ref.get(commentReads)).toEqual([]);
+      for (const cursor of ["", "x".repeat(4_097)]) {
+        const invalid = yield* call(
+          "read_issue_comments",
+          { ...commentInput, cursor },
+          readOnly,
+        ).pipe(Effect.flip);
+        expect(invalid).toMatchObject({ _tag: "InvalidParams" });
+      }
+      expect(yield* Ref.get(commentReads)).toEqual([]);
+      const older = yield* call("read_issue_comments", commentInput, readOnly);
+      expect(older.isError).toBe(false);
+      expect(older.structuredContent).toEqual(comments);
+      expect(validateComments(older.structuredContent).valid).toBe(true);
+      const oldest = yield* call(
+        "read_issue_comments",
+        { ...commentInput, cursor: comments.nextCursor },
+        readOnly,
+      );
+      expect(oldest.structuredContent).toEqual({ comments: [], nextCursor: null });
+      expect(validateComments(oldest.structuredContent).valid).toBe(true);
+      const trackerDenied = yield* call(
+        "read_issue_comments",
+        { ...commentInput, cursor: "denied" },
+        readOnly,
+      );
+      expect(trackerDenied.isError).toBe(true);
+      expect(trackerDenied.content).toEqual([
+        { type: "text", text: "Issue operation comments failed: Tracker permission denied" },
+      ]);
+      expect(yield* Ref.get(commentReads)).toEqual([
+        commentInput,
+        { ...commentInput, cursor: comments.nextCursor },
+        { ...commentInput, cursor: "denied" },
+      ]);
       const denied = yield* call(
         "read_issue_candidates",
         { projectId, tracker: binding.tracker },

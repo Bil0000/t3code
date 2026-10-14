@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  IssueOperationError,
   IssueTrackerKind,
   ProjectId,
   ProviderInstanceId,
@@ -175,6 +176,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     readonly project?: OrchestrationProjectShell;
     readonly sources?: ReadonlyArray<IssueService.ProjectTrackerBinding>;
     readonly detail?: IssueDetail;
+    readonly comments?: IssueService.IssueService["Service"]["comments"];
   } = {},
 ) {
   const links = yield* Ref.make<ReadonlyArray<ThreadIssueService.LinkThreadIssueInput>>([]);
@@ -214,6 +216,14 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
           url: currentDetail.url,
         }),
       detail: (input) => record("detail", input, currentDetail),
+      comments: (input) =>
+        record("comments", input, undefined).pipe(
+          Effect.flatMap(() =>
+            options.comments === undefined
+              ? Effect.succeed({ comments: [], nextCursor: null })
+              : options.comments(input),
+          ),
+        ),
       candidates: (input) => record("candidates", input, candidates),
       comment: (input) => record("comment", input, undefined),
       setState: (input) => record("setState", input, undefined),
@@ -266,6 +276,108 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect("continues two older comment pages without reading or resolving the issue again", () =>
+    Effect.gen(function* () {
+      const olderComment = {
+        id: "comment-2",
+        author: null,
+        body: "Older comment",
+        createdAt: "2026-08-01T00:00:00.000Z",
+        url: "https://linear.app/team/issue/ENG-7/seven#comment-2",
+        reactions: [],
+        reactionsTruncated: false,
+      };
+      const harness = yield* makeHarness([], {
+        sources: [gitHostSource, standaloneSource],
+        detail: { ...standaloneDetail, commentsCursor: "opaque-page-2" },
+        comments: (input) =>
+          Effect.gen(function* () {
+            const context = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+            expect(Option.getOrThrow(context).environmentId).toBe(
+              EnvironmentId.make("environment-1"),
+            );
+            return input.cursor === "opaque-page-2"
+              ? { comments: [olderComment], nextCursor: "opaque-page-3" }
+              : { comments: [{ ...olderComment, id: "comment-1" }], nextCursor: null };
+          }),
+      });
+      const read = yield* harness.call("read_issue", { tracker: LINEAR, key: "ENG-7" });
+      expect(read.commentsTruncated).toBe(true);
+      expect(read.commentsCursor).toBe("opaque-page-2");
+      const input = {
+        projectId: read.projectId,
+        tracker: read.tracker,
+        host: read.host,
+        scope: read.scope,
+        key: read.key,
+      };
+      const older = yield* harness.call("read_issue_comments", {
+        ...input,
+        cursor: read.commentsCursor!,
+      });
+      expect(older).toEqual({ comments: [olderComment], nextCursor: "opaque-page-3" });
+      const oldest = yield* harness.call("read_issue_comments", {
+        ...input,
+        cursor: older.nextCursor!,
+      });
+      expect(oldest).toEqual({
+        comments: [{ ...olderComment, id: "comment-1" }],
+        nextCursor: null,
+      });
+      expect(yield* Ref.get(harness.resolutions)).toEqual(["sources"]);
+      expect(yield* Ref.get(harness.calls)).toEqual([
+        { operation: "detail", input },
+        { operation: "comments", input: { ...input, cursor: "opaque-page-2" } },
+        { operation: "comments", input: { ...input, cursor: "opaque-page-3" } },
+      ]);
+    }),
+  );
+
+  it.effect("resolves comment URLs and key shorthand without full issue reads", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* harness.call("read_issue_comments", { url: detail.url, cursor: "url-page" });
+      yield* harness.call("read_issue_comments", { key: "7", cursor: "key-page" });
+      expect(yield* Ref.get(harness.calls)).toEqual([
+        {
+          operation: "comments",
+          input: {
+            projectId: PROJECT_ID,
+            ...gitHostSource,
+            scope: "t3tools/t3code",
+            key: "7",
+            cursor: "url-page",
+          },
+        },
+        {
+          operation: "comments",
+          input: { projectId: PROJECT_ID, ...gitHostSource, key: "7", cursor: "key-page" },
+        },
+      ]);
+    }),
+  );
+
+  it.effect("guards comment pages and preserves provider permission and cursor failures", () =>
+    Effect.gen(function* () {
+      const input = { projectId: PROJECT_ID, ...standaloneSource, key: "ENG-7", cursor: "page" };
+      for (const detail of ["Permission denied by tracker", "Comment cursor expired"]) {
+        const failure = new IssueOperationError({ operation: "comments", detail });
+        const harness = yield* makeHarness([], { comments: () => Effect.fail(failure) });
+        expect(
+          yield* harness.call("read_issue_comments", input, []).pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "McpCapabilityUnavailableError",
+          capability: "issues",
+        });
+        expect(yield* Ref.get(harness.calls)).toEqual([]);
+        expect(yield* harness.call("read_issue_comments", input).pipe(Effect.flip)).toEqual(
+          failure,
+        );
+        expect(yield* Ref.get(harness.calls)).toEqual([{ operation: "comments", input }]);
+      }
+    }),
+  );
+
   it.effect("guards candidate reads with source selection and the issues capability", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness([], { sources: [gitHostSource, jiraSource] });
