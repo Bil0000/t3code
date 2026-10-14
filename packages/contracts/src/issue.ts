@@ -3,6 +3,7 @@ import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import {
+  CommandId,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -737,6 +738,7 @@ export type ThreadIssueSnapshot = typeof ThreadIssueSnapshot.Type;
  */
 export const ThreadIssueLink = Schema.Struct({
   ...ThreadIssueKey.fields,
+  linkId: Schema.optional(CommandId),
   projectId: ProjectId,
   url: TrimmedNonEmptyString,
   source: ThreadIssueLinkSource,

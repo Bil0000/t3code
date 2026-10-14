@@ -165,6 +165,8 @@ const make = Effect.gen(function* () {
       scope: link.scope,
       key: link.key,
       snapshot,
+      linkedAt: link.linkedAt,
+      linkId: link.linkId ?? null,
     });
   });
 

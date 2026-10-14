@@ -2726,6 +2726,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           let reads = 0;
+          let nonce = 0;
+          let pauseRead = false;
+          const readStarted = yield* Deferred.make<void>();
+          const releaseRead = yield* Deferred.make<void>();
           const context = yield* Layer.build(
             Layer.mergeAll(
               Layer.mock(IssueService.IssueService)({
@@ -2776,12 +2780,20 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                       events: [],
                       linkedPullRequests: [],
                     };
-                  }),
+                  }).pipe(
+                    Effect.tap(() =>
+                      pauseRead
+                        ? Deferred.succeed(readStarted, undefined).pipe(
+                            Effect.andThen(Deferred.await(releaseRead)),
+                          )
+                        : Effect.void,
+                    ),
+                  ),
               }),
               Layer.succeed(
                 Crypto.Crypto,
                 Crypto.make({
-                  randomBytes: (size) => new Uint8Array(size).fill(1),
+                  randomBytes: (size) => new Uint8Array(size).fill(++nonce),
                   digest: (_algorithm, data) => Effect.succeed(data),
                 }),
               ),
@@ -2822,6 +2834,35 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           yield* service.refresh(threadId, { staleOnly: true });
           yield* service.drain;
           assert.equal(reads, 1);
+          const ref = { ...key, projectId };
+          const detail = yield* Context.get(context, IssueService.IssueService).detail(ref);
+          yield* service.unlink({ threadId, key });
+          yield* service.link({ threadId, ref, url: detail.url, source: "agent" });
+          const captured = (yield* orchestrator.getThreadShell(threadId))!.issues![0]!;
+          pauseRead = true;
+          yield* service.refresh(threadId);
+          yield* Deferred.await(readStarted);
+          yield* service.unlink({ threadId, key });
+          yield* service.link({
+            threadId,
+            ref,
+            url: detail.url,
+            source: "agent",
+            detail: {
+              ...detail,
+              title: "Relinked closed issue",
+              state: { category: "closed", name: "closed" },
+            },
+          });
+          const relinked = (yield* orchestrator.getThreadProjection(threadId)).thread.issues![0]!;
+          assert.equal(relinked.linkedAt, captured.linkedAt);
+          assert.notEqual(relinked.linkId, captured.linkId);
+          yield* Deferred.succeed(releaseRead, undefined);
+          yield* service.drain;
+          const current = (yield* orchestrator.getThreadProjection(threadId)).thread.issues![0]!;
+          assert.deepEqual(current.snapshot, relinked.snapshot);
+          assert.equal(current.snapshot?.state.category, "closed");
+          assert.equal(reads, 3);
         }),
       );
       yield* orchestrator.dispatch({

@@ -9,6 +9,7 @@ import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
   IssueCommentsPageInput,
+  ThreadIssueLink,
   IssueLabelCandidatesPage,
   IssueState,
   IssuePageInput,
@@ -29,6 +30,7 @@ import {
 
 const decodeDescriptor = Schema.decodeEffect(StandaloneIssueTrackerDescriptor);
 const decodeComments = Schema.decodeUnknownSync(IssueCommentsPageInput);
+const decodeThreadLink = Schema.decodeUnknownSync(ThreadIssueLink);
 const decodeActor = Schema.decodeEffect(IssueActor);
 const decodeCreate = Schema.decodeEffect(IssueCreateInput);
 const decodeCreated = Schema.decodeEffect(IssueCreateResult);
@@ -270,5 +272,24 @@ it("preserves optional comment-page viewer context while accepting older clients
   expect(decodeComments({ ...input, viewer: "native-viewer" })).toEqual({
     ...input,
     viewer: "native-viewer",
+  });
+});
+
+it("accepts saved issue links without generation IDs and preserves new IDs", () => {
+  const link = {
+    projectId: "project",
+    tracker: "github",
+    host: "github.com",
+    scope: "acme/web",
+    key: "7",
+    url: "https://github.com/acme/web/issues/7",
+    source: "agent",
+    linkedAt: "2026-10-14T00:00:00.000Z",
+    snapshot: null,
+  };
+  expect(decodeThreadLink(link)).toEqual(link);
+  expect(decodeThreadLink({ ...link, linkId: "link-command" })).toEqual({
+    ...link,
+    linkId: "link-command",
   });
 });
