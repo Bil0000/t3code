@@ -63,8 +63,9 @@ vi.mock("~/state/environments", () => ({
 }));
 vi.mock("~/state/server", async () => {
   const { Atom } = await import("effect/reactivity");
+  const { DEFAULT_RESOLVED_KEYBINDINGS } = await import("@t3tools/shared/keybindings");
   return {
-    primaryServerKeybindingsAtom: Atom.make([]),
+    primaryServerKeybindingsAtom: Atom.make(DEFAULT_RESOLVED_KEYBINDINGS),
     environmentServerConfigsAtom: Atom.make(new Map()),
   };
 });
@@ -72,17 +73,20 @@ vi.mock("~/state/queries", () => ({ useDebouncedValue: (value: string) => value 
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("~/hooks/useIssueViewRefresh", () => ({ useIssueViewRefresh: () => {} }));
 vi.mock("~/hooks/useNavigateBack", () => ({ useEscapeToGoBack: () => {} }));
-vi.mock("~/keybindings", () => ({ shortcutLabelForCommand: () => "" }));
 vi.mock("~/panelAnimations", () => ({
   usePanelAnimationSettings: () => ({ active: false, durationMs: 0 }),
-  usePanelPresence: () => ({ present: false, value: null }),
+  usePanelPresence: (present: boolean, value: unknown) => ({ present, value }),
 }));
 vi.mock("~/components/ui/sidebar", () => ({ SidebarInset: "div" }));
 vi.mock("~/components/WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
 vi.mock("~/components/chat/PanelLayoutControls", () => ({ PanelLayoutControls: () => null }));
-vi.mock("~/components/RightPanelTabs", () => ({ RightPanelTabs: () => null }));
+vi.mock("~/components/RightPanelTabs", () => ({
+  RightPanelTabs: ({ children }: { children: ReactNode }) => (
+    <aside aria-label="Issue details">{children}</aside>
+  ),
+}));
 vi.mock("~/components/issue/IssueDetailPanel", () => ({ IssueDetailPanel: () => null }));
 vi.mock("~/components/pullRequest/PullRequestDetailPanel", () => ({
   PullRequestDetailPanel: () => null,
@@ -91,6 +95,7 @@ vi.mock("~/components/issue/IssueCreateDialog", () => ({ IssueCreateDialog: () =
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { Route, type IssuesSearch } from "../../routes/_chat.issues";
 
 const environmentA = EnvironmentId.make("environment-a");
@@ -166,6 +171,7 @@ async function mount() {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();
+  useRightPanelStore.setState(useRightPanelStore.getInitialState(), true);
   state.responses.clear();
   state.read.mockClear();
   state.projects = [];
@@ -336,4 +342,43 @@ it("removes projects after an authoritative empty unfiltered answer", async () =
   state.responses.set(environmentA, AsyncResult.success(sourceAnswer([])));
   await refresh();
   expect(container.querySelector('button[aria-label^="Filter by project:"]')).toBeNull();
+});
+
+it("toggles the selected issue panel with the existing keyboard shortcut", async () => {
+  state.responses.set(environmentA, AsyncResult.success(answer([issue("A")])));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  await mount();
+  const panel = () => container.querySelector('aside[aria-label="Issue details"]');
+  const toggle = async (options: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", {
+      key: "b",
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+      ...options,
+    });
+    await act(async () => document.dispatchEvent(event));
+    return event;
+  };
+  expect((await toggle()).defaultPrevented).toBe(false);
+  expect(panel()).toBeNull();
+  const row = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+    button.textContent?.includes("Issue A"),
+  )!;
+  await act(async () => row.click());
+  expect(panel()).not.toBeNull();
+  expect((await toggle()).defaultPrevented).toBe(true);
+  expect(panel()).toBeNull();
+  expect(state.search.selectedProjectId).toBeUndefined();
+  await toggle({ repeat: true });
+  expect(panel()).toBeNull();
+  await toggle();
+  expect(panel()).not.toBeNull();
+  expect(state.search.key).toBe("A");
+  const palette = document.createElement("div");
+  palette.setAttribute("data-command-palette", "");
+  container.append(palette);
+  expect((await toggle()).defaultPrevented).toBe(false);
+  expect(panel()).not.toBeNull();
 });
