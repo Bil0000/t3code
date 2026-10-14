@@ -135,8 +135,8 @@ function toSummary(raw: typeof RawIssueSchema.Type): TrackerIssueSummary {
     // GitLab has exactly the two states, calls the open one `opened`, and records no reason.
     state:
       raw.state?.trim().toLowerCase() === "closed"
-        ? { category: "closed", name: "closed" }
-        : { category: "open", name: "open" },
+        ? { category: "closed", name: "closed", workflowCategory: "completed" }
+        : { category: "open", name: "open", workflowCategory: "unstarted" },
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
     closedAt: trimmed(raw.closed_at),
@@ -255,6 +255,8 @@ function toIssueNotes(
       author,
       body,
       createdAt: note.createdAt,
+      editedAt: note.updatedAt == null || note.updatedAt === note.createdAt ? null : note.updatedAt,
+      canEdit: note.userPermissions?.adminNote ?? false,
       url: null,
     });
   }
@@ -412,7 +414,7 @@ export const ISSUE_AWARD_EMOJI_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: Stri
       notes(first: ${PAGE_SIZE}, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
-          id body createdAt system
+          id body createdAt updatedAt system userPermissions { adminNote }
           author { id username name avatarUrl }
           awardEmoji(first: ${PAGE_SIZE}) { pageInfo { hasNextPage } nodes { name user { username } } }
         }
@@ -432,6 +434,8 @@ const RawGraphNoteSchema = Schema.Struct({
   id: Schema.String,
   body: Schema.optional(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
+  updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  userPermissions: Schema.optional(Schema.Struct({ adminNote: Schema.Boolean })),
   system: Schema.optional(Schema.Boolean),
   author: Schema.optional(
     Schema.NullOr(

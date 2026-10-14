@@ -14,13 +14,19 @@ import * as Schema from "effect/Schema";
 import {
   IssueTrackerKind,
   type IssueCapabilities,
+  type IssueActor,
+  type IssueEvent,
+  type IssuePageInput,
   type IssueInvolvement,
   type IssueViewerPermissions,
 } from "@t3tools/contracts";
 import {
   IssueTrackerError,
   type IssueTrackerApi,
+  type IssueScopeTarget,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
+
+import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 import * as GitLabCli from "./GitLabCli.ts";
 import {
@@ -41,12 +47,40 @@ import {
 } from "./gitLabIssueJson.ts";
 import { decodeViewerJson, gitLabAwardName } from "./gitLabMergeRequestJson.ts";
 
+const EditCommentPermissions = Schema.Struct({
+  data: Schema.Struct({
+    note: Schema.NullOr(
+      Schema.Struct({ userPermissions: Schema.Struct({ adminNote: Schema.Boolean }) }),
+    ),
+  }),
+});
+const HistoryActor = Schema.Struct({
+  id: Schema.optional(Schema.Int),
+  username: Schema.String,
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  avatar_url: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const HistoryRow = Schema.Struct({
+  id: Schema.Int,
+  created_at: Schema.String,
+  body: Schema.optional(Schema.String),
+  system: Schema.optional(Schema.Boolean),
+  action: Schema.optional(Schema.String),
+  state: Schema.optional(Schema.String),
+  author: Schema.optional(Schema.NullOr(HistoryActor)),
+  user: Schema.optional(Schema.NullOr(HistoryActor)),
+  label: Schema.optional(Schema.NullOr(Schema.Struct({ name: Schema.String }))),
+});
+
 const KIND = IssueTrackerKind.make("gitlab");
 
 const CAPABILITIES: IssueCapabilities = {
   create: true,
   edit: true,
   comment: true,
+  editComment: true,
+  listSorts: ["created", "updated"],
+  listOrders: ["asc", "desc"],
   labels: true,
   assignees: true,
   reactions: true,
@@ -306,6 +340,34 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         decode: (raw) => decodeLinkedMergeRequestsJson(raw, input.endpoint === "closed_by"),
       });
 
+    const candidatePage = <A>(
+      input: IssueScopeTarget & IssuePageInput,
+      operation: string,
+      endpoint: string,
+      decode: (raw: string) => Result.Result<ReadonlyArray<A>, unknown>,
+    ) => {
+      const page = parsePage(input.cursor);
+      if (page === null)
+        return Effect.fail(refused(operation, "The cursor was not one GitLab handed out."));
+      const limit = Math.min(input.limit ?? 50, PAGE_SIZE);
+      return api({
+        ...input,
+        operation,
+        path: `projects/${projectPath(input.scope)}/${endpoint}?per_page=${limit}&page=${page}`,
+      }).pipe(
+        Effect.flatMap((raw) => {
+          const rows = decodeJsonResult(Schema.Array(Schema.Unknown))(raw);
+          const items = decode(raw);
+          return Result.isSuccess(rows) && Result.isSuccess(items)
+            ? Effect.succeed({
+                items: items.success,
+                nextCursor: rows.success.length >= limit ? String(page + 1) : null,
+              })
+            : Effect.fail(unreadable(operation, raw));
+        }),
+      );
+    };
+
     const template =
       (input: { readonly cwd: string; readonly host: string; readonly scope: string }) =>
       (entry: GitLabTemplateEntry) =>
@@ -324,13 +386,20 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       getViewer: (input) => viewer({ cwd: input.cwd, host: input.host, operation: "getViewer" }),
 
       listIssues: (input) => {
-        if (input.involvement === "mentioned") {
+        if (input.involvement === "mentioned" || input.sort === "comments") {
           return Effect.fail(refused("listIssues", "GitLab cannot filter issues by mentions."));
         }
         const page = parsePage(input.cursor);
         if (page === null) {
           return Effect.fail(refused("listIssues", "The cursor was not one GitLab handed out."));
         }
+        const categories = input.stateCategories;
+        const open =
+          categories === undefined ? input.state !== "closed" : categories.includes("unstarted");
+        const closed =
+          categories === undefined ? input.state !== "open" : categories.includes("completed");
+        if (!open && !closed) return Effect.succeed({ items: [], nextCursor: null });
+        const state = open && closed ? "all" : open ? "opened" : "closed";
         const perPage = Math.min(Math.max(input.limit, 1), PAGE_SIZE);
         const text = input.query?.trim() ?? "";
         return read({
@@ -338,14 +407,14 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           host: input.host,
           operation: "listIssues",
           path: `projects/${projectPath(input.scope)}/issues?${query([
-            ["state", input.state === "open" ? "opened" : input.state],
+            ["state", state],
             ["scope", "all"],
             ...involvementParams(input),
             // GitLab's own `search` matches title and description, URL-encoded like every other
             // value here, so no text in it can become a parameter of its own.
             ...(text.length === 0 ? [] : [["search", text] as const]),
-            ["order_by", "updated_at"],
-            ["sort", "desc"],
+            ["order_by", `${input.sort ?? "updated"}_at`],
+            ["sort", input.order ?? "desc"],
             ["per_page", String(perPage)],
             ["page", String(page)],
           ])}`,
@@ -431,10 +500,177 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
               operation: "getComments",
             }),
           ),
-          Effect.map((page) => ({ comments: page.comments, nextCursor: page.nextCursor })),
+          Effect.map((page) => ({
+            comments: page.comments.map((comment) => ({
+              ...comment,
+              canEdit: input.viewer === undefined ? false : (comment.canEdit ?? false),
+            })),
+            nextCursor: page.nextCursor,
+          })),
         ),
 
       getViewerPermissions: () => Effect.succeed(VIEWER_PERMISSIONS),
+
+      editComment: (input) =>
+        issuePath(input, "editComment").pipe(
+          Effect.flatMap(({ path }) => {
+            if (parseNumber(input.commentId) === null)
+              return Effect.fail(refused("editComment", "The comment id names no GitLab note."));
+            return read({
+              ...input,
+              operation: "editComment",
+              path: `${path}/notes/${input.commentId}`,
+              decode: decodeJsonResult(
+                Schema.Struct({
+                  id: Schema.Int,
+                  noteable_iid: Schema.Int,
+                  noteable_type: Schema.String,
+                  system: Schema.Boolean,
+                }),
+              ),
+            }).pipe(
+              Effect.filterOrFail(
+                (note) =>
+                  String(note.id) === input.commentId &&
+                  String(note.noteable_iid) === input.key &&
+                  note.noteable_type === "Issue" &&
+                  !note.system,
+                () => refused("editComment", "The comment does not belong to this issue."),
+              ),
+              Effect.flatMap(() =>
+                read({
+                  ...input,
+                  operation: "editComment",
+                  path: "graphql",
+                  method: "POST",
+                  body: {
+                    query: "query($id:NoteID!) { note(id:$id) { userPermissions { adminNote } } }",
+                    variables: { id: `gid://gitlab/Note/${input.commentId}` },
+                  },
+                  decode: decodeJsonResult(EditCommentPermissions),
+                }),
+              ),
+              Effect.filterOrFail(
+                (result) => result.data.note?.userPermissions.adminNote === true,
+                () => refused("editComment", "You cannot edit this comment."),
+              ),
+              Effect.flatMap(() =>
+                write({
+                  ...input,
+                  operation: "editComment",
+                  path: `${path}/notes/${input.commentId}`,
+                  method: "PUT",
+                  body: { body: input.body },
+                }),
+              ),
+            );
+          }),
+        ),
+
+      getHistory: (input) =>
+        Effect.gen(function* () {
+          const match = /^(notes|labels|states):([1-9]\d{0,6})$/.exec(input.cursor ?? "notes:1");
+          if (match === null)
+            return yield* refused(
+              "getHistory",
+              "The history cursor was not one GitLab handed out.",
+            );
+          const phase = match[1];
+          const page = Number(match[2]);
+          const { path } = yield* issuePath(input, "getHistory");
+          const limit = Math.min(input.limit ?? 50, PAGE_SIZE);
+          const endpoint =
+            phase === "notes"
+              ? "notes"
+              : phase === "labels"
+                ? "resource_label_events"
+                : "resource_state_events";
+          const rows = yield* read({
+            ...input,
+            operation: "getHistory",
+            path: `${path}/${endpoint}?per_page=${limit}&page=${page}${phase === "notes" ? "&sort=asc&order_by=created_at" : ""}`,
+            decode: decodeJsonResult(Schema.Array(HistoryRow)),
+          });
+          return {
+            items: rows.flatMap((row): IssueEvent[] => {
+              if (phase === "notes" && !row.system) return [];
+              const user = row.author ?? row.user;
+              const actor: IssueActor | null =
+                user === undefined || user === null
+                  ? null
+                  : {
+                      id: user.id === undefined ? undefined : String(user.id),
+                      login: user.username,
+                      name: user.name ?? null,
+                      avatarUrl: user.avatar_url ?? null,
+                    };
+              const kind =
+                phase === "labels"
+                  ? row.action === "add"
+                    ? "labeled"
+                    : "unlabeled"
+                  : phase === "states"
+                    ? row.state === "closed"
+                      ? "closed"
+                      : "reopened"
+                    : "updated";
+              return [
+                {
+                  id: `${phase}:${row.id}`,
+                  kind,
+                  actor,
+                  createdAt: row.created_at,
+                  detail: (row.label?.name ?? row.body?.trim()) || null,
+                },
+              ];
+            }),
+            nextCursor:
+              rows.length >= limit
+                ? `${phase}:${page + 1}`
+                : phase === "notes"
+                  ? "labels:1"
+                  : phase === "labels"
+                    ? "states:1"
+                    : null,
+          };
+        }),
+
+      getLinkedPullRequests: (input) =>
+        Effect.gen(function* () {
+          const match = /^(closing|related):([1-9]\d{0,6})$/.exec(input.cursor ?? "closing:1");
+          if (match === null)
+            return yield* refused(
+              "getLinkedPullRequests",
+              "The linked merge request cursor was not one GitLab handed out.",
+            );
+          const closing = match[1] === "closing";
+          const page = Number(match[2]);
+          const limit = Math.min(input.limit ?? 50, PAGE_SIZE);
+          const { path } = yield* issuePath(input, "getLinkedPullRequests");
+          const raw = yield* api({
+            ...input,
+            operation: "getLinkedPullRequests",
+            path: `${path}/${closing ? "closed_by" : "related_merge_requests"}?per_page=${limit}&page=${page}`,
+          });
+          const rows = decodeJsonResult(Schema.Array(Schema.Unknown))(raw);
+          const items = decodeLinkedMergeRequestsJson(raw, closing);
+          if (!Result.isSuccess(rows) || !Result.isSuccess(items))
+            return yield* unreadable("getLinkedPullRequests", raw);
+          return {
+            items: items.success,
+            nextCursor:
+              rows.success.length >= limit
+                ? `${closing ? "closing" : "related"}:${page + 1}`
+                : closing
+                  ? "related:1"
+                  : null,
+          };
+        }),
+
+      listLabelCandidates: (input) =>
+        candidatePage(input, "listLabelCandidates", "labels", decodeProjectLabelsJson),
+      listAssigneeCandidates: (input) =>
+        candidatePage(input, "listAssigneeCandidates", "users", decodeProjectMembersJson),
 
       create: (input) =>
         assigneeIds("create", input.assignees).pipe(

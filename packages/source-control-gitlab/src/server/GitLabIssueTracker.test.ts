@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
@@ -126,6 +127,95 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each([true, false])(
+    "uses the note's native edit permission %s on the selected host",
+    (canEdit) =>
+      Effect.gen(function* () {
+        const writes: string[] = [];
+        const api = yield* tracker((args, stdin) => {
+          expect(args[args.indexOf("--hostname") + 1]).toBe("gitlab.internal:8443");
+          if (args[1] === "graphql")
+            return encode({ data: { note: { userPermissions: { adminNote: canEdit } } } });
+          if (args.includes("PUT")) {
+            writes.push(stdin!);
+            return "{}";
+          }
+          return encode({ id: 7, noteable_iid: 42, noteable_type: "Issue", system: false });
+        });
+        const result = yield* Effect.result(
+          api.editComment!({
+            cwd: "/w",
+            host: "gitlab.internal:8443",
+            scope: "acme/web",
+            key: "42",
+            commentId: "7",
+            body: "Updated",
+          }),
+        );
+        expect(Result.isSuccess(result)).toBe(canEdit);
+        expect(writes).toEqual(canEdit ? [encode({ body: "Updated" })] : []);
+      }),
+  );
+
+  it.effect("keeps native history phases when a notes page contains no history", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker((args) => {
+        const path = args[1]!;
+        if (path.includes("/notes?"))
+          return encode([
+            { id: 1, created_at: "2026-07-01T00:00:00Z", system: false, body: "Comment" },
+          ]);
+        if (path.includes("resource_label_events"))
+          return encode([
+            { id: 2, created_at: "2026-07-01T00:00:00Z", action: "add", label: { name: "bug" } },
+          ]);
+        return encode([{ id: 3, created_at: "2026-07-01T00:00:00Z", state: "closed" }]);
+      });
+      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 2 };
+      const notes = yield* api.getHistory!(target);
+      expect(notes).toEqual({ items: [], nextCursor: "labels:1" });
+      const labels = yield* api.getHistory!({ ...target, cursor: notes.nextCursor! });
+      expect(labels).toMatchObject({
+        items: [{ kind: "labeled", detail: "bug" }],
+        nextCursor: "states:1",
+      });
+      expect(yield* api.getHistory!({ ...target, cursor: labels.nextCursor! })).toMatchObject({
+        items: [{ kind: "closed" }],
+        nextCursor: null,
+      });
+    }),
+  );
+
+  it.effect(
+    "passes native list sorting and empty workflow filters without broadening the scope",
+    () =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args) => {
+          paths.push(args[1]!);
+          return "[]";
+        });
+        const input = {
+          cwd: "/w",
+          host: "gitlab.com",
+          scope: "acme/web",
+          state: "all" as const,
+          involvement: "all" as const,
+          viewer: "julius",
+          limit: 5,
+          sort: "created" as const,
+          order: "asc" as const,
+        };
+        yield* api.listIssues(input);
+        expect(paths[0]).toContain("order_by=created_at&sort=asc");
+        expect(yield* api.listIssues({ ...input, stateCategories: ["canceled"] })).toEqual({
+          items: [],
+          nextCursor: null,
+        });
+        expect(paths).toHaveLength(1);
+      }),
+  );
+
   it.effect("clears all assignees with GitLab's native zero sentinel", () =>
     Effect.gen(function* () {
       let body: string | undefined;
@@ -420,6 +510,8 @@ describe("GitLabIssueTracker", () => {
           author: { login: "julius", name: null, avatarUrl: null },
           body: "Repro attached.",
           createdAt: "2026-07-02T00:00:00Z",
+          editedAt: null,
+          canEdit: false,
           url: null,
           reactions: [{ content: "thumbs-up", count: 2, actors: ["theo"], viewerHasReacted: true }],
         },
