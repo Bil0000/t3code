@@ -269,6 +269,15 @@ export function createIssueEnvironmentAtoms<R, E>(
       },
     }),
     detail,
+    resolveUrl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:resolve-url",
+      tag: WS_METHODS.issuesResolveUrl,
+      scheduler: commandScheduler,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
+      },
+    }),
     /** Older comments past the cursor the detail handed over; the panel prepends what arrives. */
     comments: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:comments",

@@ -98,6 +98,19 @@ export const IssueRef = Schema.Struct({
 });
 export type IssueRef = typeof IssueRef.Type;
 
+export const IssueResolveUrlInput = Schema.Struct({
+  url: Schema.String,
+  projectId: Schema.optional(ProjectId),
+});
+export type IssueResolveUrlInput = typeof IssueResolveUrlInput.Type;
+
+export const IssueResolvedUrl = Schema.Struct({
+  ...IssueRef.fields,
+  host: TrimmedNonEmptyString,
+  writable: Schema.Boolean,
+});
+export type IssueResolvedUrl = typeof IssueResolvedUrl.Type;
+
 /** A scope with no issue in it, for reads about the container itself: templates, candidates. */
 export const IssueScopeRef = Schema.Struct({
   projectId: ProjectId,

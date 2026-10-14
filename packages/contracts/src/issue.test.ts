@@ -2,6 +2,9 @@ import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { AuthOrchestrationReadScope } from "./auth.ts";
+import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
+import { WS_METHODS } from "./rpc.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
@@ -9,6 +12,8 @@ import {
   IssueCreateInput,
   IssueCreateResult,
   IssueLinkedPullRequest,
+  IssueResolveUrlInput,
+  IssueResolvedUrl,
   IssueSummary,
   IssueTrackerKind,
   IssueTrackerProjectBinding,
@@ -137,3 +142,20 @@ it.effect("preserves a created issue and warnings about native fields that were 
     assert.deepEqual(yield* decodeCreated(created), created);
   }),
 );
+
+it("keeps URL resolution direct and protected by the read grant", () => {
+  const input = { url: "https://github.com/acme/web/issues/1", projectId: ProjectId.make("web") };
+  assert.deepEqual(Schema.decodeSync(IssueResolveUrlInput)(input), input);
+  const result = {
+    projectId: ProjectId.make("web"),
+    tracker: IssueTrackerKind.make("github"),
+    host: "github.com",
+    scope: "acme/web",
+    key: "1",
+    writable: true,
+  };
+  assert.deepEqual(Schema.decodeSync(IssueResolvedUrl)(result), result);
+  assert.deepEqual(clientRpcRequiredScopes(WS_METHODS.issuesResolveUrl, input), [
+    AuthOrchestrationReadScope,
+  ]);
+});

@@ -1,4 +1,5 @@
 import type {
+  AuthSessionState,
   EnvironmentId,
   IssueCapabilities,
   IssueComment,
@@ -8,15 +9,17 @@ import type {
   IssueTrackerKind,
   ProjectId,
 } from "@t3tools/contracts";
+import { AuthOrchestrationReadScope } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcClient from "../rpc/client.ts";
+import * as Session from "./session.ts";
 
 import {
   continueIssueListPage,
@@ -29,6 +32,65 @@ import {
   prependIssueComments,
   refreshIssueListPage,
 } from "./issues.ts";
+
+it("resolves one clicked issue URL in the requested environment and preferred project", async () => {
+  const input = {
+    url: "https://linear.app/workspace/issue/ENG-42/name",
+    projectId: "project-1" as ProjectId,
+  };
+  const reference = {
+    projectId: input.projectId,
+    tracker: "linear" as IssueTrackerKind,
+    host: "linear.app",
+    scope: "workspace/ENG",
+    key: "ENG-42",
+    writable: true,
+  };
+  const request = vi.spyOn(RpcClient, "requestGuarded");
+  request.mockImplementation((() => Effect.succeed(reference)) as unknown as Parameters<
+    typeof request.mockImplementation
+  >[0]);
+  const run = vi.fn((_environmentId: EnvironmentId, effect: Effect.Effect<unknown>) => effect);
+  const runtime = Atom.runtime(
+    Layer.succeed(
+      EnvironmentRegistry.EnvironmentRegistry,
+      EnvironmentRegistry.EnvironmentRegistry.of({
+        run,
+      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+    ),
+  );
+  const session = Atom.make(
+    AsyncResult.success({
+      authenticated: true,
+      auth: {
+        policy: "remote-reachable",
+        bootstrapMethods: [],
+        sessionMethods: [],
+        sessionCookieName: "test",
+      },
+      scopes: [AuthOrchestrationReadScope],
+      permissions: [AuthOrchestrationReadScope],
+    } satisfies AuthSessionState),
+  );
+  const sessions = Session.createEnvironmentSessionAtoms(runtime);
+  const sessionFactory = vi.spyOn(Session, "createEnvironmentSessionAtoms").mockReturnValue({
+    ...sessions,
+    sessionStateAtom: () => session,
+  });
+  const atoms = createIssueEnvironmentAtoms(runtime);
+  const registry = AtomRegistry.make();
+  const environmentId = "environment-1" as EnvironmentId;
+  try {
+    const result = await atoms.resolveUrl.run(registry, { environmentId, input });
+    expect(result).toMatchObject({ _tag: "Success", value: reference });
+    expect(request).toHaveBeenCalledExactlyOnceWith("issues.resolveUrl", input);
+    expect(run.mock.calls[0]?.[0]).toBe(environmentId);
+  } finally {
+    registry.dispose();
+    request.mockRestore();
+    sessionFactory.mockRestore();
+  }
+});
 
 describe("issue comment requests", () => {
   it.each([
