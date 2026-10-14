@@ -145,6 +145,96 @@ function tracker(
 }
 
 describe("ForgejoIssueTracker", () => {
+  it.effect.each([
+    { operation: "create", name: "BUG" },
+    { operation: "update", name: "BUG" },
+    { operation: "create", name: "bug" },
+    { operation: "update", name: "bug" },
+  ] as const)("applies native template label $name on $operation", ({ operation, name }) =>
+    Effect.gen(function* () {
+      const requests: ForgejoCli.ForgejoApiInput[] = [];
+      const api = yield* tracker((input) => {
+        requests.push(input);
+        if (input.method || input.path.endsWith("/issues/42")) return { stdout: encode(ISSUE) };
+        if (input.path.endsWith("/issue_templates"))
+          return {
+            stdout: encode([
+              { file_name: "bug.md", name: "Bug", content: "Steps", labels: [name] },
+            ]),
+          };
+        if (input.path.endsWith("/issue_config")) return { stdout: "{}" };
+        return { stdout: encode(input.path.startsWith("repos/") ? ISSUE.labels : []) };
+      });
+      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+      const template = (yield* api.listTemplates!(target)).templates[0]!;
+      expect(template.labels).toEqual([name]);
+      requests.length = 0;
+      if (operation === "create")
+        yield* api.create!({
+          ...target,
+          title: "Bug",
+          body: template.body,
+          labels: template.labels,
+          assignees: [],
+          templateKey: template.key,
+        });
+      else yield* api.update!({ ...target, labels: template.labels });
+      expect(requests.filter((request) => request.method)).toMatchObject([
+        { body: { labels: [3] } },
+      ]);
+      expect(requests).toHaveLength(operation === "create" ? 2 : 3);
+    }),
+  );
+
+  it.effect.each([
+    { requested: "BUG", native: "bug", matches: true },
+    { requested: "Σ", native: "ς", matches: true },
+    { requested: "S", native: "ſ", matches: true },
+    { requested: "K", native: "k", matches: true },
+    { requested: "BUG[1].*", native: "bug[1].*", matches: true },
+    { requested: "BUG[1].*", native: "bug1-other", matches: false },
+    { requested: "BUG", native: "bug\n", matches: false },
+    { requested: "SS", native: "ß", matches: false },
+    { requested: "İ", native: "i", matches: false },
+    { requested: "BUG", native: "unrelated", matches: false },
+  ])("validates scoped native label $requested against $native", ({ requested, native, matches }) =>
+    Effect.gen(function* () {
+      for (const source of ["repo", "org"] as const) {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.method) return { stdout: encode(ISSUE) };
+          if (input.path.includes("?")) return { stdout: "[]" };
+          if (source === "org" && input.path.startsWith("repos/"))
+            return new ForgejoCli.ForgejoCliError({
+              command: "fj",
+              cwd: "/w",
+              reason: "not-found",
+              detail: "No repository label.",
+            });
+          return { stdout: encode({ id: 93, name: native }) };
+        });
+        const result = yield* Effect.result(
+          api.create!({
+            cwd: "/w",
+            host: "forgejo.test:3000",
+            scope: "acme/web",
+            title: "Bug",
+            body: "",
+            labels: [requested],
+            assignees: [],
+          }),
+        );
+        expect(Result.isSuccess(result)).toBe(matches);
+        const writes = requests.filter((request) => request.method);
+        if (matches) expect(writes).toMatchObject([{ body: { labels: [93] } }]);
+        else expect(writes).toEqual([]);
+        expect(requests).toHaveLength(3 + Number(source === "org") + Number(matches));
+        expect(requests[2]?.path).toBe(`repos/acme/web/labels/${encodeURIComponent(requested)}`);
+      }
+    }),
+  );
+
   it.effect.each(["create", "update"] as const)(
     "prefers a page-two repository label over a same-name organization label on %s",
     (operation) =>
@@ -168,8 +258,8 @@ describe("ForgejoIssueTracker", () => {
         });
         const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
         if (operation === "create")
-          yield* api.create!({ ...target, title: "New", body: "", labels: ["bug"], assignees: [] });
-        else yield* api.update!({ ...target, labels: ["bug"] });
+          yield* api.create!({ ...target, title: "New", body: "", labels: ["BUG"], assignees: [] });
+        else yield* api.update!({ ...target, labels: ["BUG"] });
         expect(requests.filter((request) => request.method)).toMatchObject([
           { body: { labels: [93] } },
         ]);
@@ -199,7 +289,7 @@ describe("ForgejoIssueTracker", () => {
         host: "forgejo.test:3000",
         scope: "acme/web",
         key: "42",
-        labels: ["bug"],
+        labels: ["BUG"],
       });
       expect(requests.filter((request) => request.method)).toMatchObject([
         { body: { labels: [99] } },
@@ -214,14 +304,15 @@ describe("ForgejoIssueTracker", () => {
       Effect.gen(function* () {
         for (const resolution of ["repo", "org", "rate-limit", "wrong-name", "numeric"] as const) {
           const requests: ForgejoCli.ForgejoApiInput[] = [];
-          const name = resolution === "numeric" ? "12" : "bug";
+          const name = resolution === "numeric" ? "12" : "BUG";
           const api = yield* tracker((input) => {
             requests.push(input);
             if (input.method) return { stdout: encode(ISSUE) };
             if (input.path === "repos/acme/web/issues/42")
               return { stdout: encode({ ...ISSUE, labels: [] }) };
             const [route] = input.path.split("?");
-            if (route === "orgs/acme/labels") return { stdout: encode([{ id: 99, name }]) };
+            if (route === "orgs/acme/labels")
+              return { stdout: encode([{ id: 99, name: name.toLowerCase() }]) };
             if (route === "repos/acme/web/labels")
               return {
                 stdout: encode([{ id: 4, name: "enhancement" }]),
@@ -234,7 +325,12 @@ describe("ForgejoIssueTracker", () => {
                 reason: resolution === "org" ? "not-found" : "rate-limit",
                 detail: "Native label lookup failed.",
               });
-            return { stdout: encode({ id: 93, name: resolution === "repo" ? name : "foreign" }) };
+            return {
+              stdout: encode({
+                id: 93,
+                name: resolution === "repo" ? name.toLowerCase() : "foreign",
+              }),
+            };
           });
           const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
           const result = yield* Effect.result(
@@ -317,9 +413,9 @@ describe("ForgejoIssueTracker", () => {
         const requests: ForgejoCli.ForgejoApiInput[] = [];
         const names = Array.from(
           { length: mode === "lookup-limit" ? 5 : 121 },
-          (_, index) => `${mode === "large-catalog" ? "known" : "later"}-${index}`,
+          (_, index) => `${mode === "large-catalog" ? "KNOWN" : "LATER"}-${index}`,
         );
-        const native = names.map((name, index) => ({ id: index + 1001, name }));
+        const native = names.map((name, index) => ({ id: index + 1001, name: name.toLowerCase() }));
         const api = yield* tracker((input) => {
           requests.push(input);
           if (input.method) return { stdout: encode(ISSUE) };
@@ -340,7 +436,11 @@ describe("ForgejoIssueTracker", () => {
             };
           }
           if (mode === "lookup-limit" && route!.startsWith("orgs/"))
-            return { stdout: encode(native.find((label) => route!.endsWith(`/${label.name}`))) };
+            return {
+              stdout: encode(
+                native.find((label) => route!.endsWith(`/${label.name.toUpperCase()}`)),
+              ),
+            };
           return new ForgejoCli.ForgejoCliError({
             command: "fj",
             cwd: "/w",

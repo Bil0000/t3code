@@ -10,6 +10,7 @@
  */
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
+import * as RegExpUtils from "effect/RegExp";
 import * as Schema from "effect/Schema";
 import {
   IssueTrackerKind,
@@ -221,7 +222,10 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       path?: string,
     ) {
       if (names.length === 0) return [];
-      const wanted = [...new Set(names)];
+      const wanted = [...new Set(names)].map((name) => ({
+        name,
+        pattern: new RegExp(`^${RegExpUtils.escape(name)}$`, "iu"),
+      }));
       const repository = yield* readPage(
         target,
         operation,
@@ -231,7 +235,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       );
       let labels = repository.rows;
       const missing = (catalog = labels) =>
-        wanted.filter((name) => !catalog.some((label) => label.name === name));
+        wanted.filter(({ pattern }) => !catalog.some((label) => pattern.test(label.name)));
       if (path !== undefined) {
         const issue = yield* getIssue(target, operation, path);
         labels = [...(issue.labels ?? []), ...labels];
@@ -275,11 +279,13 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           operation,
           "At most five labels outside the first native pages can be resolved per write. No fields were changed.",
         );
-      for (const name of unresolved) {
+      for (const { name, pattern } of unresolved) {
         if (/^[+-]?\d+$/.test(name) || name === "." || name === "..") continue;
         for (const [index, catalog] of catalogs.entries()) {
           const known =
-            index === 1 ? organizationLabelsFound.find((label) => label.name === name) : undefined;
+            index === 1
+              ? organizationLabelsFound.find((label) => pattern.test(label.name))
+              : undefined;
           const label =
             known ??
             (yield* read(
@@ -294,7 +300,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
               ),
             ));
           if (label === null) continue;
-          if (label.name !== name || label.id < 1)
+          if (!pattern.test(label.name) || label.id < 1)
             return yield* refused(
               operation,
               "Forgejo returned a different native label than requested. No fields were changed.",
@@ -303,8 +309,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           break;
         }
       }
-      const ids = wanted.flatMap((name) => {
-        const label = labels.find((candidate) => candidate.name === name);
+      const ids = wanted.flatMap(({ pattern }) => {
+        const label = labels.find((candidate) => pattern.test(candidate.name));
         return label ? [label.id] : [];
       });
       if (ids.length !== wanted.length || ids.some((id) => id < 1))
