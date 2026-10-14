@@ -118,13 +118,28 @@ export function nextIssueAssignees(
 const matches = (needle: string, ...fields: ReadonlyArray<string | null | undefined>) =>
   fields.some((field) => (field ?? "").toLowerCase().includes(needle));
 
+export function issueLabelId(label: Pick<IssueLabel, "id" | "name">): string {
+  return label.id ?? label.name;
+}
+
+export function nextIssueLabels(
+  current: ReadonlyArray<IssueLabel>,
+  candidate: IssueLabel,
+): string[] {
+  const ids = current.map(issueLabelId);
+  const id = issueLabelId(candidate);
+  return ids.includes(id) ? ids.filter((selected) => selected !== id) : [...ids, id];
+}
+
 export function issueLabelOptions(
   applied: ReadonlyArray<IssueLabel>,
   fetched: ReadonlyArray<IssueLabelCandidate>,
   query: string,
 ): IssueLabelCandidate[] {
   const missing = applied
-    .filter((label) => !fetched.some((candidate) => candidate.name === label.name))
+    .filter(
+      (label) => !fetched.some((candidate) => issueLabelId(candidate) === issueLabelId(label)),
+    )
     .map((label) => ({ ...label, description: null }));
   const needle = query.toLowerCase();
   return [...fetched, ...missing].filter((label) => matches(needle, label.name, label.description));

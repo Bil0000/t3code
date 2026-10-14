@@ -19,6 +19,7 @@ import {
   retainUnacknowledgedIssueReactions,
   issueDisplayLabel,
   issueLabelOptions,
+  nextIssueLabels,
   linkedPullRequestTarget,
   nextIssueAssignees,
 } from "./issueDetail.logic";
@@ -304,4 +305,24 @@ describe("confirmed issue reactions", () => {
     expect(retainUnacknowledgedIssueReactions(native(2, false), desired).size).toBe(0);
     expect(retainUnacknowledgedIssueReactions([], desired).size).toBe(0);
   });
+});
+
+it("keeps workspace and team labels with equal names distinct during native writes", () => {
+  const workspace = { id: "workspace-W", name: "Bug", color: null };
+  const team = { id: "team-T", name: "Bug", color: null, description: null };
+  const other = { id: "other", name: "Other", color: null, description: null };
+  expect(issueLabelOptions([workspace], [team, other], "").map((label) => label.id)).toEqual([
+    "team-T",
+    "other",
+    "workspace-W",
+  ]);
+  expect(nextIssueLabels([workspace], other)).toEqual(["workspace-W", "other"]);
+  expect(nextIssueLabels([workspace], team)).toEqual(["workspace-W", "team-T"]);
+  expect(nextIssueLabels([workspace, team], team)).toEqual(["workspace-W"]);
+  expect(nextIssueLabels([workspace, team], workspace)).toEqual(["team-T"]);
+  expect(nextIssueLabels([workspace, other], workspace)).toEqual(["other"]);
+  expect(nextIssueLabels([{ name: "Bug", color: null }], { name: "Other", color: null })).toEqual([
+    "Bug",
+    "Other",
+  ]);
 });

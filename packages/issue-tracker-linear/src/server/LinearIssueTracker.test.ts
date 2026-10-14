@@ -1051,7 +1051,7 @@ describe("LinearIssueTracker", () => {
         closedAt: "2026-07-03T00:00:00.000Z",
         author: { id: "usr_julius", login: "julius", name: "julius" },
         assignees: [{ id: "usr_theo", login: "theo", name: "theo" }],
-        labels: [{ name: "Bug", color: "#f00" }],
+        labels: [{ id: "lbl_bug", name: "Bug", color: "#f00" }],
       });
       // The stored key goes in as-is, not as a bearer token.
       expect(requests.map((request) => request.authorization)).toEqual(["lin_api_stored"]);
@@ -1316,9 +1316,11 @@ describe("LinearIssueTracker", () => {
       });
       const api = yield* test.tracker;
       const scoped = { ...target, scope: "acme/ENG" };
-      yield* api.update({ ...scoped, key: "ENG-7", labels: ["Old", "Bug", "WorkspaceOld"] });
+      yield* api.update({ ...scoped, key: "ENG-7", labels: [old.id, bug.id, workspaceOld.id] });
       const candidates = yield* api.listCandidates(scoped);
-      expect(candidates.labels.map((label) => label.name)).toEqual(["Bug"]);
+      expect(candidates.labels).toEqual([
+        { id: bug.id, name: "Bug", color: null, description: null },
+      ]);
       expect(candidates.truncated).toBe(true);
       expect(test.requests.map((request) => request.operation)).toEqual([
         "T3IssueReference",
@@ -1326,7 +1328,7 @@ describe("LinearIssueTracker", () => {
         "T3IssueUpdate",
         "T3Team",
       ]);
-      yield* api.create({ ...scoped, title: "New", body: "", labels: ["Bug"], assignees: [] });
+      yield* api.create({ ...scoped, title: "New", body: "", labels: [bug.id], assignees: [] });
       for (const label of [group, workspaceGroup]) {
         test.requests.length = 0;
         expect(
@@ -1535,7 +1537,6 @@ describe("LinearIssueTracker", () => {
   );
 
   it("offers plain templates as drafts and form or rich ones as links into Linear", () => {
-    const labels = new Map([["lbl_bug", "Bug"]]);
     const plain = LinearIssueTracker.toTemplate(
       {
         id: "tpl_1",
@@ -1547,7 +1548,6 @@ describe("LinearIssueTracker", () => {
         templateData: { title: "Bug: ", labelIds: ["lbl_bug", "lbl_unknown"], assigneeId: null },
       },
       "ENG",
-      labels,
     );
     expect(plain).toEqual({
       template: {
@@ -1556,7 +1556,7 @@ describe("LinearIssueTracker", () => {
         about: "For bugs",
         title: "Bug: ",
         body: "## Steps",
-        labels: ["Bug"],
+        labels: ["lbl_bug", "lbl_unknown"],
         assignees: [],
       },
     });
@@ -1571,10 +1571,358 @@ describe("LinearIssueTracker", () => {
         templateData: {},
       },
       "ENG",
-      labels,
     );
     expect(form).toEqual({
       link: { name: "Intake", about: "", url: "https://linear.app/team/ENG/new?template=tpl_2" },
     });
   });
 });
+
+it.effect.each(["complete", "team", "workspace"] as const)(
+  "retains the workspace Bug ID when adding another label: catalog=%s",
+  (partial) =>
+    Effect.gen(function* () {
+      const teamBug = { id: "T", name: "Bug", color: null };
+      const workspaceBug = { ...teamBug, id: "W" };
+      const other = { id: "O", name: "Other", color: null };
+      const writes: unknown[] = [];
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const test = fakeLinear({
+        T3Issues: () => ({
+          organization: ORGANIZATION,
+          issues: {
+            nodes: [issue("ENG-7", { labels: { ...empty, nodes: [workspaceBug] } })],
+            pageInfo: empty.pageInfo,
+          },
+        }),
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                states: empty,
+                members: empty,
+                labels: {
+                  nodes: [teamBug, other],
+                  pageInfo: { hasNextPage: partial === "team", endCursor: "team-more" },
+                },
+                templates: { nodes: [] },
+              },
+            ],
+          },
+          issueLabels: {
+            nodes: [workspaceBug],
+            pageInfo: { hasNextPage: partial === "workspace", endCursor: "workspace-more" },
+          },
+        }),
+        T3IssueUpdate: (variables) => {
+          writes.push(variables.input);
+          return { issueUpdate: { success: true } };
+        },
+        T3IssueCreate: (variables) => {
+          expect(variables.input).toMatchObject({ labelIds: ["W"] });
+          return {
+            issueCreate: {
+              success: true,
+              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+            },
+          };
+        },
+      });
+      const api = yield* test.tracker;
+      const page = yield* api.listIssues({
+        ...target,
+        state: "all",
+        involvement: "all",
+        viewer: "",
+        limit: 50,
+      });
+      expect(page.items[0]?.labels).toEqual([{ id: "W", name: "Bug", color: null }]);
+      const candidates = yield* api.listCandidates(target);
+      expect(candidates.labels.map(({ id, name }) => ({ id, name }))).toEqual([
+        { id: "T", name: "Bug" },
+        { id: "O", name: "Other" },
+        { id: "W", name: "Bug" },
+      ]);
+      test.requests.length = 0;
+      yield* api.update({
+        ...target,
+        key: "ENG-7",
+        labels: [page.items[0]!.labels[0]!.id!, other.id],
+      });
+      expect(writes).toEqual([{ labelIds: ["W", "O"] }]);
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3IssueReference",
+        "T3Team",
+        "T3IssueUpdate",
+      ]);
+      test.requests.length = 0;
+      yield* api.create({ ...target, title: "New", body: "", labels: ["W"], assignees: [] });
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team", "T3IssueCreate"]);
+      test.requests.length = 0;
+      expect(
+        (yield* api.update({ ...target, key: "ENG-7", labels: ["Bug", "Other"] }).pipe(Effect.flip))
+          .detail,
+      ).toContain("ambiguous");
+      expect(writes).toHaveLength(1);
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3IssueReference",
+        "T3Team",
+      ]);
+      if (partial !== "complete") {
+        expect(
+          (yield* api.update({ ...target, key: "ENG-7", labels: ["Other"] }).pipe(Effect.flip))
+            .detail,
+        ).toContain("incomplete");
+        expect(writes).toHaveLength(1);
+      }
+    }),
+);
+
+it.effect.each(["create", "update"] as const)(
+  "uses scoped native IDs beyond the initial 250 without scans: %s",
+  (operation) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const labels = Array.from({ length: 250 }, (_, n) => ({
+        id: n === 0 ? "O" : `label-${n}`,
+        name: n === 0 ? "Other" : "Bug",
+        color: null,
+      }));
+      const members = Array.from({ length: 250 }, (_, n) => user(`member-${n}`, "Same"));
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        states: empty,
+        labels: { nodes: labels, pageInfo: { hasNextPage: true, endCursor: "labels-250" } },
+        members: { nodes: members, pageInfo: { hasNextPage: true, endCursor: "members-250" } },
+        templates: { nodes: [] },
+      };
+      const test = fakeLinear({
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          teams: { nodes: [team] },
+          issueLabels: empty,
+        }),
+        T3LabelCandidates: (variables) => {
+          expect(variables).toMatchObject({
+            first: 1,
+            after: null,
+            filter: {
+              and: [
+                { or: [{ team: { key: { eq: "ENG" } } }, { team: { null: true } }] },
+                { id: { in: ["W"] } },
+              ],
+            },
+          });
+          return {
+            organization: ORGANIZATION,
+            teams: { nodes: [team] },
+            issueLabels: {
+              nodes: [{ id: "W", name: "Same", color: null }],
+              pageInfo: empty.pageInfo,
+            },
+          };
+        },
+        T3AssigneeCandidates: (variables) => {
+          expect(variables).toMatchObject({
+            first: 1,
+            after: null,
+            filter: {
+              active: { eq: true },
+              id: { eq: "member-250" },
+            },
+          });
+          return {
+            organization: ORGANIZATION,
+            teams: {
+              nodes: [
+                {
+                  ...team,
+                  members: {
+                    nodes: [user("member-250", "Same")],
+                    pageInfo: empty.pageInfo,
+                  },
+                },
+              ],
+            },
+          };
+        },
+        T3IssueCreate: (variables) => {
+          expect(variables.input).toMatchObject({
+            labelIds: ["W", "O"],
+            assigneeId: "member-250",
+          });
+          return {
+            issueCreate: {
+              success: true,
+              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+            },
+          };
+        },
+        T3IssueUpdate: (variables) => {
+          expect(variables.input).toEqual({ labelIds: ["W", "O"], assigneeId: "member-250" });
+          return { issueUpdate: { success: true } };
+        },
+      });
+      const api = yield* test.tracker;
+      const selection = {
+        ...target,
+        scope: "acme/ENG",
+        labels: ["W", "O"],
+        assignees: ["member-250"],
+      };
+      if (operation === "create") yield* api.create({ ...selection, title: "New", body: "" });
+      else yield* api.update({ ...selection, key: "ENG-7" });
+      expect(test.requests.map(({ operation: name }) => name)).toEqual([
+        ...(operation === "update" ? ["T3IssueReference"] : []),
+        "T3Team",
+        "T3LabelCandidates",
+        "T3AssigneeCandidates",
+        operation === "create" ? "T3IssueCreate" : "T3IssueUpdate",
+      ]);
+    }),
+);
+
+it.effect.each([
+  "foreign",
+  "foreign-team",
+  "partial",
+  "missing",
+  "group",
+  "wrong-id",
+  "duplicate",
+  "too-many",
+] as const)("refuses invalid selected label IDs without a mutation: %s", (failure) =>
+  Effect.gen(function* () {
+    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const team = {
+      id: "team_eng",
+      key: "ENG",
+      name: "Engineering",
+      states: empty,
+      labels: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
+      members: empty,
+      templates: { nodes: [] },
+    };
+    const test = fakeLinear({
+      T3IssueReference: () => ({ issue: issue("ENG-7") }),
+      T3Team: () => ({
+        organization: ORGANIZATION,
+        teams: { nodes: [team] },
+        issueLabels: empty,
+      }),
+      T3LabelCandidates: () => ({
+        organization: failure === "foreign" ? { ...ORGANIZATION, id: "org_other" } : ORGANIZATION,
+        teams: { nodes: [{ ...team, id: failure === "foreign-team" ? "other-team" : team.id }] },
+        issueLabels: {
+          nodes:
+            failure === "missing"
+              ? []
+              : [
+                  {
+                    id: failure === "wrong-id" ? "other" : "chosen",
+                    name: "Same",
+                    color: null,
+                    isGroup: failure === "group",
+                  },
+                  ...(failure === "duplicate" ? [{ id: "chosen", name: "Same", color: null }] : []),
+                ],
+          pageInfo: {
+            hasNextPage: failure === "partial",
+            endCursor: failure === "partial" ? "more" : null,
+          },
+        },
+      }),
+    });
+    const api = yield* test.tracker;
+    const labels =
+      failure === "too-many" ? Array.from({ length: 201 }, (_, n) => `label-${n}`) : ["chosen"];
+    for (const action of [
+      api.create({ ...target, title: "New", body: "", labels, assignees: [] }),
+      api.update({ ...target, key: "ENG-7", labels }),
+    ]) {
+      test.requests.length = 0;
+      expect((yield* action.pipe(Effect.flip)).reason).toBe("failed");
+      expect(
+        test.requests.some(
+          ({ operation }) => operation.includes("Create") || operation.includes("Update"),
+        ),
+      ).toBe(false);
+      expect(test.requests).toHaveLength(
+        failure === "too-many"
+          ? test.requests[0]?.operation === "T3IssueReference"
+            ? 2
+            : 1
+          : test.requests[0]?.operation === "T3IssueReference"
+            ? 3
+            : 2,
+      );
+    }
+  }),
+);
+
+it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
+  "refuses invalid selected member IDs without a mutation: %s",
+  (failure) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        states: empty,
+        labels: empty,
+        members: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
+        templates: { nodes: [] },
+      };
+      const test = fakeLinear({
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          teams: { nodes: [team] },
+          issueLabels: empty,
+        }),
+        T3AssigneeCandidates: () => ({
+          organization: ORGANIZATION,
+          teams: {
+            nodes: [
+              {
+                ...team,
+                id: failure === "foreign" ? "other-team" : team.id,
+                members: {
+                  nodes:
+                    failure === "inactive"
+                      ? []
+                      : [user(failure === "wrong-id" ? "other" : "chosen", "Same")],
+                  pageInfo: {
+                    hasNextPage: failure === "partial",
+                    endCursor: failure === "partial" ? "more" : null,
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      for (const action of [
+        api.create({ ...target, title: "New", body: "", labels: [], assignees: ["chosen"] }),
+        api.update({ ...target, key: "ENG-7", assignees: ["chosen"] }),
+      ]) {
+        test.requests.length = 0;
+        expect((yield* action.pipe(Effect.flip)).reason).toBe("failed");
+        expect(
+          test.requests.some(
+            ({ operation }) => operation.includes("Create") || operation.includes("Update"),
+          ),
+        ).toBe(false);
+      }
+    }),
+);

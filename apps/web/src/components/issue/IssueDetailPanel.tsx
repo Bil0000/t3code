@@ -78,6 +78,8 @@ import {
   issueAssigneeOptions,
   issueDisplayLabel,
   issueLabelOptions,
+  issueLabelId,
+  nextIssueLabels,
   issueSupportsReactions,
   offeredIssueReactionContents,
   retainUnacknowledgedIssueReactions,
@@ -348,17 +350,15 @@ function IssueLabelPicker({
     open ? issueEnvironment.candidates({ environmentId, input: reference }) : null,
   );
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
-  const applied = new Set(detail.labels.map((label) => label.name));
+  const applied = new Set(detail.labels.map(issueLabelId));
   const candidates = useMemo(
     () => issueLabelOptions(detail.labels, candidatesQuery.data?.labels ?? [], query),
     [detail.labels, candidatesQuery.data, query],
   );
   const toggle = async (candidate: IssueLabelCandidate) => {
     if (pending !== null) return;
-    setPending(candidate.name);
-    const labels = applied.has(candidate.name)
-      ? detail.labels.filter((label) => label.name !== candidate.name).map((label) => label.name)
-      : [...applied, candidate.name];
+    setPending(issueLabelId(candidate));
+    const labels = nextIssueLabels(detail.labels, candidate);
     const result = await update({ environmentId, input: { ...reference, labels } });
     setPending(null);
     if (result._tag === "Failure") {
@@ -390,7 +390,7 @@ function IssueLabelPicker({
       errorLabel="The labels could not be read."
       truncated={candidatesQuery.data?.truncated === true}
       truncatedLabel="More labels exist than are listed here."
-      candidateKey={(candidate) => candidate.name}
+      candidateKey={(candidate) => issueLabelId(candidate)}
       disabled={pending !== null}
       onSelect={(candidate) => void toggle(candidate)}
     >
@@ -409,7 +409,7 @@ function IssueLabelPicker({
                 <span className="text-muted-foreground"> · {candidate.description}</span>
               ) : null}
             </span>
-            {applied.has(candidate.name) ? (
+            {applied.has(issueLabelId(candidate)) ? (
               <CheckIcon aria-label="Applied" className="size-3.5 shrink-0" />
             ) : null}
           </>
@@ -867,7 +867,7 @@ export function IssueDetailPanel({
 
           <div className="flex flex-wrap items-center gap-1.5">
             {detail.labels.map((label) => (
-              <PullRequestLabelChip key={label.name} label={label} />
+              <PullRequestLabelChip key={issueLabelId(label)} label={label} />
             ))}
             {detail.capabilities.labels ? (
               <IssueLabelPicker

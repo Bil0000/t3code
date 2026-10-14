@@ -161,7 +161,11 @@ function toSummary(
     updatedAt: issue.updatedAt,
     closedAt: issue.completedAt ?? issue.canceledAt ?? null,
     assignees: issue.assignee === null ? [] : [toActor(issue.assignee)],
-    labels: issue.labels.nodes.map((label) => ({ name: label.name, color: label.color })),
+    labels: issue.labels.nodes.map((label) => ({
+      id: label.id,
+      name: label.name,
+      color: label.color,
+    })),
     labelsTruncated: issue.labels.pageInfo.hasNextPage,
     commentCount,
   };
@@ -276,7 +280,6 @@ function toLinkedPullRequests(
 export function toTemplate(
   template: LinearApi.LinearTemplate,
   teamKey: string,
-  labelNames: ReadonlyMap<string, string>,
 ): { readonly template: IssueTemplate } | { readonly link: IssueExternalTemplate } {
   const data = template.templateData;
   const body = template.content ?? (typeof data.description === "string" ? data.description : null);
@@ -292,10 +295,7 @@ export function toTemplate(
       about: template.description ?? "",
       title: data.title ?? "",
       body: body ?? "",
-      labels: (data.labelIds ?? []).flatMap((id) => {
-        const name = labelNames.get(id);
-        return name === undefined ? [] : [name];
-      }),
+      labels: data.labelIds ?? [],
       assignees: data.assigneeId ? [data.assigneeId] : [],
     },
   };
@@ -389,15 +389,62 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       scope: LinearApi.LinearTeamScope,
       names: ReadonlyArray<string>,
     ) =>
-      Effect.forEach(names, (name) => {
-        const match = [...scope.team.labels.nodes, ...scope.workspaceLabels].find(
-          (label) => !label.isGroup && label.name.toLowerCase() === name.trim().toLowerCase(),
+      Effect.gen(function* () {
+        const labels = [
+          ...new Map(
+            [...scope.team.labels.nodes, ...scope.workspaceLabels].map((label) => [
+              label.id,
+              label,
+            ]),
+          ).values(),
+        ];
+        const unresolved = [...new Set(names)].filter(
+          (name) =>
+            !labels.some(
+              (label) =>
+                label.id === name || label.name.toLowerCase() === name.trim().toLowerCase(),
+            ),
         );
-        return match === undefined
-          ? Effect.fail(
-              failed(operation, `Linear has no applicable label named "${name}" for this team.`),
-            )
-          : Effect.succeed(match.id);
+        if (scope.labelsTruncated && unresolved.length > 0) {
+          if (unresolved.length > 200)
+            return yield* failed(operation, "Choose at most 200 additional Linear labels.");
+          const found = yield* linear.listLabelCandidates({
+            key: scope.team.key,
+            first: unresolved.length,
+            ids: unresolved,
+          });
+          if (
+            found.organization.id !== scope.organization.id ||
+            found.teams.nodes[0]?.id !== scope.team.id ||
+            found.issueLabels.pageInfo.hasNextPage ||
+            found.issueLabels.nodes.length !== unresolved.length ||
+            unresolved.some(
+              (id) => !found.issueLabels.nodes.some((label) => label.id === id && !label.isGroup),
+            ) ||
+            found.issueLabels.nodes.some((label) => !unresolved.includes(label.id))
+          )
+            return yield* failed(operation, "Choose labels available to this Linear team.");
+          labels.push(...found.issueLabels.nodes);
+        }
+        return yield* Effect.forEach(names, (name) => {
+          const byId = labels.find((label) => !label.isGroup && label.id === name);
+          if (byId !== undefined) return Effect.succeed(byId.id);
+          const matches = labels.filter(
+            (label) => !label.isGroup && label.name.toLowerCase() === name.trim().toLowerCase(),
+          );
+          if (matches.length > 1 || scope.labelsTruncated)
+            return Effect.fail(
+              failed(
+                operation,
+                `Use a label ID. "${name}" is ambiguous, or the label list is incomplete.`,
+              ),
+            );
+          return matches[0] === undefined
+            ? Effect.fail(
+                failed(operation, `Linear has no applicable label named "${name}" for this team.`),
+              )
+            : Effect.succeed(matches[0].id);
+        });
       });
 
     /** One assignee at most: Linear issues have a single assignee. */
@@ -405,30 +452,45 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       operation: string,
       scope: LinearApi.LinearTeamScope,
       assignees: ReadonlyArray<string>,
-    ): Effect.Effect<string | null, IssueTrackerError> => {
-      const [first, ...rest] = assignees;
-      if (first === undefined) return Effect.succeed(null);
-      if (rest.length > 0)
-        return Effect.fail(failed(operation, "A Linear issue has one assignee at most."));
-      const byId = scope.team.members.nodes.find((user) => user.id === first);
-      if (byId !== undefined) return Effect.succeed(byId.id);
-      const matches = scope.team.members.nodes.filter(
-        (user) =>
-          user.email?.toLowerCase() === first.toLowerCase() ||
-          user.displayName?.toLowerCase() === first.toLowerCase(),
-      );
-      if (matches.length > 1 || scope.team.members.pageInfo.hasNextPage)
-        return Effect.fail(
-          failed(
+    ): Effect.Effect<string | null, IssueTrackerError> =>
+      Effect.gen(function* () {
+        const [first, ...rest] = assignees;
+        if (first === undefined) return null;
+        if (rest.length > 0)
+          return yield* failed(operation, "A Linear issue has one assignee at most.");
+        const byId = scope.team.members.nodes.find((user) => user.id === first);
+        if (byId !== undefined) return byId.id;
+        const matches = scope.team.members.nodes.filter(
+          (user) =>
+            user.email?.toLowerCase() === first.toLowerCase() ||
+            user.displayName?.toLowerCase() === first.toLowerCase(),
+        );
+        if (matches.length === 0 && scope.team.members.pageInfo.hasNextPage) {
+          const found = yield* linear.listAssigneeCandidates({
+            key: scope.team.key,
+            first: 1,
+            id: first,
+          });
+          const team = found.teams.nodes[0];
+          if (
+            found.organization.id !== scope.organization.id ||
+            team?.id !== scope.team.id ||
+            team.members.pageInfo.hasNextPage ||
+            team.members.nodes.length !== 1 ||
+            team.members.nodes[0]?.id !== first
+          )
+            return yield* failed(operation, "Choose an active member of this Linear team.");
+          return first;
+        }
+        if (matches.length > 1 || scope.team.members.pageInfo.hasNextPage)
+          return yield* failed(
             operation,
             "Use a member ID. The name or email is ambiguous, or the member list is incomplete.",
-          ),
-        );
-      const member = matches[0];
-      return member === undefined
-        ? Effect.fail(failed(operation, `"${first}" is not a member of this Linear team.`))
-        : Effect.succeed(member.id);
-    };
+          );
+        return matches[0] === undefined
+          ? yield* failed(operation, `"${first}" is not a member of this Linear team.`)
+          : matches[0].id;
+      });
 
     const viewerId: Effect.Effect<string | null> = linear.viewer().pipe(
       Effect.map((data) => data.viewer.id),
@@ -651,17 +713,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       listTemplates: (input) =>
         requireTeam("listTemplates", input.scope).pipe(
           Effect.map((scope) => {
-            const labelNames = new Map(
-              [...scope.team.labels.nodes, ...scope.workspaceLabels].map((label) => [
-                label.id,
-                label.name,
-              ]),
-            );
             const templates: IssueTemplate[] = [];
             const externalTemplates: IssueExternalTemplate[] = [];
             for (const template of scope.team.templates.nodes) {
               if (template.type !== "issue") continue;
-              const mapped = toTemplate(template, scope.team.key, labelNames);
+              const mapped = toTemplate(template, scope.team.key);
               if ("template" in mapped) templates.push(mapped.template);
               else externalTemplates.push(mapped.link);
             }
@@ -675,6 +731,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
             labels: [...scope.team.labels.nodes, ...scope.workspaceLabels]
               .filter((label) => !label.isGroup && label.archivedAt == null)
               .map((label) => ({
+                id: label.id,
                 name: label.name,
                 color: label.color,
                 description: label.description ?? null,

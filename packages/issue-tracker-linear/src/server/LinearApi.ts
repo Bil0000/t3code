@@ -354,6 +354,17 @@ const TeamData = Schema.Struct({
   teams: Schema.Struct({ nodes: Schema.Array(LinearTeamDetail) }),
   issueLabels: Connection(LinearLabel),
 });
+const LabelCandidatesData = Schema.Struct({
+  organization: LinearOrganization,
+  teams: Schema.Struct({ nodes: Schema.Array(LinearTeam) }),
+  issueLabels: Connection(LinearLabel),
+});
+const AssigneeCandidatesData = Schema.Struct({
+  organization: LinearOrganization,
+  teams: Schema.Struct({
+    nodes: Schema.Array(Schema.Struct({ ...LinearTeam.fields, members: Connection(LinearUser) })),
+  }),
+});
 const CreatedData = Schema.Struct({
   issueCreate: Schema.Struct({
     success: Schema.Boolean,
@@ -375,6 +386,7 @@ export interface LinearTeamScope {
   readonly organization: LinearOrganization;
   readonly team: LinearTeamDetail;
   readonly workspaceLabels: ReadonlyArray<LinearLabel>;
+  readonly labelsTruncated: boolean;
   /** Linear had more than one page of something; a missing label or member may still exist. */
   readonly truncated: boolean;
 }
@@ -443,6 +455,18 @@ export class LinearApi extends Context.Service<
       },
       IssueTrackerError
     >;
+    readonly listLabelCandidates: (input: {
+      readonly ids?: ReadonlyArray<string>;
+      readonly key: string;
+      readonly first: number;
+      readonly after?: string | undefined;
+    }) => Effect.Effect<typeof LabelCandidatesData.Type, IssueTrackerError>;
+    readonly listAssigneeCandidates: (input: {
+      readonly id?: string;
+      readonly key: string;
+      readonly first: number;
+      readonly after?: string | undefined;
+    }) => Effect.Effect<typeof AssigneeCandidatesData.Type, IssueTrackerError>;
     readonly getTeam: (key: string) => Effect.Effect<LinearTeamScope | null, IssueTrackerError>;
     readonly createIssue: (
       input: Record<string, unknown>,
@@ -820,6 +844,8 @@ export const make = Effect.gen(function* () {
           organization: data.organization,
           team,
           workspaceLabels: data.issueLabels.nodes,
+          labelsTruncated:
+            team.labels.pageInfo.hasNextPage || data.issueLabels.pageInfo.hasNextPage,
           truncated:
             team.states.pageInfo.hasNextPage ||
             team.labels.pageInfo.hasNextPage ||
@@ -863,7 +889,41 @@ export const make = Effect.gen(function* () {
       ReactionsData,
     ).pipe(Effect.map((data) => (data.comment ?? data.issue)?.reactions ?? []));
 
+  const listLabelCandidates: LinearApi["Service"]["listLabelCandidates"] = (input) =>
+    execute(
+      "listLabelCandidates",
+      `query T3LabelCandidates($key: String!, $first: Int!, $after: String, $filter: IssueLabelFilter!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name } } issueLabels(first: $first, after: $after, includeArchived: true, filter: $filter) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } }`,
+      {
+        key: input.key,
+        first: input.first,
+        after: input.after ?? null,
+        filter: {
+          and: [
+            { or: [{ team: { key: { eq: input.key } } }, { team: { null: true } }] },
+            ...(input.ids === undefined ? [] : [{ id: { in: input.ids } }]),
+          ],
+        },
+      },
+      LabelCandidatesData,
+    );
+  const listAssigneeCandidates: LinearApi["Service"]["listAssigneeCandidates"] = (input) =>
+    execute(
+      "listAssigneeCandidates",
+      `query T3AssigneeCandidates($key: String!, $first: Int!, $after: String, $filter: UserFilter!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name members(first: $first, after: $after, filter: $filter) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } } } } }`,
+      {
+        key: input.key,
+        first: input.first,
+        after: input.after ?? null,
+        filter: {
+          active: { eq: true },
+          ...(input.id === undefined ? {} : { id: { eq: input.id } }),
+        },
+      },
+      AssigneeCandidatesData,
+    );
   return LinearApi.of({
+    listLabelCandidates,
+    listAssigneeCandidates,
     viewer,
     probeCredential,
     getScope,
