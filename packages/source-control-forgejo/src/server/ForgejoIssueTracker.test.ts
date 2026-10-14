@@ -136,6 +136,101 @@ function tracker(
 }
 
 describe("ForgejoIssueTracker", () => {
+  it.effect.each(["create", "update"] as const)(
+    "applies an uppercase native template label on %s without extra reads",
+    (operation) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.method || input.path === "repos/acme/web/issues/42")
+            return { stdout: encode(ISSUE) };
+          if (input.path.endsWith("/issue_templates"))
+            return {
+              stdout: encode([
+                { file_name: "bug.md", name: "Bug", content: "Steps", labels: ["BUG"] },
+              ]),
+            };
+          if (input.path.endsWith("/issue_config")) return { stdout: "{}" };
+          return { stdout: encode(input.path.startsWith("repos/") ? ISSUE.labels : []) };
+        });
+        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const template = (yield* api.listTemplates!(target)).templates[0]!;
+        expect(template.labels).toEqual(["BUG"]);
+        requests.length = 0;
+        if (operation === "create")
+          yield* api.create!({
+            ...target,
+            title: "Bug",
+            body: template.body,
+            labels: template.labels,
+            assignees: [],
+          });
+        else yield* api.update!({ ...target, labels: template.labels });
+        expect(requests.filter((request) => request.method)).toMatchObject([
+          { body: { labels: [3] } },
+        ]);
+        expect(requests).toHaveLength(2);
+      }),
+  );
+
+  it.effect.each([
+    { requested: "BUG", native: "bug", source: "repo", matches: true },
+    { requested: "BUG", native: "bug", source: "retained", matches: true },
+    { requested: "BUG", native: "bug", source: "org", matches: true },
+    { requested: "Σ", native: "ς", source: "repo", matches: true },
+    { requested: "S", native: "ſ", source: "repo", matches: true },
+    { requested: "K", native: "k", source: "repo", matches: true },
+    { requested: "BUG[1].*", native: "bug[1].*", source: "org", matches: true },
+    { requested: "BUG[1].*", native: "bug1-other", source: "repo", matches: false },
+    { requested: "BUG", native: "bug\n", source: "repo", matches: false },
+    { requested: "BUG", native: "bug\r", source: "org", matches: false },
+    { requested: "BUG", native: "bug\u2028", source: "retained", matches: false },
+    { requested: "BUG", native: "bug\u2029", source: "repo", matches: false },
+    { requested: "SS", native: "ß", source: "retained", matches: false },
+    { requested: "İ", native: "i", source: "org", matches: false },
+  ])(
+    "matches label $requested with native $native from $source: $matches",
+    ({ requested, native, source, matches }) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const label = { id: 93, name: native };
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.method) return { stdout: encode({ ...ISSUE, labels: [label] }) };
+          if (input.path === "repos/acme/web/issues/42")
+            return { stdout: encode({ ...ISSUE, labels: [label] }) };
+          return {
+            stdout: encode(
+              (source === "repo" && input.path.startsWith("repos/")) ||
+                (source === "org" && input.path.startsWith("orgs/"))
+                ? [label]
+                : [],
+            ),
+          };
+        });
+        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const mutation =
+          source === "retained"
+            ? api.update!({ ...target, labels: [requested] })
+            : api.create!({
+                ...target,
+                title: "Bug",
+                body: "",
+                labels: [requested],
+                assignees: [],
+              });
+        if (matches) yield* mutation;
+        else expect(yield* Effect.flip(mutation)).toMatchObject({ reason: "failed" });
+        expect(requests.filter((request) => request.method)).toMatchObject(
+          matches ? [{ body: { labels: [93] } }] : [],
+        );
+        expect(requests).toHaveLength(
+          source === "retained" || (source === "org" && matches) ? 3 : 2,
+        );
+      }),
+  );
+
   it.effect.each([
     { reacted: true, method: "POST", issueUrl: "https://forgejo.test:3000/acme/web/issues/42" },
     {

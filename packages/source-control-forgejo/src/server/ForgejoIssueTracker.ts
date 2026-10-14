@@ -9,6 +9,7 @@
  * @module source-control-forgejo/server/ForgejoIssueTracker
  */
 import * as Effect from "effect/Effect";
+import * as RegExpUtils from "effect/RegExp";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import {
@@ -198,7 +199,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       path?: string,
     ) {
       if (names.length === 0) return [];
-      const wanted = [...new Set(names)];
+      const wanted = [...new Set(names)].map(
+        (name) => new RegExp(`^${RegExpUtils.escape(name)}$`, "iu"),
+      );
       let labels = yield* readArray(
         target,
         operation,
@@ -207,17 +210,17 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       );
       if (
         path !== undefined &&
-        wanted.some((name) => !labels.some((label) => label.name === name))
+        wanted.some((pattern) => !labels.some((label) => pattern.test(label.name)))
       ) {
         const issue = yield* getIssue(target, operation, path);
         labels = [...labels, ...(issue.labels ?? [])];
       }
-      if (wanted.some((name) => !labels.some((label) => label.name === name))) {
+      if (wanted.some((pattern) => !labels.some((label) => pattern.test(label.name)))) {
         const organization = yield* organizationLabels(target, operation);
         labels = [...labels, ...organization.rows];
       }
-      const ids = wanted.flatMap((name) => {
-        const label = labels.find((candidate) => candidate.name === name);
+      const ids = wanted.flatMap((pattern) => {
+        const label = labels.find((candidate) => pattern.test(candidate.name));
         return label ? [label.id] : [];
       });
       if (ids.length !== wanted.length)
