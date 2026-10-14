@@ -63,7 +63,7 @@ export function IssueCommentContent({
           <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
         )}
         {comment.editedAt ? <span>edited</span> : null}
-        {canEdit && comment.canEdit === true && allowed && !editing ? (
+        {canEdit && comment.canEdit !== false && allowed && !editing ? (
           <PullRequestEditButton aria-label="Edit comment" onClick={() => setEditing(true)} />
         ) : null}
       </PullRequestMetaLine>

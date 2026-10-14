@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import type { IssueState, IssueComment } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -65,6 +66,8 @@ const state = vi.hoisted(() => ({
     },
   },
   write: vi.fn(),
+  allowed: true,
+  toast: vi.fn(),
   candidatesRead: vi.fn(),
   candidates: {
     data: null as { states: ReadonlyArray<IssueState> } | null,
@@ -76,8 +79,10 @@ const state = vi.hoisted(() => ({
 vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),
-  useEnvironmentScope: () => true,
+  useEnvironmentScope: () => state.allowed,
+  readEnvironmentScope: () => state.allowed,
 }));
+vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("~/hooks/useIssueViewRefresh", () => ({ useIssueViewRefresh: () => {} }));
 vi.mock("./useIssueThreadHandoff", () => ({
   useIssueThreadHandoff: () => ({ pending: false, start: vi.fn() }),
@@ -102,7 +107,7 @@ vi.mock("~/state/query", () => ({
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.write }));
 vi.mock("~/state/issues", async () => {
   const { Atom } = await import("effect/reactivity");
-  const command = { permissionAtom: () => Atom.make(true) };
+  const command = { permissionAtom: () => Atom.make(state.allowed) };
   return {
     issueEnvironment: {
       detail: () => ({ kind: "detail" }),
@@ -620,3 +625,96 @@ it.each([
     vi.unstubAllGlobals();
   }
 });
+
+it.each(["unknown", "allowed", "denied", "unsupported", "no-grant", "read-only"])(
+  "keeps Azure comment editing behind native and client guards (%s)",
+  async (guard) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    state.allowed = guard !== "no-grant";
+    state.toast.mockReset();
+    state.write.mockReset().mockResolvedValue({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("Azure 403 Forbidden")),
+    });
+    state.detail = {
+      ...state.detail,
+      tracker: "azure-devops",
+      viewer: null,
+      key: "42",
+      comments: [
+        {
+          id: "comment",
+          author: null,
+          body: "Original comment",
+          createdAt: "2026-10-14T00:00:00Z",
+          url: null,
+          ...(guard === "unknown" ? {} : { canEdit: guard !== "denied" }),
+        },
+      ],
+      commentsCursor: null,
+      writable: guard !== "read-only",
+      capabilities: {
+        ...state.detail.capabilities,
+        editComment: guard !== "unsupported",
+        reactions: false,
+        events: false,
+      },
+    };
+    const environmentId = EnvironmentId.make("environment");
+    const reference = {
+      projectId: ProjectId.make("project"),
+      tracker: IssueTrackerKind.make("azure-devops"),
+      host: "dev.azure.com",
+      scope: "org/project",
+      key: "42",
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+      );
+      const edit = container.querySelector<HTMLButtonElement>('button[aria-label="Edit comment"]');
+      expect(edit !== null).toBe(guard === "unknown" || guard === "allowed");
+      if (guard === "unknown") {
+        await act(async () => edit!.click());
+        const input = container.querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Edit comment"]',
+        )!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+            input,
+            "Keep this draft",
+          );
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        const save = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent === "Save",
+        )!;
+        await act(async () => save.click());
+        expect(state.write).toHaveBeenCalledExactlyOnceWith({
+          environmentId,
+          input: { ...reference, commentId: "comment", body: "Keep this draft" },
+        });
+        expect(state.toast).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "error",
+            title: "Could not save the comment",
+            description: "Azure 403 Forbidden",
+          }),
+        );
+        expect(
+          container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Edit comment"]')
+            ?.value,
+        ).toBe("Keep this draft");
+        expect(save.disabled).toBe(false);
+      } else expect(state.write).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.allowed = true;
+      vi.unstubAllGlobals();
+    }
+  },
+);
