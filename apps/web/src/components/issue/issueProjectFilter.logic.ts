@@ -18,9 +18,10 @@ interface ScopedProject {
 export type IssueListSources = NonNullable<IssueListResult["sources"]>;
 
 export function issueCreateSources(
-  answer: Pick<IssueListResult, "sources" | "trackers">,
+  answer: Pick<IssueListResult, "trackers">,
+  sources: IssueListSources,
 ): IssueListSources {
-  return (answer.sources ?? []).filter(
+  return sources.filter(
     (source) =>
       source.capabilities.create &&
       answer.trackers.find(

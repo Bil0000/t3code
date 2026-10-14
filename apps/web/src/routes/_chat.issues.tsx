@@ -785,8 +785,8 @@ function IssuesRoute() {
       return false;
     };
     for (const [environmentId, page] of held) {
-      if (page.answer.sources !== undefined) {
-        for (const source of issueCreateSources(page.answer)) {
+      if (page.sources !== undefined) {
+        for (const source of issueCreateSources(page.answer, page.sources)) {
           if (known(environmentId, source.tracker, source.host, source.scope)) continue;
           scopes.push({
             environmentId,

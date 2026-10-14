@@ -1,5 +1,6 @@
 import { EnvironmentId, IssueCapabilities, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { continueIssueListPage } from "@t3tools/client-runtime/state/issues";
 
 import { pullRequestFilterProjects } from "../pullRequest/pullRequestProjectFilter.logic";
 import {
@@ -30,6 +31,58 @@ const source = (projectId: string, tracker: string, scope: string) =>
   }) satisfies IssueListSources[number];
 
 describe("issueCreateSources", () => {
+  it("offers the rebound continuation source while keeping the original tracker status", () => {
+    const old = {
+      ...source("old", "github", "acme/web"),
+      projectTitle: "Old checkout",
+      capabilities: { create: true } as IssueCapabilities,
+    };
+    const current = {
+      ...old,
+      projectId: ProjectId.make("current"),
+      projectTitle: "Current checkout",
+    };
+    const cursor = { "github github.com acme/web": "2" };
+    const answer = {
+      sources: [old],
+      trackers: [
+        {
+          tracker: old.tracker,
+          host: old.host,
+          configured: true,
+          projectCount: 1,
+          capabilities: old.capabilities,
+          detail: null,
+        },
+      ],
+      entries: [],
+      errors: [],
+      nextCursors: cursor,
+      viewers: {},
+    };
+    const held = { ...answer, answer, firstCursors: cursor, firstKeys: new Set<string>() };
+    const continued = continueIssueListPage(
+      held,
+      cursor,
+      {
+        entries: [],
+        sources: [current],
+        nextCursors: { "github github.com acme/web": "3" },
+        errors: [],
+      },
+      held.firstCursors,
+    );
+    expect(continued.answer).toBe(answer);
+    expect(issueCreateSources(continued.answer, continued.sources)).toEqual([current]);
+    expect(
+      issueCreateSources(
+        { ...answer, trackers: [{ ...answer.trackers[0]!, configured: false }] },
+        continued.sources,
+      ),
+    ).toEqual([]);
+    expect(issueCreateSources(answer, [])).toEqual([]);
+  });
+
   it("keeps the configured tracker when another tracker on the same host cannot be used", () => {
     const github = {
       ...source("main", "github", "acme/web"),
@@ -58,10 +111,10 @@ describe("issueCreateSources", () => {
         },
       ],
     };
-    expect(issueCreateSources(answer)).toEqual([gitlab]);
-    expect(issueCreateSources({ ...answer, trackers: answer.trackers.toReversed() })).toEqual([
-      gitlab,
-    ]);
+    expect(issueCreateSources(answer, answer.sources)).toEqual([gitlab]);
+    expect(
+      issueCreateSources({ ...answer, trackers: answer.trackers.toReversed() }, answer.sources),
+    ).toEqual([gitlab]);
   });
 });
 describe("issueListRefreshSource", () => {
