@@ -214,37 +214,53 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
     ) {
       if (names.length === 0) return [];
       const wanted = [...new Set(names)];
-      let labels = yield* readArray(
+      const repository = yield* readPage(
         target,
         operation,
-        `${repoPath(target.scope)}/labels?limit=${PAGE_SIZE}`,
+        `${repoPath(target.scope)}/labels`,
+        1,
         ForgejoLabel,
       );
-      const missing = () => wanted.filter((name) => !labels.some((label) => label.name === name));
-      if (path !== undefined && missing().length > 0) {
+      let labels = repository.rows;
+      const missing = (catalog = labels) =>
+        wanted.filter((name) => !catalog.some((label) => label.name === name));
+      if (path !== undefined) {
         const issue = yield* getIssue(target, operation, path);
-        labels = [...labels, ...(issue.labels ?? [])];
+        labels = [...(issue.labels ?? []), ...labels];
       }
+      let organizationLabelsFound: typeof labels = [];
       let organizationNext: string | null = null;
       if (missing().length > 0) {
         const organization = yield* organizationLabels(target, operation);
-        labels = [...labels, ...organization.rows];
+        organizationLabelsFound = organization.rows;
         organizationNext = organization.nextCursor;
       }
       const catalogs = [
         `${repoPath(target.scope)}/labels`,
         `orgs/${encodeURIComponent(target.scope.split("/").at(-2)!)}/labels`,
       ];
-      for (const [index, catalog] of catalogs.entries()) {
-        if (index === 1 && organizationNext === null) continue;
-        for (let page = 2; page <= LABEL_PAGE_LIMIT && missing().length > 0; page++) {
-          const result = yield* index === 0
-            ? readPage(target, operation, catalog, page, ForgejoLabel)
-            : organizationLabels(target, operation, page);
-          labels = [...labels, ...result.rows];
-          if (result.nextCursor === null) break;
-        }
+      let repositoryNext = repository.nextCursor;
+      for (
+        let page = 2;
+        page <= LABEL_PAGE_LIMIT && repositoryNext !== null && missing().length > 0;
+        page++
+      ) {
+        const result = yield* readPage(target, operation, catalogs[0]!, page, ForgejoLabel);
+        labels = [...labels, ...result.rows];
+        repositoryNext = result.nextCursor;
       }
+      for (
+        let page = 2;
+        page <= LABEL_PAGE_LIMIT &&
+        organizationNext !== null &&
+        missing([...labels, ...organizationLabelsFound]).length > 0;
+        page++
+      ) {
+        const result = yield* organizationLabels(target, operation, page);
+        organizationLabelsFound = [...organizationLabelsFound, ...result.rows];
+        organizationNext = result.nextCursor;
+      }
+      if (repositoryNext === null) labels = [...labels, ...organizationLabelsFound];
       const unresolved = missing();
       if (unresolved.length > LABEL_LOOKUP_LIMIT)
         return yield* refused(
@@ -253,18 +269,22 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         );
       for (const name of unresolved) {
         if (/^[+-]?\d+$/.test(name) || name === "." || name === "..") continue;
-        for (const catalog of catalogs) {
-          const label = yield* read(
-            target,
-            operation,
-            { path: `${catalog}/${encodeURIComponent(name)}` },
-            ForgejoLabel,
-          ).pipe(
-            Effect.catchIf(
-              (error) => error.reason === "not-found",
-              () => Effect.succeed(null),
-            ),
-          );
+        for (const [index, catalog] of catalogs.entries()) {
+          const known =
+            index === 1 ? organizationLabelsFound.find((label) => label.name === name) : undefined;
+          const label =
+            known ??
+            (yield* read(
+              target,
+              operation,
+              { path: `${catalog}/${encodeURIComponent(name)}` },
+              ForgejoLabel,
+            ).pipe(
+              Effect.catchIf(
+                (error) => error.reason === "not-found",
+                () => Effect.succeed(null),
+              ),
+            ));
           if (label === null) continue;
           if (label.name !== name || label.id < 1)
             return yield* refused(
