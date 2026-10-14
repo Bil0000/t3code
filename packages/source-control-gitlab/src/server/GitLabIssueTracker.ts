@@ -737,16 +737,20 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
       setState: (input) =>
         issuePath(input, "setState").pipe(
-          Effect.flatMap(({ path }) =>
-            write({
+          Effect.flatMap(({ path }) => {
+            if (input.state !== "open" && input.state !== "closed")
+              return Effect.fail(
+                refused("setState", "GitLab supports only open and closed issue states."),
+              );
+            return write({
               cwd: input.cwd,
               host: input.host,
               operation: "setState",
               path,
               method: "PUT",
               body: { state_event: input.state === "closed" ? "close" : "reopen" },
-            }),
-          ),
+            });
+          }),
         ),
 
       setReaction: (input) =>

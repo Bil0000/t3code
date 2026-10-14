@@ -127,6 +127,38 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each([
+    { state: "open", event: "reopen" },
+    { state: "closed", event: "close" },
+    { state: "native-unknown", event: null },
+  ])("writes only supported GitLab state tokens: $state", ({ state, event }) =>
+    Effect.gen(function* () {
+      const writes: unknown[] = [];
+      const api = yield* tracker((args, stdin) => {
+        expect(args).toContain("PUT");
+        expect(args[1]).toBe("projects/acme%2Fweb/issues/42");
+        writes.push(JSON.parse(stdin!));
+        return "{}";
+      });
+      const result = yield* Effect.result(
+        api.setState!({
+          cwd: "/w",
+          host: "gitlab.com",
+          scope: "acme/web",
+          key: "42",
+          state,
+        }),
+      );
+      expect(Result.isSuccess(result)).toBe(event !== null);
+      expect(writes).toEqual(event === null ? [] : [{ state_event: event }]);
+      if (Result.isFailure(result))
+        expect(result.failure).toMatchObject({
+          _tag: "IssueTrackerError",
+          operation: "setState",
+        });
+    }),
+  );
+
   it.effect.each([true, false])(
     "uses the note's native edit permission %s on the selected host",
     (canEdit) =>
