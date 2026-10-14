@@ -65,7 +65,7 @@ function parseAgent(entry: unknown): OrchestrationV2WorkflowAgent | null {
     ...optional("agentId", text(field(entry, "agentId"))),
     ...optional("phaseIndex", count(field(entry, "phaseIndex"))),
     ...optional("phaseTitle", text(field(entry, "phaseTitle"))),
-    ...optional("model", text(field(entry, "model"))),
+    ...optional("model", text(field(entry, "fallbackModel")) ?? text(field(entry, "model"))),
     ...optional("attempt", count(field(entry, "attempt"))),
     ...optional("totalTokens", count(field(entry, "tokens"))),
     ...optional("toolCalls", count(field(entry, "toolCalls"))),

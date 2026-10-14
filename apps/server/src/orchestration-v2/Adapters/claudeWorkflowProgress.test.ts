@@ -71,6 +71,7 @@ describe("mergeClaudeWorkflowProgress", () => {
           state: "done",
           agentId: "a1",
           model: "claude-opus-5[1m]",
+          fallbackModel: "claude-opus-4-8",
           attempt: 2,
           tokens: 71_141,
           toolCalls: 3,
@@ -91,7 +92,7 @@ describe("mergeClaudeWorkflowProgress", () => {
       state: "completed",
       phaseIndex: 1,
       phaseTitle: "Alpha",
-      model: "claude-opus-5[1m]",
+      model: "claude-opus-4-8",
       attempt: 2,
       totalTokens: 71_141,
       toolCalls: 3,
@@ -219,6 +220,7 @@ describe("mergeClaudeWorkflowProgress", () => {
         agent({
           state: "error",
           attempt: 1,
+          model: "claude-opus-5[1m]",
           promptPreview: "First prompt",
           resultPreview: "First result",
           tokens: 100,
@@ -231,7 +233,10 @@ describe("mergeClaudeWorkflowProgress", () => {
       ]),
     });
     const second = mergeClaudeWorkflowProgress({
-      previous: first,
+      previous: first && {
+        ...first,
+        agents: first.agents.map((member) => ({ ...member, effort: "max", speed: "standard" })),
+      },
       message: snapshotFrame([
         { type: "workflow_agent", index: 1, label: "alpha:one", state: "start", attempt: 2 },
       ]),
@@ -245,7 +250,7 @@ describe("mergeClaudeWorkflowProgress", () => {
         phaseIndex: 1,
         phaseTitle: "Alpha",
       },
-      first?.agents[1],
+      { ...first?.agents[1], effort: "max", speed: "standard" },
     ]);
     expect(second?.phases).toEqual(first?.phases);
   });
@@ -285,10 +290,20 @@ describe("mergeClaudeWorkflowProgress", () => {
   it("retains member fields omitted by a later frame in the same attempt", () => {
     const first = mergeClaudeWorkflowProgress({
       previous: undefined,
-      message: snapshotFrame([agent({ attempt: 2, promptPreview: "Current prompt", tokens: 100 })]),
+      message: snapshotFrame([
+        agent({
+          attempt: 2,
+          model: "claude-opus-5[1m]",
+          promptPreview: "Current prompt",
+          tokens: 100,
+        }),
+      ]),
     });
     const second = mergeClaudeWorkflowProgress({
-      previous: first,
+      previous: first && {
+        ...first,
+        agents: first.agents.map((member) => ({ ...member, effort: "xhigh", speed: "standard" })),
+      },
       message: snapshotFrame([agent({ state: "done", resultPreview: "Current result" })]),
     });
     expect(second?.agents[0]).toMatchObject({
@@ -297,6 +312,9 @@ describe("mergeClaudeWorkflowProgress", () => {
       prompt: "Current prompt",
       result: "Current result",
       totalTokens: 100,
+      model: "claude-opus-5[1m]",
+      effort: "xhigh",
+      speed: "standard",
     });
   });
 
