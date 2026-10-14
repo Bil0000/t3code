@@ -9,6 +9,8 @@ import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRat
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
 import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
+import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
+import * as GitHubIssueTracker from "@t3tools/source-control-github/server/GitHubIssueTracker";
 import {
   IssueTrackerKind,
   IssueUpdateInput,
@@ -603,6 +605,88 @@ describe("IssueService with a standalone tracker", () => {
 });
 
 describe("IssueService write permissions", () => {
+  it.effect.each([
+    { role: null, status: 200, succeeds: true, writes: 1 },
+    { role: null, status: 403, succeeds: false, writes: 1 },
+    { role: "READ", status: 200, succeeds: false, writes: 0 },
+    { role: "TRIAGE", status: 200, succeeds: true, writes: 1 },
+  ])("keeps native GitHub metadata authorization for $role/$status", (testCase) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const writes: GitHubApi.GitHubRestInput[] = [];
+      const driver = yield* GitHubIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(GitHubApi.GitHubApi)({
+            graphql: () =>
+              Effect.sync(() => {
+                reads += 1;
+                return JSON.stringify({
+                  data: {
+                    repository: {
+                      viewerPermission: testCase.role,
+                      issue: { viewerCanUpdate: false },
+                    },
+                  },
+                });
+              }),
+            rest: (request) =>
+              Effect.sync(() => {
+                writes.push(request);
+              }).pipe(
+                Effect.andThen(
+                  testCase.status === 403
+                    ? Effect.fail(
+                        new GitHubApi.GitHubApiResponseError({
+                          host: "github.com",
+                          operation: "update",
+                          status: 403,
+                        }),
+                      )
+                    : Effect.succeed({
+                        status: 200,
+                        headers: {},
+                        truncated: false,
+                        invalidUtf8: false,
+                        body: JSON.stringify({
+                          labels: [{ name: "bug", color: "000000" }],
+                          assignees: [{ login: "octocat" }],
+                        }),
+                      }),
+                ),
+              ),
+          }),
+        ),
+      );
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [driver],
+      });
+      const update = service.update({
+        projectId: ProjectId.make("web"),
+        tracker: GITHUB,
+        scope: "acme/web",
+        key: "42",
+        labels: ["bug"],
+        assignees: ["octocat"],
+      });
+      if (testCase.succeeds) yield* update;
+      else {
+        const error = yield* Effect.flip(update);
+        expect(error._tag).toBe("IssueOperationError");
+        if (testCase.status === 403)
+          expect(error).toMatchObject({ detail: expect.stringContaining("403") });
+      }
+      expect(reads).toBe(1);
+      expect(writes).toHaveLength(testCase.writes);
+      if (testCase.writes > 0)
+        expect(writes[0]).toMatchObject({
+          method: "PATCH",
+          path: "repos/acme/web/issues/42",
+          body: { labels: ["bug"], assignees: ["octocat"] },
+        });
+    }),
+  );
+
   it.effect.each([
     { field: "edit" as const, input: { title: "Changed" } },
     { field: "edit" as const, input: { body: "Changed" } },
