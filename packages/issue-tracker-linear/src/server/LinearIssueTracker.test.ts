@@ -2870,3 +2870,74 @@ it.effect.each([100, 101])("bounds native workspace template catalogs: %s", (cou
     expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
   }),
 );
+
+it.effect("uses workspace-scoped native templates without accepting another team's template", () =>
+  Effect.gen(function* () {
+    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const template = {
+      id: "workspace-template",
+      name: "Bug",
+      description: null,
+      content: "Steps",
+      type: "issue",
+      hasFormFields: false,
+      templateData: {},
+      teamId: null,
+    };
+    const nativeTemplates = [template, { ...template, id: "foreign-template", teamId: "team_ops" }];
+    const test = fakeLinear({
+      T3Team: (variables) => {
+        expect(variables).toEqual({ key: "ENG" });
+        expect(test.requests.at(-1)?.query).toContain(
+          'organization { id urlKey templates(first: 100, filter: { type: { eq: "issue" } })',
+        );
+        expect(test.requests.at(-1)?.query).toContain(
+          "teams(first: 1, filter: { key: { eq: $key } })",
+        );
+        return {
+          organization: {
+            ...ORGANIZATION,
+            templates: {
+              ...empty,
+              nodes: nativeTemplates.filter((entry) => entry.teamId === null),
+            },
+          },
+          issueLabels: empty,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                ancestors: [],
+                states: empty,
+                labels: empty,
+                members: empty,
+                templates: empty,
+              },
+            ],
+          },
+        };
+      },
+    });
+    const api = yield* test.tracker;
+    expect((yield* api.listTemplates(target)).templates.map(({ key }) => key)).toEqual([
+      template.id,
+    ]);
+    expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
+    test.requests.length = 0;
+    expect(
+      (yield* api
+        .create({
+          ...target,
+          title: "New",
+          body: "",
+          labels: [],
+          assignees: [],
+          templateKey: "foreign-template",
+        })
+        .pipe(Effect.flip)).reason,
+    ).toBe("failed");
+    expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
+  }),
+);
