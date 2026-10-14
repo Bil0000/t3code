@@ -4,6 +4,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
+import { VcsProcessExitError } from "@t3tools/contracts";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
@@ -684,6 +685,34 @@ describe("AzureDevOpsIssueTracker", () => {
     }),
   );
 
+  it.effect.each([
+    ["getIssue", "JULIUS@acme.test", true],
+    ["getIssue", "other@acme.test", false],
+    ["getComments", undefined, undefined],
+    ["getComments", "JULIUS@acme.test", true],
+    ["getComments", "other@acme.test", false],
+  ] as const)("keeps %s comment edit rights for viewer %s", ([operation, viewer, canEdit]) =>
+    Effect.gen(function* () {
+      const seen: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        seen.push(args);
+        return answer(args);
+      });
+      const input = {
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        ...(viewer === undefined ? {} : { viewer }),
+      };
+      const result = yield* operation === "getIssue"
+        ? api.getIssue(input)
+        : api.getComments({ ...input, cursor: "next-token" });
+      expect(result.comments[0]?.canEdit).toBe(canEdit);
+      expect(seen).toHaveLength(operation === "getIssue" ? 4 : 2);
+    }),
+  );
+
   it.effect("lets the native token decide comment edit rights when the viewer is unknown", () =>
     Effect.gen(function* () {
       const paths: ReadonlyArray<string>[] = [];
@@ -703,6 +732,68 @@ describe("AzureDevOpsIssueTracker", () => {
       expect(paths).toHaveLength(2);
       expect(paths.flat()).not.toContain("profiles");
       expect(paths.flat()).toContain("PATCH");
+    }),
+  );
+
+  it.effect.each([
+    [401, "authentication", "unauthenticated"],
+    [403, "command-failed", "failed"],
+    [429, "rate-limited", "rate-limited"],
+  ] as const)("keeps native comment edit error %s", ([status, failureKind, reason]) =>
+    Effect.gen(function* () {
+      const seen: ReadonlyArray<string>[] = [];
+      const cause = new VcsProcessExitError({
+        operation: "AzureDevOpsCli.execute",
+        command: "az",
+        cwd: "/w",
+        exitCode: 1,
+        detail: `HTTP ${status}`,
+        failureKind,
+      });
+      const api = yield* AzureDevOpsIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeFileSystem.layer,
+            Layer.effect(AzureDevOpsCli.AzureDevOpsCli, AzureDevOpsCli.make).pipe(
+              Layer.provide(
+                TestSourceControlHost.layer({
+                  process: {
+                    run: ({ args }) => {
+                      seen.push(args);
+                      return args[0] === "boards"
+                        ? Effect.succeed(TestSourceControlHost.processOutput(encode(WORK_ITEM)))
+                        : Effect.fail(cause);
+                    },
+                  },
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      const error = yield* Effect.flip(
+        api.editComment!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          commentId: "1",
+          body: "Changed",
+        }),
+      );
+      expect(error).toMatchObject({ operation: "editComment", reason, cause: { cause } });
+      expect(seen).toHaveLength(2);
+      expect(seen[1]).toEqual(
+        expect.arrayContaining([
+          "PATCH",
+          "project=Web App",
+          "workItemId=7",
+          "commentId=1",
+          "7.1-preview",
+          "api-version=7.1-preview.4",
+          "format=markdown",
+        ]),
+      );
     }),
   );
 
@@ -850,7 +941,7 @@ describe("AzureDevOpsIssueTracker", () => {
           body: "Repro attached.",
           createdAt: "2026-07-02T00:00:00Z",
           editedAt: null,
-          canEdit: false,
+          canEdit: undefined,
           url: null,
           reactions: [{ content: "thumbs-up", count: 2, actors: [], viewerHasReacted: true }],
         },

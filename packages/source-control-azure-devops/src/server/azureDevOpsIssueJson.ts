@@ -272,8 +272,9 @@ export function decodeCommentsJson(
               ? comment.value.modifiedDate
               : null,
           canEdit:
-            viewer !== undefined &&
-            toActor(comment.value.createdBy)?.login.toLowerCase() === viewer.toLowerCase(),
+            viewer === undefined
+              ? undefined
+              : toActor(comment.value.createdBy)?.login.toLowerCase() === viewer.toLowerCase(),
           url: null,
           reactions: toReactions(comment.value.reactions),
         },
