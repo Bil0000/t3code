@@ -807,7 +807,17 @@ export const make = Effect.gen(function* () {
               ),
             ));
       const lender =
-        own ?? preferFirst(onTracker.filter((project) => !isStandaloneIssueTracker(project.api)));
+        own ??
+        preferFirst(
+          onTracker.filter(
+            (project) =>
+              !isStandaloneIssueTracker(project.api) ||
+              (project.tracker === "linear" &&
+                parsed.workspace !== undefined &&
+                project.scope.includes("/") &&
+                project.scope.split("/")[0]?.toLowerCase() === parsed.workspace),
+          ),
+        );
       if (lender === undefined) {
         return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
       }

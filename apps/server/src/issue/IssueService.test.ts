@@ -1136,14 +1136,16 @@ it.effect(
     }),
 );
 
-it.effect("keeps another Linear team in the bound workspace read-only", () =>
+it.effect("resolves another Linear team's URL in the bound workspace read-only", () =>
   Effect.gen(function* () {
+    const reads: string[] = [];
     const service = yield* makeService({
       projects: [project({ id: "web" })],
       trackers: [
         fakeStandaloneTracker({
           getIssue: (input) => {
-            expect(input.scope).toBe("Acme/QA");
+            expect(input.scope.toLowerCase()).toBe("acme/qa");
+            reads.push(input.scope);
             return Effect.succeed(issue(input.key));
           },
           getViewerPermissions: () => Effect.die("Foreign team writes must not read permissions"),
@@ -1165,6 +1167,25 @@ it.effect("keeps another Linear team in the bound workspace read-only", () =>
       _tag: "IssueOperationError",
       reason: "read-only",
     });
+    const resolved = yield* service.resolveUrl("https://linear.app/acme/issue/QA-123/title");
+    expect(resolved).toEqual({
+      projectId: "web",
+      tracker: LINEAR,
+      host: "linear.app",
+      scope: "acme/qa",
+      key: "QA-123",
+      writable: false,
+    });
+    expect(reads).toEqual(["Acme/QA"]);
+    expect(yield* service.detail(resolved)).toMatchObject({ writable: false });
+    expect(yield* Effect.flip(service.comment({ ...resolved, body: "Hello" }))).toMatchObject({
+      _tag: "IssueOperationError",
+      reason: "read-only",
+    });
+    expect(
+      yield* Effect.flip(service.resolveUrl("https://linear.app/other-workspace/issue/QA-123")),
+    ).toMatchObject({ _tag: "IssueUnavailableError" });
+    expect(reads).toEqual(["Acme/QA", "acme/qa"]);
   }),
 );
 
