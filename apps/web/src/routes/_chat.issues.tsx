@@ -1006,6 +1006,19 @@ function IssuesRoute() {
                   </Button>
                 ) : null}
               </div>
+              {!noneAnswered && list.error ? (
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
+                  <span>{list.error}</span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={list.isPending}
+                    onClick={list.refresh}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
               {listBody}
             </WorkspacePageContainer>
           </div>
