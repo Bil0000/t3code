@@ -266,13 +266,13 @@ const COMMENTS_QUERY = `query T3Comments($id: String!, $first: Int!, $after: Str
     }
   }
 }`;
-const TEAM_QUERY = `query T3Team($key: String!) {
+const TEAM_QUERY = `query T3Team($key: String!, $includeAncestorLabels: Boolean!) {
   organization { id urlKey templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
   teams(first: 1, filter: { key: { eq: $key } }) {
     nodes {
       id key name
       states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } }
-      ancestors { id key name labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
+      ancestors { id key name labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
       labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } }
       members(first: 250) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } }
       templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } }
@@ -369,10 +369,12 @@ const LinearTeamDetail = Schema.Struct({
     Schema.Struct({
       ...LinearTeam.fields,
       templates: LinearTemplates,
-      labels: Schema.Struct({
-        ...Connection(LinearLabel).fields,
-        nodes: Schema.Array(LinearLabel).check(Schema.isMaxLength(250)),
-      }),
+      labels: Schema.optional(
+        Schema.Struct({
+          ...Connection(LinearLabel).fields,
+          nodes: Schema.Array(LinearLabel).check(Schema.isMaxLength(250)),
+        }),
+      ),
     }),
   ).check(Schema.isMaxLength(5)),
   labels: Connection(LinearLabel),
@@ -547,7 +549,10 @@ export class LinearApi extends Context.Service<
       readonly after?: string | undefined;
     }) => Effect.Effect<typeof AssigneeCandidatesData.Type, IssueTrackerError>;
     readonly updateComment: (id: string, body: string) => Effect.Effect<void, IssueTrackerError>;
-    readonly getTeam: (key: string) => Effect.Effect<LinearTeamScope | null, IssueTrackerError>;
+    readonly getTeam: (
+      key: string,
+      includeAncestorLabels?: boolean,
+    ) => Effect.Effect<LinearTeamScope | null, IssueTrackerError>;
     readonly createIssue: (
       input: Record<string, unknown>,
     ) => Effect.Effect<{ readonly identifier: string; readonly url: string }, IssueTrackerError>;
@@ -941,8 +946,16 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const getTeam: LinearApi["Service"]["getTeam"] = (key) =>
-    execute("getTeam", TEAM_QUERY, { key }, TeamData).pipe(
+  const getTeam: LinearApi["Service"]["getTeam"] = (key, includeAncestorLabels = false) =>
+    execute("getTeam", TEAM_QUERY, { key, includeAncestorLabels }, TeamData).pipe(
+      Effect.filterOrFail(
+        (data) =>
+          !includeAncestorLabels ||
+          data.teams.nodes.every((team) =>
+            team.ancestors.every((ancestor) => ancestor.labels !== undefined),
+          ),
+        () => fail("getTeam", "failed", "Linear omitted the requested ancestor labels."),
+      ),
       Effect.map((data) => {
         const team = data.teams.nodes[0];
         if (team === undefined) return null;
@@ -967,13 +980,13 @@ export const make = Effect.gen(function* () {
           labelsTruncated:
             team.labels.pageInfo.hasNextPage ||
             data.issueLabels.pageInfo.hasNextPage ||
-            team.ancestors.some((ancestor) => ancestor.labels.pageInfo.hasNextPage),
+            team.ancestors.some((ancestor) => ancestor.labels?.pageInfo.hasNextPage),
           truncated:
             team.states.pageInfo.hasNextPage ||
             team.labels.pageInfo.hasNextPage ||
             team.members.pageInfo.hasNextPage ||
             data.issueLabels.pageInfo.hasNextPage ||
-            team.ancestors.some((ancestor) => ancestor.labels.pageInfo.hasNextPage) ||
+            team.ancestors.some((ancestor) => ancestor.labels?.pageInfo.hasNextPage) ||
             templatesTruncated,
         };
       }),

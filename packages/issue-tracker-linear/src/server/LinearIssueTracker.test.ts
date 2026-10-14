@@ -2592,6 +2592,7 @@ it.effect.each([false, true])(
       });
       const api = yield* test.tracker;
       const candidates = yield* api.listCandidates(target);
+      expect(test.requests.at(-1)?.variables.includeAncestorLabels).toBe(true);
       expect(candidates.labels.map(({ id }) => id)).toEqual([
         childLabel.id,
         other.id,
@@ -2610,8 +2611,10 @@ it.effect.each([false, true])(
         "T3Team",
         "T3LabelCandidates",
       ]);
+      expect(test.requests[0]?.variables.includeAncestorLabels).toBe(false);
       test.requests.length = 0;
       yield* api.update({ ...target, key: "ENG-7", labels: [parentLabel.id, other.id] });
+      expect(test.requests[1]?.variables.includeAncestorLabels).toBe(true);
       expect(written.at(-1)).toEqual({ labelIds: [parentLabel.id, other.id] });
       expect(test.requests.map(({ operation }) => operation)).toEqual([
         "T3IssueReference",
@@ -2627,6 +2630,7 @@ it.effect.each([false, true])(
         assignees: [],
       });
       expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team", "T3IssueCreate"]);
+      expect(test.requests[0]?.variables.includeAncestorLabels).toBe(true);
       expect(
         (yield* api.update({ ...target, key: "ENG-7", labels: ["Security"] }).pipe(Effect.flip))
           .detail,
@@ -2711,35 +2715,37 @@ it.effect.each(["workspace", "ancestor"] as const)(
       const form = { ...plain, id: "inherited-form", hasFormFields: true };
       const catalog = { ...empty, nodes: [plain, form] };
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: { ...ORGANIZATION, templates: source === "workspace" ? catalog : empty },
-          issueLabels: empty,
-          teams: {
-            nodes: [
-              {
-                id: "team_eng",
-                key: "ENG",
-                name: "Engineering",
-                states: empty,
-                labels: empty,
-                members: empty,
-                templates: empty,
-                ancestors:
-                  source === "ancestor"
-                    ? [
-                        {
-                          id: "parent",
-                          key: "PARENT",
-                          name: "Parent",
-                          labels: empty,
-                          templates: catalog,
-                        },
-                      ]
-                    : [],
-              },
-            ],
-          },
-        }),
+        T3Team: (variables) => {
+          expect(variables.includeAncestorLabels).toBe(false);
+          return {
+            organization: { ...ORGANIZATION, templates: source === "workspace" ? catalog : empty },
+            issueLabels: empty,
+            teams: {
+              nodes: [
+                {
+                  id: "team_eng",
+                  key: "ENG",
+                  name: "Engineering",
+                  states: empty,
+                  labels: empty,
+                  members: empty,
+                  templates: empty,
+                  ancestors:
+                    source === "ancestor"
+                      ? [
+                          {
+                            id: "parent",
+                            key: "PARENT",
+                            name: "Parent",
+                            templates: catalog,
+                          },
+                        ]
+                      : [],
+                },
+              ],
+            },
+          };
+        },
         T3IssueCreate: (variables) => {
           expect(variables.input).toMatchObject({ teamId: "team_eng", templateId: plain.id });
           return {
@@ -2887,7 +2893,7 @@ it.effect("uses workspace-scoped native templates without accepting another team
     const nativeTemplates = [template, { ...template, id: "foreign-template", teamId: "team_ops" }];
     const test = fakeLinear({
       T3Team: (variables) => {
-        expect(variables).toEqual({ key: "ENG" });
+        expect(variables).toEqual({ key: "ENG", includeAncestorLabels: false });
         expect(test.requests.at(-1)?.query).toContain(
           'organization { id urlKey templates(first: 100, filter: { type: { eq: "issue" } })',
         );
@@ -2940,4 +2946,100 @@ it.effect("uses workspace-scoped native templates without accepting another team
     ).toBe("failed");
     expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
   }),
+);
+
+it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels"] as const)(
+  "keeps ancestor metadata while selecting only needed labels: %s",
+  (operation) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const parentLabel = { id: "parent-label", name: "Security", color: null };
+      const test = fakeLinear({
+        T3Team: (variables) => {
+          expect(variables.includeAncestorLabels).toBe(operation === "missingLabels");
+          expect(test.requests.at(-1)?.query).toContain("ancestors { id key name labels(");
+          expect(test.requests.at(-1)?.query).toContain(
+            "labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels)",
+          );
+          return {
+            organization: { ...ORGANIZATION, templates: empty },
+            issueLabels: empty,
+            teams: {
+              nodes: [
+                {
+                  id: "team_eng",
+                  key: "ENG",
+                  name: "Engineering",
+                  states: empty,
+                  labels: empty,
+                  members: { ...empty, nodes: [THEO] },
+                  templates: empty,
+                  ancestors: [{ id: "parent", key: "PARENT", name: "Parent", templates: empty }],
+                },
+              ],
+            },
+          };
+        },
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3IssueCreate: (variables) => {
+          expect(variables.input).toMatchObject({ labelIds: [] });
+          return {
+            issueCreate: {
+              success: true,
+              issue: {
+                identifier: "ENG-8",
+                url: "https://linear.app/acme/issue/ENG-8",
+              },
+            },
+          };
+        },
+        T3IssueUpdate: (variables) => {
+          expect(variables.input).toEqual(
+            operation === "assignee" ? { assigneeId: THEO.id } : { labelIds: [] },
+          );
+          return { issueUpdate: { success: true } };
+        },
+        T3LabelCandidates: (variables) => {
+          expect(variables.filter).toEqual({
+            and: [
+              { or: [{ team: { id: { in: ["team_eng", "parent"] } } }, { team: { null: true } }] },
+            ],
+          });
+          return {
+            organization: ORGANIZATION,
+            teams: { nodes: [{ id: "team_eng", key: "ENG", name: "Engineering" }] },
+            issueLabels: { ...empty, nodes: [parentLabel] },
+          };
+        },
+      });
+      const api = yield* test.tracker;
+      if (operation === "missingLabels") {
+        expect((yield* api.listCandidates(target).pipe(Effect.flip)).reason).toBe("failed");
+      } else if (operation === "labelPage") {
+        expect((yield* api.listLabelCandidates(target)).items).toMatchObject([
+          { id: parentLabel.id },
+        ]);
+      } else if (operation === "create") {
+        yield* api.create({ ...target, title: "New", body: "", labels: [], assignees: [] });
+      } else {
+        yield* api.update({
+          ...target,
+          key: "ENG-7",
+          ...(operation === "assignee" ? { assignees: [THEO.id] } : { labels: [] }),
+        });
+      }
+      expect(test.requests.map(({ operation: name }) => name)).toEqual([
+        ...(["assignee", "clearLabels"].includes(operation) ? ["T3IssueReference"] : []),
+        "T3Team",
+        ...(operation === "missingLabels"
+          ? []
+          : [
+              operation === "labelPage"
+                ? "T3LabelCandidates"
+                : operation === "create"
+                  ? "T3IssueCreate"
+                  : "T3IssueUpdate",
+            ]),
+      ]);
+    }),
 );

@@ -404,9 +404,9 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         Effect.flatMap((reference) => requireIssueReference(operation, scope, reference)),
       );
 
-    const requireTeam = (operation: string, scope: string) =>
+    const requireTeam = (operation: string, scope: string, includeAncestorLabels = false) =>
       requireScope(operation, scope).pipe(
-        Effect.flatMap((parsed) => linear.getTeam(parsed.team)),
+        Effect.flatMap((parsed) => linear.getTeam(parsed.team, includeAncestorLabels)),
         Effect.filterOrFail(
           (team): team is LinearApi.LinearTeamScope => team !== null,
           () => failed(operation, `No Linear team has the key "${scope}".`),
@@ -425,7 +425,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           ...new Map(
             [
               ...scope.team.labels.nodes,
-              ...scope.team.ancestors.flatMap((ancestor) => ancestor.labels.nodes),
+              ...scope.team.ancestors.flatMap((ancestor) => ancestor.labels?.nodes ?? []),
               ...scope.workspaceLabels,
             ].map((label) => [label.id, label]),
           ).values(),
@@ -718,7 +718,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
 
       create: (input) =>
         Effect.gen(function* () {
-          const scope = yield* requireTeam("create", input.scope);
+          const scope = yield* requireTeam("create", input.scope, input.labels.length > 0);
           const labels = yield* labelIds("create", scope, input.labels);
           const assignee = yield* assigneeId("create", scope, input.assignees);
           const parent =
@@ -877,7 +877,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           if (input.title !== undefined) patch.title = input.title;
           if (input.body !== undefined) patch.description = input.body;
           if (input.labels !== undefined || input.assignees !== undefined) {
-            const scope = yield* requireTeam("update", input.scope);
+            const scope = yield* requireTeam(
+              "update",
+              input.scope,
+              (input.labels?.length ?? 0) > 0,
+            );
             if (input.labels !== undefined)
               patch.labelIds = yield* labelIds("update", scope, input.labels);
             if (input.assignees !== undefined)
@@ -963,11 +967,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         }),
 
       listCandidates: (input) =>
-        requireTeam("listCandidates", input.scope).pipe(
+        requireTeam("listCandidates", input.scope, true).pipe(
           Effect.map((scope) => ({
             labels: [
               ...scope.team.labels.nodes,
-              ...scope.team.ancestors.flatMap((ancestor) => ancestor.labels.nodes),
+              ...scope.team.ancestors.flatMap((ancestor) => ancestor.labels?.nodes ?? []),
               ...scope.workspaceLabels,
             ]
               .filter((label) => !label.isGroup && label.archivedAt == null)
