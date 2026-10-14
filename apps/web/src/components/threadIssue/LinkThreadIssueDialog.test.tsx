@@ -3,7 +3,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type IssueListCursors } from "@t3tools/contracts";
 
 const state = vi.hoisted(() => {
   const source = {
@@ -25,7 +25,12 @@ const state = vi.hoisted(() => {
   return {
     source,
     linked,
-    list: { entries: [linked], sources: [source], nextCursors: { "github.com org/repo": "next" } },
+    list: {
+      entries: [linked],
+      sources: [source],
+      nextCursors: { "github.com org/repo": "next" } as IssueListCursors,
+      errors: [],
+    },
     load: vi.fn(),
     link: vi.fn(),
   };
@@ -58,7 +63,11 @@ it("can load later issues when every issue on the first page is already linked",
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.load.mockResolvedValue({
     _tag: "Success",
-    value: { entries: [{ ...state.linked, key: "2", title: "Later issue" }], nextCursors: {} },
+    value: {
+      entries: [{ ...state.linked, key: "2", title: "Later issue" }],
+      nextCursors: {},
+      errors: [],
+    },
   });
   const container = document.createElement("div");
   document.body.append(container);
@@ -80,6 +89,73 @@ it("can load later issues when every issue on the first page is already linked",
     await act(async () => load!.click());
     expect(state.load).toHaveBeenCalledOnce();
     expect(document.body.textContent).toContain("Later issue");
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("shows a source page failure and retries its qualified cursor without paging another tracker", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const github = "github github.com org/repo";
+  state.list = {
+    ...state.list,
+    nextCursors: { [github]: "next", "gitlab github.com org/repo": "other" },
+  };
+  state.load
+    .mockReset()
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        entries: [],
+        nextCursors: {},
+        errors: [
+          {
+            projectId: state.source.projectId,
+            projectTitle: "Project",
+            tracker: "github",
+            host: "github.com",
+            message: "Provider offline",
+          },
+        ],
+      },
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        entries: [{ ...state.linked, key: "2", title: "Retried issue" }],
+        nextCursors: {},
+        errors: [],
+      },
+    });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    openLinkThreadIssueDialog({
+      environmentId: EnvironmentId.make("environment"),
+      threadId: ThreadId.make("thread"),
+    });
+    await act(async () =>
+      root.render(
+        createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+      ),
+    );
+    const more = () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Load more",
+      );
+    await act(async () => more()!.click());
+    expect(document.body.textContent).toContain("Provider offline");
+    expect(more()).toBeDefined();
+    await act(async () => more()!.click());
+    expect(state.load).toHaveBeenCalledTimes(2);
+    for (const [request] of state.load.mock.calls)
+      expect(request.input.cursors).toEqual({ [github]: "next" });
+    expect(document.body.textContent).toContain("Retried issue");
+    expect(document.body.textContent).not.toContain("Provider offline");
+    expect(more()).toBeUndefined();
   } finally {
     await act(async () => root.unmount());
     container.remove();

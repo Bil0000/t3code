@@ -16,7 +16,12 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useThreadShell } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
-import { mergeIssueListPage, issueListCursorsOn } from "@t3tools/client-runtime/state/issues";
+import {
+  continueIssueListPage,
+  issueEntryKey,
+  mergeIssueListPage,
+  issueListCursorsOn,
+} from "@t3tools/client-runtime/state/issues";
 import { threadEnvironment } from "~/state/threads";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useDebouncedValue } from "~/state/queries";
@@ -89,6 +94,7 @@ function LinkThreadIssueDialog({
     seed: IssueListResult;
     entries: ReadonlyArray<IssueListEntry>;
     cursors: IssueListCursors;
+    errors: IssueListResult["errors"];
   } | null>(null);
   const held = pages?.seed === list.data ? pages : null;
   const candidates = mergeIssueListPage(list.data?.entries ?? [], held?.entries ?? []).filter(
@@ -134,18 +140,26 @@ function LinkThreadIssueDialog({
       setError(formatEnvironmentQueryError(result.cause));
       return;
     }
+    const continued = continueIssueListPage(
+      {
+        entries: held?.entries ?? [],
+        nextCursors: held?.cursors ?? seed.nextCursors,
+        firstCursors: seed.nextCursors,
+        firstKeys: new Set(seed.entries.map(issueEntryKey)),
+        errors: held?.errors ?? seed.errors,
+        sources: seed.sources,
+      },
+      nextCursors,
+      result.value,
+      seed.nextCursors,
+    );
     setPages({
       seed,
-      entries: mergeIssueListPage(held?.entries ?? [], result.value.entries),
-      cursors: {
-        ...Object.fromEntries(
-          Object.entries(held?.cursors ?? seed.nextCursors).filter(
-            ([key]) => nextCursors[key] === undefined,
-          ),
-        ),
-        ...result.value.nextCursors,
-      },
+      entries: continued.entries,
+      cursors: continued.nextCursors,
+      errors: continued.errors,
     });
+    setError(continued.errors.map(({ message }) => message).join(" · ") || null);
   };
 
   const linkRef = async (ref: IssueRef & { host: string }, nativeUrl?: string) => {
