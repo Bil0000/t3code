@@ -607,7 +607,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           const identifier = yield* requireIdentifier("getComments", input.key);
           const [page, viewer] = yield* Effect.all([
             linear.getComments({ identifier, first: COMMENTS_PAGE, after: input.cursor }),
-            viewerId,
+            input.viewer === undefined ? viewerId : Effect.succeed(input.viewer),
           ]);
           yield* requireIssueReference("getComments", input.scope, page.issue);
           return {

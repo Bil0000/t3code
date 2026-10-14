@@ -123,7 +123,7 @@ export interface IssueTrackerApi {
 
   /** One page of older comments past a cursor `getIssue` or a previous page handed over. */
   readonly getComments: (
-    input: IssueTarget & { readonly cursor: string },
+    input: IssueTarget & { readonly cursor: string; readonly viewer?: string },
   ) => Effect.Effect<IssueCommentsPage, IssueTrackerError>;
 
   /**

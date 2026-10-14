@@ -145,6 +145,82 @@ function fakeLinear(
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
 
 describe("LinearIssueTracker", () => {
+  it.effect.each([
+    { viewer: JULIUS.id, fails: false, mine: true, actors: [] },
+    { viewer: JULIUS.id, fails: true, mine: true, actors: [] },
+    { viewer: THEO.id, fails: false, mine: false, actors: ["julius"] },
+    { viewer: undefined, fails: false, mine: true, actors: [] },
+    { viewer: undefined, fails: true, mine: false, actors: ["julius"] },
+  ])(
+    "uses comment viewer $viewer with native viewer failure $fails",
+    ({ viewer, fails, mine, actors }) =>
+      Effect.gen(function* () {
+        const test = fakeLinear({
+          T3Viewer: () =>
+            fails
+              ? Response.json({ errors: [{ message: "Unavailable" }] }, { status: 500 })
+              : { viewer: JULIUS },
+          T3IssueReference: () => ({ issue: issue("ENG-7") }),
+          T3IssueReactions: () => ({
+            issue: {
+              reactions: [
+                { id: "native-viewer-reaction", emoji: "👍", user: JULIUS },
+                { id: "display-viewer-reaction", emoji: "👍", user: THEO },
+              ],
+            },
+          }),
+          T3ReactionDelete: (variables) => {
+            expect(variables.id).toBe("native-viewer-reaction");
+            return { reactionDelete: { success: true } };
+          },
+          T3Comments: () => ({
+            issue: issue("ENG-7", {
+              comments: {
+                nodes: [
+                  {
+                    id: "cmt_older",
+                    body: "Older",
+                    createdAt: "2026-07-01T00:00:00.000Z",
+                    url: null,
+                    user: JULIUS,
+                    reactions: [{ id: "r1", emoji: "👍", user: JULIUS }],
+                  },
+                ],
+                pageInfo: { hasNextPage: true, endCursor: "oldest" },
+              },
+            }),
+          }),
+        });
+        const api = yield* test.tracker;
+        const result = yield* api.getComments({
+          ...target,
+          key: "ENG-7",
+          cursor: "older",
+          ...(viewer === undefined ? {} : { viewer }),
+        });
+        expect(result.nextCursor).toBe("oldest");
+        expect(result.comments[0]?.reactions).toEqual([
+          { content: "thumbs-up", count: 1, actors, viewerHasReacted: mine },
+        ]);
+        expect(test.requests.map((request) => request.operation)).toEqual(
+          viewer === undefined ? ["T3Comments", "T3Viewer"] : ["T3Comments"],
+        );
+        expect(test.requests.every((request) => request.authorization === "lin_api_stored")).toBe(
+          true,
+        );
+        if (viewer === THEO.id) {
+          yield* api.setReaction({ ...target, key: "ENG-7", content: "thumbs-up", reacted: false });
+          expect(test.requests.map((request) => request.operation)).toEqual([
+            "T3Comments",
+            "T3IssueReference",
+            "T3Viewer",
+            "T3IssueReactions",
+            "T3ReactionDelete",
+          ]);
+        }
+      }),
+  );
+
   it.effect("classifies native duplicates as closed without adding a writable close reason", () =>
     Effect.gen(function* () {
       const duplicate = state("Duplicate", "duplicate");

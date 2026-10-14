@@ -659,7 +659,11 @@ export function IssueDetailPanel({
     setLoadingOlder(true);
     const result = await loadComments({
       environmentId,
-      input: { ...reference, cursor: nextCursor },
+      input: {
+        ...reference,
+        cursor: nextCursor,
+        ...(detail.viewer === null ? {} : { viewer: detail.viewer }),
+      },
     });
     setLoadingOlder(false);
     if (result._tag === "Failure") {
