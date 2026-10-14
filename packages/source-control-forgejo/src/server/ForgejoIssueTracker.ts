@@ -957,11 +957,32 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           ],
           { concurrency: 2 },
         ).pipe(
-          Effect.map(([templates, config]) => ({
-            templates: templates.flatMap((template) => forgejoIssueTemplate(template) ?? []),
-            blankIssuesEnabled: config.blankIssuesEnabled,
-            ...(config.contactLinks.length === 0 ? {} : { contactLinks: config.contactLinks }),
-          })),
+          Effect.map(([templates, config]) => {
+            const converted = templates.map((template) => ({
+              template,
+              editable: forgejoIssueTemplate(template),
+            }));
+            const externalTemplates = converted.flatMap(({ template, editable }) => {
+              if (editable !== null || !/\.ya?ml$/i.test(template.file_name)) return [];
+              const url = new URL(
+                `https://${input.host}/${input.scope.split("/").map(encodeURIComponent).join("/")}/issues/new`,
+              );
+              url.searchParams.set("template", template.file_name);
+              return [
+                {
+                  name: template.name?.trim() || template.file_name,
+                  about: template.about ?? "",
+                  url: url.href,
+                },
+              ];
+            });
+            return {
+              templates: converted.flatMap(({ editable }) => editable ?? []),
+              ...(externalTemplates.length === 0 ? {} : { externalTemplates }),
+              blankIssuesEnabled: config.blankIssuesEnabled,
+              ...(config.contactLinks.length === 0 ? {} : { contactLinks: config.contactLinks }),
+            };
+          }),
         ),
 
       listCandidates: (input) =>

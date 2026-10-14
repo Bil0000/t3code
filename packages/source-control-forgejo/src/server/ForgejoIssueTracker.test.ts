@@ -528,6 +528,95 @@ describe("ForgejoIssueTracker", () => {
       }),
   );
 
+  it.effect.each([
+    {
+      name: "numeric input",
+      body: [{ type: "input", attributes: { label: "Ticket" }, validations: { is_number: true } }],
+    },
+    {
+      name: "regex input",
+      body: [
+        { type: "input", attributes: { label: "Ticket" }, validations: { regex: "^[0-9]+$" } },
+      ],
+    },
+    {
+      name: "unknown validation",
+      body: [
+        { type: "input", attributes: { label: "Ticket" }, validations: { custom_rule: true } },
+      ],
+    },
+    {
+      name: "content-only markdown",
+      body: [
+        {
+          type: "markdown",
+          visible: ["content"],
+          attributes: { value: "Required incident notice" },
+        },
+      ],
+    },
+    {
+      name: "form-only input",
+      body: [{ type: "input", visible: ["form"], attributes: { label: "Ticket" } }],
+    },
+    {
+      name: "content-only checkbox option",
+      body: [
+        {
+          type: "checkboxes",
+          attributes: {
+            label: "Agree",
+            options: [{ label: "Required notice", visible: ["content"] }],
+          },
+        },
+      ],
+    },
+    { name: "unknown field", body: [{ type: "date", attributes: { label: "When" } }] },
+    { name: "unknown body shape", body: { fields: [] } },
+    { name: "empty form", body: [] },
+  ])("keeps $name reachable through the native form", ({ body }) =>
+    Effect.gen(function* () {
+      const requests: ForgejoCli.ForgejoApiInput[] = [];
+      const filename = ".forgejo/ISSUE_TEMPLATE/incident #1&title=other.yaml";
+      const api = yield* tracker((input) => {
+        requests.push(input);
+        return {
+          stdout: encode(
+            input.path.endsWith("issue_config")
+              ? { blank_issues_enabled: false, contact_links: [CONTACT_LINK] }
+              : [
+                  { file_name: filename, name: "Incident", about: "Report an incident", body },
+                  { file_name: "bug.md", name: "Bug", content: "Describe the bug" },
+                ],
+          ),
+        };
+      });
+      const result = yield* api.listTemplates!({
+        cwd: "/w",
+        host: "forgejo.test:3000",
+        scope: "mount/acme/web",
+      });
+      expect(result).toMatchObject({
+        templates: [{ key: "bug.md", body: "Describe the bug" }],
+        externalTemplates: [{ name: "Incident", about: "Report an incident" }],
+        blankIssuesEnabled: false,
+        contactLinks: [CONTACT_LINK],
+      });
+      expect(result.templates).toHaveLength(1);
+      expect(result.externalTemplates).toHaveLength(1);
+      const url = new URL(result.externalTemplates![0]!.url);
+      expect(url.origin).toBe("https://forgejo.test:3000");
+      expect(url.pathname).toBe("/mount/acme/web/issues/new");
+      expect([...url.searchParams]).toEqual([["template", filename]]);
+      expect(url.hash).toBe("");
+      expect(requests.map((request) => request.path).sort()).toEqual([
+        "repos/mount/acme/web/issue_config",
+        "repos/mount/acme/web/issue_templates",
+      ]);
+      expect(requests.every((request) => request.method === undefined)).toBe(true);
+    }),
+  );
+
   it.effect("preserves native structured form fields with contact links", () =>
     Effect.gen(function* () {
       const api = yield* tracker((input) => ({
@@ -539,12 +628,18 @@ describe("ForgejoIssueTracker", () => {
                   file_name: "bug.yml",
                   name: "Bug",
                   body: [
-                    { type: "markdown", attributes: { value: "Read first" } },
+                    {
+                      type: "markdown",
+                      attributes: { value: "Read first" },
+                      validations: null,
+                      visible: ["form"],
+                    },
                     {
                       type: "textarea",
                       id: "repro",
                       attributes: { label: "Steps", render: "shell" },
-                      validations: { required: true },
+                      validations: { required: true, is_number: false, regex: "" },
+                      visible: ["form", "content"],
                     },
                     {
                       type: "dropdown",
@@ -560,7 +655,9 @@ describe("ForgejoIssueTracker", () => {
                       id: "agree",
                       attributes: {
                         label: "Agree",
-                        options: [{ label: "Checked", required: true }],
+                        options: [
+                          { label: "Checked", required: true, visible: ["form", "content"] },
+                        ],
                       },
                     },
                   ],

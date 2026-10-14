@@ -72,7 +72,7 @@ export const ForgejoTimelineEntry = Schema.Struct({
 });
 
 export const ForgejoIssueTemplate = Schema.Struct({
-  body: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+  body: Schema.optional(Schema.Unknown),
   file_name: Schema.String,
   name: Schema.optional(Schema.NullOr(Schema.String)),
   about: Schema.optional(Schema.NullOr(Schema.String)),
@@ -165,9 +165,11 @@ export function forgejoIssueEvent(entry: typeof ForgejoTimelineEntry.Type): Issu
   }
 }
 
+const TemplateVisibility = Schema.Array(Schema.Literals(["form", "content"]));
 const TemplateField = Schema.Struct({
   type: Schema.Literals(["markdown", "input", "textarea", "dropdown", "checkboxes"]),
   id: Schema.optional(Schema.String),
+  visible: Schema.optional(TemplateVisibility),
   attributes: Schema.Struct({
     label: Schema.optional(Schema.String),
     description: Schema.optional(Schema.String),
@@ -179,14 +181,28 @@ const TemplateField = Schema.Struct({
       Schema.Array(
         Schema.Union([
           Schema.String,
-          Schema.Struct({ label: Schema.String, required: Schema.optional(Schema.Boolean) }),
+          Schema.Struct({
+            label: Schema.String,
+            required: Schema.optional(Schema.Boolean),
+            visible: Schema.optional(TemplateVisibility),
+          }),
         ]),
       ),
     ),
   }),
-  validations: Schema.optional(Schema.Struct({ required: Schema.optional(Schema.Boolean) })),
+  validations: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        required: Schema.optional(Schema.Boolean),
+        is_number: Schema.optional(Schema.Literal(false)),
+        regex: Schema.optional(Schema.Literal("")),
+      }),
+    ),
+  ),
 });
-const decodeFormFields = Schema.decodeUnknownOption(Schema.Array(TemplateField));
+const decodeFormFields = Schema.decodeUnknownOption(Schema.Array(TemplateField), {
+  onExcessProperty: "error",
+});
 export function forgejoIssueTemplate(
   template: typeof ForgejoIssueTemplate.Type,
 ): IssueTemplate | null {
@@ -203,6 +219,23 @@ export function forgejoIssueTemplate(
   if (!/\.ya?ml$/i.test(template.file_name)) return null;
   const parsed = Option.getOrUndefined(decodeFormFields(template.body ?? []));
   if (!parsed || !parsed.length) return null;
+  if (
+    parsed.some(
+      (field) =>
+        (field.visible !== undefined &&
+          field.visible.length > 0 &&
+          (!field.visible.includes("form") ||
+            field.visible.includes("content") === (field.type === "markdown"))) ||
+        (field.attributes.options ?? []).some(
+          (option) =>
+            typeof option !== "string" &&
+            option.visible !== undefined &&
+            option.visible.length > 0 &&
+            (!option.visible.includes("form") || !option.visible.includes("content")),
+        ),
+    )
+  )
+    return null;
   const fields = parsed.map((field, index): IssueTemplateField => {
     const attributes = field.attributes;
     if (field.type === "markdown") return { kind: "markdown", value: attributes.value ?? "" };
