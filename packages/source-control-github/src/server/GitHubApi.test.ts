@@ -108,6 +108,51 @@ describe("environmentToken", () => {
 
 describe("GitHubApi", () => {
   it.effect.each([
+    { role: null, status: 200 },
+    { role: undefined, status: 200 },
+    { role: null, status: 403 },
+    { role: undefined, status: 403 },
+  ])("defers App metadata writes with role $role to native status $status", ({ role, status }) => {
+    const { layer, requests, credentialReads } = harness((request) =>
+      request.url.endsWith("/graphql")
+        ? json({
+            data: { repository: { viewerPermission: role, issue: { viewerCanUpdate: true } } },
+          })
+        : json(
+            status === 200
+              ? { labels: [{ name: "bug" }], assignees: [{ login: "theo" }] }
+              : { message: "Resource not accessible by integration" },
+            { status },
+          ),
+    );
+    return Effect.gen(function* () {
+      const driver = yield* GitHubIssueTracker.make;
+      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      expect(yield* driver.getViewerPermissions!(target)).toMatchObject({
+        labels: true,
+        assignees: true,
+      });
+      const update = driver.update!({ ...target, labels: ["bug"], assignees: ["theo"] });
+      if (status === 200) yield* update;
+      else
+        expect(yield* Effect.flip(update)).toMatchObject({
+          reason: "failed",
+          detail: "GitHub returned an error: Resource not accessible by integration",
+        });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toMatchObject({
+        method: "PATCH",
+        url: "https://api.github.com/repos/acme/web/issues/42",
+      });
+      const body = requests[1]!.body;
+      expect(
+        body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(body.body)) : null,
+      ).toEqual({ labels: ["bug"], assignees: ["theo"] });
+      expect(credentialReads()).toBe(2);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each([
     "update",
     "setState",
     "comment",

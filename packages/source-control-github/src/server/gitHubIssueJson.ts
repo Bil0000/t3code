@@ -602,9 +602,9 @@ function toViewerPermissions(raw: {
   readonly issue: typeof RawViewerFieldsSchema.Type | null;
 }): IssueViewerPermissions {
   const canUpdate = raw.issue?.viewerCanUpdate !== false;
-  const canTriage = ["ADMIN", "MAINTAIN", "WRITE", "TRIAGE"].includes(
-    raw.viewerPermission?.trim().toUpperCase() ?? "",
-  );
+  const canTriage =
+    raw.viewerPermission == null ||
+    ["ADMIN", "MAINTAIN", "WRITE", "TRIAGE"].includes(raw.viewerPermission.trim().toUpperCase());
   return {
     setState: canUpdate,
     comment: true,

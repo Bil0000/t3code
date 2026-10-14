@@ -124,6 +124,43 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each([
+    { role: null, allowed: true },
+    { role: undefined, allowed: true },
+    { role: "READ", allowed: false },
+    { role: "TRIAGE", allowed: true },
+    { role: "WRITE", allowed: true },
+    { role: "MAINTAIN", allowed: true },
+    { role: "ADMIN", allowed: true },
+    { role: "UNRECOGNIZED", allowed: false },
+  ])("keeps native metadata permission for role $role", ({ role, allowed }) =>
+    Effect.gen(function* () {
+      const context = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      let reads = 0;
+      const api = yield* tracker(() => {
+        reads++;
+        return JSON.stringify({
+          data: {
+            ...DETAIL_FIXTURE.data,
+            repository: { ...DETAIL_FIXTURE.data.repository, viewerPermission: role },
+          },
+        });
+      });
+      for (const permissions of [
+        yield* api.getViewerPermissions(context),
+        (yield* api.getIssue(context)).viewerPermissions,
+      ]) {
+        expect(permissions).toMatchObject({
+          labels: allowed,
+          assignees: allowed,
+          edit: false,
+          setState: false,
+        });
+      }
+      expect(reads).toBe(2);
+    }),
+  );
+
   it.effect.each([true, false])(
     "keeps native older-comment edit permission %s without a viewer",
     (canEdit) =>
