@@ -429,7 +429,12 @@ describe("AzureDevOpsIssueTracker", () => {
                         id: "bug-template",
                         name: "Bug",
                         workItemTypeName: "Bug",
-                        fields: { "System.Title": "Default title", "Custom.Priority": "High" },
+                        fields: {
+                          "System.Title": "Default title",
+                          "Custom.Priority": "High",
+                          "System.Tags": "template-tag",
+                          "System.AssignedTo": "template@acme.test",
+                        },
                       }),
                     );
                   throw new Error(`Unexpected ${args.join(" ")}`);
@@ -454,6 +459,8 @@ describe("AzureDevOpsIssueTracker", () => {
         expect.arrayContaining([
           { op: "add", path: "/fields/System.Title", value: "User title" },
           { op: "add", path: "/fields/Custom.Priority", value: "High" },
+          { op: "add", path: "/fields/System.Tags", value: "" },
+          { op: "add", path: "/fields/System.AssignedTo", value: "" },
           {
             op: "add",
             path: "/relations/-",

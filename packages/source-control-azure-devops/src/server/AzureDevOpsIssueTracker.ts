@@ -1334,8 +1334,8 @@ export const make: Effect.Effect<
           ...selected?.fields,
           "System.Title": input.title,
           "System.Description": input.body,
-          ...(input.labels.length === 0 ? {} : { "System.Tags": input.labels.join("; ") }),
-          ...(input.assignees.length === 0 ? {} : { "System.AssignedTo": input.assignees[0]! }),
+          "System.Tags": input.labels.join("; "),
+          "System.AssignedTo": input.assignees[0] ?? "",
         };
         const raw = yield* invokeWithBody({
           cwd: input.cwd,
