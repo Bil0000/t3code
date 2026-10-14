@@ -27,7 +27,8 @@ const state = vi.hoisted(() => ({
     serverConfig: { environment: { capabilities: { issues: true } } },
   })),
 }));
-vi.mock("@tanstack/react-router", () => ({
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   createFileRoute: () => (options: object) => ({ options, useSearch: () => state.search }),
   useNavigate: () => state.navigate,
 }));
@@ -90,7 +91,7 @@ vi.mock("~/components/issue/IssueCreateDialog", () => ({ IssueCreateDialog: () =
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { Route, type IssuesSearch } from "./_chat.issues";
+import { Route, type IssuesSearch } from "../../routes/_chat.issues";
 
 const environmentA = EnvironmentId.make("environment-a");
 const environmentB = EnvironmentId.make("environment-b");
@@ -150,8 +151,10 @@ async function refresh() {
     container.querySelector<HTMLButtonElement>('[aria-label="Refresh issues"]')!.click(),
   );
 }
+const Page = Route.options.component!;
+await Page.preload?.();
+
 async function mount() {
-  const Page = Route.options.component!;
   await act(async () =>
     root.render(
       <RegistryContext.Provider value={appAtomRegistry}>
