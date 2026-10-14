@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 
 import { AuthOrchestrationReadScope } from "./auth.ts";
 import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
-import { WS_METHODS } from "./rpc.ts";
+import { WS_METHODS, WsIssuesRpcGroup } from "./rpc.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
@@ -17,6 +17,8 @@ import {
   IssueResolveUrlInput,
   IssueResolvedUrl,
   IssueSummary,
+  IssueTemplate,
+  IssueTemplatesInput,
   IssueTrackerKind,
   IssueTrackerProjectBinding,
   StandaloneIssueTrackerDescriptor,
@@ -28,6 +30,49 @@ const decodeActor = Schema.decodeEffect(IssueActor);
 const decodeCreate = Schema.decodeEffect(IssueCreateInput);
 const decodeCreated = Schema.decodeEffect(IssueCreateResult);
 const decodeBinding = Schema.decodeEffect(IssueTrackerProjectBinding);
+const decodeTemplateInput = Schema.decodeUnknownSync(IssueTemplatesInput);
+const decodeTemplateRpc = Schema.decodeUnknownSync(
+  WsIssuesRpcGroup.requests.get(WS_METHODS.issuesTemplates)!.payloadSchema,
+);
+const decodeTemplate = Schema.decodeUnknownSync(IssueTemplate);
+
+it("carries template selection through the existing RPC and retains required inline bodies", () => {
+  const input = {
+    projectId: ProjectId.make("project-1"),
+    tracker: IssueTrackerKind.make("gitlab"),
+    host: "gitlab.com",
+    scope: "acme/web",
+  };
+  for (const flags of [
+    {},
+    { metadataOnly: false },
+    { metadataOnly: true },
+    { templateKey: "Bug" },
+    { metadataOnly: false, templateKey: "Bug" },
+  ]) {
+    const request = { ...input, ...flags };
+    expect(decodeTemplateInput(request)).toEqual(request);
+    expect(decodeTemplateRpc(request)).toEqual(request);
+  }
+  const template = {
+    key: "Bug",
+    name: "Bug",
+    about: "",
+    title: "",
+    body: "",
+    labels: [],
+    assignees: [],
+  };
+  expect(decodeTemplate(template)).toEqual(template);
+  for (const contentDeferred of [false, true]) {
+    expect(decodeTemplate({ ...template, contentDeferred })).toEqual({
+      ...template,
+      contentDeferred,
+    });
+  }
+  expect(() => decodeTemplate({ ...template, body: undefined, contentDeferred: true })).toThrow();
+  expect(() => decodeTemplateInput({ ...input, templateKey: " " })).toThrow();
+});
 
 it("preserves native label IDs in candidates and accepts older labels", () => {
   const candidates = {

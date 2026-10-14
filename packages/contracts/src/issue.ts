@@ -124,6 +124,13 @@ export const IssueScopeRef = Schema.Struct({
 });
 export type IssueScopeRef = typeof IssueScopeRef.Type;
 
+export const IssueTemplatesInput = Schema.Struct({
+  ...IssueScopeRef.fields,
+  metadataOnly: Schema.optional(Schema.Boolean),
+  templateKey: Schema.optional(TrimmedNonEmptyString),
+});
+export type IssueTemplatesInput = typeof IssueTemplatesInput.Type;
+
 /** One row of a listing. Carries everything a list needs and nothing a detail needs. */
 export const IssueSummary = Schema.Struct({
   tracker: IssueTrackerKind,
@@ -452,6 +459,7 @@ export const IssueTemplate = Schema.Struct({
   about: Schema.String,
   title: Schema.String,
   body: Schema.String,
+  contentDeferred: Schema.optional(Schema.Boolean),
   labels: Schema.Array(TrimmedNonEmptyString),
   assignees: Schema.Array(TrimmedNonEmptyString),
 });

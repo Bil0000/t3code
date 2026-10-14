@@ -12,11 +12,13 @@ import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/Linear
 import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
 import * as GitHubIssueTracker from "@t3tools/source-control-github/server/GitHubIssueTracker";
 import {
+  AuthOrchestrationReadScope,
   IssueTrackerKind,
   IssueUpdateInput,
   type IssueTrackerProjectBinding,
   type OrchestrationProjectShell,
   ProjectId,
+  WS_METHODS,
   type IssueViewerPermissions,
   type IssueReactionContent,
 } from "@t3tools/contracts";
@@ -28,6 +30,7 @@ import {
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
+import { RPC_REQUIRED_SCOPES } from "../auth/RpcAuthorization.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as IssueService from "./IssueService.ts";
@@ -259,6 +262,68 @@ describe("resolveGitHostBinding", () => {
 });
 
 describe("IssueService", () => {
+  it.effect("forwards template catalog and selected-body flags without other native reads", () =>
+    Effect.gen(function* () {
+      expect(RPC_REQUIRED_SCOPES[WS_METHODS.issuesTemplates]).toBe(AuthOrchestrationReadScope);
+      const calls: Parameters<NonNullable<IssueTrackerApi["listTemplates"]>>[0][] = [];
+      const template = {
+        key: "Bug",
+        name: "Bug",
+        about: "Report a bug",
+        title: "",
+        body: "Describe the bug",
+        labels: [],
+        assignees: [],
+      };
+      const tracker = fakeTracker({
+        capabilities: { ...fakeTracker().capabilities, templates: true },
+        listTemplates: (input) =>
+          Effect.sync(() => {
+            calls.push(input);
+            return {
+              templates: [
+                input.metadataOnly ? { ...template, body: "", contentDeferred: true } : template,
+              ],
+              blankIssuesEnabled: true,
+            };
+          }),
+        getViewer: () => Effect.die("Unexpected viewer read"),
+        getIssue: () => Effect.die("Unexpected issue read"),
+        getViewerPermissions: () => Effect.die("Unexpected permissions read"),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "p", repository: "acme/web" })],
+        trackers: [tracker],
+      });
+      const flags = [
+        {},
+        { metadataOnly: false },
+        { metadataOnly: true },
+        { templateKey: "Bug" },
+        { metadataOnly: false, templateKey: "Bug" },
+      ];
+      for (const selection of flags) {
+        const result = yield* service.templates({
+          projectId: ProjectId.make("p"),
+          tracker: GITHUB,
+          scope: "acme/web",
+          ...selection,
+        });
+        expect(result.templates).toEqual([
+          selection.metadataOnly ? { ...template, body: "", contentDeferred: true } : template,
+        ]);
+      }
+      expect(calls).toEqual(
+        flags.map((selection) => ({
+          cwd: "/w/p",
+          host: "github.com",
+          scope: "acme/web",
+          ...selection,
+        })),
+      );
+    }),
+  );
+
   it.effect("keeps a complete native label set through the update contract", () =>
     Effect.gen(function* () {
       const labels = Array.from({ length: 121 }, (_, index) => `label-${index}`);

@@ -179,6 +179,7 @@ import {
   IssueScopeRef,
   IssueSetStateInput,
   IssueTemplateList,
+  IssueTemplatesInput,
   IssueTrackerBindProjectInput,
   IssueTrackerConnectInput,
   IssueTrackerConnection,
@@ -1234,7 +1235,7 @@ const WsIssuesCommentsRpc = Rpc.make(WS_METHODS.issuesComments, {
 });
 
 const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
-  payload: IssueScopeRef,
+  payload: IssueTemplatesInput,
   success: IssueTemplateList,
   error: IssueRpcError,
 });
