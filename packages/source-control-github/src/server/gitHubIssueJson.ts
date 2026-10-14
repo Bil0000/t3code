@@ -142,6 +142,8 @@ const RawCommentSchema = Schema.Struct({
   author: Schema.optional(Schema.NullOr(RawActorSchema)),
   body: Schema.optional(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
+  lastEditedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  viewerCanUpdate: Schema.optional(Schema.Boolean),
   url: Schema.optional(Schema.NullOr(Schema.String)),
   reactionGroups: RawReactionGroupsSchema,
 });
@@ -156,7 +158,7 @@ const RawViewerFieldsSchema = Schema.Struct({
   viewerCanUpdate: Schema.optional(Schema.Boolean),
 });
 
-const COMMENT_FIELDS = `id author { login avatarUrl } body createdAt url ${REACTION_GROUPS_FIELDS}`;
+const COMMENT_FIELDS = `id author { login avatarUrl } body createdAt lastEditedAt viewerCanUpdate url ${REACTION_GROUPS_FIELDS}`;
 
 /**
  * The whole issue in one read: its row, body, the newest page of comments, the newest hundred
@@ -286,7 +288,7 @@ const RawIssueNodeIdSchema = Schema.Struct({
 /** Whether a comment id, which is global, hangs off the issue the request names. */
 export const ISSUE_COMMENT_SCOPE_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $commentId: ID!) {
   repository(owner: $owner, name: $name) { issue(number: $number) { id } }
-  node(id: $commentId) { ... on IssueComment { issue { id } } }
+  node(id: $commentId) { ... on IssueComment { viewerCanUpdate issue { id } } }
 }`;
 
 const RawCommentScopeSchema = Schema.Struct({
@@ -295,7 +297,10 @@ const RawCommentScopeSchema = Schema.Struct({
       Schema.Struct({ issue: Schema.NullOr(Schema.Struct({ id: Schema.String })) }),
     ),
     node: Schema.NullOr(
-      Schema.Struct({ issue: Schema.optional(Schema.Struct({ id: Schema.String })) }),
+      Schema.Struct({
+        viewerCanUpdate: Schema.optional(Schema.Boolean),
+        issue: Schema.optional(Schema.Struct({ id: Schema.String })),
+      }),
     ),
   }),
 });
@@ -333,6 +338,7 @@ const RawCandidatesSchema = Schema.Struct({
  */
 export const ISSUE_TEMPLATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
+    forms: object(expression: "HEAD:.github/ISSUE_TEMPLATE") { ... on Tree { entries { name object { ... on Blob { text } } } } }
     issueTemplates {
       filename name about title body
       assignees(first: 25) { nodes { login } }
@@ -355,11 +361,29 @@ const RawTemplatesSchema = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
       issueTemplates: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+      forms: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            entries: Schema.Array(
+              Schema.Struct({
+                name: Schema.String,
+                object: Schema.NullOr(
+                  Schema.Struct({ text: Schema.optional(Schema.NullOr(Schema.String)) }),
+                ),
+              }),
+            ),
+          }),
+        ),
+      ),
     }),
   }),
 });
 
-const RawCreatedIssueSchema = Schema.Struct({ number: Schema.Int, html_url: Schema.String });
+const RawCreatedIssueSchema = Schema.Struct({
+  id: Schema.optional(Schema.Int),
+  number: Schema.Int,
+  html_url: Schema.String,
+});
 
 const decodeSearch = decodeJsonResult(RawSearchSchema);
 const decodeIssueRow = Schema.decodeUnknownExit(RawIssueSchema);
@@ -421,11 +445,13 @@ function toIssueState(
   state: string | null | undefined,
   stateReason: string | null | undefined,
 ): IssueState {
-  if (state?.trim().toUpperCase() !== "CLOSED") return { category: "open", name: "open" };
+  if (state?.trim().toUpperCase() !== "CLOSED")
+    return { category: "open", name: "open", workflowCategory: "unstarted" };
   const reason = stateReason?.trim().toUpperCase();
   return {
     category: "closed",
     name: "closed",
+    workflowCategory: reason === "NOT_PLANNED" ? "canceled" : "completed",
     ...(reason === "COMPLETED"
       ? { closeReason: "completed" }
       : reason === "NOT_PLANNED"
@@ -551,6 +577,8 @@ function toComments(
         author: toActor(comment.author),
         body: comment.body ?? "",
         createdAt: comment.createdAt,
+        editedAt: comment.lastEditedAt ?? null,
+        canEdit: comment.viewerCanUpdate ?? false,
         url: trimmed(comment.url),
         reactions: toReactions(comment.reactionGroups, viewer),
       },
@@ -746,9 +774,27 @@ export function decodeIssueTemplatesJson(
 
 export function decodeCreatedIssueJson(
   raw: string,
-): Result.Result<{ readonly number: number; readonly url: string }, DecodeFailure> {
+): Result.Result<
+  { readonly id?: number; readonly number: number; readonly url: string },
+  DecodeFailure
+> {
   return Result.map(decodeCreatedIssue(raw), (issue) => ({
+    ...(issue.id === undefined ? {} : { id: issue.id }),
     number: issue.number,
     url: issue.html_url,
   }));
+}
+
+export function decodeIssueTemplateFilesJson(raw: string) {
+  return Result.map(decodeTemplates(raw), ({ data }) => data.repository.forms?.entries ?? []);
+}
+
+export function decodeIssueEditableCommentScopeJson(raw: string) {
+  return Result.map(
+    decodeCommentScope(raw),
+    ({ data }) =>
+      data.repository?.issue?.id != null &&
+      data.repository.issue.id === data.node?.issue?.id &&
+      data.node.viewerCanUpdate === true,
+  );
 }

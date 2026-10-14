@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 
 import * as GitHubApi from "./GitHubApi.ts";
@@ -123,6 +124,256 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each([
+    { categories: ["canceled"] as const, keys: ["8"], reason: 'reason:"not planned"' },
+    { categories: ["completed"] as const, keys: ["9"], reason: "reason:completed" },
+    { categories: ["completed", "canceled"] as const, keys: ["8", "9"], reason: null },
+    { categories: ["unstarted", "completed"] as const, keys: ["7", "9"], reason: null },
+    { categories: ["unstarted", "canceled"] as const, keys: ["7", "8"], reason: null },
+  ])("filters native workflow categories $categories and keeps the native cursor", (selection) =>
+    Effect.gen(function* () {
+      let searches = 0;
+      const api = yield* tracker((_query, variables) => {
+        searches += 1;
+        const query = (variables as { q: string }).q;
+        if (selection.reason === null) expect(query).not.toContain("reason:");
+        else expect(query).toContain(selection.reason);
+        if (selection.categories.some((category) => category === "unstarted")) {
+          expect(query).not.toContain("is:open");
+          expect(query).not.toContain("is:closed");
+        } else expect(query).toContain("is:closed");
+        return JSON.stringify({
+          data: {
+            search: {
+              nodes: [
+                { ...DETAIL_FIXTURE.data.repository.issue, number: 7, state: "OPEN" },
+                { ...DETAIL_FIXTURE.data.repository.issue, number: 8 },
+                { ...DETAIL_FIXTURE.data.repository.issue, number: 9, stateReason: "COMPLETED" },
+              ],
+              pageInfo: { hasNextPage: true, endCursor: "native-next" },
+            },
+          },
+        });
+      });
+      const page = yield* api.listIssues({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        state: "all",
+        involvement: "all",
+        viewer: "julius",
+        stateCategories: selection.categories,
+        limit: 3,
+      });
+      expect(page.items.map((item) => item.key)).toEqual(selection.keys);
+      expect(page.nextCursor).toBe("native-next");
+      expect(searches).toBe(1);
+    }),
+  );
+
+  it.effect.each([true, false])(
+    "keeps a created issue when attaching its parent succeeds %s",
+    (linked) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker(
+          () => "{}",
+          (input) => {
+            paths.push(input.path);
+            const body = input.path.endsWith("sub_issues")
+              ? linked
+                ? "{}"
+                : "invalid"
+              : JSON.stringify({
+                  id: input.method ? 1043 : 1021,
+                  number: input.method ? 43 : 21,
+                  title: "Issue",
+                  html_url: `https://github.com/acme/web/issues/${input.method ? 43 : 21}`,
+                  state: "open",
+                });
+            return { status: 200, headers: {}, body, truncated: false, invalidUtf8: false };
+          },
+        );
+        expect(
+          yield* api.create!({
+            cwd: "/w",
+            host: "github.com",
+            scope: "acme/web",
+            title: "Created",
+            body: "",
+            labels: [],
+            assignees: [],
+            parentKey: "21",
+          }),
+        ).toMatchObject({ key: "43", parentLinked: linked });
+        expect(paths).toEqual([
+          "repos/acme/web/issues/21",
+          "repos/acme/web/issues",
+          "repos/acme/web/issues/21/sub_issues",
+        ]);
+      }),
+  );
+
+  it.effect.each([true, false])(
+    "edits a scoped comment only when its native permission is %s",
+    (canEdit) =>
+      Effect.gen(function* () {
+        const queries: string[] = [];
+        const api = yield* tracker((query) => {
+          queries.push(query);
+          return JSON.stringify({
+            data: {
+              repository: { issue: { id: "I_42" } },
+              node: { viewerCanUpdate: canEdit, issue: { id: "I_42" } },
+            },
+          });
+        });
+        const result = yield* Effect.result(
+          api.editComment!({
+            cwd: "/w",
+            host: "github.com",
+            scope: "acme/web",
+            key: "42",
+            commentId: "IC_1",
+            body: "Updated",
+          }),
+        );
+        expect(Result.isSuccess(result)).toBe(canEdit);
+        expect(queries.some((query) => query.includes("updateIssueComment"))).toBe(canEdit);
+      }),
+  );
+
+  it.effect("reads cross-repository hierarchy pages and attaches and removes a parent", () =>
+    Effect.gen(function* () {
+      const writes: GitHubApi.GitHubRestInput[] = [];
+      const raw = (number: number, scope = "acme/web") => ({
+        id: number + 1000,
+        number,
+        title: `Issue ${number}`,
+        html_url: `https://github.com/${scope}/issues/${number}`,
+        state: "open",
+      });
+      const api = yield* tracker(
+        () => "{}",
+        (input) => {
+          if (input.method) writes.push(input);
+          const body = input.path.includes("sub_issues?")
+            ? [raw(42, "acme/other")]
+            : input.path.endsWith("/parent")
+              ? raw(21, "acme/other")
+              : input.path.endsWith("/21")
+                ? raw(21)
+                : raw(42);
+          return {
+            status: 200,
+            headers: input.path.includes("sub_issues?")
+              ? { link: '<https://github.com/next>; rel="next"' }
+              : {},
+            body: JSON.stringify(body),
+            truncated: false,
+            invalidUtf8: false,
+          };
+        },
+      );
+      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const hierarchy = yield* api.getHierarchy!({ ...target, limit: 1 });
+      expect(hierarchy.parent).toMatchObject({ scope: "acme/other", key: "21" });
+      expect(hierarchy.children).toMatchObject({
+        items: [{ scope: "acme/other", key: "42" }],
+        nextCursor: "2",
+      });
+      yield* api.setParent!({ ...target, parentKey: "21" });
+      yield* api.setParent!({ ...target, parentKey: null });
+      expect(writes.map((input) => [input.path, input.method, input.body])).toEqual([
+        [
+          "repos/acme/web/issues/21/sub_issues",
+          "POST",
+          { sub_issue_id: 1042, replace_parent: true },
+        ],
+        ["repos/acme/other/issues/21/sub_issue", "DELETE", { sub_issue_id: 1042 }],
+      ]);
+    }),
+  );
+
+  it.effect("keeps native history continuation after comment rows and unknown events", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker(
+        () => "{}",
+        (input) => {
+          expect(input.path).toBe("repos/acme/web/issues/42/timeline?per_page=3&page=2");
+          return {
+            status: 200,
+            headers: { link: '<https://github.com/next>; rel="next"' },
+            body: JSON.stringify([
+              { id: 1, event: "commented", created_at: "2026-07-01T00:00:00Z" },
+              { id: 2, event: "milestoned", created_at: "2026-07-01T00:00:00Z" },
+              { event: "cross-referenced", created_at: "2026-07-01T00:00:00Z" },
+            ]),
+            truncated: false,
+            invalidUtf8: false,
+          };
+        },
+      );
+      expect(
+        yield* api.getHistory!({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          key: "42",
+          cursor: "2",
+          limit: 3,
+        }),
+      ).toMatchObject({
+        items: [{ id: "2", kind: "updated", detail: "milestoned" }],
+        nextCursor: "3",
+      });
+    }),
+  );
+
+  it.effect("pages closing and related pull requests separately", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker((query, variables) => {
+        expect(variables).toMatchObject({
+          owner: "acme",
+          name: "web",
+          number: 42,
+          first: 1,
+          after: null,
+        });
+        const closing = query.includes("closedByPullRequestsReferences");
+        const pr = {
+          __typename: "PullRequest",
+          number: 50,
+          title: "Fix",
+          url: "https://github.com/acme/other/pull/50",
+          state: "MERGED",
+          repository: { nameWithOwner: "acme/other" },
+        };
+        return JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                [closing ? "closedByPullRequestsReferences" : "timelineItems"]: {
+                  nodes: closing ? [pr] : [{ source: pr }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        });
+      });
+      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42", limit: 1 };
+      const closing = yield* api.getLinkedPullRequests!(target);
+      expect(closing).toMatchObject({
+        items: [{ repository: "acme/other", closesIssue: true }],
+        nextCursor: "related:",
+      });
+      expect(
+        yield* api.getLinkedPullRequests!({ ...target, cursor: closing.nextCursor! }),
+      ).toMatchObject({ items: [{ closesIssue: false }], nextCursor: null });
+    }),
+  );
+
   it.effect.each(["labels", "assignees"] as const)(
     "refuses success when GitHub omits the requested %s update",
     (field) =>
