@@ -60,7 +60,7 @@ export const JiraIssue = Schema.Struct({
     creator: Schema.optional(Schema.NullOr(JiraUser)),
     reporter: Schema.optional(Schema.NullOr(JiraUser)),
     assignee: Schema.optional(Schema.NullOr(JiraUser)),
-    labels: Schema.optional(Schema.Array(NonEmpty).check(Schema.isMaxLength(50))),
+    labels: Schema.optional(Schema.Array(NonEmpty)),
     comment: Schema.optional(
       Schema.Struct({
         total: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),

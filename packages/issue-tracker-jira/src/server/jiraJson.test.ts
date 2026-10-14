@@ -104,6 +104,7 @@ it("keeps link destinations in Jira text marks", () => {
 
 describe("Jira normalization", () => {
   it("preserves native state names, creator IDs and Jira dates", () => {
+    const labels = Array.from({ length: 121 }, (_, index) => "label-" + index);
     const raw = {
       key: "ENG-1",
       fields: {
@@ -114,11 +115,12 @@ describe("Jira normalization", () => {
         creator: { accountId: "creator" },
         reporter: { accountId: "reporter" },
         assignee: { accountId: "assignee" },
-        labels: ["bug"],
+        labels,
         comment: { total: 3 },
       },
     };
     const result = normalizeJiraIssue(raw, "example.atlassian.net");
+    expect(result.labels.map((label) => label.name)).toEqual(labels);
     expect(result.state).toEqual({ name: "Review", category: "open" });
     expect(result.author?.login).toBe("creator");
     expect(result.assignees[0]?.login).toBe("assignee");

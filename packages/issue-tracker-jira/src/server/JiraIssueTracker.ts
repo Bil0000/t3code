@@ -568,7 +568,7 @@ export const make = Effect.gen(function* () {
               Schema.Struct({
                 fields: Schema.Struct({
                   project: Schema.Struct({ id: Text, key: Text }),
-                  labels: bounded(Text, 50),
+                  labels: Schema.Array(Text),
                 }),
               }),
             ),

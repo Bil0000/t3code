@@ -367,6 +367,7 @@ it.effect(
   "keeps candidate labels inside the project and marks filtered user windows incomplete",
   () =>
     Effect.gen(function* () {
+      const labels = Array.from({ length: 121 }, (_, index) => "label-" + index);
       const f = fakeJira((request) => ({
         body: request.url.includes("/mypermissions?")
           ? {
@@ -376,14 +377,14 @@ it.effect(
               },
             }
           : request.url.includes("/search/jql")
-            ? { issues: [{ fields: { project: { id: "20", key: "ENG" }, labels: ["bug"] } }] }
+            ? { issues: [{ fields: { project: { id: "20", key: "ENG" }, labels } }] }
             : request.url.includes("/user/assignable/search?")
               ? []
               : { startAt: 0, total: 1, issueTypes: [{ id: "task", name: "Task" }] },
       }));
       const api = yield* f.api;
       const candidates = yield* api.listCandidates!(target);
-      expect(candidates.labels[0]?.name).toBe("bug");
+      expect(candidates.labels.map((label) => label.name)).toEqual(labels.slice(0, 100));
       expect(candidates.assignees).toEqual([]);
       expect(candidates.issueTypes).toEqual([{ id: "task", name: "Task" }]);
       expect(candidates.truncated).toBe(true);
