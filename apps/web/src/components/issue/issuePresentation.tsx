@@ -1,6 +1,13 @@
 import type { IssueState, IssueTrackerKind } from "@t3tools/contracts";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon, TicketIcon } from "lucide-react";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  CircleDotDashedIcon,
+  CircleDotIcon,
+  CircleSlashIcon,
+  TicketIcon,
+} from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
@@ -18,6 +25,23 @@ export function issueTrackerPresentation(tracker: IssueTrackerKind | string) {
   return { providerName: tracker.charAt(0).toUpperCase() + tracker.slice(1), Icon: TicketIcon };
 }
 
+const STATE_PRESENTATION = {
+  backlog: { Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
+  unstarted: {
+    Icon: CircleDotIcon,
+    toneClassName: PULL_REQUEST_STATE_PRESENTATION.open.toneClassName,
+  },
+  started: { Icon: CircleDotDashedIcon, toneClassName: "text-amber-600 dark:text-amber-300/90" },
+  completed: {
+    Icon: CircleCheckIcon,
+    toneClassName: PULL_REQUEST_STATE_PRESENTATION.merged.toneClassName,
+  },
+  canceled: {
+    Icon: CircleSlashIcon,
+    toneClassName: PULL_REQUEST_STATE_PRESENTATION.draft.toneClassName,
+  },
+} as const;
+
 /**
  * Open and completed borrow the ink the pull-request states use for open and merged, so green
  * and violet mean the same thing on both pages; not planned wears a draft's grey, because work
@@ -25,6 +49,8 @@ export function issueTrackerPresentation(tracker: IssueTrackerKind | string) {
  * so a workflow tracker's "In Review" reads as itself.
  */
 export function resolveIssueStatePresentation(state: IssueState) {
+  if (state.workflowCategory !== undefined)
+    return { ...STATE_PRESENTATION[state.workflowCategory], label: state.name };
   if (state.category === "open") {
     return {
       ...PULL_REQUEST_STATE_PRESENTATION.open,
