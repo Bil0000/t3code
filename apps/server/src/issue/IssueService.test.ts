@@ -260,6 +260,61 @@ describe("resolveGitHostBinding", () => {
 });
 
 describe("IssueService", () => {
+  it.effect("forwards template catalog and selected-body flags without other native reads", () =>
+    Effect.gen(function* () {
+      const calls: Parameters<NonNullable<IssueTrackerApi["listTemplates"]>>[0][] = [];
+      const template = {
+        key: "Bug",
+        name: "Bug",
+        about: "Report a bug",
+        title: "",
+        body: "Describe the bug",
+        labels: [],
+        assignees: [],
+      };
+      const tracker = fakeTracker({
+        capabilities: { ...fakeTracker().capabilities, templates: true },
+        listTemplates: (input) =>
+          Effect.sync(() => {
+            calls.push(input);
+            return {
+              templates: [
+                input.metadataOnly ? { ...template, body: "", contentDeferred: true } : template,
+              ],
+              blankIssuesEnabled: true,
+            };
+          }),
+        getViewer: () => Effect.die("Unexpected viewer read"),
+        getIssue: () => Effect.die("Unexpected issue read"),
+        getViewerPermissions: () => Effect.die("Unexpected permissions read"),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "p", repository: "acme/web" })],
+        trackers: [tracker],
+      });
+      const flags = [{}, { metadataOnly: false }, { metadataOnly: true }, { templateKey: "Bug" }];
+      for (const selection of flags) {
+        const result = yield* service.templates({
+          projectId: ProjectId.make("p"),
+          tracker: GITHUB,
+          scope: "acme/web",
+          ...selection,
+        });
+        expect(result.templates).toEqual([
+          selection.metadataOnly ? { ...template, body: "", contentDeferred: true } : template,
+        ]);
+      }
+      expect(calls).toEqual(
+        flags.map((selection) => ({
+          cwd: "/w/p",
+          host: "github.com",
+          scope: "acme/web",
+          ...selection,
+        })),
+      );
+    }),
+  );
+
   it.effect("reads standalone bindings once while resolving many projects", () =>
     Effect.gen(function* () {
       let reads = 0;

@@ -244,6 +244,8 @@ const make = Effect.gen(function* () {
           ...binding,
           ...(input.host === undefined ? {} : { host: input.host }),
           ...(input.scope === undefined ? {} : { scope: input.scope }),
+          ...(input.metadataOnly === undefined ? {} : { metadataOnly: input.metadataOnly }),
+          ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
         });
       }),
     ),

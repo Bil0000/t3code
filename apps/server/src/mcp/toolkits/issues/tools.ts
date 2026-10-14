@@ -7,6 +7,7 @@ import {
   IssueLabelCandidatesPage,
   IssueAssigneeCandidatesPage,
   IssueTemplateList,
+  IssueTemplatesInput,
   IssueUpdateInput,
   IssueEditCommentInput,
   IssueReactionInput,
@@ -553,12 +554,15 @@ const ReadIssueLinkedPullRequests = Tool.make("read_issue_linked_pull_requests",
   .annotate(Tool.OpenWorld, true);
 
 const ReadIssueTemplates = Tool.make("read_issue_templates", {
-  description: "Read native templates and contact links for creating issues.",
+  description:
+    "Read native templates and contact links for creating issues. Opt in with metadataOnly:true to read the catalog without deferred bodies. If an entry has contentDeferred:true, call this tool again with templateKey set to its exact key and omit metadataOnly to load its body before creating the issue. Inline entries need no second read. Omit both flags to keep the existing bounded inline behavior.",
   parameters: Schema.Struct({
     projectId: IssueTargetInput.fields.projectId,
     tracker: IssueTargetInput.fields.tracker,
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
+    metadataOnly: IssueTemplatesInput.fields.metadataOnly,
+    templateKey: IssueTemplatesInput.fields.templateKey,
   }),
   success: IssueTemplateList,
   failure: IssueToolError,

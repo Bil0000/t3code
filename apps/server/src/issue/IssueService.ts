@@ -51,6 +51,7 @@ import {
   type IssueScopeRef,
   type IssueSetStateInput,
   type IssueTemplateList,
+  type IssueTemplatesInput,
   type IssueTrackerSummary,
   type IssueTrackerProjectBinding,
   type IssueUpdateInput,
@@ -193,7 +194,9 @@ export class IssueService extends Context.Service<
     ) => Effect.Effect<IssueAssigneeCandidatesPage, IssueError>;
     readonly editComment: (input: IssueEditCommentInput) => Effect.Effect<void, IssueError>;
     readonly setParent: (input: IssueSetParentInput) => Effect.Effect<void, IssueError>;
-    readonly templates: (input: IssueScopeRef) => Effect.Effect<IssueTemplateList, IssueError>;
+    readonly templates: (
+      input: IssueTemplatesInput,
+    ) => Effect.Effect<IssueTemplateList, IssueError>;
     readonly candidates: (input: IssueScopeRef) => Effect.Effect<IssueCandidates, IssueError>;
     readonly create: (input: IssueCreateInput) => Effect.Effect<IssueCreateResult, IssueError>;
     readonly comment: (input: IssueCommentInput) => Effect.Effect<void, IssueError>;
@@ -763,6 +766,8 @@ export const make = Effect.gen(function* () {
                 cwd: project.project.workspaceRoot,
                 host: project.host,
                 scope: project.scope,
+                ...(input.metadataOnly === undefined ? {} : { metadataOnly: input.metadataOnly }),
+                ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
               })
               .pipe(Effect.mapError(toIssueError("templates"))),
       ),

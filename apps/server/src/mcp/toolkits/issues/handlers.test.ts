@@ -182,6 +182,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     readonly detail?: IssueDetail;
     readonly candidates?: IssueCandidates;
     readonly update?: IssueService.IssueService["Service"]["update"];
+    readonly templates?: IssueService.IssueService["Service"]["templates"];
     readonly comments?: IssueService.IssueService["Service"]["comments"];
   } = {},
 ) {
@@ -231,7 +232,14 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
           ),
         ),
       candidates: (input) => record("candidates", input, options.candidates ?? candidates),
-      templates: (input) => record("templates", input, { templates: [], blankIssuesEnabled: true }),
+      templates: (input) =>
+        record("templates", input, undefined).pipe(
+          Effect.flatMap(() =>
+            options.templates === undefined
+              ? Effect.succeed({ templates: [], blankIssuesEnabled: true })
+              : options.templates(input),
+          ),
+        ),
       history: (input) =>
         record("history", input, { items: [], nextCursor: "native-history-next" }),
       hierarchy: (input) =>
@@ -303,6 +311,64 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect(
+    "reads a deferred template catalog then the selected body through the registered tool",
+    () =>
+      Effect.gen(function* () {
+        const template = {
+          key: "Bug",
+          name: "Bug",
+          about: "",
+          title: "",
+          body: "Describe the bug",
+          labels: [],
+          assignees: [],
+        };
+        const harness = yield* makeHarness([], {
+          templates: (input) => {
+            if (input.templateKey === "missing") {
+              return Effect.fail(
+                new IssueOperationError({ operation: "templates", detail: "Template not found" }),
+              );
+            }
+            return Effect.succeed({
+              templates: input.metadataOnly
+                ? Array.from({ length: 100 }, (_, index) => ({
+                    ...template,
+                    key: `Bug-${index}`,
+                    name: `Bug-${index}`,
+                    body: "",
+                    contentDeferred: true,
+                  }))
+                : [{ ...template, key: input.templateKey ?? template.key }],
+              blankIssuesEnabled: true,
+            });
+          },
+        });
+        const legacy = yield* harness.call("read_issue_templates", {});
+        expect(legacy.templates).toEqual([template]);
+        const catalog = yield* harness.call("read_issue_templates", { metadataOnly: true });
+        expect(catalog.templates).toHaveLength(100);
+        expect(
+          catalog.templates.every((entry) => entry.body === "" && entry.contentDeferred === true),
+        ).toBe(true);
+        const selectedKey = catalog.templates[99]!.key;
+        const selected = yield* harness.call("read_issue_templates", { templateKey: selectedKey });
+        expect(selected.templates).toEqual([{ ...template, key: selectedKey }]);
+        const missing = yield* harness
+          .call("read_issue_templates", { templateKey: "missing" })
+          .pipe(Effect.result);
+        expect(missing._tag).toBe("Failure");
+        const ref = { projectId: PROJECT_ID, ...gitHostSource };
+        expect(yield* Ref.get(harness.calls)).toEqual([
+          { operation: "templates", input: ref },
+          { operation: "templates", input: { ...ref, metadataOnly: true } },
+          { operation: "templates", input: { ...ref, templateKey: selectedKey } },
+          { operation: "templates", input: { ...ref, templateKey: "missing" } },
+        ]);
+      }),
+  );
+
   it.effect(
     "preserves an archived current Linear label through registered tool reads and replacement",
     () =>
