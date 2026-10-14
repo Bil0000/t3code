@@ -212,6 +212,28 @@ describe("confirmed mobile issue reactions", () => {
     expect(native.held).toBeNull();
   });
 
+  it("drops a confirmation from another signed-in viewer, including one that lands after the switch", () => {
+    const asA = detail({ reactions: heart, viewer: "a" });
+    const held = confirmIssueReaction(environmentId, asA, asA.comments, null, "heart", true);
+    expect(
+      issueReactionsView(environmentId, { ...asA, reactions: [...heart] }, [], held).reactions?.[0],
+    ).toMatchObject({ count: 2, viewerHasReacted: true });
+    const asB = detail({ reactions: [{ ...heart[0]!, count: 2 }], viewer: "b" });
+    const switched = issueReactionsView(environmentId, asB, asB.comments, held);
+    expect(switched.reactions).toBe(asB.reactions);
+    expect(switched.held).toBeNull();
+    const late = confirmIssueReaction(environmentId, asA, asA.comments, null, "heart", false);
+    const afterLate = issueReactionsView(environmentId, asB, asB.comments, late);
+    expect(afterLate.reactions).toBe(asB.reactions);
+    expect(afterLate.held).toBeNull();
+    const unknown = detail({ reactions: heart, viewer: null });
+    const unknownHeld = confirmIssueReaction(environmentId, unknown, [], null, "heart", true);
+    expect(
+      issueReactionsView(environmentId, { ...unknown, reactions: [...heart] }, [], unknownHeld)
+        .held,
+    ).not.toBeNull();
+  });
+
   it("holds a confirmed remove against a later add read and removes a last reaction", () => {
     const added = confirmIssueReaction(environmentId, first, first.comments, null, "heart", true);
     const removed = confirmIssueReaction(

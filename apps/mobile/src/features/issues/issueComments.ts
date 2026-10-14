@@ -94,7 +94,7 @@ export type IssueConfirmedReactions = {
 };
 
 const reactionIssueKey = (issue: IssueDetail) =>
-  JSON.stringify([issue.tracker, issueEntryKey(issue)]);
+  JSON.stringify([issue.tracker, issueEntryKey(issue), issue.viewer]);
 const reactionBase = (
   issue: IssueDetail,
   comments: ReadonlyArray<IssueComment>,
