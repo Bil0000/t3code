@@ -105,7 +105,12 @@ export function resolveGitHostBinding(
   const identity = project.repositoryIdentity;
   const kind = identity?.provider;
   if (!identity || kind === undefined || kind === "unknown") return null;
-  const host = pullRequestHostOf(identity, SourceControlProviderKind.make(kind));
+  let host = pullRequestHostOf(identity, SourceControlProviderKind.make(kind));
+  if (kind === "gitlab") {
+    const remote = URL.parse(identity.locator.remoteUrl);
+    if (remote?.protocol === "http:" || remote?.protocol === "https:")
+      host = remote.host.toLowerCase();
+  }
   const scope =
     kind === "azure-devops"
       ? azureDevOpsProjectScope(host, identity.displayName)

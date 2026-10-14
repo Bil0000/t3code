@@ -1344,6 +1344,70 @@ it.effect(
     }),
 );
 
+it.effect("keeps a GitLab HTTP remote's port when its canonical repository key omits it", () =>
+  Effect.gen(function* () {
+    const gitlab = IssueTrackerKind.make("gitlab");
+    const shell = project({
+      id: "web",
+      repository: "acme/web",
+      host: "gitlab.company.test",
+      provider: "gitlab",
+    });
+    const repositoryIdentity = shell.repositoryIdentity!;
+    const configured = {
+      ...shell,
+      repositoryIdentity: {
+        ...repositoryIdentity,
+        locator: {
+          ...repositoryIdentity.locator,
+          remoteUrl: "https://gitlab.company.test:8443/acme/web.git",
+        },
+      },
+    };
+    const listed: string[] = [];
+    const service = yield* makeService({
+      projects: [configured],
+      trackers: [
+        fakeTracker({
+          kind: gitlab,
+          listIssues: (input) =>
+            Effect.sync(() => {
+              listed.push(input.host);
+              return { items: [], nextCursor: null };
+            }),
+          getIssue: () => Effect.die("URL resolution must not read issues"),
+        }),
+      ],
+    });
+    expect(yield* service.list({ state: "open", projectId: shell.id })).toMatchObject({
+      sources: [{ projectId: "web", host: "gitlab.company.test:8443", scope: "acme/web" }],
+    });
+    expect(listed).toEqual(["gitlab.company.test:8443"]);
+    expect(
+      yield* service.resolveUrl("https://gitlab.company.test:8443/acme/web/-/issues/7"),
+    ).toMatchObject({
+      projectId: "web",
+      host: "gitlab.company.test:8443",
+      scope: "acme/web",
+      writable: true,
+    });
+    expect(
+      yield* service.resolveUrl("https://gitlab.company.test:8443/acme/other/-/issues/7"),
+    ).toMatchObject({
+      projectId: "web",
+      host: "gitlab.company.test:8443",
+      scope: "acme/other",
+      writable: false,
+    });
+    for (const host of ["gitlab.company.test", "gitlab.company.test:9443"]) {
+      expect(
+        yield* Effect.flip(service.resolveUrl(`https://${host}/acme/web/-/issues/7`)),
+      ).toMatchObject({ _tag: "IssueUnavailableError" });
+    }
+    expect(configured.repositoryIdentity.canonicalKey).toBe("gitlab.company.test/acme/web");
+  }),
+);
+
 it.effect.each([
   { tracker: "github", path: "/issues/7" },
   { tracker: "gitlab", path: "/-/issues/7" },
