@@ -159,6 +159,27 @@ describe("older issue comments across detail re-reads", () => {
     expect(other.comments.map((each) => each.id)).toEqual(["c3"]);
   });
 
+  it("drops another viewer's loaded pages so their reactions are not shown as this viewer's", () => {
+    const mine = [{ ...heart[0]!, viewerHasReacted: true }];
+    const asA = detail({ viewer: "a" });
+    const loadedByA = appendOlderIssueComments(asA, null, {
+      comments: [comment("c_old", mine)],
+      nextCursor: null,
+    });
+    expect(issueCommentsView({ ...asA }, loadedByA).held).toBe(loadedByA);
+    const asB = issueCommentsView(detail({ viewer: "b" }), loadedByA);
+    expect(asB.held).toBeNull();
+    expect(asB.comments.map((each) => each.id)).toEqual(["c3"]);
+    expect(asB.cursor).toBe("page-2");
+    const unknown = detail({ viewer: null });
+    const loadedUnknown = appendOlderIssueComments(unknown, null, {
+      comments: [comment("c_old", mine)],
+      nextCursor: null,
+    });
+    expect(issueCommentsView({ ...unknown }, loadedUnknown).held).toBe(loadedUnknown);
+    expect(issueCommentsView(detail({ viewer: "b" }), loadedUnknown).held).toBeNull();
+  });
+
   it("shows a confirmed reaction on a held comment so the next tap removes it", () => {
     const reacted = reactOnOlderIssueComment(loaded, "c2", "heart", true);
     expect(issueCommentsView(first, reacted).comments[0]?.reactions).toEqual([
