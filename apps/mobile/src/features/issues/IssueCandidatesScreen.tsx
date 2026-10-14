@@ -1,7 +1,7 @@
-import { RegistryContext } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { use, useMemo, useRef, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
@@ -16,11 +16,13 @@ import { PullRequestAvatar } from "../pull-requests/PullRequestPresentation";
 import { pullRequestLabelColor } from "../pull-requests/pullRequestList";
 import { issueAssigneeId } from "./issueDetail";
 import {
+  clearAcknowledgedIssuePicker,
   heldIssuePicker,
   issueLabelId,
+  issuePickerConfirmed,
   issuePickerIds,
+  issuePickerKey,
   nextIssuePickerIds,
-  type IssuePickerConfirmed,
 } from "./issuePicker";
 import type { IssueAssigneeCandidate } from "@t3tools/contracts";
 import type { IssueParams } from "./issueSelection";
@@ -61,9 +63,18 @@ export function IssueCandidatesScreen({
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmed, setConfirmed] = useState<IssuePickerConfirmed | null>(null);
+  const pickerKey = issuePickerKey(
+    target.environmentId,
+    { ...target.input, host: params.host },
+    params.kind,
+  );
+  const confirmed = useAtomValue(issuePickerConfirmed(pickerKey));
   const held = issue ? heldIssuePicker(issue, params.kind, confirmed, target.environmentId) : null;
-  if (confirmed !== held) setConfirmed(held);
+  useEffect(() => {
+    if (issue && confirmed !== held) {
+      clearAcknowledgedIssuePicker(registry, pickerKey, issue, params.kind, target.environmentId);
+    }
+  }, [registry, pickerKey, issue, confirmed, held, params.kind, target.environmentId]);
   const inFlight = useRef(false);
   const title = labels ? "Labels" : "Assignees";
   const rows = useMemo((): Row[] => {
@@ -76,10 +87,11 @@ export function IssueCandidatesScreen({
       const applied = new Set(issuePickerIds(issue, "labels", held, target.environmentId));
       return [
         ...fetched,
-        ...issue.labels
+        ...[...issue.labels, ...(held?.base.labels ?? [])]
           .filter(
-            (label) =>
-              !fetched.some((candidate) => issueLabelId(candidate) === issueLabelId(label)),
+            (label, index, all) =>
+              !fetched.some((candidate) => issueLabelId(candidate) === issueLabelId(label)) &&
+              all.findIndex((each) => issueLabelId(each) === issueLabelId(label)) === index,
           )
           .map((label) => ({ ...label, description: null })),
       ]
@@ -95,7 +107,12 @@ export function IssueCandidatesScreen({
     }
     const fetched = result.data?.assignees ?? [];
     const ids = issuePickerIds(issue, "assignees", held, target.environmentId);
-    const current = issue.assignees.map((actor) => ({ ...actor, id: issueAssigneeId(actor) }));
+    const current = [...issue.assignees, ...(held?.base.assignees ?? [])]
+      .map((actor) => ({ ...actor, id: issueAssigneeId(actor) }))
+      .filter(
+        (actor, index, all) =>
+          all.findIndex((each) => each.id.toLowerCase() === actor.id.toLowerCase()) === index,
+      );
     const assigned = (id: string) => ids.some((each) => each.toLowerCase() === id.toLowerCase());
     return [
       ...fetched,
@@ -126,7 +143,12 @@ export function IssueCandidatesScreen({
         input: { ...target.input, [params.kind]: ids },
       });
       if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-      setConfirmed({ base: issue, ids, environmentId: target.environmentId, kind: params.kind });
+      registry.set(issuePickerConfirmed(pickerKey), {
+        base: issue,
+        ids,
+        environmentId: target.environmentId,
+        kind: params.kind,
+      });
       markIssueTargetWritten(registry, params);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `Couldn't update ${title.toLowerCase()}.`);

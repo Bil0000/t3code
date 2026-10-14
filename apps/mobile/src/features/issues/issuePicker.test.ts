@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { IssueTrackerKind, ProjectId, type IssueDetail } from "@t3tools/contracts";
+import { AtomRegistry } from "effect/reactivity";
 import {
+  clearAcknowledgedIssuePicker,
   heldIssuePicker,
   issueLabelId,
+  issuePickerConfirmed,
   issuePickerIds,
+  issuePickerKey,
   nextIssuePickerIds,
   type IssuePickerConfirmed,
 } from "./issuePicker";
@@ -307,5 +311,66 @@ describe("issue picker writes while the detail refresh is still on its way", () 
     expect(issuePickerIds(target.issue, target.kind, held, target.environmentId)).toEqual(
       target.kind === "labels" ? ["bug"] : [],
     );
+  });
+});
+
+describe("issue picker confirmed set across sheet close and reopen", () => {
+  const actor = (id: string) => ({ id, login: id, name: null, avatarUrl: null });
+
+  it("keeps the confirmed set for the same issue and kind until the native set acknowledges it", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const registry = AtomRegistry.make({ defaultIdleTTL: 1, timeoutResolution: 1 });
+    try {
+      const stale = detail({ assignees: [actor("u-1")] });
+      const labels = issuePickerKey(environmentId, stale, "labels");
+      const assignees = issuePickerKey(environmentId, stale, "assignees");
+      const open = registry.mount(issuePickerConfirmed(labels));
+      registry.set(issuePickerConfirmed(labels), pick(stale, "labels", null, "ui"));
+      open();
+      registry.set(issuePickerConfirmed(assignees), pick(stale, "assignees", null, "u-2"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const reopened = registry.mount(issuePickerConfirmed(labels));
+      const oldRead = { ...stale };
+      clearAcknowledgedIssuePicker(registry, labels, oldRead, "labels", environmentId);
+      const held = registry.get(issuePickerConfirmed(labels));
+      expect(nextIssuePickerIds(oldRead, "labels", held, "docs", environmentId)).toEqual([
+        "bug",
+        "ui",
+        "docs",
+      ]);
+      const people = registry.get(issuePickerConfirmed(assignees));
+      expect(nextIssuePickerIds(oldRead, "assignees", people, "u-3", environmentId)).toEqual([
+        "u-1",
+        "u-2",
+        "u-3",
+      ]);
+
+      for (const other of [
+        issuePickerKey("other", stale, "labels"),
+        issuePickerKey(environmentId, { ...stale, key: "2" }, "labels"),
+        issuePickerKey(environmentId, { ...stale, scope: "org/other" }, "labels"),
+      ]) {
+        expect(registry.get(issuePickerConfirmed(other))).toBeNull();
+      }
+
+      const ack = detail({
+        labels: [
+          { name: "ui", color: null },
+          { name: "bug", color: null },
+        ],
+      });
+      clearAcknowledgedIssuePicker(registry, labels, ack, "labels", environmentId);
+      expect(registry.get(issuePickerConfirmed(labels))).toBeNull();
+      reopened();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      expect(registry.get(issuePickerConfirmed(assignees))).toBeNull();
+    } finally {
+      registry.dispose();
+      vi.useRealTimers();
+    }
   });
 });
