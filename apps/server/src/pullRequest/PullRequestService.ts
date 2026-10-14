@@ -2723,7 +2723,7 @@ export const make = Effect.gen(function* () {
     return { serve, dropExpired };
   })();
 
-  const makeLastGoodRead = <A>(capacity: number) => {
+  const makeLastGoodRead = <A>(capacity: number, maxAge?: Duration.Duration) => {
     const held = new Map<string, { readonly at: number; readonly value: A }>();
     const record = (key: string, value: A) =>
       Effect.map(Clock.currentTimeMillis, (at) => {
@@ -2773,16 +2773,35 @@ export const make = Effect.gen(function* () {
       effect: Effect.Effect<A, PullRequestError>,
       mode: "reuse" | "revalidate",
     ) => {
-      const snapshot = held.get(key);
-      if (snapshot === undefined) return read(key, effect);
-      if (mode === "reuse") return Effect.succeed(snapshot.value);
-      return revalidate(read(key, effect)).pipe(Effect.as(snapshot.value));
+      const serve = () => {
+        const snapshot = held.get(key);
+        if (snapshot === undefined) return read(key, effect);
+        if (mode === "reuse") return Effect.succeed(snapshot.value);
+        return revalidate(read(key, effect)).pipe(Effect.as(snapshot.value));
+      };
+      if (maxAge === undefined) return serve();
+      return Effect.flatMap(Clock.currentTimeMillis, (now) => {
+        const snapshot = held.get(key);
+        if (snapshot !== undefined && now - snapshot.at > Duration.toMillis(maxAge)) {
+          held.delete(key);
+        }
+        return serve();
+      });
     };
-    return { peek: (key: string) => held.get(key)?.value, read, record, serveHeld };
+    return {
+      peek: (key: string) => held.get(key)?.value,
+      forget: (key: string) => Effect.sync(() => held.delete(key)),
+      read,
+      record,
+      serveHeld,
+    };
   };
   const lastGoodSummary = makeLastGoodRead<PullRequestSummary>(DETAIL_CACHE_CAPACITY);
   const lastGoodDetail = makeLastGoodRead<PullRequestDetail>(DETAIL_CACHE_CAPACITY);
-  const lastGoodActivity = makeLastGoodRead<PullRequestActivity>(DETAIL_CACHE_CAPACITY);
+  const lastGoodActivity = makeLastGoodRead<PullRequestActivity>(
+    DETAIL_CACHE_CAPACITY,
+    STALE_DETAIL_WINDOW,
+  );
 
   // Epochs are the invalidation mechanism: a key carries its scope's epoch, so bumping the
   // epoch strands every entry made under the old one — no enumerating a cache whose keys
@@ -3264,7 +3283,9 @@ export const make = Effect.gen(function* () {
   };
   const activity: PullRequestService["Service"]["activity"] = (input) => {
     const key = refCacheKey(input);
-    const read = Cache.get(activityCache, key);
+    const read = Cache.get(activityCache, key).pipe(
+      Effect.tapError(() => lastGoodActivity.forget(key)),
+    );
     return input.allowStale === false
       ? read.pipe(Effect.tap((value) => lastGoodActivity.record(key, value)))
       : lastGoodActivity.serveHeld(key, read, "revalidate");

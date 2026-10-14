@@ -13,6 +13,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Scheduler from "effect/Scheduler";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type {
@@ -4903,7 +4904,7 @@ it.effect("serves held activity during refresh and records the refreshed convers
   }),
 );
 
-it.effect("keeps held activity after a failed refresh and drops it after invalidation", () =>
+it.effect("drops held activity after a failed strict refresh", () =>
   Effect.gen(function* () {
     let failing = false;
     const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
@@ -4931,7 +4932,10 @@ it.effect("keeps held activity after a failed refresh and drops it after invalid
       (yield* Effect.flip(service.activity({ ...reference, allowStale: false })))._tag,
       "PullRequestOperationError",
     );
-    assert.strictEqual((yield* service.activity(reference)).commentCount, 7);
+    assert.strictEqual(
+      (yield* Effect.flip(service.activity(reference)))._tag,
+      "PullRequestOperationError",
+    );
     yield* service.invalidate({ reference });
     assert.strictEqual(
       (yield* Effect.flip(service.activity(reference)))._tag,
@@ -4939,6 +4943,100 @@ it.effect("keeps held activity after a failed refresh and drops it after invalid
     );
   }),
 );
+
+it.effect("expires held activity before refreshing data older than ten minutes", () =>
+  Effect.gen(function* () {
+    let failing = false;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequestActivity: () =>
+            failing
+              ? Effect.fail(requestFailed)
+              : Effect.succeed({
+                  comments: [],
+                  commentCount: 7,
+                  commentsTruncated: false,
+                  reviewThreads: [],
+                  commits: [],
+                }),
+        }),
+      ],
+    });
+    yield* service.activity(reference);
+    yield* TestClock.adjust("601 seconds");
+    failing = true;
+    assert.strictEqual(
+      (yield* Effect.flip(service.activity(reference)))._tag,
+      "PullRequestOperationError",
+    );
+  }),
+);
+
+it.effect("discards held activity after strict and background access failures", () => {
+  const dispatcher = new Scheduler.MixedScheduler().makeDispatcher();
+  return Effect.gen(function* () {
+    for (const reason of ["not-found", "unauthenticated", "failed"] as const) {
+      for (const strict of [false, true]) {
+        let denied = false;
+        const refreshFailed = yield* Deferred.make<void>();
+        const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          ],
+          providers: [
+            fakeProvider(SourceControlProviderKind.make("github"), {
+              getChangeRequestActivity: () =>
+                denied
+                  ? Effect.fail(
+                      new PullRequestProviderError({
+                        provider: SourceControlProviderKind.make("github"),
+                        operation: "getChangeRequestActivity",
+                        reason,
+                        detail: "Resource not accessible by integration",
+                      }),
+                    ).pipe(Effect.tapError(() => Deferred.succeed(refreshFailed, undefined)))
+                  : Effect.succeed({
+                      comments: [],
+                      commentCount: 7,
+                      commentsTruncated: false,
+                      reviewThreads: [],
+                      commits: [],
+                    }),
+            }),
+          ],
+        });
+        yield* service.activity(reference);
+        yield* TestClock.adjust("61 seconds");
+        denied = true;
+        const errorTag =
+          reason === "unauthenticated"
+            ? "PullRequestUnavailableError"
+            : "PullRequestOperationError";
+        if (strict) {
+          assert.strictEqual(
+            (yield* Effect.flip(service.activity({ ...reference, allowStale: false })))._tag,
+            errorTag,
+          );
+        } else {
+          assert.strictEqual((yield* service.activity(reference)).commentCount, 7);
+          yield* Deferred.await(refreshFailed);
+          yield* Effect.sync(() => dispatcher.flush());
+        }
+        assert.strictEqual((yield* Effect.flip(service.activity(reference)))._tag, errorTag);
+      }
+    }
+  }).pipe(
+    Effect.provideService(Scheduler.Scheduler, {
+      executionMode: "async",
+      shouldYield: () => false,
+      makeDispatcher: () => dispatcher,
+    }),
+  );
+});
 
 it.effect("shares linked summaries and reuses them for display without asking the host again", () =>
   Effect.gen(function* () {
