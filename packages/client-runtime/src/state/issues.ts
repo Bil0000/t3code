@@ -13,14 +13,61 @@ import {
   type IssueRef,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { Atom, type AtomRegistry } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 
 import {
   createAtomCommandScheduler,
+  executeAtomQuery,
+  type AtomCommandResult,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+
+export function createIssueSourceRefreshQueue() {
+  const lanes = new Map<string, { next: (() => Promise<void>) | null; task: Promise<void> }>();
+  return (key: string, read: () => Promise<void>) => {
+    const previous = lanes.get(key);
+    if (previous) {
+      previous.next = read;
+      return previous.task;
+    }
+    const lane = { next: read as (() => Promise<void>) | null, task: Promise.resolve() };
+    lane.task = Promise.resolve().then(async () => {
+      try {
+        while (lane.next) {
+          const next = lane.next;
+          lane.next = null;
+          await next();
+        }
+      } finally {
+        lanes.delete(key);
+      }
+    });
+    lanes.set(key, lane);
+    return lane.task;
+  };
+}
+
+export async function readIssueListSourcePage<Q, E>(
+  registry: AtomRegistry.AtomRegistry,
+  query: Atom.Atom<AsyncResult.AsyncResult<IssueListResult, Q>>,
+  read: () => Promise<AtomCommandResult<IssueListResult, E>>,
+) {
+  if (registry.get(query).waiting)
+    await executeAtomQuery(registry, query, { reportFailure: false });
+  const answer = Option.getOrNull(AsyncResult.value(registry.get(query)));
+  const result = await read();
+  return {
+    answer,
+    result,
+    isCurrent: () => {
+      const latest = registry.get(query);
+      return !latest.waiting && Option.getOrNull(AsyncResult.value(latest)) === answer;
+    },
+  };
+}
 
 export function issueSourceMatchesList(
   input: IssueListInput,
@@ -149,7 +196,7 @@ export function refreshIssueListPage<T extends HeldIssueList>(
   fresh: IssueListPage,
   options: {
     readonly source?: IssueListSource;
-    readonly removed?: string;
+    readonly removed?: string | ReadonlySet<string>;
   } = {},
 ): T {
   const { source } = options;
@@ -216,7 +263,9 @@ export function refreshIssueListPage<T extends HeldIssueList>(
         (continuing.has(scope) &&
           !changedOwners.has(scope) &&
           !held.firstKeys.has(key) &&
-          key !== options.removed))
+          (typeof options.removed === "string"
+            ? key !== options.removed
+            : !options.removed?.has(key))))
     );
   });
   return {
@@ -343,8 +392,8 @@ export function createIssueEnvironmentAtoms<R, E>(
       tag: WS_METHODS.issuesList,
       scheduler: commandScheduler,
       concurrency: {
-        mode: "singleFlight",
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
+        mode: "serial",
+        key: ({ environmentId }) => `issues-list-page ${environmentId}`,
       },
     }),
     detail,
