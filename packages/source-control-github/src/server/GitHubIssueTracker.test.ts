@@ -123,6 +123,70 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each(["labels", "assignees"] as const)(
+    "refuses success when GitHub omits the requested %s update",
+    (field) =>
+      Effect.gen(function* () {
+        const requests: GitHubApi.GitHubRestInput[] = [];
+        const api = yield* tracker(
+          () => DETAIL_RESPONSE,
+          (input) => {
+            requests.push(input);
+            return {
+              status: 200,
+              headers: {},
+              body: JSON.stringify({ labels: [], assignees: [] }),
+              truncated: false,
+              invalidUtf8: false,
+            };
+          },
+        );
+        const error = yield* api.update!({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          key: "42",
+          [field]: ["expected"],
+        }).pipe(Effect.flip);
+        expect(error.detail).toBe(`GitHub did not save the requested ${field}.`);
+        expect(requests).toHaveLength(1);
+      }),
+  );
+
+  it.effect("keeps a created issue and warns when GitHub skips metadata", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker(
+        () => DETAIL_RESPONSE,
+        () => ({
+          status: 201,
+          headers: {},
+          body: JSON.stringify({
+            number: 43,
+            html_url: "https://github.com/acme/web/issues/43",
+            labels: [],
+            assignees: [],
+          }),
+          truncated: false,
+          invalidUtf8: false,
+        }),
+      );
+      const result = yield* api.create!({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        title: "Created issue",
+        body: "",
+        labels: ["bug"],
+        assignees: ["alice"],
+      });
+      expect(result.key).toBe("43");
+      expect(result.warnings).toEqual([
+        "The issue was created, but GitHub did not save the requested labels.",
+        "The issue was created, but GitHub did not save the requested assignees.",
+      ]);
+    }),
+  );
+
   it.effect.each([
     ["disables blank issues with a plain false value", "blank_issues_enabled: false\n", false],
     [

@@ -376,6 +376,12 @@ const decodeCreatedIssue = decodeJsonResult(RawCreatedIssueSchema);
 const decodeRestIssueLabels = decodeJsonResult(
   Schema.Struct({ labels: Schema.Array(RawLabelSchema) }),
 );
+export const decodeRestIssueMetadataJson = decodeJsonResult(
+  Schema.Struct({
+    labels: Schema.optional(Schema.Array(Schema.Struct({ name: Schema.String }))),
+    assignees: Schema.optional(Schema.Array(Schema.Struct({ login: Schema.String }))),
+  }),
+);
 const decodeViewerLogin = decodeJsonResult(
   Schema.Struct({ data: Schema.Struct({ viewer: Schema.Struct({ login: Schema.String }) }) }),
 );

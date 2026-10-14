@@ -35,6 +35,7 @@ import {
   decodeIssueCommentsJson,
   decodeIssueDetailJson,
   decodeRestIssueLabelsJson,
+  decodeRestIssueMetadataJson,
   decodeIssueNodeIdJson,
   decodeIssueSearchJson,
   decodeIssueTemplatesJson,
@@ -74,6 +75,33 @@ const CAPABILITIES: IssueCapabilities = {
 
 /** Where a repository configures the rest of its issue chooser, as GitHub spells the path. */
 const TEMPLATE_CONFIG_PATH = ".github/ISSUE_TEMPLATE/config.yml";
+
+function skippedMetadata(
+  requested: {
+    readonly labels?: ReadonlyArray<string> | undefined;
+    readonly assignees?: ReadonlyArray<string> | undefined;
+  },
+  response: GitHubApi.GitHubRestResponse,
+): ReadonlyArray<string> {
+  const decoded = decodeRestIssueMetadataJson(response.body);
+  const actual =
+    !response.truncated && !response.invalidUtf8 && Result.isSuccess(decoded)
+      ? decoded.success
+      : undefined;
+  const fields = [
+    ["labels", requested.labels, actual?.labels?.map((label) => label.name)],
+    ["assignees", requested.assignees, actual?.assignees?.map((assignee) => assignee.login)],
+  ] as const;
+  return fields.flatMap(([name, expected, saved]) => {
+    if (expected === undefined) return [];
+    if (saved === undefined) return [name];
+    const wanted = new Set(expected.map((value) => value.toLowerCase()));
+    const received = new Set(saved.map((value) => value.toLowerCase()));
+    return wanted.size === received.size && [...wanted].every((value) => received.has(value))
+      ? []
+      : [name];
+  });
+}
 
 const decodeTemplateConfig = Schema.decodeUnknownResult(
   fromYaml(Schema.Struct({ blank_issues_enabled: Schema.optionalKey(Schema.Boolean) })),
@@ -243,13 +271,34 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
     const patchIssue = (
       input: { readonly host: string; readonly scope: string; readonly key: string },
       operation: string,
-      body: Record<string, unknown>,
+      body: {
+        readonly title?: string;
+        readonly body?: string;
+        readonly labels?: ReadonlyArray<string>;
+        readonly assignees?: ReadonlyArray<string>;
+        readonly state?: string;
+        readonly state_reason?: string;
+      },
     ) =>
       restIssue(input, operation).pipe(
         Effect.flatMap(({ path }) =>
-          api
-            .rest({ host: input.host, operation, method: "PATCH", path, body })
-            .pipe(Effect.asVoid, Effect.mapError(fail(operation))),
+          api.rest({ host: input.host, operation, method: "PATCH", path, body }).pipe(
+            Effect.mapError(fail(operation)),
+            Effect.flatMap((response) => {
+              if (body.labels === undefined && body.assignees === undefined) return Effect.void;
+              const skipped = skippedMetadata(body, response);
+              return skipped.length === 0
+                ? Effect.void
+                : Effect.fail(
+                    new IssueTrackerError({
+                      tracker: KIND,
+                      operation,
+                      reason: "failed",
+                      detail: `GitHub did not save the requested ${skipped.join(" and ")}.`,
+                    }),
+                  );
+            }),
+          ),
         ),
       );
 
@@ -405,6 +454,16 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
                     key: String(decoded.success.number),
                     displayKey: `#${decoded.success.number}`,
                     url: decoded.success.url,
+                    warnings: skippedMetadata(
+                      {
+                        labels: input.labels.length === 0 ? undefined : input.labels,
+                        assignees: input.assignees.length === 0 ? undefined : input.assignees,
+                      },
+                      response,
+                    ).map(
+                      (field) =>
+                        `The issue was created, but GitHub did not save the requested ${field}.`,
+                    ),
                   })
                 : Effect.fail(unreadable("create", decoded.failure));
             }),
