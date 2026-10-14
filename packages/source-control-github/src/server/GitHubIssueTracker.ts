@@ -39,6 +39,7 @@ import {
   decodeRestIssueMetadataJson,
   decodeIssueNodeIdJson,
   decodeIssueSearchJson,
+  decodeRepositoryIssuesJson,
   decodeIssueTemplatesJson,
   decodeIssueViewerPermissionsJson,
   decodeViewerLoginJson,
@@ -50,6 +51,7 @@ import {
   ISSUE_TEMPLATES_GRAPHQL_QUERY,
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   issueSearchGraphQlQuery,
+  issueRepositoryGraphQlQuery,
   SEARCH_MAX_ROWS,
 } from "./gitHubIssueJson.ts";
 
@@ -362,6 +364,25 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
               reason: "failed",
               detail: "A repository was named that GitHub cannot address.",
             }),
+          );
+        }
+        if (!input.query?.trim() && input.involvement === "all") {
+          return graphqlRead({
+            host: input.host,
+            operation: "listIssues",
+            query: issueRepositoryGraphQlQuery(input.limit),
+            variables: {
+              ...parseRepository(input.scope),
+              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+              states: input.state === "all" ? ["OPEN", "CLOSED"] : [input.state.toUpperCase()],
+              orderBy: { field: "UPDATED_AT", direction: "DESC" },
+            },
+            decode: decodeRepositoryIssuesJson,
+          }).pipe(
+            Effect.filterOrFail(
+              (page) => page !== null,
+              () => notFound("listIssues"),
+            ),
           );
         }
         return graphqlRead({

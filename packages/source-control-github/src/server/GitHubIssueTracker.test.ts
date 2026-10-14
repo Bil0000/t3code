@@ -123,6 +123,109 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each([
+    { state: "all", states: ["OPEN", "CLOSED"] },
+    { state: "open", states: ["OPEN"] },
+    { state: "closed", states: ["CLOSED"] },
+  ] as const)("uses native repository states for $state browsing", (input) =>
+    Effect.gen(function* () {
+      const api = yield* tracker((query, variables) => {
+        expect(query).not.toContain("search(");
+        expect(query).toContain("issues(first: 100");
+        expect(variables).toEqual({
+          owner: "acme",
+          name: "web",
+          states: input.states,
+          orderBy: { field: "UPDATED_AT", direction: "DESC" },
+          cursor: "raw-native",
+        });
+        return JSON.stringify({
+          data: {
+            repository: {
+              issues: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "native-next" } },
+            },
+          },
+        });
+      });
+      expect(
+        yield* api.listIssues({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          state: input.state,
+          involvement: "all",
+          viewer: "julius",
+          query: "  ",
+          limit: 200,
+          cursor: "raw-native",
+        }),
+      ).toEqual({ items: [], nextCursor: "native-next" });
+    }),
+  );
+
+  it.effect("keeps repository misses typed and refuses malformed scopes before reading", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const api = yield* tracker(() => {
+        reads++;
+        return JSON.stringify({ data: { repository: null } });
+      });
+      const input = {
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        state: "all" as const,
+        involvement: "all" as const,
+        viewer: "julius",
+        limit: 50,
+      };
+      expect((yield* Effect.flip(api.listIssues(input))).reason).toBe("not-found");
+      expect(reads).toBe(1);
+      expect(
+        (yield* Effect.flip(api.listIssues({ ...input, scope: "acme/web repo:foreign/web" })))
+          .reason,
+      ).toBe("failed");
+      expect(reads).toBe(1);
+    }),
+  );
+
+  it.effect.each([
+    { involvement: "all", query: "focus", qualifier: '"focus"' },
+    { involvement: "assigned", qualifier: "assignee:julius" },
+    { involvement: "authored", qualifier: "author:julius" },
+    { involvement: "mentioned", qualifier: "mentions:julius" },
+  ] as const)("keeps native search for $qualifier without reading a viewer", (input) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const api = yield* tracker((query, variables) => {
+        reads++;
+        expect(query).toContain("search(");
+        expect(variables).toMatchObject({
+          q: expect.stringContaining(input.qualifier),
+          cursor: "raw-search",
+        });
+        return JSON.stringify({
+          data: {
+            search: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "next-search" } },
+          },
+        });
+      });
+      const page = yield* api.listIssues({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        state: "all",
+        viewer: "julius",
+        limit: 50,
+        cursor: "raw-search",
+        involvement: input.involvement,
+        ...("query" in input ? { query: input.query } : {}),
+      });
+      expect(page).toEqual({ items: [], nextCursor: "next-search" });
+      expect(reads).toBe(1);
+    }),
+  );
+
   it.effect(
     "marks a listed label subset and clears the flag after authoritative detail hydration",
     () =>

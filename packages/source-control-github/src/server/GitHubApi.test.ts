@@ -107,6 +107,57 @@ describe("environmentToken", () => {
 });
 
 describe("GitHubApi", () => {
+  it.effect("pages all 1050 ordinary issues through the native repository connection", () => {
+    const { layer, requests, credentialReads } = harness((request) => {
+      expect(request.url).toBe("https://git.acme.test/api/graphql");
+      expect(request.headers.authorization).toBe("Bearer first");
+      const sent = request.body;
+      const body = JSON.parse(
+        sent._tag === "Uint8Array" ? new TextDecoder().decode(sent.body) : "{}",
+      );
+      const search = body.query.includes("search(");
+      const start =
+        body.variables.cursor === undefined ? 0 : Number(body.variables.cursor.slice(7));
+      const total = search ? 1000 : 1050;
+      const nodes = Array.from({ length: Math.min(50, total - start) }, (_, index) => ({
+        number: start + index + 1,
+        title: "Issue",
+        url: `https://git.acme.test/acme/web/issues/${start + index + 1}`,
+        state: "OPEN",
+        createdAt: "2026-10-05T12:00:00.000Z",
+        updatedAt: "2026-10-05T12:00:00.000Z",
+      }));
+      const page = {
+        nodes,
+        pageInfo: { hasNextPage: start + 50 < total, endCursor: `native-${start + 50}` },
+      };
+      return json({ data: search ? { search: page } : { repository: { issues: page } } });
+    });
+    return Effect.gen(function* () {
+      const driver = yield* GitHubIssueTracker.make;
+      const keys: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = yield* driver.listIssues({
+          cwd: "/w",
+          host: "git.acme.test",
+          scope: "acme/web",
+          state: "all",
+          involvement: "all",
+          viewer: "julius",
+          limit: 50,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        keys.push(...page.items.map((item) => item.key));
+        cursor = page.nextCursor ?? undefined;
+        if (cursor !== undefined) expect(cursor).toBe(`native-${keys.length}`);
+      } while (cursor !== undefined);
+      expect(keys).toEqual(Array.from({ length: 1050 }, (_, index) => String(index + 1)));
+      expect(requests).toHaveLength(21);
+      expect(credentialReads()).toBe(21);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect.each(["update", "setState", "comment", "setReaction", "create"] as const)(
     "keeps permission preflight and %s interactive while background reads pause",
     (operation) => {
