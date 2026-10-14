@@ -3,8 +3,7 @@ import { StackActions, useNavigation, type StaticScreenProps } from "@react-navi
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { PullRequestReviewVerdict } from "@t3tools/contracts";
-import { useCallback, useRef, useState } from "react";
-import { useFocusEffect } from "@react-navigation/native";
+import { useRef, useState } from "react";
 import { Platform, Pressable, View } from "react-native";
 import { clearSubmittedReview } from "./pullRequestReviewDrafts";
 import { usePullRequestReviewDraft } from "./usePullRequestReviewDraft";
@@ -14,6 +13,7 @@ import { MaterialButton } from "../../components/MaterialButton";
 import { SegmentedControl } from "../../components/SegmentedControl";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
+import { useQueryFocusRefresh } from "../../state/use-query-focus-refresh";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { PullRequestSheetContent as SheetContent } from "./PullRequestSheetContent";
 import { pullRequestTarget, type PullRequestParams } from "./usePullRequestDiff";
@@ -64,9 +64,9 @@ export function PullRequestReviewSheet({
 }: StaticScreenProps<PullRequestParams & { readonly mode: "review" | "comment" }>) {
   const params = route.params;
   const target = pullRequestTarget(params);
-  const result = useEnvironmentQuery(composerPullRequests.detail(target));
-  const { refresh: refreshDetail } = result;
-  useFocusEffect(useCallback(() => refreshDetail(), [refreshDetail]));
+  const detailAtom = composerPullRequests.detail(target);
+  const result = useEnvironmentQuery(detailAtom);
+  useQueryFocusRefresh(detailAtom);
   const permissions = usePullRequestPermissions(params, result.data);
   const submission = useActionSubmission(params);
   const review = useAtomCommand(composerPullRequests.submitReview, { reportFailure: false });

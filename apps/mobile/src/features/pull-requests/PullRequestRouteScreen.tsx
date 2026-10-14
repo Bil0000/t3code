@@ -30,7 +30,6 @@ import { usePullRequestFileFilter } from "./usePullRequestFileFilter";
 import { isPullRequestTestFile } from "./pullRequestFileFilters";
 import {
   StackActions,
-  useFocusEffect,
   useNavigation,
   useRoute,
   type StaticScreenProps,
@@ -69,6 +68,7 @@ import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/Stac
 import { usePullRequestConnected } from "./usePullRequestConnected";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
+import { useQueryFocusRefresh } from "../../state/use-query-focus-refresh";
 import { usePullToRefresh } from "../../state/use-pull-to-refresh";
 import {
   isNativeReviewDiffDrawEvent,
@@ -127,9 +127,15 @@ function PullRequestTabScrollView(props: ScrollViewProps) {
   );
 }
 
-function usePullRequestActivityRows(params: PullRequestParams, filter: ActivityFilter) {
+function usePullRequestActivityRows(
+  params: PullRequestParams,
+  filter: ActivityFilter,
+  enabled: boolean,
+) {
   const navigation = useNavigation();
-  const result = useEnvironmentQuery(composerPullRequests.activity(requestTarget(params)));
+  const result = useEnvironmentQuery(
+    enabled ? composerPullRequests.activity(requestTarget(params)) : null,
+  );
   const filtered = useMemo(
     () => (result.data ? filterPullRequestActivity(result.data, filter) : null),
     [result.data, filter],
@@ -290,6 +296,8 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   usePullRequestEnvironmentFallback(params);
   const connected = usePullRequestConnected(params.environmentId);
   const [section, setSection] = useState<"overview" | "activity" | "guide">("overview");
+  const activityKey = pullRequestReviewKey(params);
+  const [visitedActivityKey, setVisitedActivityKey] = useState<string | null>(null);
   // Keep each tab's native list and measured rows alive when it is hidden.
   const requestedSection = useRef(section);
   const [listAnimationsReady, setListAnimationsReady] = useState(false);
@@ -297,7 +305,11 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const filesContent = usePullRequestFilesContent({ params });
   const guidesEnabled = useReviewGuidesEnabled(params);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER);
-  const activityContent = usePullRequestActivityRows(params, activityFilter);
+  const activityContent = usePullRequestActivityRows(
+    params,
+    activityFilter,
+    section === "activity" || visitedActivityKey === activityKey,
+  );
   const scrollOffsets = useRef<Record<string, number>>({});
   const currentScrollOffset = useRef(-insets.top);
   const bodyY = useRef(0);
@@ -306,6 +318,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const scrollViews = useRef<Partial<Record<typeof section, LegendListRef | null>>>({});
   const selectSection = (next: typeof section) => {
     if (next === section) return;
+    if (next === "activity") setVisitedActivityKey(activityKey);
     scrollOffsets.current[section] = currentScrollOffset.current;
     const headerEnd = Math.max(-insets.top, bodyY.current - insets.top);
     // The shared header stays in place. Once collapsed, retain each tab's own reading position.
@@ -335,8 +348,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const detailAtom = composerPullRequests.detail(requestTarget(params));
   const result = useEnvironmentQuery(detailAtom);
   const pullRefresh = usePullToRefresh(detailAtom);
-  const { refresh: refreshDetail } = result;
-  useFocusEffect(useCallback(() => refreshDetail(), [refreshDetail]));
+  useQueryFocusRefresh(detailAtom);
   const pr = result.data;
   const summary = params.initialSummary;
   const identity = pr ?? summary;
@@ -725,9 +737,9 @@ export function PullRequestFileRouteScreen({
     result.parsed,
     route.params.focus ? route.params.path : undefined,
   );
-  const detail = useEnvironmentQuery(composerPullRequests.detail(requestTarget(route.params)));
-  const { refresh: refreshDetail } = detail;
-  useFocusEffect(useCallback(() => refreshDetail(), [refreshDetail]));
+  const detailAtom = composerPullRequests.detail(requestTarget(route.params));
+  const detail = useEnvironmentQuery(detailAtom);
+  useQueryFocusRefresh(detailAtom);
   const { loadMore } = result;
   const parsed = filter.parsed;
   const reviewDraft = usePullRequestReviewDraft(route.params);

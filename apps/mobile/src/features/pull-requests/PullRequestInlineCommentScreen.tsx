@@ -1,5 +1,5 @@
-import { useFocusEffect, useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import { useCallback, useRef, useState } from "react";
+import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { useRef, useState } from "react";
 import { Alert, View } from "react-native";
 import type { PullRequestReviewPosition } from "@t3tools/contracts";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
@@ -7,6 +7,7 @@ import { MaterialButton } from "../../components/MaterialButton";
 import { uuidv4 } from "../../lib/uuid";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
+import { useQueryFocusRefresh } from "../../state/use-query-focus-refresh";
 import { PullRequestSheetContent } from "./PullRequestSheetContent";
 import { usePullRequestReviewDraft } from "./usePullRequestReviewDraft";
 import { reviewPositionLabel } from "./pullRequestDiffComments";
@@ -28,9 +29,9 @@ export function PullRequestInlineCommentScreen({ route }: StaticScreenProps<Inli
   const saved = store.draft.comments.find((draft) => draft.id === params.draftId);
   const [editedBody, setBody] = useState<string | null>(null);
   const body = editedBody ?? saved?.body ?? "";
-  const detail = useEnvironmentQuery(composerPullRequests.detail(pullRequestTarget(params)));
-  const { refresh: refreshDetail } = detail;
-  useFocusEffect(useCallback(() => refreshDetail(), [refreshDetail]));
+  const detailAtom = composerPullRequests.detail(pullRequestTarget(params));
+  const detail = useEnvironmentQuery(detailAtom);
+  useQueryFocusRefresh(detailAtom);
   const permissions = usePullRequestPermissions(params, detail.data);
   const stale = detail.data && detail.data.headSha !== params.headSha;
   const pending = useRef(false);
