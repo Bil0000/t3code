@@ -365,69 +365,79 @@ describe("AzureDevOpsIssueTracker", () => {
       }),
   );
 
-  it.effect("bounds cross-project hierarchy reads and keeps the next raw relation page", () =>
-    Effect.gen(function* () {
-      let calls = 0;
-      const api = yield* tracker((args) => {
-        calls += 1;
-        if (args[0] === "boards")
-          return encode({
-            ...WORK_ITEM,
-            relations: [
-              {
-                rel: "System.LinkTypes.Hierarchy-Reverse",
-                url: "https://dev.azure.com/acme/_apis/wit/workItems/4",
-              },
-              ...Array.from({ length: 15 }, (_, index) => ({
-                rel: "System.LinkTypes.Hierarchy-Forward",
-                url: `https://dev.azure.com/acme/_apis/wit/workItems/${index + 20}`,
-              })),
-            ],
-          });
-        const resource = args[args.indexOf("--resource") + 1];
-        if (resource === "workitems")
-          return encode({
-            value: args
-              .find((arg) => arg.startsWith("ids="))!
-              .slice(4)
-              .split(",")
-              .map((key) => ({
-                ...WORK_ITEM,
-                id: Number(key),
-                fields: {
-                  ...WORK_ITEM.fields,
-                  "System.TeamProject": `Project ${key}`,
-                  "System.WorkItemType": "Bug",
-                  "System.State": "Review",
+  it.effect.each(["Web App", "a0000000-0000-0000-0000-000000000001"])(
+    "bounds cross-project hierarchy reads and keeps the next raw relation page for %s",
+    (project) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const api = yield* tracker((args) => {
+          calls += 1;
+          if (args.slice(0, 3).join(" ") === "devops project show")
+            return encode({ id: "a0000000-0000-0000-0000-000000000001", name: "Web App" });
+          if (args[0] === "boards")
+            return encode({
+              ...WORK_ITEM,
+              relations: [
+                {
+                  rel: "System.LinkTypes.Hierarchy-Reverse",
+                  url: "https://dev.azure.com/acme/_apis/wit/workItems/4",
                 },
-              })),
-          });
-        if (resource === "workitemtypes")
-          return encode({
-            value: [{ name: "Bug", states: [{ name: "Review", category: "InProgress" }] }],
-          });
-        throw new Error(`Unexpected ${resource}`);
-      });
-      const target = {
-        cwd: "/w",
-        host: "dev.azure.com",
-        scope: "acme/Web App",
-        key: "7",
-        limit: 100,
-      };
-      const first = yield* api.getHierarchy!(target);
-      expect(first.parent?.key).toBe("4");
-      expect(first.children.items.map((item) => item.key)).toEqual(
-        Array.from({ length: 10 }, (_, index) => String(index + 20)),
-      );
-      expect(first.children.nextCursor).toBe("10");
-      expect(calls).toBe(13);
-      calls = 0;
-      const second = yield* api.getHierarchy!({ ...target, cursor: first.children.nextCursor! });
-      expect(second.children.items.map((item) => item.key)).toEqual(["30", "31", "32", "33", "34"]);
-      expect(second.children.nextCursor).toBeNull();
-      expect(calls).toBe(8);
-    }),
+                ...Array.from({ length: 15 }, (_, index) => ({
+                  rel: "System.LinkTypes.Hierarchy-Forward",
+                  url: `https://dev.azure.com/acme/_apis/wit/workItems/${index + 20}`,
+                })),
+              ],
+            });
+          const resource = args[args.indexOf("--resource") + 1];
+          if (resource === "workitems")
+            return encode({
+              value: args
+                .find((arg) => arg.startsWith("ids="))!
+                .slice(4)
+                .split(",")
+                .map((key) => ({
+                  ...WORK_ITEM,
+                  id: Number(key),
+                  fields: {
+                    ...WORK_ITEM.fields,
+                    "System.TeamProject": `Project ${key}`,
+                    "System.WorkItemType": "Bug",
+                    "System.State": "Review",
+                  },
+                })),
+            });
+          if (resource === "workitemtypes")
+            return encode({
+              value: [{ name: "Bug", states: [{ name: "Review", category: "InProgress" }] }],
+            });
+          throw new Error(`Unexpected ${resource}`);
+        });
+        const target = {
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: `acme/${project}`,
+          key: "7",
+          limit: 100,
+        };
+        const first = yield* api.getHierarchy!(target);
+        expect(first.parent?.key).toBe("4");
+        expect(first.children.items.map((item) => item.key)).toEqual(
+          Array.from({ length: 10 }, (_, index) => String(index + 20)),
+        );
+        expect(first.children.nextCursor).toBe("10");
+        expect(calls).toBe(project === "Web App" ? 13 : 14);
+        calls = 0;
+        const second = yield* api.getHierarchy!({ ...target, cursor: first.children.nextCursor! });
+        expect(second.children.items.map((item) => item.key)).toEqual([
+          "30",
+          "31",
+          "32",
+          "33",
+          "34",
+        ]);
+        expect(second.children.nextCursor).toBeNull();
+        expect(calls).toBe(project === "Web App" ? 8 : 9);
+      }),
   );
 
   it.effect("lists a project GUID through its native project name", () =>
@@ -838,6 +848,109 @@ describe("AzureDevOpsIssueTracker", () => {
         expect(seen).toHaveLength(2);
         expect(seen[1]).toContain("PATCH");
       }),
+  );
+
+  it.effect.each([
+    ["acme.visualstudio.com", "https://acme.visualstudio.com"],
+    ["acme.visualstudio.com", "https://acme.visualstudio.com/DefaultCollection"],
+    ["dev.azure.com", "https://dev.azure.com/acme"],
+    ["azure.test/mount", "https://azure.test/mount/acme"],
+  ] as const)("reads native hierarchy pages at %s %s", ([host, prefix]) =>
+    Effect.gen(function* () {
+      const seen: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        seen.push(args);
+        if (args[0] === "boards")
+          return encode({
+            ...WORK_ITEM,
+            url: `${prefix}/_apis/wit/workItems/7`,
+            relations: [
+              { rel: "System.LinkTypes.Hierarchy-Reverse", url: `${prefix}/_apis/wit/workItems/4` },
+              ...[8, 9].map((id) => ({
+                rel: "System.LinkTypes.Hierarchy-Forward",
+                url: `${prefix}/_apis/wit/workItems/${id}`,
+              })),
+            ],
+          });
+        return encode({
+          value: args
+            .find((arg) => arg.startsWith("ids="))!
+            .slice(4)
+            .split(",")
+            .map((id) => ({
+              ...WORK_ITEM,
+              id: Number(id),
+              url: `${prefix}/_apis/wit/workItems/${id}`,
+              fields: { ...WORK_ITEM.fields, "System.TeamProject": "Other App" },
+            })),
+        });
+      });
+      const target = { cwd: "/w", host, scope: "acme/Web App", key: "7", limit: 1 };
+      const first = yield* api.getHierarchy!(target);
+      expect(first).toMatchObject({
+        parent: { key: "4", scope: "acme/Other App" },
+        children: { items: [{ key: "8", scope: "acme/Other App" }], nextCursor: "1" },
+      });
+      expect(seen).toHaveLength(2);
+      expect(seen[1]).toContain("ids=4,8");
+      const second = yield* api.getHierarchy!({ ...target, cursor: first.children.nextCursor! });
+      expect(second).toMatchObject({
+        parent: { key: "4" },
+        children: { items: [{ key: "9" }], nextCursor: null },
+      });
+      expect(seen).toHaveLength(4);
+      expect(seen[3]).toContain("ids=4,9");
+    }),
+  );
+
+  it.effect.each([
+    [
+      "acme.visualstudio.com",
+      "https://acme.visualstudio.com",
+      "https://foreign.visualstudio.com/_apis/wit/workItems/8",
+    ],
+    [
+      "dev.azure.com",
+      "https://dev.azure.com/acme",
+      "https://foreign.test/acme/_apis/wit/workItems/8",
+    ],
+    [
+      "dev.azure.com",
+      "https://dev.azure.com/acme",
+      "https://dev.azure.com/acme-other/_apis/wit/workItems/8",
+    ],
+    [
+      "azure.test/mount",
+      "https://azure.test/mount/acme",
+      "https://azure.test/other/acme/_apis/wit/workItems/8",
+    ],
+    [
+      "azure.test/mount",
+      "https://azure.test/mount/acme",
+      "https://azure.test/mount/acme-other/_apis/wit/workItems/8",
+    ],
+    [
+      "dev.azure.com",
+      "https://dev.azure.com/acme",
+      "https://dev.azure.com/acme/_apis/wit/workItems/8/comments/1",
+    ],
+  ] as const)("refuses an out-of-scope native hierarchy relation %s %s %s", ([host, prefix, url]) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const api = yield* tracker(() => {
+        calls += 1;
+        return encode({
+          ...WORK_ITEM,
+          url: `${prefix}/_apis/wit/workItems/7`,
+          relations: [{ rel: "System.LinkTypes.Hierarchy-Forward", url }],
+        });
+      });
+      const error = yield* Effect.flip(
+        api.getHierarchy!({ cwd: "/w", host, scope: "acme/Web App", key: "7" }),
+      );
+      expect(error).toMatchObject({ operation: "getHierarchy", reason: "failed" });
+      expect(calls).toBe(1);
+    }),
   );
 
   it.effect("pages child relations into their own projects", () =>

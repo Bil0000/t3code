@@ -1222,7 +1222,9 @@ export const make: Effect.Effect<
           const match = /\/_apis\/wit\/workitems\/([1-9]\d*)$/i.exec(url?.pathname ?? "");
           return url !== null &&
             url.origin === organization.origin &&
-            url.pathname.toLowerCase().startsWith(`${organization.pathname.toLowerCase()}/`) &&
+            url.pathname
+              .toLowerCase()
+              .startsWith(`${organization.pathname.toLowerCase().replace(/\/+$/, "")}/`) &&
             match
             ? Number(match[1])
             : null;
