@@ -179,6 +179,20 @@ export function refreshIssueListPage<T extends HeldIssueList>(
   const isBound = (key: string) => bound === null || bound.has(key.toLowerCase());
   const taken = fresh.entries.filter((entry) => covered(scopeOf(entry, cursors)));
   const freshKeys = new Set(taken.map(issueEntryKey));
+  const representatives = new Map<string, string>();
+  for (const representative of [...taken, ...(fresh.sources ?? [])]) {
+    const scope = scopeOf(representative, cursors);
+    if (!representatives.has(scope)) representatives.set(scope, representative.projectId);
+  }
+  const changedOwners = new Set(
+    held.entries
+      .filter((entry) => {
+        const scope = scopeOf(entry, cursors);
+        const owner = representatives.get(scope);
+        return covered(scope) && owner !== undefined && owner !== entry.projectId;
+      })
+      .map((entry) => scopeOf(entry, cursors)),
+  );
   const shifted = new Set(
     [...held.entries.filter((entry) => held.firstKeys.has(issueEntryKey(entry))), ...taken]
       .filter((row) => held.firstKeys.has(issueEntryKey(row)) !== freshKeys.has(issueEntryKey(row)))
@@ -190,7 +204,8 @@ export function refreshIssueListPage<T extends HeldIssueList>(
     (!covered(key) ||
       (continuing.has(key.toLowerCase()) &&
         tails.has(key.toLowerCase()) &&
-        !shifted.has(key.toLowerCase())));
+        !shifted.has(key.toLowerCase()) &&
+        !changedOwners.has(key.toLowerCase())));
   const pick = (cursors: IssueListCursors, take: (key: string) => boolean) =>
     Object.fromEntries(Object.entries(cursors).filter(([key]) => take(key)));
   const kept = held.entries.filter((entry) => {
@@ -200,6 +215,7 @@ export function refreshIssueListPage<T extends HeldIssueList>(
       isBound(scope) &&
       (!covered(scope) ||
         (continuing.has(scope) &&
+          !changedOwners.has(scope) &&
           !held.firstKeys.has(key) &&
           !(typeof options.removed === "string"
             ? key === options.removed
