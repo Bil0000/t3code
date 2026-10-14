@@ -273,6 +273,7 @@ function CleanupSection() {
     if (!settings) return false;
     const enabled = (rules: WorktreeCleanupRules) =>
       rules.worktreeAfterDays !== null ||
+      rules.worktreeSettledAfterDays !== null ||
       rules.worktreeOnMerge ||
       rules.worktreeOnDelete ||
       rules.worktreeUnchanged;
