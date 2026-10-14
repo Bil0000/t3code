@@ -11393,6 +11393,165 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect.each([false, true])(
+    "scopes workflow member state to each run, late launch handles=%s",
+    (lateHandles) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWorkflowHarness;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const nextFirstMember = Effect.fnUntraced(function* () {
+            let event = yield* Queue.take(harness.subagentReceipts);
+            while (event.subagent.nativeTaskRef?.nativeId?.endsWith(":agent:1") !== true) {
+              event = yield* Queue.take(harness.subagentReceipts);
+            }
+            return event.subagent;
+          });
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-workflow-run-state-${lateHandles}`),
+              text: "Run the workflow twice.",
+              attachments: [],
+            }),
+          );
+          yield* harness.offerAndWait(workflowToolUse);
+          yield* harness.offerAndWait(workflowTaskStarted);
+          const firstSnapshot = workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000004001",
+            state: "start",
+            attempt: 3,
+            startedAt: 1_000,
+          });
+          if (lateHandles) yield* harness.offerAndWait(firstSnapshot);
+          yield* harness.offerAndWait(workflowLaunchAck(harness.transcriptDir));
+          if (!lateHandles) yield* harness.offerAndWait(firstSnapshot);
+          const first = yield* nextFirstMember();
+          assert.equal(first.status, "running");
+          assert.equal(
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0]
+              ?.childThreadId,
+            first.childThreadId,
+          );
+          assert.lengthOf(workflowMemberEvents(harness.events, 1), 1);
+          assert.lengthOf(threadMessages(harness.events, first.childThreadId), 1);
+          yield* harness.offerAndWait(
+            workflowSnapshot({
+              uuid: "00000000-0000-4000-8000-000000004002",
+              state: "done",
+              attempt: 4,
+            }),
+          );
+          const firstCompleted = yield* nextFirstMember();
+          assert.equal(firstCompleted.id, first.id);
+          assert.equal(firstCompleted.childThreadId, first.childThreadId);
+          yield* harness.offerAndWait(
+            workflowNotification({
+              uuid: "00000000-0000-4000-8000-000000004003",
+              status: "completed",
+            }),
+          );
+          const firstMessages = threadMessages(harness.events, first.childThreadId);
+          assert.equal(firstMessages.at(-1)?.message.text, "A1 from the transcript");
+          const firstThread = harness.events.find(
+            (event) =>
+              event.type === "app_thread.created" && event.appThread.id === first.childThreadId,
+          );
+          assert.isTrue(firstThread?.type === "app_thread.created");
+          yield* TestClock.adjust("60 seconds");
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...workflowTaskStarted,
+              uuid: "00000000-0000-4000-8000-000000004004",
+            }),
+          );
+          const secondTranscriptDir = NodePath.join(harness.transcriptDir, "second-run");
+          yield* fileSystem.makeDirectory(secondTranscriptDir);
+          yield* harness.offerAndWait(
+            claudeSdkFrame({
+              ...workflowLaunchAck(secondTranscriptDir),
+              uuid: "00000000-0000-4000-8000-000000004005",
+              tool_use_result: {
+                taskType: "local_workflow",
+                runId: "wf_second",
+                transcriptDir: secondTranscriptDir,
+              },
+            }),
+          );
+          yield* harness.offerAndWait(
+            workflowSnapshot({
+              uuid: "00000000-0000-4000-8000-000000004006",
+              state: "queued",
+            }),
+          );
+          const second = yield* nextFirstMember();
+          assert.equal(second.status, "pending");
+          assert.notEqual(second.id, first.id);
+          assert.notEqual(second.childThreadId, first.childThreadId);
+          assert.isNull(second.startedAt);
+          assert.isNull(second.completedAt);
+          assert.isNull(second.result);
+          const secondThread = harness.events.find(
+            (event) =>
+              event.type === "app_thread.created" && event.appThread.id === second.childThreadId,
+          );
+          assert.isTrue(secondThread?.type === "app_thread.created");
+          if (
+            firstThread?.type === "app_thread.created" &&
+            secondThread?.type === "app_thread.created"
+          ) {
+            assert.notDeepEqual(secondThread.appThread.createdAt, firstThread.appThread.createdAt);
+          }
+          assert.deepEqual(
+            threadMessages(harness.events, second.childThreadId).map((event) => event.message.text),
+            ["Reply with exactly: A1"],
+          );
+          yield* harness.offerAndWait(
+            workflowSnapshot({
+              uuid: "00000000-0000-4000-8000-000000004007",
+              state: "done",
+              omitResult: true,
+            }),
+          );
+          const secondCompleted = yield* nextFirstMember();
+          assert.isNull(secondCompleted.startedAt);
+          assert.notDeepEqual(secondCompleted.completedAt, firstCompleted.completedAt);
+          assert.lengthOf(threadMessages(harness.events, second.childThreadId), 1);
+          yield* fileSystem.writeFileString(
+            NodePath.join(secondTranscriptDir, "agent-a1.jsonl"),
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"A1 from the transcript"}]}}\n',
+          );
+          yield* harness.offerAndWait(
+            workflowNotification({
+              uuid: "00000000-0000-4000-8000-000000004008",
+              status: "completed",
+            }),
+          );
+          yield* harness.offerAndWait(
+            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000004009", result: "Done." }),
+          );
+          yield* Queue.take(harness.terminalReceipts);
+          const secondMessages = threadMessages(harness.events, second.childThreadId);
+          assert.deepEqual(
+            secondMessages.map((event) => event.message.text),
+            ["Reply with exactly: A1", "A1 from the transcript"],
+          );
+          assert.isTrue(
+            secondMessages.every((event) =>
+              firstMessages.every((prior) => prior.message.id !== event.message.id),
+            ),
+          );
+          assert.deepEqual(threadMessages(harness.events, first.childThreadId), firstMessages);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect("stops only a live workflow task and waits for its stopped notification", () =>
     Effect.scoped(
       Effect.gen(function* () {
