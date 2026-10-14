@@ -23,7 +23,11 @@ const user = (id: string, displayName: string) => ({
 });
 const JULIUS = user("usr_julius", "julius");
 const THEO = user("usr_theo", "theo");
-const ORGANIZATION = { id: "org_acme", urlKey: "acme" };
+const ORGANIZATION = {
+  id: "org_acme",
+  urlKey: "acme",
+  templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+};
 
 const state = (name: string, type: string, position = 0) => ({
   id: `st_${name.toLowerCase().replaceAll(" ", "-")}`,
@@ -250,7 +254,7 @@ describe("LinearIssueTracker", () => {
                 labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 ancestors: [],
-                templates: { nodes: [] },
+                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
               },
             ],
           },
@@ -1271,7 +1275,7 @@ describe("LinearIssueTracker", () => {
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
                 ancestors: [],
-                templates: { nodes: [] },
+                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
               },
             ],
           },
@@ -1342,7 +1346,7 @@ describe("LinearIssueTracker", () => {
                 labels: { nodes: [label], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 ancestors: [],
-                templates: { nodes: [] },
+                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
               },
             ],
           },
@@ -1405,7 +1409,7 @@ describe("LinearIssueTracker", () => {
                 },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 ancestors: [],
-                templates: { nodes: [] },
+                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
               },
             ],
           },
@@ -1493,7 +1497,7 @@ describe("LinearIssueTracker", () => {
                     pageInfo: { hasNextPage: partial, endCursor: partial ? "more-members" : null },
                   },
                   ancestors: [],
-                  templates: { nodes: [] },
+                  templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 },
               ],
             },
@@ -1570,7 +1574,7 @@ describe("LinearIssueTracker", () => {
                   labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                   members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                   ancestors: [],
-                  templates: { nodes: [] },
+                  templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 },
               ],
             },
@@ -1617,7 +1621,7 @@ describe("LinearIssueTracker", () => {
                 labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 ancestors: [],
-                templates: { nodes: [] },
+                templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
               },
             ],
           },
@@ -1937,7 +1941,7 @@ it.effect("pages label and member candidates with native cursors and workspace c
               states: empty,
               labels: empty,
               members: empty,
-              templates: { nodes: [] },
+              templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
             },
           ],
         },
@@ -2031,6 +2035,7 @@ it.effect("creates an issue with a checked parent and a plain native template", 
               members: empty,
               ancestors: [],
               templates: {
+                pageInfo: empty.pageInfo,
                 nodes: [
                   {
                     id: "template-1",
@@ -2182,7 +2187,7 @@ it.effect.each(["create", "update"] as const)(
         labels: { nodes: labels, pageInfo: { hasNextPage: true, endCursor: "labels-250" } },
         members: { nodes: members, pageInfo: { hasNextPage: true, endCursor: "members-250" } },
         ancestors: [],
-        templates: { nodes: [] },
+        templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
       };
       const test = fakeLinear({
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
@@ -2290,7 +2295,7 @@ it.effect.each([
       labels: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
       members: empty,
       ancestors: [],
-      templates: { nodes: [] },
+      templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
     };
     const test = fakeLinear({
       T3IssueReference: () => ({ issue: issue("ENG-7") }),
@@ -2362,7 +2367,7 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
         labels: empty,
         members: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
         ancestors: [],
-        templates: { nodes: [] },
+        templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
       };
       const test = fakeLinear({
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
@@ -2507,12 +2512,13 @@ it.effect.each([false, true])(
         states: empty,
         members: empty,
         labels: { ...empty, nodes: [childLabel, other] },
-        templates: { nodes: [] },
+        templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
         ancestors: [
           {
             id: "team_parent",
             key: "PARENT",
             name: "Parent",
+            templates: empty,
             labels: {
               nodes: [parentLabel],
               pageInfo: { hasNextPage: partial, endCursor: "parent-more" },
@@ -2668,11 +2674,12 @@ it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s
               states: empty,
               labels: empty,
               members: empty,
-              templates: { nodes: [] },
+              templates: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
               ancestors: Array.from({ length: count }, (_, n) => ({
                 id: `parent-${n}`,
                 key: `P${n}`,
                 name: "Parent",
+                templates: empty,
                 labels: empty,
               })),
             },
@@ -2683,6 +2690,183 @@ it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s
     const api = yield* test.tracker;
     if (count === 5) expect((yield* api.listCandidates(target)).truncated).toBe(false);
     else expect((yield* api.listCandidates(target).pipe(Effect.flip)).reason).toBe("failed");
+    expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
+  }),
+);
+
+it.effect.each(["workspace", "ancestor"] as const)(
+  "lists and creates native issue templates with an empty team catalog: %s",
+  (source) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const plain = {
+        id: "inherited-plain",
+        name: "Bug",
+        description: "Report a bug",
+        content: "Steps",
+        type: "issue",
+        hasFormFields: false,
+        templateData: { labelIds: ["native-label"] },
+      };
+      const form = { ...plain, id: "inherited-form", hasFormFields: true };
+      const catalog = { ...empty, nodes: [plain, form] };
+      const test = fakeLinear({
+        T3Team: () => ({
+          organization: { ...ORGANIZATION, templates: source === "workspace" ? catalog : empty },
+          issueLabels: empty,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                states: empty,
+                labels: empty,
+                members: empty,
+                templates: empty,
+                ancestors:
+                  source === "ancestor"
+                    ? [
+                        {
+                          id: "parent",
+                          key: "PARENT",
+                          name: "Parent",
+                          labels: empty,
+                          templates: catalog,
+                        },
+                      ]
+                    : [],
+              },
+            ],
+          },
+        }),
+        T3IssueCreate: (variables) => {
+          expect(variables.input).toMatchObject({ teamId: "team_eng", templateId: plain.id });
+          return {
+            issueCreate: {
+              success: true,
+              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+            },
+          };
+        },
+      });
+      const api = yield* test.tracker;
+      expect(yield* api.listTemplates(target)).toMatchObject({
+        templates: [{ key: plain.id, body: "Steps", labels: ["native-label"] }],
+        externalTemplates: [
+          { name: form.name, url: "https://linear.app/team/ENG/new?template=inherited-form" },
+        ],
+      });
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
+      test.requests.length = 0;
+      yield* api.create({
+        ...target,
+        title: "New",
+        body: "Steps",
+        labels: [],
+        assignees: [],
+        templateKey: plain.id,
+      });
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team", "T3IssueCreate"]);
+      for (const key of [form.id, "foreign-template"]) {
+        test.requests.length = 0;
+        expect(
+          (yield* api
+            .create({
+              ...target,
+              title: "New",
+              body: "",
+              labels: [],
+              assignees: [],
+              templateKey: key,
+            })
+            .pipe(Effect.flip)).reason,
+        ).toBe("failed");
+        expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
+      }
+    }),
+);
+
+it.effect.each(["workspace", "team", "ancestor"] as const)(
+  "does not claim a complete template list from a partial native catalog: %s",
+  (partial) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const catalog = { nodes: [], pageInfo: { hasNextPage: true, endCursor: "more-native" } };
+      const test = fakeLinear({
+        T3Team: () => ({
+          organization: { ...ORGANIZATION, templates: partial === "workspace" ? catalog : empty },
+          issueLabels: empty,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                states: empty,
+                labels: empty,
+                members: empty,
+                templates: partial === "team" ? catalog : empty,
+                ancestors: [
+                  {
+                    id: "parent",
+                    key: "PARENT",
+                    name: "Parent",
+                    labels: empty,
+                    templates: partial === "ancestor" ? catalog : empty,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      expect((yield* api.listTemplates(target).pipe(Effect.flip)).reason).toBe("failed");
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
+    }),
+);
+
+it.effect.each([100, 101])("bounds native workspace template catalogs: %s", (count) =>
+  Effect.gen(function* () {
+    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const test = fakeLinear({
+      T3Team: () => ({
+        organization: {
+          ...ORGANIZATION,
+          templates: {
+            ...empty,
+            nodes: Array.from({ length: count }, (_, n) => ({
+              id: `template-${n}`,
+              name: "Bug",
+              description: null,
+              content: "Steps",
+              type: "issue",
+              hasFormFields: false,
+              templateData: {},
+            })),
+          },
+        },
+        issueLabels: empty,
+        teams: {
+          nodes: [
+            {
+              id: "team_eng",
+              key: "ENG",
+              name: "Engineering",
+              ancestors: [],
+              states: empty,
+              labels: empty,
+              members: empty,
+              templates: empty,
+            },
+          ],
+        },
+      }),
+    });
+    const api = yield* test.tracker;
+    if (count === 100) expect((yield* api.listTemplates(target)).templates).toHaveLength(100);
+    else expect((yield* api.listTemplates(target).pipe(Effect.flip)).reason).toBe("failed");
     expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
   }),
 );

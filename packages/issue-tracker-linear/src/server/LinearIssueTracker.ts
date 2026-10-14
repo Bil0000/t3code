@@ -727,7 +727,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
               : yield* resolveIssue("create", input.parentKey, input.scope);
           if (
             input.templateKey !== undefined &&
-            !scope.team.templates.nodes.some(
+            !scope.templates.some(
               (template) =>
                 template.id === input.templateKey &&
                 template.type === "issue" &&
@@ -944,19 +944,23 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         }),
 
       listTemplates: (input) =>
-        requireTeam("listTemplates", input.scope).pipe(
-          Effect.map((scope) => {
-            const templates: IssueTemplate[] = [];
-            const externalTemplates: IssueExternalTemplate[] = [];
-            for (const template of scope.team.templates.nodes) {
-              if (template.type !== "issue") continue;
-              const mapped = toTemplate(template, scope.team.key);
-              if ("template" in mapped) templates.push(mapped.template);
-              else externalTemplates.push(mapped.link);
-            }
-            return { templates, externalTemplates, blankIssuesEnabled: true };
-          }),
-        ),
+        Effect.gen(function* () {
+          const scope = yield* requireTeam("listTemplates", input.scope);
+          if (scope.templatesTruncated)
+            return yield* failed(
+              "listTemplates",
+              "This team or workspace has more issue templates than the supported limit. Use Linear to see all templates.",
+            );
+          const templates: IssueTemplate[] = [];
+          const externalTemplates: IssueExternalTemplate[] = [];
+          for (const template of scope.templates) {
+            if (template.type !== "issue") continue;
+            const mapped = toTemplate(template, scope.team.key);
+            if ("template" in mapped) templates.push(mapped.template);
+            else externalTemplates.push(mapped.link);
+          }
+          return { templates, externalTemplates, blankIssuesEnabled: true };
+        }),
 
       listCandidates: (input) =>
         requireTeam("listCandidates", input.scope).pipe(

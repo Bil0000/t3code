@@ -158,6 +158,10 @@ export const LinearTemplate = Schema.Struct({
   templateData: Schema.Union([Schema.fromJsonString(LinearTemplateData), LinearTemplateData]),
 });
 export type LinearTemplate = typeof LinearTemplate.Type;
+const LinearTemplates = Schema.Struct({
+  ...Connection(LinearTemplate).fields,
+  nodes: Schema.Array(LinearTemplate).check(Schema.isMaxLength(100)),
+});
 
 const LinearIssueDetail = Schema.Struct({
   ...LinearIssue.fields,
@@ -188,6 +192,7 @@ const LinearTeamStates = Schema.Struct({
 const USER_FIELDS = "id name displayName email avatarUrl";
 const STATE_FIELDS = "id name type position";
 const LABEL_FIELDS = "id name color";
+const TEMPLATE_FIELDS = "id name description content type hasFormFields templateData";
 const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
 const COMMENT_FIELDS = `id body createdAt editedAt url user { ${USER_FIELDS} } reactions { ${REACTION_FIELDS} }`;
 const ISSUE_FIELDS = `
@@ -262,15 +267,15 @@ const COMMENTS_QUERY = `query T3Comments($id: String!, $first: Int!, $after: Str
   }
 }`;
 const TEAM_QUERY = `query T3Team($key: String!) {
-  organization { id urlKey }
+  organization { id urlKey templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
   teams(first: 1, filter: { key: { eq: $key } }) {
     nodes {
       id key name
       states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } }
-      ancestors { id key name labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } }
+      ancestors { id key name labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
       labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } }
       members(first: 250) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } }
-      templates { nodes { id name description content type hasFormFields templateData } }
+      templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } }
     }
   }
   issueLabels(first: 250, includeArchived: true, filter: { team: { null: true } }) {
@@ -363,6 +368,7 @@ const LinearTeamDetail = Schema.Struct({
   ancestors: Schema.Array(
     Schema.Struct({
       ...LinearTeam.fields,
+      templates: LinearTemplates,
       labels: Schema.Struct({
         ...Connection(LinearLabel).fields,
         nodes: Schema.Array(LinearLabel).check(Schema.isMaxLength(250)),
@@ -371,11 +377,11 @@ const LinearTeamDetail = Schema.Struct({
   ).check(Schema.isMaxLength(5)),
   labels: Connection(LinearLabel),
   members: Connection(LinearUser),
-  templates: Schema.Struct({ nodes: Schema.Array(LinearTemplate) }),
+  templates: LinearTemplates,
 });
 type LinearTeamDetail = typeof LinearTeamDetail.Type;
 const TeamData = Schema.Struct({
-  organization: LinearOrganization,
+  organization: Schema.Struct({ ...LinearOrganization.fields, templates: LinearTemplates }),
   teams: Schema.Struct({ nodes: Schema.Array(LinearTeamDetail) }),
   issueLabels: Connection(LinearLabel),
 });
@@ -444,6 +450,8 @@ export interface LinearTeamScope {
   readonly organization: LinearOrganization;
   readonly team: LinearTeamDetail;
   readonly workspaceLabels: ReadonlyArray<LinearLabel>;
+  readonly templates: ReadonlyArray<LinearTemplate>;
+  readonly templatesTruncated: boolean;
   readonly labelsTruncated: boolean;
   /** Linear had more than one page of something; a missing label or member may still exist. */
   readonly truncated: boolean;
@@ -938,10 +946,24 @@ export const make = Effect.gen(function* () {
       Effect.map((data) => {
         const team = data.teams.nodes[0];
         if (team === undefined) return null;
+        const templateCatalogs = [
+          team.templates,
+          ...team.ancestors.map((ancestor) => ancestor.templates),
+          data.organization.templates,
+        ];
+        const templatesTruncated = templateCatalogs.some((catalog) => catalog.pageInfo.hasNextPage);
         return {
           organization: data.organization,
           team,
           workspaceLabels: data.issueLabels.nodes,
+          templates: [
+            ...new Map(
+              templateCatalogs
+                .flatMap((catalog) => catalog.nodes)
+                .map((template) => [template.id, template]),
+            ).values(),
+          ],
+          templatesTruncated,
           labelsTruncated:
             team.labels.pageInfo.hasNextPage ||
             data.issueLabels.pageInfo.hasNextPage ||
@@ -951,7 +973,8 @@ export const make = Effect.gen(function* () {
             team.labels.pageInfo.hasNextPage ||
             team.members.pageInfo.hasNextPage ||
             data.issueLabels.pageInfo.hasNextPage ||
-            team.ancestors.some((ancestor) => ancestor.labels.pageInfo.hasNextPage),
+            team.ancestors.some((ancestor) => ancestor.labels.pageInfo.hasNextPage) ||
+            templatesTruncated,
         };
       }),
     );
