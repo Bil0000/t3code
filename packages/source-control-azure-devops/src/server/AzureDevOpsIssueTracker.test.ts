@@ -647,6 +647,199 @@ describe("AzureDevOpsIssueTracker", () => {
     }).pipe(Effect.provide(NodeFileSystem.layer)),
   );
 
+  it.effect.each([
+    {
+      input: { body: "**bold**\n\n- one\n- two" },
+      fields: [
+        { op: "add", path: "/fields/System.Description", value: "**bold**\n\n- one\n- two" },
+      ],
+    },
+    {
+      input: {
+        title: "Changed title",
+        body: "**bold**",
+        labels: ["bug", "updated"],
+        assignees: ["theo@acme.test"],
+      },
+      fields: [
+        { op: "add", path: "/fields/System.Title", value: "Changed title" },
+        { op: "add", path: "/fields/System.Description", value: "**bold**" },
+        { op: "add", path: "/fields/System.Tags", value: "bug; updated" },
+        { op: "add", path: "/fields/System.AssignedTo", value: "theo@acme.test" },
+      ],
+    },
+    {
+      input: { body: "", labels: [], assignees: [] },
+      fields: [
+        { op: "add", path: "/fields/System.Description", value: "" },
+        { op: "add", path: "/fields/System.Tags", value: "" },
+        { op: "add", path: "/fields/System.AssignedTo", value: "" },
+      ],
+    },
+  ] as const)(
+    "updates an existing HTML description as native Markdown: $input",
+    ({ input, fields }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const seen: ReadonlyArray<string>[] = [];
+        const patches: unknown[] = [];
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeFileSystem.layer,
+              Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+                execute: ({ args }) =>
+                  Effect.gen(function* () {
+                    seen.push(args);
+                    if (args.includes("--in-file")) {
+                      expect(args).toEqual(
+                        expect.arrayContaining([
+                          "devops",
+                          "invoke",
+                          "--organization",
+                          "https://dev.azure.com/acme",
+                          "--resource",
+                          "workitems",
+                          "--api-version",
+                          "7.1",
+                          "project=Web App",
+                          "id=7",
+                          "PATCH",
+                          "application/json-patch+json",
+                        ]),
+                      );
+                      patches.push(
+                        JSON.parse(
+                          yield* fs
+                            .readFileString(args[args.indexOf("--in-file") + 1]!)
+                            .pipe(Effect.orDie),
+                        ),
+                      );
+                    }
+                    return TestSourceControlHost.processOutput(
+                      encode({
+                        ...WORK_ITEM,
+                        rev: 6,
+                        multilineFieldsFormat: { "System.Description": "HTML" },
+                      }),
+                    );
+                  }),
+              }),
+            ),
+          ),
+        );
+        yield* api.update!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          ...input,
+        });
+        expect(patches).toEqual([
+          [
+            ...fields,
+            { op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" },
+          ],
+        ]);
+        expect(seen).toHaveLength(2);
+        expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
+      }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("keeps updates without a body on the native CLI field path", () =>
+    Effect.gen(function* () {
+      const seen: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        seen.push(args);
+        return encode(WORK_ITEM);
+      });
+      yield* api.update!({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        title: "Changed title",
+        labels: [],
+        assignees: [],
+      });
+      expect(seen).toHaveLength(2);
+      expect(seen[1]).toEqual([
+        "boards",
+        "work-item",
+        "update",
+        "--detect",
+        "false",
+        "--organization",
+        "https://dev.azure.com/acme",
+        "--id",
+        "7",
+        "--title",
+        "Changed title",
+        "--fields",
+        "System.Tags=",
+        "System.AssignedTo=",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }),
+  );
+
+  it.effect.each([
+    [400, "command-failed", "failed"],
+    [401, "authentication", "unauthenticated"],
+    [403, "command-failed", "failed"],
+    [409, "command-failed", "failed"],
+    [429, "rate-limited", "rate-limited"],
+  ] as const)(
+    "keeps native body update error %s without a fallback write",
+    ([status, failureKind, reason]) =>
+      Effect.gen(function* () {
+        const seen: ReadonlyArray<string>[] = [];
+        const cause = new VcsProcessExitError({
+          operation: "AzureDevOpsCli.execute",
+          command: "az",
+          cwd: "/w",
+          exitCode: 1,
+          detail: `HTTP ${status}`,
+          failureKind,
+        });
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeFileSystem.layer,
+              Layer.effect(AzureDevOpsCli.AzureDevOpsCli, AzureDevOpsCli.make).pipe(
+                Layer.provide(
+                  TestSourceControlHost.layer({
+                    process: {
+                      run: ({ args }) => {
+                        seen.push(args);
+                        return args.includes("show")
+                          ? Effect.succeed(TestSourceControlHost.processOutput(encode(WORK_ITEM)))
+                          : Effect.fail(cause);
+                      },
+                    },
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+        const error = yield* Effect.flip(
+          api.update!({
+            cwd: "/w",
+            host: "dev.azure.com",
+            scope: "acme/Web App",
+            key: "7",
+            body: "**bold**",
+          }),
+        );
+        expect(error).toMatchObject({ operation: "update", reason, cause: { cause } });
+        expect(seen).toHaveLength(2);
+        expect(seen[1]).toContain("PATCH");
+      }),
+  );
+
   it.effect("pages child relations into their own projects", () =>
     Effect.gen(function* () {
       const api = yield* tracker((args) => {
@@ -1119,7 +1312,7 @@ describe("AzureDevOpsIssueTracker", () => {
     }),
   );
 
-  it.effect.each(["update", "setState", "getIssue", "getComments"] as const)(
+  it.effect.each(["update", "update-body", "setState", "getIssue", "getComments"] as const)(
     "rejects a foreign native project before %s",
     (operation) =>
       Effect.gen(function* () {
@@ -1132,11 +1325,13 @@ describe("AzureDevOpsIssueTracker", () => {
         const task =
           operation === "update"
             ? api.update!({ ...target, title: "Changed title" })
-            : operation === "setState"
-              ? api.setState!({ ...target, state: "New" })
-              : operation === "getComments"
-                ? api.getComments({ ...target, cursor: "next-token" })
-                : api.getIssue(target);
+            : operation === "update-body"
+              ? api.update!({ ...target, body: "**bold**" })
+              : operation === "setState"
+                ? api.setState!({ ...target, state: "New" })
+                : operation === "getComments"
+                  ? api.getComments({ ...target, cursor: "next-token" })
+                  : api.getIssue(target);
         const error = yield* Effect.flip(task);
         expect(error.reason).toBe("not-found");
         expect(seen).toHaveLength(1);

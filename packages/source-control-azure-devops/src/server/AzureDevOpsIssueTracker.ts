@@ -1413,18 +1413,45 @@ export const make: Effect.Effect<
 
     update: (input) =>
       target("update", input).pipe(
-        Effect.flatMap((scope) =>
-          update({
-            ...scope,
+        Effect.flatMap((scope) => {
+          if (input.body === undefined)
+            return update({
+              ...scope,
+              cwd: input.cwd,
+              operation: "update",
+              args: [
+                ...(input.title === undefined ? [] : ["--title", input.title]),
+                ...fieldArgs(input),
+              ],
+            });
+          const fields = {
+            ...(input.title === undefined ? {} : { "System.Title": input.title }),
+            "System.Description": input.body,
+            ...(input.labels === undefined ? {} : { "System.Tags": input.labels.join("; ") }),
+            ...(input.assignees === undefined
+              ? {}
+              : { "System.AssignedTo": input.assignees[0] ?? "" }),
+          };
+          return invokeWithBody({
             cwd: input.cwd,
             operation: "update",
-            args: [
-              ...(input.title === undefined ? [] : ["--title", input.title]),
-              ...(input.body === undefined ? [] : ["--description", input.body]),
-              ...fieldArgs(input),
+            args: invokeArgs({
+              ...scope,
+              resource: "workitems",
+              route: [`id=${scope.number}`],
+              method: "PATCH",
+            }),
+            mediaType: "application/json-patch+json",
+            body: [
+              ...Object.entries(fields).map(([field, value]) => ({
+                op: "add",
+                path: `/fields/${field}`,
+                value,
+              })),
+              { op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" },
             ],
-          }),
-        ),
+          }).pipe(Effect.asVoid);
+        }),
       ),
 
     setState: (input) =>
