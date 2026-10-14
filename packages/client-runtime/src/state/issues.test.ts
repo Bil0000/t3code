@@ -667,6 +667,183 @@ describe("issue list continuations", () => {
 });
 
 describe("issue representative changes", () => {
+  it.each([
+    { cursor: "github github.com acme/app", sources: true },
+    { cursor: "github github.com acme/app", sources: false },
+    { cursor: "github.com acme/app", sources: true },
+    { cursor: "github.com acme/app", sources: false },
+  ])("rebinds earlier rows when a continuation changes project: %j", ({ cursor, sources }) => {
+    const old = entry({ key: "1", projectTitle: "Old checkout" });
+    const repeated = entry({ key: "2", projectTitle: old.projectTitle });
+    const other = entry({
+      key: "9",
+      tracker: "gitlab" as IssueTrackerKind,
+      projectTitle: "Other tracker",
+    });
+    const replacement = entry({
+      key: "2",
+      projectId: "replacement" as ProjectId,
+      projectTitle: "Current checkout",
+      host: "GitHub.COM",
+      scope: "Acme/App",
+      title: "Updated issue 2",
+    });
+    const otherCursor = "gitlab github.com acme/app";
+    const otherError = {
+      projectId: other.projectId,
+      projectTitle: other.projectTitle,
+      tracker: other.tracker,
+      host: other.host,
+      message: "Other tracker is unavailable",
+    };
+    const held = {
+      entries: [old, repeated, other],
+      sources: [
+        { ...old, capabilities: {} as IssueCapabilities },
+        { ...other, capabilities: {} as IssueCapabilities },
+      ],
+      firstKeys: new Set([old, repeated, other].map(issueEntryKey)),
+      firstCursors: { [cursor]: "2", [otherCursor]: "o2" },
+      nextCursors: { [cursor]: "2", [otherCursor]: "o2" },
+      errors: [otherError],
+    };
+    const page = {
+      entries: [replacement, entry({ ...replacement, key: "3" })],
+      ...(sources ? { sources: [{ ...replacement, capabilities: {} as IssueCapabilities }] } : {}),
+      nextCursors: { [cursor]: "3" },
+      errors: [],
+    };
+    const continued = continueIssueListPage(held, { [cursor]: "2" }, page, held.firstCursors);
+    const rows = continued.entries.filter((row) => row.tracker === old.tracker);
+    expect(
+      rows.map((row) => [row.projectId, row.projectTitle, row.key, row.title]).toSorted(),
+    ).toEqual([
+      ["replacement", "Current checkout", "1", old.title],
+      ["replacement", "Current checkout", "2", "Updated issue 2"],
+      ["replacement", "Current checkout", "3", replacement.title],
+    ]);
+    expect(continued.entries.find((row) => row.tracker === other.tracker)).toEqual(other);
+    expect(rows.find((row) => row.key === "1")).toMatchObject({
+      host: old.host,
+      scope: old.scope,
+      tracker: old.tracker,
+    });
+    expect(
+      continued.sources?.map(({ projectId, projectTitle }) => [projectId, projectTitle]),
+    ).toEqual([
+      ["replacement", "Current checkout"],
+      [other.projectId, other.projectTitle],
+    ]);
+    expect(continued.firstKeys).toEqual(
+      new Set([
+        issueEntryKey({ ...old, projectId: replacement.projectId }),
+        issueEntryKey(replacement),
+        issueEntryKey(other),
+      ]),
+    );
+    expect(continued.firstCursors).toBe(held.firstCursors);
+    expect(continued.nextCursors).toEqual({ [cursor]: "3", [otherCursor]: "o2" });
+    expect(continued.errors).toEqual([otherError]);
+    const fresh = refreshIssueListPage(continued, {
+      entries: [entry({ ...replacement, key: "1" }), replacement, other],
+      nextCursors: held.firstCursors,
+      errors: [otherError],
+      sources: [
+        { ...replacement, capabilities: {} as IssueCapabilities },
+        { ...other, capabilities: {} as IssueCapabilities },
+      ],
+    });
+    expect(fresh.entries.filter((row) => row.tracker === old.tracker)).toHaveLength(3);
+    expect(fresh.nextCursors[cursor]).toBe("3");
+    const next = continueIssueListPage(
+      fresh,
+      { [cursor]: "3" },
+      {
+        entries: [entry({ ...replacement, key: "3" }), entry({ ...replacement, key: "4" })],
+        nextCursors: {},
+        errors: [],
+      },
+      fresh.firstCursors,
+    );
+    expect(
+      next.entries
+        .filter((row) => row.tracker === old.tracker)
+        .map((row) => row.key)
+        .toSorted(),
+    ).toEqual(["1", "2", "3", "4"]);
+    expect(next.nextCursors).toEqual({ [otherCursor]: "o2" });
+    expect(next.errors).toEqual([otherError]);
+  });
+
+  it("rebinds and deduplicates an empty successful continuation using its source metadata", () => {
+    const old = entry({ key: "1" });
+    const replacement = entry({
+      ...old,
+      projectId: "replacement" as ProjectId,
+      projectTitle: "Current checkout",
+    });
+    const cursor = { "github github.com acme/app": "2" };
+    const held = {
+      entries: [old, replacement],
+      sources: [{ ...old, capabilities: {} as IssueCapabilities }],
+      firstKeys: new Set([issueEntryKey(old)]),
+      firstCursors: cursor,
+      nextCursors: cursor,
+      errors: [],
+    };
+    const page = {
+      entries: [],
+      sources: [{ ...replacement, capabilities: {} as IssueCapabilities }],
+      nextCursors: {},
+      errors: [],
+    };
+    const failed = continueIssueListPage(
+      held,
+      cursor,
+      {
+        ...page,
+        errors: [
+          {
+            projectId: replacement.projectId,
+            projectTitle: replacement.projectTitle,
+            tracker: replacement.tracker,
+            host: replacement.host,
+            message: "down",
+          },
+        ],
+      },
+      held.firstCursors,
+    );
+    expect(failed.entries).toEqual(held.entries);
+    expect(failed.sources).toEqual(held.sources);
+    expect(failed.firstKeys).toEqual(held.firstKeys);
+    expect(failed.nextCursors).toEqual(cursor);
+    const success = continueIssueListPage(failed, cursor, page, held.firstCursors);
+    expect(success.errors).toEqual([]);
+    expect(success.entries).toEqual([replacement]);
+    expect(success.sources?.[0]).toMatchObject({
+      projectId: replacement.projectId,
+      projectTitle: replacement.projectTitle,
+    });
+    expect(success.firstKeys).toEqual(new Set([issueEntryKey(replacement)]));
+    expect(success.nextCursors).toEqual({});
+    const withoutHeldMetadata = continueIssueListPage(
+      { ...held, sources: undefined },
+      cursor,
+      page,
+      held.firstCursors,
+    );
+    expect(withoutHeldMetadata.entries).toEqual([replacement]);
+    expect(withoutHeldMetadata.sources).toEqual(page.sources);
+    const withoutMetadata = continueIssueListPage(
+      held,
+      cursor,
+      { entries: [], nextCursors: {}, errors: [] },
+      held.firstCursors,
+    );
+    expect(withoutMetadata.entries).toEqual(held.entries);
+  });
+
   it("drops the old owner's tail and restarts its cursor, while keeping failed and unrelated sources", () => {
     const old = entry({ key: "1" });
     const tail = entry({ key: "2" });
