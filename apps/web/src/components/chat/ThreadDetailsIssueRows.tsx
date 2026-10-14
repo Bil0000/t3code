@@ -4,6 +4,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { cn } from "~/lib/utils";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { issueDisplayLabel } from "../issue/issueDetail.logic";
 import { IssueGlyph, resolveIssueStatePresentation } from "../issue/issuePresentation";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import {
@@ -32,7 +33,7 @@ export function ThreadDetailsIssueRows({
           link.snapshot === null ? null : resolveIssueStatePresentation(link.snapshot.state);
         const label =
           link.snapshot === null
-            ? `${link.scope}#${link.key}`
+            ? issueDisplayLabel(link.scope, link.key)
             : `${link.snapshot.displayKey}: ${link.snapshot.title}`;
         return (
           <Tooltip key={threadIssueKeyOf(link)}>

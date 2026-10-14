@@ -12,14 +12,16 @@
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { IssueTrackerKind } from "@t3tools/contracts";
 import { IssueTrackerError } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
-import { retryAtFromHeader } from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 export const KIND = IssueTrackerKind.make("linear");
 const DEFAULT_API_URL = "https://api.linear.app/graphql";
@@ -91,6 +93,7 @@ const Connection = <S extends Schema.Top>(node: S) =>
 export const LinearIssue = Schema.Struct({
   id: Schema.String,
   identifier: Schema.String,
+  team: Schema.Struct({ key: Schema.String }),
   number: Schema.Number,
   title: Schema.String,
   url: Schema.String,
@@ -102,7 +105,7 @@ export const LinearIssue = Schema.Struct({
   state: LinearWorkflowState,
   creator: Schema.NullOr(LinearUser),
   assignee: Schema.NullOr(LinearUser),
-  labels: Schema.Struct({ nodes: Schema.Array(LinearLabel) }),
+  labels: Connection(LinearLabel),
 });
 export type LinearIssue = typeof LinearIssue.Type;
 
@@ -153,10 +156,20 @@ const LinearIssueDetail = Schema.Struct({
   ...LinearIssue.fields,
   comments: Connection(LinearComment),
   reactions: Schema.Array(LinearReaction),
-  attachments: Schema.Struct({ nodes: Schema.Array(LinearAttachment) }),
-  history: Schema.Struct({ nodes: Schema.Array(LinearHistoryEntry) }),
+  attachments: Connection(LinearAttachment),
+  history: Connection(LinearHistoryEntry),
 });
 type LinearIssueDetail = typeof LinearIssueDetail.Type;
+const LinearIssueReference = Schema.Struct({
+  id: Schema.String,
+  identifier: Schema.String,
+  team: Schema.Struct({ key: Schema.String }),
+});
+export type LinearIssueReference = typeof LinearIssueReference.Type;
+const LinearTeamStates = Schema.Struct({
+  ...LinearTeam.fields,
+  states: Connection(LinearWorkflowState),
+});
 
 // --- Documents -----------------------------------------------------------------------------
 
@@ -167,31 +180,35 @@ const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
 const COMMENT_FIELDS = `id body createdAt url user { ${USER_FIELDS} } reactions { ${REACTION_FIELDS} }`;
 const ISSUE_FIELDS = `
   id identifier number title url description createdAt updatedAt completedAt canceledAt
+  team { key }
   state { ${STATE_FIELDS} }
   creator { ${USER_FIELDS} }
   assignee { ${USER_FIELDS} }
-  labels { nodes { ${LABEL_FIELDS} } }
 `;
 
 const VIEWER_QUERY = `query T3Viewer {
   viewer { ${USER_FIELDS} }
-  teams(first: 250) { nodes { id key name } }
+}`;
+const PROBE_QUERY = `query T3ProbeCredential {
+  viewer { ${USER_FIELDS} }
+  teams(first: 250) { nodes { id key name } pageInfo { hasNextPage endCursor } }
 }`;
 const LIST_QUERY = `query T3Issues($first: Int!, $after: String, $filter: IssueFilter!) {
   issues(first: $first, after: $after, filter: $filter, orderBy: updatedAt) {
-    nodes { ${ISSUE_FIELDS} }
+    nodes { ${ISSUE_FIELDS} labels(first: 20, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor } } }
     pageInfo { hasNextPage endCursor }
   }
 }`;
 const ISSUE_QUERY = `query T3Issue($id: String!, $comments: Int!) {
   issue(id: $id) {
     ${ISSUE_FIELDS}
+    labels(first: 100, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor } }
     comments(first: $comments, orderBy: createdAt) {
       nodes { ${COMMENT_FIELDS} }
       pageInfo { hasNextPage endCursor }
     }
     reactions { ${REACTION_FIELDS} }
-    attachments(first: 50) { nodes { url title sourceType metadata } }
+    attachments(first: 50) { nodes { url title sourceType metadata } pageInfo { hasNextPage endCursor } }
     history(first: 100, orderBy: createdAt) {
       nodes {
         id createdAt actor { ${USER_FIELDS} }
@@ -200,11 +217,28 @@ const ISSUE_QUERY = `query T3Issue($id: String!, $comments: Int!) {
         addedLabels { ${LABEL_FIELDS} } removedLabels { ${LABEL_FIELDS} }
         fromTitle toTitle
       }
+      pageInfo { hasNextPage endCursor }
     }
   }
 }`;
+const ISSUE_REFERENCE_QUERY = `query T3IssueReference($id: String!) {
+  issue(id: $id) { id identifier team { key } }
+}`;
+const COMMENT_TARGET_QUERY = `query T3CommentTarget($id: String!, $commentId: String!) {
+  issue(id: $id) { id identifier team { key } }
+  comment(id: $commentId) { id issue { id identifier team { key } } }
+}`;
+const TEAM_STATES_QUERY = `query T3TeamStates($key: String!) {
+  teams(first: 1, filter: { key: { eq: $key } }) {
+    nodes { id key name states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
+  }
+}`;
+const SCOPE_QUERY = `query T3Scope($key: String!) {
+  teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name } }
+}`;
 const COMMENTS_QUERY = `query T3Comments($id: String!, $first: Int!, $after: String) {
   issue(id: $id) {
+    id identifier team { key }
     comments(first: $first, after: $after, orderBy: createdAt) {
       nodes { ${COMMENT_FIELDS} }
       pageInfo { hasNextPage endCursor }
@@ -255,20 +289,32 @@ const GraphQlError = Schema.Struct({
 });
 type GraphQlError = typeof GraphQlError.Type;
 
-const Envelope = <S extends Schema.Top>(data: S) =>
-  Schema.Struct({
-    data: Schema.optional(Schema.NullOr(data)),
-    errors: Schema.optional(Schema.Array(GraphQlError)),
-  });
+const Envelope = Schema.Struct({
+  data: Schema.optional(Schema.Unknown),
+  errors: Schema.optional(Schema.Array(GraphQlError)),
+});
 
 const ViewerData = Schema.Struct({
   viewer: LinearUser,
-  teams: Schema.Struct({ nodes: Schema.Array(LinearTeam) }),
 });
+const ProbeData = Schema.Struct({ viewer: LinearUser, teams: Connection(LinearTeam) });
 const ListData = Schema.Struct({ issues: Connection(LinearIssue) });
 const IssueData = Schema.Struct({ issue: Schema.NullOr(LinearIssueDetail) });
+const IssueReferenceData = Schema.Struct({ issue: Schema.NullOr(LinearIssueReference) });
+const CommentTargetData = Schema.Struct({
+  issue: Schema.NullOr(LinearIssueReference),
+  comment: Schema.NullOr(
+    Schema.Struct({ id: Schema.String, issue: Schema.NullOr(LinearIssueReference) }),
+  ),
+});
+const TeamStatesData = Schema.Struct({
+  teams: Schema.Struct({ nodes: Schema.Array(LinearTeamStates) }),
+});
+const ScopeData = Schema.Struct({ teams: Schema.Struct({ nodes: Schema.Array(LinearTeam) }) });
 const CommentsData = Schema.Struct({
-  issue: Schema.NullOr(Schema.Struct({ comments: Connection(LinearComment) })),
+  issue: Schema.NullOr(
+    Schema.Struct({ ...LinearIssueReference.fields, comments: Connection(LinearComment) }),
+  ),
 });
 const LinearTeamDetail = Schema.Struct({
   ...LinearTeam.fields,
@@ -309,13 +355,21 @@ export interface LinearTeamScope {
 export class LinearApi extends Context.Service<
   LinearApi,
   {
-    /** Who a credential is, and the teams it reaches. Takes the token so it can vet a new one. */
     readonly viewer: (
       token?: string,
-    ) => Effect.Effect<
-      { readonly viewer: LinearUser; readonly teams: ReadonlyArray<LinearTeam> },
+    ) => Effect.Effect<{ readonly viewer: LinearUser }, IssueTrackerError>;
+    readonly probeCredential: (token: string) => Effect.Effect<
+      {
+        readonly viewer: LinearUser;
+        readonly teams: ReadonlyArray<LinearTeam>;
+        readonly scopesTruncated: boolean;
+      },
       IssueTrackerError
     >;
+    readonly getScope: (
+      key: string,
+      token: string,
+    ) => Effect.Effect<LinearTeam | null, IssueTrackerError>;
     readonly listIssues: (input: {
       readonly filter: Record<string, unknown>;
       readonly first: number;
@@ -329,12 +383,26 @@ export class LinearApi extends Context.Service<
       identifier: string,
       comments: number,
     ) => Effect.Effect<LinearIssueDetail | null, IssueTrackerError>;
+    readonly getIssueReference: (
+      identifier: string,
+    ) => Effect.Effect<LinearIssueReference | null, IssueTrackerError>;
+    readonly getCommentTarget: (
+      identifier: string,
+      commentId: string,
+    ) => Effect.Effect<typeof CommentTargetData.Type, IssueTrackerError>;
+    readonly getTeamStates: (
+      key: string,
+    ) => Effect.Effect<typeof LinearTeamStates.Type | null, IssueTrackerError>;
     readonly getComments: (input: {
       readonly identifier: string;
       readonly first: number;
       readonly after: string;
     }) => Effect.Effect<
-      { readonly nodes: ReadonlyArray<LinearComment>; readonly nextCursor: string | null },
+      {
+        readonly issue: LinearIssueReference;
+        readonly nodes: ReadonlyArray<LinearComment>;
+        readonly nextCursor: string | null;
+      },
       IssueTrackerError
     >;
     readonly getTeam: (key: string) => Effect.Effect<LinearTeamScope | null, IssueTrackerError>;
@@ -393,6 +461,9 @@ export const make = Effect.gen(function* () {
   const config = yield* LinearApiConfig.pipe(Effect.orDie);
   const httpClient = yield* HttpClient.HttpClient;
   const host = yield* IssueTrackerHost.IssueTrackerHost;
+  const crypto = yield* Crypto.Crypto;
+  const rateLimits = yield* RateLimit.SourceControlRateLimit;
+  const rateKey = { provider: KIND, host: new URL(config.apiUrl).host };
 
   const storedToken = (operation: string) =>
     host.credentials
@@ -414,7 +485,15 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<S["Type"], IssueTrackerError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const key = token ?? (yield* storedToken(operation));
-      const now = yield* Clock.currentTimeMillis;
+      const credentialScope = yield* crypto
+        .digest("SHA-256", new TextEncoder().encode(key))
+        .pipe(Effect.map(Hex.encode), Effect.orDie);
+      const lease = yield* rateLimits.check(rateKey).pipe(
+        Effect.provideService(RateLimit.CredentialScope, credentialScope),
+        Effect.mapError((error) =>
+          fail(operation, "rate-limited", error.detail, { retryAt: error.retryAt }),
+        ),
+      );
       const response = yield* httpClient
         .execute(
           HttpClientRequest.post(config.apiUrl).pipe(
@@ -429,23 +508,32 @@ export const make = Effect.gen(function* () {
             fail(operation, "failed", "Linear could not be reached.", { cause }),
           ),
         );
-      const retryAt = retryAtFromHeader(
-        response.headers["x-ratelimit-requests-reset"] ??
-          response.headers["x-ratelimit-complexity-reset"],
-        now,
-      );
+      const now = yield* Clock.currentTimeMillis;
+      const resetTimes = ["requests", "complexity", "endpoint-requests"].flatMap((window) => {
+        const value = response.headers[`x-ratelimit-${window}-reset`];
+        const reset = value === undefined || !/^\d+$/u.test(value.trim()) ? NaN : Number(value);
+        return Number.isSafeInteger(reset) && reset > now ? [reset] : [];
+      });
+      const retryAfter = RateLimit.retryAtFromHeader(response.headers["retry-after"], now);
+      const retryTimes = [...resetTimes, ...(retryAfter === undefined ? [] : [retryAfter])];
+      const retryAt = retryTimes.length === 0 ? undefined : Math.max(...retryTimes);
       const rateLimited = () =>
-        fail(
-          operation,
-          "rate-limited",
-          "Linear's rate limit was reached.",
-          retryAt === undefined ? {} : { retryAt },
-        );
+        Effect.gen(function* () {
+          yield* rateLimits
+            .recordRateLimit({ ...rateKey, lease, ...(retryAt === undefined ? {} : { retryAt }) })
+            .pipe(Effect.provideService(RateLimit.CredentialScope, credentialScope));
+          return yield* fail(
+            operation,
+            "rate-limited",
+            "Linear's rate limit was reached.",
+            retryAt === undefined ? {} : { retryAt },
+          );
+        });
       if (response.status === 429) return yield* rateLimited();
       if (response.status === 401 || response.status === 403) {
         return yield* fail(operation, "unauthenticated", "Linear rejected the API key.");
       }
-      const envelope = yield* HttpClientResponse.schemaBodyJson(Envelope(data))(response).pipe(
+      const envelope = yield* HttpClientResponse.schemaBodyJson(Envelope)(response).pipe(
         Effect.mapError((cause) =>
           fail(
             operation,
@@ -459,14 +547,26 @@ export const make = Effect.gen(function* () {
       if (isUnauthenticated(envelope.errors)) {
         return yield* fail(operation, "unauthenticated", "Linear rejected the API key.");
       }
-      if (envelope.data === undefined || envelope.data === null) {
+      if (
+        (envelope.errors?.length ?? 0) > 0 ||
+        envelope.data === undefined ||
+        envelope.data === null
+      ) {
         return yield* fail(
           operation,
           "failed",
           errorDetail(envelope.errors, `Linear returned HTTP ${response.status}.`),
         );
       }
-      return envelope.data;
+      const decoded = yield* Schema.decodeEffect(data)(envelope.data).pipe(
+        Effect.mapError((cause) =>
+          fail(operation, "failed", "Linear returned an unexpected response.", { cause }),
+        ),
+      );
+      yield* rateLimits
+        .recordSuccess({ ...rateKey, lease })
+        .pipe(Effect.provideService(RateLimit.CredentialScope, credentialScope));
+      return decoded;
     });
 
   const mutate = (
@@ -483,15 +583,29 @@ export const make = Effect.gen(function* () {
     );
 
   const viewer: LinearApi["Service"]["viewer"] = (token) =>
-    execute("viewer", VIEWER_QUERY, {}, ViewerData, token).pipe(
-      Effect.map((data) => ({ viewer: data.viewer, teams: data.teams.nodes })),
+    execute("viewer", VIEWER_QUERY, {}, ViewerData, token);
+  const probeCredential: LinearApi["Service"]["probeCredential"] = (token) =>
+    execute("probeCredential", PROBE_QUERY, {}, ProbeData, token).pipe(
+      Effect.map((data) => ({
+        viewer: data.viewer,
+        teams: data.teams.nodes,
+        scopesTruncated: data.teams.pageInfo.hasNextPage,
+      })),
+    );
+  const getScope: LinearApi["Service"]["getScope"] = (key, token) =>
+    execute("getScope", SCOPE_QUERY, { key }, ScopeData, token).pipe(
+      Effect.map((data) => data.teams.nodes[0] ?? null),
     );
 
   const listIssues: LinearApi["Service"]["listIssues"] = (input) =>
     execute(
       "listIssues",
       LIST_QUERY,
-      { first: input.first, after: input.after ?? null, filter: input.filter },
+      {
+        first: Math.min(100, Math.max(1, input.first)),
+        after: input.after ?? null,
+        filter: input.filter,
+      },
       ListData,
     ).pipe(
       Effect.map((data) => ({
@@ -501,7 +615,12 @@ export const make = Effect.gen(function* () {
     );
 
   const getIssue: LinearApi["Service"]["getIssue"] = (identifier, comments) =>
-    execute("getIssue", ISSUE_QUERY, { id: identifier, comments }, IssueData).pipe(
+    execute(
+      "getIssue",
+      ISSUE_QUERY,
+      { id: identifier, comments: Math.min(100, Math.max(0, comments)) },
+      IssueData,
+    ).pipe(
       Effect.map((data) => data.issue),
       // Linear answers an unknown identifier with an error and no data, not with null.
       Effect.catchIf(
@@ -509,18 +628,43 @@ export const make = Effect.gen(function* () {
         () => Effect.succeed(null),
       ),
     );
+  const getIssueReference: LinearApi["Service"]["getIssueReference"] = (identifier) =>
+    execute(
+      "getIssueReference",
+      ISSUE_REFERENCE_QUERY,
+      { id: identifier },
+      IssueReferenceData,
+    ).pipe(
+      Effect.map((data) => data.issue),
+      Effect.catchIf(
+        (error) => error.reason === "failed" && /not found/i.test(error.detail),
+        () => Effect.succeed(null),
+      ),
+    );
+  const getCommentTarget: LinearApi["Service"]["getCommentTarget"] = (identifier, commentId) =>
+    execute(
+      "getCommentTarget",
+      COMMENT_TARGET_QUERY,
+      { id: identifier, commentId },
+      CommentTargetData,
+    );
+  const getTeamStates: LinearApi["Service"]["getTeamStates"] = (key) =>
+    execute("getTeamStates", TEAM_STATES_QUERY, { key }, TeamStatesData).pipe(
+      Effect.map((data) => data.teams.nodes[0] ?? null),
+    );
 
   const getComments: LinearApi["Service"]["getComments"] = (input) =>
     execute(
       "getComments",
       COMMENTS_QUERY,
-      { id: input.identifier, first: input.first, after: input.after },
+      { id: input.identifier, first: Math.min(100, Math.max(1, input.first)), after: input.after },
       CommentsData,
     ).pipe(
       Effect.flatMap((data) =>
         data.issue === null
           ? Effect.fail(fail("getComments", "not-found", "This issue no longer exists."))
           : Effect.succeed({
+              issue: data.issue,
               nodes: data.issue.comments.nodes,
               nextCursor: data.issue.comments.pageInfo.hasNextPage
                 ? data.issue.comments.pageInfo.endCursor
@@ -582,8 +726,13 @@ export const make = Effect.gen(function* () {
 
   return LinearApi.of({
     viewer,
+    probeCredential,
+    getScope,
     listIssues,
     getIssue,
+    getIssueReference,
+    getCommentTarget,
+    getTeamStates,
     getComments,
     getTeam,
     createIssue,

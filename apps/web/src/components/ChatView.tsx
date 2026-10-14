@@ -11185,7 +11185,10 @@ export default function ChatView(props: ChatViewProps) {
           rightPanelOpen && activeRightPanelSurface?.id === renderedRightPanelSurface.id
         }
         key={`${renderedRightPanelSurface.host ?? ""}:${renderedRightPanelSurface.repository}#${renderedRightPanelSurface.number}`}
-        environmentId={activeThread.environmentId}
+        environmentId={
+          (renderedRightPanelSurface.environmentId as EnvironmentId | undefined) ??
+          activeThread.environmentId
+        }
         onSelectPullRequest={(reference) => {
           if (activeThreadRef)
             useRightPanelStore.getState().openPullRequest(activeThreadRef, {
@@ -11193,6 +11196,9 @@ export default function ChatView(props: ChatViewProps) {
               repository: reference.repository,
               number: reference.number,
               ...(reference.host ? { host: reference.host } : {}),
+              ...(renderedRightPanelSurface.environmentId === undefined
+                ? {}
+                : { environmentId: renderedRightPanelSurface.environmentId }),
             });
         }}
         threadRef={activeThreadRef}
@@ -11242,13 +11248,13 @@ export default function ChatView(props: ChatViewProps) {
           key: renderedRightPanelSurface.key,
         }}
         threadRef={activeThreadRef}
-        onSelectPullRequest={(reference) => {
+        onSelectPullRequest={(target) => {
           if (activeThreadRef)
             useRightPanelStore.getState().openPullRequest(activeThreadRef, {
-              projectId: reference.projectId,
-              repository: reference.repository,
-              number: reference.number,
-              ...(reference.host ? { host: reference.host } : {}),
+              ...target,
+              ...(renderedRightPanelSurface.environmentId === undefined
+                ? {}
+                : { environmentId: renderedRightPanelSurface.environmentId }),
             });
         }}
       />

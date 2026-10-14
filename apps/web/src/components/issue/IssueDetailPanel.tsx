@@ -13,7 +13,6 @@ import type {
   IssueReaction,
   IssueReactionContent,
   IssueRef,
-  PullRequestRef,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -73,6 +72,16 @@ import {
   IssueStateGlyph,
   issueTrackerPresentation,
 } from "./issuePresentation";
+import {
+  issueAssigneeId,
+  issueAssigneeOptions,
+  issueDisplayLabel,
+  issueLabelOptions,
+  isIssueAssignee,
+  linkedPullRequestTarget,
+  nextIssueAssignees,
+  type IssueLinkedPullRequestTarget,
+} from "./issueDetail.logic";
 
 /**
  * Links or unlinks the issue to the thread it is shown beside. Dispatches the orchestration
@@ -146,6 +155,28 @@ function writeBlockReason(detail: IssueDetail, canWrite: boolean): string | null
   if (!detail.writable)
     return "This issue is outside every project's own scope, so it is read-only here.";
   return null;
+}
+
+function IssueTruncatedNote({
+  text,
+  url,
+  providerName,
+}: {
+  text: string;
+  url: string;
+  providerName: string;
+}) {
+  return (
+    <p className="text-xs text-muted-foreground">
+      {text}{" "}
+      <InlineButton
+        tone="muted"
+        render={<a href={url} target="_blank" rel="noopener noreferrer" />}
+      >
+        View on {providerName}
+      </InlineButton>
+    </p>
+  );
 }
 
 const REACTION_PILL_CLASS =
@@ -270,12 +301,14 @@ function IssueLabelPicker({
   detail,
   allowed,
   disabledReason,
+  onUpdated,
 }: {
   environmentId: EnvironmentId;
   reference: IssueRef;
   detail: IssueDetail;
   allowed: boolean;
   disabledReason: string;
+  onUpdated: (() => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -285,15 +318,10 @@ function IssueLabelPicker({
   );
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const applied = new Set(detail.labels.map((label) => label.name));
-  const candidates = useMemo(() => {
-    const needle = query.toLowerCase();
-    return (candidatesQuery.data?.labels ?? []).filter(
-      (label) =>
-        needle.length === 0 ||
-        label.name.toLowerCase().includes(needle) ||
-        (label.description ?? "").toLowerCase().includes(needle),
-    );
-  }, [candidatesQuery.data, query]);
+  const candidates = useMemo(
+    () => issueLabelOptions(detail.labels, candidatesQuery.data?.labels ?? [], query),
+    [detail.labels, candidatesQuery.data, query],
+  );
   const toggle = async (candidate: IssueLabelCandidate) => {
     if (pending !== null) return;
     setPending(candidate.name);
@@ -308,7 +336,9 @@ function IssueLabelPicker({
         title: "Could not change labels",
         description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
       });
+      return;
     }
+    onUpdated?.();
   };
   return (
     <PullRequestCandidatePicker
@@ -364,12 +394,14 @@ function IssueAssigneePicker({
   detail,
   allowed,
   disabledReason,
+  onUpdated,
 }: {
   environmentId: EnvironmentId;
   reference: IssueRef;
   detail: IssueDetail;
   allowed: boolean;
   disabledReason: string;
+  onUpdated: (() => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -378,23 +410,18 @@ function IssueAssigneePicker({
     open ? issueEnvironment.candidates({ environmentId, input: reference }) : null,
   );
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
-  const assigned = new Set(detail.assignees.map((actor) => actor.login.toLowerCase()));
-  const candidates = useMemo(() => {
-    const needle = query.toLowerCase();
-    return (candidatesQuery.data?.assignees ?? []).filter(
-      (candidate) =>
-        needle.length === 0 ||
-        candidate.login.toLowerCase().includes(needle) ||
-        (candidate.name ?? "").toLowerCase().includes(needle),
-    );
-  }, [candidatesQuery.data, query]);
+  const candidates = useMemo(
+    () => issueAssigneeOptions(detail.assignees, candidatesQuery.data?.assignees ?? [], query),
+    [detail.assignees, candidatesQuery.data, query],
+  );
   const toggle = async (candidate: IssueAssigneeCandidate) => {
     if (pending !== null) return;
     setPending(candidate.id);
-    const login = candidate.login.toLowerCase();
-    const assignees = assigned.has(login)
-      ? detail.assignees.filter((actor) => actor.login.toLowerCase() !== login).map((a) => a.login)
-      : [...detail.assignees.map((actor) => actor.login), candidate.id];
+    const assignees = nextIssueAssignees(
+      detail.assignees,
+      candidate,
+      detail.capabilities.maxAssignees,
+    );
     const result = await update({ environmentId, input: { ...reference, assignees } });
     setPending(null);
     if (result._tag === "Failure") {
@@ -403,7 +430,9 @@ function IssueAssigneePicker({
         title: "Could not change assignees",
         description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
       });
+      return;
     }
+    onUpdated?.();
   };
   return (
     <PullRequestCandidatePicker
@@ -431,7 +460,7 @@ function IssueAssigneePicker({
       {(candidate) => (
         <>
           <PullRequestActorLabel actor={candidate} tooltip={false} className="min-w-0 flex-1" />
-          {assigned.has(candidate.login.toLowerCase()) ? (
+          {isIssueAssignee(detail.assignees, candidate.id) ? (
             <CheckIcon aria-label="Assigned" className="size-3.5 shrink-0" />
           ) : null}
         </>
@@ -506,12 +535,14 @@ export function IssueDetailPanel({
   reference,
   threadRef = null,
   onSelectPullRequest,
+  onUpdated,
 }: {
   environmentId: EnvironmentId;
   reference: IssueRef;
   threadRef?: ScopedThreadRef | null;
   /** Opens a linked change request beside this one; absent, the link goes to the host. */
-  onSelectPullRequest?: ((reference: PullRequestRef) => void) | undefined;
+  onSelectPullRequest?: ((target: IssueLinkedPullRequestTarget) => void) | undefined;
+  onUpdated?: (() => void) | undefined;
 }) {
   const detailQuery = useEnvironmentQuery(
     issueEnvironment.detail({ environmentId, input: reference }),
@@ -612,6 +643,7 @@ export function IssueDetailPanel({
       return;
     }
     setDraft("");
+    onUpdated?.();
   };
 
   const save = async (patch: { title?: string; body?: string }) => {
@@ -627,6 +659,7 @@ export function IssueDetailPanel({
       return;
     }
     setEditing(null);
+    onUpdated?.();
   };
 
   const moveTo = async (state: string, closeReason?: string) => {
@@ -643,7 +676,9 @@ export function IssueDetailPanel({
         title: "The state could not be changed",
         description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
       });
+      return;
     }
+    onUpdated?.();
   };
 
   const stateControl: ReactNode = canSetState ? (
@@ -711,12 +746,9 @@ export function IssueDetailPanel({
         <div className="flex flex-col gap-4 px-4 pt-3 pb-4">
           <PullRequestDetailTitleRow className="gap-2">
             <IssueStateGlyph state={detail.state} />
-            <span className="shrink-0 font-mono text-xs text-muted-foreground">
-              {detail.displayKey}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
               <tracker.Icon aria-hidden className="mr-1 inline size-3 align-[-2px]" />
-              {detail.scope}
+              {issueDisplayLabel(detail.scope, detail.displayKey)}
             </span>
             {stateControl}
             {threadRef ? (
@@ -814,16 +846,29 @@ export function IssueDetailPanel({
                 environmentId={environmentId}
                 reference={reference}
                 detail={detail}
-                allowed={canLabel}
-                disabledReason={blocked ?? "Changing labels needs triage access on this tracker."}
+                allowed={canLabel && detail.labelsTruncated !== true}
+                disabledReason={
+                  blocked ??
+                  (detail.labelsTruncated === true
+                    ? `Not every label is shown here, so change them on ${tracker.providerName}.`
+                    : "Changing labels needs triage access on this tracker.")
+                }
+                onUpdated={onUpdated}
               />
             ) : null}
           </div>
+          {detail.labelsTruncated === true ? (
+            <IssueTruncatedNote
+              text="Not every label is shown here."
+              url={detail.url}
+              providerName={tracker.providerName}
+            />
+          ) : null}
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
             <span className="shrink-0">Assignees</span>
             {detail.assignees.length === 0 ? <span>none</span> : null}
             {detail.assignees.map((actor) => (
-              <PullRequestActorLabel key={actor.login} actor={actor} />
+              <PullRequestActorLabel key={issueAssigneeId(actor)} actor={actor} />
             ))}
             {detail.capabilities.assignees ? (
               <IssueAssigneePicker
@@ -834,6 +879,7 @@ export function IssueDetailPanel({
                 disabledReason={
                   blocked ?? "Changing assignees needs triage access on this tracker."
                 }
+                onUpdated={onUpdated}
               />
             ) : null}
           </div>
@@ -878,28 +924,30 @@ export function IssueDetailPanel({
                 reference={reference}
               />
             ) : null}
+            {detail.reactionsTruncated === true ? (
+              <IssueTruncatedNote
+                text="Reaction details are limited."
+                url={detail.url}
+                providerName={tracker.providerName}
+              />
+            ) : null}
           </section>
 
           {detail.linkedPullRequests.length > 0 ? (
             <section className="flex flex-col gap-1">
               <h3 className="text-xs text-muted-foreground">Linked pull requests</h3>
-              {detail.linkedPullRequests.map((link) => (
-                <LinkedPullRequestRow
-                  key={`${link.repository}#${link.number}`}
-                  link={link}
-                  onSelect={
-                    onSelectPullRequest
-                      ? () =>
-                          onSelectPullRequest({
-                            projectId: reference.projectId,
-                            ...(reference.host === undefined ? {} : { host: reference.host }),
-                            repository: link.repository,
-                            number: link.number,
-                          })
-                      : null
-                  }
-                />
-              ))}
+              {detail.linkedPullRequests.map((link) => {
+                const target = linkedPullRequestTarget(link, reference);
+                return (
+                  <LinkedPullRequestRow
+                    key={link.url}
+                    link={link}
+                    onSelect={
+                      onSelectPullRequest && target ? () => onSelectPullRequest(target) : null
+                    }
+                  />
+                );
+              })}
             </section>
           ) : null}
 
@@ -910,6 +958,13 @@ export function IssueDetailPanel({
                 ? ` · ${detail.commentCount} ${detail.commentCount === 1 ? "comment" : "comments"}`
                 : ""}
             </h3>
+            {detail.historyTruncated === true ? (
+              <IssueTruncatedNote
+                text="Some older activity is not shown here."
+                url={detail.url}
+                providerName={tracker.providerName}
+              />
+            ) : null}
             {nextCursor !== null ? (
               <Button
                 size="sm"
@@ -958,6 +1013,13 @@ export function IssueDetailPanel({
                       subjectId={item.comment.id}
                       environmentId={environmentId}
                       reference={reference}
+                    />
+                  ) : null}
+                  {item.comment.reactionsTruncated === true ? (
+                    <IssueTruncatedNote
+                      text="Reaction details are limited."
+                      url={item.comment.url ?? detail.url}
+                      providerName={tracker.providerName}
                     />
                   ) : null}
                 </article>

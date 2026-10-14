@@ -1,13 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, IssueCreateResult, IssueScopeRef } from "@t3tools/contracts";
+import { ExternalLinkIcon } from "lucide-react";
 import { useState } from "react";
 
 import { issueEnvironment } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import {
   Dialog,
   DialogDescription,
@@ -23,12 +24,14 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { readableFailure } from "../pullRequest/pullRequestDetail.logic";
+import { issueCreateBlocked, resolveIssueType } from "./IssueCreateDialog.logic";
 
 export interface IssueCreateScope {
   readonly environmentId: EnvironmentId;
   readonly projectTitle: string;
   readonly scope: IssueScopeRef;
   readonly templates: boolean;
+  readonly createIssueTypes?: boolean;
 }
 
 const BLANK = "__blank__";
@@ -62,6 +65,7 @@ export function IssueCreateDialog({
     labels: [],
     assignees: [],
   });
+  const [issueType, setIssueType] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const create = useAtomCommand(issueEnvironment.create, { reportFailure: false });
   const canWrite = useAtomValue(
@@ -73,13 +77,22 @@ export function IssueCreateDialog({
       : null,
   );
   const templates = templatesQuery.data?.templates ?? [];
+  const externalTemplates = templatesQuery.data?.externalTemplates ?? [];
   const blankAllowed = templatesQuery.data?.blankIssuesEnabled ?? true;
+  const candidatesQuery = useEnvironmentQuery(
+    open && scope !== null && scope.createIssueTypes === true
+      ? issueEnvironment.candidates({ environmentId: scope.environmentId, input: scope.scope })
+      : null,
+  );
+  const issueTypes = candidatesQuery.data?.issueTypes ?? [];
+  const chosenIssueType = resolveIssueType(issueTypes, issueType);
 
   const reset = () => {
     setTemplateKey(BLANK);
     setTitle("");
     setBody("");
     setExtras({ labels: [], assignees: [] });
+    setIssueType(null);
   };
 
   const chooseTemplate = (key: string | null) => {
@@ -96,8 +109,26 @@ export function IssueCreateDialog({
     setExtras({ labels: template.labels, assignees: template.assignees });
   };
 
+  const blocked = issueCreateBlocked({
+    hasScope: scope !== null,
+    canWrite,
+    templates: scope?.templates
+      ? { pending: templatesQuery.isPending, list: templatesQuery.data }
+      : null,
+    blankChosen: templateKey === BLANK,
+    issueTypes:
+      scope?.createIssueTypes === true
+        ? {
+            pending: candidatesQuery.isPending,
+            error: candidatesQuery.error,
+            count: issueTypes.length,
+            chosen: chosenIssueType,
+          }
+        : null,
+  });
+
   const submit = async () => {
-    if (scope === null || pending) return;
+    if (scope === null || pending || blocked !== null) return;
     const trimmedTitle = title.trim();
     if (trimmedTitle.length === 0) return;
     setPending(true);
@@ -109,6 +140,7 @@ export function IssueCreateDialog({
         body,
         labels: extras.labels,
         assignees: extras.assignees,
+        ...(chosenIssueType === null ? {} : { issueType: chosenIssueType }),
       },
     });
     setPending(false);
@@ -120,20 +152,20 @@ export function IssueCreateDialog({
       });
       return;
     }
-    toastManager.add({ type: "success", title: `Created ${result.value.displayKey}` });
+    const warnings = result.value.warnings ?? [];
+    toastManager.add(
+      warnings.length === 0
+        ? { type: "success", title: `Created ${result.value.displayKey}` }
+        : {
+            type: "warning",
+            title: `Created ${result.value.displayKey} with warnings`,
+            description: warnings.join(" "),
+          },
+    );
     reset();
     onCreated(scope, result.value);
     onOpenChange(false);
   };
-
-  const blocked =
-    scope === null
-      ? "No project here can file issues."
-      : !canWrite
-        ? "Creating issues needs the source-control write scope."
-        : !blankAllowed && templateKey === BLANK && templates.length > 0
-          ? "This tracker requires a template."
-          : null;
 
   return (
     <Dialog open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
@@ -154,6 +186,7 @@ export function IssueCreateDialog({
                     setScopeIndex(Number(value));
                     setTemplateKey(BLANK);
                     setExtras({ labels: [], assignees: [] });
+                    setIssueType(null);
                   }}
                 >
                   <SelectTrigger id="issue-create-scope" size="sm" aria-label="Project">
@@ -207,7 +240,45 @@ export function IssueCreateDialog({
                 </Select>
               </div>
             ) : null}
+            {scope?.createIssueTypes === true && issueTypes.length > 1 ? (
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <Label htmlFor="issue-create-type">Issue type</Label>
+                <Select
+                  value={chosenIssueType ?? ""}
+                  onValueChange={(value) => setIssueType(value || null)}
+                >
+                  <SelectTrigger id="issue-create-type" size="sm" aria-label="Issue type">
+                    <SelectValue>
+                      {issueTypes.find((type) => type.id === chosenIssueType)?.name ??
+                        "Choose a type"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {issueTypes.map((type) => (
+                      <SelectItem key={type.id} value={type.id}>
+                        {type.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+            ) : null}
           </div>
+          {externalTemplates.length > 0 ? (
+            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              Fill in on the tracker:
+              {externalTemplates.map((template) => (
+                <InlineButton
+                  key={template.url}
+                  title={template.about || undefined}
+                  render={<a href={template.url} target="_blank" rel="noreferrer noopener" />}
+                >
+                  {template.name}
+                  <ExternalLinkIcon aria-hidden className="size-3" />
+                </InlineButton>
+              ))}
+            </p>
+          ) : null}
           <div className="flex flex-col gap-1">
             <Label htmlFor="issue-create-title">Title</Label>
             <Input

@@ -1,5 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
-import { issueEntryKey, mergeIssueListPage } from "@t3tools/client-runtime/state/issues";
+import {
+  continueIssueListPage,
+  issueEntryKey,
+  issueListCursorsOn,
+  issueScopeKey,
+  offeredIssueInvolvements,
+  refreshIssueListPage,
+} from "@t3tools/client-runtime/state/issues";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import type {
   EnvironmentId,
@@ -9,6 +17,7 @@ import type {
   IssueListInput,
   IssueListResult,
   IssueListState,
+  IssueScopeRef,
   IssueTrackerKind,
   IssueTrackerSummary,
   ProjectId,
@@ -26,7 +35,7 @@ import {
   UserCheckIcon,
   UsersIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { IssueCreateDialog, type IssueCreateScope } from "~/components/issue/IssueCreateDialog";
@@ -43,6 +52,7 @@ import {
 } from "~/components/issue/issueListPreferences";
 import { IssueGlyph, issueTrackerPresentation } from "~/components/issue/issuePresentation";
 import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDetailPanel";
+import { readableFailure } from "~/components/pullRequest/pullRequestDetail.logic";
 import { PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
 import {
   PullRequestFilterOptionIcon,
@@ -65,6 +75,7 @@ import {
 } from "~/components/ui/empty";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "~/components/ui/menu";
 import { SidebarInset } from "~/components/ui/sidebar";
+import { toastManager } from "~/components/ui/toast";
 import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { isElectron } from "~/env";
 import { useEscapeToGoBack } from "~/hooks/useNavigateBack";
@@ -91,6 +102,7 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 export interface IssuesSearch extends IssueListPreferences {
   readonly selectedEnvironmentId?: EnvironmentId;
   readonly selectedProjectId?: ProjectId;
+  readonly selectedHost?: string;
   readonly tracker?: string;
   readonly scope?: string;
   readonly key?: string;
@@ -149,6 +161,7 @@ export const Route = createFileRoute("/_chat/issues")({
       bounded(raw.selectedEnvironmentId),
     ),
     ...present<"selectedProjectId", ProjectId>("selectedProjectId", bounded(raw.selectedProjectId)),
+    ...present("selectedHost", bounded(raw.selectedHost)),
     ...present("tracker", bounded(raw.tracker)),
     ...present("scope", bounded(raw.scope)),
     ...present("key", bounded(raw.key)),
@@ -161,6 +174,10 @@ interface HeldPage {
   readonly answer: IssueListResult;
   readonly entries: ReadonlyArray<IssueListEntry>;
   readonly nextCursors: IssueListCursors;
+  readonly firstCursors: IssueListCursors;
+  readonly firstKeys: ReadonlySet<string>;
+  readonly errors: IssueListResult["errors"];
+  readonly sources?: IssueListResult["sources"];
 }
 
 function trackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "host">): string {
@@ -193,59 +210,143 @@ function IssuesRoute() {
   );
 
   const debouncedQuery = useDebouncedValue(search.q ?? "", 300);
-  const listInput = useMemo<IssueListInput>(
+  const baseInput = useMemo<IssueListInput>(
     () => ({
       state: search.status,
       involvement: search.who,
-      limit: PAGE_SIZE,
       ...(search.host ? { host: search.host } : {}),
       ...(debouncedQuery ? { query: debouncedQuery } : {}),
     }),
     [search.status, search.who, search.host, debouncedQuery],
   );
+  const filterKey = JSON.stringify([capableEnvironments.map((e) => e.environmentId), baseInput]);
+  const [paging, setPaging] = useState<{
+    readonly key: string;
+    readonly pages: ReadonlyMap<EnvironmentId, HeldPage>;
+  }>({ key: filterKey, pages: new Map() });
+  const filterKeyRef = useRef(filterKey);
+  useEffect(() => {
+    filterKeyRef.current = filterKey;
+  }, [filterKey]);
+  const current = paging.key === filterKey ? paging : null;
   const targets = useMemo<ReadonlyArray<IssueListTarget>>(
-    () => capableEnvironments.map((e) => ({ environmentId: e.environmentId, input: listInput })),
-    [capableEnvironments, listInput],
+    () =>
+      capableEnvironments.map((e) => ({
+        environmentId: e.environmentId,
+        input: { ...baseInput, limit: PAGE_SIZE },
+      })),
+    [capableEnvironments, baseInput],
   );
   const list = useIssueList(targets);
-  useLiveRefresh(list.refresh, { key: JSON.stringify(targets) });
-
-  // Continuations are laid over the first page they continue; a new first page forgets them.
-  const [pages, setPages] = useState<ReadonlyMap<EnvironmentId, HeldPage>>(new Map());
+  const [refreshedPages] = useState(() => new WeakMap<HeldPage, HeldPage>());
   const held = useMemo(() => {
+    const refreshed = (previous: HeldPage, answer: IssueListResult) => {
+      const cached = refreshedPages.get(previous);
+      if (cached?.answer === answer) return cached;
+      const page = { ...refreshIssueListPage(previous, answer), answer };
+      refreshedPages.set(previous, page);
+      return page;
+    };
     const next = new Map<EnvironmentId, HeldPage>();
     for (const [environmentId, answer] of list.answers) {
-      const previous = pages.get(environmentId);
+      const previous = current?.pages.get(environmentId);
       next.set(
         environmentId,
-        previous?.answer === answer
-          ? previous
-          : { answer, entries: answer.entries, nextCursors: answer.nextCursors },
+        previous === undefined
+          ? {
+              answer,
+              entries: answer.entries,
+              nextCursors: answer.nextCursors,
+              firstCursors: answer.nextCursors,
+              firstKeys: new Set(answer.entries.map(issueEntryKey)),
+              errors: answer.errors,
+              sources: answer.sources,
+            }
+          : previous.answer === answer
+            ? previous
+            : refreshed(previous, answer),
       );
     }
+    for (const [environmentId, page] of current?.pages ?? []) {
+      if (!next.has(environmentId)) next.set(environmentId, page);
+    }
     return next;
-  }, [list.answers, pages]);
+  }, [list.answers, current, refreshedPages]);
+  const heldRef = useRef(held);
+  useEffect(() => {
+    heldRef.current = held;
+  }, [held]);
+
+  useLiveRefresh(list.refresh, { key: filterKey });
+
+  const storePage = (
+    key: string,
+    environmentId: EnvironmentId,
+    update: (page: HeldPage) => HeldPage,
+  ) =>
+    setPaging((previous) => {
+      if (key !== filterKeyRef.current) return previous;
+      const base = previous.key === key ? previous : { key, pages: new Map() };
+      const stored = base.pages.get(environmentId);
+      const rendered = heldRef.current.get(environmentId);
+      const latest = stored !== undefined && stored.answer === rendered?.answer ? stored : rendered;
+      if (latest === undefined) return previous;
+      const pages = new Map(base.pages);
+      pages.set(environmentId, update(latest));
+      return { ...base, pages };
+    });
+
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
-  const [loadingMore, setLoadingMore] = useState<EnvironmentId | null>(null);
-  const loadMore = async (environmentId: EnvironmentId) => {
+  const [loadingMore, setLoadingMore] = useState<string | null>(null);
+  const loadMore = async (environmentId: EnvironmentId, host: string) => {
     const page = held.get(environmentId);
-    if (!page || Object.keys(page.nextCursors).length === 0 || loadingMore !== null) return;
-    setLoadingMore(environmentId);
+    const cursors = page ? issueListCursorsOn(page.nextCursors, host) : {};
+    if (!page || Object.keys(cursors).length === 0 || loadingMore !== null) return;
+    const key = filterKey;
+    setLoadingMore(`${environmentId} ${host}`);
     const result = await loadPage({
       environmentId,
-      input: { ...listInput, cursors: page.nextCursors },
+      input: { ...baseInput, limit: PAGE_SIZE, cursors },
     });
     setLoadingMore(null);
-    if (result._tag === "Failure") return;
-    setPages((current) => {
-      const next = new Map(current);
-      next.set(environmentId, {
-        answer: page.answer,
-        entries: mergeIssueListPage(page.entries, result.value.entries),
-        nextCursors: result.value.nextCursors,
+    if (result._tag === "Failure") {
+      toastManager.add({
+        type: "error",
+        title: "More issues could not be read",
+        description: readableFailure(squashAtomCommandFailure(result), "The server refused it."),
       });
-      return next;
+      return;
+    }
+    storePage(key, environmentId, (latest) =>
+      continueIssueListPage(latest, cursors, result.value, page.firstCursors),
+    );
+  };
+
+  const refreshSource = async (
+    environmentId: EnvironmentId,
+    source: IssueScopeRef,
+    removedKey?: string,
+  ) => {
+    const page = held.get(environmentId);
+    if (!page || source.host === undefined) {
+      list.refresh();
+      return;
+    }
+    const scope = { projectId: source.projectId, host: source.host, scope: source.scope };
+    const key = filterKey;
+    const result = await loadPage({
+      environmentId,
+      input: { ...baseInput, projectId: source.projectId, host: source.host, limit: PAGE_SIZE },
     });
+    if (result._tag === "Failure") return;
+    storePage(key, environmentId, (latest) =>
+      latest.answer === page.answer
+        ? refreshIssueListPage(latest, result.value, {
+            source: scope,
+            ...(removedKey === undefined ? {} : { removed: removedKey }),
+          })
+        : latest,
+    );
   };
 
   // Rows grouped per tracker account, so a tracker that cannot be read says so where its rows
@@ -260,6 +361,8 @@ function IssuesRoute() {
         more: EnvironmentId[];
       }
     >();
+    const groupOf = (tracker: string, host: string) =>
+      byTracker.get(`${tracker} ${host.toLowerCase()}`);
     const needle = debouncedQuery.toLowerCase();
     for (const [environmentId, page] of held) {
       for (const tracker of page.answer.trackers) {
@@ -267,7 +370,7 @@ function IssuesRoute() {
         if (!byTracker.has(key)) byTracker.set(key, { tracker, rows: [], errors: [], more: [] });
         const group = byTracker.get(key)!;
         if (!group.tracker.configured && tracker.configured) group.tracker = tracker;
-        if (Object.keys(page.nextCursors).some((c) => c.startsWith(`${tracker.host} `)))
+        if (Object.keys(issueListCursorsOn(page.nextCursors, tracker.host)).length > 0)
           group.more.push(environmentId);
       }
       for (const entry of page.entries) {
@@ -284,14 +387,15 @@ function IssuesRoute() {
           continue;
         group.rows.push({ ...entry, environmentId });
       }
-      for (const error of page.answer.errors) {
+      for (const error of page.errors) {
         const project = projects.find(
           (p) => p.environmentId === environmentId && p.id === error.projectId,
         );
         const kind = project?.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
         const host = kind ? pullRequestHostOf(project?.repositoryIdentity, kind) : null;
         const group =
-          (host ? byTracker.get(`${kind} ${host.toLowerCase()}`) : undefined) ??
+          (error.tracker && error.host ? groupOf(error.tracker, error.host) : undefined) ??
+          (kind && host ? groupOf(kind, host) : undefined) ??
           [...byTracker.values()][0];
         group?.errors.push({ ...error, environmentId });
       }
@@ -320,6 +424,15 @@ function IssuesRoute() {
       })),
     ];
   }, [groups]);
+  const offeredInvolvements = useMemo(() => {
+    const offered = offeredIssueInvolvements(
+      groups.map((group) => group.tracker),
+      search.who,
+    );
+    return offered === null
+      ? INVOLVEMENT_TABS
+      : INVOLVEMENT_TABS.filter((tab) => offered.has(tab.value));
+  }, [groups, search.who]);
 
   const updateSearch = useCallback(
     (patch: { [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined }) =>
@@ -335,6 +448,7 @@ function IssuesRoute() {
               ? { selectedEnvironmentId: next.selectedEnvironmentId }
               : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+            ...(next.selectedHost ? { selectedHost: next.selectedHost } : {}),
             ...(next.tracker ? { tracker: next.tracker } : {}),
             ...(next.scope ? { scope: next.scope } : {}),
             ...(next.key ? { key: next.key } : {}),
@@ -346,6 +460,7 @@ function IssuesRoute() {
   const clearedSelection = {
     selectedEnvironmentId: undefined,
     selectedProjectId: undefined,
+    selectedHost: undefined,
     tracker: undefined,
     scope: undefined,
     key: undefined,
@@ -387,6 +502,7 @@ function IssuesRoute() {
         ? {
             selectedEnvironmentId: surface.environmentId as EnvironmentId | undefined,
             selectedProjectId: surface.projectId as ProjectId,
+            selectedHost: surface.host,
             tracker: surface.tracker,
             scope: surface.scope,
             key: surface.key,
@@ -401,6 +517,7 @@ function IssuesRoute() {
       updateSearch({
         selectedEnvironmentId: entry.environmentId,
         selectedProjectId: entry.projectId,
+        selectedHost: entry.host,
         tracker: entry.tracker,
         scope: entry.scope,
         key: entry.key,
@@ -425,11 +542,13 @@ function IssuesRoute() {
         : { environmentId: search.selectedEnvironmentId }),
       projectId: search.selectedProjectId,
       tracker: search.tracker,
+      ...(search.selectedHost === undefined ? {} : { host: search.selectedHost }),
       scope: search.scope,
       key: search.key,
     });
   }, [
     rightPanelRef,
+    search.selectedHost,
     search.tracker,
     search.scope,
     search.key,
@@ -459,7 +578,38 @@ function IssuesRoute() {
   // Every writable scope the workspace has, for the composer.
   const createScopes = useMemo<ReadonlyArray<IssueCreateScope>>(() => {
     const scopes: IssueCreateScope[] = [];
+    const seen = new Set<string>();
+    const known = (environmentId: EnvironmentId, tracker: string, host: string, scope: string) => {
+      const key = issueScopeKey(environmentId, { tracker, host, scope });
+      if (seen.has(key)) return true;
+      seen.add(key);
+      return false;
+    };
     for (const [environmentId, page] of held) {
+      if (page.answer.sources !== undefined) {
+        for (const source of page.answer.sources) {
+          const tracker = page.answer.trackers.find(
+            (t) => t.host.toLowerCase() === source.host.toLowerCase(),
+          );
+          if (tracker?.configured === false || !source.capabilities.create) continue;
+          if (known(environmentId, source.tracker, source.host, source.scope)) continue;
+          scopes.push({
+            environmentId,
+            projectTitle: source.projectTitle,
+            templates: source.capabilities.templates,
+            ...(source.capabilities.createIssueTypes === undefined
+              ? {}
+              : { createIssueTypes: source.capabilities.createIssueTypes }),
+            scope: {
+              projectId: source.projectId,
+              tracker: source.tracker,
+              host: source.host,
+              scope: source.scope,
+            },
+          });
+        }
+        continue;
+      }
       for (const project of projects) {
         if (project.environmentId !== environmentId) continue;
         const identity = project.repositoryIdentity;
@@ -471,16 +621,14 @@ function IssuesRoute() {
           (t) => String(t.tracker) === kind && t.host.toLowerCase() === host.toLowerCase(),
         );
         if (!tracker?.configured || tracker.capabilities?.create !== true) continue;
-        if (
-          scopes.some(
-            (s) => s.scope.scope.toLowerCase() === scope.toLowerCase() && s.scope.host === host,
-          )
-        )
-          continue;
+        if (known(environmentId, tracker.tracker, host, scope)) continue;
         scopes.push({
           environmentId,
           projectTitle: project.title,
           templates: tracker.capabilities.templates,
+          ...(tracker.capabilities.createIssueTypes === undefined
+            ? {}
+            : { createIssueTypes: tracker.capabilities.createIssueTypes }),
           scope: { projectId: project.id, tracker: tracker.tracker, host, scope },
         });
       }
@@ -490,7 +638,7 @@ function IssuesRoute() {
   const [createOpen, setCreateOpen] = useState(false);
 
   const showTracker = groups.length > 1;
-  const noneAnswered = list.answers.length === 0;
+  const noneAnswered = held.size === 0;
 
   const listBody: ReactNode = !issuesSupported ? (
     <PullRequestsUnavailableState
@@ -582,9 +730,11 @@ function IssuesRoute() {
                 variant="ghost-muted"
                 className="self-start"
                 disabled={loadingMore !== null}
-                onClick={() => void loadMore(environmentId)}
+                onClick={() => void loadMore(environmentId, group.tracker.host)}
               >
-                {loadingMore === environmentId ? "Loading…" : "Load more"}
+                {loadingMore === `${environmentId} ${group.tracker.host}`
+                  ? "Loading…"
+                  : "Load more"}
               </Button>
             ))}
           </section>
@@ -643,6 +793,8 @@ function IssuesRoute() {
                       (debouncedQuery.length > 0 && list.isPending)
                     }
                     onChange={(q) => updateSearch({ q: q || undefined })}
+                    placeholder="Search issues, or label:bug"
+                    aria-label="Search issues"
                   />
                 </div>
                 <ToggleGroup
@@ -664,10 +816,10 @@ function IssuesRoute() {
                 <FilterMenu
                   label="Filter by involvement"
                   value={search.who}
-                  options={INVOLVEMENT_TABS}
+                  options={offeredInvolvements}
                   onChange={(who) => updateSearch({ who })}
                 />
-                {hostOptions.length > 2 ? (
+                {hostOptions.length > 2 || search.host ? (
                   <FilterMenu
                     label="Filter by tracker"
                     value={search.host ?? ""}
@@ -767,15 +919,28 @@ function IssuesRoute() {
                   scope: renderedSurface.scope,
                   key: renderedSurface.key,
                 }}
-                onSelectPullRequest={(reference) => {
+                onSelectPullRequest={(target) => {
                   useRightPanelStore.getState().openPullRequest(rightPanelRef, {
-                    projectId: reference.projectId,
-                    repository: reference.repository,
-                    number: reference.number,
-                    ...(reference.host === undefined ? {} : { host: reference.host }),
+                    ...target,
                     environmentId: panelEnvironmentId,
                   });
                 }}
+                onUpdated={() =>
+                  void refreshSource(
+                    panelEnvironmentId,
+                    {
+                      projectId: renderedSurface.projectId as ProjectId,
+                      tracker: renderedSurface.tracker as IssueTrackerKind,
+                      ...(renderedSurface.host ? { host: renderedSurface.host } : {}),
+                      scope: renderedSurface.scope,
+                    },
+                    issueEntryKey({
+                      ...renderedSurface,
+                      host: renderedSurface.host ?? "",
+                      projectId: renderedSurface.projectId as ProjectId,
+                    }),
+                  )
+                }
               />
             ) : (
               <PullRequestDetailPanel
@@ -801,7 +966,7 @@ function IssuesRoute() {
         scopes={createScopes}
         onOpenChange={setCreateOpen}
         onCreated={(scope, result) => {
-          list.refresh();
+          void refreshSource(scope.environmentId, scope.scope);
           selectEntry({
             environmentId: scope.environmentId,
             projectId: scope.scope.projectId,

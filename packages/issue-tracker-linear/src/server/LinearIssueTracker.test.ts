@@ -1,7 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
+import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { IssueTrackerKind } from "@t3tools/contracts";
 import type { StandaloneIssueTrackerApi } from "@t3tools/issue-tracker-core/server/IssueTracker";
@@ -44,7 +47,11 @@ const issue = (
   state: state("In Progress", "started"),
   creator: JULIUS,
   assignee: THEO,
-  labels: { nodes: [{ id: "lbl_bug", name: "Bug", color: "#f00" }] },
+  team: { key: identifier.split("-")[0] },
+  labels: {
+    nodes: [{ id: "lbl_bug", name: "Bug", color: "#f00" }],
+    pageInfo: { hasNextPage: false, endCursor: null },
+  },
   ...overrides,
 });
 
@@ -53,9 +60,12 @@ function fakeLinear(
   answers: Record<string, (variables: Record<string, unknown>) => unknown>,
   stored: string | null = "lin_api_stored",
 ) {
+  let currentToken = stored;
   const requests: Array<{
     readonly authorization: string | undefined;
     readonly operation: string;
+    readonly query: string;
+    readonly variables: Record<string, unknown>;
   }> = [];
   const http = Layer.succeed(
     HttpClient.HttpClient,
@@ -66,7 +76,12 @@ function fakeLinear(
           body._tag === "Uint8Array" ? new TextDecoder().decode(body.body) : String(body._tag);
         const parsed = JSON.parse(text) as { query: string; variables: Record<string, unknown> };
         const operation = /^(?:query|mutation) (\w+)/.exec(parsed.query)?.[1] ?? "?";
-        requests.push({ authorization: request.headers.authorization, operation });
+        requests.push({
+          authorization: request.headers.authorization,
+          operation,
+          query: parsed.query,
+          variables: parsed.variables,
+        });
         const answer = answers[operation];
         const response =
           answer === undefined
@@ -77,10 +92,15 @@ function fakeLinear(
                   headers: { "content-type": "application/json" },
                 },
               )
-            : new Response(JSON.stringify({ data: answer(parsed.variables) }), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              });
+            : (() => {
+                const result = answer(parsed.variables);
+                return result instanceof Response
+                  ? result
+                  : new Response(JSON.stringify({ data: result }), {
+                      status: 200,
+                      headers: { "content-type": "application/json" },
+                    });
+              })();
         return HttpClientResponse.fromWeb(request, response);
       }),
     ),
@@ -88,20 +108,482 @@ function fakeLinear(
   const host = Layer.succeed(
     IssueTrackerHost.IssueTrackerHost,
     IssueTrackerHost.IssueTrackerHost.of({
-      credentials: { get: () => Effect.succeed(Option.fromNullishOr(stored)) },
+      credentials: { get: () => Effect.sync(() => Option.fromNullishOr(currentToken)) },
     }),
   );
   // Every optional write is implemented here; the type says so for the calls below.
+  const dependencies = Layer.mergeAll(
+    http,
+    host,
+    RateLimit.layer,
+    Layer.succeed(
+      Crypto.Crypto,
+      Crypto.make({
+        randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
+        digest: (algorithm, data) =>
+          Effect.promise(() =>
+            globalThis.crypto.subtle.digest(algorithm, new Uint8Array(data).buffer),
+          ).pipe(Effect.map((buffer) => new Uint8Array(buffer))),
+      }),
+    ),
+  );
   const tracker = LinearIssueTracker.make.pipe(
     Effect.map((api) => api as Required<StandaloneIssueTrackerApi>),
-    Effect.provide(LinearApi.layer.pipe(Layer.provide(Layer.merge(http, host)))),
+    Effect.provide(LinearApi.layer.pipe(Layer.provide(dependencies))),
   );
-  return { tracker, requests };
+  return {
+    tracker,
+    requests,
+    api: LinearApi.make.pipe(Effect.provide(dependencies)),
+    setToken: (value: string) => {
+      currentToken = value;
+    },
+  };
 }
 
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
 
 describe("LinearIssueTracker", () => {
+  it.effect("keeps viewer reads small and reports a partial credential catalog", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3Viewer: () => ({ viewer: JULIUS }),
+        T3ProbeCredential: () => ({
+          viewer: JULIUS,
+          teams: {
+            nodes: [{ id: "team_eng", key: "ENG", name: "Engineering" }],
+            pageInfo: { hasNextPage: true, endCursor: "more-teams" },
+          },
+        }),
+        T3Scope: (variables) => ({
+          teams: { nodes: [{ id: "team_hidden", key: variables.key, name: "Hidden team" }] },
+        }),
+      });
+      const api = yield* test.tracker;
+      expect(yield* api.getViewer(target)).toBe(JULIUS.id);
+      expect(test.requests[0]?.query).not.toContain("teams(");
+      const probe = yield* api.probeCredential("lin_api_probe");
+      expect(probe.accountId).toBe(JULIUS.id);
+      expect(probe.scopesTruncated).toBe(true);
+      expect(probe.scopes).toEqual([{ key: "ENG", name: "Engineering" }]);
+      expect(test.requests[1]?.query).toContain("teams(first: 250)");
+      expect(yield* api.getScope("lin_api_probe", "hidden")).toEqual({
+        key: "HIDDEN",
+        name: "Hidden team",
+      });
+      expect(test.requests.map((request) => request.authorization)).toEqual([
+        "lin_api_stored",
+        "lin_api_probe",
+        "lin_api_probe",
+      ]);
+    }),
+  );
+  it.effect("clamps issue lists and marks partial preview labels", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3Issues: () => ({
+          issues: {
+            nodes: [
+              issue("ENG-1", {
+                labels: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "more-labels" } },
+              }),
+              issue("ENG-2"),
+            ],
+            pageInfo: { hasNextPage: true, endCursor: "more-issues" },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      const page = yield* api.listIssues({
+        ...target,
+        state: "all",
+        involvement: "all",
+        viewer: JULIUS.id,
+        limit: 200,
+      });
+      expect(test.requests).toHaveLength(1);
+      expect(test.requests[0]?.variables.first).toBe(100);
+      expect(test.requests[0]?.query).toContain("labels(first: 20, includeArchived: true)");
+      expect(page.items[0]?.labelsTruncated).toBe(true);
+      expect(page.items.map((item) => item.commentCount)).toEqual([0, 0]);
+      expect(page.nextCursor).toBe("more-issues");
+    }),
+  );
+  it.effect("writes a comment after an ID-only lookup of the actual team", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3IssueReference: () => ({
+          issue: { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } },
+        }),
+        T3CommentCreate: (variables) => {
+          expect(variables.input).toEqual({ issueId: "iss_native", body: "Comment" });
+          return { commentCreate: { success: true } };
+        },
+      });
+      const api = yield* test.tracker;
+      yield* api.comment({ ...target, key: "eng-7", body: "Comment" });
+      expect(test.requests.map((request) => request.operation)).toEqual([
+        "T3IssueReference",
+        "T3CommentCreate",
+      ]);
+      expect(test.requests[0]?.query).not.toMatch(
+        /history|attachments|comments|labels|description/u,
+      );
+    }),
+  );
+  it.effect("rejects a moved issue before a comment write", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3IssueReference: () => ({
+          issue: { id: "iss_native", identifier: "OTHER-7", team: { key: "OTHER" } },
+        }),
+      });
+      const api = yield* test.tracker;
+      expect(
+        (yield* api.comment({ ...target, key: "ENG-7", body: "Comment" }).pipe(Effect.flip)).reason,
+      ).toBe("failed");
+      expect(test.requests.map((request) => request.operation)).toEqual(["T3IssueReference"]);
+    }),
+  );
+  it.effect("resolves issue and comment in one small query before a reaction", () =>
+    Effect.gen(function* () {
+      const reference = { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } };
+      const test = fakeLinear({
+        T3CommentTarget: () => ({
+          issue: reference,
+          comment: { id: "cmt_native", issue: reference },
+        }),
+        T3ReactionCreate: (variables) => {
+          expect(variables.input).toEqual({ commentId: "cmt_native", emoji: "👍" });
+          return { reactionCreate: { success: true } };
+        },
+      });
+      const api = yield* test.tracker;
+      yield* api.setReaction({
+        ...target,
+        key: "ENG-7",
+        subjectId: "cmt_native",
+        content: "thumbs-up",
+        reacted: true,
+      });
+      expect(test.requests.map((request) => request.operation)).toEqual([
+        "T3CommentTarget",
+        "T3ReactionCreate",
+      ]);
+      expect(test.requests[0]?.query).not.toMatch(
+        /history|attachments|comments\(|labels|description/u,
+      );
+    }),
+  );
+  it.effect("cannot react to a comment on another issue or team", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3CommentTarget: () => ({
+          issue: { id: "iss_eng", identifier: "ENG-7", team: { key: "ENG" } },
+          comment: {
+            id: "cmt_foreign",
+            issue: { id: "iss_other", identifier: "OTHER-7", team: { key: "OTHER" } },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      expect(
+        (yield* api
+          .setReaction({
+            ...target,
+            key: "ENG-7",
+            subjectId: "cmt_foreign",
+            content: "thumbs-up",
+            reacted: true,
+          })
+          .pipe(Effect.flip)).reason,
+      ).toBe("not-found");
+      expect(test.requests.map((request) => request.operation)).toEqual(["T3CommentTarget"]);
+    }),
+  );
+  it.effect("rejects foreign and moved native teams before edits or state writes", () =>
+    Effect.gen(function* () {
+      for (const key of ["OPS-7", "ENG-7"]) {
+        const test = fakeLinear({
+          T3IssueReference: () => ({
+            issue: { id: "iss_ops", identifier: "OPS-7", team: { key: "OPS" } },
+          }),
+          T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
+        });
+        const api = yield* test.tracker;
+        expect(
+          (yield* api.update({ ...target, key, title: "Changed" }).pipe(Effect.flip)).reason,
+        ).toBe("failed");
+        expect(
+          (yield* api.setState({ ...target, key, state: "closed" }).pipe(Effect.flip)).reason,
+        ).toBe("failed");
+        expect(test.requests.map((request) => request.operation)).toEqual([
+          "T3IssueReference",
+          "T3IssueReference",
+        ]);
+      }
+    }),
+  );
+  it.effect("checks the returned native team before exposing issue or comment data", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3Viewer: () => ({ viewer: JULIUS }),
+        T3Issue: () => ({
+          issue: issue("OPS-7", {
+            comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            reactions: [],
+            attachments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            history: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          }),
+        }),
+        T3Comments: () => ({
+          issue: {
+            id: "iss_ops",
+            identifier: "OPS-7",
+            team: { key: "OPS" },
+            comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          },
+        }),
+        T3IssueReference: () => ({
+          issue: { id: "iss_ops", identifier: "OPS-7", team: { key: "OPS" } },
+        }),
+      });
+      const api = yield* test.tracker;
+      expect((yield* api.getIssue({ ...target, key: "ENG-7" }).pipe(Effect.flip)).reason).toBe(
+        "failed",
+      );
+      expect(
+        (yield* api.getComments({ ...target, key: "ENG-7", cursor: "next" }).pipe(Effect.flip))
+          .reason,
+      ).toBe("failed");
+      expect(
+        (yield* api.getViewerPermissions({ ...target, key: "ENG-7" }).pipe(Effect.flip)).reason,
+      ).toBe("failed");
+    }),
+  );
+  it.effect("edits a moved identifier with the verified native issue UUID", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3IssueReference: () => ({
+          issue: { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } },
+        }),
+        T3IssueUpdate: (variables) => {
+          expect(variables).toEqual({ id: "iss_native", input: { title: "Changed" } });
+          return { issueUpdate: { success: true } };
+        },
+      });
+      const api = yield* test.tracker;
+      yield* api.update({ ...target, key: "OPS-7", title: "Changed" });
+      expect(test.requests.map((request) => request.operation)).toEqual([
+        "T3IssueReference",
+        "T3IssueUpdate",
+      ]);
+    }),
+  );
+  it.effect("rejects a mentions filter before any native request", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({});
+      const api = yield* test.tracker;
+      const error = yield* api
+        .listIssues({
+          ...target,
+          state: "all",
+          involvement: "mentioned",
+          viewer: JULIUS.id,
+          limit: 20,
+        })
+        .pipe(Effect.flip);
+      expect(error.detail).toContain("mentions");
+      expect(test.requests).toHaveLength(0);
+    }),
+  );
+  it.effect("keeps full reaction counts with bounded actor names and honest detail flags", () =>
+    Effect.gen(function* () {
+      const nativeReactions = Array.from({ length: 100 }, (_, index) => ({
+        id: `reaction-${index}`,
+        emoji: "👍",
+        user: user(`user-${index}`, `user-${index}`),
+      }));
+      const test = fakeLinear({
+        T3Viewer: () => ({ viewer: JULIUS }),
+        T3Issue: () => ({
+          issue: issue("ENG-7", {
+            labels: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "more-labels" } },
+            comments: {
+              nodes: [
+                {
+                  id: "cmt_1",
+                  body: "Comment",
+                  createdAt: "2026-07-01T00:00:00.000Z",
+                  url: null,
+                  user: THEO,
+                  reactions: nativeReactions,
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+            reactions: nativeReactions,
+            attachments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            history: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "more-history" } },
+          }),
+        }),
+      });
+      const api = yield* test.tracker;
+      const detail = yield* api.getIssue({ ...target, key: "ENG-7" });
+      expect(detail.labelsTruncated).toBe(true);
+      expect(detail.historyTruncated).toBe(true);
+      expect(detail.reactionsTruncated).toBe(true);
+      expect(detail.reactions?.[0]?.count).toBe(100);
+      expect(detail.reactions?.[0]?.actors).toHaveLength(20);
+      expect(detail.comments[0]?.reactionsTruncated).toBe(true);
+      expect(detail.comments[0]?.reactions?.[0]?.count).toBe(100);
+      expect(test.requests.find((request) => request.operation === "T3Issue")?.query).toContain(
+        "labels(first: 100, includeArchived: true)",
+      );
+      expect(test.requests.find((request) => request.operation === "T3Issue")?.query).toContain(
+        "history(first: 100",
+      );
+    }),
+  );
+  it.effect("uses native epoch milliseconds and the latest quota reset", () =>
+    Effect.gen(function* () {
+      const now = 1_750_000_000_000;
+      yield* TestClock.setTime(now);
+      const { api } = fakeLinear({
+        T3Viewer: () =>
+          new Response("limited", {
+            status: 429,
+            headers: {
+              "x-ratelimit-requests-reset": String(now + 30_000),
+              "x-ratelimit-complexity-reset": String(now + 60_000),
+              "x-ratelimit-endpoint-requests-reset": String(now + 90_000),
+              "retry-after": "5",
+            },
+          }),
+      });
+      const native = yield* api;
+      const error = yield* native.viewer().pipe(Effect.flip);
+      expect(error.reason).toBe("rate-limited");
+      expect(error.retryAt).toBe(now + 90_000);
+    }),
+  );
+  it.effect("keeps Retry-After separate and ignores invalid native reset times", () =>
+    Effect.gen(function* () {
+      const now = 1_750_000_000_000;
+      yield* TestClock.setTime(now);
+      const { api } = fakeLinear({
+        T3Viewer: () =>
+          new Response("limited", {
+            status: 429,
+            headers: {
+              "x-ratelimit-requests-reset": "not-a-timestamp",
+              "x-ratelimit-complexity-reset": String(now - 1),
+              "x-ratelimit-endpoint-requests-reset": "Infinity",
+              "retry-after": "20",
+            },
+          }),
+      });
+      const native = yield* api;
+      const error = yield* native.viewer().pipe(Effect.flip);
+      expect(error.retryAt).toBe(now + 20_000);
+    }),
+  );
+  it.effect("blocks native requests until reset and isolates a changed token", () =>
+    Effect.gen(function* () {
+      const now = 1_750_000_000_000;
+      yield* TestClock.setTime(now);
+      let limited = true;
+      const test = fakeLinear({
+        T3Viewer: () =>
+          limited
+            ? new Response("limited", {
+                status: 429,
+                headers: { "x-ratelimit-requests-reset": String(now + 60_000) },
+              })
+            : { viewer: JULIUS, teams: { nodes: [] } },
+      });
+      const native = yield* test.api;
+      yield* native.viewer().pipe(Effect.flip);
+      limited = false;
+      expect((yield* native.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+      expect(test.requests).toHaveLength(1);
+      test.setToken("lin_api_changed");
+      expect((yield* native.viewer()).viewer.id).toBe(JULIUS.id);
+      expect(test.requests).toHaveLength(2);
+      test.setToken("lin_api_stored");
+      expect((yield* native.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+      expect(test.requests).toHaveLength(2);
+      yield* TestClock.adjust("60 seconds");
+      expect((yield* native.viewer()).viewer.id).toBe(JULIUS.id);
+      expect(test.requests).toHaveLength(3);
+    }),
+  );
+  it.effect("records GraphQL rate limits before any later HTTP request", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3Viewer: () =>
+          Response.json(
+            { errors: [{ message: "Rate limited", extensions: { code: "RATELIMITED" } }] },
+            { status: 400, headers: { "retry-after": "10" } },
+          ),
+      });
+      const native = yield* test.api;
+      expect((yield* native.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+      expect((yield* native.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+      expect(test.requests).toHaveLength(1);
+    }),
+  );
+  it.effect("rejects GraphQL errors even with otherwise valid partial data", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3Viewer: () =>
+          Response.json({
+            data: { viewer: JULIUS },
+            errors: [{ message: "A field could not be read." }],
+          }),
+      });
+      const api = yield* test.api;
+      expect((yield* api.viewer().pipe(Effect.flip)).detail).toBe("A field could not be read.");
+    }),
+  );
+  it.effect("records rate errors before decoding incomplete native data", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3Viewer: () =>
+          Response.json({
+            data: { viewer: null },
+            errors: [{ message: "Rate limited", extensions: { code: "RATELIMITED" } }],
+          }),
+      });
+      const api = yield* test.api;
+      expect((yield* api.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+      expect((yield* api.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+      expect(test.requests).toHaveLength(1);
+    }),
+  );
+  it.effect("fails reaction removal when the viewer cannot be read", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3IssueReference: () => ({
+          issue: { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } },
+        }),
+        T3Viewer: () => Response.json({ errors: [{ message: "Unavailable" }] }, { status: 500 }),
+        T3IssueReactions: () => ({
+          issue: { reactions: [{ id: "my_reaction", emoji: "👍", user: JULIUS }] },
+        }),
+      });
+      const api = yield* test.tracker;
+      expect(
+        (yield* api
+          .setReaction({ ...target, key: "ENG-7", content: "thumbs-up", reacted: false })
+          .pipe(Effect.flip)).reason,
+      ).toBe("failed");
+      expect(test.requests.map((request) => request.operation)).toEqual([
+        "T3IssueReference",
+        "T3Viewer",
+      ]);
+    }),
+  );
   it.effect("lists a team's issues as summaries keyed by identifier", () =>
     Effect.gen(function* () {
       const { tracker, requests } = fakeLinear({
@@ -144,8 +626,8 @@ describe("LinearIssueTracker", () => {
       ]);
       expect(page.items[0]).toMatchObject({
         closedAt: "2026-07-03T00:00:00.000Z",
-        author: { login: "usr_julius", name: "julius" },
-        assignees: [{ login: "usr_theo", name: "theo" }],
+        author: { id: "usr_julius", login: "julius", name: "julius" },
+        assignees: [{ id: "usr_theo", login: "theo", name: "theo" }],
         labels: [{ name: "Bug", color: "#f00" }],
       });
       // The stored key goes in as-is, not as a bearer token.
@@ -178,6 +660,7 @@ describe("LinearIssueTracker", () => {
               { id: "r4", emoji: "🤷", user: THEO },
             ],
             attachments: {
+              pageInfo: { hasNextPage: false, endCursor: null },
               nodes: [
                 {
                   url: "https://github.com/acme/web/pull/12",
@@ -189,6 +672,7 @@ describe("LinearIssueTracker", () => {
               ],
             },
             history: {
+              pageInfo: { hasNextPage: false, endCursor: null },
               nodes: [
                 {
                   id: "h1",
@@ -210,6 +694,9 @@ describe("LinearIssueTracker", () => {
       });
       const api = yield* tracker;
       const detail = yield* api.getIssue({ ...target, key: "eng-7" });
+      expect(detail.author).toMatchObject({ id: JULIUS.id, login: "julius" });
+      expect(detail.assignees[0]).toMatchObject({ id: THEO.id, login: "theo" });
+      expect(detail.comments[0]?.author).toMatchObject({ id: THEO.id, login: "theo" });
       expect(detail.viewer).toBe("usr_julius");
       expect(detail.commentsCursor).toBe("cmt_cur");
       expect(detail.comments[0]?.reactions).toEqual([
@@ -225,7 +712,13 @@ describe("LinearIssueTracker", () => {
         ["assigned", "julius"],
       ]);
       expect(detail.linkedPullRequests).toEqual([
-        expect.objectContaining({ repository: "acme/web", number: 12, state: "merged" }),
+        expect.objectContaining({
+          repository: "acme/web",
+          provider: "github",
+          host: "github.com",
+          number: 12,
+          state: "merged",
+        }),
       ]);
 
       const missing = yield* Effect.flip(api.getIssue({ ...target, key: "123" }));
@@ -233,12 +726,56 @@ describe("LinearIssueTracker", () => {
     }),
   );
 
+  it.effect("shows member names while assigning through native IDs", () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3Team: () => ({
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                members: {
+                  nodes: [
+                    user("usr_display", "  Display Name  "),
+                    { ...user("usr_name", "  Full Name  "), displayName: "  " },
+                    { ...user("usr_id", "  "), displayName: null },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+                templates: { nodes: [] },
+              },
+            ],
+          },
+          issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        }),
+        T3IssueReference: () => ({
+          issue: { id: "iss_native", identifier: "ENG-7", team: { key: "ENG" } },
+        }),
+        T3IssueUpdate: (variables) => {
+          expect(variables).toEqual({ id: "iss_native", input: { assigneeId: "usr_display" } });
+          return { issueUpdate: { success: true } };
+        },
+      });
+      const api = yield* test.tracker;
+      const candidates = yield* api.listCandidates(target);
+      expect(candidates.assignees.map(({ id, login }) => ({ id, login }))).toEqual([
+        { id: "usr_display", login: "Display Name" },
+        { id: "usr_name", login: "Full Name" },
+        { id: "usr_id", login: "usr_id" },
+      ]);
+      yield* api.update({ ...target, key: "ENG-7", assignees: [candidates.assignees[0]!.id] });
+    }),
+  );
   it.effect("closes through the team's completed state and reports a missing key", () =>
     Effect.gen(function* () {
       const updates: Array<Record<string, unknown>> = [];
       const { tracker } = fakeLinear(
         {
-          T3Team: () => ({
+          T3TeamStates: () => ({
             teams: {
               nodes: [
                 {
@@ -275,7 +812,10 @@ describe("LinearIssueTracker", () => {
       expect(unauthenticated.reason).toBe("unauthenticated");
 
       const connected = fakeLinear({
-        T3Team: () => ({
+        T3IssueReference: () => ({
+          issue: { id: "iss_native", identifier: "ENG-1", team: { key: "ENG" } },
+        }),
+        T3TeamStates: () => ({
           teams: {
             nodes: [
               {
@@ -311,6 +851,23 @@ describe("LinearIssueTracker", () => {
         { stateId: "st_canceled" },
         { stateId: "st_done" },
         { stateId: "st_todo" },
+      ]);
+      expect(connected.requests.map((request) => request.operation)).toEqual([
+        "T3IssueReference",
+        "T3TeamStates",
+        "T3IssueUpdate",
+        "T3IssueReference",
+        "T3TeamStates",
+        "T3IssueUpdate",
+        "T3IssueReference",
+        "T3TeamStates",
+        "T3IssueUpdate",
+      ]);
+      expect(connected.requests[1]?.query).not.toMatch(/labels|members|templates|issueLabels/u);
+      expect(updates.map((update) => update.id)).toEqual([
+        "iss_native",
+        "iss_native",
+        "iss_native",
       ]);
     }),
   );

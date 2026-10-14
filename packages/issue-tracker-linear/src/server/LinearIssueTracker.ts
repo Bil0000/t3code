@@ -12,7 +12,7 @@
  */
 import * as Effect from "effect/Effect";
 import {
-  type IssueActor,
+  SourceControlProviderKind,
   type IssueCapabilities,
   type IssueComment,
   type IssueEvent,
@@ -57,6 +57,8 @@ const CAPABILITIES: IssueCapabilities = {
   comment: true,
   labels: true,
   assignees: true,
+  maxAssignees: 1,
+  involvements: ["all", "assigned", "authored"],
   reactions: true,
   templates: true,
   linkedPullRequests: true,
@@ -110,11 +112,12 @@ function toState(state: LinearApi.LinearWorkflowState): IssueState {
     : { category: "open", name: state.name };
 }
 
-/** Linear identifies people by id, so that is the login; the display name is what people see. */
-function toActor(user: LinearApi.LinearUser): IssueActor {
+function toActor(user: LinearApi.LinearUser) {
+  const name = user.displayName?.trim() || user.name?.trim() || null;
   return {
-    login: user.id,
-    name: user.displayName ?? user.name,
+    id: user.id,
+    login: name ?? user.id,
+    name,
     avatarUrl: user.avatarUrl ?? null,
   };
 }
@@ -138,44 +141,47 @@ function toSummary(issue: LinearApi.LinearIssue, commentCount = 0): TrackerIssue
     closedAt: issue.completedAt ?? issue.canceledAt ?? null,
     assignees: issue.assignee === null ? [] : [toActor(issue.assignee)],
     labels: issue.labels.nodes.map((label) => ({ name: label.name, color: label.color })),
+    labelsTruncated: issue.labels.pageInfo.hasNextPage,
     commentCount,
   };
 }
 
-function toReactions(
-  reactions: ReadonlyArray<LinearApi.LinearReaction>,
-  viewerId: string | null,
-): IssueReaction[] {
-  const grouped = new Map<IssueReactionContent, IssueReaction>();
+function toReactions(reactions: ReadonlyArray<LinearApi.LinearReaction>, viewerId: string | null) {
+  const grouped = new Map<
+    IssueReactionContent,
+    { count: number; actors: string[]; viewerHasReacted: boolean }
+  >();
+  let truncated = false;
   for (const reaction of reactions) {
     const content = CONTENT_BY_EMOJI.get(reaction.emoji);
     if (content === undefined) continue;
     const mine = reaction.user !== null && reaction.user.id === viewerId;
-    const existing = grouped.get(content);
-    const actor = reaction.user === null || mine ? [] : [userName(reaction.user)];
-    grouped.set(
-      content,
-      existing === undefined
-        ? { content, count: 1, actors: actor, viewerHasReacted: mine }
-        : {
-            ...existing,
-            count: existing.count + 1,
-            actors: [...existing.actors, ...actor],
-            viewerHasReacted: existing.viewerHasReacted || mine,
-          },
-    );
+    let group = grouped.get(content);
+    if (group === undefined) {
+      group = { count: 0, actors: [], viewerHasReacted: false };
+      grouped.set(content, group);
+    }
+    group.count++;
+    group.viewerHasReacted ||= mine;
+    if (reaction.user !== null && !mine) {
+      if (group.actors.length < 20) group.actors.push(userName(reaction.user));
+      else truncated = true;
+    }
   }
-  return [...grouped.values()];
+  const values: IssueReaction[] = [...grouped].map(([content, group]) => ({ content, ...group }));
+  return { values, truncated };
 }
 
 function toComment(comment: LinearApi.LinearComment, viewerId: string | null): IssueComment {
+  const reactions = toReactions(comment.reactions, viewerId);
   return {
     id: comment.id,
     author: comment.user === null ? null : toActor(comment.user),
     body: comment.body,
     createdAt: comment.createdAt,
     url: comment.url,
-    reactions: toReactions(comment.reactions, viewerId),
+    reactions: reactions.values,
+    reactionsTruncated: reactions.truncated,
   };
 }
 
@@ -224,6 +230,8 @@ function toLinkedPullRequests(
     return [
       {
         repository: match[1] ?? match[2]!,
+        provider: SourceControlProviderKind.make(match[1] === undefined ? "gitlab" : "github"),
+        host: match[1] === undefined ? "gitlab.com" : "github.com",
         number: Number(match[3]),
         title: attachment.title.trim() || attachment.url,
         url: attachment.url,
@@ -277,7 +285,6 @@ function involvementFilter(input: {
     case "authored":
       return { creator: { id: { eq: input.viewer } } };
     case "mentioned":
-      return { subscribers: { some: { id: { eq: input.viewer } } } };
     case "all":
       return {};
   }
@@ -302,6 +309,21 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       const identifier = parseIdentifier(key);
       return identifier === null ? Effect.fail(notFound(operation)) : Effect.succeed(identifier);
     };
+    const requireIssueReference = <T extends LinearApi.LinearIssueReference>(
+      operation: string,
+      scope: string,
+      reference: T | null,
+    ) =>
+      reference === null
+        ? Effect.fail(notFound(operation))
+        : reference.team.key.toUpperCase() !== scope.trim().toUpperCase()
+          ? Effect.fail(failed(operation, "This issue belongs to another Linear team."))
+          : Effect.succeed(reference);
+    const resolveIssue = (operation: string, key: string, scope: string) =>
+      requireIdentifier(operation, key).pipe(
+        Effect.flatMap(linear.getIssueReference),
+        Effect.flatMap((reference) => requireIssueReference(operation, scope, reference)),
+      );
 
     const requireTeam = (operation: string, scope: string) =>
       linear.getTeam(scope.trim().toUpperCase()).pipe(
@@ -358,17 +380,25 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       standalone: DESCRIPTOR,
 
       probeCredential: (token) =>
-        linear.viewer(token).pipe(
+        linear.probeCredential(token).pipe(
           Effect.map((data) => ({
             account: userName(data.viewer),
+            accountId: data.viewer.id,
             scopes: data.teams.map((team) => ({ key: team.key, name: team.name })),
+            scopesTruncated: data.scopesTruncated,
           })),
         ),
+      getScope: (token, scope) =>
+        linear
+          .getScope(scope.trim().toUpperCase(), token)
+          .pipe(Effect.map((team) => (team === null ? null : { key: team.key, name: team.name }))),
 
       // The id, not the display name: it is what the involvement filters compare against.
       getViewer: () => linear.viewer().pipe(Effect.map((data) => data.viewer.id)),
 
       listIssues: (input) => {
+        if (input.involvement === "mentioned")
+          return Effect.fail(failed("listIssues", "Linear does not expose a mentions filter."));
         const filter: Record<string, unknown> = {
           team: { key: { eq: input.scope.trim().toUpperCase() } },
           ...involvementFilter(input),
@@ -390,7 +420,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         }
         return linear.listIssues({ filter, first: input.limit, after: input.cursor }).pipe(
           Effect.map((page) => ({
-            items: page.nodes.map(toSummary),
+            items: page.nodes.map((issue) => toSummary(issue)),
             nextCursor: page.nextCursor,
           })),
         );
@@ -399,22 +429,25 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       getIssue: (input) =>
         Effect.gen(function* () {
           const identifier = yield* requireIdentifier("getIssue", input.key);
-          const [issue, viewer] = yield* Effect.all([
+          const [nativeIssue, viewer] = yield* Effect.all([
             linear.getIssue(identifier, COMMENTS_PAGE),
             viewerId,
           ]);
-          if (issue === null) return yield* notFound("getIssue");
+          const issue = yield* requireIssueReference("getIssue", input.scope, nativeIssue);
+          const reactions = toReactions(issue.reactions, viewer);
           return {
             ...toSummary(issue, issue.comments.nodes.length),
             body: issue.description ?? "",
             viewer,
             viewerPermissions: VIEWER_PERMISSIONS,
-            reactions: toReactions(issue.reactions, viewer),
+            reactions: reactions.values,
+            reactionsTruncated: reactions.truncated,
             comments: issue.comments.nodes.map((comment) => toComment(comment, viewer)),
             commentsCursor: issue.comments.pageInfo.hasNextPage
               ? issue.comments.pageInfo.endCursor
               : null,
             events: toEvents(issue.history.nodes),
+            historyTruncated: issue.history.pageInfo.hasNextPage,
             linkedPullRequests: toLinkedPullRequests(issue.attachments.nodes),
           };
         }),
@@ -426,13 +459,17 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
             linear.getComments({ identifier, first: COMMENTS_PAGE, after: input.cursor }),
             viewerId,
           ]);
+          yield* requireIssueReference("getComments", input.scope, page.issue);
           return {
             comments: page.nodes.map((comment) => toComment(comment, viewer)),
             nextCursor: page.nextCursor,
           };
         }),
 
-      getViewerPermissions: () => Effect.succeed(VIEWER_PERMISSIONS),
+      getViewerPermissions: (input) =>
+        resolveIssue("getViewerPermissions", input.key, input.scope).pipe(
+          Effect.as(VIEWER_PERMISSIONS),
+        ),
 
       create: (input) =>
         Effect.gen(function* () {
@@ -451,15 +488,13 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
 
       comment: (input) =>
         Effect.gen(function* () {
-          const identifier = yield* requireIdentifier("comment", input.key);
-          const issue = yield* linear.getIssue(identifier, 0);
-          if (issue === null) return yield* notFound("comment");
+          const issue = yield* resolveIssue("comment", input.key, input.scope);
           yield* linear.createComment({ issueId: issue.id, body: input.body });
         }),
 
       update: (input) =>
         Effect.gen(function* () {
-          const identifier = yield* requireIdentifier("update", input.key);
+          const issue = yield* resolveIssue("update", input.key, input.scope);
           const patch: Record<string, unknown> = {};
           if (input.title !== undefined) patch.title = input.title;
           if (input.body !== undefined) patch.description = input.body;
@@ -470,14 +505,20 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
             if (input.assignees !== undefined)
               patch.assigneeId = yield* assigneeId("update", scope, input.assignees);
           }
-          yield* linear.updateIssue(identifier, patch);
+          yield* linear.updateIssue(issue.id, patch);
         }),
 
       setState: (input) =>
         Effect.gen(function* () {
-          const identifier = yield* requireIdentifier("setState", input.key);
-          const scope = yield* requireTeam("setState", input.scope);
-          const states = scope.team.states.nodes.toSorted(
+          const issue = yield* resolveIssue("setState", input.key, input.scope);
+          const scope = yield* linear.getTeamStates(input.scope.trim().toUpperCase());
+          if (scope === null) return yield* failed("setState", "This Linear team is unavailable.");
+          if (scope.states.pageInfo.hasNextPage)
+            return yield* failed(
+              "setState",
+              "This team has more workflow states than the supported limit.",
+            );
+          const states = scope.states.nodes.toSorted(
             (a, b) => (a.position ?? 0) - (b.position ?? 0),
           );
           const wanted =
@@ -488,30 +529,33 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
                 states.find((state) => state.type === "triage"));
           if (wanted === undefined)
             return yield* failed("setState", "This team has no workflow state for that change.");
-          yield* linear.updateIssue(identifier, { stateId: wanted.id });
+          yield* linear.updateIssue(issue.id, { stateId: wanted.id });
         }),
 
       setReaction: (input) =>
         Effect.gen(function* () {
           const identifier = yield* requireIdentifier("setReaction", input.key);
           const emoji = EMOJI_BY_CONTENT[input.content];
-          const target =
-            input.subjectId === undefined
-              ? yield* linear
-                  .getIssue(identifier, 0)
-                  .pipe(
-                    Effect.flatMap((issue) =>
-                      issue === null
-                        ? Effect.fail(notFound("setReaction"))
-                        : Effect.succeed({ issueId: issue.id }),
-                    ),
-                  )
-              : { commentId: input.subjectId };
+          let target: { issueId?: string; commentId?: string };
+          if (input.subjectId === undefined) {
+            const issue = yield* resolveIssue("setReaction", identifier, input.scope);
+            target = { issueId: issue.id };
+          } else {
+            const resolved = yield* linear.getCommentTarget(identifier, input.subjectId);
+            const issue = yield* requireIssueReference("setReaction", input.scope, resolved.issue);
+            if (
+              resolved.comment === null ||
+              resolved.comment.issue?.id !== issue.id ||
+              resolved.comment.issue.team.key.toUpperCase() !== input.scope.trim().toUpperCase()
+            )
+              return yield* notFound("setReaction");
+            target = { commentId: resolved.comment.id };
+          }
           if (input.reacted) {
             yield* linear.createReaction({ ...target, emoji });
             return;
           }
-          const viewer = yield* viewerId;
+          const viewer = (yield* linear.viewer()).viewer.id;
           const reactions = yield* linear.listReactions(target);
           const own = reactions.find(
             (reaction) => reaction.emoji === emoji && reaction.user?.id === viewer,
@@ -548,7 +592,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
               color: label.color,
               description: label.description ?? null,
             })),
-            assignees: scope.team.members.nodes.map((user) => ({ ...toActor(user), id: user.id })),
+            assignees: scope.team.members.nodes.map(toActor),
             truncated: scope.truncated,
           })),
         ),

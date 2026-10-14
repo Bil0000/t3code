@@ -1,7 +1,10 @@
 import {
   WS_METHODS,
   type EnvironmentId,
+  type IssueCapabilities,
   type IssueComment,
+  type IssueInvolvement,
+  type IssueListCursors,
   type IssueListEntry,
   type IssueListResult,
   type IssueRef,
@@ -39,6 +42,171 @@ export function mergeIssueListPage(
   for (const entry of held) byKey.set(issueEntryKey(entry), entry);
   for (const entry of page) byKey.set(issueEntryKey(entry), entry);
   return [...byKey.values()].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+export function issueListCursorsOn(cursors: IssueListCursors, host: string): IssueListCursors {
+  const prefix = `${host.toLowerCase()} `;
+  return Object.fromEntries(
+    Object.entries(cursors).filter(([key]) => key.toLowerCase().startsWith(prefix)),
+  );
+}
+
+type IssueListPage = Pick<IssueListResult, "entries" | "nextCursors" | "errors"> & {
+  readonly sources?: IssueListResult["sources"];
+};
+type HeldIssueList = IssueListPage & {
+  readonly firstCursors: IssueListCursors;
+  readonly firstKeys: ReadonlySet<string>;
+};
+
+const projectHostKey = (row: { readonly projectId: string; readonly host?: string | undefined }) =>
+  `${row.projectId} ${row.host?.toLowerCase()}`;
+const scopeOf = (host: string, scope: string) => `${host} ${scope}`.toLowerCase();
+
+const heldSources = (held: HeldIssueList) => held.sources ?? held.entries;
+
+function failedScopes(
+  pool: ReadonlyArray<{
+    readonly projectId: string;
+    readonly host: string;
+    readonly scope: string;
+  }>,
+  errors: IssueListPage["errors"],
+): ReadonlySet<string> {
+  const failed = new Set(errors.map(projectHostKey));
+  return new Set(
+    pool
+      .filter((source) => failed.has(projectHostKey(source)))
+      .map((source) => scopeOf(source.host, source.scope)),
+  );
+}
+
+export function continueIssueListPage<T extends HeldIssueList>(
+  held: T,
+  sent: IssueListCursors,
+  page: IssueListPage,
+  sentFirstCursors: IssueListCursors,
+): T {
+  if (
+    held.firstCursors !== sentFirstCursors ||
+    Object.entries(sent).some(([key, cursor]) => held.nextCursors[key] !== cursor)
+  ) {
+    return held;
+  }
+  const sentScopes = new Set(Object.keys(sent).map((key) => key.toLowerCase()));
+  const retried = new Set(
+    heldSources(held)
+      .filter((source) => sentScopes.has(scopeOf(source.host, source.scope)))
+      .map(projectHostKey),
+  );
+  const failed = failedScopes(heldSources(held), page.errors);
+  const kept = Object.entries(held.nextCursors).filter(
+    ([key]) => sent[key] === undefined || failed.has(key.toLowerCase()),
+  );
+  return {
+    ...held,
+    entries: mergeIssueListPage(held.entries, page.entries),
+    nextCursors: { ...Object.fromEntries(kept), ...page.nextCursors },
+    errors: [...held.errors.filter((error) => !retried.has(projectHostKey(error))), ...page.errors],
+  };
+}
+
+export function refreshIssueListPage<T extends HeldIssueList>(
+  held: T,
+  fresh: IssueListPage,
+  options: {
+    readonly source?: { readonly projectId: string; readonly host: string; readonly scope: string };
+    readonly removed?: string;
+  } = {},
+): T {
+  const { source } = options;
+  const failed = failedScopes([...(fresh.sources ?? []), ...heldSources(held)], fresh.errors);
+  const covered = (key: string) =>
+    !failed.has(key.toLowerCase()) &&
+    (source === undefined || key.toLowerCase() === scopeOf(source.host, source.scope));
+  const continued = (key: string) => held.nextCursors[key] !== held.firstCursors[key];
+  const keys = new Set([...Object.keys(held.firstCursors), ...Object.keys(held.nextCursors)]);
+  const tails = new Set([...keys].filter(continued).map((key) => key.toLowerCase()));
+  const bound =
+    source === undefined && fresh.sources !== undefined
+      ? new Set(fresh.sources.map((each) => scopeOf(each.host, each.scope)))
+      : null;
+  const isBound = (key: string) => bound === null || bound.has(key.toLowerCase());
+  const taken = fresh.entries.filter((entry) => covered(scopeOf(entry.host, entry.scope)));
+  const freshKeys = new Set(taken.map(issueEntryKey));
+  const shifted = new Set(
+    [...held.entries.filter((entry) => held.firstKeys.has(issueEntryKey(entry))), ...taken]
+      .filter((row) => held.firstKeys.has(issueEntryKey(row)) !== freshKeys.has(issueEntryKey(row)))
+      .map((row) => scopeOf(row.host, row.scope)),
+  );
+  const continuing = new Set(Object.keys(fresh.nextCursors).map((key) => key.toLowerCase()));
+  const keep = (key: string) =>
+    isBound(key) &&
+    (!covered(key) ||
+      (continuing.has(key.toLowerCase()) &&
+        tails.has(key.toLowerCase()) &&
+        !shifted.has(key.toLowerCase())));
+  const pick = (cursors: IssueListCursors, take: (key: string) => boolean) =>
+    Object.fromEntries(Object.entries(cursors).filter(([key]) => take(key)));
+  const kept = held.entries.filter((entry) => {
+    const scope = scopeOf(entry.host, entry.scope);
+    const key = issueEntryKey(entry);
+    return (
+      isBound(scope) &&
+      (!covered(scope) ||
+        (continuing.has(scope) && !held.firstKeys.has(key) && key !== options.removed))
+    );
+  });
+  return {
+    ...held,
+    entries: mergeIssueListPage(kept, taken),
+    firstKeys: new Set([
+      ...kept.map(issueEntryKey).filter((key) => held.firstKeys.has(key)),
+      ...taken.map(issueEntryKey),
+    ]),
+    nextCursors: {
+      ...pick(held.nextCursors, keep),
+      ...pick(fresh.nextCursors, (key) => !keep(key)),
+    },
+    firstCursors: {
+      ...pick(held.firstCursors, (key) => isBound(key) && !covered(key)),
+      ...pick(fresh.nextCursors, covered),
+    },
+    sources: source === undefined ? (fresh.sources ?? held.sources) : held.sources,
+    errors: [
+      ...(source === undefined
+        ? []
+        : held.errors.filter((error) => projectHostKey(error) !== projectHostKey(source))),
+      ...fresh.errors,
+    ],
+  };
+}
+
+export function issueScopeKey(
+  environmentId: EnvironmentId,
+  scope: { readonly tracker: string; readonly host: string; readonly scope: string },
+): string {
+  return JSON.stringify([
+    environmentId,
+    scope.tracker,
+    scope.host.toLowerCase(),
+    scope.scope.toLowerCase(),
+  ]);
+}
+
+export function offeredIssueInvolvements(
+  trackers: ReadonlyArray<{ readonly capabilities: IssueCapabilities | null }>,
+  active: IssueInvolvement,
+): ReadonlySet<IssueInvolvement> | null {
+  const offered = new Set<IssueInvolvement>([active]);
+  let declared = false;
+  for (const { capabilities } of trackers) {
+    if (capabilities === null) continue;
+    if (capabilities.involvements === undefined) return null;
+    declared = true;
+    for (const involvement of capabilities.involvements) offered.add(involvement);
+  }
+  return declared ? offered : null;
 }
 
 /** Older comments go in front: the detail carries the newest page and pages walk backwards. */
