@@ -1,6 +1,8 @@
 import type {
   IssueComment,
   IssueDetail,
+  IssueReaction,
+  IssueReactionContent,
   IssueLinkedPullRequest,
   IssueRef,
   SourceControlProviderKind,
@@ -14,11 +16,14 @@ import {
   issueCommentsView,
   issueSupportsReactions,
   offeredIssueReactionContents,
+  retainUnacknowledgedIssueReactions,
   issueDisplayLabel,
   issueLabelOptions,
   linkedPullRequestTarget,
   nextIssueAssignees,
 } from "./issueDetail.logic";
+
+import { applyPendingPullRequestReactions } from "../pullRequest/pullRequestReactions.logic";
 
 const actor = (login: string, id: string) => ({ login, name: null, avatarUrl: null, id });
 
@@ -274,5 +279,29 @@ describe("issue reaction capabilities", () => {
     expect(issueSupportsReactions({ reactions: true }, true)).toBe(true);
     expect(offeredIssueReactionContents([])).toEqual([]);
     expect(offeredIssueReactionContents(undefined)).toHaveLength(8);
+  });
+});
+
+describe("confirmed issue reactions", () => {
+  const native = (count: number, viewerHasReacted: boolean): IssueReaction[] => [
+    { content: "thumbs-up", count, actors: [], viewerHasReacted },
+  ];
+  it("holds the viewer's confirmed choice through stale reads and other users' count changes", () => {
+    const desired = new Map<IssueReactionContent, boolean>([["thumbs-up", true]]);
+    const latest = native(5, false);
+    const retained = retainUnacknowledgedIssueReactions(latest, desired);
+    expect(applyPendingPullRequestReactions(latest, retained)).toEqual(native(6, true));
+    expect(retainUnacknowledgedIssueReactions(native(6, true), retained).size).toBe(0);
+  });
+  it("holds a removal until the native viewer flag or absent reaction confirms it", () => {
+    const desired = new Map<IssueReactionContent, boolean>([["thumbs-up", false]]);
+    expect(
+      applyPendingPullRequestReactions(
+        native(3, true),
+        retainUnacknowledgedIssueReactions(native(3, true), desired),
+      ),
+    ).toEqual(native(2, false));
+    expect(retainUnacknowledgedIssueReactions(native(2, false), desired).size).toBe(0);
+    expect(retainUnacknowledgedIssueReactions([], desired).size).toBe(0);
   });
 });

@@ -2,6 +2,7 @@ import type {
   IssueActor,
   IssueCapabilities,
   IssueReactionContent,
+  IssueReaction,
   IssueComment,
   IssueDetail,
   IssueAssigneeCandidate,
@@ -15,6 +16,19 @@ import { issueEntryKey, prependIssueComments } from "@t3tools/client-runtime/sta
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 
 import { PULL_REQUEST_REACTION_ORDER } from "../pullRequest/pullRequestReactions.logic";
+
+export function retainUnacknowledgedIssueReactions(
+  reactions: ReadonlyArray<IssueReaction>,
+  desired: ReadonlyMap<IssueReactionContent, boolean>,
+): ReadonlyMap<IssueReactionContent, boolean> {
+  return new Map(
+    [...desired].filter(
+      ([content, reacted]) =>
+        (reactions.find((reaction) => reaction.content === content)?.viewerHasReacted ?? false) !==
+        reacted,
+    ),
+  );
+}
 
 export function issueSupportsReactions(
   capabilities: Pick<IssueCapabilities, "reactions" | "commentReactions">,

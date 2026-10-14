@@ -80,6 +80,7 @@ import {
   issueLabelOptions,
   issueSupportsReactions,
   offeredIssueReactionContents,
+  retainUnacknowledgedIssueReactions,
   isIssueAssignee,
   linkedPullRequestTarget,
   nextIssueAssignees,
@@ -203,17 +204,24 @@ export function IssueReactionBar({
   reference: IssueRef;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [pending, setPending] = useState<ReadonlyMap<IssueReactionContent, boolean>>(new Map());
+  const [pending, setPending] = useState({
+    native: reactions,
+    values: new Map<IssueReactionContent, boolean>() as ReadonlyMap<IssueReactionContent, boolean>,
+  });
   const [busy, setBusy] = useState<ReadonlySet<IssueReactionContent>>(new Set());
   const react = useAtomCommand(issueEnvironment.react, { reportFailure: false });
-  const shown = applyPendingPullRequestReactions(reactions, pending);
-
+  const values =
+    pending.native === reactions
+      ? pending.values
+      : retainUnacknowledgedIssueReactions(reactions, pending.values);
+  if (pending.native !== reactions) setPending({ native: reactions, values });
+  const shown = applyPendingPullRequestReactions(reactions, values);
   const offered = offeredIssueReactionContents(contents);
 
   const toggle = async (content: IssueReactionContent, reacted: boolean) => {
     if (!canReact || !offered.includes(content) || busy.has(content)) return;
     setBusy((current) => new Set([...current, content]));
-    setPending((current) => new Map([...current, [content, reacted]]));
+    setPending({ native: reactions, values: new Map([...values, [content, reacted]]) });
     const result = await react({
       environmentId,
       input: { ...reference, ...(subjectId === undefined ? {} : { subjectId }), content, reacted },
@@ -223,12 +231,14 @@ export function IssueReactionBar({
       next.delete(content);
       return next;
     });
-    setPending((current) => {
-      const next = new Map(current);
-      next.delete(content);
-      return next;
-    });
     if (result._tag === "Failure") {
+      setPending((current) => {
+        const next = new Map(current.values);
+        const previous = values.get(content);
+        if (previous === undefined) next.delete(content);
+        else next.set(content, previous);
+        return { native: current.native, values: next };
+      });
       toastManager.add({ type: "error", title: "The reaction could not be saved" });
     }
   };
