@@ -988,7 +988,7 @@ function IssueDetailContent({
             )}
             {detail.reactions !== undefined ? (
               <IssueReactionBar
-                key={issueEntryKey(detail)}
+                key={JSON.stringify([issueEntryKey(detail), detail.viewer ?? null])}
                 reactions={detail.reactions}
                 canReact={canReact}
                 contents={detail.capabilities.reactionContents}
@@ -1122,6 +1122,11 @@ function IssueDetailContent({
                       {item.comment.reactions !== undefined ||
                       issueSupportsReactions(detail.capabilities, true) ? (
                         <IssueReactionBar
+                          key={JSON.stringify([
+                            issueEntryKey(detail),
+                            item.comment.id,
+                            detail.viewer ?? null,
+                          ])}
                           reactions={item.comment.reactions ?? []}
                           canReact={canReactToComment}
                           contents={detail.capabilities.reactionContents}

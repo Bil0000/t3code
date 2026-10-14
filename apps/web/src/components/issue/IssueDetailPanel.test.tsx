@@ -8,7 +8,12 @@ import {
   ProjectId,
   IssueCommentsPageInput,
 } from "@t3tools/contracts";
-import type { IssueState, IssueComment, IssueLinkedPullRequestsPage } from "@t3tools/contracts";
+import type {
+  IssueState,
+  IssueComment,
+  IssueReaction,
+  IssueLinkedPullRequestsPage,
+} from "@t3tools/contracts";
 import { RegistryContext } from "@effect/atom-react";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
@@ -29,6 +34,7 @@ const state = vi.hoisted(() => ({
     url: "https://github.com/org/repo/issues/1",
     author: null,
     viewer: null as string | null,
+    reactions: undefined as ReadonlyArray<IssueReaction> | undefined,
     state: { category: "open", name: "open" } as IssueState,
     states: undefined as ReadonlyArray<IssueState> | undefined,
     createdAt: "2026-10-14T00:00:00Z",
@@ -158,6 +164,105 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
 const decodeCommentPageInput = Schema.decodeUnknownSync(IssueCommentsPageInput);
+
+it.each(["viewer-a", null])(
+  "clears issue and comment reaction confirmation on viewer switch before ACK (%s)",
+  async (viewer) => {
+    const previousDetail = state.detail;
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    state.allowed = true;
+    state.write.mockReset().mockResolvedValue({ _tag: "Success" });
+    const reactions = [
+      { content: "thumbs-up" as const, count: 2, actors: [], viewerHasReacted: false },
+    ];
+    state.detail = {
+      ...state.detail,
+      viewer,
+      reactions,
+      writable: true,
+      commentsCursor: null,
+      comments: [
+        {
+          id: "comment",
+          author: null,
+          body: "Native comment",
+          createdAt: "2026-10-14T00:00:00Z",
+          url: null,
+          reactions,
+        },
+      ],
+      capabilities: {
+        ...state.detail.capabilities,
+        reactions: true,
+        events: false,
+        linkedPullRequests: false,
+      },
+    };
+    const environmentId = EnvironmentId.make("environment");
+    const reference = {
+      projectId: ProjectId.make("project"),
+      tracker: IssueTrackerKind.make("github"),
+      host: "github.com",
+      scope: "org/repo",
+      key: "1",
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const pills = () => [
+      ...container.querySelectorAll<HTMLButtonElement>('button[aria-label^="thumbs up,"]'),
+    ];
+    const render = () =>
+      act(async () =>
+        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+      );
+    try {
+      await render();
+      expect(pills()).toHaveLength(2);
+      for (const pill of pills()) await act(async () => pill.click());
+      expect(pills().map((pill) => [pill.textContent, pill.getAttribute("aria-pressed")])).toEqual([
+        ["👍3", "true"],
+        ["👍3", "true"],
+      ]);
+      state.detail = {
+        ...state.detail,
+        reactions: [...reactions],
+        comments: state.detail.comments.map((comment) => ({
+          ...comment,
+          reactions: [...reactions],
+        })),
+      };
+      await render();
+      expect(pills().every((pill) => pill.getAttribute("aria-pressed") === "true")).toBe(true);
+      const native = [{ ...reactions[0]!, count: 3 }];
+      state.detail = {
+        ...state.detail,
+        viewer: "viewer-b",
+        reactions: native,
+        comments: state.detail.comments.map((comment) => ({ ...comment, reactions: native })),
+      };
+      await render();
+      expect(pills().map((pill) => [pill.textContent, pill.getAttribute("aria-pressed")])).toEqual([
+        ["👍3", "false"],
+        ["👍3", "false"],
+      ]);
+      for (const pill of pills()) await act(async () => pill.click());
+      expect(
+        state.write.mock.calls.map(([request]) => [request.input.subjectId, request.input.reacted]),
+      ).toEqual([
+        [undefined, true],
+        ["comment", true],
+        [undefined, true],
+        ["comment", true],
+      ]);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.detail = previousDetail;
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it.each([
   ["Sprint 4", false],
