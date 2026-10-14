@@ -1240,7 +1240,7 @@ it.effect("resolves a legacy Linear team binding and verifies the native workspa
 );
 
 it.effect(
-  "resolves Jira URL refs for reads and writes only on the configured tenant and project",
+  "resolves Jira URL refs with same-site foreign project reads and writes only on the bound project",
   () =>
     Effect.gen(function* () {
       let reads = 0;
@@ -1251,7 +1251,7 @@ it.effect(
           Effect.sync(() => {
             reads++;
             expect(input.host).toBe("tenant.atlassian.net");
-            expect(input.scope).toBe("ENG");
+            expect(input.scope).toBe(input.key.split("-")[0]);
             return { ...issue(input.key), url: `https://tenant.atlassian.net/browse/${input.key}` };
           }),
         comment: (input) =>
@@ -1289,15 +1289,40 @@ it.effect(
       yield* service.comment({ ...ref, body: "Hello" });
       yield* service.setState({ ...ref, state: "closed" });
       expect(writes).toEqual(["comment ENG ENG-123", "state ENG ENG-123"]);
+      const foreign = yield* service.resolveUrl("https://tenant.atlassian.net/browse/OPS-1");
+      expect(foreign).toEqual({
+        projectId: "web",
+        tracker: JIRA,
+        host: "tenant.atlassian.net",
+        scope: "OPS",
+        key: "OPS-1",
+        writable: false,
+      });
+      expect(reads).toBe(1);
+      expect(yield* service.detail(foreign)).toMatchObject({ writable: false });
+      for (const operation of [
+        service.comment({ ...foreign, body: "Hello" }),
+        service.setState({ ...foreign, state: "closed" }),
+      ]) {
+        expect(yield* Effect.flip(operation)).toMatchObject({
+          _tag: "IssueOperationError",
+          reason: "read-only",
+        });
+      }
       for (const url of [
         "https://other.atlassian.net/browse/ENG-123",
-        "https://tenant.atlassian.net/browse/QA-123",
+        "https://other.atlassian.net/browse/OPS-1",
       ]) {
         expect(yield* Effect.flip(service.resolveUrl(url))).toMatchObject({
           _tag: "IssueUnavailableError",
         });
       }
-      expect(reads).toBe(1);
+      expect(reads).toBe(2);
+      expect(writes).toEqual(["comment ENG ENG-123", "state ENG ENG-123"]);
+      const unbound = yield* makeService({ projects: [project({ id: "web" })], trackers: [api] });
+      expect(
+        yield* Effect.flip(unbound.resolveUrl("https://tenant.atlassian.net/browse/OPS-1")),
+      ).toMatchObject({ _tag: "IssueUnavailableError" });
     }),
 );
 

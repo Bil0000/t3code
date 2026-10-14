@@ -817,6 +817,7 @@ export const make = Effect.gen(function* () {
           onTracker.filter(
             (project) =>
               !isStandaloneIssueTracker(project.api) ||
+              project.tracker === "jira" ||
               (project.tracker === "linear" &&
                 parsed.workspace !== undefined &&
                 project.scope.includes("/") &&
@@ -855,7 +856,8 @@ export const make = Effect.gen(function* () {
         projectId: lender.project.id,
         tracker: lender.tracker,
         host: lender.host,
-        scope: own === undefined ? parsed.scope : lender.scope,
+        scope:
+          own?.scope ?? (parsed.tracker === "jira" ? parsed.scope.toUpperCase() : parsed.scope),
         key: parsed.key,
         writable: own !== undefined,
       };
