@@ -992,6 +992,26 @@ describe("ForgejoIssueTracker", () => {
       }),
   );
 
+  it.effect("honors a smaller requested issue page", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker((input) => {
+        expect(new URL(input.path, "https://forgejo.test").searchParams.get("limit")).toBe("3");
+        return { stdout: encode([ISSUE]), stderr: 'Link: </next>; rel="next"' };
+      });
+      const page = yield* api.listIssues({
+        cwd: "/w",
+        host: "forgejo.test",
+        scope: "acme/web",
+        state: "all",
+        involvement: "all",
+        viewer: "julius",
+        limit: 3,
+      });
+      expect(page.items).toHaveLength(1);
+      expect(page.nextCursor).toBe("2");
+    }),
+  );
+
   it.effect("lists issues by page and leaves pull requests out of the rows", () =>
     Effect.gen(function* () {
       const paths: string[] = [];
@@ -1049,12 +1069,46 @@ describe("ForgejoIssueTracker", () => {
       expect(first.comments.map((comment) => comment.id)).toEqual(
         Array.from({ length: 50 }, (_, index) => String(index + 1)),
       );
-      expect(first.commentsCursor).toBe("offset:50");
+      expect(first.commentsCursor).toBe("offset:1:50");
       const second = yield* api.getComments({ ...target, cursor: first.commentsCursor! });
       expect(second.comments.map((comment) => comment.id)).toEqual(["51"]);
       expect(second.nextCursor).toBeNull();
       expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toHaveLength(2);
       expect(paths.filter((path) => path.endsWith("/comments/51/reactions"))).toHaveLength(1);
+    }),
+  );
+
+  it.effect("keeps the native page while slicing an oversized later comment page", () =>
+    Effect.gen(function* () {
+      const pages: number[] = [];
+      const api = yield* tracker((input) => {
+        if (input.path.startsWith("repos/acme/web/issues/42/comments?")) {
+          const page = Number(new URL(input.path, "https://forgejo.test").searchParams.get("page"));
+          pages.push(page);
+          const rows = Array.from({ length: page === 1 ? 1 : 60 }, (_, index) => ({
+            id: page === 1 ? 1 : index + 2,
+            body: "Comment",
+            user: { login: "julius" },
+            created_at: "2026-07-02T00:00:00Z",
+          }));
+          return {
+            stdout: encode(rows),
+            stderr: page === 1 ? 'Link: </next>; rel="next"' : 'Link: </previous>; rel="prev"',
+          };
+        }
+        if (/\/issues\/comments\/\d+\/reactions$/.test(input.path)) return { stdout: "[]" };
+        return answer(input.path);
+      });
+      const target = { cwd: "/w", host: "forgejo.test", scope: "acme/web", key: "42" };
+      const first = yield* api.getIssue(target);
+      const second = yield* api.getComments({ ...target, cursor: first.commentsCursor! });
+      expect(second.nextCursor).toBe("offset:2:50");
+      const third = yield* api.getComments({ ...target, cursor: second.nextCursor! });
+      expect(third.comments.map((comment) => comment.id)).toEqual(
+        Array.from({ length: 10 }, (_, index) => String(index + 52)),
+      );
+      expect(third.nextCursor).toBeNull();
+      expect(pages).toEqual([1, 2, 2]);
     }),
   );
 

@@ -235,6 +235,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       path: string,
       page: number,
       schema: Schema.Codec<A, unknown, never, never>,
+      limit = PAGE_SIZE,
     ): Effect.Effect<
       {
         readonly rows: ReadonlyArray<A>;
@@ -244,7 +245,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       IssueTrackerError
     > =>
       request(target, operation, {
-        path: `${path}${path.includes("?") ? "&" : "?"}limit=${PAGE_SIZE}&page=${page}`,
+        path: `${path}${path.includes("?") ? "&" : "?"}limit=${limit}&page=${page}`,
       }).pipe(
         Effect.flatMap((result) => {
           if (result.stdoutTruncated)
@@ -319,9 +320,13 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       cursor: string | undefined,
       viewer: string,
     ) {
-      const offsetMatch = /^offset:([1-9]\d{0,8})$/.exec(cursor ?? "");
+      const offsetMatch = /^offset:(?:([1-9]\d{0,6}):)?([1-9]\d{0,8})$/.exec(cursor ?? "");
       const pageMatch = COMMENT_PAGE_CURSOR.exec(cursor ?? "");
-      const page = offsetMatch ? 1 : pageMatch ? Number(pageMatch[1]) : parsePage(cursor);
+      const page = offsetMatch
+        ? Number(offsetMatch[1] ?? 1)
+        : pageMatch
+          ? Number(pageMatch[1])
+          : parsePage(cursor);
       if (page === null)
         return yield* refused(operation, "The cursor was not one Forgejo handed out.");
       const result = yield* request(target, operation, {
@@ -335,13 +340,13 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       const rows = decoded.success ?? [];
       const links = /^link:\s*(.*)$/im.exec(result.stderr)?.[1];
       const seenAt = pageMatch ? rows.findIndex((row) => row.id === Number(pageMatch[2])) : -1;
-      const offset = offsetMatch ? Number(offsetMatch[1]) : seenAt + 1;
+      const offset = offsetMatch ? Number(offsetMatch[2]) : seenAt + 1;
       const selected = rows.slice(offset, offset + COMMENT_REACTION_LIMIT);
       const last = selected.at(-1);
       let nextCursor: string | null = null;
       if (last) {
         if (offset + selected.length < rows.length)
-          nextCursor = `offset:${offset + selected.length}`;
+          nextCursor = `offset:${page}:${offset + selected.length}`;
         else if (links !== undefined) {
           if (/rel="?next"?/i.test(links)) nextCursor = String(page + 1);
         } else if (!offsetMatch) nextCursor = `page:${page + 1}:${last.id}`;
@@ -471,6 +476,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           `${repoPath(input.scope)}/issues?${params}`,
           page,
           ForgejoIssue,
+          Math.min(input.limit, PAGE_SIZE),
         ).pipe(
           Effect.map(({ rows, nextCursor }) => ({
             items: rows.flatMap((issue) => (issue.pull_request ? [] : [forgejoIssue(issue)])),
@@ -524,7 +530,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       getComments: (input) => {
         const validCursor =
           parsePage(input.cursor) !== null ||
-          /^offset:[1-9]\d{0,8}$/.test(input.cursor) ||
+          /^offset:(?:[1-9]\d{0,6}:)?[1-9]\d{0,8}$/.test(input.cursor) ||
           COMMENT_PAGE_CURSOR.test(input.cursor);
         return !validCursor
           ? Effect.fail(refused("getComments", "The cursor was not one Forgejo handed out."))
