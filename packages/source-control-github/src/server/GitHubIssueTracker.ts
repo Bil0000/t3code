@@ -134,6 +134,7 @@ const LinkedPage = Schema.Struct({
 
 const isIssueEventKind = Schema.is(IssueEventKind);
 const KIND = IssueTrackerKind.make("github");
+const MAX_ASSIGNEES = 10;
 
 const CAPABILITIES: IssueCapabilities = {
   create: true,
@@ -147,6 +148,7 @@ const CAPABILITIES: IssueCapabilities = {
   listOrders: ["asc", "desc"],
   labels: true,
   assignees: true,
+  maxAssignees: MAX_ASSIGNEES,
   reactions: true,
   templates: true,
   linkedPullRequests: true,
@@ -329,6 +331,18 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
         detail: "GitHub could not find the requested issue.",
       });
 
+    const validateAssignees = (assignees: ReadonlyArray<string> | undefined, operation: string) =>
+      (assignees?.length ?? 0) > MAX_ASSIGNEES
+        ? Effect.fail(
+            new IssueTrackerError({
+              tracker: KIND,
+              operation,
+              reason: "failed",
+              detail: "GitHub issues support at most 10 assignees.",
+            }),
+          )
+        : Effect.void;
+
     /** A GraphQL read whose answer is decoded, reporting a failure against the read that made it. */
     const graphqlRead = <A>(input: {
       readonly host: string;
@@ -395,6 +409,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
       },
     ) =>
       restIssue(input, operation).pipe(
+        Effect.tap(() => validateAssignees(body.assignees, operation)),
         Effect.flatMap(({ path }) =>
           api.rest({ host: input.host, operation, method: "PATCH", path, body }).pipe(
             Effect.mapError(fail(operation)),
@@ -929,6 +944,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
 
       create: (input) =>
         Effect.gen(function* () {
+          yield* validateAssignees(input.assignees, "create");
           if (input.parentKey !== undefined)
             yield* readRelatedIssue({ ...input, key: input.parentKey }, "create");
           const { owner, name } = parseRepository(input.scope);
