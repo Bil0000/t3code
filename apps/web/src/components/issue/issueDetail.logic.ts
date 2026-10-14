@@ -64,6 +64,7 @@ export function offeredIssueReactionContents(
 
 export type IssueOlderComments = {
   readonly issue: string;
+  readonly viewer?: string | null | undefined;
   readonly seed: string | null;
   readonly firstIds: ReadonlyArray<string>;
   readonly comments: ReadonlyArray<IssueComment>;
@@ -73,6 +74,7 @@ export type IssueOlderComments = {
 export function issueCommentsView(detail: IssueDetail, older: IssueOlderComments | null) {
   const held =
     older?.issue === issueEntryKey(detail) &&
+    (older.viewer === undefined || older.viewer === detail.viewer) &&
     older.seed === detail.commentsCursor &&
     older.firstIds.length === detail.comments.length &&
     older.firstIds.every((id, index) => id === detail.comments[index]?.id)
@@ -108,6 +110,7 @@ export function appendOlderIssueComments(
 ): IssueOlderComments {
   return {
     issue: issueEntryKey(detail),
+    viewer: detail.viewer,
     seed: detail.commentsCursor,
     firstIds: detail.comments.map((comment) => comment.id),
     comments: prependIssueComments(

@@ -262,6 +262,19 @@ describe("older issue comments across detail re-reads", () => {
     nextCursor: "page-3",
   });
 
+  it("resets a viewer change while retaining same-viewer edits, null viewers and legacy windows", () => {
+    const changed = detail({ viewer: "another-viewer" });
+    expect(issueCommentsView(changed, loaded).held).toBeNull();
+    const edited = editRetainedIssueComment(loaded, loaded.issue, "c2", "edited");
+    expect(issueCommentsView(detail(), edited).comments[0]?.body).toBe("edited");
+    const unknown = appendOlderIssueComments(detail({ viewer: null }), null, {
+      comments: [comment("c2")],
+      nextCursor: null,
+    });
+    expect(issueCommentsView(detail({ viewer: null }), unknown).held).toBe(unknown);
+    expect(issueCommentsView(changed, { ...loaded, viewer: undefined }).held).not.toBeNull();
+  });
+
   it("keeps loaded pages when a new detail has the same first-page IDs and cursor", () => {
     const refreshed = detail({
       title: "Renamed",

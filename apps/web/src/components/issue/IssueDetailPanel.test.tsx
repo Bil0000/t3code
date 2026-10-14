@@ -474,7 +474,7 @@ it.each([
     const wire = encodeCommentPageInput(input);
     const decoded = decodeCommentPageInput(wire);
     const owned = decoded.viewer === "viewer-123";
-    expect(decoded.viewer).toBe(viewer ?? undefined);
+    expect(decoded.viewer).toBe(state.detail.viewer ?? undefined);
     return {
       _tag: "Success",
       value: {
@@ -545,6 +545,31 @@ it.each([
         container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Edit comment"]')?.value,
       ).toBe("Older own comment");
     }
+    state.detail = { ...state.detail };
+    await act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+    );
+    expect(state.write).toHaveBeenCalledOnce();
+    if (viewer !== null) {
+      state.detail = { ...state.detail, viewer: "viewer-456" };
+      await act(async () =>
+        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+      );
+      expect(container.querySelector('textarea[aria-label="Edit comment"]')).toBeNull();
+      expect(container.querySelector('button[aria-label^="thumbs up,"]')).toBeNull();
+      expect(state.write).toHaveBeenCalledOnce();
+      const reload = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Load older comments",
+      )!;
+      await act(async () => reload.click());
+      expect(state.write).toHaveBeenCalledTimes(2);
+      expect(state.write.mock.calls[1]![0].input.viewer).toBe("viewer-456");
+      expect(container.querySelector('button[aria-label="Edit comment"]')).toBeNull();
+      if (tracker === "linear")
+        expect(
+          container.querySelector('button[aria-label^="thumbs up,"]')!.getAttribute("aria-pressed"),
+        ).toBe("false");
+    } else expect(container.textContent).toContain("Older own comment");
   } finally {
     await act(async () => root.unmount());
     container.remove();
