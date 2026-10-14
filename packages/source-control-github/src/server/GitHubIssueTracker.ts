@@ -49,6 +49,7 @@ import {
   decodeRestIssueMetadataJson,
   decodeIssueNodeIdJson,
   decodeIssueSearchJson,
+  decodeRepositoryIssuesJson,
   decodeIssueTemplatesJson,
   decodeIssueTemplateFilesJson,
   decodeIssueEditableCommentScopeJson,
@@ -62,6 +63,7 @@ import {
   ISSUE_TEMPLATES_GRAPHQL_QUERY,
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   issueSearchGraphQlQuery,
+  issueRepositoryGraphQlQuery,
   SEARCH_MAX_ROWS,
 } from "./gitHubIssueJson.ts";
 
@@ -612,16 +614,53 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
           )
         )
           return Effect.succeed({ items: [], nextCursor: null });
-        return graphqlRead({
-          host: input.host,
-          operation: "listIssues",
-          query: issueSearchGraphQlQuery(Math.min(input.limit, SEARCH_MAX_ROWS)),
-          variables:
-            input.cursor === undefined
-              ? { q: searchQuery(input) }
-              : { q: searchQuery(input), cursor: input.cursor },
-          decode: decodeIssueSearchJson,
-        }).pipe(
+        const page =
+          input.query?.trim() || input.involvement !== "all"
+            ? graphqlRead({
+                host: input.host,
+                operation: "listIssues",
+                query: issueSearchGraphQlQuery(Math.min(input.limit, SEARCH_MAX_ROWS)),
+                variables:
+                  input.cursor === undefined
+                    ? { q: searchQuery(input) }
+                    : { q: searchQuery(input), cursor: input.cursor },
+                decode: decodeIssueSearchJson,
+              })
+            : graphqlRead({
+                host: input.host,
+                operation: "listIssues",
+                query: issueRepositoryGraphQlQuery(input.limit),
+                variables: {
+                  ...parseRepository(input.scope),
+                  ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+                  states:
+                    input.stateCategories === undefined
+                      ? input.state === "all"
+                        ? ["OPEN", "CLOSED"]
+                        : [input.state.toUpperCase()]
+                      : [
+                          ...(input.stateCategories.includes("unstarted") ? ["OPEN"] : []),
+                          ...(input.stateCategories.some(
+                            (state) => state === "completed" || state === "canceled",
+                          )
+                            ? ["CLOSED"]
+                            : []),
+                        ],
+                  orderBy: {
+                    field: { created: "CREATED_AT", updated: "UPDATED_AT", comments: "COMMENTS" }[
+                      input.sort ?? "updated"
+                    ],
+                    direction: (input.order ?? "desc").toUpperCase(),
+                  },
+                },
+                decode: decodeRepositoryIssuesJson,
+              }).pipe(
+                Effect.filterOrFail(
+                  (value) => value !== null,
+                  () => notFound("listIssues"),
+                ),
+              );
+        return page.pipe(
           Effect.map((page) => ({
             ...page,
             items: page.items.filter(

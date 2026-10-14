@@ -109,14 +109,24 @@ export function issueSearchGraphQlQuery(rows: number): string {
 }`;
 }
 
-const RawSearchSchema = Schema.Struct({
-  data: Schema.Struct({
-    search: Schema.Struct({
-      pageInfo: Schema.optional(Schema.NullOr(RawPageInfoSchema)),
-      // Row by row, so a node that is not an issue is skipped rather than blanking the page.
-      nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
-    }),
-  }),
+export function issueRepositoryGraphQlQuery(rows: number): string {
+  return `query($owner: String!, $name: String!, $cursor: String, $states: [IssueState!], $orderBy: IssueOrder!) {
+  repository(owner: $owner, name: $name) {
+    issues(first: ${Math.min(Math.max(Math.trunc(rows), 1), PAGE_SIZE)}, after: $cursor, states: $states, orderBy: $orderBy) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ${ISSUE_ROW_FIELDS} }
+    }
+  }
+}`;
+}
+
+const RawIssuePageSchema = Schema.Struct({
+  pageInfo: Schema.optional(Schema.NullOr(RawPageInfoSchema)),
+  nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+});
+const RawSearchSchema = Schema.Struct({ data: Schema.Struct({ search: RawIssuePageSchema }) });
+const RawRepositoryIssuesSchema = Schema.Struct({
+  data: Schema.Struct({ repository: Schema.NullOr(Schema.Struct({ issues: RawIssuePageSchema })) }),
 });
 
 const RawReferenceSchema = Schema.Struct({
@@ -395,6 +405,7 @@ const RawCreatedIssueSchema = Schema.Struct({
 });
 
 const decodeSearch = decodeJsonResult(RawSearchSchema);
+const decodeRepositoryIssues = decodeJsonResult(RawRepositoryIssuesSchema);
 const decodeIssueRow = Schema.decodeUnknownExit(RawIssueSchema);
 const decodeDetail = decodeJsonResult(RawDetailSchema);
 const decodeCommentPage = decodeJsonResult(RawCommentPageSchema);
@@ -498,15 +509,24 @@ export function decodeIssueSearchJson(
 ): Result.Result<GitHubIssueSearchPage, DecodeFailure> {
   const decoded = decodeSearch(raw);
   if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
-  const search = decoded.success.data.search;
-  const items = (search.nodes ?? []).flatMap((entry) => {
+  return Result.succeed(toIssuePage(decoded.success.data.search));
+}
+
+export function decodeRepositoryIssuesJson(raw: string) {
+  return Result.map(decodeRepositoryIssues(raw), ({ data }) =>
+    data.repository === null ? null : toIssuePage(data.repository.issues),
+  );
+}
+
+function toIssuePage(page: typeof RawIssuePageSchema.Type): GitHubIssueSearchPage {
+  const items = (page.nodes ?? []).flatMap((entry) => {
     const row = decodeIssueRow(entry);
     return Exit.isSuccess(row) ? [toSummary(row.value)] : [];
   });
-  return Result.succeed({
+  return {
     items,
-    nextCursor: search.pageInfo?.hasNextPage === true ? trimmed(search.pageInfo.endCursor) : null,
-  });
+    nextCursor: page.pageInfo?.hasNextPage === true ? trimmed(page.pageInfo.endCursor) : null,
+  };
 }
 
 function toPullRequestState(value: string | null | undefined): PullRequestState {

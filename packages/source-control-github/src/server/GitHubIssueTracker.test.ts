@@ -128,6 +128,233 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each([
+    { state: "all", states: ["OPEN", "CLOSED"] },
+    { state: "open", states: ["OPEN"] },
+    { state: "closed", states: ["CLOSED"] },
+  ] as const)("uses native repository states for $state browsing", (input) =>
+    Effect.gen(function* () {
+      const api = yield* tracker((query, variables) => {
+        expect(query).not.toContain("search(");
+        expect(variables).toMatchObject({ states: input.states });
+        return JSON.stringify({
+          data: { repository: { issues: { nodes: [], pageInfo: { hasNextPage: false } } } },
+        });
+      });
+      expect(
+        yield* api.listIssues({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          state: input.state,
+          involvement: "all",
+          viewer: "julius",
+          query: "  ",
+          limit: 50,
+        }),
+      ).toEqual({ items: [], nextCursor: null });
+    }),
+  );
+
+  it.effect("keeps repository misses typed and refuses malformed scopes before reading", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const api = yield* tracker(() => {
+        reads++;
+        return JSON.stringify({ data: { repository: null } });
+      });
+      const input = {
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        state: "all" as const,
+        involvement: "all" as const,
+        viewer: "julius",
+        limit: 50,
+      };
+      expect((yield* Effect.flip(api.listIssues(input))).reason).toBe("not-found");
+      expect(reads).toBe(1);
+      expect(
+        (yield* Effect.flip(api.listIssues({ ...input, scope: "acme/web repo:foreign/web" })))
+          .reason,
+      ).toBe("failed");
+      expect(reads).toBe(1);
+    }),
+  );
+
+  it.effect.each([
+    { involvement: "all", query: "focus", qualifier: '"focus"' },
+    { involvement: "assigned", qualifier: "assignee:julius" },
+    { involvement: "authored", qualifier: "author:julius" },
+    { involvement: "mentioned", qualifier: "mentions:julius" },
+  ] as const)("keeps native search for $qualifier without reading a viewer", (input) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const api = yield* tracker((query, variables) => {
+        reads++;
+        expect(query).toContain("search(");
+        expect(variables).toMatchObject({
+          q: expect.stringContaining(input.qualifier),
+          cursor: "raw-search",
+        });
+        return JSON.stringify({
+          data: {
+            search: { nodes: [], pageInfo: { hasNextPage: true, endCursor: "next-search" } },
+          },
+        });
+      });
+      const page = yield* api.listIssues({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        state: "all",
+        viewer: "julius",
+        limit: 50,
+        cursor: "raw-search",
+        involvement: input.involvement,
+        ...("query" in input ? { query: input.query } : {}),
+      });
+      expect(page).toEqual({ items: [], nextCursor: "next-search" });
+      expect(reads).toBe(1);
+    }),
+  );
+
+  it.effect.each([
+    { categories: ["canceled"] as const, keys: ["8"], states: ["CLOSED"] },
+    { categories: ["completed"] as const, keys: ["9"], states: ["CLOSED"] },
+    { categories: ["completed", "canceled"] as const, keys: ["8", "9"], states: ["CLOSED"] },
+    {
+      categories: ["unstarted", "completed"] as const,
+      keys: ["7", "9"],
+      states: ["OPEN", "CLOSED"],
+    },
+    {
+      categories: ["unstarted", "canceled"] as const,
+      keys: ["7", "8"],
+      states: ["OPEN", "CLOSED"],
+    },
+  ])("filters repository workflow categories $categories after the native page", (input) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const api = yield* tracker((query, variables) => {
+        reads++;
+        expect(query).not.toContain("search(");
+        expect(variables).toMatchObject({ states: input.states });
+        return JSON.stringify({
+          data: {
+            repository: {
+              issues: {
+                nodes: [
+                  { ...DETAIL_FIXTURE.data.repository.issue, number: 7, state: "OPEN" },
+                  { ...DETAIL_FIXTURE.data.repository.issue, number: 8 },
+                  { ...DETAIL_FIXTURE.data.repository.issue, number: 9, stateReason: "COMPLETED" },
+                ],
+                pageInfo: { hasNextPage: true, endCursor: "raw-next" },
+              },
+            },
+          },
+        });
+      });
+      const page = yield* api.listIssues({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        state: "all",
+        stateCategories: input.categories,
+        involvement: "all",
+        viewer: "julius",
+        limit: 50,
+      });
+      expect(page.items.map((item) => item.key)).toEqual(input.keys);
+      expect(page.nextCursor).toBe("raw-next");
+      expect(reads).toBe(1);
+    }),
+  );
+
+  it.effect.each([
+    { sort: "created", order: "asc", field: "CREATED_AT", direction: "ASC" },
+    { sort: "created", order: "desc", field: "CREATED_AT", direction: "DESC" },
+    { sort: "updated", order: "asc", field: "UPDATED_AT", direction: "ASC" },
+    { sort: "updated", order: "desc", field: "UPDATED_AT", direction: "DESC" },
+    { sort: "comments", order: "asc", field: "COMMENTS", direction: "ASC" },
+    { sort: "comments", order: "desc", field: "COMMENTS", direction: "DESC" },
+  ] as const)("uses native repository $sort $order ordering and raw continuation", (order) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const api = yield* tracker((query, variables) => {
+        reads++;
+        expect(query).not.toContain("search(");
+        expect(query).toContain("issues(first: 100");
+        expect(variables).toEqual({
+          owner: "acme",
+          name: "web",
+          states: ["OPEN", "CLOSED"],
+          orderBy: { field: order.field, direction: order.direction },
+          cursor: "raw-native",
+        });
+        return JSON.stringify({
+          data: {
+            repository: {
+              issues: {
+                nodes: [DETAIL_FIXTURE.data.repository.issue],
+                pageInfo: { hasNextPage: true, endCursor: "raw-next" },
+              },
+            },
+          },
+        });
+      });
+      const page = yield* api.listIssues({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        state: "all",
+        involvement: "all",
+        viewer: "julius",
+        limit: 200,
+        cursor: "raw-native",
+        sort: order.sort,
+        order: order.order,
+      });
+      expect(page.items[0]?.key).toBe("42");
+      expect(page.nextCursor).toBe("raw-next");
+      expect(reads).toBe(1);
+    }),
+  );
+
+  it.effect("keeps a filtered-empty repository page cursor without scanning", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const api = yield* tracker((query, variables) => {
+        reads++;
+        expect(query).not.toContain("search(");
+        expect(variables).toMatchObject({ states: ["CLOSED"] });
+        return JSON.stringify({
+          data: {
+            repository: {
+              issues: {
+                nodes: [{ ...DETAIL_FIXTURE.data.repository.issue, stateReason: "COMPLETED" }],
+                pageInfo: { hasNextPage: true, endCursor: "raw-next" },
+              },
+            },
+          },
+        });
+      });
+      expect(
+        yield* api.listIssues({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          state: "all",
+          stateCategories: ["canceled"],
+          involvement: "all",
+          viewer: "julius",
+          limit: 50,
+        }),
+      ).toEqual({ items: [], nextCursor: "raw-next" });
+      expect(reads).toBe(1);
+    }),
+  );
+
   it.effect(
     "marks a listed label subset and clears the flag after authoritative detail hydration",
     () =>
@@ -365,6 +592,7 @@ describe("GitHubIssueTracker", () => {
         involvement: "all",
         viewer: "julius",
         stateCategories: selection.categories,
+        query: "focus",
         limit: 3,
       });
       expect(page.items.map((item) => item.key)).toEqual(selection.keys);
