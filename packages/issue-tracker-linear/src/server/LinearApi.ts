@@ -267,6 +267,7 @@ const TEAM_QUERY = `query T3Team($key: String!) {
     nodes {
       id key name
       states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } }
+      ancestors { id key name labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } }
       labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } }
       members(first: 250) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } }
       templates { nodes { id name description content type hasFormFields templateData } }
@@ -359,6 +360,15 @@ const CommentsData = Schema.Struct({
 const LinearTeamDetail = Schema.Struct({
   ...LinearTeam.fields,
   states: Connection(LinearWorkflowState),
+  ancestors: Schema.Array(
+    Schema.Struct({
+      ...LinearTeam.fields,
+      labels: Schema.Struct({
+        ...Connection(LinearLabel).fields,
+        nodes: Schema.Array(LinearLabel).check(Schema.isMaxLength(250)),
+      }),
+    }),
+  ).check(Schema.isMaxLength(5)),
   labels: Connection(LinearLabel),
   members: Connection(LinearUser),
   templates: Schema.Struct({ nodes: Schema.Array(LinearTemplate) }),
@@ -517,6 +527,7 @@ export class LinearApi extends Context.Service<
     ) => Effect.Effect<typeof AttachmentsPageData.Type, IssueTrackerError>;
     readonly listLabelCandidates: (input: {
       readonly ids?: ReadonlyArray<string>;
+      readonly teamIds: ReadonlyArray<string>;
       readonly key: string;
       readonly first: number;
       readonly after?: string | undefined;
@@ -932,12 +943,15 @@ export const make = Effect.gen(function* () {
           team,
           workspaceLabels: data.issueLabels.nodes,
           labelsTruncated:
-            team.labels.pageInfo.hasNextPage || data.issueLabels.pageInfo.hasNextPage,
+            team.labels.pageInfo.hasNextPage ||
+            data.issueLabels.pageInfo.hasNextPage ||
+            team.ancestors.some((ancestor) => ancestor.labels.pageInfo.hasNextPage),
           truncated:
             team.states.pageInfo.hasNextPage ||
             team.labels.pageInfo.hasNextPage ||
             team.members.pageInfo.hasNextPage ||
-            data.issueLabels.pageInfo.hasNextPage,
+            data.issueLabels.pageInfo.hasNextPage ||
+            team.ancestors.some((ancestor) => ancestor.labels.pageInfo.hasNextPage),
         };
       }),
     );
@@ -1012,7 +1026,7 @@ export const make = Effect.gen(function* () {
         after: input.after ?? null,
         filter: {
           and: [
-            { or: [{ team: { key: { eq: input.key } } }, { team: { null: true } }] },
+            { or: [{ team: { id: { in: input.teamIds } } }, { team: { null: true } }] },
             ...(input.ids === undefined ? [] : [{ id: { in: input.ids } }]),
           ],
         },

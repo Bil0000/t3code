@@ -249,6 +249,7 @@ describe("LinearIssueTracker", () => {
                 states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                ancestors: [],
                 templates: { nodes: [] },
               },
             ],
@@ -1269,6 +1270,7 @@ describe("LinearIssueTracker", () => {
                   ],
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
+                ancestors: [],
                 templates: { nodes: [] },
               },
             ],
@@ -1339,6 +1341,7 @@ describe("LinearIssueTracker", () => {
                 states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 labels: { nodes: [label], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                ancestors: [],
                 templates: { nodes: [] },
               },
             ],
@@ -1401,6 +1404,7 @@ describe("LinearIssueTracker", () => {
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                ancestors: [],
                 templates: { nodes: [] },
               },
             ],
@@ -1488,6 +1492,7 @@ describe("LinearIssueTracker", () => {
                     ],
                     pageInfo: { hasNextPage: partial, endCursor: partial ? "more-members" : null },
                   },
+                  ancestors: [],
                   templates: { nodes: [] },
                 },
               ],
@@ -1564,6 +1569,7 @@ describe("LinearIssueTracker", () => {
                   },
                   labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                   members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                  ancestors: [],
                   templates: { nodes: [] },
                 },
               ],
@@ -1610,6 +1616,7 @@ describe("LinearIssueTracker", () => {
                 },
                 labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                ancestors: [],
                 templates: { nodes: [] },
               },
             ],
@@ -1915,7 +1922,26 @@ it.effect("sets and clears parent links while rejecting self and foreign parents
 it.effect("pages label and member candidates with native cursors and workspace checks", () =>
   Effect.gen(function* () {
     const pageInfo = { hasNextPage: true, endCursor: "more" };
+    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
     const test = fakeLinear({
+      T3Team: () => ({
+        organization: ORGANIZATION,
+        issueLabels: empty,
+        teams: {
+          nodes: [
+            {
+              id: "team-1",
+              key: "ENG",
+              name: "Engineering",
+              ancestors: [],
+              states: empty,
+              labels: empty,
+              members: empty,
+              templates: { nodes: [] },
+            },
+          ],
+        },
+      }),
       T3LabelCandidates: () => ({
         organization: ORGANIZATION,
         teams: { nodes: [{ id: "team-1", key: "ENG", name: "Engineering" }] },
@@ -1948,7 +1974,7 @@ it.effect("pages label and member candidates with native cursors and workspace c
       nextCursor: "more",
     });
     yield* api.listLabelCandidates({ ...target, scope: "foreign/ENG", limit: 1 }).pipe(Effect.flip);
-    expect(test.requests).toHaveLength(3);
+    expect(test.requests).toHaveLength(4);
   }),
 );
 
@@ -2003,6 +2029,7 @@ it.effect("creates an issue with a checked parent and a plain native template", 
               states: empty,
               labels: empty,
               members: empty,
+              ancestors: [],
               templates: {
                 nodes: [
                   {
@@ -2154,6 +2181,7 @@ it.effect.each(["create", "update"] as const)(
         states: empty,
         labels: { nodes: labels, pageInfo: { hasNextPage: true, endCursor: "labels-250" } },
         members: { nodes: members, pageInfo: { hasNextPage: true, endCursor: "members-250" } },
+        ancestors: [],
         templates: { nodes: [] },
       };
       const test = fakeLinear({
@@ -2169,7 +2197,7 @@ it.effect.each(["create", "update"] as const)(
             after: null,
             filter: {
               and: [
-                { or: [{ team: { key: { eq: "ENG" } } }, { team: { null: true } }] },
+                { or: [{ team: { id: { in: ["team_eng"] } } }, { team: { null: true } }] },
                 { id: { in: ["label-250"] } },
               ],
             },
@@ -2261,6 +2289,7 @@ it.effect.each([
       states: empty,
       labels: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
       members: empty,
+      ancestors: [],
       templates: { nodes: [] },
     };
     const test = fakeLinear({
@@ -2332,6 +2361,7 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
         states: empty,
         labels: empty,
         members: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
+        ancestors: [],
         templates: { nodes: [] },
       };
       const test = fakeLinear({
@@ -2460,4 +2490,199 @@ it.effect.each(["team", "workspace"] as const)(
         expect(test.requests.map(({ operation }) => operation)).toEqual(["T3IssueReference"]);
       }
     }),
+);
+it.effect.each([false, true])(
+  "lists and retains native parent-team labels: partial=%s",
+  (partial) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const parentLabel = { id: "parent-security", name: "Security", color: null };
+      const childLabel = { ...parentLabel, id: "child-security" };
+      const other = { id: "other", name: "Other", color: null };
+      const written: unknown[] = [];
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        states: empty,
+        members: empty,
+        labels: { ...empty, nodes: [childLabel, other] },
+        templates: { nodes: [] },
+        ancestors: [
+          {
+            id: "team_parent",
+            key: "PARENT",
+            name: "Parent",
+            labels: {
+              nodes: [parentLabel],
+              pageInfo: { hasNextPage: partial, endCursor: "parent-more" },
+            },
+          },
+        ],
+      };
+      const test = fakeLinear({
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          teams: { nodes: [team] },
+          issueLabels: empty,
+        }),
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3LabelCandidates: (variables) => {
+          expect(variables.filter).toMatchObject({
+            and: [
+              {
+                or: [
+                  { team: { id: { in: ["team_eng", "team_parent"] } } },
+                  { team: { null: true } },
+                ],
+              },
+              ...(variables.after === "previous"
+                ? []
+                : [
+                    {
+                      id: {
+                        in: [
+                          JSON.stringify(variables.filter).includes("parent-hidden")
+                            ? "parent-hidden"
+                            : "foreign",
+                        ],
+                      },
+                    },
+                  ]),
+            ],
+          });
+          return {
+            organization: ORGANIZATION,
+            teams: { nodes: [team] },
+            issueLabels:
+              variables.after === "previous"
+                ? {
+                    nodes: [parentLabel],
+                    pageInfo: { hasNextPage: true, endCursor: "next-native" },
+                  }
+                : {
+                    ...empty,
+                    nodes:
+                      variables.filter &&
+                      JSON.stringify(variables.filter).includes('"parent-hidden"')
+                        ? [{ ...parentLabel, id: "parent-hidden" }]
+                        : [],
+                  },
+          };
+        },
+        T3IssueUpdate: (variables) => {
+          written.push(variables.input);
+          return { issueUpdate: { success: true } };
+        },
+        T3IssueCreate: (variables) => {
+          expect(variables.input).toMatchObject({ labelIds: [parentLabel.id] });
+          return {
+            issueCreate: {
+              success: true,
+              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+            },
+          };
+        },
+      });
+      const api = yield* test.tracker;
+      const candidates = yield* api.listCandidates(target);
+      expect(candidates.labels.map(({ id }) => id)).toEqual([
+        childLabel.id,
+        other.id,
+        parentLabel.id,
+      ]);
+      expect(candidates.truncated).toBe(partial);
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
+      test.requests.length = 0;
+      expect(
+        yield* api.listLabelCandidates({ ...target, limit: 1, cursor: "previous" }),
+      ).toMatchObject({
+        items: [{ id: parentLabel.id }],
+        nextCursor: "next-native",
+      });
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3Team",
+        "T3LabelCandidates",
+      ]);
+      test.requests.length = 0;
+      yield* api.update({ ...target, key: "ENG-7", labels: [parentLabel.id, other.id] });
+      expect(written.at(-1)).toEqual({ labelIds: [parentLabel.id, other.id] });
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3IssueReference",
+        "T3Team",
+        "T3IssueUpdate",
+      ]);
+      test.requests.length = 0;
+      yield* api.create({
+        ...target,
+        title: "New",
+        body: "",
+        labels: [parentLabel.id],
+        assignees: [],
+      });
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team", "T3IssueCreate"]);
+      expect(
+        (yield* api.update({ ...target, key: "ENG-7", labels: ["Security"] }).pipe(Effect.flip))
+          .detail,
+      ).toContain("ambiguous");
+      if (partial) {
+        expect(
+          (yield* api.update({ ...target, key: "ENG-7", labels: [other.name] }).pipe(Effect.flip))
+            .detail,
+        ).toContain("incomplete");
+        test.requests.length = 0;
+        yield* api.update({ ...target, key: "ENG-7", labels: ["parent-hidden"] });
+        expect(written.at(-1)).toEqual({ labelIds: ["parent-hidden"] });
+        expect(test.requests.map(({ operation }) => operation)).toEqual([
+          "T3IssueReference",
+          "T3Team",
+          "T3LabelCandidates",
+          "T3IssueUpdate",
+        ]);
+        const before = written.length;
+        test.requests.length = 0;
+        yield* api.update({ ...target, key: "ENG-7", labels: ["foreign"] }).pipe(Effect.flip);
+        expect(written).toHaveLength(before);
+        expect(test.requests.map(({ operation }) => operation)).toEqual([
+          "T3IssueReference",
+          "T3Team",
+          "T3LabelCandidates",
+        ]);
+      }
+    }),
+);
+
+it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s", (count) =>
+  Effect.gen(function* () {
+    const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+    const test = fakeLinear({
+      T3Team: () => ({
+        organization: ORGANIZATION,
+        issueLabels: empty,
+        teams: {
+          nodes: [
+            {
+              id: "team_eng",
+              key: "ENG",
+              name: "Engineering",
+              states: empty,
+              labels: empty,
+              members: empty,
+              templates: { nodes: [] },
+              ancestors: Array.from({ length: count }, (_, n) => ({
+                id: `parent-${n}`,
+                key: `P${n}`,
+                name: "Parent",
+                labels: empty,
+              })),
+            },
+          ],
+        },
+      }),
+    });
+    const api = yield* test.tracker;
+    if (count === 5) expect((yield* api.listCandidates(target)).truncated).toBe(false);
+    else expect((yield* api.listCandidates(target).pipe(Effect.flip)).reason).toBe("failed");
+    expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
+  }),
 );

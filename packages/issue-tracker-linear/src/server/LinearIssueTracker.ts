@@ -423,10 +423,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       Effect.gen(function* () {
         const labels = [
           ...new Map(
-            [...scope.team.labels.nodes, ...scope.workspaceLabels].map((label) => [
-              label.id,
-              label,
-            ]),
+            [
+              ...scope.team.labels.nodes,
+              ...scope.team.ancestors.flatMap((ancestor) => ancestor.labels.nodes),
+              ...scope.workspaceLabels,
+            ].map((label) => [label.id, label]),
           ).values(),
         ];
         const unresolved = [...new Set(names)].filter(
@@ -443,6 +444,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
             key: scope.team.key,
             first: unresolved.length,
             ids: unresolved,
+            teamIds: [scope.team.id, ...scope.team.ancestors.map((ancestor) => ancestor.id)],
           });
           if (
             found.organization.id !== scope.organization.id ||
@@ -821,14 +823,18 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       listLabelCandidates: (input) =>
         Effect.gen(function* () {
           const first = yield* pageInput("listLabelCandidates", input);
-          const scope = yield* requireScope("listLabelCandidates", input.scope);
+          const scope = yield* requireTeam("listLabelCandidates", input.scope);
           const result = yield* linear.listLabelCandidates({
-            key: scope.team,
+            key: scope.team.key,
+            teamIds: [scope.team.id, ...scope.team.ancestors.map((ancestor) => ancestor.id)],
             first,
             after: input.cursor,
           });
           yield* requireWorkspace("listLabelCandidates", input.scope, result.organization.urlKey);
-          if (result.teams.nodes[0]?.key.toUpperCase() !== scope.team)
+          if (
+            result.teams.nodes[0]?.id !== scope.team.id ||
+            result.organization.id !== scope.organization.id
+          )
             return yield* notFound("listLabelCandidates");
           return {
             items: result.issueLabels.nodes
@@ -955,7 +961,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       listCandidates: (input) =>
         requireTeam("listCandidates", input.scope).pipe(
           Effect.map((scope) => ({
-            labels: [...scope.team.labels.nodes, ...scope.workspaceLabels]
+            labels: [
+              ...scope.team.labels.nodes,
+              ...scope.team.ancestors.flatMap((ancestor) => ancestor.labels.nodes),
+              ...scope.workspaceLabels,
+            ]
               .filter((label) => !label.isGroup && label.archivedAt == null)
               .map((label) => ({
                 id: label.id,
