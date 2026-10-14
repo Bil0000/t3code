@@ -833,6 +833,56 @@ describe("native issue state controls", () => {
       expect(state.candidatesRead).not.toHaveBeenCalled();
     },
   );
+  it.each([
+    "linear-started",
+    "linear-completed",
+    "linear-canceled",
+    "azure-devops",
+    "github",
+    "gitlab",
+  ])("omits the current native state while preserving valid transitions (%s)", async (kind) => {
+    const tracker = kind.startsWith("linear") ? "linear" : kind;
+    const generic = tracker === "github" || tracker === "gitlab";
+    const current: IssueState = generic
+      ? { category: "open", name: "open" }
+      : kind === "linear-completed"
+        ? { category: "closed", name: "Done", id: "done", workflowCategory: "completed" }
+        : kind === "linear-canceled"
+          ? { category: "closed", name: "Canceled", id: "canceled", workflowCategory: "canceled" }
+          : { category: "open", name: "In Progress", id: "started", workflowCategory: "started" };
+    const destination: IssueState = generic
+      ? { category: "closed", name: "closed" }
+      : kind === "linear-completed"
+        ? { category: "closed", name: "Canceled", id: "canceled", workflowCategory: "canceled" }
+        : kind === "linear-canceled"
+          ? { category: "closed", name: "Done", id: "done", workflowCategory: "completed" }
+          : { category: "open", name: "In Review", id: "review", workflowCategory: "started" };
+    state.detail = {
+      ...state.detail,
+      tracker,
+      writable: true,
+      state: current,
+      states: generic ? undefined : [current, destination],
+      viewerPermissions: { ...state.detail.viewerPermissions, setState: true },
+    };
+    await act(async () => render(tracker));
+    expect(
+      buttons().some(
+        (button) => button.textContent === "Reopen" || button.textContent === current.name,
+      ),
+    ).toBe(false);
+    const action = buttons().find(
+      (button) => button.textContent === (generic ? "Close" : destination.name),
+    );
+    expect(action).toBeDefined();
+    await act(async () => action!.click());
+    expect(state.write).toHaveBeenCalledOnce();
+    expect(state.write).toHaveBeenCalledWith({
+      environmentId,
+      input: { ...reference(tracker), state: destination.id ?? destination.name },
+    });
+    expect(state.candidatesRead).not.toHaveBeenCalled();
+  });
   it("reads Jira states only on menu open and retries failure without generic writes", async () => {
     state.candidates.error = "Project states unavailable";
     state.detail = {
