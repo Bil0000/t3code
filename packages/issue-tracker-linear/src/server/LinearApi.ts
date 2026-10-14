@@ -255,13 +255,13 @@ const COMMENTS_QUERY = `query T3Comments($id: String!, $first: Int!, $after: Str
     }
   }
 }`;
-const TEAM_QUERY = `query T3Team($key: String!) {
+const TEAM_QUERY = `query T3Team($key: String!, $includeAncestorLabels: Boolean!) {
   organization { id urlKey }
   teams(first: 1, filter: { key: { eq: $key } }) {
     nodes {
       id key name
       states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } }
-      ancestors { id key name labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } }
+      ancestors @include(if: $includeAncestorLabels) { id key name labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } }
       labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } }
       members(first: 250) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } }
       templates { nodes { id name description content type hasFormFields templateData } }
@@ -353,7 +353,9 @@ const LinearTeamDetail = Schema.Struct({
         nodes: Schema.Array(LinearLabel).check(Schema.isMaxLength(250)),
       }),
     }),
-  ).check(Schema.isMaxLength(5)),
+  )
+    .check(Schema.isMaxLength(5))
+    .pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   labels: Connection(LinearLabel),
   members: Connection(LinearUser),
   templates: Schema.Struct({ nodes: Schema.Array(LinearTemplate) }),
@@ -478,7 +480,10 @@ export class LinearApi extends Context.Service<
       readonly first: number;
       readonly after?: string | undefined;
     }) => Effect.Effect<typeof AssigneeCandidatesData.Type, IssueTrackerError>;
-    readonly getTeam: (key: string) => Effect.Effect<LinearTeamScope | null, IssueTrackerError>;
+    readonly getTeam: (
+      key: string,
+      includeAncestorLabels?: boolean,
+    ) => Effect.Effect<LinearTeamScope | null, IssueTrackerError>;
     readonly createIssue: (
       input: Record<string, unknown>,
     ) => Effect.Effect<{ readonly identifier: string; readonly url: string }, IssueTrackerError>;
@@ -846,8 +851,8 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const getTeam: LinearApi["Service"]["getTeam"] = (key) =>
-    execute("getTeam", TEAM_QUERY, { key }, TeamData).pipe(
+  const getTeam: LinearApi["Service"]["getTeam"] = (key, includeAncestorLabels = false) =>
+    execute("getTeam", TEAM_QUERY, { key, includeAncestorLabels }, TeamData).pipe(
       Effect.map((data) => {
         const team = data.teams.nodes[0];
         if (team === undefined) return null;

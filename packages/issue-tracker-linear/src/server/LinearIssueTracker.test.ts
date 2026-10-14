@@ -2030,11 +2030,14 @@ it.effect.each([false, true])(
         ],
       };
       const test = fakeLinear({
-        T3Team: () => ({
-          organization: ORGANIZATION,
-          teams: { nodes: [team] },
-          issueLabels: empty,
-        }),
+        T3Team: (variables) => {
+          expect(variables.includeAncestorLabels).toBe(true);
+          return {
+            organization: ORGANIZATION,
+            teams: { nodes: [team] },
+            issueLabels: empty,
+          };
+        },
         T3IssueReference: () => ({ issue: issue("ENG-7") }),
         T3LabelCandidates: (variables) => {
           const hidden = JSON.stringify(variables.filter).includes('"parent-hidden"');
@@ -2167,4 +2170,78 @@ it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s
     else expect((yield* api.listCandidates(target).pipe(Effect.flip)).reason).toBe("failed");
     expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team"]);
   }),
+);
+
+it.effect.each(["templates", "create", "assignee", "clearLabels"] as const)(
+  "skips unused ancestor label catalogs: %s",
+  (operation) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const writes: unknown[] = [];
+      const test = fakeLinear({
+        T3Team: (variables) => {
+          expect(variables.includeAncestorLabels).toBe(false);
+          return {
+            organization: ORGANIZATION,
+            teams: {
+              nodes: [
+                {
+                  id: "team_eng",
+                  key: "ENG",
+                  name: "Engineering",
+                  states: empty,
+                  labels: empty,
+                  members: { ...empty, nodes: [THEO] },
+                  templates: { nodes: [] },
+                },
+              ],
+            },
+            issueLabels: empty,
+          };
+        },
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3IssueCreate: (variables) => {
+          writes.push(variables.input);
+          return {
+            issueCreate: {
+              success: true,
+              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+            },
+          };
+        },
+        T3IssueUpdate: (variables) => {
+          writes.push(variables.input);
+          return { issueUpdate: { success: true } };
+        },
+      });
+      const api = yield* test.tracker;
+      const actions = {
+        templates: api.listTemplates(target),
+        create: api.create({ ...target, title: "New", body: "", labels: [], assignees: [] }),
+        assignee: api.update({ ...target, key: "ENG-7", assignees: [THEO.id] }),
+        clearLabels: api.update({ ...target, key: "ENG-7", labels: [] }),
+      };
+      yield* actions[operation];
+      expect(test.requests.find(({ operation }) => operation === "T3Team")?.query).toContain(
+        "ancestors @include(if: $includeAncestorLabels)",
+      );
+      expect(test.requests.map(({ operation: name }) => name)).toEqual([
+        ...(["assignee", "clearLabels"].includes(operation) ? ["T3IssueReference"] : []),
+        "T3Team",
+        ...(operation === "templates"
+          ? []
+          : [operation === "create" ? "T3IssueCreate" : "T3IssueUpdate"]),
+      ]);
+      expect(writes).toEqual(
+        operation === "templates"
+          ? []
+          : [
+              operation === "create"
+                ? { teamId: "team_eng", title: "New", description: "", labelIds: [] }
+                : operation === "assignee"
+                  ? { assigneeId: THEO.id }
+                  : { labelIds: [] },
+            ],
+      );
+    }),
 );
