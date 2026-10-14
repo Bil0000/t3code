@@ -22,6 +22,8 @@ import type {
 import {
   BotIcon,
   ChevronDownIcon,
+  CircleDotIcon,
+  CopyIcon,
   ExternalLinkIcon,
   Link2Icon,
   Link2OffIcon,
@@ -31,6 +33,7 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { useIssueViewRefresh } from "~/hooks/useIssueViewRefresh";
+import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIssueThreadHandoff } from "./useIssueThreadHandoff";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -756,6 +759,12 @@ function IssueDetailContent({
         <div className="flex flex-col gap-4 px-4 pt-3 pb-4">
           <PullRequestDetailTitleRow className="gap-2">
             <IssueStateGlyph state={detail.state} />
+            <span className="text-xs text-muted-foreground">
+              {detail.state.name}
+              {detail.state.closeReason
+                ? ` · ${detail.state.closeReason.replaceAll("-", " ")}`
+                : null}
+            </span>
             <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
               <tracker.Icon aria-hidden className="mr-1 inline size-3 align-[-2px]" />
               {issueDisplayLabel(detail.scope, detail.displayKey)}
@@ -788,6 +797,30 @@ function IssueDetailContent({
               onClick={detailQuery.refresh}
             >
               <RefreshIcon size="sm" refreshing={detailQuery.isPending} />
+            </Button>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Copy issue link"
+              onClick={() =>
+                void writeTextToClipboard(detail.url, "issue link").then(
+                  (copied) => {
+                    if (copied)
+                      toastManager.add({
+                        type: "success",
+                        title: "Issue link copied",
+                        description: detail.url,
+                      });
+                  },
+                  () =>
+                    toastManager.add({
+                      type: "error",
+                      title: "The issue link could not be copied",
+                    }),
+                )
+              }
+            >
+              <CopyIcon aria-hidden className="size-3.5" />
             </Button>
             <Button
               size="icon-xs"
@@ -852,6 +885,7 @@ function IssueDetailContent({
           <PullRequestMetaLine className="text-xs text-muted-foreground">
             <PullRequestActorLabel actor={detail.author} />
             <span>opened {formatRelativeTimeLabel(detail.createdAt)}</span>
+            <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>
             {detail.closedAt ? (
               <span>closed {formatRelativeTimeLabel(detail.closedAt)}</span>
             ) : null}
@@ -911,6 +945,14 @@ function IssueDetailContent({
               />
             ) : null}
           </div>
+
+          {detail.milestone ? (
+            <PullRequestMetaLine className="text-xs text-muted-foreground">
+              <CircleDotIcon aria-hidden className="size-3.5" />
+              <span>Milestone</span>
+              <span>{detail.milestone}</span>
+            </PullRequestMetaLine>
+          ) : null}
 
           <section className="group flex flex-col gap-2 rounded-lg border border-border/60 p-3">
             <div className="flex items-start gap-1">

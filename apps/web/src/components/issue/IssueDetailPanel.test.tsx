@@ -35,6 +35,7 @@ const state = vi.hoisted(() => ({
     updatedAt: "2026-10-14T00:00:00Z",
     closedAt: null,
     labels: [],
+    milestone: undefined as string | null | undefined,
     assignees: [],
     comments: [] as ReadonlyArray<IssueComment>,
     commentsCursor: null as string | null,
@@ -153,9 +154,85 @@ vi.mock("~/state/issues", async (importOriginal) => {
 });
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
 const decodeCommentPageInput = Schema.decodeUnknownSync(IssueCommentsPageInput);
+
+it.each([
+  ["Sprint 4", false],
+  [null, false],
+  [undefined, false],
+  [undefined, true],
+] as const)(
+  "restores unlinked read-only detail metadata and copying (%s, blocked=%s)",
+  async (milestone, blockedCopy) => {
+    const previousDetail = state.detail;
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const writeText = vi.fn();
+    if (blockedCopy) writeText.mockRejectedValue(new Error("Clipboard blocked"));
+    else writeText.mockResolvedValue(undefined);
+    vi.stubGlobal(
+      "navigator",
+      Object.assign(Object.create(navigator), { clipboard: { writeText } }),
+    );
+    state.toast.mockReset();
+    state.detail = {
+      ...state.detail,
+      milestone,
+      state: { category: "open", name: "Waiting for QA" },
+      writable: false,
+      comments: [],
+      commentsCursor: null,
+      capabilities: {
+        ...state.detail.capabilities,
+        states: [],
+        events: false,
+        linkedPullRequests: false,
+      },
+    };
+    const environmentId = EnvironmentId.make("environment");
+    const reference = {
+      projectId: ProjectId.make("project"),
+      tracker: IssueTrackerKind.make("github"),
+      host: "github.com",
+      scope: "org/repo",
+      key: "1",
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+      );
+      expect(container.textContent).toContain("Waiting for QA");
+      expect(container.textContent).toContain(
+        `updated ${formatRelativeTimeLabel(state.detail.updatedAt)}`,
+      );
+      expect(container.textContent?.includes("Milestone")).toBe(
+        milestone !== null && milestone !== undefined,
+      );
+      if (milestone) expect(container.textContent).toContain(milestone);
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>('button[aria-label="Copy issue link"]')!.click(),
+      );
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(state.detail.url);
+      expect(state.toast).toHaveBeenCalledWith(
+        expect.objectContaining(
+          blockedCopy
+            ? { type: "error", title: "The issue link could not be copied" }
+            : { type: "success", title: "Issue link copied", description: state.detail.url },
+        ),
+      );
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.detail = previousDetail;
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it("can comment after switching from History to an issue without history support", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
