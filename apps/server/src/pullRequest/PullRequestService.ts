@@ -2082,7 +2082,7 @@ export const make = Effect.gen(function* () {
         // What the host can do and what this account may ask of it are two questions, and both
         // have to say yes. The second is asked last, because it costs a request and the checks
         // above do not.
-        return viewerPermissionsOf(
+        const operation = viewerPermissionsOf(
           project,
           input,
           "runAction",
@@ -2167,6 +2167,17 @@ export const make = Effect.gen(function* () {
             );
           }),
         );
+        return input.action === "delete-branch" && project.api.withVerifiedCredential !== undefined
+          ? project.api
+              .withVerifiedCredential(
+                { cwd: project.project.workspaceRoot, host: project.host },
+                () => operation.pipe(Effect.result),
+              )
+              .pipe(
+                Effect.mapError(toPullRequestError("runAction")),
+                Effect.flatMap(Effect.fromResult),
+              )
+          : operation;
       }),
     );
 
