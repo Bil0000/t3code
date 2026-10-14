@@ -380,8 +380,8 @@ export function issueCreateScopes(
   };
   for (const { environmentId, held } of lists) {
     if (project && project.environmentId !== environmentId) continue;
-    if (held.answer.sources !== undefined) {
-      for (const source of held.answer.sources) {
+    if (held.sources !== undefined) {
+      for (const source of held.sources) {
         if (project && source.projectId !== project.projectId) continue;
         const tracker = held.answer.trackers.find(
           (tracker) => trackerKey(tracker) === trackerKey(source),

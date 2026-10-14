@@ -491,6 +491,61 @@ describe("mobile issue list", () => {
     expect(issueCreateScopes([source(answer({ sources: [] }))], [project()])).toEqual([]);
   });
 
+  it("creates through the current representative after continuing a deleted project source", () => {
+    const original = {
+      projectId: ProjectId.make("A"),
+      projectTitle: "A",
+      tracker,
+      host: "github.com",
+      scope: "org/repo",
+      capabilities,
+    };
+    const current = { ...original, projectId: ProjectId.make("B"), projectTitle: "B" };
+    const initial = heldIssueList(
+      answer({ sources: [original], nextCursors: { "github.com org/repo": "50" } }),
+    );
+    const held = continueIssueListPage(
+      initial,
+      initial.nextCursors,
+      answer({ entries: [entry("51", current)], sources: [current] }),
+      initial.firstCursors,
+    );
+    const lists = [{ environmentId, held }];
+    const expected = [
+      {
+        environmentId,
+        projectTitle: "B",
+        templates: true,
+        scope: { projectId: current.projectId, tracker, host: current.host, scope: current.scope },
+      },
+    ];
+    expect(issueCreateScopes(lists, [])).toEqual(expected);
+    expect(issueCreateScopes(lists, [], { environmentId, projectId: "B" })).toEqual(expected);
+    expect(issueCreateScopes(lists, [], { environmentId, projectId: "A" })).toEqual([]);
+  });
+
+  it("uses current projects after an older-server continuation without source metadata", () => {
+    const initial = heldIssueList(answer({ nextCursors: { "github.com org/repo": "50" } }));
+    const held = continueIssueListPage(
+      initial,
+      initial.nextCursors,
+      answer({ entries: [entry("51", { projectId: ProjectId.make("B"), projectTitle: "B" })] }),
+      initial.firstCursors,
+    );
+    const current = { ...project(), id: ProjectId.make("B"), title: "B" };
+    expect(held.sources).toBeUndefined();
+    expect(
+      issueCreateScopes([{ environmentId, held }], [current], { environmentId, projectId: "B" }),
+    ).toEqual([
+      {
+        environmentId,
+        projectTitle: "B",
+        templates: true,
+        scope: { projectId: current.id, tracker, host: "github.com", scope: "org/repo" },
+      },
+    ]);
+  });
+
   it("falls back to same-environment repository identities and requires a configured create capability", () => {
     const projects = [
       project(),
