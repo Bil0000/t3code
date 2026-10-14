@@ -339,6 +339,30 @@ export type IssueCreateScope = {
   readonly scope: IssueScopeRef & { readonly host: string };
 };
 
+function azureDevOpsIssueScope(host: string, displayName: string | undefined): string | null {
+  const segments = (displayName ?? "").split("/").filter((part) => part.length > 0);
+  const marker = segments.indexOf("_git");
+  const hostname = host.split(":")[0]!;
+  const legacy = hostname.endsWith(".visualstudio.com");
+  const valid = legacy
+    ? marker === 1 || (marker === 2 && segments[0]?.toLowerCase() === "defaultcollection")
+    : marker === 2;
+  if (!valid || segments.length !== marker + 2) return null;
+  const organization = legacy ? hostname.slice(0, -".visualstudio.com".length) : segments[0];
+  const project = segments[marker - 1];
+  if (!organization || !project) return null;
+  try {
+    const parts = [organization, project].map(decodeURIComponent);
+    return parts.every(
+      (part) => part.trim().length > 0 && !part.includes("/") && !part.includes("\\"),
+    )
+      ? parts.join("/")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function issueCreateScopes(
   lists: ReadonlyArray<IssueListSource>,
   projects: ReadonlyArray<
@@ -388,9 +412,13 @@ export function issueCreateScopes(
         continue;
       const identity = candidate.repositoryIdentity;
       const kind = identity?.provider as SourceControlProviderKind | undefined;
-      const scope = sourceControlRepositorySelector(identity);
-      if (!identity || !kind || scope === null) continue;
+      if (!identity || !kind) continue;
       const host = pullRequestHostOf(identity, kind);
+      const scope =
+        kind === "azure-devops"
+          ? azureDevOpsIssueScope(host, identity.displayName)
+          : sourceControlRepositorySelector(identity);
+      if (scope === null) continue;
       const tracker = held.answer.trackers.find(
         (tracker) =>
           String(tracker.tracker) === kind && tracker.host.toLowerCase() === host.toLowerCase(),

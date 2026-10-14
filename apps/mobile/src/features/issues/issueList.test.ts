@@ -523,6 +523,64 @@ describe("mobile issue list", () => {
         ),
       ).toEqual([]);
   });
+
+  it.each([
+    ["dev.azure.com", "acme/Web App/_git/web", "acme/Web App"],
+    ["dev.azure.com", "acme/Web%20App/_git/web", "acme/Web App"],
+    ["dev.azure.com", "acme/Web%2520App/_git/web", "acme/Web%20App"],
+    ["acme.visualstudio.com", "Web App/_git/web", "acme/Web App"],
+    ["acme.visualstudio.com", "DefaultCollection/Web%20App/_git/web", "acme/Web App"],
+    ["Acme.VISUALSTUDIO.COM:8443", "Web%20App/_git/web", "acme/Web App"],
+    ["dev.azure.com:8443", "acme/Web%20App/_git/web", "acme/Web App"],
+    ["dev.azure.com", "web", null],
+    ["dev.azure.com", "acme/_git/web", null],
+    ["dev.azure.com", "acme/Web%2FApp/_git/web", null],
+    ["dev.azure.com", "acme/Web%5CApp/_git/web", null],
+    ["dev.azure.com", "acme/Web%ZZApp/_git/web", null],
+    ["dev.azure.com", "acme/Web App/_git", null],
+    ["acme.visualstudio.com", "acme/Web App/_git/web", null],
+  ])("uses the older-server Azure issue scope for %s/%s", (host, displayName, scope) => {
+    const base = project();
+    const azureTracker = {
+      ...answer().trackers[0]!,
+      tracker: IssueTrackerKind.make("azure-devops"),
+      host,
+    };
+    const azureProject = {
+      ...base,
+      repositoryIdentity: {
+        ...base.repositoryIdentity,
+        provider: SourceControlProviderKind.make("azure-devops"),
+        canonicalKey: `${host}/${displayName}`,
+        displayName,
+        owner: "acme",
+        name: "web",
+        locator: {
+          ...base.repositoryIdentity.locator,
+          remoteUrl: `https://${host}/${displayName}`,
+        },
+      },
+    };
+    expect(
+      issueCreateScopes([source(answer({ trackers: [azureTracker] }))], [azureProject]),
+    ).toEqual(
+      scope === null
+        ? []
+        : [
+            {
+              environmentId,
+              projectTitle: "Project",
+              templates: true,
+              scope: {
+                projectId: azureProject.id,
+                tracker: azureTracker.tracker,
+                host: host.toLowerCase(),
+                scope,
+              },
+            },
+          ],
+    );
+  });
 });
 
 function project() {
