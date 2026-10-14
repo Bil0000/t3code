@@ -410,13 +410,21 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       if (first === undefined) return Effect.succeed(null);
       if (rest.length > 0)
         return Effect.fail(failed(operation, "A Linear issue has one assignee at most."));
-      const member =
-        scope.team.members.nodes.find((user) => user.id === first) ??
-        scope.team.members.nodes.find(
-          (user) =>
-            user.email?.toLowerCase() === first.toLowerCase() ||
-            user.displayName?.toLowerCase() === first.toLowerCase(),
+      const byId = scope.team.members.nodes.find((user) => user.id === first);
+      if (byId !== undefined) return Effect.succeed(byId.id);
+      const matches = scope.team.members.nodes.filter(
+        (user) =>
+          user.email?.toLowerCase() === first.toLowerCase() ||
+          user.displayName?.toLowerCase() === first.toLowerCase(),
+      );
+      if (matches.length > 1 || scope.team.members.pageInfo.hasNextPage)
+        return Effect.fail(
+          failed(
+            operation,
+            "Use a member ID. The name or email is ambiguous, or the member list is incomplete.",
+          ),
         );
+      const member = matches[0];
       return member === undefined
         ? Effect.fail(failed(operation, `"${first}" is not a member of this Linear team.`))
         : Effect.succeed(member.id);

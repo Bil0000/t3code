@@ -1347,6 +1347,84 @@ describe("LinearIssueTracker", () => {
       }
     }),
   );
+  it.effect.each([false, true])(
+    "requires a unique assignee fallback on a complete member page: partial=%s",
+    (partial) =>
+      Effect.gen(function* () {
+        const written: unknown[] = [];
+        const test = fakeLinear({
+          T3IssueReference: () => ({ issue: issue("ENG-7") }),
+          T3Team: () => ({
+            organization: ORGANIZATION,
+            teams: {
+              nodes: [
+                {
+                  id: "team_eng",
+                  key: "ENG",
+                  name: "Engineering",
+                  states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                  labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                  members: {
+                    nodes: [
+                      { ...user("usr_first", "Sam"), email: "first@acme.test" },
+                      { ...user("usr_second", "Sam"), email: "second@acme.test" },
+                      user("usr_solo", "Solo"),
+                    ],
+                    pageInfo: { hasNextPage: partial, endCursor: partial ? "more-members" : null },
+                  },
+                  templates: { nodes: [] },
+                },
+              ],
+            },
+            issueLabels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          }),
+          T3IssueUpdate: (variables) => {
+            written.push(variables.input);
+            return { issueUpdate: { success: true } };
+          },
+          T3IssueCreate: (variables) => {
+            written.push(variables.input);
+            return {
+              issueCreate: {
+                success: true,
+                issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+              },
+            };
+          },
+        });
+        const api = yield* test.tracker;
+        const scoped = { ...target, scope: "acme/ENG" };
+        for (const [input, expected] of [
+          ["usr_second", "usr_second"],
+          ["SECOND@ACME.TEST", partial ? null : "usr_second"],
+          ["solo", partial ? null : "usr_solo"],
+          ["Sam", null],
+        ] as const) {
+          for (const [action, calls] of [
+            [
+              api.create({ ...scoped, title: "New", body: "", labels: [], assignees: [input] }),
+              ["T3Team", "T3IssueCreate"],
+            ],
+            [
+              api.update({ ...scoped, key: "ENG-7", assignees: [input] }),
+              ["T3IssueReference", "T3Team", "T3IssueUpdate"],
+            ],
+          ] as const) {
+            test.requests.length = 0;
+            if (expected === null) {
+              const before = written.length;
+              expect((yield* action.pipe(Effect.flip)).reason).toBe("failed");
+              expect(written).toHaveLength(before);
+              expect(test.requests.map((request) => request.operation)).toEqual(calls.slice(0, -1));
+            } else {
+              yield* action;
+              expect(written.at(-1)).toMatchObject({ assigneeId: expected });
+              expect(test.requests.map((request) => request.operation)).toEqual(calls);
+            }
+          }
+        }
+      }),
+  );
   it.effect("closes through the team's completed state and reports a missing key", () =>
     Effect.gen(function* () {
       const updates: Array<Record<string, unknown>> = [];
