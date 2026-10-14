@@ -123,6 +123,75 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each(["create", "update"] as const)(
+    "enforces 10 assignees before %s native work",
+    (operation) =>
+      Effect.gen(function* () {
+        const requests: GitHubApi.GitHubRestInput[] = [];
+        let graphqlReads = 0;
+        const api = yield* tracker(
+          () => {
+            graphqlReads++;
+            return "{}";
+          },
+          (input) => {
+            requests.push(input);
+            return {
+              status: 200,
+              headers: {},
+              body: JSON.stringify({
+                number: 43,
+                html_url: "https://github.com/acme/web/issues/43",
+                labels: [],
+                assignees: (input.body as { assignees: string[] }).assignees.map((login) => ({
+                  login,
+                })),
+              }),
+              truncated: false,
+              invalidUtf8: false,
+            };
+          },
+        );
+        const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const assignees = Array.from({ length: 11 }, (_, index) => `user-${index}`);
+        const write =
+          operation === "create"
+            ? api.create!({
+                ...target,
+                title: "New",
+                body: "",
+                labels: [],
+                assignees,
+              })
+            : api.update!({ ...target, assignees });
+        const refused = yield* write.pipe(Effect.result);
+        expect(requests).toHaveLength(0);
+        expect(graphqlReads).toBe(0);
+        expect(refused).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            operation,
+            reason: "failed",
+            detail: "GitHub issues support at most 10 assignees.",
+          },
+        });
+        expect(api.capabilities.maxAssignees).toBe(10);
+        if (operation === "create")
+          yield* api.create!({
+            ...target,
+            title: "New",
+            body: "",
+            labels: [],
+            assignees: assignees.slice(0, 10),
+          });
+        else yield* api.update!({ ...target, assignees: assignees.slice(0, 10) });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.method).toBe(operation === "create" ? "POST" : "PATCH");
+        expect(requests[0]?.body).toMatchObject({ assignees: assignees.slice(0, 10) });
+        expect(graphqlReads).toBe(0);
+      }),
+  );
+
   it.effect.each([
     { state: "all", states: ["OPEN", "CLOSED"] },
     { state: "open", states: ["OPEN"] },

@@ -56,6 +56,7 @@ import {
 } from "./gitHubIssueJson.ts";
 
 const KIND = IssueTrackerKind.make("github");
+const MAX_ASSIGNEES = 10;
 
 const CAPABILITIES: IssueCapabilities = {
   create: true,
@@ -63,6 +64,7 @@ const CAPABILITIES: IssueCapabilities = {
   comment: true,
   labels: true,
   assignees: true,
+  maxAssignees: MAX_ASSIGNEES,
   reactions: true,
   templates: true,
   linkedPullRequests: true,
@@ -218,6 +220,18 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
         detail: "GitHub could not find the requested issue.",
       });
 
+    const validateAssignees = (assignees: ReadonlyArray<string> | undefined, operation: string) =>
+      (assignees?.length ?? 0) > MAX_ASSIGNEES
+        ? Effect.fail(
+            new IssueTrackerError({
+              tracker: KIND,
+              operation,
+              reason: "failed",
+              detail: "GitHub issues support at most 10 assignees.",
+            }),
+          )
+        : Effect.void;
+
     /** A GraphQL read whose answer is decoded, reporting a failure against the read that made it. */
     const graphqlRead = <A>(input: {
       readonly host: string;
@@ -284,6 +298,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
       },
     ) =>
       restIssue(input, operation).pipe(
+        Effect.tap(() => validateAssignees(body.assignees, operation)),
         Effect.flatMap(({ path }) =>
           api.rest({ host: input.host, operation, method: "PATCH", path, body }).pipe(
             Effect.mapError(fail(operation)),
@@ -457,46 +472,48 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
           Effect.provideService(SourceControlRateLimit.Interactive, true),
         ),
 
-      create: (input) => {
-        const { owner, name } = parseRepository(input.scope);
-        return api
-          .rest({
-            host: input.host,
-            operation: "create",
-            method: "POST",
-            path: `repos/${owner}/${name}/issues`,
-            body: {
-              title: input.title,
-              body: input.body,
-              labels: input.labels,
-              assignees: input.assignees,
-            },
-          })
-          .pipe(
-            Effect.mapError(fail("create")),
-            Effect.flatMap((response) => {
-              const decoded = decodeCreatedIssueJson(response.body);
-              return Result.isSuccess(decoded)
-                ? Effect.succeed({
-                    key: String(decoded.success.number),
-                    displayKey: `#${decoded.success.number}`,
-                    url: decoded.success.url,
-                    warnings: skippedMetadata(
-                      {
-                        labels: input.labels.length === 0 ? undefined : input.labels,
-                        assignees: input.assignees.length === 0 ? undefined : input.assignees,
-                      },
-                      response,
-                    ).map(
-                      (field) =>
-                        `The issue was created, but GitHub did not save the requested ${field}.`,
-                    ),
-                  })
-                : Effect.fail(unreadable("create", decoded.failure));
-            }),
-            Effect.provideService(SourceControlRateLimit.Interactive, true),
-          );
-      },
+      create: (input) =>
+        Effect.gen(function* () {
+          yield* validateAssignees(input.assignees, "create");
+          const { owner, name } = parseRepository(input.scope);
+          return yield* api
+            .rest({
+              host: input.host,
+              operation: "create",
+              method: "POST",
+              path: `repos/${owner}/${name}/issues`,
+              body: {
+                title: input.title,
+                body: input.body,
+                labels: input.labels,
+                assignees: input.assignees,
+              },
+            })
+            .pipe(
+              Effect.mapError(fail("create")),
+              Effect.flatMap((response) => {
+                const decoded = decodeCreatedIssueJson(response.body);
+                return Result.isSuccess(decoded)
+                  ? Effect.succeed({
+                      key: String(decoded.success.number),
+                      displayKey: `#${decoded.success.number}`,
+                      url: decoded.success.url,
+                      warnings: skippedMetadata(
+                        {
+                          labels: input.labels.length === 0 ? undefined : input.labels,
+                          assignees: input.assignees.length === 0 ? undefined : input.assignees,
+                        },
+                        response,
+                      ).map(
+                        (field) =>
+                          `The issue was created, but GitHub did not save the requested ${field}.`,
+                      ),
+                    })
+                  : Effect.fail(unreadable("create", decoded.failure));
+              }),
+              Effect.provideService(SourceControlRateLimit.Interactive, true),
+            );
+        }),
 
       comment: (input) =>
         restIssue(input, "comment").pipe(
