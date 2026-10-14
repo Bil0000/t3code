@@ -8,6 +8,7 @@ import { WS_METHODS } from "./rpc.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
+  IssueCommentsPageInput,
   IssueCapabilities,
   IssueCandidates,
   IssueCreateInput,
@@ -171,4 +172,22 @@ it("keeps URL resolution direct and protected by the read grant", () => {
   expect(clientRpcRequiredScopes(WS_METHODS.issuesResolveUrl, input)).toEqual([
     AuthOrchestrationReadScope,
   ]);
+});
+
+it("preserves optional comment-page viewer context while accepting older clients", () => {
+  const decode = Schema.decodeUnknownSync(IssueCommentsPageInput);
+  const input = {
+    projectId: "project",
+    tracker: "linear",
+    host: "linear.app",
+    scope: "acme/ENG",
+    key: "ENG-7",
+    cursor: "older",
+  };
+  expect(decode(input)).toEqual(input);
+  expect(decode({ ...input, viewer: "native-viewer" })).toEqual({
+    ...input,
+    viewer: "native-viewer",
+  });
+  expect(() => decode({ ...input, viewer: " " })).toThrow();
 });
