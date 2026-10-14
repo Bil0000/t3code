@@ -360,6 +360,10 @@ const make = Effect.gen(function* () {
             author: entry.author?.login ?? null,
             assignees: entry.assignees.map((actor) => actor.login),
             labels: entry.labels.map((label) => label.name),
+            labelDetails: entry.labels,
+            ...(entry.labelsTruncated === undefined
+              ? {}
+              : { labelsTruncated: entry.labelsTruncated }),
             updatedAt: entry.updatedAt,
             commentCount: entry.commentCount,
           })),
@@ -388,6 +392,10 @@ const make = Effect.gen(function* () {
           author: detail.author?.login ?? null,
           assignees: detail.assignees.map((actor) => actor.login),
           labels: detail.labels.map((label) => label.name),
+          labelDetails: detail.labels,
+          ...(detail.labelsTruncated === undefined
+            ? {}
+            : { labelsTruncated: detail.labelsTruncated }),
           createdAt: detail.createdAt,
           updatedAt: detail.updatedAt,
           closedAt: detail.closedAt,

@@ -18,6 +18,8 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import type { Tool } from "effect/ai";
 
+import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
+import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
@@ -176,6 +178,8 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     readonly project?: OrchestrationProjectShell;
     readonly sources?: ReadonlyArray<IssueService.ProjectTrackerBinding>;
     readonly detail?: IssueDetail;
+    readonly candidates?: IssueCandidates;
+    readonly update?: IssueService.IssueService["Service"]["update"];
     readonly comments?: IssueService.IssueService["Service"]["comments"];
   } = {},
 ) {
@@ -224,7 +228,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
               : options.comments(input),
           ),
         ),
-      candidates: (input) => record("candidates", input, candidates),
+      candidates: (input) => record("candidates", input, options.candidates ?? candidates),
       templates: (input) => record("templates", input, { templates: [], blankIssuesEnabled: true }),
       history: (input) =>
         record("history", input, { items: [], nextCursor: "native-history-next" }),
@@ -239,7 +243,10 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
         record("labelCandidates", input, { items: [], nextCursor: "native-labels-next" }),
       assigneeCandidates: (input) =>
         record("assigneeCandidates", input, { items: [], nextCursor: null }),
-      update: (input) => record("update", input, undefined),
+      update: (input) =>
+        record("update", input, undefined).pipe(
+          Effect.andThen(options.update === undefined ? Effect.void : options.update(input)),
+        ),
       editComment: (input) => record("editComment", input, undefined),
       react: (input) => record("react", input, undefined),
       setParent: (input) => record("setParent", input, undefined),
@@ -294,6 +301,156 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect(
+    "preserves an archived current Linear label through registered tool reads and replacement",
+    () =>
+      Effect.gen(function* () {
+        const oldBug = {
+          id: "old-bug",
+          name: "Bug",
+          color: null,
+          archivedAt: "2026-01-01T00:00:00Z",
+        };
+        const teamBug = { id: "team-bug", name: "Bug", color: null };
+        const workspaceBug = { id: "workspace-bug", name: "Bug", color: null };
+        const feature = { id: "new-feature", name: "Feature", color: null };
+        const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+        const nativeCalls: string[] = [];
+        const writes: Record<string, unknown>[] = [];
+        const native = yield* LinearIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mock(LinearApi.LinearApi)({
+              getIssueReference: () =>
+                Effect.sync(() => {
+                  nativeCalls.push("reference");
+                  return {
+                    id: "issue",
+                    identifier: "ENG-7",
+                    team: { key: "ENG" },
+                    url: standaloneDetail.url,
+                  };
+                }),
+              getTeam: () =>
+                Effect.sync(() => {
+                  nativeCalls.push("team");
+                  return {
+                    organization: { id: "workspace", urlKey: "acme", templates: empty },
+                    team: {
+                      id: "team",
+                      key: "ENG",
+                      name: "Engineering",
+                      states: empty,
+                      labels: { ...empty, nodes: [oldBug, teamBug, feature] },
+                      members: empty,
+                      templates: empty,
+                      ancestors: [],
+                    },
+                    workspaceLabels: [workspaceBug],
+                    templates: [],
+                    templatesTruncated: false,
+                    labelsTruncated: false,
+                    truncated: false,
+                  };
+                }),
+              updateIssue: (_id, patch) =>
+                Effect.sync(() => {
+                  nativeCalls.push("write");
+                  writes.push(patch);
+                }),
+            }),
+          ),
+        );
+        const harness = yield* makeHarness([], {
+          sources: [standaloneSource],
+          detail: { ...standaloneDetail, labels: [oldBug], labelsTruncated: false },
+          candidates: {
+            labels: [teamBug, workspaceBug, feature].map((label) => ({
+              ...label,
+              description: null,
+            })),
+            assignees: [],
+            truncated: false,
+          },
+          update: (input) =>
+            native.update!({
+              cwd: "/fake",
+              host: input.host!,
+              scope: input.scope,
+              key: input.key,
+              labels: input.labels,
+            }).pipe(
+              Effect.mapError(
+                (error) => new IssueOperationError({ operation: "update", detail: error.detail }),
+              ),
+            ),
+        });
+        const read = yield* harness.call("read_issue", { key: "ENG-7" });
+        const listed = yield* harness.call("list_issues", {});
+        const available = yield* harness.call("read_issue_candidates", { tracker: LINEAR });
+        expect(read.labels).toEqual(["Bug"]);
+        expect(available.labels.some((label) => label.id === oldBug.id)).toBe(false);
+        const ambiguous = yield* harness
+          .call("set_issue_labels", {
+            key: "ENG-7",
+            labels: [...read.labels, feature.id],
+          })
+          .pipe(Effect.result);
+        expect(ambiguous._tag).toBe("Failure");
+        expect(writes).toEqual([]);
+        for (const output of [read, listed.issues[0]!]) {
+          const selected =
+            output.labelDetails?.map((label) => label.id ?? label.name) ?? output.labels;
+          yield* harness.call("set_issue_labels", {
+            key: "ENG-7",
+            labels: [...selected, feature.id],
+          });
+        }
+        expect(writes).toEqual([
+          { labelIds: [oldBug.id, feature.id] },
+          { labelIds: [oldBug.id, feature.id] },
+        ]);
+        expect(nativeCalls).toEqual([
+          "reference",
+          "team",
+          "reference",
+          "team",
+          "write",
+          "reference",
+          "team",
+          "write",
+        ]);
+        expect((yield* Ref.get(harness.calls)).map((call) => call.operation)).toEqual([
+          "detail",
+          "list",
+          "candidates",
+          "update",
+          "update",
+          "update",
+        ]);
+      }),
+  );
+
+  it.effect("reports partial current labels and keeps name-only trackers compatible", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], {
+        detail: { ...detail, labels: [{ name: "Bug", color: null }], labelsTruncated: true },
+      });
+      const read = yield* harness.call("read_issue", { key: "7" });
+      const listed = yield* harness.call("list_issues", {});
+      expect(read.labelsTruncated).toBe(true);
+      expect(listed.issues[0]?.labelsTruncated).toBe(true);
+      for (const output of [read, listed.issues[0]!]) {
+        expect(output.labelDetails).toEqual([{ name: "Bug", color: null }]);
+      }
+      yield* harness.call("set_issue_labels", { key: "7", labels: [] });
+      expect((yield* Ref.get(harness.calls)).map((call) => call.operation)).toEqual([
+        "detail",
+        "list",
+        "update",
+      ]);
+    }),
+  );
+
   it.effect("rejects omitted replacement arrays before writes and permits explicit clearing", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
