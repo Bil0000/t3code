@@ -1,3 +1,4 @@
+import { continueIssueListPage } from "@t3tools/client-runtime/state/issues";
 import { EnvironmentId, IssueCapabilities, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -59,10 +60,49 @@ describe("issueCreateSources", () => {
         },
       ],
     };
-    expect(issueCreateSources(answer)).toEqual([gitlab]);
-    expect(issueCreateSources({ ...answer, trackers: answer.trackers.toReversed() })).toEqual([
+    expect(issueCreateSources(answer, answer.sources)).toEqual([gitlab]);
+    expect(issueCreateSources({ trackers: answer.trackers.toReversed() }, answer.sources)).toEqual([
       gitlab,
     ]);
+  });
+
+  it("creates through the project a continuation rebound the scope to", () => {
+    const deleted = {
+      ...source("deleted", "github", "acme/web"),
+      projectTitle: "Deleted checkout",
+      capabilities: { create: true } as IssueCapabilities,
+    };
+    const current = { ...deleted, projectId: ProjectId.make("current"), projectTitle: "Current" };
+    const cursor = "github github.com acme/web";
+    const answer = {
+      sources: [deleted],
+      trackers: [
+        {
+          tracker: deleted.tracker,
+          host: deleted.host,
+          configured: true,
+          projectCount: 1,
+          capabilities: deleted.capabilities,
+          detail: null,
+        },
+      ],
+    };
+    const held = {
+      answer,
+      entries: [],
+      nextCursors: { [cursor]: "2" },
+      firstCursors: { [cursor]: "2" },
+      firstKeys: new Set<string>(),
+      errors: [],
+      sources: answer.sources,
+    };
+    const page = continueIssueListPage(
+      held,
+      { [cursor]: "2" },
+      { entries: [], sources: [current], nextCursors: {}, errors: [] },
+      held.firstCursors,
+    );
+    expect(issueCreateSources(page.answer, page.sources!)).toEqual([current]);
   });
 });
 

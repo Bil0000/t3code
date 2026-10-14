@@ -85,9 +85,10 @@ export function issueFilterProjects<Project extends ScopedProject>(
 }
 
 export function issueCreateSources(
-  answer: Pick<IssueListResult, "sources" | "trackers">,
+  answer: Pick<IssueListResult, "trackers">,
+  sources: IssueListSources,
 ): IssueListSources {
-  return (answer.sources ?? []).filter(
+  return sources.filter(
     (source) =>
       source.capabilities.create &&
       answer.trackers.find(
