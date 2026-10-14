@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 
 import { AuthOrchestrationReadScope } from "./auth.ts";
 import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
-import { WS_METHODS } from "./rpc.ts";
+import { WS_METHODS, WsIssuesRpcGroup } from "./rpc.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
@@ -16,6 +16,8 @@ import {
   IssueHierarchyPage,
   IssueTemplate,
   IssueTemplateList,
+  IssueTemplatesInput,
+  IssueScopeRef,
   IssueCapabilities,
   IssueCreateInput,
   IssueCreateResult,
@@ -43,6 +45,11 @@ const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
 const decodeLabelPage = Schema.decodeUnknownSync(IssueLabelCandidatesPage);
 const decodeResolveInput = Schema.decodeSync(IssueResolveUrlInput);
 const decodeResolved = Schema.decodeSync(IssueResolvedUrl);
+const decodeTemplateInput = Schema.decodeSync(IssueTemplatesInput);
+const decodeTemplateRpc = Schema.decodeUnknownSync(
+  WsIssuesRpcGroup.requests.get(WS_METHODS.issuesTemplates)!.payloadSchema,
+);
+const decodeScope = Schema.decodeUnknownSync(IssueScopeRef);
 
 it("accepts older reaction capabilities and preserves native comment limits", () => {
   const decode = Schema.decodeUnknownSync(IssueCapabilities);
@@ -228,6 +235,42 @@ it("keeps structured template fields and contact links beside body templates", (
     contributingGuidelinesUrl: "https://example.com/contributing",
   };
   expect(decodeTemplates(list)).toEqual(list);
+});
+
+it("carries optional template selection through the existing RPC while retaining inline bodies", () => {
+  const input = {
+    projectId: ProjectId.make("project-1"),
+    tracker: IssueTrackerKind.make("gitlab"),
+    host: "gitlab.com",
+    scope: "acme/web",
+  };
+  for (const flags of [
+    {},
+    { metadataOnly: false },
+    { metadataOnly: true },
+    { templateKey: "Bug" },
+  ]) {
+    const request = { ...input, ...flags };
+    expect(decodeTemplateInput(request)).toEqual(request);
+    expect(decodeTemplateRpc(request)).toEqual(request);
+    expect(decodeScope(request)).toEqual(input);
+  }
+  const template = {
+    key: "Bug",
+    name: "Bug",
+    about: "",
+    title: "",
+    body: "",
+    labels: [],
+    assignees: [],
+  };
+  expect(decodeTemplate(template)).toEqual(template);
+  expect(decodeTemplate({ ...template, contentDeferred: true })).toEqual({
+    ...template,
+    contentDeferred: true,
+  });
+  expect(() => decodeTemplate({ ...template, body: undefined, contentDeferred: true })).toThrow();
+  expect(() => decodeTemplateInput({ ...input, templateKey: "" })).toThrow();
 });
 
 it("preserves distinct native label IDs when labels have the same name", () => {

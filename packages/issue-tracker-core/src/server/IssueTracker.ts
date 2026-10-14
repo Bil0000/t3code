@@ -219,7 +219,10 @@ export interface IssueTrackerApi {
 
   /** Only called when `capabilities.templates` is true. */
   readonly listTemplates?: (
-    input: IssueScopeTarget,
+    input: IssueScopeTarget & {
+      readonly metadataOnly?: boolean | undefined;
+      readonly templateKey?: string | undefined;
+    },
   ) => Effect.Effect<IssueTemplateList, IssueTrackerError>;
 
   /** Only called when `capabilities.labels` or `capabilities.assignees` is true. */
