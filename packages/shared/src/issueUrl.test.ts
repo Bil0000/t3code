@@ -125,4 +125,30 @@ describe("parseIssueUrl", () => {
       expect(parseIssueUrl(url, { tracker, host: "other.acme.test" })).toBeNull();
     },
   );
+
+  it.each([
+    ["github", "https://git.acme.test:3000/team/repo/issues/7"],
+    ["gitlab", "https://git.acme.test:3000/team/repo/-/issues/7"],
+    ["forgejo", "https://git.acme.test:3000/team/repo/issues/7"],
+  ])("keeps the configured %s install's port", (tracker, url) => {
+    expect(parseIssueUrl(url, { tracker, host: "git.acme.test:3000" })).toEqual({
+      tracker,
+      host: "git.acme.test:3000",
+      scope: "team/repo",
+      key: "7",
+    });
+    if (tracker !== "gitlab") {
+      expect(parseIssueUrl(url, { tracker, host: "git.acme.test:4000" })).toBeNull();
+    }
+  });
+
+  it.each([
+    ["https://github.acme.test:3000/team/repo/issues/7", "github.acme.test:3000"],
+    ["https://gitlab.acme.test:3000/team/repo/-/issues/7", "gitlab.acme.test:3000"],
+    ["https://forgejo.acme.test:3000/team/repo/issues/7", "forgejo.acme.test:3000"],
+    ["https://github.acme.test:443/team/repo/issues/7", "github.acme.test"],
+    ["http://forgejo.acme.test:80/team/repo/issues/7", "forgejo.acme.test"],
+  ])("keeps the native host identity for %s", (url, host) => {
+    expect(parseIssueUrl(url)?.host).toBe(host);
+  });
 });

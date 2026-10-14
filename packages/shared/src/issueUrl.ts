@@ -52,11 +52,12 @@ export function parseIssueUrl(
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  const host = url.hostname.toLowerCase();
+  const hostname = url.hostname.toLowerCase();
+  const host = url.host.toLowerCase();
   const configuredTracker =
     configuredHost?.host.trim().toLowerCase() === host ? configuredHost.tracker : undefined;
 
-  if (host === "linear.app") {
+  if (hostname === "linear.app") {
     if (url.protocol !== "https:" || url.port !== "") return null;
     const match = /^\/([^/]+)\/issue\/(([A-Za-z][A-Za-z0-9]*)-[1-9]\d*)(?:\/[^/]+)?\/?$/u.exec(
       url.pathname,
@@ -74,7 +75,7 @@ export function parseIssueUrl(
         }
       : null;
   }
-  if (host.endsWith(".atlassian.net")) {
+  if (hostname.endsWith(".atlassian.net")) {
     if (url.protocol !== "https:" || url.port !== "") return null;
     const match = /^\/browse\/(([A-Za-z][A-Za-z0-9_]*)-[1-9]\d*)\/?$/u.exec(url.pathname);
     const key = match?.[1];
@@ -90,13 +91,13 @@ export function parseIssueUrl(
   // Azure DevOps work items: /{org}/{project}/_workitems/edit/{n}. The scope is the repository
   // path the project binding writes, which a work item URL does not carry, so the organisation
   // and project stand in for it; the service matches by host and prefix.
-  if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
-    const legacy = host.endsWith(".visualstudio.com");
+  if (isHostOf(hostname, "dev.azure.com") || hostname.endsWith(".visualstudio.com")) {
+    const legacy = hostname.endsWith(".visualstudio.com");
     const match = legacy
       ? /^\/(?:DefaultCollection\/)?([^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/iu.exec(url.pathname)
       : /^\/([^/]+\/[^/]+)\/_workitems\/edit\/(\d+)(?:\/|$)/u.exec(url.pathname);
     const [organization, project] = legacy
-      ? [host.slice(0, -".visualstudio.com".length), match?.[1]]
+      ? [hostname.slice(0, -".visualstudio.com".length), match?.[1]]
       : (match?.[1]?.split("/") ?? []);
     const scope = organization && project ? azureDevOpsIssueScope(organization, project) : null;
     const issue = claim("azure-devops", host, match);
@@ -107,7 +108,7 @@ export function parseIssueUrl(
   if (
     twoSegments &&
     (configuredTracker === "github" ||
-      (configuredTracker === undefined && isHostOf(host, "github.com", "github")))
+      (configuredTracker === undefined && isHostOf(hostname, "github.com", "github")))
   ) {
     return claim("github", host, twoSegments);
   }
@@ -118,9 +119,9 @@ export function parseIssueUrl(
     forgejo &&
     (configuredTracker === "forgejo" ||
       (configuredTracker === undefined &&
-        (isHostOf(host, "codeberg.org") ||
-          isHostOf(host, "forgejo.org", "forgejo") ||
-          isHostOf(host, "gitea.com", "gitea"))))
+        (isHostOf(hostname, "codeberg.org") ||
+          isHostOf(hostname, "forgejo.org", "forgejo") ||
+          isHostOf(hostname, "gitea.com", "gitea"))))
   ) {
     return claim("forgejo", host, forgejo);
   }

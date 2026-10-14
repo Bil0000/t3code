@@ -776,7 +776,7 @@ export const make = Effect.gen(function* () {
             detail: "This is not a recognised issue URL.",
           }),
       });
-      const { supported } = yield* listProjects({ host: target.hostname.toLowerCase() });
+      const { supported } = yield* listProjects({ host: target.host.toLowerCase() });
       const parsed =
         supported.map((project) => parseIssueUrl(url, project)).find((link) => link !== null) ??
         parseIssueUrl(url);

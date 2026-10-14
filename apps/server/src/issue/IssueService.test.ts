@@ -1344,6 +1344,98 @@ it.effect(
     }),
 );
 
+it.effect.each([
+  { tracker: "github", path: "/issues/7" },
+  { tracker: "gitlab", path: "/-/issues/7" },
+  { tracker: "forgejo", path: "/issues/7" },
+])(
+  "resolves custom ports for $tracker without lending another install's source",
+  ({ tracker, path }) =>
+    Effect.gen(function* () {
+      const kind = IssueTrackerKind.make(tracker);
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "web",
+            repository: "acme/web",
+            host: "git.acme.test:3000",
+            provider: tracker,
+          }),
+          project({
+            id: "other",
+            repository: "acme/web",
+            host: "git.acme.test:4000",
+            provider: tracker,
+          }),
+        ],
+        trackers: [
+          fakeTracker({
+            kind,
+            getIssue: () => Effect.die("URL resolution must not read issues"),
+            listIssues: () => Effect.die("URL resolution must not list issues"),
+          }),
+        ],
+      });
+      for (const [port, projectId] of [
+        ["3000", "web"],
+        ["4000", "other"],
+      ] as const) {
+        expect(
+          yield* service.resolveUrl(
+            `https://git.acme.test:${port}/acme/web${path}`,
+            ProjectId.make("other"),
+          ),
+        ).toEqual({
+          projectId,
+          tracker: kind,
+          host: `git.acme.test:${port}`,
+          scope: "acme/web",
+          key: "7",
+          writable: true,
+        });
+        expect(
+          yield* service.resolveUrl(`https://git.acme.test:${port}/acme/foreign${path}`),
+        ).toMatchObject({
+          projectId,
+          host: `git.acme.test:${port}`,
+          scope: "acme/foreign",
+          writable: false,
+        });
+      }
+      expect(
+        yield* Effect.flip(service.resolveUrl(`https://git.acme.test:5000/acme/web${path}`)),
+      ).toMatchObject({
+        _tag: tracker === "gitlab" ? "IssueUnavailableError" : "IssueOperationError",
+      });
+    }),
+);
+
+it.effect("matches a Git host's normalized default HTTPS port", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "web",
+          repository: "acme/web",
+          host: "git.acme.test:443",
+          provider: "forgejo",
+        }),
+      ],
+      trackers: [
+        fakeTracker({
+          kind: IssueTrackerKind.make("forgejo"),
+          getIssue: () => Effect.die("URL resolution must not read issues"),
+        }),
+      ],
+    });
+    expect(yield* service.resolveUrl("https://git.acme.test:443/acme/web/issues/7")).toMatchObject({
+      projectId: "web",
+      host: "git.acme.test",
+      writable: true,
+    });
+  }),
+);
+
 it.effect("resolves a configured Forgejo source before a GitHub-looking hostname", () =>
   Effect.gen(function* () {
     const forgejo = IssueTrackerKind.make("forgejo");
