@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
-import { NodeId, ProviderDriverKind, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  deriveWorkflowGroups,
+  projectedSubagentsToRuntime,
+} from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  NodeId,
+  ProviderDriverKind,
+  RunId,
+  ThreadId,
+  type OrchestrationV2SubagentWorkflow,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 import {
+  nextWorkflowSelection,
   resolveSubagentRowPresentation,
   resolveSubagentStopTarget,
-  workflowGroupSummary,
+  workflowMemberDetail,
+  workflowMemberMetadata,
+  workflowRail,
 } from "./threadAgentsPresentation";
 
 const base = {
@@ -82,20 +96,180 @@ describe("resolveSubagentRowPresentation", () => {
   });
 });
 
-type Group = Parameters<typeof workflowGroupSummary>[0];
+type WorkflowAgent = OrchestrationV2SubagentWorkflow["agents"][number];
 
-const members = (...statuses: ReadonlyArray<string>) => statuses.map((status) => ({ status }));
+const workflowRailOf = (
+  agents: ReadonlyArray<WorkflowAgent>,
+  status: "running" | "completed" = "running",
+) =>
+  workflowRail(
+    deriveWorkflowGroups(
+      projectedSubagentsToRuntime([
+        {
+          id: "workflow",
+          title: "Mobile Stop review",
+          prompt: "",
+          model: null,
+          status,
+          result: null,
+          startedAt: DateTime.makeUnsafe("2026-08-01T10:00:00.000Z"),
+          completedAt: null,
+          updatedAt: DateTime.makeUnsafe("2026-08-01T10:00:05.000Z"),
+          workflow: {
+            phases: [
+              { index: 0, title: "Inspect" },
+              { index: 1, title: "Verify" },
+              { index: 2, title: "Report" },
+            ],
+            agents,
+          },
+        },
+      ]),
+    )[0]!,
+  );
 
-describe("workflowGroupSummary", () => {
-  it("summarizes phases and settled agents", () => {
-    const group = {
-      phases: [{ members: members("completed", "failed") }, { members: [] }],
-      unphasedMembers: members("running"),
-    } as unknown as Group;
-    expect(workflowGroupSummary(group)).toBe("1 phase · 2/3 agents done");
-    expect(workflowGroupSummary({ phases: [], unphasedMembers: [] } as unknown as Group)).toBe(
-      "No agents yet",
+const agent = (
+  index: number,
+  phaseIndex: number | undefined,
+  state: WorkflowAgent["state"],
+  overrides: Partial<WorkflowAgent> = {},
+): WorkflowAgent => ({
+  index,
+  label: `agent ${index}`,
+  state,
+  ...(phaseIndex === undefined ? {} : { phaseIndex }),
+  ...overrides,
+});
+
+describe("workflowRail", () => {
+  it("keeps declared phases without agents and gives unphased agents a stop", () => {
+    const rail = workflowRailOf([
+      agent(1, 0, "completed"),
+      agent(2, 1, "running"),
+      agent(3, undefined, "queued"),
+    ]);
+
+    expect(rail.map((item) => [item.title, item.tone, item.members.length])).toEqual([
+      ["Inspect", "completed", 1],
+      ["Verify", "working", 1],
+      ["Report", "queued", 0],
+      ["Other", "queued", 1],
+    ]);
+  });
+
+  it("counts only completed agents toward a failed phase's progress", () => {
+    const [phase] = workflowRailOf([agent(1, 0, "failed"), agent(2, 0, "completed")], "completed");
+
+    expect([phase!.tone, phase!.completedCount, phase!.members.length]).toEqual(["failed", 1, 2]);
+  });
+});
+
+describe("nextWorkflowSelection", () => {
+  const running = workflowRailOf([agent(1, 0, "completed"), agent(2, 1, "running")]);
+
+  it("opens the running phase from the collapsed title, then collapses", () => {
+    expect(nextWorkflowSelection(running, null)).toBe("1");
+    expect(nextWorkflowSelection(running, "1")).toBeNull();
+  });
+
+  it("prefers the failed phase, then the latest phase with agents", () => {
+    const failed = workflowRailOf([agent(1, 0, "failed"), agent(2, 1, "completed")], "completed");
+    const done = workflowRailOf([agent(1, 0, "completed"), agent(2, 1, "completed")], "completed");
+
+    expect(nextWorkflowSelection(failed, null)).toBe("0");
+    expect(nextWorkflowSelection(done, null)).toBe("1");
+    expect(nextWorkflowSelection(workflowRailOf([]), null)).toBeNull();
+  });
+
+  it("keeps one phase open: another replaces it and the open one collapses the card", () => {
+    expect(nextWorkflowSelection(running, null, "0")).toBe("0");
+    expect(nextWorkflowSelection(running, "1", "0")).toBe("0");
+    expect(nextWorkflowSelection(running, "0", "0")).toBeNull();
+  });
+
+  it("keeps the chosen phase open after the run settles", () => {
+    const settled = workflowRailOf(
+      [agent(1, 0, "completed"), agent(2, 1, "completed")],
+      "completed",
     );
+
+    expect(nextWorkflowSelection(settled, "0", "1")).toBe("1");
+    expect(nextWorkflowSelection(settled, "0", "0")).toBeNull();
+    expect(settled.find((item) => item.key === "0")?.members).toHaveLength(1);
+  });
+});
+
+describe("workflow member rows", () => {
+  it("keeps reported model, effort, and speed once an agent completes", () => {
+    const [completed] = workflowRailOf(
+      [
+        agent(1, 0, "completed", {
+          model: "claude-opus-5-5",
+          effort: "high",
+          speed: "fast",
+          result: "Checked controls",
+        }),
+      ],
+      "completed",
+    )[0]!.members;
+
+    expect(workflowMemberMetadata(completed!, undefined)).toEqual({
+      model: "Claude Opus 5.5",
+      effort: "High",
+      speed: "Fast",
+      fast: true,
+    });
+    expect(workflowMemberDetail(completed!)).toEqual({ detail: "Checked controls", error: null });
+  });
+
+  it("reports nothing the provider did not send", () => {
+    expect(workflowMemberMetadata({ model: null, effort: null }, undefined)).toEqual({
+      model: null,
+      effort: null,
+      speed: null,
+      fast: false,
+    });
+  });
+
+  it("labels effort from the catalog model a reported alias resolves to", () => {
+    expect(
+      workflowMemberMetadata(
+        { model: "opus", effort: "xhigh" },
+        {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          models: [
+            {
+              slug: "claude-opus-5-5",
+              name: "Claude Opus 5.5",
+              shortName: "Opus 5.5",
+              aliases: ["opus"],
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "effort",
+                    label: "Reasoning",
+                    type: "select",
+                    options: [{ id: "xhigh", label: "Extra High" }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ),
+    ).toMatchObject({ model: "Opus 5.5", effort: "Extra High" });
+  });
+
+  it("shows a failed agent's error under its prompt", () => {
+    const [failed] = workflowRailOf([
+      agent(1, 0, "failed", { prompt: "Update session store", result: "Type error" }),
+    ])[0]!.members;
+
+    expect(workflowMemberDetail(failed!)).toEqual({
+      detail: "Update session store",
+      error: "Type error",
+    });
   });
 });
 

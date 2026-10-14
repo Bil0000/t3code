@@ -1,13 +1,17 @@
 import {
   formatSubagentDisplayTitle,
+  resolveSubagentMetadata,
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
 import {
   isActiveSubagentStatus,
-  isTerminalSubagentStatus,
+  type RuntimeSubagent,
   type SubagentWorkflowGroup,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import type { OrchestrationV2Subagent } from "@t3tools/contracts";
+import type { OrchestrationV2Subagent, ServerProvider } from "@t3tools/contracts";
+import { resolveSelectableModel } from "@t3tools/shared/model";
+
+import { subagentCardDetail } from "./subagent-card-presentation";
 
 const PROMPT_TITLE_LIMIT = 80;
 
@@ -78,13 +82,102 @@ export function resolveSubagentRowPresentation(
   };
 }
 
-export function workflowGroupSummary(group: SubagentWorkflowGroup): string {
-  const members = [...group.phases.flatMap((phase) => phase.members), ...group.unphasedMembers];
-  if (members.length === 0) return "No agents yet";
-  const settled = members.filter((member) => isTerminalSubagentStatus(member.status)).length;
-  const phases = group.phases.filter((phase) => phase.members.length > 0).length;
-  const agents = `${settled}/${members.length} ${members.length === 1 ? "agent" : "agents"} done`;
-  return phases === 0 ? agents : `${phases} ${phases === 1 ? "phase" : "phases"} · ${agents}`;
+export type WorkflowRailTone = SubagentRowTone | "queued";
+
+export interface WorkflowRailItem {
+  readonly key: string;
+  readonly title: string;
+  readonly members: ReadonlyArray<RuntimeSubagent>;
+  readonly completedCount: number;
+  readonly tone: WorkflowRailTone;
+}
+
+function railTone(members: ReadonlyArray<RuntimeSubagent>): WorkflowRailTone {
+  if (members.every((member) => member.status === "pending")) return "queued";
+  if (members.some((member) => isActiveSubagentStatus(member.status) || member.status === "idle")) {
+    return "working";
+  }
+  if (members.some((member) => member.status === "failed")) return "failed";
+  return members.every((member) => member.status === "completed") ? "completed" : "stopped";
+}
+
+export function workflowRail(group: SubagentWorkflowGroup): ReadonlyArray<WorkflowRailItem> {
+  const items = group.phases.map((phase) => ({
+    key: String(phase.index),
+    title: phase.title,
+    members: phase.members,
+  }));
+  if (group.unphasedMembers.length > 0) {
+    items.push({
+      key: "unphased",
+      title: items.length === 0 ? "Agents" : "Other",
+      members: group.unphasedMembers,
+    });
+  }
+  return items.map((item) => ({
+    ...item,
+    completedCount: item.members.filter((member) => member.status === "completed").length,
+    tone: railTone(item.members),
+  }));
+}
+
+export function nextWorkflowSelection(
+  rail: ReadonlyArray<WorkflowRailItem>,
+  selected: string | null,
+  tapped?: string,
+): string | null {
+  const open = rail.some((item) => item.key === selected) ? selected : null;
+  if (tapped !== undefined) return tapped === open ? null : tapped;
+  if (open !== null) return null;
+  const filled = rail.filter((item) => item.members.length > 0);
+  return (
+    (
+      filled.find((item) => item.tone === "working") ??
+      filled.find((item) => item.tone === "failed") ??
+      filled.at(-1)
+    )?.key ?? null
+  );
+}
+
+const EFFORT_OPTION_IDS = new Set(["reasoningEffort", "effort", "reasoning", "variant"]);
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+export function workflowMemberMetadata(
+  member: Pick<RuntimeSubagent, "model" | "effort" | "speed">,
+  provider: Pick<ServerProvider, "driver" | "models"> | undefined,
+) {
+  const model = member.model?.trim()
+    ? resolveSubagentMetadata({ model: member.model, provider }).modelLabel
+    : null;
+  const slug = provider
+    ? resolveSelectableModel(provider.driver, member.model, provider.models)
+    : null;
+  const effortChoice = provider?.models
+    .find((candidate) => candidate.slug === slug)
+    ?.capabilities?.optionDescriptors?.flatMap((descriptor) =>
+      descriptor.type === "select" && EFFORT_OPTION_IDS.has(descriptor.id)
+        ? descriptor.options
+        : [],
+    )
+    .find((option) => option.id === member.effort);
+  return {
+    model,
+    effort: member.effort ? (effortChoice?.label ?? capitalize(member.effort)) : null,
+    speed: member.speed ? capitalize(member.speed) : null,
+    fast: member.speed === "fast",
+  };
+}
+
+export function workflowMemberDetail(
+  member: Pick<RuntimeSubagent, "status" | "progress" | "result" | "error">,
+) {
+  return {
+    detail: subagentCardDetail(subagentDetailPreview(member)),
+    error: member.status === "failed" ? subagentCardDetail(member.error) : null,
+  };
 }
 
 export function resolveSubagentStopTarget(
