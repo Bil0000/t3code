@@ -30,6 +30,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.issuesUpdate]: AuthSourceControlWriteScope,
   [WS_METHODS.issuesSetState]: AuthSourceControlWriteScope,
   [WS_METHODS.issuesReact]: AuthSourceControlWriteScope,
+  [WS_METHODS.issuesEditComment]: AuthSourceControlWriteScope,
+  [WS_METHODS.issuesSetParent]: AuthSourceControlWriteScope,
+  [WS_METHODS.issuesRefreshThreadLinks]: AuthOrchestrationOperateScope,
   // A tracker credential and a project's binding are settings, saved under the same grant.
   [WS_METHODS.issueTrackersConnect]: AuthSettingsWriteScope,
   [WS_METHODS.issueTrackersBindProject]: AuthSettingsWriteScope,

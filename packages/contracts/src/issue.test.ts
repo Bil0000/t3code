@@ -5,6 +5,11 @@ import * as Schema from "effect/Schema";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
+  IssueState,
+  IssuePageInput,
+  IssueHierarchyPage,
+  IssueTemplate,
+  IssueTemplateList,
   IssueCapabilities,
   IssueCreateInput,
   IssueCreateResult,
@@ -20,6 +25,11 @@ const decodeActor = Schema.decodeEffect(IssueActor);
 const decodeCreate = Schema.decodeEffect(IssueCreateInput);
 const decodeCreated = Schema.decodeEffect(IssueCreateResult);
 const decodeBinding = Schema.decodeEffect(IssueTrackerProjectBinding);
+const decodeState = Schema.decodeUnknownSync(IssueState);
+const decodePage = Schema.decodeUnknownSync(IssuePageInput);
+const decodeHierarchy = Schema.decodeUnknownSync(IssueHierarchyPage);
+const decodeTemplate = Schema.decodeUnknownSync(IssueTemplate);
+const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
 
 it("accepts older reaction capabilities and preserves native comment limits", () => {
   const decode = Schema.decodeUnknownSync(IssueCapabilities);
@@ -137,3 +147,72 @@ it.effect("preserves a created issue and warnings about native fields that were 
     assert.deepEqual(yield* decodeCreated(created), created);
   }),
 );
+
+it("preserves native state IDs and workflow categories with stable open and closed groups", () => {
+  const state = {
+    category: "open",
+    name: "In review",
+    id: "native-17",
+    workflowCategory: "started",
+  };
+  expect(decodeState(state)).toEqual(state);
+  expect(decodeState({ category: "closed", name: "Done" })).toEqual({
+    category: "closed",
+    name: "Done",
+  });
+  expect(() => decodeState({ ...state, workflowCategory: "review" })).toThrow();
+});
+
+it("bounds issue continuation requests to 200 rows and preserves hierarchy continuation", () => {
+  expect(decodePage({ cursor: "native-next", limit: 200 })).toEqual({
+    cursor: "native-next",
+    limit: 200,
+  });
+  for (const limit of [0, 201, 1.5]) expect(() => decodePage({ limit })).toThrow();
+  expect(() => decodePage({ cursor: "x".repeat(4097) })).toThrow();
+  const page = { parent: null, children: { items: [], nextCursor: "next", truncated: true } };
+  expect(decodeHierarchy(page)).toEqual(page);
+});
+
+it("keeps structured template fields and contact links beside body templates", () => {
+  const template = {
+    key: "bug.yml",
+    name: "Bug",
+    about: "Report a bug",
+    title: "",
+    body: "",
+    labels: [],
+    assignees: [],
+    fields: [
+      { kind: "markdown", value: "Steps" },
+      {
+        kind: "input",
+        id: "version",
+        label: "Version",
+        description: null,
+        required: true,
+        placeholder: null,
+        value: null,
+      },
+      {
+        kind: "dropdown",
+        id: "os",
+        label: "OS",
+        description: null,
+        required: true,
+        multiple: false,
+        options: ["Linux"],
+        defaultValues: ["Linux"],
+      },
+    ],
+  };
+  expect(decodeTemplate(template)).toEqual(template);
+  const list = {
+    templates: [template],
+    externalTemplates: [],
+    blankIssuesEnabled: false,
+    contactLinks: [{ name: "Help", about: "Get help", url: "https://example.com/help" }],
+    contributingGuidelinesUrl: "https://example.com/contributing",
+  };
+  expect(decodeTemplates(list)).toEqual(list);
+});

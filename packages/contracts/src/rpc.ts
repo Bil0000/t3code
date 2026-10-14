@@ -25,7 +25,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   CodexAuthCallbackInput,
   CodexAuthCallbackState,
@@ -163,6 +163,15 @@ import {
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import {
   IssueCandidates,
+  IssueAssigneeCandidatesPage,
+  IssueEditCommentInput,
+  IssueHierarchyPage,
+  IssueHistoryPage,
+  IssueLabelCandidatesPage,
+  IssueLinkedPullRequestsPage,
+  IssuePageRef,
+  IssueScopePageRef,
+  IssueSetParentInput,
   IssueCommentInput,
   IssueCommentsPage,
   IssueCommentsPageInput,
@@ -596,6 +605,15 @@ export const WS_METHODS = {
   issuesUpdate: "issues.update",
   issuesSetState: "issues.setState",
   issuesReact: "issues.react",
+  issuesHistory: "issues.history",
+  issuesLinkedPullRequests: "issues.linkedPullRequests",
+  issuesHierarchy: "issues.hierarchy",
+  issuesLabelCandidates: "issues.labelCandidates",
+  issuesAssigneeCandidates: "issues.assigneeCandidates",
+  issuesEditComment: "issues.editComment",
+  issuesSetParent: "issues.setParent",
+  issuesRefreshThreadLinks: "issues.refreshThreadLinks",
+
   issueTrackersList: "issueTrackers.list",
   issueTrackersConnect: "issueTrackers.connect",
   issueTrackersBindProject: "issueTrackers.bindProject",
@@ -1263,6 +1281,54 @@ const WsIssuesSetStateRpc = Rpc.make(WS_METHODS.issuesSetState, {
 
 const WsIssuesReactRpc = Rpc.make(WS_METHODS.issuesReact, {
   payload: IssueReactionInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesHistoryRpc = Rpc.make(WS_METHODS.issuesHistory, {
+  payload: IssuePageRef,
+  success: IssueHistoryPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesLinkedPullRequestsRpc = Rpc.make(WS_METHODS.issuesLinkedPullRequests, {
+  payload: IssuePageRef,
+  success: IssueLinkedPullRequestsPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesHierarchyRpc = Rpc.make(WS_METHODS.issuesHierarchy, {
+  payload: IssuePageRef,
+  success: IssueHierarchyPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
+  payload: IssueScopePageRef,
+  success: IssueLabelCandidatesPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
+  payload: IssueScopePageRef,
+  success: IssueAssigneeCandidatesPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesEditCommentRpc = Rpc.make(WS_METHODS.issuesEditComment, {
+  payload: IssueEditCommentInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesSetParentRpc = Rpc.make(WS_METHODS.issuesSetParent, {
+  payload: IssueSetParentInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+const WsIssuesRefreshThreadLinksRpc = Rpc.make(WS_METHODS.issuesRefreshThreadLinks, {
+  payload: Schema.Struct({ threadId: ThreadId }),
   success: Schema.Void,
   error: IssueRpcError,
 });
@@ -2027,6 +2093,15 @@ export const WsIssuesRpcGroup = RpcGroup.make(
   WsIssuesUpdateRpc,
   WsIssuesSetStateRpc,
   WsIssuesReactRpc,
+  WsIssuesHistoryRpc,
+  WsIssuesLinkedPullRequestsRpc,
+  WsIssuesHierarchyRpc,
+  WsIssuesLabelCandidatesRpc,
+  WsIssuesAssigneeCandidatesRpc,
+  WsIssuesEditCommentRpc,
+  WsIssuesSetParentRpc,
+  WsIssuesRefreshThreadLinksRpc,
+
   WsIssueTrackersListRpc,
   WsIssueTrackersConnectRpc,
   WsIssueTrackersBindProjectRpc,
