@@ -82,6 +82,7 @@ export const LinearComment = Schema.Struct({
   id: Schema.String,
   body: Schema.String,
   createdAt: Schema.String,
+  editedAt: Schema.optional(Schema.NullOr(Schema.String)),
   url: Schema.NullOr(Schema.String),
   user: Schema.NullOr(LinearUser),
   reactions: Schema.Array(LinearReaction),
@@ -160,6 +161,10 @@ export type LinearTemplate = typeof LinearTemplate.Type;
 
 const LinearIssueDetail = Schema.Struct({
   ...LinearIssue.fields,
+  team: Schema.Struct({
+    key: Schema.String,
+    states: Schema.optional(Connection(LinearWorkflowState)),
+  }),
   comments: Connection(LinearComment),
   reactions: Schema.Array(LinearReaction),
   attachments: Connection(LinearAttachment),
@@ -184,7 +189,7 @@ const USER_FIELDS = "id name displayName email avatarUrl";
 const STATE_FIELDS = "id name type position";
 const LABEL_FIELDS = "id name color";
 const REACTION_FIELDS = `id emoji user { ${USER_FIELDS} }`;
-const COMMENT_FIELDS = `id body createdAt url user { ${USER_FIELDS} } reactions { ${REACTION_FIELDS} }`;
+const COMMENT_FIELDS = `id body createdAt editedAt url user { ${USER_FIELDS} } reactions { ${REACTION_FIELDS} }`;
 const ISSUE_FIELDS = `
   id identifier number title url description createdAt updatedAt completedAt canceledAt
   team { key }
@@ -201,16 +206,16 @@ const PROBE_QUERY = `query T3ProbeCredential {
   organization { id urlKey }
   teams(first: 250) { nodes { id key name } pageInfo { hasNextPage endCursor } }
 }`;
-const LIST_QUERY = `query T3Issues($first: Int!, $after: String, $filter: IssueFilter!) {
+const LIST_QUERY = `query T3Issues($first: Int, $last: Int, $after: String, $before: String, $orderBy: PaginationOrderBy!, $filter: IssueFilter!) {
   organization { id urlKey }
-  issues(first: $first, after: $after, filter: $filter, orderBy: updatedAt) {
-    nodes { ${ISSUE_FIELDS} labels(first: 20, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor } } }
-    pageInfo { hasNextPage endCursor }
+  issues(first: $first, last: $last, after: $after, before: $before, filter: $filter, orderBy: $orderBy) {
+    nodes { ${ISSUE_FIELDS} labels(first: 20, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor hasPreviousPage startCursor } } }
+    pageInfo { hasNextPage endCursor hasPreviousPage startCursor }
   }
 }`;
 const ISSUE_QUERY = `query T3Issue($id: String!, $comments: Int!) {
   issue(id: $id) {
-    ${ISSUE_FIELDS}
+    ${ISSUE_FIELDS} team { key states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
     labels(first: 100, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor } }
     comments(first: $comments, orderBy: createdAt) {
       nodes { ${COMMENT_FIELDS} }
@@ -321,7 +326,14 @@ const ProbeData = Schema.Struct({
 });
 const ListData = Schema.Struct({
   organization: LinearOrganization,
-  issues: Connection(LinearIssue),
+  issues: Schema.Struct({
+    nodes: Schema.Array(LinearIssue),
+    pageInfo: Schema.Struct({
+      ...PageInfo.fields,
+      hasPreviousPage: Schema.optional(Schema.Boolean),
+      startCursor: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  }),
 });
 const IssueData = Schema.Struct({ issue: Schema.NullOr(LinearIssueDetail) });
 const IssueReferenceData = Schema.Struct({ issue: Schema.NullOr(LinearIssueReference) });
@@ -371,6 +383,50 @@ const ReactionsData = Schema.Struct({
   ),
 });
 
+export const LinearRelation = Schema.Struct({
+  ...LinearIssueReference.fields,
+  title: Schema.String,
+  state: LinearWorkflowState,
+});
+export type LinearRelation = typeof LinearRelation.Type;
+const RELATION_FIELDS = `id identifier url team { key } title state { ${STATE_FIELDS} }`;
+const HISTORY_FIELDS = `id createdAt actor { ${USER_FIELDS} } fromState { ${STATE_FIELDS} } toState { ${STATE_FIELDS} } fromAssignee { ${USER_FIELDS} } toAssignee { ${USER_FIELDS} } addedLabels { ${LABEL_FIELDS} } removedLabels { ${LABEL_FIELDS} } fromTitle toTitle`;
+const HierarchyData = Schema.Struct({
+  issue: Schema.NullOr(
+    Schema.Struct({
+      ...LinearIssueReference.fields,
+      parent: Schema.NullOr(LinearRelation),
+      children: Connection(LinearRelation),
+    }),
+  ),
+});
+const HistoryPageData = Schema.Struct({
+  issue: Schema.NullOr(
+    Schema.Struct({ ...LinearIssueReference.fields, history: Connection(LinearHistoryEntry) }),
+  ),
+});
+const AttachmentsPageData = Schema.Struct({
+  issue: Schema.NullOr(
+    Schema.Struct({ ...LinearIssueReference.fields, attachments: Connection(LinearAttachment) }),
+  ),
+});
+const LabelCandidatesData = Schema.Struct({
+  organization: LinearOrganization,
+  teams: Schema.Struct({ nodes: Schema.Array(LinearTeam) }),
+  issueLabels: Connection(LinearLabel),
+});
+const AssigneeCandidatesData = Schema.Struct({
+  organization: LinearOrganization,
+  teams: Schema.Struct({
+    nodes: Schema.Array(Schema.Struct({ ...LinearTeam.fields, members: Connection(LinearUser) })),
+  }),
+});
+interface NativePageInput {
+  readonly identifier: string;
+  readonly first: number;
+  readonly after?: string | undefined;
+}
+
 // --- Service -------------------------------------------------------------------------------
 
 /** The team with the workspace-wide labels that any of its issues may also carry. */
@@ -409,6 +465,8 @@ export class LinearApi extends Context.Service<
       readonly filter: Record<string, unknown>;
       readonly first: number;
       readonly after?: string | undefined;
+      readonly sort?: "created" | "updated";
+      readonly order?: "asc" | "desc";
     }) => Effect.Effect<
       {
         readonly organization: LinearOrganization;
@@ -447,6 +505,29 @@ export class LinearApi extends Context.Service<
       },
       IssueTrackerError
     >;
+
+    readonly getHierarchy: (
+      input: NativePageInput,
+    ) => Effect.Effect<typeof HierarchyData.Type, IssueTrackerError>;
+    readonly getHistory: (
+      input: NativePageInput,
+    ) => Effect.Effect<typeof HistoryPageData.Type, IssueTrackerError>;
+    readonly getAttachments: (
+      input: NativePageInput,
+    ) => Effect.Effect<typeof AttachmentsPageData.Type, IssueTrackerError>;
+    readonly listLabelCandidates: (input: {
+      readonly ids?: ReadonlyArray<string>;
+      readonly key: string;
+      readonly first: number;
+      readonly after?: string | undefined;
+    }) => Effect.Effect<typeof LabelCandidatesData.Type, IssueTrackerError>;
+    readonly listAssigneeCandidates: (input: {
+      readonly id?: string;
+      readonly key: string;
+      readonly first: number;
+      readonly after?: string | undefined;
+    }) => Effect.Effect<typeof AssigneeCandidatesData.Type, IssueTrackerError>;
+    readonly updateComment: (id: string, body: string) => Effect.Effect<void, IssueTrackerError>;
     readonly getTeam: (key: string) => Effect.Effect<LinearTeamScope | null, IssueTrackerError>;
     readonly createIssue: (
       input: Record<string, unknown>,
@@ -755,16 +836,26 @@ export const make = Effect.gen(function* () {
       "listIssues",
       LIST_QUERY,
       {
-        first: Math.min(100, Math.max(1, input.first)),
-        after: input.after ?? null,
+        first: input.order === "asc" ? null : Math.min(100, Math.max(1, input.first)),
+        last: input.order === "asc" ? Math.min(100, Math.max(1, input.first)) : null,
+        after: input.order === "asc" ? null : (input.after ?? null),
+        before: input.order === "asc" ? (input.after ?? null) : null,
+        orderBy: input.sort === "created" ? "createdAt" : "updatedAt",
         filter: input.filter,
       },
       ListData,
     ).pipe(
       Effect.map((data) => ({
         organization: data.organization,
-        nodes: data.issues.nodes,
-        nextCursor: data.issues.pageInfo.hasNextPage ? data.issues.pageInfo.endCursor : null,
+        nodes: input.order === "asc" ? data.issues.nodes.toReversed() : data.issues.nodes,
+        nextCursor:
+          input.order === "asc"
+            ? data.issues.pageInfo.hasPreviousPage
+              ? (data.issues.pageInfo.startCursor ?? null)
+              : null
+            : data.issues.pageInfo.hasNextPage
+              ? data.issues.pageInfo.endCursor
+              : null,
       })),
     );
 
@@ -890,7 +981,74 @@ export const make = Effect.gen(function* () {
       ReactionsData,
     ).pipe(Effect.map((data) => (data.comment ?? data.issue)?.reactions ?? []));
 
+  const getHierarchy: LinearApi["Service"]["getHierarchy"] = (input) =>
+    execute(
+      "getHierarchy",
+      `query T3Hierarchy($id: String!, $first: Int!, $after: String) { issue(id: $id) { id identifier url team { key } parent { ${RELATION_FIELDS} } children(first: $first, after: $after) { nodes { ${RELATION_FIELDS} } pageInfo { hasNextPage endCursor } } } }`,
+      { id: input.identifier, first: input.first, after: input.after ?? null },
+      HierarchyData,
+    );
+  const getHistory: LinearApi["Service"]["getHistory"] = (input) =>
+    execute(
+      "getHistory",
+      `query T3History($id: String!, $first: Int!, $after: String) { issue(id: $id) { id identifier url team { key } history(first: $first, after: $after, orderBy: createdAt) { nodes { ${HISTORY_FIELDS} } pageInfo { hasNextPage endCursor } } } }`,
+      { id: input.identifier, first: input.first, after: input.after ?? null },
+      HistoryPageData,
+    );
+  const getAttachments: LinearApi["Service"]["getAttachments"] = (input) =>
+    execute(
+      "getLinkedPullRequests",
+      `query T3Attachments($id: String!, $first: Int!, $after: String) { issue(id: $id) { id identifier url team { key } attachments(first: $first, after: $after) { nodes { url title sourceType metadata } pageInfo { hasNextPage endCursor } } } }`,
+      { id: input.identifier, first: input.first, after: input.after ?? null },
+      AttachmentsPageData,
+    );
+  const listLabelCandidates: LinearApi["Service"]["listLabelCandidates"] = (input) =>
+    execute(
+      "listLabelCandidates",
+      `query T3LabelCandidates($key: String!, $first: Int!, $after: String, $filter: IssueLabelFilter!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name } } issueLabels(first: $first, after: $after, includeArchived: true, filter: $filter) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } }`,
+      {
+        key: input.key,
+        first: input.first,
+        after: input.after ?? null,
+        filter: {
+          and: [
+            { or: [{ team: { key: { eq: input.key } } }, { team: { null: true } }] },
+            ...(input.ids === undefined ? [] : [{ id: { in: input.ids } }]),
+          ],
+        },
+      },
+      LabelCandidatesData,
+    );
+  const listAssigneeCandidates: LinearApi["Service"]["listAssigneeCandidates"] = (input) =>
+    execute(
+      "listAssigneeCandidates",
+      `query T3AssigneeCandidates($key: String!, $first: Int!, $after: String, $filter: UserFilter!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name members(first: $first, after: $after, filter: $filter) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } } } } }`,
+      {
+        key: input.key,
+        first: input.first,
+        after: input.after ?? null,
+        filter: {
+          active: { eq: true },
+          ...(input.id === undefined ? {} : { id: { eq: input.id } }),
+        },
+      },
+      AssigneeCandidatesData,
+    );
+  const updateComment: LinearApi["Service"]["updateComment"] = (id, body) =>
+    mutate(
+      "editComment",
+      `mutation T3CommentUpdate($id: String!, $input: CommentUpdateInput!) { commentUpdate(id: $id, input: $input) { success } }`,
+      { id, input: { body } },
+      "commentUpdate",
+    );
+
   return LinearApi.of({
+    getHierarchy,
+    getHistory,
+    getAttachments,
+    listLabelCandidates,
+    listAssigneeCandidates,
+    updateComment,
     viewer,
     probeCredential,
     getScope,
