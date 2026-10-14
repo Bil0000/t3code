@@ -495,7 +495,7 @@ describe("ForgejoIssueTracker", () => {
     }),
   );
 
-  it.effect.each([undefined, "julius"])(
+  it.effect.each([undefined, "julius", "maintainer"])(
     "does not fetch a viewer just to show older comment edit flags %s",
     (viewer) =>
       Effect.gen(function* () {
@@ -512,7 +512,7 @@ describe("ForgejoIssueTracker", () => {
           cursor: "1",
           ...(viewer === undefined ? {} : { viewer }),
         });
-        expect(page.comments[0]?.canEdit).toBe(viewer !== undefined);
+        expect(page.comments[0]?.canEdit).toBe(viewer === "julius");
         expect(paths).not.toContain("user");
         expect(paths).not.toContain("repos/acme/web");
       }),
