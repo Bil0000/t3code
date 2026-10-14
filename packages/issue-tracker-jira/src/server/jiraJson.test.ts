@@ -42,6 +42,33 @@ describe("Jira document conversion", () => {
     });
   });
 
+  it.each([
+    { attrs: { order: 7 }, expected: "7. First\n8. Second" },
+    { attrs: { order: 0 }, expected: "0. First\n1. Second" },
+    { attrs: undefined, expected: "1. First\n2. Second" },
+    { attrs: {}, expected: "1. First\n2. Second" },
+    { attrs: { order: -1 }, expected: "1. First\n2. Second" },
+    { attrs: { order: 1.5 }, expected: "1. First\n2. Second" },
+    { attrs: { order: "7" }, expected: "1. First\n2. Second" },
+  ])("uses the ordered list start for attrs $attrs", ({ attrs, expected }) => {
+    expect(
+      adfToText({
+        type: "doc",
+        version: 1,
+        content: [
+          {
+            type: "orderedList",
+            attrs,
+            content: ["First", "Second"].map((text) => ({
+              type: "listItem",
+              content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+            })),
+          },
+        ],
+      }),
+    ).toBe(expected);
+  });
+
   it("rejects malformed, excessive and unknown content instead of dropping it", () => {
     expect(() =>
       adfToText({ type: "doc", version: 1, content: [{ type: "unknownMedia" }] }),

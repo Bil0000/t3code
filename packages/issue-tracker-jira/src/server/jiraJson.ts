@@ -139,10 +139,14 @@ export function adfToText(value: unknown): string {
         return children()
           .map((child) => "- " + child)
           .join("\n");
-      case "orderedList":
+      case "orderedList": {
+        const order = node.attrs === undefined ? undefined : attrs().order;
+        const start =
+          typeof order === "number" && Number.isInteger(order) && order >= 0 ? order : 1;
         return children()
-          .map((child, index) => String(index + 1) + ". " + child)
+          .map((child, index) => String(index + start) + ". " + child)
           .join("\n");
+      }
       case "tableRow":
         return children().join(" | ");
       case "table":
