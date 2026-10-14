@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { issueEntryKey } from "@t3tools/client-runtime/state/issues";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { AuthOrchestrationOperateScope, threadIssueKeysEqual } from "@t3tools/contracts";
 import type {
@@ -648,6 +649,7 @@ export function IssueDetailPanel({
   const canReactToComment = blocked === null && issueSupportsReactions(detail.capabilities, true);
   const canSetState = may(detail.capabilities.states.length > 0, detail.viewerPermissions.setState);
   const tracker = issueTrackerPresentation(detail.tracker);
+  const reactionOwner = `${environmentId}\u0000${issueEntryKey(detail)}\u0000${detail.viewer ?? ""}`;
   const otherStates = detail.capabilities.states.filter(
     (state) => state.category !== detail.state.category || state.name !== detail.state.name,
   );
@@ -963,6 +965,7 @@ export function IssueDetailPanel({
             )}
             {detail.reactions !== undefined ? (
               <IssueReactionBar
+                key={reactionOwner}
                 reactions={detail.reactions}
                 canReact={canReact}
                 contents={detail.capabilities.reactionContents}
@@ -1055,6 +1058,7 @@ export function IssueDetailPanel({
                   {item.comment.reactions !== undefined ||
                   issueSupportsReactions(detail.capabilities, true) ? (
                     <IssueReactionBar
+                      key={reactionOwner}
                       reactions={item.comment.reactions ?? []}
                       canReact={canReactToComment}
                       contents={detail.capabilities.reactionContents}
