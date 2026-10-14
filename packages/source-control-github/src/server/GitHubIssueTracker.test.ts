@@ -123,6 +123,66 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each([
+    ["disables blank issues with a plain false value", "blank_issues_enabled: false\n", false],
+    [
+      "disables blank issues with a false value and a comment",
+      "blank_issues_enabled: false # require a template\n",
+      false,
+    ],
+    [
+      "enables blank issues with a true value and a comment",
+      "blank_issues_enabled: true # allow blank issues\n",
+      true,
+    ],
+    ["enables blank issues when the config has no setting", "contact_links: []\n", true],
+    ["ignores a nested blank issue setting", "other:\n  blank_issues_enabled: false\n", true],
+    ["enables blank issues when the config is invalid", "blank_issues_enabled: [\n", true],
+  ] as const)("%s", ([, config, blankIssuesEnabled]) =>
+    Effect.gen(function* () {
+      const api = yield* tracker(
+        () => JSON.stringify({ data: { repository: { issueTemplates: [] } } }),
+        (input) => {
+          expect(input.path).toBe("repos/acme/web/contents/.github/ISSUE_TEMPLATE/config.yml");
+          expect(input.accept).toBe("application/vnd.github.raw");
+          return {
+            status: 200,
+            headers: {},
+            body: config,
+            truncated: false,
+            invalidUtf8: false,
+          };
+        },
+      );
+      expect(
+        yield* api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
+      ).toEqual({ templates: [], blankIssuesEnabled });
+    }),
+  );
+
+  it.effect("enables blank issues when the template config is missing", () =>
+    Effect.gen(function* () {
+      const api = yield* GitHubIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(GitHubApi.GitHubApi)({
+            graphql: () =>
+              Effect.succeed(JSON.stringify({ data: { repository: { issueTemplates: [] } } })),
+            rest: () =>
+              Effect.fail(
+                new GitHubApi.GitHubApiNotFoundError({
+                  host: "github.com",
+                  operation: "listTemplateConfig",
+                }),
+              ),
+          }),
+        ),
+      );
+      expect(
+        yield* api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
+      ).toEqual({ templates: [], blankIssuesEnabled: true });
+    }),
+  );
+
   it.effect("refuses reactions on a comment outside the selected issue", () =>
     Effect.gen(function* () {
       for (const reacted of [true, false]) {

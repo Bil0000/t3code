@@ -10,6 +10,7 @@
  */
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import {
   IssueTrackerKind,
   type IssueCapabilities,
@@ -19,6 +20,7 @@ import {
   IssueTrackerError,
   type IssueTrackerApi,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
 
 import * as GitHubApi from "./GitHubApi.ts";
 import {
@@ -72,6 +74,10 @@ const CAPABILITIES: IssueCapabilities = {
 
 /** Where a repository configures the rest of its issue chooser, as GitHub spells the path. */
 const TEMPLATE_CONFIG_PATH = ".github/ISSUE_TEMPLATE/config.yml";
+
+const decodeTemplateConfig = Schema.decodeUnknownResult(
+  fromYaml(Schema.Struct({ blank_issues_enabled: Schema.optionalKey(Schema.Boolean) })),
+);
 
 /** What a repository selector may hold before it goes into a search query as itself. */
 const SEARCH_REPOSITORY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
@@ -488,9 +494,10 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
                 path: `repos/${owner}/${name}/contents/${TEMPLATE_CONFIG_PATH}`,
               })
               .pipe(
-                Effect.map(
-                  (response) => !/^\s*blank_issues_enabled\s*:\s*false\s*$/m.test(response.body),
-                ),
+                Effect.map((response) => {
+                  const config = decodeTemplateConfig(response.body);
+                  return !Result.isSuccess(config) || config.success.blank_issues_enabled !== false;
+                }),
                 Effect.catch((error) =>
                   error._tag === "GitHubApiRateLimitError" ||
                   error._tag === "SourceControlRateLimitPausedError"
