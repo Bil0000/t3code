@@ -353,12 +353,12 @@ function IssuesRoute() {
 
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
   const [loadingMore, setLoadingMore] = useState<string | null>(null);
-  const loadMore = async (environmentId: EnvironmentId, host: string) => {
+  const loadMore = async (environmentId: EnvironmentId, host: string, tracker: string) => {
     const page = held.get(environmentId);
-    const cursors = page ? issueListCursorsOn(page.nextCursors, host) : {};
+    const cursors = page ? issueListCursorsOn(page.nextCursors, host, tracker) : {};
     if (!page || Object.keys(cursors).length === 0 || loadingMore !== null) return;
     const key = filterKey;
-    setLoadingMore(`${environmentId} ${host}`);
+    setLoadingMore(`${environmentId} ${tracker} ${host}`);
     const result = await loadPage({
       environmentId,
       input: { ...baseInput, limit: PAGE_SIZE, cursors },
@@ -395,7 +395,12 @@ function IssuesRoute() {
       list.refresh();
       return;
     }
-    const scope = { projectId: canonical.projectId, host: canonical.host, scope: canonical.scope };
+    const scope = {
+      projectId: canonical.projectId,
+      tracker: canonical.tracker,
+      host: canonical.host,
+      scope: canonical.scope,
+    };
     const key = filterKey;
     const result = await loadPage({
       environmentId,
@@ -440,7 +445,10 @@ function IssuesRoute() {
         if (!byTracker.has(key)) byTracker.set(key, { tracker, rows: [], errors: [], more: [] });
         const group = byTracker.get(key)!;
         if (!group.tracker.configured && tracker.configured) group.tracker = tracker;
-        if (Object.keys(issueListCursorsOn(page.nextCursors, tracker.host)).length > 0)
+        if (
+          Object.keys(issueListCursorsOn(page.nextCursors, tracker.host, tracker.tracker)).length >
+          0
+        )
           group.more.push(environmentId);
       }
       for (const entry of page.entries) {
@@ -828,9 +836,11 @@ function IssuesRoute() {
                 variant="ghost-muted"
                 className="self-start"
                 disabled={loadingMore !== null}
-                onClick={() => void loadMore(environmentId, group.tracker.host)}
+                onClick={() =>
+                  void loadMore(environmentId, group.tracker.host, group.tracker.tracker)
+                }
               >
-                {loadingMore === `${environmentId} ${group.tracker.host}`
+                {loadingMore === `${environmentId} ${group.tracker.tracker} ${group.tracker.host}`
                   ? "Loading…"
                   : "Load more"}
               </Button>

@@ -18,6 +18,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import {
+  issueListCursorKey,
+  issueTrackerHostKey,
   IssueOperationError,
   IssueTrackerKind,
   IssueUnavailableError,
@@ -121,10 +123,6 @@ export function resolveGitHostBinding(
     host,
     scope,
   };
-}
-
-function listCursorKey(host: string, scope: string): string {
-  return `${host} ${scope}`;
 }
 
 function isTrackerUnusable(error: IssueTrackerError): boolean {
@@ -272,15 +270,20 @@ export const make = Effect.gen(function* () {
         const supported: SupportedProject[] = [];
         const unimplemented = new Map<
           string,
-          { tracker: IssueTrackerKind; projectCount: number }
+          { tracker: IssueTrackerKind; host: string; projectCount: number }
         >();
         for (const candidate of bound.flat()) {
           if (host !== undefined && candidate.host !== host) continue;
           const api = registry.get(candidate.tracker);
           if (api === null) {
-            const counted = unimplemented.get(candidate.host);
+            const key = issueTrackerHostKey(candidate);
+            const counted = unimplemented.get(key);
             if (counted === undefined)
-              unimplemented.set(candidate.host, { tracker: candidate.tracker, projectCount: 1 });
+              unimplemented.set(key, {
+                tracker: candidate.tracker,
+                host: candidate.host,
+                projectCount: 1,
+              });
             else counted.projectCount += 1;
             continue;
           }
@@ -386,10 +389,38 @@ export const make = Effect.gen(function* () {
       // Worktrees of one repository are separate projects; read each scope once.
       const scopes = new Map<string, SupportedProject>();
       for (const project of supported) {
-        const key = listCursorKey(project.host, project.scope);
+        const key = issueListCursorKey(project);
         if (!scopes.has(key)) scopes.set(key, project);
       }
-      const continuing = input.cursors;
+      const continuing = input.cursors === undefined ? undefined : { ...input.cursors };
+      if (continuing !== undefined) {
+        const legacySources =
+          input.projectId !== undefined &&
+          [...scopes.values()].some(
+            (project) => continuing[`${project.host} ${project.scope}`] !== undefined,
+          )
+            ? yield* listProjects({ host: input.host })
+            : { supported, unimplemented };
+        const trackersByHost = new Map<string, Set<IssueTrackerKind>>();
+        for (const source of [
+          ...legacySources.supported,
+          ...legacySources.unimplemented.values(),
+        ]) {
+          const kinds = trackersByHost.get(source.host) ?? new Set<IssueTrackerKind>();
+          kinds.add(source.tracker);
+          trackersByHost.set(source.host, kinds);
+        }
+        for (const [key, project] of scopes) {
+          const legacy = continuing[`${project.host} ${project.scope}`];
+          if (legacy === undefined || continuing[key] !== undefined) continue;
+          if (trackersByHost.get(project.host)!.size > 1)
+            return yield* new IssueOperationError({
+              operation: "list",
+              detail: "This issue cursor does not identify one tracker. Refresh the issue list.",
+            });
+          continuing[key] = legacy;
+        }
+      }
       const viewers = new Map<string, string>();
       const viewerReads = new Map<string, Effect.Effect<string, IssueTrackerError>>();
       const trackers = new Map<string, IssueTrackerSummary>();
@@ -399,23 +430,27 @@ export const make = Effect.gen(function* () {
 
       const viewerFor = (project: SupportedProject) =>
         Effect.gen(function* () {
-          let read = viewerReads.get(project.host);
+          let read = viewerReads.get(issueTrackerHostKey(project));
           if (read === undefined) {
             read = yield* Effect.cached(
               project.api
                 .getViewer({ cwd: project.project.workspaceRoot, host: project.host })
-                .pipe(Effect.tap((viewer) => Effect.sync(() => viewers.set(project.host, viewer)))),
+                .pipe(
+                  Effect.tap((viewer) =>
+                    Effect.sync(() => viewers.set(issueTrackerHostKey(project), viewer)),
+                  ),
+                ),
             );
-            viewerReads.set(project.host, read);
+            viewerReads.set(issueTrackerHostKey(project), read);
           }
           return yield* read;
         });
 
       // Every project counts, including worktrees of a scope read once below.
       for (const project of supported) {
-        const existing = trackers.get(project.host);
+        const existing = trackers.get(issueTrackerHostKey(project));
         trackers.set(
-          project.host,
+          issueTrackerHostKey(project),
           existing === undefined
             ? {
                 tracker: project.tracker,
@@ -429,9 +464,13 @@ export const make = Effect.gen(function* () {
         );
       }
       const recordFailure = (project: SupportedProject, failure: IssueTrackerError) => {
-        const existing = trackers.get(project.host);
+        const existing = trackers.get(issueTrackerHostKey(project));
         if (existing !== undefined && isTrackerUnusable(failure))
-          trackers.set(project.host, { ...existing, configured: false, detail: failure.detail });
+          trackers.set(issueTrackerHostKey(project), {
+            ...existing,
+            configured: false,
+            detail: failure.detail,
+          });
       };
 
       yield* Effect.forEach(
@@ -497,8 +536,9 @@ export const make = Effect.gen(function* () {
         { concurrency: SCOPE_CONCURRENCY, discard: true },
       );
 
-      for (const [host, { tracker, projectCount }] of unimplemented) {
-        trackers.set(host, {
+      for (const source of unimplemented.values()) {
+        const { host, tracker, projectCount } = source;
+        trackers.set(issueTrackerHostKey(source), {
           tracker,
           host,
           projectCount,

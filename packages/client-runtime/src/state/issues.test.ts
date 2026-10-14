@@ -217,6 +217,62 @@ describe("issue list continuations", () => {
     "linear.app ENG": "c",
   };
 
+  it("keeps same-host trackers separate through retries and source refresh", () => {
+    const github = entry({ key: "1", host: "shared.example" });
+    const gitlab = entry({ ...github, tracker: "gitlab" as IssueTrackerKind });
+    const gh = "github shared.example acme/app";
+    const gl = "gitlab shared.example acme/app";
+    const held = {
+      entries: [github, gitlab],
+      nextCursors: { [gh]: "gh2", [gl]: "gl2" },
+      firstCursors: { [gh]: "gh2", [gl]: "gl2" },
+      firstKeys: new Set([github, gitlab].map(issueEntryKey)),
+      errors: [] as IssueListResult["errors"],
+    };
+    expect(mergeIssueListPage([github], [gitlab])).toHaveLength(2);
+    expect(issueListCursorsOn(held.nextCursors, "Shared.Example", "gitlab")).toEqual({
+      [gl]: "gl2",
+    });
+    const down = {
+      projectId: gitlab.projectId,
+      projectTitle: "App",
+      tracker: gitlab.tracker,
+      host: gitlab.host,
+      message: "down",
+    };
+    const failed = continueIssueListPage(
+      held,
+      { [gl]: "gl2" },
+      { entries: [], nextCursors: {}, errors: [down] },
+      held.firstCursors,
+    );
+    expect(failed.nextCursors).toEqual(held.nextCursors);
+    const continued = continueIssueListPage(
+      failed,
+      { [gl]: "gl2" },
+      { entries: [entry({ ...gitlab, key: "2" })], nextCursors: { [gl]: "gl3" }, errors: [] },
+      held.firstCursors,
+    );
+    expect(continued.errors).toEqual([]);
+    expect(continued.nextCursors).toEqual({ [gh]: "gh2", [gl]: "gl3" });
+    expect(continued.entries).toHaveLength(3);
+    const refreshed = refreshIssueListPage(
+      continued,
+      { entries: [], nextCursors: {}, errors: [] },
+      { source: gitlab },
+    );
+    expect(refreshed.entries).toEqual([github]);
+    expect(refreshed.nextCursors).toEqual({ [gh]: "gh2" });
+    const narrowed = refreshIssueListPage(held, {
+      entries: [gitlab],
+      nextCursors: { [gl]: "gl2" },
+      errors: [],
+      sources: [{ ...gitlab, capabilities: {} as IssueCapabilities }],
+    });
+    expect(narrowed.entries).toEqual([gitlab]);
+    expect(narrowed.nextCursors).toEqual({ [gl]: "gl2" });
+  });
+
   it("continues only the scopes of the chosen host", () => {
     expect(issueListCursorsOn(cursors, "GitHub.com")).toEqual({
       "github.com acme/app": "a",
@@ -516,7 +572,12 @@ describe("refreshIssueListPage", () => {
       loaded,
       { entries: rows(2, 51), nextCursors: { "github.com acme/app": "2" }, errors: [] },
       {
-        source: { projectId: "project-1", host: "GitHub.com", scope: "Acme/App" },
+        source: {
+          tracker: "github",
+          projectId: "project-1",
+          host: "GitHub.com",
+          scope: "Acme/App",
+        },
         removed: issueEntryKey(entry({ key: "1" })),
       },
     );
@@ -585,7 +646,14 @@ describe("refreshIssueListPage", () => {
     const next = refreshIssueListPage(
       held,
       { entries: [entry({ key: "1", title: "Retitled" })], nextCursors: {}, errors: [] },
-      { source: { projectId: "project-1", host: "github.com", scope: "acme/app" } },
+      {
+        source: {
+          tracker: "github",
+          projectId: "project-1",
+          host: "github.com",
+          scope: "acme/app",
+        },
+      },
     );
     expect(next.entries.filter((row) => row.scope === "acme/app").map((row) => row.title)).toEqual([
       "Retitled",

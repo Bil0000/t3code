@@ -350,6 +350,88 @@ describe("IssueService", () => {
     }),
   );
 
+  it.effect("keeps tracker scopes and viewers separate when two trackers share a host", () =>
+    Effect.gen(function* () {
+      const host = "shared.example";
+      const gitlab = IssueTrackerKind.make("gitlab");
+      const readViewers: string[] = [];
+      const listed: string[] = [];
+      const projects = [
+        project({ id: "gh", repository: "acme/web", host }),
+        project({ id: "gl", repository: "acme/web", provider: "gitlab", host }),
+      ];
+      const service = yield* makeService({
+        projects,
+        trackers: [GITHUB, gitlab].map((kind) =>
+          fakeTracker({
+            kind,
+            getViewer: () =>
+              Effect.sync(() => {
+                readViewers.push(kind);
+                return kind + "-viewer";
+              }),
+            listIssues: (input) =>
+              Effect.sync(() => {
+                expect(input.viewer).toBe(kind + "-viewer");
+                listed.push(kind);
+                return { items: [issue("1")], nextCursor: "next" };
+              }),
+          }),
+        ),
+      });
+      const result = yield* service.list({ state: "open" });
+      expect(readViewers.toSorted()).toEqual(["github", "gitlab"]);
+      expect(listed.toSorted()).toEqual(["github", "gitlab"]);
+      expect(result.entries.map((entry) => entry.tracker).toSorted()).toEqual(["github", "gitlab"]);
+      expect(
+        result.trackers
+          .map((summary) => [summary.tracker, summary.host, summary.projectCount])
+          .toSorted(),
+      ).toEqual([
+        ["github", host, 1],
+        ["gitlab", host, 1],
+      ]);
+      expect(result.viewers).toEqual({
+        "github shared.example": "github-viewer",
+        "gitlab shared.example": "gitlab-viewer",
+      });
+      expect(result.nextCursors).toEqual({
+        "github shared.example acme/web": "next",
+        "gitlab shared.example acme/web": "next",
+      });
+      yield* service.list({ state: "open", cursors: { "gitlab shared.example acme/web": "next" } });
+      expect(listed).toHaveLength(3);
+      expect(listed.at(-1)).toBe("gitlab");
+      const narrowed = yield* service.list({ state: "open", projectId: ProjectId.make("gl") });
+      expect(narrowed.nextCursors).toEqual({ "gitlab shared.example acme/web": "next" });
+      expect(narrowed.viewers).toEqual({ "gitlab shared.example": "gitlab-viewer" });
+      yield* service.list({ state: "open", cursors: narrowed.nextCursors });
+      expect(listed.at(-1)).toBe("gitlab");
+      expect(listed).toHaveLength(5);
+      for (const projectId of [undefined, ProjectId.make("gl")]) {
+        const failure = yield* Effect.flip(
+          service.list({
+            state: "open",
+            projectId,
+            cursors: { "shared.example acme/web": "next" },
+          }),
+        );
+        expect(failure).toMatchObject({ _tag: "IssueOperationError", operation: "list" });
+      }
+      expect(listed).toHaveLength(5);
+      expect(readViewers).toHaveLength(5);
+      const unsupported = yield* makeService({
+        projects,
+        trackers: [fakeTracker()],
+      });
+      const unavailable = yield* unsupported.list({ state: "open" });
+      expect(unavailable.trackers.map(({ tracker, configured }) => [tracker, configured])).toEqual([
+        ["github", true],
+        ["gitlab", false],
+      ]);
+    }),
+  );
+
   it.effect("lists each repository once and reports unusable trackers per host", () =>
     Effect.gen(function* () {
       const listed: string[] = [];
@@ -387,7 +469,7 @@ describe("IssueService", () => {
         ["web", "2"],
         ["web", "1"],
       ]);
-      expect(result.nextCursors).toEqual({ "github.com acme/web": "next" });
+      expect(result.nextCursors).toEqual({ "github github.com acme/web": "next" });
       expect(result.errors).toEqual([
         {
           projectId: "api",
@@ -397,7 +479,7 @@ describe("IssueService", () => {
           message: "boom",
         },
       ]);
-      expect(result.viewers).toEqual({ "github.com": "julius" });
+      expect(result.viewers).toEqual({ "github github.com": "julius" });
       expect(result.trackers).toEqual([
         expect.objectContaining({ host: "github.com", projectCount: 3, configured: true }),
         expect.objectContaining({
