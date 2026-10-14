@@ -12,6 +12,14 @@ import { useProjects, useServerConfigs, useThreadShell } from "../state/entities
 import { issueEnvironment } from "../state/issues";
 import { useAtomCommand } from "../state/use-atom-command";
 
+async function openUnresolvedLink(url: string): Promise<void> {
+  if (window.desktopBridge) return readLocalApi()?.shell.openExternal(url);
+  const opened = window.open("", "_blank");
+  if (!opened) throw new Error("The browser blocked the link.");
+  opened.opener = null;
+  opened.location.href = url;
+}
+
 export function useOpenIssueLink(
   threadRef?: ScopedThreadRef,
   panelRef?: ScopedThreadRef,
@@ -63,10 +71,7 @@ export function useOpenIssueLink(
         },
       })
         .then(async (result) => {
-          if (result._tag === "Failure") {
-            await readLocalApi()?.shell.openExternal(targetUrl);
-            return;
-          }
+          if (result._tag === "Failure") return openUnresolvedLink(targetUrl);
           const reference = result.value;
           useRightPanelStore.getState().openIssue(resolvedPanelRef, {
             ...(resolvedPanelRef.environmentId === environmentId ? {} : { environmentId }),
@@ -93,7 +98,19 @@ export function useOpenIssueLink(
           }
         })
         .catch(() => {
-          toastManager.add({ type: "error", title: "The link could not be opened" });
+          const id = toastManager.add({
+            type: "error",
+            title: "The link could not be opened",
+            description: targetUrl,
+            actionProps: {
+              children: "Open link",
+              onClick: () =>
+                void openUnresolvedLink(targetUrl).then(
+                  () => toastManager.close(id),
+                  () => undefined,
+                ),
+            },
+          });
         });
       return true;
     },

@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   resolve: vi.fn(),
   openExternal: vi.fn(),
   toast: vi.fn(),
+  toastClose: vi.fn(),
   navigate: vi.fn(),
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
@@ -56,7 +57,9 @@ vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => state.resolv
 vi.mock("../localApi", () => ({
   readLocalApi: () => ({ shell: { openExternal: state.openExternal } }),
 }));
-vi.mock("../components/ui/toast", () => ({ toastManager: { add: state.toast } }));
+vi.mock("../components/ui/toast", () => ({
+  toastManager: { add: state.toast, close: state.toastClose },
+}));
 import {
   ISSUES_PANEL_REF,
   PULL_REQUESTS_PANEL_REF,
@@ -107,6 +110,8 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await act(async () => renderer.unmount());
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 const event = (patch = {}) => ({
   preventDefault: vi.fn(),
@@ -191,6 +196,7 @@ describe("native chat issue links", () => {
   });
 
   it("keeps a thread-less link the server rejects on the external path", async () => {
+    vi.stubGlobal("desktopBridge", {});
     standalone = true;
     await act(async () => {
       renderer.update(createElement(Hook));
@@ -217,6 +223,7 @@ describe("native chat issue links", () => {
   });
 
   it("keeps a rejected or excluded URL usable through the native external-link service", async () => {
+    vi.stubGlobal("desktopBridge", {});
     state.resolve.mockResolvedValue({ _tag: "Failure" });
     const url = "https://forgejo.not-owned.test/team/repo/issues/42";
     await act(async () => {
@@ -225,6 +232,65 @@ describe("native chat issue links", () => {
     expect(state.resolve).toHaveBeenCalledOnce();
     expect(state.openExternal).toHaveBeenCalledExactlyOnceWith(url);
     expect(surfaces(threadRef)).toEqual([]);
+  });
+
+  it("offers a desktop link the shell could not open as a fresh click", async () => {
+    vi.stubGlobal("desktopBridge", {});
+    state.resolve.mockResolvedValue({ _tag: "Failure" });
+    state.openExternal.mockRejectedValueOnce(new Error("Unable to open link."));
+    const url = "https://linear.app/workspace/issue/ENG-42";
+    await act(async () => {
+      open(event(), url);
+    });
+    const toast = state.toast.mock.calls[0]?.[0];
+    expect(toast).toMatchObject({ type: "error", description: url });
+    expect(state.toastClose).not.toHaveBeenCalled();
+    await act(async () => toast.actionProps.onClick());
+    expect(state.openExternal).toHaveBeenLastCalledWith(url);
+    expect(state.toastClose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["the browser blocks the late tab", () => state.resolve.mockResolvedValue({ _tag: "Failure" })],
+    ["the resolver rejects", () => state.resolve.mockRejectedValue(new Error("offline"))],
+  ])("keeps offering a browser link as a fresh click when %s", async (_, fail) => {
+    fail();
+    const tab = { opener: window, location: { href: "" } };
+    const windowOpen = vi.spyOn(window, "open").mockReturnValue(null);
+    const url = "https://linear.app/workspace/issue/ENG-42";
+    await act(async () => {
+      open(event(), url);
+    });
+    const toast = state.toast.mock.calls[0]?.[0];
+    expect(toast).toMatchObject({ type: "error", description: url });
+    const blockedCalls = windowOpen.mock.calls.length;
+    toast.actionProps.onClick();
+    expect(windowOpen).toHaveBeenCalledTimes(blockedCalls + 1);
+    await act(async () => {});
+    expect(state.toastClose).not.toHaveBeenCalled();
+    windowOpen.mockReturnValue(tab as unknown as Window);
+    toast.actionProps.onClick();
+    expect(windowOpen).toHaveBeenCalledTimes(blockedCalls + 2);
+    await act(async () => {});
+    expect(tab).toEqual({ opener: null, location: { href: url } });
+    expect(state.toastClose).toHaveBeenCalledOnce();
+    expect(state.toast).toHaveBeenCalledOnce();
+    expect(state.openExternal).not.toHaveBeenCalled();
+    expect(surfaces(threadRef)).toEqual([]);
+  });
+
+  it("opens a blank-first tab in the browser when the server rejects the link in time", async () => {
+    state.resolve.mockResolvedValue({ _tag: "Failure" });
+    const tab = { opener: window, location: { href: "" } };
+    const windowOpen = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+    const url = "https://linear.app/workspace/issue/ENG-42";
+    await act(async () => {
+      open(event(), url);
+    });
+    expect(windowOpen).toHaveBeenCalledExactlyOnceWith("", "_blank");
+    expect(tab).toEqual({ opener: null, location: { href: url } });
+    expect(state.openExternal).not.toHaveBeenCalled();
+    expect(state.toast).not.toHaveBeenCalled();
   });
 
   it("does not open an issue before a delayed resolver answer", async () => {
@@ -250,6 +316,7 @@ describe("native chat issue links", () => {
     expect(open(click, "https://linear.app/docs/api")).toBe(false);
     expect(click.preventDefault).not.toHaveBeenCalled();
     expect(state.resolve).not.toHaveBeenCalled();
+    expect(state.toast).not.toHaveBeenCalled();
   });
 
   it.each(["metaKey", "ctrlKey", "altKey", "shiftKey"])("keeps %s clicks native", async (key) => {
@@ -259,6 +326,7 @@ describe("native chat issue links", () => {
     });
     expect(click.preventDefault).not.toHaveBeenCalled();
     expect(state.resolve).not.toHaveBeenCalled();
+    expect(state.toast).not.toHaveBeenCalled();
   });
 
   it("keeps unsupported environments on the existing external path", async () => {
@@ -270,6 +338,7 @@ describe("native chat issue links", () => {
     expect(open(click, "https://linear.app/workspace/issue/ENG-42")).toBe(false);
     expect(click.preventDefault).not.toHaveBeenCalled();
     expect(state.resolve).not.toHaveBeenCalled();
+    expect(state.toast).not.toHaveBeenCalled();
   });
 });
 
