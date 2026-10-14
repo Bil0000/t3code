@@ -177,7 +177,8 @@ const make = Effect.gen(function* () {
       const sameIdentity =
         Option.isSome(previous) &&
         (previous.value.host ?? api.standalone.host)?.trim().toLowerCase() === host &&
-        (previous.value.accountId ?? previous.value.account) === (probe.accountId ?? probe.account);
+        previous.value.accountId !== undefined &&
+        previous.value.accountId === probe.accountId;
       const previousBindings = sameIdentity
         ? []
         : yield* bindings.list.pipe(

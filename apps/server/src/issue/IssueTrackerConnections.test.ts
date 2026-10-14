@@ -468,6 +468,32 @@ it.effect(
     }),
 );
 
+it.effect.each([
+  { previousId: undefined, nextId: undefined },
+  { previousId: undefined, nextId: "Alex" },
+  { previousId: "Alex", nextId: undefined },
+] as const)("clears bindings when either account ID is missing: %j", ({ previousId, nextId }) =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture({
+      stored: "old-token",
+      projectExists: true,
+      probe: Effect.die("Unexpected credential probe"),
+      probeForToken: (token) => {
+        const accountId = token === "old-token" ? previousId : nextId;
+        return Effect.succeed({
+          account: "Alex",
+          ...(accountId === undefined ? {} : { accountId }),
+          scopes: [],
+        });
+      },
+    });
+    fixture.saved.set(projectId, binding);
+    yield* fixture.service.connect({ tracker, token: "new-token" });
+    assert.isFalse(fixture.saved.has(projectId));
+    assert.deepEqual(fixture.credentials, ["new-token"]);
+  }),
+);
+
 it.effect("refuses a credential whose driver does not provide its actual site", () =>
   Effect.gen(function* () {
     const fixture = yield* makeFixture({
