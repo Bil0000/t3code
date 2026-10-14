@@ -121,6 +121,19 @@ export const IssueRef = Schema.Struct({
 });
 export type IssueRef = typeof IssueRef.Type;
 
+export const IssueResolveUrlInput = Schema.Struct({
+  url: Schema.String,
+  projectId: Schema.optional(ProjectId),
+});
+export type IssueResolveUrlInput = typeof IssueResolveUrlInput.Type;
+
+export const IssueResolvedUrl = Schema.Struct({
+  ...IssueRef.fields,
+  host: TrimmedNonEmptyString,
+  writable: Schema.Boolean,
+});
+export type IssueResolvedUrl = typeof IssueResolvedUrl.Type;
+
 /** A scope with no issue in it, for reads about the container itself: templates, candidates. */
 export const IssueScopeRef = Schema.Struct({
   projectId: ProjectId,
@@ -314,7 +327,21 @@ export const IssueCommentsPage = Schema.Struct({
 });
 export type IssueCommentsPage = typeof IssueCommentsPage.Type;
 
-/** Where each scope a listing already reached carries on, keyed `"<host> <scope>"`. */
+export function issueTrackerHostKey(source: {
+  readonly tracker: string;
+  readonly host: string;
+}): string {
+  return `${source.tracker} ${source.host.toLowerCase()}`;
+}
+
+export function issueListCursorKey(source: {
+  readonly tracker: string;
+  readonly host: string;
+  readonly scope: string;
+}): string {
+  return `${issueTrackerHostKey(source)} ${source.scope}`;
+}
+
 export const IssueListCursors = Schema.Record(
   TrimmedNonEmptyString,
   TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
@@ -375,7 +402,6 @@ export const IssueListResult = Schema.Struct({
       }),
     ),
   ),
-  /** The signed-in account per host, which is what involvement compares against. */
   viewers: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
   trackers: Schema.Array(IssueTrackerSummary),
   /** By update, newest first, across every scope this answer covers. */
@@ -718,7 +744,9 @@ export const ThreadIssueLink = Schema.Struct({
 });
 export type ThreadIssueLink = typeof ThreadIssueLink.Type;
 
-export function threadIssueKeyOf(key: ThreadIssueKey): string {
+export function threadIssueKeyOf(
+  key: Pick<ThreadIssueKey, "host" | "scope" | "key"> & { readonly tracker: string },
+): string {
   return `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${key.scope.trim().toLowerCase()}\u0000${key.key.trim()}`;
 }
 

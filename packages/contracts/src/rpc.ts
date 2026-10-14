@@ -183,6 +183,8 @@ import {
   IssueOperationError,
   IssueReactionInput,
   IssueRef,
+  IssueResolveUrlInput,
+  IssueResolvedUrl,
   IssueScopeRef,
   IssueSetStateInput,
   IssueTemplateList,
@@ -597,6 +599,7 @@ export const WS_METHODS = {
   // Issue tracking methods
   issuesList: "issues.list",
   issuesDetail: "issues.detail",
+  issuesResolveUrl: "issues.resolveUrl",
   issuesComments: "issues.comments",
   issuesTemplates: "issues.templates",
   issuesCandidates: "issues.candidates",
@@ -1226,6 +1229,12 @@ const IssueRpcError = Schema.Union([
 const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
   payload: IssueListInput,
   success: IssueListResult,
+  error: IssueRpcError,
+});
+
+const WsIssuesResolveUrlRpc = Rpc.make(WS_METHODS.issuesResolveUrl, {
+  payload: IssueResolveUrlInput,
+  success: IssueResolvedUrl,
   error: IssueRpcError,
 });
 
@@ -2085,6 +2094,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsIssuesRpcGroup = RpcGroup.make(
   WsIssuesListRpc,
   WsIssuesDetailRpc,
+  WsIssuesResolveUrlRpc,
   WsIssuesCommentsRpc,
   WsIssuesTemplatesRpc,
   WsIssuesCandidatesRpc,

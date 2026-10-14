@@ -2906,6 +2906,7 @@ export const OrchestrationV2Command = Schema.Union([
     projectId: ProjectId,
     url: TrimmedNonEmptyString,
     source: ThreadIssueLinkSource,
+    snapshot: Schema.optional(ThreadIssueSnapshot),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.issue.unlink"),

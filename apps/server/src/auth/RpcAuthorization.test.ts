@@ -127,6 +127,50 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("reads issues under the orchestration read scope and writes them like pull requests", () => {
+    for (const method of [
+      WS_METHODS.issuesList,
+      WS_METHODS.issuesDetail,
+      WS_METHODS.issuesResolveUrl,
+      WS_METHODS.issuesComments,
+      WS_METHODS.issuesTemplates,
+      WS_METHODS.issuesCandidates,
+      WS_METHODS.issuesHistory,
+      WS_METHODS.issuesHierarchy,
+      WS_METHODS.issuesLinkedPullRequests,
+      WS_METHODS.issuesLabelCandidates,
+      WS_METHODS.issuesAssigneeCandidates,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.issuesCreate,
+      WS_METHODS.issuesComment,
+      WS_METHODS.issuesUpdate,
+      WS_METHODS.issuesSetState,
+      WS_METHODS.issuesReact,
+      WS_METHODS.issuesEditComment,
+      WS_METHODS.issuesSetParent,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthSourceControlWriteScope);
+    }
+  });
+
+  it("requires an orchestration operate grant to refresh issue snapshots", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.issuesRefreshThreadLinks)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
+  it("treats a standalone tracker credential as a setting", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueTrackersList)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    for (const method of [WS_METHODS.issueTrackersConnect, WS_METHODS.issueTrackersBindProject]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthSettingsWriteScope);
+    }
+  });
+
   it("requires source control writes to start, retry, or cancel project clones", () => {
     for (const method of [
       WS_METHODS.projectCloneStart,

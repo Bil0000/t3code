@@ -61,6 +61,10 @@ export type T3McpToolSummaryAction =
   | "unwatch-pr"
   | "write-pr-guides"
   | "read-pr-guide"
+  | "list-issue-sources"
+  | "update-issue"
+  | "edit-issue-comment"
+  | "react-issue"
   | "list-issues"
   | "read-issue"
   | "create-issue"
@@ -130,6 +134,22 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "pull-request",
   ),
   list_issues: tool(["List", "Listing", "Listed", "issues"], "list-issues"),
+  list_issue_sources: tool(["List", "Listing", "Listed", "issue sources"], "list-issue-sources"),
+  read_issue_history: tool(["Read", "Reading", "Read", "issue history"], "read-issue"),
+  read_issue_hierarchy: tool(["Read", "Reading", "Read", "issue hierarchy"], "read-issue"),
+  read_issue_linked_pull_requests: tool(
+    ["Read", "Reading", "Read", "linked pull requests"],
+    "read-issue",
+  ),
+  read_issue_templates: tool(["Read", "Reading", "Read", "issue templates"], "read-issue"),
+  list_issue_labels: tool(["List", "Listing", "Listed", "issue labels"], "read-issue"),
+  list_issue_assignees: tool(["List", "Listing", "Listed", "issue assignees"], "read-issue"),
+  update_issue: tool(["Edit", "Editing", "Edited", "an issue"], "update-issue"),
+  edit_issue_comment: tool(["Edit", "Editing", "Edited", "an issue comment"], "edit-issue-comment"),
+  set_issue_reaction: tool(["React", "Reacting", "Reacted", "to an issue"], "react-issue"),
+  set_issue_labels: tool(["Change", "Changing", "Changed", "issue labels"], "update-issue"),
+  set_issue_assignees: tool(["Change", "Changing", "Changed", "issue assignees"], "update-issue"),
+  set_issue_parent: tool(["Change", "Changing", "Changed", "an issue parent"], "update-issue"),
   read_issue: tool(["Read", "Reading", "Read", "an issue"], "read-issue"),
   read_issue_comments: tool(["Read", "Reading", "Read", "older issue comments"], "read-issue"),
   read_issue_candidates: tool(["Read", "Reading", "Read", "issue choices"], "read-issue"),

@@ -2,6 +2,9 @@ import { assert, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { AuthOrchestrationReadScope } from "./auth.ts";
+import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
+import { WS_METHODS } from "./rpc.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
@@ -15,6 +18,8 @@ import {
   IssueCreateInput,
   IssueCreateResult,
   IssueLinkedPullRequest,
+  IssueResolveUrlInput,
+  IssueResolvedUrl,
   IssueSummary,
   IssueTrackerKind,
   IssueTrackerProjectBinding,
@@ -32,6 +37,8 @@ const decodeHierarchy = Schema.decodeUnknownSync(IssueHierarchyPage);
 const decodeTemplate = Schema.decodeUnknownSync(IssueTemplate);
 const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
 const decodeLabelPage = Schema.decodeUnknownSync(IssueLabelCandidatesPage);
+const decodeResolveInput = Schema.decodeSync(IssueResolveUrlInput);
+const decodeResolved = Schema.decodeSync(IssueResolvedUrl);
 
 it("accepts older reaction capabilities and preserves native comment limits", () => {
   const decode = Schema.decodeUnknownSync(IssueCapabilities);
@@ -229,4 +236,21 @@ it("preserves distinct native label IDs when labels have the same name", () => {
     nextCursor: null,
   };
   expect(decodeLabelPage(page)).toEqual(page);
+});
+
+it("keeps URL resolution direct and protected by the read grant", () => {
+  const input = { url: "https://github.com/acme/web/issues/1", projectId: ProjectId.make("web") };
+  assert.deepEqual(decodeResolveInput(input), input);
+  const result = {
+    projectId: ProjectId.make("web"),
+    tracker: IssueTrackerKind.make("github"),
+    host: "github.com",
+    scope: "acme/web",
+    key: "1",
+    writable: true,
+  };
+  assert.deepEqual(decodeResolved(result), result);
+  assert.deepEqual(clientRpcRequiredScopes(WS_METHODS.issuesResolveUrl, input), [
+    AuthOrchestrationReadScope,
+  ]);
 });
