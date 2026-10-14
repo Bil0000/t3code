@@ -229,7 +229,8 @@ export function refreshIssueListPage<T extends HeldIssueList>(
   const covered = (key: string) =>
     !failed.has(key.toLowerCase()) &&
     (source === undefined || key.toLowerCase() === scopeOf(source, cursors));
-  const continued = (key: string) => held.nextCursors[key] !== held.firstCursors[key];
+  const continued = (key: string) =>
+    held.nextCursors[key] !== undefined && held.nextCursors[key] !== held.firstCursors[key];
   const keys = new Set([...Object.keys(held.firstCursors), ...Object.keys(held.nextCursors)]);
   const tails = new Set([...keys].filter(continued).map((key) => key.toLowerCase()));
   const bound =

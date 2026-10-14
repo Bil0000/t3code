@@ -988,6 +988,66 @@ describe("refreshIssueListPage", () => {
     expect(next.firstCursors).toEqual(loaded.firstCursors);
   });
 
+  it.each(["github.com acme/app", "github github.com acme/app"])(
+    "restores an exhausted scope's cursor after an unchanged first-page refresh: %s",
+    (scope) => {
+      const first = {
+        entries: rows(1, 2),
+        nextCursors: { [scope]: "2" },
+        firstCursors: { [scope]: "2" },
+        firstKeys: new Set(rows(1, 2).map(issueEntryKey)),
+        errors: [],
+      };
+      const completed = continueIssueListPage(
+        first,
+        first.nextCursors,
+        {
+          entries: rows(3, 4),
+          nextCursors: {},
+          errors: [],
+        },
+        first.firstCursors,
+      );
+      expect(completed.entries).toEqual(rows(1, 4));
+      expect(completed.nextCursors).toEqual({});
+      const fresh = refreshIssueListPage(completed, {
+        entries: rows(1, 2),
+        nextCursors: { [scope]: "2" },
+        errors: [],
+      });
+      expect(fresh.entries).toEqual(rows(1, 4));
+      expect(fresh.nextCursors).toEqual({ [scope]: "2" });
+      expect(fresh.firstKeys).toEqual(first.firstKeys);
+      const failed = refreshIssueListPage(fresh, {
+        entries: [],
+        nextCursors: {},
+        errors: [{ projectId: "project-1" as ProjectId, projectTitle: "App", message: "down" }],
+      });
+      expect(failed.entries).toEqual(fresh.entries);
+      expect(failed.nextCursors).toEqual(fresh.nextCursors);
+      const next = continueIssueListPage(
+        failed,
+        { [scope]: "2" },
+        {
+          entries: rows(3, 5),
+          nextCursors: {},
+          errors: [],
+        },
+        failed.firstCursors,
+      );
+      expect(next.entries).toEqual(rows(1, 5));
+      expect(next.nextCursors).toEqual({});
+      expect(next.errors).toEqual([]);
+      const terminal = refreshIssueListPage(completed, {
+        entries: rows(1, 2),
+        nextCursors: {},
+        errors: [],
+      });
+      expect(terminal.entries).toEqual(rows(1, 2));
+      expect(terminal.nextCursors).toEqual({});
+    },
+  );
+
   it.each([40, 50])(
     "drops a continued scope's tail when a fresh first page of %i rows ends the listing",
     (count) => {
