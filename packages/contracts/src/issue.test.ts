@@ -20,6 +20,7 @@ import {
   IssueTrackerKind,
   IssueTrackerProjectBinding,
   StandaloneIssueTrackerDescriptor,
+  ThreadIssueLink,
 } from "./issue.ts";
 
 const decodeDescriptor = Schema.decodeEffect(StandaloneIssueTrackerDescriptor);
@@ -190,4 +191,24 @@ it("preserves optional comment-page viewer context while accepting older clients
     viewer: "native-viewer",
   });
   expect(() => decode({ ...input, viewer: " " })).toThrow();
+});
+
+it("accepts saved issue links without generation IDs and preserves new IDs", () => {
+  const decode = Schema.decodeUnknownSync(ThreadIssueLink);
+  const link = {
+    projectId: "project",
+    tracker: "github",
+    host: "github.com",
+    scope: "acme/web",
+    key: "7",
+    url: "https://github.com/acme/web/issues/7",
+    source: "agent",
+    linkedAt: "2026-10-14T00:00:00.000Z",
+    snapshot: null,
+  };
+  expect(decode(link)).toEqual(link);
+  expect(decode({ ...link, linkId: "link-command" })).toEqual({
+    ...link,
+    linkId: "link-command",
+  });
 });
