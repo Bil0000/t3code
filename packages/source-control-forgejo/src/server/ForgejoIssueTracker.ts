@@ -195,15 +195,27 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       target: Target,
       operation: string,
       names: ReadonlyArray<string>,
+      path?: string,
     ) {
       if (names.length === 0) return [];
-      const labels = yield* readArray(
+      const wanted = [...new Set(names)];
+      let labels = yield* readArray(
         target,
         operation,
         `${repoPath(target.scope)}/labels?limit=${PAGE_SIZE}`,
         ForgejoLabel,
       );
-      const wanted = [...new Set(names)];
+      if (
+        path !== undefined &&
+        wanted.some((name) => !labels.some((label) => label.name === name))
+      ) {
+        const issue = yield* getIssue(target, operation, path);
+        labels = [...labels, ...(issue.labels ?? [])];
+      }
+      if (wanted.some((name) => !labels.some((label) => label.name === name))) {
+        const organization = yield* organizationLabels(target, operation);
+        labels = [...labels, ...organization.rows];
+      }
       const ids = wanted.flatMap((name) => {
         const label = labels.find((candidate) => candidate.name === name);
         return label ? [label.id] : [];
@@ -213,7 +225,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           operation,
           "A requested label was not in the native label page. No fields were changed.",
         );
-      return ids;
+      return [...new Set(ids)];
     });
 
     /** One page of a listing, and whether Forgejo's `Link` header announced another. */
@@ -252,6 +264,20 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
             paginationKnown: links !== undefined,
           });
         }),
+      );
+
+    const organizationLabels = (target: Target, operation: string) =>
+      readPage(
+        target,
+        operation,
+        `orgs/${encodeURIComponent(target.scope.split("/")[0]!)}/labels`,
+        1,
+        ForgejoLabel,
+      ).pipe(
+        Effect.catchIf(
+          (error) => error.reason === "not-found",
+          () => Effect.succeed({ rows: [], nextCursor: null, paginationKnown: true }),
+        ),
       );
 
     const write = (
@@ -569,7 +595,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         Effect.gen(function* () {
           const { path } = yield* issueTarget("update", input);
           const labels =
-            input.labels === undefined ? undefined : yield* labelIds(input, "update", input.labels);
+            input.labels === undefined
+              ? undefined
+              : yield* labelIds(input, "update", input.labels, path);
           if (
             input.title !== undefined ||
             input.body !== undefined ||
@@ -667,20 +695,29 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           [
             readPage(input, "listCandidates", `${repoPath(input.scope)}/labels`, 1, ForgejoLabel),
             readPage(input, "listCandidates", `${repoPath(input.scope)}/assignees`, 1, ForgejoUser),
+            organizationLabels(input, "listCandidates"),
           ],
           { concurrency: 2 },
         ).pipe(
-          Effect.map(([labels, assignees]) => ({
-            labels: labels.rows.map((label) => ({
-              name: label.name,
-              color: label.color ?? null,
-              description: label.description ?? null,
-            })),
+          Effect.map(([labels, assignees, organization]) => ({
+            labels: [...labels.rows, ...organization.rows]
+              .filter(
+                (label, index, rows) =>
+                  rows.findIndex((candidate) => candidate.name === label.name) === index,
+              )
+              .map((label) => ({
+                name: label.name,
+                color: label.color ?? null,
+                description: label.description ?? null,
+              })),
             assignees: assignees.rows.flatMap((user) => {
               const actor = forgejoActor(user);
               return actor === null ? [] : [{ ...actor, id: actor.login }];
             }),
-            truncated: labels.nextCursor !== null || assignees.nextCursor !== null,
+            truncated:
+              labels.nextCursor !== null ||
+              assignees.nextCursor !== null ||
+              organization.nextCursor !== null,
           })),
         ),
     };

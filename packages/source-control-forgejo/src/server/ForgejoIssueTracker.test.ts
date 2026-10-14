@@ -114,6 +114,7 @@ function tracker(
     | {
         readonly stdout: string;
         readonly stderr?: string;
+        readonly stdoutTruncated?: boolean;
       }
     | ForgejoCli.ForgejoCliError,
 ) {
@@ -123,10 +124,11 @@ function tracker(
         api: (input) => {
           const result = onApi(input);
           if (isForgejoCliError(result)) return Effect.fail(result);
-          const { stdout, stderr } = result;
-          return Effect.succeed(
-            TestSourceControlHost.processOutput(stdout, { stderr: stderr ?? "" }),
-          );
+          const { stdout, stderr, stdoutTruncated } = result;
+          return Effect.succeed({
+            ...TestSourceControlHost.processOutput(stdout, { stderr: stderr ?? "" }),
+            stdoutTruncated: stdoutTruncated ?? false,
+          });
         },
       }),
     ),
@@ -397,13 +399,21 @@ describe("ForgejoIssueTracker", () => {
     (operation) =>
       Effect.gen(function* () {
         const writes: string[] = [];
+        const paths: string[] = [];
         const api = yield* tracker((input) => {
+          paths.push(input.path);
           if (input.method) {
             writes.push(input.path);
             return { stdout: encode(ISSUE) };
           }
-          if (input.path.startsWith("repos/acme/web/labels"))
-            return { stdout: encode([{ id: 12, name: "bug" }]) };
+          if (
+            input.path.startsWith("repos/acme/web/labels") ||
+            input.path.startsWith("orgs/acme/labels")
+          )
+            return {
+              stdout: encode([{ id: 12, name: "bug" }]),
+              stderr: 'Link: <https://forgejo.test/labels?page=2>; rel="next"',
+            };
           return answer(input.path);
         });
         const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
@@ -420,7 +430,161 @@ describe("ForgejoIssueTracker", () => {
         );
         expect(error.detail).toContain("label");
         expect(writes).toEqual([]);
+        expect(paths).toHaveLength(operation === "create" ? 2 : 3);
+        expect(paths.some((path) => path.includes("page=2"))).toBe(false);
       }),
+  );
+
+  it.effect.each([
+    { labels: ["Old", "bug", "enhancement", "Old"], ids: [90, 3, 4] },
+    { labels: ["bug", "enhancement"], ids: [3, 4] },
+    { labels: [], ids: [] },
+  ])("replaces labels without losing retained organization labels: $labels", ({ labels, ids }) =>
+    Effect.gen(function* () {
+      const requests: ForgejoCli.ForgejoApiInput[] = [];
+      const api = yield* tracker((input) => {
+        requests.push(input);
+        if (input.method) return { stdout: "[]" };
+        if (input.path.startsWith("repos/acme/web/labels"))
+          return {
+            stdout: encode([
+              { id: 3, name: "bug" },
+              { id: 4, name: "enhancement" },
+            ]),
+          };
+        if (input.path === "repos/acme/web/issues/42")
+          return {
+            stdout: encode({ ...ISSUE, labels: [...ISSUE.labels, { id: 90, name: "Old" }] }),
+          };
+        throw new Error(`unexpected path ${input.path}`);
+      });
+      yield* api.update!({
+        cwd: "/w",
+        host: "forgejo.test:3000",
+        scope: "acme/web",
+        key: "42",
+        labels,
+      });
+      expect(requests.filter((input) => input.method)).toMatchObject([
+        { path: "repos/acme/web/issues/42/labels", method: "PUT", body: { labels: ids } },
+      ]);
+      expect(requests).toHaveLength(labels.includes("Old") ? 3 : labels.length ? 2 : 1);
+    }),
+  );
+
+  it.effect.each(["create", "update"] as const)(
+    "offers and resolves one native organization label page for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.method)
+            return {
+              stdout: encode({
+                ...ISSUE,
+                labels: [
+                  { id: 3, name: "bug" },
+                  { id: 91, name: "Org" },
+                ],
+              }),
+            };
+          if (input.path.startsWith("repos/acme/web/labels"))
+            return {
+              stdout: encode(ISSUE.labels),
+              stderr: 'Link: <https://forgejo.test/labels?page=1>; rel="last"',
+            };
+          if (input.path.startsWith("orgs/acme/labels"))
+            return {
+              stdout: encode([
+                { id: 91, name: "Org" },
+                { id: 99, name: "bug", color: "ffffff" },
+              ]),
+              stderr: 'Link: <https://forgejo.test/labels?page=2>; rel="next"',
+            };
+          if (input.path.startsWith("repos/acme/web/assignees")) return { stdout: "[]" };
+          return answer(input.path);
+        });
+        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        expect(yield* api.listCandidates!(target)).toMatchObject({
+          labels: [{ name: "bug", color: "d73a4a" }, { name: "Org" }],
+          truncated: true,
+        });
+        expect(requests.map((input) => input.path)).toContain("orgs/acme/labels?limit=50&page=1");
+        requests.length = 0;
+        if (operation === "create")
+          yield* api.create!({
+            ...target,
+            title: "New issue",
+            body: "",
+            labels: ["bug", "Org"],
+            assignees: [],
+          });
+        else yield* api.update!({ ...target, labels: ["bug", "Org"] });
+        expect(requests.filter((input) => input.method)).toMatchObject([
+          { body: { labels: [3, 91] } },
+        ]);
+        expect(requests.filter((input) => input.path.startsWith("orgs/"))).toHaveLength(1);
+        expect(requests).toHaveLength(operation === "create" ? 3 : 4);
+      }),
+  );
+
+  it.effect.each(["not-found", "rate-limit"] as const)(
+    "keeps repository candidates only for absent organization API, not %s failures",
+    (reason) =>
+      Effect.gen(function* () {
+        const api = yield* tracker((input) => {
+          if (input.path.startsWith("orgs/acme/labels"))
+            return new ForgejoCli.ForgejoCliError({
+              command: "tea",
+              cwd: "/w",
+              reason,
+              detail: "Organization labels unavailable.",
+            });
+          if (input.path.startsWith("repos/acme/web/labels"))
+            return { stdout: encode(ISSUE.labels) };
+          if (input.path.startsWith("repos/acme/web/assignees")) return { stdout: "[]" };
+          throw new Error(`unexpected path ${input.path}`);
+        });
+        const result = api.listCandidates!({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "acme/web",
+        });
+        if (reason === "not-found")
+          expect(yield* result).toMatchObject({ labels: [{ name: "bug" }], truncated: true });
+        else expect(yield* Effect.flip(result)).toMatchObject({ reason: "rate-limited" });
+      }),
+  );
+
+  it.effect.each([
+    "repos/acme/web/labels?limit=50",
+    "repos/acme/web/issues/42",
+    "orgs/acme/labels?limit=50&page=1",
+  ])("refuses truncated label resolution response at %s before changing any fields", (path) =>
+    Effect.gen(function* () {
+      const writes: ForgejoCli.ForgejoApiInput[] = [];
+      const api = yield* tracker((input) => {
+        if (input.method) writes.push(input);
+        const response =
+          input.path === "repos/acme/web/issues/42"
+            ? { stdout: encode(ISSUE) }
+            : { stdout: encode([{ id: 92, name: "Org" }]) };
+        return input.path === path ? { ...response, stdoutTruncated: true } : response;
+      });
+      const error = yield* Effect.flip(
+        api.update!({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "acme/web",
+          key: "42",
+          title: "Changed",
+          labels: ["Old"],
+        }),
+      );
+      expect(error.detail).toContain("output limit");
+      expect(writes).toEqual([]);
+    }),
   );
 
   it.effect("maps a numeric native label name to its actual mutation ID", () =>
