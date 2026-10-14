@@ -1,7 +1,7 @@
 /**
  * Linear as an issue tracker. An issue key is its identifier
  * (`ENG-123`), and Linear's workflow states travel by name with the category read off their
- * type: `completed` and `canceled` are closed, every other type is open. Closing therefore picks
+ * type. Closing picks
  * the team's first state of the matching type, which is what Linear's own "Done" and "Canceled"
  * buttons do.
  *
@@ -81,7 +81,7 @@ const VIEWER_PERMISSIONS: IssueViewerPermissions = {
 };
 
 const COMMENTS_PAGE = 50;
-const CLOSED_STATE_TYPES = ["completed", "canceled"];
+const CLOSED_STATE_TYPES = ["completed", "canceled", "duplicate"];
 
 /** Linear reacts with the emoji itself; GitHub's names are the contract's vocabulary. */
 const EMOJI_BY_CONTENT: Record<IssueReactionContent, string> = {
@@ -391,10 +391,12 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
     ) =>
       Effect.forEach(names, (name) => {
         const match = [...scope.team.labels.nodes, ...scope.workspaceLabels].find(
-          (label) => label.name.toLowerCase() === name.trim().toLowerCase(),
+          (label) => !label.isGroup && label.name.toLowerCase() === name.trim().toLowerCase(),
         );
         return match === undefined
-          ? Effect.fail(failed(operation, `Linear has no label named "${name}" for this team.`))
+          ? Effect.fail(
+              failed(operation, `Linear has no applicable label named "${name}" for this team.`),
+            )
           : Effect.succeed(match.id);
       });
 
@@ -663,7 +665,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         requireTeam("listCandidates", input.scope).pipe(
           Effect.map((scope) => ({
             labels: [...scope.team.labels.nodes, ...scope.workspaceLabels]
-              .filter((label) => label.archivedAt == null)
+              .filter((label) => !label.isGroup && label.archivedAt == null)
               .map((label) => ({
                 name: label.name,
                 color: label.color,

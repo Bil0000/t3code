@@ -145,6 +145,78 @@ function fakeLinear(
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
 
 describe("LinearIssueTracker", () => {
+  it.effect("classifies native duplicates as closed without adding a writable close reason", () =>
+    Effect.gen(function* () {
+      const duplicate = state("Duplicate", "duplicate");
+      const todo = state("Todo", "unstarted");
+      const native = issue("ENG-7", {
+        state: duplicate,
+        comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        reactions: [],
+        attachments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        history: {
+          nodes: [
+            [todo, duplicate],
+            [duplicate, todo],
+          ].map(([fromState, toState], index) => ({
+            id: `history-${index}`,
+            createdAt: "2026-07-01T00:00:00.000Z",
+            actor: JULIUS,
+            fromState,
+            toState,
+            fromAssignee: null,
+            toAssignee: null,
+            addedLabels: null,
+            removedLabels: null,
+            fromTitle: null,
+            toTitle: null,
+          })),
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      });
+      const test = fakeLinear({
+        T3Viewer: () => ({ viewer: JULIUS }),
+        T3Issue: () => ({ issue: native }),
+        T3Issues: () => ({
+          organization: ORGANIZATION,
+          issues: {
+            nodes: [native],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      const detail = yield* api.getIssue({ ...target, key: "ENG-7" });
+      expect(detail.state).toEqual({
+        category: "closed",
+        name: "Duplicate",
+        closeReason: "duplicate",
+      });
+      expect(detail.events.map((event) => event.kind)).toEqual(["closed", "reopened"]);
+      for (const state of ["closed", "open"] as const) {
+        const page = yield* api.listIssues({
+          ...target,
+          state,
+          involvement: "all",
+          viewer: JULIUS.id,
+          limit: 50,
+        });
+        expect(page.items[0]?.state.category).toBe("closed");
+        expect(test.requests.at(-1)?.variables.filter).toMatchObject({
+          state: {
+            type: { [state === "closed" ? "in" : "nin"]: ["completed", "canceled", "duplicate"] },
+          },
+        });
+      }
+      expect(api.capabilities.closeReasons).toEqual(["completed", "canceled"]);
+      expect(test.requests.map((request) => request.operation)).toEqual([
+        "T3Issue",
+        "T3Viewer",
+        "T3Issues",
+        "T3Issues",
+      ]);
+    }),
+  );
   it.effect("rejects the same team key in another workspace without extra native reads", () =>
     Effect.gen(function* () {
       const native = issue("ENG-7", {
@@ -940,7 +1012,7 @@ describe("LinearIssueTracker", () => {
         T3Issues: (variables) => {
           expect(variables.filter).toMatchObject({
             team: { key: { eq: "ENG" } },
-            state: { type: { nin: ["completed", "canceled"] } },
+            state: { type: { nin: ["completed", "canceled", "duplicate"] } },
             assignee: { id: { eq: "usr_julius" } },
           });
           return {
@@ -1181,64 +1253,99 @@ describe("LinearIssueTracker", () => {
       ]);
     }),
   );
-  it.effect(
-    "retains archived labels during a whole-set edit but offers only active candidates",
-    () =>
-      Effect.gen(function* () {
-        const old = { id: "lbl_old", name: "Old", color: null, archivedAt: "2026-01-01T00:00:00Z" };
-        const bug = { id: "lbl_bug", name: "Bug", color: null, archivedAt: null };
-        const workspaceOld = { ...old, id: "lbl_workspace_old", name: "WorkspaceOld" };
-        const test = fakeLinear({
-          T3IssueReference: () => ({ issue: issue("ENG-7") }),
-          T3Team: () => ({
-            organization: ORGANIZATION,
-            teams: {
-              nodes: [
-                {
-                  id: "team_eng",
-                  key: "ENG",
-                  name: "Engineering",
-                  states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                  labels: {
-                    nodes: test.requests
-                      .at(-1)
-                      ?.query.includes("labels(first: 250, includeArchived: true)")
-                      ? [old, bug]
-                      : [bug],
-                    pageInfo: { hasNextPage: false, endCursor: null },
-                  },
-                  members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
-                  templates: { nodes: [] },
+  it.effect("retains archived labels and child labels while refusing native label groups", () =>
+    Effect.gen(function* () {
+      const old = { id: "lbl_old", name: "Old", color: null, archivedAt: "2026-01-01T00:00:00Z" };
+      const group = { id: "lbl_type", name: "Type", color: null, archivedAt: null, isGroup: true };
+      const bug = {
+        id: "lbl_bug",
+        name: "Bug",
+        color: null,
+        archivedAt: null,
+        isGroup: false,
+        parent: group,
+      };
+      const workspaceOld = { ...old, id: "lbl_workspace_old", name: "WorkspaceOld" };
+      const workspaceGroup = { ...group, id: "lbl_workspace_type", name: "WorkspaceType" };
+      const test = fakeLinear({
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                labels: {
+                  nodes: test.requests
+                    .at(-1)
+                    ?.query.includes("labels(first: 250, includeArchived: true)")
+                    ? [old, group, bug]
+                    : [group, bug],
+                  pageInfo: { hasNextPage: false, endCursor: null },
                 },
-              ],
-            },
-            issueLabels: {
-              nodes: test.requests
-                .at(-1)
-                ?.query.includes("issueLabels(first: 250, includeArchived: true")
-                ? [workspaceOld]
-                : [],
-              pageInfo: { hasNextPage: false, endCursor: null },
-            },
-          }),
-          T3IssueUpdate: (variables) => {
-            expect(variables.input).toEqual({ labelIds: [old.id, bug.id, workspaceOld.id] });
-            return { issueUpdate: { success: true } };
+                members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                templates: { nodes: [] },
+              },
+            ],
           },
-        });
-        const api = yield* test.tracker;
-        const scoped = { ...target, scope: "acme/ENG" };
-        yield* api.update({ ...scoped, key: "ENG-7", labels: ["Old", "Bug", "WorkspaceOld"] });
-        expect((yield* api.listCandidates(scoped)).labels.map((label) => label.name)).toEqual([
-          "Bug",
-        ]);
+          issueLabels: {
+            nodes: test.requests
+              .at(-1)
+              ?.query.includes("issueLabels(first: 250, includeArchived: true")
+              ? [workspaceOld, workspaceGroup]
+              : [workspaceGroup],
+            pageInfo: { hasNextPage: true, endCursor: "more-labels" },
+          },
+        }),
+        T3IssueUpdate: (variables) => {
+          expect(variables.input).toEqual({ labelIds: [old.id, bug.id, workspaceOld.id] });
+          return { issueUpdate: { success: true } };
+        },
+        T3IssueCreate: (variables) => {
+          expect(variables.input).toMatchObject({ labelIds: [bug.id] });
+          return {
+            issueCreate: {
+              success: true,
+              issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+            },
+          };
+        },
+      });
+      const api = yield* test.tracker;
+      const scoped = { ...target, scope: "acme/ENG" };
+      yield* api.update({ ...scoped, key: "ENG-7", labels: ["Old", "Bug", "WorkspaceOld"] });
+      const candidates = yield* api.listCandidates(scoped);
+      expect(candidates.labels.map((label) => label.name)).toEqual(["Bug"]);
+      expect(candidates.truncated).toBe(true);
+      expect(test.requests.map((request) => request.operation)).toEqual([
+        "T3IssueReference",
+        "T3Team",
+        "T3IssueUpdate",
+        "T3Team",
+      ]);
+      yield* api.create({ ...scoped, title: "New", body: "", labels: ["Bug"], assignees: [] });
+      for (const label of [group, workspaceGroup]) {
+        test.requests.length = 0;
+        expect(
+          (yield* api
+            .create({ ...scoped, title: "New", body: "", labels: [label.name], assignees: [] })
+            .pipe(Effect.flip)).reason,
+        ).toBe("failed");
+        expect(test.requests.map((request) => request.operation)).toEqual(["T3Team"]);
+        test.requests.length = 0;
+        expect(
+          (yield* api.update({ ...scoped, key: "ENG-7", labels: [label.name] }).pipe(Effect.flip))
+            .reason,
+        ).toBe("failed");
         expect(test.requests.map((request) => request.operation)).toEqual([
           "T3IssueReference",
           "T3Team",
-          "T3IssueUpdate",
-          "T3Team",
         ]);
-      }),
+      }
+    }),
   );
   it.effect("closes through the team's completed state and reports a missing key", () =>
     Effect.gen(function* () {
