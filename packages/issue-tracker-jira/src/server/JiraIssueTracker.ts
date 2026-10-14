@@ -266,14 +266,14 @@ export const make = Effect.gen(function* () {
         path:
           "/issue/" +
           encodeURIComponent(input.key) +
-          "/comment?orderBy=created&startAt=" +
+          "/comment?orderBy=-created&startAt=" +
           startAt +
           "&maxResults=50",
         schema: CommentPage,
       });
       if (page.startAt !== startAt || (page.comments.length === 0 && startAt < page.total))
         return yield* JiraApi.failed("getComments", "Jira returned an inconsistent comment page.");
-      return yield* commentResult(input, page);
+      return yield* commentResult(input, { ...page, comments: page.comments.toReversed() });
     });
   const issueTypes = (input: IssueScopeTarget) =>
     Effect.gen(function* () {
@@ -356,12 +356,12 @@ export const make = Effect.gen(function* () {
         );
         const embedded = issue.fields.comment;
         const page =
-          embedded?.comments === undefined
+          embedded?.comments === undefined && embedded?.total !== 0
             ? yield* comments(input, 0)
             : yield* commentResult(input, {
-                startAt: embedded.startAt ?? 0,
-                total: embedded.total,
-                comments: embedded.comments,
+                startAt: 0,
+                total: embedded?.total ?? 0,
+                comments: embedded?.comments ?? [],
               });
         const history = issue.changelog
           ? { ...issue.changelog, values: issue.changelog.histories, isLast: undefined }

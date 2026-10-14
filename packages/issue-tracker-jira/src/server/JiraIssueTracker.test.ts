@@ -477,6 +477,135 @@ it.effect("loads embedded conversation and history with only three detail reques
   }),
 );
 
+it.effect("loads older comments after Jira's latest embedded page without gaps or duplicates", () =>
+  Effect.gen(function* () {
+    const nativeComments = Array.from({ length: 150 }, (_, index) => ({
+      id: String(index + 1),
+      author: user,
+      body: issue.fields.description,
+      created: `2026-10-14T${10 + Math.floor(index / 60)}:${String(index % 60).padStart(2, "0")}:00Z`,
+      updated: issue.fields.updated,
+    }));
+    for (const embeddedCount of [100, 20]) {
+      const offsets: number[] = [];
+      const f = fakeJira((request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/myself")) return { body: user };
+        if (url.pathname.endsWith("/mypermissions")) return { body: { permissions: {} } };
+        if (url.pathname.endsWith("/comment")) {
+          expect(url.searchParams.get("orderBy")).toBe("-created");
+          expect(url.searchParams.get("maxResults")).toBe("50");
+          const startAt = Number(url.searchParams.get("startAt"));
+          offsets.push(startAt);
+          return {
+            body: {
+              startAt,
+              total: 150,
+              comments: nativeComments.toReversed().slice(startAt, startAt + 50),
+            },
+          };
+        }
+        return {
+          body: {
+            ...issue,
+            changelog: { histories: [] },
+            fields: {
+              ...issue.fields,
+              comment: {
+                startAt: 0,
+                total: 150,
+                comments: nativeComments.slice(-embeddedCount),
+              },
+            },
+          },
+        };
+      });
+      const api = yield* f.api;
+      const result = yield* api.getIssue(target);
+      expect(f.calls).toHaveLength(3);
+      expect(result.commentsCursor).toBe(String(embeddedCount));
+      const loaded = [...result.comments];
+      let cursor = result.commentsCursor;
+      while (cursor !== null) {
+        const page = yield* api.getComments({ ...target, cursor });
+        const ids = page.comments.map((comment) => Number(comment.id));
+        expect(ids).toEqual(ids.toSorted((a, b) => a - b));
+        loaded.unshift(...page.comments);
+        cursor = page.nextCursor;
+      }
+      expect(offsets).toEqual(embeddedCount === 100 ? [100] : [20, 70, 120]);
+      expect(loaded.map((comment) => comment.id)).toEqual(
+        nativeComments.map((comment) => comment.id),
+      );
+    }
+  }),
+);
+
+it.effect("keeps complete and empty embedded comment sets without another request", () =>
+  Effect.gen(function* () {
+    for (const comment of [
+      { startAt: 0, total: 0, comments: [] },
+      { total: 0 },
+      {
+        startAt: 0,
+        total: 1,
+        comments: [
+          {
+            id: "1",
+            body: issue.fields.description,
+            created: issue.fields.created,
+            updated: issue.fields.updated,
+          },
+        ],
+      },
+    ]) {
+      const f = fakeJira((request) => {
+        if (request.url.includes("/myself")) return { body: user };
+        if (request.url.includes("/mypermissions")) return { body: { permissions: {} } };
+        return {
+          body: {
+            ...issue,
+            changelog: { histories: [] },
+            fields: { ...issue.fields, comment },
+          },
+        };
+      });
+      const api = yield* f.api;
+      const result = yield* api.getIssue(target);
+      expect(result.comments).toHaveLength(comment.total);
+      expect(result.commentsCursor).toBeNull();
+      expect(f.calls).toHaveLength(3);
+    }
+  }),
+);
+
+it.effect("starts comment paging with the latest comments in ascending display order", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => {
+      if (!request.url.includes("/comment?")) return { body: issue };
+      const url = new URL(request.url);
+      expect(url.searchParams.get("orderBy")).toBe("-created");
+      expect(url.searchParams.get("startAt")).toBe("0");
+      return {
+        body: {
+          startAt: 0,
+          total: 4,
+          comments: [4, 3, 2].map((id) => ({
+            id: String(id),
+            body: issue.fields.description,
+            created: issue.fields.created,
+            updated: issue.fields.updated,
+          })),
+        },
+      };
+    });
+    const api = yield* f.api;
+    const page = yield* api.getComments({ ...target, cursor: "0" });
+    expect(page.comments.map((comment) => comment.id)).toEqual(["2", "3", "4"]);
+    expect(page.nextCursor).toBe("3");
+  }),
+);
+
 it.effect("checks fresh native permissions then updates with one scope guard and one write", () =>
   Effect.gen(function* () {
     const f = fakeJira((request) =>
