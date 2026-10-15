@@ -1,4 +1,4 @@
-import { WS_METHODS } from "@t3tools/contracts";
+import { WS_METHODS, type IssueTrackerScopesInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { Atom } from "effect/reactivity";
 
@@ -6,7 +6,9 @@ import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentQueryAtomFamily,
 } from "./runtime.ts";
+import { requestGuarded } from "../rpc/client.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as Persistence from "../platform/persistence.ts";
 
@@ -33,6 +35,11 @@ export function createIssueTrackerEnvironmentAtoms<R, E>(
   };
   return {
     connections,
+    scopes: createEnvironmentQueryAtomFamily(runtime, {
+      label: "environment-data:issue-trackers:scopes",
+      execute: (input: IssueTrackerScopesInput) =>
+        requestGuarded(WS_METHODS.issueTrackersScopes, input),
+    }),
     /** Saves a credential the tracker accepted, or removes the stored one with a null token. */
     connect: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issue-trackers:connect",
