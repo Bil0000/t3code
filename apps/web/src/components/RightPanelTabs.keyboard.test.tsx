@@ -113,6 +113,46 @@ async function press(key: string, options: KeyboardEventInit = {}) {
   return event;
 }
 
+it("keeps native issue labels beside pull request tabs", async () => {
+  const issue = (tracker: string, scope: string, key: string) =>
+    ({
+      id: `issue:${tracker}:${scope}:${key}`,
+      kind: "issue",
+      projectId: "p",
+      tracker,
+      scope,
+      key,
+    }) as const;
+  await renderPanel({
+    surfaces: [
+      { ...issue("forgejo", "Mount/acme/web", "42"), connectionId: "Account/B" },
+      issue("github", "acme/web", "7"),
+      issue("gitlab", "acme/api", "7"),
+      issue("linear", "ENG", "ENG-12"),
+      issue("jira", "PROJ", "PROJ-3"),
+      {
+        id: "pull-request:p:acme/api:7",
+        kind: "pull-request",
+        projectId: "p",
+        repository: "acme/api",
+        number: 7,
+      },
+    ],
+  });
+  expect(
+    [...container.querySelectorAll('[aria-label^="Close "]')].map((button) =>
+      button.getAttribute("aria-label"),
+    ),
+  ).toEqual([
+    "Close Mount/acme/web#42",
+    "Close acme/web#7",
+    "Close acme/api#7",
+    "Close ENG-12",
+    "Close PROJ-3",
+    "Close #7",
+  ]);
+});
+
 describe("right panel new-tab shortcut", () => {
   const threadRef = scopeThreadRef(EnvironmentId.make("thread-A"), ThreadId.make("thread"));
   const otherRef = scopeThreadRef(EnvironmentId.make("other-B"), ThreadId.make("thread"));

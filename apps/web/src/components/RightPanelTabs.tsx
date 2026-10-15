@@ -95,6 +95,7 @@ import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import { issueDisplayLabel } from "./issue/issueDetail.logic";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -636,7 +637,7 @@ function surfaceTitle(
     case "issues":
       return "Issues";
     case "issue":
-      return surface.key;
+      return issueDisplayLabel(surface.scope, surface.key);
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
