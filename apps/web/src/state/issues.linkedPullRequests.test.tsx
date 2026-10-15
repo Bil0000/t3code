@@ -161,3 +161,39 @@ it("preserves native providers, hosts, repositories, Forgejo mounts and ports", 
   expect(view.items).toEqual(links);
   expect(view.hasMore).toBe(false);
 });
+
+it("keeps Forgejo mount case while merging native owner/repo aliases across pages", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  input = { ...input, tracker: IssueTrackerKind.make("linear"), host: "linear.app", key: "ENG-2" };
+  const upper = {
+    ...link,
+    provider: SourceControlProviderKind.make("forgejo"),
+    host: "code.example",
+    url: "https://code.example/Mount/org/repo/pulls/50",
+  };
+  const lower = {
+    ...upper,
+    url: "https://code.example/mount/org/repo/pulls/50",
+    closesIssue: false,
+  };
+  const updated = [upper, lower].map((item) => ({
+    ...item,
+    url: item.url.replace("org/repo", "ORG/Repo") + "#discussion",
+    closesIssue: false,
+  }));
+  setPage(undefined, { items: [upper, lower], nextCursor: "related" });
+  setPage("related", { items: updated, nextCursor: "empty" });
+  setPage("empty", { items: [], nextCursor: null });
+  await act(async () => {
+    root = create(
+      createElement(RegistryContext.Provider, { value: appAtomRegistry }, createElement(Probe)),
+    );
+  });
+  expect(view.items).toEqual([upper, lower]);
+  await act(async () => view.loadMore());
+  expect(view.items).toEqual([{ ...updated[0], closesIssue: true }, updated[1]]);
+  expect(view.hasMore).toBe(true);
+  await act(async () => view.loadMore());
+  expect(view.items).toEqual([{ ...updated[0], closesIssue: true }, updated[1]]);
+  expect(view.hasMore).toBe(false);
+});

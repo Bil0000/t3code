@@ -1,4 +1,5 @@
 import { createIssueEnvironmentAtoms } from "@t3tools/client-runtime/state/issues";
+import { issueScopeKeyOf } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   IssueListInput,
@@ -7,7 +8,10 @@ import type {
   IssueLinkedPullRequest,
   ProjectId,
 } from "@t3tools/contracts";
-import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
+import {
+  changeRequestRepositoryUrl,
+  parseChangeRequestUrl,
+} from "@t3tools/shared/changeRequestUrl";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -238,14 +242,20 @@ export function useIssueLinkedPullRequests(
   const links = new Map<string, IssueLinkedPullRequest>();
   for (const link of page.items) {
     const parsed = parseChangeRequestUrl(link.url);
+    const provider = link.provider ?? input?.tracker;
+    const repositoryUrl = provider === "forgejo" ? changeRequestRepositoryUrl(link.url) : null;
+    const repository =
+      repositoryUrl === null
+        ? (parsed?.repository ?? link.repository)
+        : new URL(repositoryUrl).pathname.slice(1);
     let host = link.host?.toLowerCase() ?? link.url;
     try {
       host = new URL(link.url).host.toLowerCase() || host;
     } catch {}
     const key = JSON.stringify([
-      link.provider ?? input?.tracker,
+      provider,
       host,
-      parsed?.repository ?? link.repository.toLowerCase(),
+      issueScopeKeyOf({ tracker: provider ?? "", scope: repository }),
       link.number,
     ]);
     links.set(key, {
