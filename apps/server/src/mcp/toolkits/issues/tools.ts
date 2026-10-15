@@ -206,6 +206,7 @@ export const ReadIssueResult = Schema.Struct({
   /** False for an issue outside every project's own scope: it can be read, not changed. */
   writable: Schema.Boolean,
   capabilities: IssueCapabilities,
+  states: IssueDetail.fields.states,
   viewer: IssueDetail.fields.viewer,
   author: Schema.NullOr(Schema.String),
   assignees: Schema.Array(Schema.String),
@@ -216,6 +217,7 @@ export const ReadIssueResult = Schema.Struct({
   updatedAt: Schema.String,
   closedAt: Schema.NullOr(Schema.String),
   body: Schema.String,
+  bodyEditable: IssueDetail.fields.bodyEditable,
   comments: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -309,7 +311,7 @@ const ListIssuesTool = Tool.make("list_issues", {
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. Use current labelDetails IDs to preserve labels, including archived labels absent from candidates. If labelsTruncated is true, do not replace labels from this partial set. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
+    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. If bodyEditable is false, edit its rich description in the native tracker. Use states when present, otherwise capabilities.states, for state changes. Use current labelDetails IDs to preserve labels, including archived labels absent from candidates. If labelsTruncated is true, do not replace labels from this partial set. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
   parameters: IssueTargetInput,
   success: ReadIssueResult,
   failure: IssueToolError,
@@ -400,11 +402,12 @@ const CommentOnIssueTool = Tool.make("comment_on_issue", {
 
 const SetIssueStateTool = Tool.make("set_issue_state", {
   description:
-    "Move an issue to one of the states its tracker offers (read_issue reports them under capabilities.states): open or closed on a git host, with a closeReason where the tracker takes one.",
+    "Move an issue to a state from read_issue.states when present, otherwise capabilities.states. Pass a closeReason where the tracker takes one.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     state: TrimmedNonEmptyString.annotate({
-      description: "A state name from capabilities.states.",
+      description:
+        "A state name from read_issue.states, or capabilities.states when states is absent.",
     }),
     closeReason: Schema.optional(
       TrimmedNonEmptyString.annotate({

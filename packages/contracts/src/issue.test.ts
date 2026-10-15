@@ -13,6 +13,7 @@ import {
   IssueCandidates,
   IssueCreateInput,
   IssueCreateResult,
+  IssueDetail,
   IssueLinkedPullRequest,
   IssueResolveUrlInput,
   IssueResolvedUrl,
@@ -294,4 +295,20 @@ it("accepts saved issue links without generation IDs and preserves new IDs", () 
     ...link,
     linkId: "link-command",
   });
+});
+
+it("accepts older issue details and preserves body safety and native states", () => {
+  const decode = Schema.decodeUnknownSync(
+    Schema.Struct({
+      bodyEditable: IssueDetail.fields.bodyEditable,
+      states: IssueDetail.fields.states,
+    }),
+  );
+  expect(decode({})).toEqual({});
+  for (const bodyEditable of [true, false]) {
+    const metadata = { bodyEditable, states: [{ name: "Ready", category: "open" }] };
+    expect(decode(metadata)).toEqual(metadata);
+  }
+  expect(() => decode({ bodyEditable: "false" })).toThrow();
+  expect(() => decode({ states: [{ name: "Ready", category: "unknown" }] })).toThrow();
 });

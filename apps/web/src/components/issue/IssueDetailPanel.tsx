@@ -646,11 +646,13 @@ export function IssueDetailPanel({
     blocked === null && capability && permission;
   const canComment = may(detail.capabilities.comment, detail.viewerPermissions.comment);
   const canEdit = may(detail.capabilities.edit, detail.viewerPermissions.edit);
+  const canEditBody = canEdit && detail.bodyEditable !== false;
   const canLabel = may(detail.capabilities.labels, detail.viewerPermissions.labels);
   const canAssign = may(detail.capabilities.assignees, detail.viewerPermissions.assignees);
   const canReact = blocked === null && detail.capabilities.reactions;
   const canReactToComment = blocked === null && issueSupportsReactions(detail.capabilities, true);
-  const canSetState = may(detail.capabilities.states.length > 0, detail.viewerPermissions.setState);
+  const states = detail.states ?? detail.capabilities.states;
+  const canSetState = may(states.length > 0, detail.viewerPermissions.setState);
   const tracker = issueTrackerPresentation(detail.tracker);
   const reactionOwner = `${environmentId}\u0000${issueEntryKey(detail)}\u0000${detail.viewer ?? ""}`;
   const isCurrentState = (state: IssueState) =>
@@ -662,7 +664,7 @@ export function IssueDetailPanel({
           (reason) => !isCurrentState(state) || reason !== detail.state.closeReason,
         )
       : [];
-  const otherStates = detail.capabilities.states.filter(
+  const otherStates = states.filter(
     (state) => !isCurrentState(state) || closeReasonsFor(state).length > 0,
   );
   const closingStates = otherStates.filter((state) => state.category === "closed");
@@ -946,14 +948,22 @@ export function IssueDetailPanel({
           <section className="group flex flex-col gap-2 rounded-lg border border-border/60 p-3">
             <div className="flex items-start gap-1">
               <span className="min-w-0 flex-1 text-xs text-muted-foreground">Description</span>
-              {canEdit && editing !== "body" ? (
+              {canEditBody && editing !== "body" ? (
                 <PullRequestEditButton
                   aria-label="Edit description"
                   onClick={() => setEditing("body")}
                 />
               ) : null}
+              {canEdit && !canEditBody ? (
+                <InlineButton
+                  tone="muted"
+                  render={<a href={detail.url} target="_blank" rel="noopener noreferrer" />}
+                >
+                  Edit description on {tracker.providerName}
+                </InlineButton>
+              ) : null}
             </div>
-            {editing === "body" ? (
+            {editing === "body" && canEditBody ? (
               <PullRequestMarkdownEditor
                 value={detail.body}
                 cwd={cwd}

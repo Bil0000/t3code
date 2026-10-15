@@ -15,8 +15,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import type { Tool } from "effect/ai";
+import { McpSchema, McpServer, type Tool } from "effect/ai";
 
 import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
 import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
@@ -26,6 +27,7 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
 import { v2PullRequestThread } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
@@ -52,6 +54,9 @@ const jiraSource: IssueService.ProjectTrackerBinding = {
   scope: "ENG",
 };
 const candidates: IssueCandidates = { labels: [], assignees: [], truncated: false };
+const decodeReadIssueResult = Schema.decodeUnknownEffect(
+  IssuesToolkit.tools.read_issue.successSchema,
+);
 
 const invocation = (
   capabilities: ReadonlyArray<McpInvocationContext.McpCapability>,
@@ -275,10 +280,66 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
       Effect.provide(layerDependencies),
     );
-  return { links, unlinks, resolutions, call, calls };
+  return { links, unlinks, resolutions, call, calls, layerDependencies };
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect("preserves optional body editing and native states through registered MCP output", () =>
+    Effect.gen(function* () {
+      const nativeDetail = {
+        ...detail,
+        bodyEditable: false,
+        states: [
+          { category: "open", name: "Needs review" },
+          { category: "closed", name: "Shipped" },
+        ],
+      } satisfies IssueDetail;
+      const client = McpSchema.McpServerClient.of({
+        clientId: 1,
+        protocolVersion: "2025-06-18",
+        clientCapabilities: {},
+        clientInfo: { name: "issues-test", version: "1" },
+        initializePayload: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "issues-test", version: "1" },
+        },
+        getClient: Effect.die("unused"),
+      });
+      for (const currentDetail of [nativeDetail, detail]) {
+        const harness = yield* makeHarness([], { detail: currentDetail });
+        yield* Effect.gen(function* () {
+          const server = yield* McpServer.McpServer;
+          const result = yield* server.callTool({
+            name: "read_issue",
+            arguments: { projectId: PROJECT_ID, key: "7" },
+          });
+          expect(result.isError).toBe(false);
+          const read = yield* decodeReadIssueResult(result.structuredContent);
+          if (currentDetail.bodyEditable === undefined) {
+            expect(read).not.toHaveProperty("bodyEditable");
+            expect(read).not.toHaveProperty("states");
+          } else {
+            expect(read.bodyEditable).toBe(false);
+            expect(read.states).toEqual(nativeDetail.states);
+          }
+          expect(yield* Ref.get(harness.calls)).toEqual([
+            { operation: "detail", input: { projectId: PROJECT_ID, ...gitHostSource, key: "7" } },
+          ]);
+        }).pipe(
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["issues"])),
+          Effect.provide(
+            McpHttpServer.toolkitRegistration(IssuesToolkit, IssuesHandlers.layer).pipe(
+              Layer.provideMerge(McpServer.McpServer.layer),
+              Layer.provide(harness.layerDependencies),
+            ),
+          ),
+        );
+      }
+    }),
+  );
+
   it.effect("preserves an archived Linear label ID when replacing labels from read and list", () =>
     Effect.gen(function* () {
       const oldBug = { id: "W", name: "Bug", color: null, archivedAt: "2026-01-01T00:00:00Z" };

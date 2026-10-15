@@ -21,6 +21,7 @@ import type {
   IssueReaction,
   IssueReactionContent,
   IssueSummary,
+  IssueState,
   IssueTemplateList,
   IssueTrackerKind,
   IssueTrackerScope,
@@ -83,6 +84,8 @@ export interface TrackerIssuePage {
 
 export interface TrackerIssueDetail extends TrackerIssueSummary {
   readonly body: string;
+  readonly bodyEditable?: boolean;
+  readonly states?: ReadonlyArray<IssueState>;
   readonly viewer: string | null;
   readonly viewerPermissions: IssueViewerPermissions;
   readonly reactions?: ReadonlyArray<IssueReaction>;

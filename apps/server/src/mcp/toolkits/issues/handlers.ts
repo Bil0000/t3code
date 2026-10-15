@@ -242,6 +242,7 @@ const make = Effect.gen(function* () {
           state: detail.state,
           writable: detail.writable,
           capabilities: detail.capabilities,
+          ...(detail.states === undefined ? {} : { states: detail.states }),
           viewer: detail.viewer,
           author: detail.author?.login ?? null,
           assignees: detail.assignees.map((actor) => actor.login),
@@ -254,6 +255,7 @@ const make = Effect.gen(function* () {
           updatedAt: detail.updatedAt,
           closedAt: detail.closedAt,
           body: detail.body,
+          ...(detail.bodyEditable === undefined ? {} : { bodyEditable: detail.bodyEditable }),
           comments: detail.comments.map((comment) => ({
             id: comment.id,
             author: comment.author?.login ?? null,

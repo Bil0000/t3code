@@ -3,6 +3,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import * as Cause from "effect/Cause";
 import {
   EnvironmentId,
   IssueTrackerKind,
@@ -21,7 +22,20 @@ vi.mock("@effect/atom-react", async (original) => ({
   ...(await original()),
   useAtomValue: () => true,
 }));
-vi.mock("~/state/entities", () => ({ useProjects: () => [], useThreadShell: () => null }));
+vi.mock("~/state/session", async (original) => ({
+  ...(await original()),
+  useEnvironmentScope: () => true,
+  readEnvironmentScope: () => true,
+}));
+vi.mock("../pullRequest/PullRequestCommentBody", () => ({
+  PullRequestCommentBody: ({ text }: { text: string }) => <p>{text}</p>,
+}));
+vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
+vi.mock("~/state/entities", () => ({
+  useProjects: () => [],
+  useThreadShell: () => null,
+  useServerConfigs: () => new Map(),
+}));
 vi.mock("../ui/menu", () => ({
   Menu: ({ children }: { children: ReactNode }) => children,
   MenuTrigger: ({ children }: { children: ReactNode }) => <button type="button">{children}</button>,
@@ -66,6 +80,7 @@ const render = (
   current: IssueState,
   closeReasons: ReadonlyArray<string>,
   states: ReadonlyArray<IssueState> = generic,
+  extra: Partial<IssueDetail> = {},
 ) => {
   state.detail = {
     ...reference,
@@ -103,6 +118,7 @@ const render = (
       closeReasons,
     },
     viewerPermissions: { setState: true, comment: true, edit: true, labels: true, assignees: true },
+    ...extra,
   };
   return act(async () =>
     root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
@@ -159,4 +175,94 @@ it("keeps a named workflow's other states and hides only the current one", async
 it("offers both close reasons from a native open state", async () => {
   await render({ category: "open", name: "Todo" }, ["completed", "canceled"]);
   expect(actions()).toEqual(["Close", "Close as completed", "Close as canceled"]);
+});
+
+it.each([
+  [
+    [
+      { category: "open", name: "To Do" },
+      { category: "open", name: "In Progress" },
+      { category: "closed", name: "Done" },
+    ],
+    "Move to Done",
+    ["Close", "Move to In Progress", "Move to Done"],
+  ],
+  [
+    [
+      { category: "open", name: "To Do" },
+      { category: "open", name: "Review" },
+      { category: "closed", name: "Shipped" },
+    ],
+    "Move to Review",
+    ["Close", "Move to Review", "Move to Shipped"],
+  ],
+] as const)(
+  "offers the issue's own native states over the tracker's generic ones",
+  async (native, pick, expected) => {
+    await render({ category: "open", name: "To Do" }, [], generic, { states: native });
+    expect(actions()).toEqual(expected);
+    await act(async () =>
+      [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+        .find((item) => item.textContent === pick)!
+        .click(),
+    );
+    expect(state.setState.mock.calls[0]?.[0].input).toMatchObject({ state: pick.slice(8) });
+  },
+);
+
+const button = (label: string) =>
+  [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (item) => item.getAttribute("aria-label") === label || item.textContent === label,
+  );
+const type = (element: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")!.set!;
+  setter.call(element, value);
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+};
+const open = { category: "open", name: "open" } as const;
+const description = () =>
+  container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]');
+
+it("saves only the title of an issue whose rich description cannot be edited here", async () => {
+  await render(open, [], generic, { body: "Rich *text*", bodyEditable: false });
+  expect(button("Edit description")).toBeUndefined();
+  expect(container.textContent).toContain("Rich");
+  expect(
+    [...container.querySelectorAll("a")].find(
+      (link) => link.textContent === "Edit description on Jira",
+    )?.href,
+  ).toBe(state.detail!.url);
+  await act(async () => button("Edit title")!.click());
+  await act(async () => type(container.querySelector("input")!, "Renamed"));
+  await act(async () => button("Save")!.click());
+  expect(state.setState.mock.calls[0]?.[0].input).toEqual({ ...reference, title: "Renamed" });
+});
+
+it.each([undefined, true])(
+  "edits a plain description when bodyEditable is %s",
+  async (bodyEditable) => {
+    await render(open, [], generic, {
+      body: "Old",
+      ...(bodyEditable === undefined ? {} : { bodyEditable }),
+    });
+    expect(container.textContent).not.toContain("Edit description on");
+    await act(async () => button("Edit description")!.click());
+    await act(async () => type(description()!, "New"));
+    await act(async () => button("Save")!.click());
+    expect(state.setState.mock.calls[0]?.[0].input).toEqual({ ...reference, body: "New" });
+  },
+);
+
+it("keeps the description draft after a refused save so it can be retried", async () => {
+  state.setState
+    .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("denied")) })
+    .mockResolvedValueOnce({ _tag: "Success" });
+  await render(open, [], generic, { body: "Old" });
+  await act(async () => button("Edit description")!.click());
+  await act(async () => type(description()!, "New"));
+  await act(async () => button("Save")!.click());
+  expect(description()?.value).toBe("New");
+  await act(async () => button("Save")!.click());
+  expect(state.setState.mock.calls.map((call) => call[0].input.body)).toEqual(["New", "New"]);
+  expect(description()).toBeNull();
 });
