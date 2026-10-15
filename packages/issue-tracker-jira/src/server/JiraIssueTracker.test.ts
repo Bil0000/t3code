@@ -364,6 +364,165 @@ it.effect("blocks foreign-project writes and rejects multiple assignees", () =>
   }),
 );
 
+it.effect.each([
+  { key: undefined, denied: false },
+  { key: "ENG-1", denied: false },
+  { key: "ENG-1", denied: true },
+])("scopes native state choices without losing other metadata: %j", ({ key, denied }) =>
+  Effect.gen(function* () {
+    const done = { id: "3", name: "Done", statusCategory: { key: "done" } };
+    const verified = { id: "9", name: "Verified", statusCategory: { key: "done" } };
+    const duplicate = { ...done, id: "6", name: "Ambiguous" };
+    const available = [
+      { id: "task-done", to: done, isAvailable: true, fields: { note: { required: false } } },
+      { id: "unavailable", to: { ...done, id: "4", name: "Unavailable" }, isAvailable: false },
+      {
+        id: "required",
+        to: { ...done, id: "5", name: "Signoff" },
+        fields: { resolution: { required: true } },
+      },
+      { id: "duplicate-a", to: duplicate },
+      { id: "duplicate-b", to: duplicate, fields: { resolution: { required: true } } },
+    ];
+    const f = fakeJira((request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/mypermissions")) {
+        expect(url.searchParams.get(key === undefined ? "projectKey" : "issueKey")).toBe(
+          key ?? target.scope,
+        );
+        return {
+          body: {
+            permissions: {
+              CREATE_ISSUES: { havePermission: true },
+              ASSIGN_ISSUES: { havePermission: true },
+              TRANSITION_ISSUES: { havePermission: true },
+            },
+          },
+        };
+      }
+      if (url.pathname.endsWith("/search/jql"))
+        return {
+          body: { issues: [{ fields: { project: issue.fields.project, labels: ["triaged"] } }] },
+        };
+      if (url.pathname.endsWith("/user/assignable/search")) return { body: [user] };
+      if (url.pathname.includes("/createmeta/"))
+        return {
+          body: {
+            startAt: 0,
+            total: 1,
+            issueTypes: [{ id: "task", name: "Task" }],
+          },
+        };
+      if (url.pathname.endsWith("/statuses"))
+        return {
+          body: [
+            { id: "task", statuses: [issue.fields.status, done] },
+            { id: "bug", statuses: [verified] },
+          ],
+        };
+      if (url.pathname.endsWith("/transitions")) {
+        if (request.method === "GET") {
+          expect(url.searchParams.get("expand")).toBe("transitions.fields");
+          expect(url.searchParams.has("includeUnavailableTransitions")).toBe(false);
+          return { body: { transitions: available } };
+        }
+        expect(body(request)).toEqual({ transition: { id: "task-done" } });
+        return { status: denied ? 403 : 204 };
+      }
+      expect(url.pathname).toBe("/rest/api/3/issue/ENG-1");
+      expect(url.searchParams.get("fields")).toBe("project,status");
+      return { body: issue };
+    });
+    const api = yield* f.api;
+    const candidates = yield* api.listCandidates!({
+      cwd: target.cwd,
+      host: target.host,
+      scope: target.scope,
+      key,
+    });
+    expect(candidates.states?.map(({ id }) => id)).toEqual(
+      key === undefined ? ["2", "3", "9"] : ["3"],
+    );
+    expect(candidates.labels.map(({ name }) => name)).toEqual(["triaged"]);
+    expect(candidates.assignees).toMatchObject([{ id: user.accountId }]);
+    expect(candidates.issueTypes).toEqual([{ id: "task", name: "Task" }]);
+    expect(candidates.truncated).toBe(true);
+    expect(f.calls).toHaveLength(key === undefined ? 5 : 6);
+    expect(
+      f.calls.some(({ method, url }) => method === "POST" && url.includes("/transitions")),
+    ).toBe(false);
+    if (key !== undefined) {
+      expect(f.calls.some(({ url }) => url.includes("/project/ENG/statuses"))).toBe(false);
+      const action = api.setState!({ ...target, state: candidates.states![0]!.id! });
+      if (denied) expect((yield* action.pipe(Effect.flip)).detail).toContain("403");
+      else yield* action;
+      expect(f.calls).toHaveLength(9);
+      expect(f.calls[8]?.method).toBe("POST");
+      expect(body(f.calls[8])).toEqual({ transition: { id: "task-done" } });
+    }
+  }),
+);
+
+it.effect.each(["foreign", "missing", "permissions", "transitions"] as const)(
+  "refuses invalid issue candidate reads before any mutation: %s",
+  (failure) =>
+    Effect.gen(function* () {
+      const f = fakeJira((request) => {
+        if (request.url.includes("/mypermissions?"))
+          return failure === "permissions" ? { status: 403 } : { body: { permissions: {} } };
+        if (request.url.includes("/transitions?")) return { status: 403 };
+        if (failure === "missing") return { status: 404 };
+        return {
+          body:
+            failure === "foreign"
+              ? { ...issue, fields: { ...issue.fields, project: { id: "30", key: "OPS" } } }
+              : issue,
+        };
+      });
+      const api = yield* f.api;
+      const error = yield* api.listCandidates!(target).pipe(Effect.flip);
+      expect(error.reason).toBe(
+        failure === "foreign" || failure === "missing" ? "not-found" : "failed",
+      );
+      expect(f.calls).toHaveLength(
+        failure === "transitions" ? 3 : failure === "permissions" ? 2 : 1,
+      );
+      expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+    }),
+);
+
+it.effect("keeps label metadata when native transition permissions return no choices", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => ({
+      body: request.url.includes("/mypermissions?")
+        ? {
+            permissions: {
+              TRANSITION_ISSUES: { havePermission: false },
+              ASSIGN_ISSUES: { havePermission: false },
+              CREATE_ISSUES: { havePermission: false },
+            },
+          }
+        : request.url.includes("/transitions?")
+          ? { transitions: [] }
+          : request.url.includes("/search/jql")
+            ? { issues: [{ fields: { project: issue.fields.project, labels: ["triaged"] } }] }
+            : issue,
+    }));
+    const api = yield* f.api;
+    const candidates = yield* api.listCandidates!(target);
+    expect(candidates).toMatchObject({
+      states: [],
+      labels: [{ name: "triaged" }],
+      assignees: [],
+      issueTypes: [],
+    });
+    expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "GET", "POST"]);
+    expect(f.calls.some(({ url }) => url.includes("/statuses") || url.includes("/myself"))).toBe(
+      false,
+    );
+  }),
+);
+
 it.effect("uses an explicit native issue type and omits fields absent from the create screen", () =>
   Effect.gen(function* () {
     const f = fakeJira((request) => {
@@ -470,7 +629,11 @@ it.effect(
                 : { startAt: 0, total: 1, issueTypes: [{ id: "task", name: "Task" }] },
       }));
       const api = yield* f.api;
-      const candidates = yield* api.listCandidates!(target);
+      const candidates = yield* api.listCandidates!({
+        cwd: target.cwd,
+        host: target.host,
+        scope: target.scope,
+      });
       expect(candidates.labels.map((label) => label.name)).toEqual(labels.slice(0, 100));
       expect(candidates.assignees).toEqual([]);
       expect(candidates.issueTypes).toEqual([{ id: "task", name: "Task" }]);

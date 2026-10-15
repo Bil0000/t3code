@@ -91,6 +91,7 @@ const Transitions = Schema.Struct({
     Schema.Struct({
       id: Text,
       to: JiraStatus,
+      isAvailable: Schema.optional(Schema.Boolean),
       fields: Schema.optional(
         Schema.Record(Schema.String, Schema.Struct({ required: Schema.optional(Schema.Boolean) })),
       ),
@@ -203,7 +204,10 @@ export const make = Effect.gen(function* () {
         );
       return issue;
     });
-  const permissions = (input: IssueScopeTarget & { readonly key?: string }, operation: string) =>
+  const permissions = (
+    input: IssueScopeTarget & { readonly key?: string | undefined },
+    operation: string,
+  ) =>
     jira.request({
       host: input.host,
       operation,
@@ -837,7 +841,10 @@ export const make = Effect.gen(function* () {
       }),
     listCandidates: (input) =>
       Effect.gen(function* () {
+        const issueTarget = input.key === undefined ? null : { ...input, key: input.key };
+        if (issueTarget !== null) yield* requireScopeIssue(issueTarget, "listCandidates");
         const raw = yield* permissions(input, "listCandidates");
+        const available = issueTarget === null ? null : yield* transitions(issueTarget);
         const sample = yield* jira.request({
           host: input.host,
           operation: "listCandidates",
@@ -882,18 +889,28 @@ export const make = Effect.gen(function* () {
             })
           : [];
         const types = allowed(raw, "CREATE_ISSUES") ? yield* issueTypes(input) : [];
-        const statuses = yield* jira.request({
-          host: input.host,
-          operation: "listCandidates",
-          method: "GET",
-          path: "/project/" + encodeURIComponent(input.scope) + "/statuses",
-          schema: bounded(Schema.Struct({ statuses: bounded(JiraStatus) })),
-        });
-        const nativeStates = [
-          ...new Map(
-            statuses.flatMap((type) => type.statuses).map((status) => [status.id, status]),
-          ).values(),
-        ];
+        const statuses =
+          available === null
+            ? (yield* jira.request({
+                host: input.host,
+                operation: "listCandidates",
+                method: "GET",
+                path: "/project/" + encodeURIComponent(input.scope) + "/statuses",
+                schema: bounded(Schema.Struct({ statuses: bounded(JiraStatus) })),
+              })).flatMap((type) => type.statuses)
+            : available.transitions
+                .filter(
+                  (transition) =>
+                    transition.isAvailable !== false &&
+                    usable(transition) &&
+                    available.transitions.filter(
+                      (candidate) =>
+                        candidate.to.id === transition.to.id ||
+                        candidate.to.name === transition.to.id,
+                    ).length === 1,
+                )
+                .map((transition) => transition.to);
+        const nativeStates = [...new Map(statuses.map((status) => [status.id, status])).values()];
         if (nativeStates.length > 100)
           return yield* JiraApi.failed(
             "listCandidates",
