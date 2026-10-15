@@ -1628,6 +1628,49 @@ describe("native issue body editability", () => {
       back.mockRestore();
     }
   });
+  it("keeps a typed comment on Escape and still posts with Control+Enter", async () => {
+    state.detail = {
+      ...state.detail,
+      capabilities: { ...state.detail.capabilities, comment: true },
+      viewerPermissions: { ...state.detail.viewerPermissions, comment: true },
+    };
+    function IssuesPage() {
+      useEscapeToGoBack();
+      return <IssueDetailPanel environmentId={environmentId} reference={reference} />;
+    }
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+    try {
+      await act(async () => root.render(<IssuesPage />));
+      const box = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Add a comment"]',
+      )!;
+      await act(async () => {
+        box.focus();
+        type(box, "Half a reply");
+      });
+      const press = (init: KeyboardEventInit) =>
+        act(async () => {
+          box.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
+          );
+        });
+      await press({ key: "Escape" });
+      expect(box.value).toBe("Half a reply");
+      expect(document.activeElement).not.toBe(box);
+      expect(back).not.toHaveBeenCalled();
+      expect(state.write).not.toHaveBeenCalled();
+      await press({ key: "Enter", ctrlKey: true });
+      expect(state.write).toHaveBeenCalledExactlyOnceWith({
+        environmentId,
+        input: { ...reference, body: "Half a reply" },
+      });
+      expect(box.value).toBe("");
+      await press({ key: "Escape" });
+      expect(back).toHaveBeenCalledOnce();
+    } finally {
+      back.mockRestore();
+    }
+  });
   it("keeps rich descriptions native while saving only the title", async () => {
     state.detail.bodyEditable = false;
     await act(async () => render());

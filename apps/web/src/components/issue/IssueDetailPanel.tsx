@@ -1298,6 +1298,10 @@ function IssueDetailContent({
             disabled={!canComment || submitting !== null}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
+              if (event.key === "Escape" && draft.length > 0) {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
                 void submitComment();
