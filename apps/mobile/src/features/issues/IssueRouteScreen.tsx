@@ -9,7 +9,7 @@ import {
   type IssueLinkedPullRequest,
   type IssueReactionContent,
 } from "@t3tools/contracts";
-import { use, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { use, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -31,7 +31,7 @@ import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { relativeTime } from "../../lib/time";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
-import { useProjects, useServerConfigs } from "../../state/entities";
+import { useProject, useProjects, useServerConfigs } from "../../state/entities";
 import { issueEnvironment } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -40,6 +40,7 @@ import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidWorkspaceSidebarButton } from "../layout/workspace-sidebar-toolbar";
 import { PullRequestCardGroup, PullRequestCardRow } from "../pull-requests/PullRequestControls";
 import { PullRequestMarkdown } from "../pull-requests/PullRequestMarkdown";
+import { PullRequestMediaContext } from "../pull-requests/PullRequestMedia";
 import { PullRequestAvatar } from "../pull-requests/PullRequestPresentation";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 import { useAndroidWorkspaceBack } from "../workspace/useAndroidWorkspaceNavigation";
@@ -424,6 +425,14 @@ function IssueRouteContent({
   useFocusEffect(useCallback(() => refresh(), [refresh]));
   const issue = result.data;
   const access = useIssueAccess(params, issue);
+  const cwd = useProject({
+    environmentId: target.environmentId,
+    projectId: target.input.projectId,
+  })?.workspaceRoot;
+  const media = useMemo(
+    () => (cwd ? { environmentId: target.environmentId, cwd } : null),
+    [target.environmentId, cwd],
+  );
   const title = issue?.displayKey ?? params.displayKey ?? params.key;
   const subtitle = access.connected ? params.scope : `${params.scope} · Offline`;
   return (
@@ -518,7 +527,9 @@ function IssueRouteContent({
           </View>
         ) : null}
         {issue ? (
-          <IssueBody key={JSON.stringify(target)} params={params} issue={issue} />
+          <PullRequestMediaContext value={media}>
+            <IssueBody key={JSON.stringify(target)} params={params} issue={issue} />
+          </PullRequestMediaContext>
         ) : result.isPending ? (
           <ActivityIndicator className="my-12" />
         ) : (

@@ -20,7 +20,13 @@ import * as RpcClient from "../../../../../packages/client-runtime/src/rpc/clien
 
 type Props = { readonly children?: ReactNode; readonly onPress?: () => void };
 
-const harness = vi.hoisted(() => ({ focus: () => {}, back: 0 }));
+const harness = vi.hoisted(() => ({
+  focus: () => {},
+  back: 0,
+  command: (() => undefined) as (input: unknown) => unknown,
+  projects: new Map<string, { workspaceRoot: string }>(),
+  assets: [] as Array<{ environmentId: unknown; resource: unknown }>,
+}));
 
 vi.mock("react-native", () => ({
   ActivityIndicator: () => null,
@@ -59,8 +65,28 @@ vi.mock("../../native/useOpenPullRequest", () => ({ useOpenPullRequest: () => vi
 vi.mock("../../state/entities", () => ({
   useProjects: () => [],
   useServerConfigs: () => new Map(),
+  useProject: (ref: { environmentId: string; projectId: string } | null) =>
+    ref ? (harness.projects.get(`${ref.environmentId}:${ref.projectId}`) ?? null) : null,
 }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: () => (input: unknown) => harness.command(input),
+}));
+vi.mock("../../state/assets", () => ({
+  useAssetUrlState: (environmentId: unknown, resource: { url: string } | null) => {
+    if (resource) harness.assets.push({ environmentId, resource });
+    return resource ? { _tag: "Success", url: `signed:${resource.url}` } : { _tag: "Initial" };
+  },
+  useRefreshAssetUrl: () => async () => null,
+}));
+vi.mock("expo-image", () => ({ Image: () => null }));
+vi.mock("../../components/MediaVideoPlayer", () => ({ MediaVideoPlayer: () => null }));
+vi.mock("../../components/VideoAttachmentTile", () => ({ VideoAttachmentTile: () => null }));
+vi.mock("../../components/VideoPreviewModal", () => ({ VideoPreviewModal: () => null }));
+vi.mock("../../components/FilePreviewModal", () => ({ FilePreviewModal: () => null }));
+vi.mock("../../components/FilePreviewGallery", () => ({
+  useFilePreviewGallery: () => (item: unknown) => item,
+}));
+vi.mock("../threads/ThreadMarkdownImage", () => ({ ThreadMarkdownImageView: () => null }));
 vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
   useAdaptiveWorkspaceLayout: () => ({ layout: { usesSplitView: false } }),
 }));
@@ -74,7 +100,17 @@ vi.mock("../pull-requests/PullRequestControls", () => ({
   PullRequestCardGroup: () => null,
   PullRequestCardRow: () => null,
 }));
-vi.mock("../pull-requests/PullRequestMarkdown", () => ({ PullRequestMarkdown: () => null }));
+vi.mock("../pull-requests/PullRequestMarkdown", async () => {
+  const { usePullRequestMediaUrl } = await import("../pull-requests/PullRequestMedia");
+  const { markdownImageSources } = await import("../../lib/markdownImageSources");
+  function MarkdownImage({ url }: { readonly url: string }) {
+    return <i data-uri={usePullRequestMediaUrl(url).uri ?? ""} />;
+  }
+  return {
+    PullRequestMarkdown: ({ markdown }: { readonly markdown: string }) =>
+      markdownImageSources(markdown).map((url) => <MarkdownImage key={url} url={url} />),
+  };
+});
 vi.mock("../pull-requests/PullRequestPresentation", () => ({ PullRequestAvatar: () => null }));
 vi.mock("./IssueReactions", () => ({ IssueReactions: () => null }));
 vi.mock("./useIssueAccess", async () => {
@@ -322,6 +358,92 @@ it.each([
     } else {
       expect(browser).toBeUndefined();
     }
+    expect(reads).toBe(1);
+    await act(() => root.unmount());
+    registry.dispose();
+  },
+);
+
+it.each([true, false])(
+  "reads private GitHub images in the body and comments through the issue's project: %s",
+  async (project) => {
+    const media = {
+      body: "https://github.com/user-attachments/assets/body-1",
+      raw: "https://raw.githubusercontent.com/acme/app/main/body.png",
+      plain: "https://example.com/plain.png",
+      current: "https://github.com/user-attachments/assets/current-2",
+      older: "https://raw.githubusercontent.com/acme/app/main/older.png",
+    };
+    const comment = (id: string, url: string) => ({
+      id,
+      author: null,
+      body: `![](${url})`,
+      createdAt: "2026-10-01T00:00:00Z",
+      url: null,
+    });
+    harness.assets = [];
+    harness.projects = new Map([
+      ["thread-env:thread-project", { workspaceRoot: "/thread-repo" }],
+      ...(project ? [["issue-env:issue-project", { workspaceRoot: "/issue-repo" }] as const] : []),
+    ]);
+    harness.command = async () => ({
+      _tag: "Success",
+      value: { comments: [comment("older", media.older)], nextCursor: null },
+    });
+    let reads = 0;
+    request.mockImplementation((() =>
+      Effect.sync(() => {
+        reads += 1;
+        return {
+          ...detail("Images"),
+          body: `![](${media.body}) ![](${media.raw}) ![](${media.plain})`,
+          comments: [comment("current", media.current)],
+          commentsCursor: "older-cursor",
+        };
+      })) as unknown as Parameters<typeof request.mockImplementation>[0]);
+    const registry = AtomRegistry.make();
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(() =>
+      root.render(
+        <RegistryContext.Provider value={registry}>
+          <IssueRouteScreen
+            route={{
+              params: {
+                environmentId: "issue-env",
+                projectId: "issue-project",
+                tracker: "github",
+                host: "github.com",
+                scope: "acme/app",
+                key: "1",
+              },
+            }}
+          />
+        </RegistryContext.Provider>,
+      ),
+    );
+    await settle();
+    const older = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Load older comments",
+    );
+    await act(() => older!.click());
+    await settle();
+
+    const uris = [...container.querySelectorAll("i")].map((image) => image.dataset.uri);
+    const github = [media.body, media.raw, media.current, media.older];
+    expect(uris.toSorted()).toEqual(
+      [...github.map((url) => (project ? `signed:${url}` : url)), media.plain].toSorted(),
+    );
+    expect([...new Set(harness.assets.map((asset) => JSON.stringify(asset)))].toSorted()).toEqual(
+      (project ? github : [])
+        .map((url) =>
+          JSON.stringify({
+            environmentId: "issue-env",
+            resource: { _tag: "github-media", cwd: "/issue-repo", url },
+          }),
+        )
+        .toSorted(),
+    );
     expect(reads).toBe(1);
     await act(() => root.unmount());
     registry.dispose();
