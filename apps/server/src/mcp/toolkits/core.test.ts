@@ -628,7 +628,7 @@ it.effect("registers native issue choices and guards reads and typed creation wi
       });
       expect(commentDenied.isError).toBe(true);
       expect(yield* Ref.get(commentReads)).toEqual([]);
-      for (const cursor of ["", "x".repeat(4_097)]) {
+      for (const cursor of ["", "x".repeat(8_193)]) {
         const invalid = yield* call(
           "read_issue_comments",
           { ...commentInput, cursor },
@@ -648,6 +648,14 @@ it.effect("registers native issue choices and guards reads and typed creation wi
       );
       expect(oldest.structuredContent).toEqual({ comments: [], nextCursor: null });
       expect(validateComments(oldest.structuredContent).valid).toBe(true);
+      const longestCursor = "x".repeat(8_192);
+      const longest = yield* call(
+        "read_issue_comments",
+        { ...commentInput, cursor: longestCursor },
+        readOnly,
+      );
+      expect(longest.isError).toBe(false);
+      expect(longest.structuredContent).toEqual(comments);
       const trackerDenied = yield* call(
         "read_issue_comments",
         { ...commentInput, cursor: "denied" },
@@ -660,6 +668,7 @@ it.effect("registers native issue choices and guards reads and typed creation wi
       expect(yield* Ref.get(commentReads)).toEqual([
         commentInput,
         { ...commentInput, cursor: comments.nextCursor },
+        { ...commentInput, cursor: longestCursor },
         { ...commentInput, cursor: "denied" },
       ]);
       const denied = yield* call(

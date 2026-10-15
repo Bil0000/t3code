@@ -137,6 +137,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   list_issue_sources: tool(["List", "Listing", "Listed", "issue sources"], "list-issue-sources"),
   read_issue_history: tool(["Read", "Reading", "Read", "issue history"], "read-issue"),
   read_issue_hierarchy: tool(["Read", "Reading", "Read", "issue hierarchy"], "read-issue"),
+  read_issue_dependencies: tool(["Read", "Reading", "Read", "issue dependencies"], "read-issue"),
   read_issue_linked_pull_requests: tool(
     ["Read", "Reading", "Read", "linked pull requests"],
     "read-issue",
@@ -150,6 +151,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   set_issue_labels: tool(["Change", "Changing", "Changed", "issue labels"], "update-issue"),
   set_issue_assignees: tool(["Change", "Changing", "Changed", "issue assignees"], "update-issue"),
   set_issue_parent: tool(["Change", "Changing", "Changed", "an issue parent"], "update-issue"),
+  set_issue_dependency: tool(
+    ["Change", "Changing", "Changed", "an issue dependency"],
+    "update-issue",
+  ),
   read_issue: tool(["Read", "Reading", "Read", "an issue"], "read-issue"),
   read_issue_comments: tool(["Read", "Reading", "Read", "older issue comments"], "read-issue"),
   read_issue_candidates: tool(["Read", "Reading", "Read", "issue choices"], "read-issue"),
