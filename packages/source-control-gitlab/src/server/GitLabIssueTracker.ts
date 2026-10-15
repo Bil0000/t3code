@@ -380,8 +380,11 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       getViewer: (input) => viewer({ cwd: input.cwd, host: input.host, operation: "getViewer" }),
 
       listIssues: (input) => {
-        if (input.involvement === "mentioned" || input.sort === "comments") {
+        if (input.involvement === "mentioned") {
           return Effect.fail(refused("listIssues", "GitLab cannot filter issues by mentions."));
+        }
+        if (input.sort === "comments") {
+          return Effect.fail(refused("listIssues", "GitLab cannot sort issues by comments."));
         }
         const page = parsePage(input.cursor);
         if (page === null) {

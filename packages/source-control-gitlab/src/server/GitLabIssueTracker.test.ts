@@ -1308,28 +1308,48 @@ describe("GitLabIssueTracker", () => {
     }),
   );
 
-  it.effect("refuses unsupported mention filtering before making a native request", () =>
-    Effect.gen(function* () {
-      let requests = 0;
-      const api = yield* tracker(() => {
-        requests += 1;
-        return "[]";
-      });
-      const error = yield* Effect.flip(
-        api.listIssues({
-          cwd: "/w",
-          host: "gitlab.com",
-          scope: "acme/web",
-          state: "all",
-          involvement: "mentioned",
-          viewer: "julius",
-          limit: 20,
-        }),
-      );
-      expect(error.reason).toBe("failed");
-      expect(requests).toBe(0);
-      expect(api.capabilities.involvements).toEqual(["all", "assigned", "authored"]);
-    }),
+  it.effect.each([
+    {
+      involvement: "mentioned",
+      sort: undefined,
+      detail: "GitLab cannot filter issues by mentions.",
+    },
+    { involvement: "all", sort: "comments", detail: "GitLab cannot sort issues by comments." },
+    {
+      involvement: "mentioned",
+      sort: "comments",
+      detail: "GitLab cannot filter issues by mentions.",
+    },
+  ] as const)(
+    "explains unsupported list input before a native request: $involvement/$sort",
+    (input) =>
+      Effect.gen(function* () {
+        let requests = 0;
+        const api = yield* tracker(() => {
+          requests += 1;
+          return "[]";
+        });
+        const error = yield* Effect.flip(
+          api.listIssues({
+            cwd: "/w",
+            host: "gitlab.com",
+            scope: "acme/web",
+            state: "all",
+            involvement: input.involvement,
+            ...(input.sort === undefined ? {} : { sort: input.sort }),
+            viewer: "julius",
+            limit: 20,
+          }),
+        );
+        expect(error).toMatchObject({
+          operation: "listIssues",
+          reason: "failed",
+          detail: input.detail,
+        });
+        expect(requests).toBe(0);
+        expect(api.capabilities.involvements).toEqual(["all", "assigned", "authored"]);
+        expect(api.capabilities.listSorts).toEqual(["created", "updated"]);
+      }),
   );
 
   it.effect("keeps numeric actor IDs when current and candidate assignees are sent back", () =>
