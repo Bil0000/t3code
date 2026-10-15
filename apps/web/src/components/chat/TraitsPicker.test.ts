@@ -3,8 +3,13 @@ import {
   ProviderInstanceId,
   ProviderDriverKind,
   type ProviderOptionDescriptor,
+  type ServerProviderModel,
 } from "@t3tools/contracts";
-import { buildTraitsTriggerDisplay, buildUnavailableModelOptionDescriptors } from "./TraitsPicker";
+import {
+  buildTraitsTriggerDisplay,
+  buildUnavailableModelOptionDescriptors,
+  getReasoningLevelChange,
+} from "./TraitsPicker";
 
 function selectDescriptor(
   id: string,
@@ -55,6 +60,180 @@ const CONTEXT_WINDOW = selectDescriptor(
 );
 
 const CODEX = ProviderDriverKind.make("codex");
+
+describe("reasoning level shortcuts", () => {
+  const options = [
+    { id: "low", label: "Low" },
+    { id: "high", label: "High", isDefault: true },
+    { id: "ultrathink", label: "Ultrathink" },
+  ];
+  const modelWith = (
+    descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+  ): ServerProviderModel[] => [
+    {
+      slug: "test-model",
+      name: "Test",
+      isCustom: false,
+      capabilities: { optionDescriptors: descriptors },
+    },
+  ];
+  const input = {
+    provider: CODEX,
+    model: "test-model",
+    models: modelWith([
+      { ...selectDescriptor("effort", options, "high"), promptInjectedValues: ["ultrathink"] },
+      fastModeDescriptor(false),
+    ]),
+    modelOptions: [{ id: "fastMode", value: true }],
+    prompt: "Solve this",
+    planModeEnabled: false,
+    direction: -1 as const,
+  };
+
+  it("steps from the default and keeps other traits", () => {
+    expect(getReasoningLevelChange(input)).toEqual({
+      prompt: "Solve this",
+      modelOptions: [
+        { id: "effort", value: "low" },
+        { id: "fastMode", value: true },
+      ],
+    });
+    expect(
+      getReasoningLevelChange({
+        ...input,
+        models: modelWith([{ id: "effort", label: "Effort", type: "select", options }]),
+      })?.modelOptions,
+    ).toEqual([{ id: "effort", value: "low" }]);
+  });
+
+  it("steps from the displayed reported value unless the draft overrides it", () => {
+    const instanceId = ProviderInstanceId.make("custom-codex");
+    const reportedModelSelection = {
+      instanceId,
+      model: "test-model",
+      options: [{ id: "effort", value: "low" }],
+    };
+    const reportedInput = { ...input, instanceId, reportedModelSelection, direction: 1 as const };
+    expect(getReasoningLevelChange(reportedInput)?.modelOptions).toEqual([
+      { id: "effort", value: "high" },
+      { id: "fastMode", value: true },
+    ]);
+    expect(
+      getReasoningLevelChange({
+        ...reportedInput,
+        modelOptions: [{ id: "effort", value: "high" }],
+      }),
+    ).toEqual({ prompt: "Ultrathink:\nSolve this" });
+    expect(
+      getReasoningLevelChange({
+        ...reportedInput,
+        reportedModelSelection: {
+          ...reportedModelSelection,
+          instanceId: ProviderInstanceId.make("another-codex"),
+        },
+      }),
+    ).toEqual({ prompt: "Ultrathink:\nSolve this" });
+    expect(
+      getReasoningLevelChange({
+        ...reportedInput,
+        reportedModelSelection: { ...reportedModelSelection, model: "another-model" },
+      }),
+    ).toEqual({ prompt: "Ultrathink:\nSolve this" });
+  });
+
+  it("uses a catalog default for an unset OpenCode variant", () => {
+    expect(
+      getReasoningLevelChange({
+        ...input,
+        provider: ProviderDriverKind.make("opencode"),
+        instanceId: ProviderInstanceId.make("opencode"),
+        models: modelWith([selectDescriptor("variant", options, "high")]),
+      })?.modelOptions,
+    ).toEqual([{ id: "variant", value: "low" }]);
+  });
+
+  it("stops at both ends", () => {
+    expect(
+      getReasoningLevelChange({ ...input, modelOptions: [{ id: "effort", value: "low" }] }),
+    ).toBeNull();
+    expect(
+      getReasoningLevelChange({ ...input, prompt: "Ultrathink:\nSolve this", direction: 1 }),
+    ).toBeNull();
+  });
+
+  it("enters and leaves prompt-controlled ultrathink", () => {
+    expect(getReasoningLevelChange({ ...input, direction: 1 })).toEqual({
+      prompt: "Ultrathink:\nSolve this",
+    });
+    expect(getReasoningLevelChange({ ...input, prompt: "Ultrathink:\nSolve this" })).toEqual({
+      prompt: "Solve this",
+      modelOptions: [
+        { id: "effort", value: "high" },
+        { id: "fastMode", value: true },
+      ],
+    });
+    expect(
+      getReasoningLevelChange({ ...input, prompt: "Please ultrathink about this" }),
+    ).toBeNull();
+  });
+
+  it("preserves slash commands and can add the prefix to an empty prompt", () => {
+    expect(getReasoningLevelChange({ ...input, prompt: "/review", direction: 1 })).toEqual({
+      prompt: "/review",
+    });
+    expect(getReasoningLevelChange({ ...input, prompt: "", direction: 1 })).toEqual({
+      prompt: "Ultrathink:\n",
+    });
+  });
+
+  it.each([
+    ["codex", "reasoningEffort"],
+    ["claudeAgent", "effort"],
+    ["cursor", "reasoning"],
+    ["grok", "reasoningEffort"],
+    ["opencode", "variant"],
+    ["antigravity", "thinking"],
+  ])("uses %s model choices in catalog order", (provider, id) => {
+    expect(
+      getReasoningLevelChange({
+        ...input,
+        provider: ProviderDriverKind.make(provider),
+        models: modelWith([CONTEXT_WINDOW, selectDescriptor(id, options, "high")]),
+      })?.modelOptions,
+    ).toEqual([
+      { id: "contextWindow", value: "1m" },
+      { id, value: "low" },
+    ]);
+  });
+
+  it.each(["agent", "contextWindow"])("does not change %s options", (id) => {
+    expect(
+      getReasoningLevelChange({
+        ...input,
+        models: modelWith([selectDescriptor(id, options, "high")]),
+      }),
+    ).toBeNull();
+  });
+
+  it("does nothing without an available effort choice", () => {
+    expect(getReasoningLevelChange({ ...input, models: [] })).toBeNull();
+    expect(getReasoningLevelChange({ ...input, models: modelWith([]) })).toBeNull();
+    expect(
+      getReasoningLevelChange({
+        ...input,
+        models: modelWith([selectDescriptor("effort", options, "stale")]),
+      }),
+    ).toBeNull();
+    expect(
+      getReasoningLevelChange({
+        ...input,
+        provider: ProviderDriverKind.make("opencode"),
+        models: [],
+        modelOptions: [{ id: "variant", value: "high" }],
+      }),
+    ).toBeNull();
+  });
+});
 
 function display(descriptors: ReadonlyArray<ProviderOptionDescriptor>) {
   return buildTraitsTriggerDisplay({

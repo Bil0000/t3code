@@ -8090,6 +8090,15 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "reasoning.increase" || command === "reasoning.decrease") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) {
+          composerRef.current?.adjustReasoningLevel(command === "reasoning.increase" ? 1 : -1);
+        }
+        return;
+      }
+
       if (
         command === "composer.host" ||
         command === "composer.effort" ||

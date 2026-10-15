@@ -18,6 +18,15 @@ import {
 } from "./KeybindingsSettings.logic";
 
 describe("KeybindingsSettings.logic", () => {
+  it("offers reasoning steps without default bindings", () => {
+    const commands = buildKeybindingCommandOptions(DEFAULT_RESOLVED_KEYBINDINGS);
+    for (const command of ["reasoning.increase", "reasoning.decrease"] as const) {
+      expect(commands).toContain(command);
+      expect(DEFAULT_RESOLVED_KEYBINDINGS.some((binding) => binding.command === command)).toBe(
+        false,
+      );
+    }
+  });
   it("lists composer, provider, and pull request commands with editable defaults", () => {
     const rows = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "");
     for (const command of [

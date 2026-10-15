@@ -256,6 +256,61 @@ function getTraitsSectionVisibility(input: {
   };
 }
 
+function getTraitSelectChange(
+  selected: ReturnType<typeof getSelectedTraits>,
+  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
+  prompt: string,
+  value: string,
+) {
+  if (!value) return null;
+  if (descriptor.promptInjectedValues?.includes(value)) {
+    return {
+      prompt:
+        prompt.trim().length === 0
+          ? ULTRATHINK_PROMPT_PREFIX
+          : applyClaudePromptEffortPrefix(prompt, "ultrathink"),
+    };
+  }
+  const isPrimary = descriptor.id === selected.primarySelectDescriptor?.id;
+  if (isPrimary && selected.ultrathinkInBodyText) return null;
+  return {
+    prompt:
+      isPrimary && selected.ultrathinkPromptControlled
+        ? prompt.replace(/^Ultrathink:\s*/i, "")
+        : prompt,
+    modelOptions: buildProviderOptionSelectionsFromDescriptors(
+      replaceDescriptorCurrentValue(selected.descriptors, descriptor.id, value),
+    ),
+  };
+}
+
+export function getReasoningLevelChange(
+  input: Parameters<typeof getTraitsSectionVisibility>[0] & {
+    direction: 1 | -1;
+    instanceId?: ProviderInstanceId;
+    reportedModelSelection?: ModelSelection | null | undefined;
+  },
+) {
+  const selected = getTraitsSectionVisibility(input);
+  const descriptor = selected.selectDescriptors.find((entry) =>
+    ["reasoningEffort", "reasoning", "effort", "variant", "thinking"].includes(entry.id),
+  );
+  if (!descriptor || selected.modelIsUnavailable || selected.ultrathinkInBodyText) return null;
+  const modelSelection =
+    input.instanceId && input.model
+      ? { instanceId: input.instanceId, model: input.model, options: input.modelOptions ?? [] }
+      : null;
+  const current =
+    selected.ultrathinkPromptControlled && descriptor.id === selected.primarySelectDescriptor?.id
+      ? "ultrathink"
+      : (getProviderOptionCurrentValue(descriptor, modelSelection, input.reportedModelSelection) ??
+        getProviderOptionCurrentValue(descriptor));
+  const index = descriptor.options.findIndex((option) => option.id === current);
+  if (index < 0) return null;
+  const next = descriptor.options[index + input.direction];
+  return next ? getTraitSelectChange(selected, descriptor, input.prompt, next.id) : null;
+}
+
 export function shouldRenderTraitsControls(input: {
   provider: ProviderDriverKind;
   models: ReadonlyArray<ServerProviderModel>;
@@ -317,6 +372,15 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     },
     [instanceId, model, persistence, provider, setProviderModelOptions],
   );
+  const selected = getTraitsSectionVisibility({
+    provider,
+    models,
+    model,
+    prompt,
+    modelOptions,
+    allowPromptInjectedEffort,
+    planModeEnabled,
+  });
   const {
     descriptors,
     selectDescriptors,
@@ -326,15 +390,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     ultrathinkInBodyText,
     hasAnyControls,
     modelIsUnavailable,
-  } = getTraitsSectionVisibility({
-    provider,
-    models,
-    model,
-    prompt,
-    modelOptions,
-    allowPromptInjectedEffort,
-    planModeEnabled,
-  });
+  } = selected;
   const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
     updateModelOptions(buildProviderOptionSelectionsFromDescriptors(nextDescriptors));
   };
@@ -343,21 +399,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
     value: string,
   ) => {
-    if (!value) return;
-    if (descriptor.promptInjectedValues?.includes(value)) {
-      const nextPrompt =
-        prompt.trim().length === 0
-          ? ULTRATHINK_PROMPT_PREFIX
-          : applyClaudePromptEffortPrefix(prompt, "ultrathink");
-      onPromptChange(nextPrompt);
-      return;
-    }
-    if (ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id) return;
-    if (ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id) {
-      const stripped = prompt.replace(/^Ultrathink:\s*/i, "");
-      onPromptChange(stripped);
-    }
-    updateDescriptors(replaceDescriptorCurrentValue(descriptors, descriptor.id, value));
+    const change = getTraitSelectChange(selected, descriptor, prompt, value);
+    if (!change) return;
+    if (change.prompt !== prompt) onPromptChange(change.prompt);
+    if ("modelOptions" in change) updateModelOptions(change.modelOptions);
   };
 
   if (!hasAnyControls) {

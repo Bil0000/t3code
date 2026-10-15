@@ -294,6 +294,7 @@ import {
   ComposerSelectControl,
 } from "./ComposerControl";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
+import { getReasoningLevelChange } from "./TraitsPicker";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import {
   matchesPullRequestQuery,
@@ -1486,6 +1487,7 @@ export interface ChatComposerHandle {
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
   openModelPicker: () => void;
+  adjustReasoningLevel: (direction: 1 | -1) => void;
   toggleModelPicker: () => void;
   openControl: (command: KeybindingCommand) => void;
   isModelPickerOpen: () => boolean;
@@ -6392,6 +6394,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           { ensureLeadingBoundary: true, citationCommentAnchor: sourceAnchor },
         ),
       openModelPicker: openModelPickerStable,
+      adjustReasoningLevel: (direction) => {
+        if (noProviderAvailable || isComposerApprovalState || pendingUserInputs.length > 0) return;
+        const store = useComposerDraftStore.getState();
+        const modelOptions =
+          store.getComposerDraft(composerDraftTarget)?.modelSelectionByProvider[selectedInstanceId]
+            ?.options ?? composerModelOptions?.[selectedInstanceId];
+        const change = getReasoningLevelChange({
+          provider: selectedProvider,
+          instanceId: selectedInstanceId,
+          models: selectedProviderModels,
+          model: selectedModel,
+          modelOptions,
+          reportedModelSelection,
+          prompt: promptRef.current,
+          planModeEnabled: settings.planModeEnabled,
+          direction,
+        });
+        if (!change) return;
+        if ("modelOptions" in change) {
+          store.setProviderModelOptions(
+            composerDraftTarget,
+            selectedProvider,
+            change.modelOptions,
+            {
+              instanceId: selectedInstanceId,
+              model: selectedModel,
+              persistSticky: true,
+            },
+          );
+        }
+        if (change.prompt !== promptRef.current) setPromptFromTraitsStable(change.prompt);
+      },
       toggleModelPicker: () => {
         if (isComposerModelPickerOpen) {
           setIsComposerModelPickerOpen(false);
@@ -6531,6 +6565,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerAttachments,
       foldPastedText,
       composerDraftTarget,
+      composerModelOptions,
       composerCursor,
       activePendingProgress,
       composerTerminalContexts,
@@ -6559,6 +6594,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       resetComposerTrigger,
       setComposerTrigger,
       selectedModel,
+      selectedInstanceId,
+      reportedModelSelection,
+      setPromptFromTraitsStable,
+      settings.planModeEnabled,
       selectedModelOptionsForDispatch,
       selectedModelSelection,
       multipleModelSelections,

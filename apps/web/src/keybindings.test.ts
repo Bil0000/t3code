@@ -1553,6 +1553,30 @@ describe("composer and pull request shortcuts", () => {
     { key: "mod+alt+e", command: "composer.effort", when: "!terminalFocus" },
   ]);
 
+  it.each(["MacIntel", "Win32", "Linux"])("resolves custom reasoning steps on %s", (platform) => {
+    for (const [key, command] of [
+      ["=", "reasoning.increase"],
+      ["-", "reasoning.decrease"],
+    ] as const) {
+      const bindings = compileResolvedKeybindingsConfig([
+        { key: `alt+${key}`, command, when: "composerFocus" },
+      ]);
+      assert.strictEqual(
+        resolveShortcutCommand(event({ key, altKey: true }), bindings, {
+          platform,
+          context: { composerFocus: true },
+        }),
+        command,
+      );
+      assert.isNull(
+        resolveShortcutCommand(event({ key, altKey: true }), bindings, {
+          platform,
+          context: { composerFocus: false },
+        }),
+      );
+    }
+  });
+
   it("leaves AltGr text entry alone with a custom Alt binding", () => {
     for (const platform of ["Win32", "Linux"]) {
       const input = event({
