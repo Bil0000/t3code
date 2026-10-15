@@ -82,6 +82,11 @@ vi.mock("~/components/pullRequest/PullRequestDetailPanel", () => ({
 vi.mock("~/components/issue/IssueCreateDialog", () => ({ IssueCreateDialog: () => null }));
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import {
+  ISSUES_PANEL_REF,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+} from "~/rightPanelStore";
 import { Route } from "~/routes/_chat.issues";
 
 const environmentA = EnvironmentId.make("environment-a");
@@ -152,6 +157,7 @@ beforeEach(() => {
   state.listPage.mockReset();
   state.search = { who: "all", status: "open" };
   state.projects = [];
+  state.navigate.mockClear();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -363,4 +369,53 @@ it("refreshes each first page over the last refreshed list, not the continuation
   expect(text()).not.toContain("Issue 3");
   expect(state.read.mock.calls.map(([id]) => id).sort()).toEqual([environmentA, environmentB]);
   expect(state.listPage).toHaveBeenCalledOnce();
+});
+
+it("toggles the issue panel with its advertised shortcut and keeps the URL in step", async () => {
+  const selected = {
+    environmentId: environmentA,
+    projectId: "project",
+    tracker: "github",
+    host: "github.com",
+    scope: "org/repo",
+    key: "7",
+  };
+  useRightPanelStore.getState().openIssue(ISSUES_PANEL_REF, selected);
+  state.responses.set(environmentA, AsyncResult.success(answer([])));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  await mount();
+  const isOpen = () =>
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ISSUES_PANEL_REF).isOpen;
+  const press = () => {
+    const event = new KeyboardEvent("keydown", {
+      key: "b",
+      code: "KeyB",
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      document.body.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  };
+  const search = () =>
+    state.navigate.mock.lastCall![0].search({ who: "all", status: "open", q: undefined });
+  expect(press()).toBe(true);
+  expect(isOpen()).toBe(false);
+  expect(search()).toEqual({ who: "all", status: "open", q: undefined });
+  expect(press()).toBe(true);
+  expect(isOpen()).toBe(true);
+  expect(search()).toMatchObject({
+    selectedEnvironmentId: environmentA,
+    selectedProjectId: "project",
+    tracker: "github",
+    scope: "org/repo",
+    key: "7",
+  });
+  act(() => useRightPanelStore.getState().closeAllSurfaces(ISSUES_PANEL_REF));
+  state.navigate.mockClear();
+  expect(press()).toBe(false);
+  expect(state.navigate).not.toHaveBeenCalled();
 });

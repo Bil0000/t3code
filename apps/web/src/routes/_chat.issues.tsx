@@ -38,7 +38,15 @@ import {
   UserCheckIcon,
   UsersIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { IssueCreateDialog, type IssueCreateScope } from "~/components/issue/IssueCreateDialog";
@@ -94,7 +102,8 @@ import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { isElectron } from "~/env";
 import { useEscapeToGoBack } from "~/hooks/useNavigateBack";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
-import { shortcutLabelForCommand } from "~/keybindings";
+import { isCommandPaletteOpen } from "~/commandPaletteBus";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { usePanelAnimationSettings, usePanelPresence } from "~/panelAnimations";
 import {
@@ -740,6 +749,23 @@ function IssuesRoute() {
     useRightPanelStore.getState().show(rightPanelRef);
     selectSurfaceInUrl(panelSurface);
   };
+  const toggleRightPanelFromShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (panelSurface === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) toggleRightPanel();
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isCommandPaletteOpen()) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: getShortcutContext(),
+      });
+      if (command === "rightPanel.toggle") toggleRightPanelFromShortcut(event);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [keybindings]);
 
   // Every writable scope the workspace has, for the composer.
   const createScopes = useMemo<ReadonlyArray<IssueCreateScope>>(() => {
