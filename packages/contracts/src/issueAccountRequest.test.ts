@@ -1,6 +1,14 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-import { issueAccountRequest, IssueRef, IssueUpdateInput, ThreadIssueKey } from "./issue.ts";
+import {
+  issueAccountRequest,
+  IssueRef,
+  IssueUpdateInput,
+  IssueCreateInput,
+  IssueSetStateInput,
+  IssueEditCommentInput,
+  ThreadIssueKey,
+} from "./issue.ts";
 import { ORCHESTRATION_V2_WS_METHODS, OrchestrationV2Command } from "./orchestrationV2.ts";
 import { WsIssuesRpcGroup, WsRpcGroup, WS_METHODS } from "./rpc.ts";
 
@@ -32,6 +40,11 @@ const cases = [
   [WS_METHODS.issuesHistory, ref],
   [WS_METHODS.issuesLinkedPullRequests, ref],
   [WS_METHODS.issuesHierarchy, ref],
+  [WS_METHODS.issuesDependencies, { ...ref, direction: "blocks", cursor: "next", limit: 7 }],
+  [
+    WS_METHODS.issuesSetDependency,
+    { ...ref, direction: "blocked-by", targetScope: "OPS", targetKey: "OPS-3", linked: false },
+  ],
   [WS_METHODS.issuesLabelCandidates, scopes],
   [WS_METHODS.issuesAssigneeCandidates, scopes],
   [WS_METHODS.issuesEditComment, { ...ref, commentId: "comment", body: "Edit" }],
@@ -92,7 +105,7 @@ describe("account-safe issue payloads", () => {
     },
   );
 
-  it("covers 18 targeted RPCs plus 5 refresh/settings RPCs", () => {
+  it("covers targeted RPCs and refresh/settings RPCs", () => {
     const guarded = new Set(cases.map(([tag]) => tag));
     for (const [tag, input] of [
       [WS_METHODS.issuesRefreshThreadLinks, { threadId: "thread" }],
@@ -110,7 +123,7 @@ describe("account-safe issue payloads", () => {
       guarded.add(tag as (typeof cases)[number][0]);
     }
     expect([...WsIssuesRpcGroup.requests.keys()].sort()).toEqual([...guarded].sort());
-    expect(guarded.size).toBe(23);
+    expect(guarded.size).toBe(25);
   });
 
   it.each(["thread.issue.link", "thread.issue.unlink", "thread.issue-link.sync"] as const)(
@@ -159,3 +172,65 @@ describe("account-safe issue payloads", () => {
     });
   });
 });
+
+const { fieldValues: _createValues, ...legacyCreateFields } = IssueCreateInput.fields;
+const {
+  fieldValues: _stateValues,
+  transitionId: _transitionId,
+  ...legacyStateFields
+} = IssueSetStateInput.fields;
+const { richBody: _richUpdate, ...legacyUpdateFields } = IssueUpdateInput.fields;
+const { richBody: _richComment, ...legacyCommentFields } = IssueEditCommentInput.fields;
+const legacyWriteDecoders = {
+  [WS_METHODS.issuesCreate]: Schema.decodeUnknownSync(
+    issueAccountRequest(Schema.Struct(legacyCreateFields)),
+  ),
+  [WS_METHODS.issuesSetState]: Schema.decodeUnknownSync(
+    issueAccountRequest(Schema.Struct(legacyStateFields)),
+  ),
+  [WS_METHODS.issuesUpdate]: Schema.decodeUnknownSync(
+    issueAccountRequest(Schema.Struct(legacyUpdateFields)),
+  ),
+  [WS_METHODS.issuesEditComment]: Schema.decodeUnknownSync(
+    issueAccountRequest(Schema.Struct(legacyCommentFields)),
+  ),
+};
+const richBody = { format: "adf", document: '{"type":"doc","version":1,"content":[]}' };
+it.each([
+  [
+    WS_METHODS.issuesCreate,
+    {
+      ...scopes,
+      title: "New",
+      body: "",
+      labels: [],
+      assignees: [],
+      fieldValues: { custom: "value" },
+    },
+    "title",
+  ],
+  [WS_METHODS.issuesSetState, { ...ref, state: "3", transitionId: "31" }, "state"],
+  [
+    WS_METHODS.issuesSetState,
+    { ...ref, state: "31", fieldValues: { resolution: "done" } },
+    "state",
+  ],
+  [WS_METHODS.issuesUpdate, { ...ref, richBody }, "title"],
+  [WS_METHODS.issuesUpdate, { ...ref, title: "New", body: "fallback", richBody }, "title"],
+  [WS_METHODS.issuesEditComment, { ...ref, commentId: "c", body: "fallback", richBody }, "body"],
+] as const)(
+  "makes old servers refuse advanced %s writes before stripping fields",
+  (tag, input, field) => {
+    const { encode, decode } = issueCodecs.get(tag)!;
+    for (const selection of [{}, { connectionId: "ExactB" }]) {
+      const selected = { ...input, ...selection };
+      const wire = encode(selected);
+      expect((wire as Readonly<Record<string, unknown>>)[field]).toEqual(
+        field in input ? { value: input[field as keyof typeof input] } : {},
+      );
+      expect(decode(wire)).toEqual(selected);
+      expect(() => legacyWriteDecoders[tag](wire)).toThrow();
+      if ("connectionId" in selection) expect(() => decodeLegacyProject(wire)).toThrow();
+    }
+  },
+);

@@ -10,7 +10,7 @@ import {
   usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
 import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
-import { threadIssueKeysEqual } from "@t3tools/contracts";
+import { issueHostKey, threadIssueKeysEqual } from "@t3tools/contracts";
 import {
   normalizeThreadPullRequestKey,
   visibleThreadPullRequests,
@@ -3177,7 +3177,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 ...(command.connectionId === undefined
                   ? {}
                   : { connectionId: command.connectionId }),
-                host: command.host.trim().toLowerCase(),
+                host: issueHostKey(command.host),
                 scope: command.scope.trim(),
                 key: command.key.trim(),
                 projectId: command.projectId,

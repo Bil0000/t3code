@@ -202,11 +202,13 @@ const fixture = Effect.gen(function* () {
       displayName: "Jira",
       host: "jira.example.test",
     },
-    probeCredential: () =>
+    probeCredential: (token) =>
       Effect.succeed({
         account: "jira-user",
         accountId: "jira-user",
-        host: "jira.example.test",
+        host: token.startsWith("dc-")
+          ? `JIRA.EXAMPLE:8443/${token.includes("lower") ? "jira" : "Jira"}`
+          : "jira.example.test",
         scopes: [{ key: "OPS", name: "Operations" }],
       }),
   };
@@ -806,4 +808,94 @@ it.effect(
       assert.equal((yield* f.service.detail(f.ref("default"))).title, "A");
       assert.equal(f.requests.length, 2);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("persists distinct Jira mount cases and protects default and selected credentials", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* f.connections.connect({ tracker: JIRA, token: "dc-upper-default" });
+    const upper = yield* f.connections.connect({
+      tracker: JIRA,
+      addAccount: true,
+      token: { value: "dc-upper-B" },
+    });
+    const lower = yield* f.connections.connect({
+      tracker: JIRA,
+      addAccount: true,
+      token: { value: "dc-lower-B" },
+    });
+    assert.isDefined(upper.connectionId);
+    assert.isDefined(lower.connectionId);
+    assert.notEqual(upper.connectionId, lower.connectionId);
+    assert.deepEqual(
+      (yield* f.accounts.list).map((account) => account.host).sort(),
+      ["jira.example:8443/Jira", "jira.example:8443/jira"].sort(),
+    );
+    for (const [projectId, connectionId] of [
+      ["default", undefined],
+      ["A", upper.connectionId],
+      ["B", lower.connectionId],
+    ] as const) {
+      yield* f.connections.bindProject({
+        projectId: ProjectId.make(projectId),
+        tracker: JIRA,
+        binding: {
+          value: {
+            tracker: JIRA,
+            scope: "OPS",
+            ...(connectionId === undefined ? {} : { connectionId }),
+          },
+        },
+      });
+    }
+    const saved = yield* f.bindings.list;
+    assert.equal(saved.get(ProjectId.make("default"))?.[0]?.host, "jira.example:8443/Jira");
+    assert.equal(saved.get(ProjectId.make("A"))?.[0]?.host, "jira.example:8443/Jira");
+    assert.equal(saved.get(ProjectId.make("B"))?.[0]?.host, "jira.example:8443/jira");
+    const stored = new Map(f.stored);
+    yield* f.connections
+      .connect({ tracker: JIRA, addAccount: true, token: { value: "dc-upper-rotated" } })
+      .pipe(Effect.flip);
+    yield* f.connections
+      .connect({ tracker: JIRA, connectionId: upper.connectionId, token: { value: "dc-lower-B" } })
+      .pipe(Effect.flip);
+    assert.deepEqual(f.stored, stored);
+    const catalog = yield* f.connections.list;
+    assert.equal(
+      catalog.trackers.find((entry) => entry.tracker === JIRA)?.host,
+      "jira.example:8443/Jira",
+    );
+    assert.deepEqual(
+      catalog.accounts
+        ?.filter((entry) => entry.connectionId !== undefined)
+        .map((entry) => [entry.connectionId, entry.host, entry.account])
+        .sort(),
+      [
+        [upper.connectionId, "jira.example:8443/Jira", "jira-user"],
+        [lower.connectionId, "jira.example:8443/jira", "jira-user"],
+      ].sort(),
+    );
+    yield* f.connections.connect({
+      tracker: JIRA,
+      connectionId: lower.connectionId,
+      token: { value: "dc-lower-rotated" },
+    });
+    assert.deepEqual(yield* f.bindings.list, saved);
+    assert.equal(
+      new TextDecoder().decode(f.stored.get(IssueTrackerHostLive.issueTrackerSecretName(JIRA))),
+      "dc-upper-default",
+    );
+    assert.equal(
+      new TextDecoder().decode(
+        f.stored.get(IssueTrackerHostLive.issueTrackerSecretName(JIRA, upper.connectionId)),
+      ),
+      "dc-upper-B",
+    );
+    assert.equal(
+      new TextDecoder().decode(
+        f.stored.get(IssueTrackerHostLive.issueTrackerSecretName(JIRA, lower.connectionId)),
+      ),
+      "dc-lower-rotated",
+    );
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

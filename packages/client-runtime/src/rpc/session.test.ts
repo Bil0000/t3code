@@ -205,6 +205,17 @@ const accountRequests = [
   [WS_METHODS.issuesHistory, accountRef],
   [WS_METHODS.issuesLinkedPullRequests, accountRef],
   [WS_METHODS.issuesHierarchy, accountRef],
+  [WS_METHODS.issuesDependencies, { ...accountRef, cursor: "next", limit: 7, direction: "blocks" }],
+  [
+    WS_METHODS.issuesSetDependency,
+    {
+      ...accountRef,
+      direction: "blocked-by",
+      targetScope: "OPS",
+      targetKey: "OPS-1",
+      linked: false,
+    },
+  ],
   [WS_METHODS.issuesLabelCandidates, accountScope],
   [WS_METHODS.issuesAssigneeCandidates, accountScope],
   [WS_METHODS.issuesEditComment, { ...accountRef, commentId: "comment", body: "Edit" }],
@@ -407,19 +418,32 @@ describe("RpcSessionFactory", () => {
   it.effect("retains account envelopes on a second session with legacy configuration", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
-      for (const [index, config] of [ENCODED_SERVER_CONFIG, LEGACY_SERVER_CONFIG].entries()) {
+      const richBody = {
+        format: "adf" as const,
+        document: '{"type":"doc","version":1,"content":[]}',
+      };
+      const scenarios = [ENCODED_SERVER_CONFIG, LEGACY_SERVER_CONFIG].flatMap((config) =>
+        [undefined, richBody].map((body) => ({ config, body })),
+      );
+      for (const [index, { config, body }] of scenarios.entries()) {
         const session = yield* factory.connect(PREPARED);
         const ready = yield* Effect.forkChild(session.ready);
         const socket = yield* awaitSocket(sockets, index);
         socket.open();
         yield* completeInitialConfig(socket, config);
         yield* Fiber.join(ready);
-        const input = { ...accountRef, title: "Retained edit", connectionId: "Account /B" };
+        const input = {
+          ...accountRef,
+          title: "Retained edit",
+          connectionId: "Account /B",
+          ...(body === undefined ? {} : { richBody: body }),
+        };
         const request = yield* Effect.forkChild(session.client[WS_METHODS.issuesUpdate](input));
         const frame = yield* awaitRequest(socket, 1);
         expect(frame.payload).toEqual({
           ...accountRef,
-          title: "Retained edit",
+          title: body === undefined ? "Retained edit" : { value: "Retained edit" },
+          ...(body === undefined ? {} : { richBody: body }),
           projectId: { value: "project", connectionId: "Account /B" },
         });
         expect(accountPayloadCodecs.get(WS_METHODS.issuesUpdate)!.decode(frame.payload)).toEqual(

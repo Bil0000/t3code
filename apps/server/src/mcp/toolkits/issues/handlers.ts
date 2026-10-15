@@ -234,6 +234,30 @@ const make = Effect.gen(function* () {
         });
       }),
     ),
+    read_issue_dependencies: McpToolAccess.reads((input) =>
+      Effect.gen(function* () {
+        const target = yield* resolveTarget(input);
+        return yield* issues.dependencies({
+          ...refOf(target),
+          direction: input.direction,
+          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+          ...(input.limit === undefined ? {} : { limit: input.limit }),
+        });
+      }),
+    ),
+    set_issue_dependency: McpToolAccess.writesWithCapability((input) =>
+      Effect.gen(function* () {
+        const target = yield* resolveTarget(input);
+        yield* issues.setDependency({
+          ...refOf(target),
+          direction: input.direction,
+          targetScope: input.targetScope,
+          targetKey: input.targetKey,
+          linked: input.linked,
+        });
+        return identityOf(target);
+      }),
+    ),
     read_issue_hierarchy: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
         const target = yield* resolveTarget(input);
@@ -310,6 +334,7 @@ const make = Effect.gen(function* () {
         const target = yield* resolveTarget(input);
         yield* issues.update({
           ...refOf(target),
+          ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
           ...(input.title === undefined ? {} : { title: input.title }),
           ...(input.body === undefined ? {} : { body: input.body }),
           ...(input.labels === undefined ? {} : { labels: input.labels }),
@@ -325,6 +350,7 @@ const make = Effect.gen(function* () {
           ...refOf(target),
           commentId: input.commentId,
           body: input.body,
+          ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
         });
         return identityOf(target);
       }),
@@ -391,6 +417,7 @@ const make = Effect.gen(function* () {
             scope: entry.scope,
             key: entry.key,
             url: entry.url,
+            ...(entry.itemType === undefined ? {} : { itemType: entry.itemType }),
             displayKey: entry.displayKey,
             title: entry.title,
             state: entry.state,
@@ -428,6 +455,7 @@ const make = Effect.gen(function* () {
         const detail = yield* issues.detail(refOf(target));
         return {
           ...identityOf(target, detail),
+          ...(detail.itemType === undefined ? {} : { itemType: detail.itemType }),
           displayKey: detail.displayKey,
           title: detail.title,
           state: detail.state,
@@ -450,6 +478,8 @@ const make = Effect.gen(function* () {
           updatedAt: detail.updatedAt,
           closedAt: detail.closedAt,
           body: detail.body,
+          ...(detail.richBody === undefined ? {} : { richBody: detail.richBody }),
+          ...(detail.externalLinks === undefined ? {} : { externalLinks: detail.externalLinks }),
           ...(detail.bodyEditable === undefined ? {} : { bodyEditable: detail.bodyEditable }),
           commentCount: detail.commentCount,
           ...(detail.reactions === undefined ? {} : { reactions: detail.reactions }),
@@ -465,6 +495,7 @@ const make = Effect.gen(function* () {
             author: comment.author?.login ?? null,
             authorDetails: comment.author,
             body: comment.body,
+            ...(comment.richBody === undefined ? {} : { richBody: comment.richBody }),
             ...(comment.url === undefined ? {} : { url: comment.url }),
             createdAt: comment.createdAt,
             ...(comment.editedAt === undefined ? {} : { editedAt: comment.editedAt }),
@@ -522,6 +553,7 @@ const make = Effect.gen(function* () {
           body: input.body ?? "",
           labels: input.labels ?? [],
           assignees: input.assignees ?? [],
+          ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
           ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
           ...(input.parentKey === undefined ? {} : { parentKey: input.parentKey }),
           ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
@@ -544,6 +576,7 @@ const make = Effect.gen(function* () {
           projectId: project.id,
           ...binding,
           ...(input.key === undefined ? {} : { key: input.key }),
+          ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
         });
       }),
     ),
@@ -560,6 +593,8 @@ const make = Effect.gen(function* () {
         yield* issues.setState({
           ...refOf(target),
           state: input.state,
+          ...(input.transitionId === undefined ? {} : { transitionId: input.transitionId }),
+          ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
           ...(input.closeReason === undefined ? {} : { closeReason: input.closeReason }),
         });
         return identityOf(target);

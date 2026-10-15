@@ -18,6 +18,10 @@ import {
   IssueScopeRef,
   IssueComment,
   IssueCandidates,
+  IssueDependenciesInput,
+  IssueDependenciesPage,
+  IssueSetDependencyInput,
+  IssueSetStateInput,
   IssueCandidatesInput,
   IssueCommentsPage,
   IssueCommentsPageInput,
@@ -204,6 +208,7 @@ const IssueIdentity = {
 
 export const IssueEntry = Schema.Struct({
   ...IssueIdentity,
+  itemType: IssueSummary.fields.itemType,
   displayKey: Schema.String,
   title: Schema.String,
   state: IssueState,
@@ -240,6 +245,7 @@ export type ListIssuesResult = typeof ListIssuesResult.Type;
 
 export const ReadIssueResult = Schema.Struct({
   ...IssueIdentity,
+  itemType: IssueSummary.fields.itemType,
   displayKey: Schema.String,
   title: Schema.String,
   state: IssueState,
@@ -262,6 +268,8 @@ export const ReadIssueResult = Schema.Struct({
   closedAt: Schema.NullOr(Schema.String),
   body: Schema.String,
   bodyEditable: IssueDetail.fields.bodyEditable,
+  richBody: IssueDetail.fields.richBody,
+  externalLinks: IssueDetail.fields.externalLinks,
   commentCount: Schema.optional(IssueDetail.fields.commentCount),
   reactions: IssueDetail.fields.reactions,
   reactionsTruncated: IssueDetail.fields.reactionsTruncated,
@@ -273,6 +281,7 @@ export const ReadIssueResult = Schema.Struct({
       author: Schema.NullOr(Schema.String),
       authorDetails: Schema.optional(IssueComment.fields.author),
       body: Schema.String,
+      richBody: IssueComment.fields.richBody,
       url: Schema.optional(IssueComment.fields.url),
       createdAt: Schema.String,
       editedAt: IssueComment.fields.editedAt,
@@ -297,6 +306,7 @@ export type ReadIssueResult = typeof ReadIssueResult.Type;
 
 export const CreateIssueResult = Schema.Struct({
   ...IssueIdentity,
+  itemType: IssueSummary.fields.itemType,
   displayKey: Schema.String,
   warnings: IssueTrackerCreateResult.fields.warnings,
   parentLinked: IssueTrackerCreateResult.fields.parentLinked,
@@ -419,10 +429,11 @@ const CreateIssueTool = Tool.make("create_issue", {
     body: Schema.optional(Schema.String.check(Schema.isMaxLength(65_536))),
     labels: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(50))),
     assignees: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(25))),
+    fieldValues: IssueCreateInput.fields.fieldValues,
     issueType: IssueCreateInput.fields.issueType,
     parentKey: IssueCreateInput.fields.parentKey,
     templateKey: IssueCreateInput.fields.templateKey,
-  }).pipe(issueAccountRequest),
+  }).pipe((schema) => issueAccountRequest(schema, "projectId", "title")),
   success: CreateIssueResult,
   failure: IssueToolError,
   dependencies,
@@ -441,6 +452,7 @@ const ReadIssueCandidatesTool = Tool.make("read_issue_candidates", {
     tracker: IssueTargetInput.fields.tracker,
     connectionId: IssueTargetInput.fields.connectionId,
     key: IssueCandidatesInput.fields.key,
+    issueType: IssueCandidatesInput.fields.issueType,
   }).pipe(issueAccountRequest),
   success: IssueCandidates,
   failure: IssueToolError,
@@ -474,6 +486,8 @@ const SetIssueStateTool = Tool.make("set_issue_state", {
     "Move an issue to one of the states its tracker offers (read_issue reports native choices under states and fallback choices under capabilities.states): open or closed on a git host, with a closeReason where the tracker takes one.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
+    fieldValues: IssueSetStateInput.fields.fieldValues,
+    transitionId: IssueSetStateInput.fields.transitionId,
     state: TrimmedNonEmptyString.annotate({
       description: "A native state ID or name from states, or a name from capabilities.states.",
     }),
@@ -482,7 +496,7 @@ const SetIssueStateTool = Tool.make("set_issue_state", {
         description: "A reason from capabilities.closeReasons, for a closing state only.",
       }),
     ),
-  }).pipe(issueAccountRequest),
+  }).pipe((schema) => issueAccountRequest(schema, "projectId", "state")),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -576,6 +590,44 @@ const ReadIssueHistory = Tool.make("read_issue_history", {
 })
   .annotate(Tool.Title, "Read a bounded page of native issue history")
   .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
+const ReadIssueDependencies = Tool.make("read_issue_dependencies", {
+  description:
+    "Read one bounded page of issues and pull requests that block this issue or are blocked by it.",
+  parameters: Schema.Struct({
+    ...IssueTargetInput.fields,
+    ...IssuePageInput.fields,
+    direction: IssueDependenciesInput.fields.direction,
+  }).pipe(issueAccountRequest),
+  success: IssueDependenciesPage,
+  failure: IssueToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Read issue dependencies")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(Tool.OpenWorld, true);
+
+const SetIssueDependency = Tool.make("set_issue_dependency", {
+  description:
+    "Link or unlink a directed issue dependency. This does not change the parent or sub-issues.",
+  parameters: Schema.Struct({
+    ...IssueTargetInput.fields,
+    direction: IssueSetDependencyInput.fields.direction,
+    targetScope: IssueSetDependencyInput.fields.targetScope,
+    targetKey: IssueSetDependencyInput.fields.targetKey,
+    linked: IssueSetDependencyInput.fields.linked,
+  }).pipe(issueAccountRequest),
+  success: IssueWriteResult,
+  failure: IssueToolError,
+  dependencies,
+})
+  .annotate(Tool.Title, "Set issue dependency")
+  .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, true);
@@ -677,11 +729,12 @@ const UpdateIssue = Tool.make("update_issue", {
     "Change the supplied title, body, labels or assignees of an issue. For label replacement, preserve current labelDetails IDs and use id rather than name when present. If labelsTruncated is true, supply a complete desired set or omit labels.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
+    richBody: IssueUpdateInput.fields.richBody,
     title: IssueUpdateInput.fields.title,
     body: IssueUpdateInput.fields.body,
     labels: IssueUpdateInput.fields.labels,
     assignees: IssueUpdateInput.fields.assignees,
-  }).pipe(issueAccountRequest),
+  }).pipe((schema) => issueAccountRequest(schema, "projectId", "title")),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -696,9 +749,10 @@ const EditIssueComment = Tool.make("edit_issue_comment", {
   description: "Edit one comment. The native tracker checks the current account permission.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
+    richBody: IssueEditCommentInput.fields.richBody,
     commentId: IssueEditCommentInput.fields.commentId,
     body: IssueEditCommentInput.fields.body,
-  }).pipe(issueAccountRequest),
+  }).pipe((schema) => issueAccountRequest(schema, "projectId", "body")),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -780,6 +834,8 @@ export const IssuesToolkit = Toolkit.make(
   ListIssueSources,
   ReadIssueHistory,
   ReadIssueHierarchy,
+  ReadIssueDependencies,
+  SetIssueDependency,
   ReadIssueLinkedPullRequests,
   ReadIssueTemplates,
   ListIssueLabels,

@@ -3061,3 +3061,380 @@ it.effect("refuses ambiguous account scopes and foreign Forgejo mounts before vi
       .pipe(Effect.flip);
   }),
 );
+
+it.effect(
+  "forwards native fields, separate transition IDs and rich edits only with declared support",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<{ operation: string; input: unknown }> = [];
+      let allowed = true;
+      const record = (operation: string, input: unknown) =>
+        Effect.sync(() => {
+          calls.push({ operation, input });
+        });
+      const base = fakeTracker();
+      const api = fakeTracker({
+        capabilities: {
+          ...base.capabilities,
+          createFields: true,
+          stateFields: true,
+          richText: true,
+          editComment: true,
+        },
+        create: (input) =>
+          record("create", input).pipe(
+            Effect.as({ key: "2", displayKey: "#2", url: "https://github.com/acme/web/issues/2" }),
+          ),
+        listCandidates: (input) =>
+          record("candidates", input).pipe(
+            Effect.as({
+              labels: [],
+              assignees: [],
+              fields: [{ id: "custom", label: "Custom", required: true, kind: "text" as const }],
+              truncated: false,
+            }),
+          ),
+        setState: (input) => record("state", input),
+        update: (input) => record("update", input),
+        editComment: (input) => record("comment", input),
+        getViewerPermissions: () => Effect.succeed({ ...permissions, edit: allowed }),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [api],
+      });
+      const ref = {
+        projectId: ProjectId.make("web"),
+        tracker: GITHUB,
+        scope: "acme/web",
+        key: "1",
+      };
+      const fieldValues = { custom: "value" };
+      const richBody = {
+        format: "adf" as const,
+        document: '{"type":"doc","version":1,"content":[]}',
+      };
+      expect((yield* service.candidates({ ...ref, issueType: "Bug" })).fields).toHaveLength(1);
+      yield* service.create({
+        ...ref,
+        title: "New",
+        body: "",
+        labels: [],
+        assignees: [],
+        fieldValues,
+      });
+      yield* service.setState({ ...ref, state: "closed", transitionId: "31", fieldValues });
+      yield* service.update({ ...ref, richBody });
+      yield* service.editComment({ ...ref, commentId: "c", body: "fallback", richBody });
+      expect(calls).toMatchObject([
+        { operation: "candidates", input: { issueType: "Bug" } },
+        { operation: "create", input: { fieldValues } },
+        { operation: "state", input: { state: "closed", transitionId: "31", fieldValues } },
+        { operation: "update", input: { richBody } },
+        { operation: "comment", input: { richBody } },
+      ]);
+      allowed = false;
+      yield* service.update({ ...ref, richBody }).pipe(Effect.flip);
+      const unsupported = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [{ ...api, capabilities: { ...base.capabilities, editComment: true } }],
+      });
+      for (const request of [
+        unsupported.create({
+          ...ref,
+          title: "New",
+          body: "",
+          labels: [],
+          assignees: [],
+          fieldValues,
+        }),
+        unsupported.setState({ ...ref, state: "closed", fieldValues }),
+        unsupported.setState({ ...ref, state: "closed", transitionId: "31" }),
+        unsupported.update({ ...ref, richBody }),
+        unsupported.editComment({ ...ref, commentId: "c", body: "fallback", richBody }),
+      ])
+        expect((yield* Effect.flip(request))._tag).toBe("IssueOperationError");
+      expect(calls).toHaveLength(5);
+    }),
+);
+
+it.effect.each([
+  [true, false, true],
+  [false, true, false],
+  [undefined, true, true],
+  [undefined, false, false],
+] as const)(
+  "uses the native parent permission before legacy edit: %j",
+  ([updateParent, edit, allowed]) =>
+    Effect.gen(function* () {
+      let writes = 0;
+      const base = fakeTracker();
+      const api = fakeTracker({
+        capabilities: { ...base.capabilities, updateParent: true },
+        getViewerPermissions: () =>
+          Effect.succeed({
+            ...permissions,
+            edit,
+            ...(updateParent === undefined ? {} : { updateParent }),
+          }),
+        setParent: () =>
+          Effect.sync(() => {
+            writes++;
+          }),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [api],
+      });
+      const request = service.setParent({
+        projectId: ProjectId.make("web"),
+        tracker: GITHUB,
+        scope: "acme/web",
+        key: "1",
+        parentKey: null,
+      });
+      if (allowed) yield* request;
+      else expect((yield* Effect.flip(request))._tag).toBe("IssueOperationError");
+      expect(writes).toBe(allowed ? 1 : 0);
+    }),
+);
+
+it.effect(
+  "keeps dependency pages and writes on the exact account and checks fresh edit access",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<{ operation: string; account?: string; input: unknown }> = [];
+      let edit = true;
+      const record = (operation: string, input: unknown) =>
+        Effect.gen(function* () {
+          const account = yield* IssueTrackerHost.ConnectionId;
+          calls.push({ operation, ...(account === undefined ? {} : { account }), input });
+        });
+      const base = fakeStandaloneTracker();
+      const api = fakeStandaloneTracker({
+        capabilities: { ...base.capabilities, dependencies: true },
+        getViewerPermissions: (input) =>
+          record("permissions", input).pipe(Effect.as({ ...permissions, edit })),
+        getDependencies: (input) =>
+          record("read", input).pipe(
+            Effect.as({ items: [], nextCursor: "native-next", truncated: true }),
+          ),
+        setDependency: (input) => record("write", input),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "a" }), project({ id: "b" })],
+        trackers: [api],
+        bindings: {
+          a: { tracker: LINEAR, scope: "ENG", connectionId: "ExactB" },
+          b: { tracker: LINEAR, scope: "ENG" },
+        },
+      });
+      const ref = {
+        projectId: ProjectId.make("a"),
+        tracker: LINEAR,
+        scope: "ENG",
+        key: "ENG-1",
+        connectionId: "ExactB",
+      };
+      expect(
+        yield* service.dependencies({ ...ref, direction: "blocks", cursor: "native", limit: 7 }),
+      ).toEqual({ items: [], nextCursor: "native-next", truncated: true });
+      const input = {
+        ...ref,
+        direction: "blocked-by" as const,
+        targetScope: "OPS",
+        targetKey: "OPS-2",
+        linked: false,
+      };
+      yield* service.setDependency(input);
+      expect(calls.map(({ operation, account }) => ({ operation, account }))).toEqual([
+        { operation: "read", account: "ExactB" },
+        { operation: "permissions", account: "ExactB" },
+        { operation: "write", account: "ExactB" },
+      ]);
+      expect(calls[0]?.input).toMatchObject({ direction: "blocks", cursor: "native", limit: 7 });
+      expect(calls[2]?.input).toMatchObject({
+        direction: "blocked-by",
+        targetScope: "OPS",
+        targetKey: "OPS-2",
+        linked: false,
+      });
+      edit = false;
+      yield* service.setDependency(input).pipe(Effect.flip);
+      expect(calls.filter(({ operation }) => operation === "write")).toHaveLength(1);
+      const before = calls.length;
+      yield* service.setDependency({ ...input, scope: "OTHER" }).pipe(Effect.flip);
+      yield* service.setDependency({ ...input, connectionId: "exactb" }).pipe(Effect.flip);
+      expect(calls).toHaveLength(before);
+      const { connectionId: _connectionId, ...defaultRef } = ref;
+      yield* service.dependencies({
+        ...defaultRef,
+        projectId: ProjectId.make("b"),
+        direction: "blocked-by",
+      });
+      expect(calls.at(-1)?.account).toBeUndefined();
+      const unsupported = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({ capabilities: { ...fakeTracker().capabilities, dependencies: true } }),
+        ],
+      });
+      const missing = {
+        projectId: ProjectId.make("web"),
+        tracker: GITHUB,
+        scope: "acme/web",
+        key: "1",
+        direction: "blocks" as const,
+      };
+      expect((yield* Effect.flip(unsupported.dependencies(missing)))._tag).toBe(
+        "IssueOperationError",
+      );
+      expect(
+        (yield* Effect.flip(
+          unsupported.setDependency({
+            ...missing,
+            targetScope: "acme/web",
+            targetKey: "2",
+            linked: true,
+          }),
+        ))._tag,
+      ).toBe("IssueOperationError");
+    }),
+);
+
+it.effect(
+  "keeps Jira DC instance paths, ports and accounts exact through URL resolution and writes",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<{ account?: string; host: string; key: string }> = [];
+      const base = fakeStandaloneTracker();
+      const api: StandaloneIssueTrackerApi = {
+        ...base,
+        kind: JIRA,
+        standalone: { ...base.standalone, tracker: JIRA, host: "jira.example:8443/Jira" },
+        getIssue: (input) =>
+          Effect.gen(function* () {
+            const account = yield* IssueTrackerHost.ConnectionId;
+            calls.push({
+              ...(account === undefined ? {} : { account }),
+              host: input.host,
+              key: input.key,
+            });
+            return { ...issue(input.key), url: `https://${input.host}/browse/${input.key}` };
+          }),
+        update: (input) =>
+          Effect.gen(function* () {
+            const account = yield* IssueTrackerHost.ConnectionId;
+            calls.push({
+              ...(account === undefined ? {} : { account }),
+              host: input.host,
+              key: input.key,
+            });
+          }),
+      };
+      const service = yield* makeService({
+        projects: [
+          project({ id: "upper" }),
+          project({ id: "lower" }),
+          project({ id: "other-account" }),
+        ],
+        trackers: [api],
+        bindings: {
+          upper: {
+            tracker: JIRA,
+            scope: "OPS",
+            host: "JIRA.EXAMPLE:8443/Jira",
+            connectionId: "ExactB",
+          },
+          lower: {
+            tracker: JIRA,
+            scope: "OPS",
+            host: "jira.example:8443/jira",
+            connectionId: "ExactB",
+          },
+          "other-account": {
+            tracker: JIRA,
+            scope: "OPS",
+            host: "jira.example:8443/Jira",
+            connectionId: "exactb",
+          },
+        },
+      });
+      expect(
+        (yield* service.listSources({ host: "JIRA.EXAMPLE:8443/Jira" })).map(
+          (source) => source.projectId,
+        ),
+      ).toEqual(["upper", "other-account"]);
+      expect(
+        (yield* service.listSources({ host: "jira.example:8443/jira" })).map(
+          (source) => source.projectId,
+        ),
+      ).toEqual(["lower"]);
+      for (const [id, prefix] of [
+        ["upper", "Jira"],
+        ["lower", "jira"],
+      ] as const) {
+        const resolved = yield* service.resolveUrl(
+          `https://jira.example:8443/${prefix}/browse/OPS-7`,
+          ProjectId.make(id),
+          "ExactB",
+        );
+        expect(resolved).toMatchObject({
+          projectId: id,
+          host: `jira.example:8443/${prefix}`,
+          scope: "OPS",
+          connectionId: "ExactB",
+          writable: true,
+        });
+        yield* service.update({ ...resolved, title: "Change" });
+      }
+      expect(calls).toEqual([
+        { account: "ExactB", host: "jira.example:8443/Jira", key: "OPS-7" },
+        { account: "ExactB", host: "jira.example:8443/jira", key: "OPS-7" },
+      ]);
+      for (const url of [
+        "https://jira.example:8443/JIRA/browse/OPS-7",
+        "https://jira.example/Jira/browse/OPS-7",
+        "https://jira.example:8443/jira/browse/OPS-7",
+      ]) {
+        yield* service.resolveUrl(url, ProjectId.make("upper"), "ExactB").pipe(Effect.flip);
+      }
+      yield* service
+        .resolveUrl(
+          "https://jira.example:8443/Jira/browse/OPS-7",
+          ProjectId.make("upper"),
+          "exactb",
+        )
+        .pipe(Effect.flip);
+      yield* service
+        .resolveUrl("https://jira.example:8443/jira/browse/OPS-7", ProjectId.make("upper"))
+        .pipe(Effect.flip);
+      expect(calls).toHaveLength(2);
+    }),
+);
+
+it.effect(
+  "exposes trusted native per-issue capabilities without changing the driver defaults",
+  () =>
+    Effect.gen(function* () {
+      const base = fakeTracker();
+      const native = { ...base.capabilities, updateParent: false };
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [
+          fakeTracker({
+            capabilities: { ...base.capabilities, updateParent: true },
+            getIssue: ({ key }) => Effect.succeed({ ...issue(key), capabilities: native }),
+          }),
+        ],
+      });
+      expect(
+        (yield* service.detail({
+          projectId: ProjectId.make("web"),
+          tracker: GITHUB,
+          scope: "acme/web",
+          key: "1",
+        })).capabilities,
+      ).toEqual(native);
+    }),
+);

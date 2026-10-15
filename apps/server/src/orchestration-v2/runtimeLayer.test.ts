@@ -2638,6 +2638,63 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       }),
   );
 
+  it.effect("keeps Jira mount identity through thread link storage and unlink", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const threadId = ThreadId.make("runtime-jira-mount-links");
+      const projectId = ProjectId.make("jira-mount-project");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("jira-mount-create"),
+        threadId,
+        projectId,
+        title: "Jira mounts",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { tracker: IssueTrackerKind.make("jira"), scope: "ENG", key: "ENG-42" };
+      for (const [index, host] of [
+        "jira.example/Jira",
+        "jira.example/jira",
+        "JIRA.EXAMPLE/Jira",
+      ].entries()) {
+        yield* orchestrator.dispatch({
+          type: "thread.issue.link",
+          commandId: CommandId.make(`jira-mount-link-${index}`),
+          threadId,
+          projectId,
+          ...key,
+          host,
+          source: "manual",
+          url: `https://${host}/browse/ENG-42`,
+        });
+      }
+      yield* worker.drain();
+      assert.deepEqual(
+        (yield* orchestrator.getThreadShell(threadId))?.issues?.map((link) => link.host),
+        ["jira.example/Jira", "jira.example/jira"],
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.issue.unlink",
+        commandId: CommandId.make("jira-mount-unlink"),
+        threadId,
+        ...key,
+        host: "JIRA.EXAMPLE/Jira",
+      });
+      yield* worker.drain();
+      assert.deepEqual(
+        (yield* orchestrator.getThreadProjection(threadId)).thread.issues?.map((link) => link.host),
+        ["jira.example/jira"],
+      );
+    }),
+  );
+
   it.effect("links an issue, syncs its snapshot, and unlinks it", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

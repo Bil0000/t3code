@@ -90,11 +90,14 @@ function tracker(
       record("listAssigneeCandidates", input.host, { items: [], nextCursor: null }),
     editComment: (input) => record("editComment", input.host, undefined),
     setParent: (input) => record("setParent", input.host, undefined),
+    getDependencies: (input) =>
+      record("getDependencies", input.host, { items: [], nextCursor: null }),
+    setDependency: (input) => record("setDependency", input.host, undefined),
     ...overrides,
   };
 }
 
-it.effect.each(["gitlab", "azure-devops", "forgejo"])(
+it.effect.each(["gitlab", "azure-devops", "forgejo", "gitcafe"])(
   "honors PR host pauses before %s issue reads",
   (kind) =>
     Effect.gen(function* () {
@@ -116,6 +119,7 @@ it.effect.each(["gitlab", "azure-devops", "forgejo"])(
         api.getHistory!(target),
         api.getLinkedPullRequests!(target),
         api.getHierarchy!(target),
+        api.getDependencies!({ ...target, direction: "blocks" }),
         api.listLabelCandidates!(target),
         api.listAssigneeCandidates!(target),
       ];
@@ -134,6 +138,7 @@ it.effect.each([
   { kind: "gitlab", explicitRetry: false },
   { kind: "azure-devops", explicitRetry: false },
   { kind: "forgejo", explicitRetry: false },
+  { kind: "gitcafe", explicitRetry: true },
   { kind: "gitlab", explicitRetry: true },
 ])(
   "records issue 429s for later PR and issue checks: $kind / $explicitRetry",

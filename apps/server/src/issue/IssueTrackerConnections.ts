@@ -18,6 +18,7 @@ import * as Crypto from "effect/Crypto";
 import * as Semaphore from "effect/Semaphore";
 import {
   IssueTrackerConnectionError,
+  issueHostKey,
   IssueTrackerKind,
   type IssueTrackerBindProjectInput,
   type IssueTrackerConnectInput,
@@ -136,9 +137,10 @@ const make = Effect.gen(function* () {
   ) =>
     api.probeCredential(token).pipe(
       Effect.map((probe): IssueTrackerConnection => {
-        const host = (probe.host ?? api.standalone.host)?.trim().toLowerCase() ?? null;
+        const host = issueHostKey(probe.host ?? api.standalone.host ?? "") || null;
         const matching =
-          saved === undefined || (saved.host === host && saved.accountId === probe.accountId);
+          saved === undefined ||
+          (issueHostKey(saved.host) === host && saved.accountId === probe.accountId);
         return {
           ...api.standalone,
           ...(saved === undefined ? {} : { connectionId: saved.connectionId }),
@@ -330,13 +332,16 @@ const make = Effect.gen(function* () {
         return disconnected(api, saved.connectionId);
       }
       const probe = yield* probeCredential(api, token);
-      const host = (probe.host ?? api.standalone.host)?.trim().toLowerCase();
+      const host = issueHostKey(probe.host ?? api.standalone.host ?? "");
       if (!host || !probe.accountId?.trim())
         return yield* rejected(
           api.kind,
           "The credential did not identify a tracker host and account.",
         );
-      if (saved !== undefined && (saved.host !== host || saved.accountId !== probe.accountId))
+      if (
+        saved !== undefined &&
+        (issueHostKey(saved.host) !== host || saved.accountId !== probe.accountId)
+      )
         return yield* rejected(
           api.kind,
           "This credential belongs to a different account. Use Add account instead.",
@@ -349,7 +354,7 @@ const make = Effect.gen(function* () {
           existing.some(
             (account) =>
               account.tracker === api.kind &&
-              account.host === host &&
+              issueHostKey(account.host) === host &&
               account.accountId === probe.accountId,
           )
         )
@@ -440,7 +445,7 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-      const host = (probe.host ?? api.standalone.host)?.trim().toLowerCase();
+      const host = issueHostKey(probe.host ?? api.standalone.host ?? "");
       if (!host) {
         return yield* new IssueTrackerConnectionError({
           tracker: input.tracker,
@@ -456,7 +461,7 @@ const make = Effect.gen(function* () {
         : yield* api.probeCredential(new TextDecoder().decode(stored.value)).pipe(Effect.option);
       const sameIdentity =
         Option.isSome(previous) &&
-        (previous.value.host ?? api.standalone.host)?.trim().toLowerCase() === host &&
+        issueHostKey(previous.value.host ?? api.standalone.host ?? "") === host &&
         previous.value.accountId !== undefined &&
         previous.value.accountId === probe.accountId;
       const previousBindings = sameIdentity
@@ -590,7 +595,8 @@ const make = Effect.gen(function* () {
       );
       if (
         savedAccount !== undefined &&
-        ((probe.host ?? api.standalone.host)?.trim().toLowerCase() !== savedAccount.host ||
+        (issueHostKey(probe.host ?? api.standalone.host ?? "") !==
+          issueHostKey(savedAccount.host) ||
           probe.accountId !== savedAccount.accountId)
       )
         return yield* rejected(tracker, "The credential no longer belongs to this saved account.");
@@ -616,7 +622,7 @@ const make = Effect.gen(function* () {
           detail: "This scope is not available to the connected account.",
         });
       }
-      const host = (probe.host ?? api.standalone.host)?.trim().toLowerCase();
+      const host = issueHostKey(probe.host ?? api.standalone.host ?? "");
       if (!host) {
         return yield* new IssueTrackerConnectionError({
           tracker,

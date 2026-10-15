@@ -19,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import {
   issueListCursorKey,
+  issueHostKey,
   issueScopeKeyOf,
   issueTrackerHostKey,
   IssueOperationError,
@@ -27,6 +28,9 @@ import {
   pullRequestHostOf,
   SourceControlProviderKind,
   type IssueCandidates,
+  type IssueDependenciesInput,
+  type IssueDependenciesPage,
+  type IssueSetDependencyInput,
   type IssueCandidatesInput,
   type IssueAssigneeCandidatesPage,
   type IssueEditCommentInput,
@@ -207,6 +211,10 @@ export class IssueService extends Context.Service<
     readonly linkedPullRequests: (
       input: IssuePageRef,
     ) => Effect.Effect<IssueLinkedPullRequestsPage, IssueError>;
+    readonly dependencies: (
+      input: IssueDependenciesInput,
+    ) => Effect.Effect<IssueDependenciesPage, IssueError>;
+    readonly setDependency: (input: IssueSetDependencyInput) => Effect.Effect<void, IssueError>;
     readonly hierarchy: (input: IssuePageRef) => Effect.Effect<IssueHierarchyPage, IssueError>;
     readonly labelCandidates: (
       input: IssueScopePageRef,
@@ -268,7 +276,7 @@ export const make = Effect.gen(function* () {
         : [
             {
               tracker: binding.tracker,
-              host: host.trim().toLowerCase(),
+              host: issueHostKey(host),
               scope: binding.scope,
               ...(binding.connectionId === undefined ? {} : { connectionId: binding.connectionId }),
             },
@@ -337,7 +345,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
       Effect.map((bound) => {
-        const host = filter.host?.trim().toLowerCase();
+        const host = filter.host === undefined ? undefined : issueHostKey(filter.host);
         const supported: SupportedProject[] = [];
         const unimplemented = new Map<
           string,
@@ -382,7 +390,7 @@ export const make = Effect.gen(function* () {
         if (own === undefined || own.connectionId !== ref.connectionId) {
           return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
         }
-        const host = ref.host?.trim().toLowerCase() ?? own.host;
+        const host = ref.host === undefined ? own.host : issueHostKey(ref.host);
         if (host !== own.host) {
           return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
         }
@@ -792,7 +800,7 @@ export const make = Effect.gen(function* () {
               projectId: project.project.id,
               projectTitle: project.project.title,
               writable: project.writable,
-              capabilities: project.api.capabilities,
+              capabilities: issue.capabilities ?? project.api.capabilities,
             })),
           ),
       ),
@@ -850,6 +858,45 @@ export const make = Effect.gen(function* () {
               .pipe(withConnection(project), Effect.mapError(toIssueError("linkedPullRequests"))),
       ),
     );
+
+  const dependencies: IssueService["Service"]["dependencies"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project) =>
+        project.api.getDependencies === undefined || !project.api.capabilities.dependencies
+          ? Effect.fail(unsupported("dependencies", "dependencies"))
+          : project.api
+              .getDependencies({
+                cwd: project.project.workspaceRoot,
+                host: project.host,
+                scope: project.scope,
+                key: input.key,
+                direction: input.direction,
+                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+                ...(input.limit === undefined ? {} : { limit: input.limit }),
+              })
+              .pipe(withConnection(project), Effect.mapError(toIssueError("dependencies"))),
+      ),
+    );
+
+  const setDependency: IssueService["Service"]["setDependency"] = (input) =>
+    Effect.gen(function* () {
+      const project = yield* requireWritable(input, "setDependency");
+      if (project.api.setDependency === undefined || !project.api.capabilities.dependencies)
+        return yield* unsupported("setDependency", "dependencies");
+      yield* requirePermissions(project, input, "setDependency", (permissions) => permissions.edit);
+      yield* project.api
+        .setDependency({
+          cwd: project.project.workspaceRoot,
+          host: project.host,
+          scope: project.scope,
+          key: input.key,
+          direction: input.direction,
+          targetScope: input.targetScope,
+          targetKey: input.targetKey,
+          linked: input.linked,
+        })
+        .pipe(withConnection(project), Effect.mapError(toIssueError("setDependency")));
+    });
 
   const hierarchy: IssueService["Service"]["hierarchy"] = (input) =>
     requireProject(input).pipe(
@@ -927,7 +974,9 @@ export const make = Effect.gen(function* () {
         !(
           project.api.capabilities.labels ||
           project.api.capabilities.assignees ||
-          project.api.capabilities.createIssueTypes
+          project.api.capabilities.createIssueTypes ||
+          project.api.capabilities.createFields ||
+          project.api.capabilities.stateFields
         )
           ? Effect.fail(unsupported("candidates", "labels, assignees, or issue types"))
           : project.api
@@ -936,6 +985,7 @@ export const make = Effect.gen(function* () {
                 host: project.host,
                 scope: project.scope,
                 ...(input.key === undefined ? {} : { key: input.key }),
+                ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
               })
               .pipe(withConnection(project), Effect.mapError(toIssueError("candidates"))),
       ),
@@ -947,6 +997,8 @@ export const make = Effect.gen(function* () {
       const { capabilities } = project.api;
       if (project.api.create === undefined || !capabilities.create)
         return yield* unsupported("create", "filing issues");
+      if (input.fieldValues !== undefined && !capabilities.createFields)
+        return yield* unsupported("create", "native create fields");
       if (input.issueType !== undefined && !capabilities.createIssueTypes)
         return yield* unsupported("create", "selecting an issue type");
       if (input.parentKey !== undefined && !capabilities.createSubIssue)
@@ -970,6 +1022,7 @@ export const make = Effect.gen(function* () {
           body: input.body,
           labels: input.labels,
           assignees: input.assignees,
+          ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
           ...(input.issueType === undefined ? {} : { issueType: input.issueType }),
           ...(input.parentKey === undefined ? {} : { parentKey: input.parentKey }),
           ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
@@ -1012,7 +1065,8 @@ export const make = Effect.gen(function* () {
     requireWritable(input, "update").pipe(
       Effect.flatMap((project) => {
         const { capabilities } = project.api;
-        const wantsWords = input.title !== undefined || input.body !== undefined;
+        const wantsWords =
+          input.title !== undefined || input.body !== undefined || input.richBody !== undefined;
         if (!wantsWords && input.labels === undefined && input.assignees === undefined) {
           return Effect.fail(
             new IssueOperationError({ operation: "update", detail: "Nothing to change." }),
@@ -1021,6 +1075,8 @@ export const make = Effect.gen(function* () {
         if (project.api.update === undefined) return Effect.fail(unsupported("update", "edits"));
         if (wantsWords && !capabilities.edit)
           return Effect.fail(unsupported("update", "editing the title or body"));
+        if (input.richBody !== undefined && !capabilities.richText)
+          return Effect.fail(unsupported("update", "rich text"));
         if (input.labels !== undefined && !capabilities.labels)
           return Effect.fail(unsupported("update", "labels"));
         if (input.assignees !== undefined && !capabilities.assignees)
@@ -1054,6 +1110,7 @@ export const make = Effect.gen(function* () {
                 key: input.key,
                 title: input.title,
                 body: input.body,
+                ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
                 labels: input.labels,
                 assignees: input.assignees,
               })
@@ -1070,6 +1127,11 @@ export const make = Effect.gen(function* () {
         const target = capabilities.states.find(
           (state) => state.name === input.state || state.id === input.state,
         );
+        if (
+          (input.fieldValues !== undefined || input.transitionId !== undefined) &&
+          !capabilities.stateFields
+        )
+          return Effect.fail(unsupported("setState", "native transition fields"));
         if (project.api.setState === undefined)
           return Effect.fail(unsupported("setState", `the state "${input.state}"`));
         if (
@@ -1091,6 +1153,8 @@ export const make = Effect.gen(function* () {
                 scope: project.scope,
                 key: input.key,
                 state: input.state,
+                ...(input.transitionId === undefined ? {} : { transitionId: input.transitionId }),
+                ...(input.fieldValues === undefined ? {} : { fieldValues: input.fieldValues }),
                 closeReason: input.closeReason,
               })
               .pipe(withConnection(project), Effect.mapError(toIssueError("setState"))),
@@ -1134,7 +1198,9 @@ export const make = Effect.gen(function* () {
       const project = yield* requireWritable(input, "editComment", true);
       if (project.api.editComment === undefined || !project.api.capabilities.editComment)
         return yield* unsupported("editComment", "editing comments");
-      if (input.body.trim().length === 0)
+      if (input.richBody !== undefined && !project.api.capabilities.richText)
+        return yield* unsupported("editComment", "rich text");
+      if (input.body.trim().length === 0 && input.richBody === undefined)
         return yield* new IssueOperationError({
           operation: "editComment",
           detail: "A comment needs some text.",
@@ -1147,6 +1213,7 @@ export const make = Effect.gen(function* () {
           key: input.key,
           commentId: input.commentId,
           body: input.body,
+          ...(input.richBody === undefined ? {} : { richBody: input.richBody }),
         })
         .pipe(withConnection(project), Effect.mapError(toIssueError("editComment")));
     });
@@ -1161,7 +1228,12 @@ export const make = Effect.gen(function* () {
           operation: "setParent",
           detail: "An issue cannot be its own parent.",
         });
-      yield* requirePermissions(project, input, "setParent", (permissions) => permissions.edit);
+      yield* requirePermissions(
+        project,
+        input,
+        "setParent",
+        (permissions) => permissions.updateParent ?? permissions.edit,
+      );
       yield* project.api
         .setParent({
           cwd: project.project.workspaceRoot,
@@ -1188,7 +1260,10 @@ export const make = Effect.gen(function* () {
             detail: "This is not a recognised issue URL.",
           }),
       });
-      const { supported } = yield* listProjects({ host: target.host.toLowerCase() });
+      const available = yield* listProjects({});
+      const supported = available.supported.filter(
+        (project) => project.host.split("/")[0] === target.host.toLowerCase(),
+      );
       const parsed =
         supported.map((project) => parseIssueUrl(url, project)).find((link) => link !== null) ??
         parseIssueUrl(url);
@@ -1210,10 +1285,13 @@ export const make = Effect.gen(function* () {
         (project) =>
           project.project.id === preferredProjectId && project.tracker === parsed.tracker,
       );
+      if (preferred !== undefined && preferred.host !== parsed.host)
+        return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
       const selectedAccount = connectionId ?? preferred?.connectionId;
       const onTracker = supported.filter(
         (project) =>
           project.tracker === parsed.tracker &&
+          project.host === parsed.host &&
           ((connectionId === undefined && preferred === undefined) ||
             project.connectionId === selectedAccount),
       );
@@ -1272,7 +1350,7 @@ export const make = Effect.gen(function* () {
             key: parsed.key,
           })
           .pipe(withConnection(lender), Effect.mapError(toIssueError("resolveUrl")));
-        const canonical = parseIssueUrl(issue.url);
+        const canonical = parseIssueUrl(issue.url, lender);
         if (
           canonical === null ||
           canonical.tracker !== parsed.tracker ||
@@ -1311,6 +1389,8 @@ export const make = Effect.gen(function* () {
     comments,
     history,
     linkedPullRequests,
+    dependencies,
+    setDependency,
     hierarchy,
     labelCandidates,
     assigneeCandidates,

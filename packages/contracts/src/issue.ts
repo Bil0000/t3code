@@ -38,6 +38,7 @@ export function issueAccountRequest<
 >(
   schema: S,
   field: "projectId" | "key" = "projectId",
+  advancedField?: "title" | "state" | "body",
 ): Schema.Codec<S["Type"], Readonly<Record<string, unknown>>> &
   Pick<S, "~type.make.in" | "~type.make"> {
   const value = schema.fields[field] ?? Schema.optional(ProjectId);
@@ -45,15 +46,61 @@ export function issueAccountRequest<
     description:
       "A saved issue account target. Copy this object from the returned reference; put the connection ID inside it, never at the request top level.",
   });
+  const advancedKeys = ["fieldValues", "richBody", "transitionId"].filter(
+    (key) => schema.fields[key] !== undefined,
+  );
   const wire = Schema.Struct({
     ...schema.fields,
     connectionId: Schema.optional(Schema.Never),
     [field]: Schema.optional(Schema.Union([value, account])),
-  });
+    ...(advancedField === undefined
+      ? {}
+      : {
+          [advancedField]: Schema.optional(
+            Schema.Union([
+              schema.fields[advancedField]!,
+              Schema.Struct({ value: schema.fields[advancedField]! }),
+            ]),
+          ),
+        }),
+  }).check(
+    Schema.makeFilter(
+      (raw) => {
+        const input = raw as Readonly<Record<string, unknown>>;
+        return (
+          advancedField === undefined ||
+          advancedKeys.every((key) => input[key] === undefined) ||
+          typeof input[advancedField] === "object" ||
+          `Native issue fields require a wrapped ${advancedField} value.`
+        );
+      },
+      {
+        toJsonSchema: () =>
+          advancedField === undefined
+            ? {}
+            : {
+                anyOf: [
+                  { not: { anyOf: advancedKeys.map((key) => ({ required: [key] })) } },
+                  {
+                    required: [advancedField],
+                    properties: { [advancedField]: { type: "object" } },
+                  },
+                ],
+              },
+      },
+    ),
+  );
   return wire.pipe(
     Schema.decodeTo(schema, {
       decode: SchemaGetter.transform((raw) => {
-        const input = raw as Readonly<Record<string, unknown>>;
+        let input = raw as Readonly<Record<string, unknown>>;
+        if (advancedField !== undefined) {
+          const wrapped = input[advancedField];
+          if (wrapped !== null && typeof wrapped === "object") {
+            const { [advancedField]: _wrapped, ...rest } = input;
+            input = "value" in wrapped ? { ...rest, [advancedField]: wrapped.value } : rest;
+          }
+        }
         const target = input[field];
         if (target !== null && typeof target === "object" && "connectionId" in target) {
           const { [field]: _qualified, ...rest } = input;
@@ -67,7 +114,18 @@ export function issueAccountRequest<
         return input as S["Encoded"];
       }),
       encode: SchemaGetter.transform((raw) => {
-        const input = raw as Readonly<Record<string, unknown>>;
+        const plain = raw as Readonly<Record<string, unknown>>;
+        const input =
+          advancedField !== undefined &&
+          (plain.fieldValues !== undefined ||
+            plain.richBody !== undefined ||
+            plain.transitionId !== undefined)
+            ? {
+                ...plain,
+                [advancedField]:
+                  plain[advancedField] === undefined ? {} : { value: plain[advancedField] },
+              }
+            : plain;
         const { connectionId, ...rest } = input;
         return (
           connectionId === undefined
@@ -119,12 +177,84 @@ export type IssueListSort = typeof IssueListSort.Type;
 export const IssueListOrder = Schema.Literals(["asc", "desc"]);
 export type IssueListOrder = typeof IssueListOrder.Type;
 export const IssuePageInput = Schema.Struct({
-  cursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  cursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
 });
 export type IssuePageInput = typeof IssuePageInput.Type;
 
+export const IssueInputField = Schema.Struct({
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  label: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+  required: Schema.Boolean,
+  kind: Schema.Literals([
+    "text",
+    "textarea",
+    "number",
+    "date",
+    "datetime",
+    "select",
+    "multiselect",
+    "json",
+  ]),
+  description: Schema.optional(Schema.String.check(Schema.isMaxLength(4096))),
+  options: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        value: Schema.String.check(Schema.isMaxLength(4096)),
+        label: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+      }),
+    ).check(Schema.isMaxLength(100)),
+  ),
+});
+export type IssueInputField = typeof IssueInputField.Type;
+
+export const IssueFieldValues = Schema.Record(
+  TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  Schema.Union([
+    Schema.String.check(Schema.isMaxLength(65_536)),
+    Schema.Array(Schema.String.check(Schema.isMaxLength(65_536))).check(Schema.isMaxLength(100)),
+  ]),
+).check(
+  Schema.makeFilter(
+    (values) =>
+      Object.keys(values).length <= 100 &&
+      Object.entries(values).reduce(
+        (total, [key, value]) =>
+          total +
+          key.length +
+          (typeof value === "string"
+            ? value.length
+            : value.reduce((length, item) => length + item.length, 0)),
+        0,
+      ) <= 65_536,
+  ),
+);
+export type IssueFieldValues = typeof IssueFieldValues.Type;
+
+export const IssueRichBody = Schema.Union([
+  Schema.Struct({
+    format: Schema.Literal("adf"),
+    document: Schema.String.check(Schema.isMaxLength(262_144)).check(
+      Schema.makeFilter((value) => {
+        try {
+          JSON.parse(value);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+    ),
+  }),
+  Schema.Struct({
+    format: Schema.Literal("jira-wiki"),
+    document: Schema.String.check(Schema.isMaxLength(65_536)),
+  }),
+]);
+export type IssueRichBody = typeof IssueRichBody.Type;
+
 export const IssueState = Schema.Struct({
+  transitionId: Schema.optional(TrimmedNonEmptyString),
+  fields: Schema.optional(Schema.Array(IssueInputField).check(Schema.isMaxLength(100))),
   workflowCategory: Schema.optional(IssueWorkflowCategory),
   id: Schema.optional(TrimmedNonEmptyString),
   category: IssueStateCategory,
@@ -208,6 +338,7 @@ export const IssueScopeRef = Schema.Struct({
 export type IssueScopeRef = typeof IssueScopeRef.Type;
 
 export const IssueCandidatesInput = Schema.Struct({
+  issueType: Schema.optional(TrimmedNonEmptyString),
   ...IssueScopeRef.fields,
   key: Schema.optional(TrimmedNonEmptyString),
 });
@@ -222,6 +353,7 @@ export type IssueTemplatesInput = typeof IssueTemplatesInput.Type;
 
 /** One row of a listing. Carries everything a list needs and nothing a detail needs. */
 export const IssueSummary = Schema.Struct({
+  itemType: Schema.optional(TrimmedNonEmptyString),
   tracker: IssueTrackerKind,
   host: TrimmedNonEmptyString,
   scope: TrimmedNonEmptyString,
@@ -254,6 +386,7 @@ export const IssueListEntry = Schema.Struct({
 export type IssueListEntry = typeof IssueListEntry.Type;
 
 export const IssueComment = Schema.Struct({
+  richBody: Schema.optional(IssueRichBody),
   editedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   canEdit: Schema.optional(Schema.Boolean),
   id: TrimmedNonEmptyString,
@@ -306,7 +439,7 @@ export const IssueLinkedPullRequest = Schema.Struct({
   title: TrimmedNonEmptyString,
   url: TrimmedNonEmptyString,
   state: Schema.NullOr(PullRequestState),
-  isDraft: Schema.Boolean,
+  isDraft: Schema.optional(Schema.Boolean),
   /** Merging it closes this issue, rather than only citing it. */
   closesIssue: Schema.Boolean,
 });
@@ -317,6 +450,11 @@ export type IssueLinkedPullRequest = typeof IssueLinkedPullRequest.Type;
  * service refuses a call outside these before it reaches the driver.
  */
 export const IssueCapabilities = Schema.Struct({
+  createFields: Schema.optional(Schema.Boolean),
+  stateFields: Schema.optional(Schema.Boolean),
+  richText: Schema.optional(Schema.Boolean),
+  dependencies: Schema.optional(Schema.Boolean),
+  subIssueNoun: Schema.optional(TrimmedNonEmptyString),
   editComment: Schema.optional(Schema.Boolean),
   subIssues: Schema.optional(Schema.Boolean),
   createSubIssue: Schema.optional(Schema.Boolean),
@@ -364,6 +502,7 @@ export type IssueCapabilities = typeof IssueCapabilities.Type;
  * tracker, which says why, rather than from a missing control.
  */
 export const IssueViewerPermissions = Schema.Struct({
+  updateParent: Schema.optional(Schema.Boolean),
   setState: Schema.Boolean,
   comment: Schema.Boolean,
   edit: Schema.Boolean,
@@ -373,6 +512,15 @@ export const IssueViewerPermissions = Schema.Struct({
 export type IssueViewerPermissions = typeof IssueViewerPermissions.Type;
 
 export const IssueDetail = Schema.Struct({
+  richBody: Schema.optional(IssueRichBody),
+  externalLinks: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        title: TrimmedNonEmptyString,
+        url: TrimmedNonEmptyString,
+      }),
+    ).check(Schema.isMaxLength(100)),
+  ),
   connectionId: Schema.optional(IssueTrackerConnectionId),
   states: Schema.optional(Schema.Array(IssueState)),
   ...IssueSummary.fields,
@@ -390,7 +538,7 @@ export const IssueDetail = Schema.Struct({
   reactionsTruncated: Schema.optional(Schema.Boolean),
   comments: Schema.Array(IssueComment),
   /** Where older comments carry on; null once the conversation is whole. */
-  commentsCursor: Schema.NullOr(TrimmedNonEmptyString),
+  commentsCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
   events: Schema.Array(IssueEvent),
   linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
   historyTruncated: Schema.optional(Schema.Boolean),
@@ -400,22 +548,26 @@ export type IssueDetail = typeof IssueDetail.Type;
 /** Older comments, one page past a cursor the detail or a previous page handed over. */
 export const IssueCommentsPageInput = Schema.Struct({
   ...IssueRef.fields,
-  cursor: TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
+  cursor: TrimmedNonEmptyString.check(Schema.isMaxLength(8192)),
   viewer: Schema.optional(TrimmedNonEmptyString),
 });
 export type IssueCommentsPageInput = typeof IssueCommentsPageInput.Type;
 
 export const IssueCommentsPage = Schema.Struct({
   comments: Schema.Array(IssueComment),
-  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
 });
 export type IssueCommentsPage = typeof IssueCommentsPage.Type;
+
+export function issueHostKey(host: string): string {
+  return host.trim().replace(/^[^/]+/u, (authority) => authority.toLowerCase());
+}
 
 export function issueTrackerHostKey(source: {
   readonly tracker: string;
   readonly host: string;
 }): string {
-  return `${source.tracker} ${source.host.toLowerCase()}`;
+  return `${source.tracker} ${issueHostKey(source.host)}`;
 }
 
 export function issueListCursorKey(source: {
@@ -432,7 +584,7 @@ export function issueListCursorKey(source: {
 
 export const IssueListCursors = Schema.Record(
   TrimmedNonEmptyString,
-  TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
+  TrimmedNonEmptyString.check(Schema.isMaxLength(8192)),
 );
 export type IssueListCursors = typeof IssueListCursors.Type;
 
@@ -576,6 +728,7 @@ const IssueBody = Schema.String.check(Schema.isMaxLength(65_536));
 const CommentBody = Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536));
 
 export const IssueCreateInput = Schema.Struct({
+  fieldValues: Schema.optional(IssueFieldValues),
   ...IssueScopeRef.fields,
   title: IssueTitle,
   /** May be empty: an issue with a title and nothing else is a legitimate one. */
@@ -609,6 +762,7 @@ export type IssueCommentInput = typeof IssueCommentInput.Type;
  * The service refuses a request with nothing present.
  */
 export const IssueUpdateInput = Schema.Struct({
+  richBody: Schema.optional(IssueRichBody),
   ...IssueRef.fields,
   title: Schema.optional(IssueTitle),
   body: Schema.optional(IssueBody),
@@ -618,6 +772,8 @@ export const IssueUpdateInput = Schema.Struct({
 export type IssueUpdateInput = typeof IssueUpdateInput.Type;
 
 export const IssueSetStateInput = Schema.Struct({
+  transitionId: Schema.optional(TrimmedNonEmptyString),
+  fieldValues: Schema.optional(IssueFieldValues),
   ...IssueRef.fields,
   state: TrimmedNonEmptyString,
   /** Only meaningful for a closing state on a tracker that declared `closeReasons`. */
@@ -725,6 +881,7 @@ export type IssueAssigneeCandidate = typeof IssueAssigneeCandidate.Type;
 
 /** The labels and people a scope offers, read when a picker opens rather than with every issue. */
 export const IssueCandidates = Schema.Struct({
+  fields: Schema.optional(Schema.Array(IssueInputField).check(Schema.isMaxLength(100))),
   states: Schema.optional(Schema.Array(IssueState)),
   labels: Schema.Array(IssueLabelCandidate),
   assignees: Schema.Array(IssueAssigneeCandidate),
@@ -749,6 +906,8 @@ export const IssueScopePageRef = Schema.Struct({
 });
 export type IssueScopePageRef = typeof IssueScopePageRef.Type;
 export const IssueRelation = Schema.Struct({
+  itemType: Schema.optional(TrimmedNonEmptyString),
+  externalOnly: Schema.optional(Schema.Boolean),
   scope: TrimmedNonEmptyString,
   key: TrimmedNonEmptyString,
   displayKey: TrimmedNonEmptyString,
@@ -757,15 +916,42 @@ export const IssueRelation = Schema.Struct({
   state: IssueState,
 });
 export type IssueRelation = typeof IssueRelation.Type;
+export const IssueDependencyDirection = Schema.Literals(["blocks", "blocked-by"]);
+export type IssueDependencyDirection = typeof IssueDependencyDirection.Type;
+export const IssueDependency = Schema.Struct({
+  ...IssueRelation.fields,
+  kind: Schema.Literals(["issue", "pull-request"]),
+});
+export type IssueDependency = typeof IssueDependency.Type;
+export const IssueDependenciesPage = Schema.Struct({
+  items: Schema.Array(IssueDependency).check(Schema.isMaxLength(200)),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
+  truncated: Schema.optional(Schema.Boolean),
+});
+export type IssueDependenciesPage = typeof IssueDependenciesPage.Type;
+export const IssueDependenciesInput = Schema.Struct({
+  ...IssuePageRef.fields,
+  direction: IssueDependencyDirection,
+});
+export type IssueDependenciesInput = typeof IssueDependenciesInput.Type;
+export const IssueSetDependencyInput = Schema.Struct({
+  ...IssueRef.fields,
+  direction: IssueDependencyDirection,
+  targetScope: TrimmedNonEmptyString,
+  targetKey: TrimmedNonEmptyString,
+  linked: Schema.Boolean,
+});
+export type IssueSetDependencyInput = typeof IssueSetDependencyInput.Type;
+
 export const IssueHistoryPage = Schema.Struct({
   items: Schema.Array(IssueEvent),
-  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
   truncated: Schema.optional(Schema.Boolean),
 });
 export type IssueHistoryPage = typeof IssueHistoryPage.Type;
 export const IssueLinkedPullRequestsPage = Schema.Struct({
   items: Schema.Array(IssueLinkedPullRequest),
-  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
   truncated: Schema.optional(Schema.Boolean),
 });
 export type IssueLinkedPullRequestsPage = typeof IssueLinkedPullRequestsPage.Type;
@@ -776,13 +962,13 @@ export const IssueLabelCandidatesPage = Schema.Struct({
       description: Schema.optional(Schema.NullOr(Schema.String)),
     }),
   ),
-  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
   truncated: Schema.optional(Schema.Boolean),
 });
 export type IssueLabelCandidatesPage = typeof IssueLabelCandidatesPage.Type;
 export const IssueAssigneeCandidatesPage = Schema.Struct({
   items: Schema.Array(IssueActor),
-  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
   truncated: Schema.optional(Schema.Boolean),
 });
 export type IssueAssigneeCandidatesPage = typeof IssueAssigneeCandidatesPage.Type;
@@ -790,12 +976,13 @@ export const IssueHierarchyPage = Schema.Struct({
   parent: Schema.NullOr(IssueRelation),
   children: Schema.Struct({
     items: Schema.Array(IssueRelation),
-    nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+    nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
     truncated: Schema.optional(Schema.Boolean),
   }),
 });
 export type IssueHierarchyPage = typeof IssueHierarchyPage.Type;
 export const IssueEditCommentInput = Schema.Struct({
+  richBody: Schema.optional(IssueRichBody),
   ...IssueRef.fields,
   commentId: TrimmedNonEmptyString,
   body: CommentBody,
@@ -924,7 +1111,7 @@ export function threadIssueKeyOf(
     key.tracker === "linear" || key.tracker === "jira"
       ? key.key.trim().toUpperCase()
       : key.key.trim();
-  const identity = `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${issueScopeKeyOf(key)}\u0000${nativeKey}`;
+  const identity = `${key.tracker}\u0000${issueHostKey(key.host)}\u0000${issueScopeKeyOf(key)}\u0000${nativeKey}`;
   return key.connectionId === undefined
     ? identity
     : `@${encodeURIComponent(key.connectionId)}\u0000${identity}`;
@@ -969,6 +1156,7 @@ export const StandaloneIssueTrackerDescriptor = Schema.Struct({
           key: TrimmedNonEmptyString,
           label: TrimmedNonEmptyString,
           secret: Schema.Boolean,
+          optional: Schema.optional(Schema.Boolean),
         }),
       ).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
     ),

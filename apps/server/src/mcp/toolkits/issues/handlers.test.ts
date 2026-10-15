@@ -284,6 +284,9 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
         ),
       history: (input) =>
         record("history", input, { items: [], nextCursor: "native-history-next" }),
+      dependencies: (input) =>
+        record("dependencies", input, { items: [], nextCursor: "dependency-next" }),
+      setDependency: (input) => record("setDependency", input, undefined),
       hierarchy: (input) =>
         record("hierarchy", input, {
           parent: null,
@@ -412,8 +415,12 @@ describe("issue toolkit handlers", () => {
             labels: [],
             assignees: [],
             parentKey: "ENG-8",
+            direction: "blocks",
+            targetScope: "ENG",
+            targetKey: "ENG-9",
+            linked: true,
           };
-          expect(Object.keys(IssuesToolkit.tools)).toHaveLength(23);
+          expect(Object.keys(IssuesToolkit.tools)).toHaveLength(25);
           for (const name of Object.keys(IssuesToolkit.tools)) {
             if (name === "list_thread_issues") continue;
             const encoded = encodeIssueTools[name]!(accountInput);
@@ -1037,9 +1044,15 @@ describe("issue toolkit handlers", () => {
               } else {
                 const path = new URL(request.url).pathname.replace(/^\/rest\/api\/3/, "");
                 nativeReads.push(path);
-                expect([`/issue/${input.key}`, "/myself", "/mypermissions"]).toContain(path);
-                response =
-                  path === "/myself"
+                expect([
+                  `/issue/${input.key}`,
+                  `/issue/${input.key}/remotelink`,
+                  "/myself",
+                  "/mypermissions",
+                ]).toContain(path);
+                response = path.endsWith("/remotelink")
+                  ? []
+                  : path === "/myself"
                     ? { accountId: "viewer", displayName: "Viewer" }
                     : path === "/mypermissions"
                       ? { permissions: {} }
@@ -1183,7 +1196,9 @@ describe("issue toolkit handlers", () => {
       expect(reads).toBe(1);
       expect(dispatches).toBe(1);
       expect(nativeReads.sort()).toEqual(
-        linear ? ["T3Issue", "T3Viewer"] : [`/issue/${input.key}`, "/mypermissions", "/myself"],
+        linear
+          ? ["T3Issue", "T3Viewer"]
+          : [`/issue/${input.key}`, `/issue/${input.key}/remotelink`, "/mypermissions", "/myself"],
       );
     }),
   );
@@ -2172,5 +2187,146 @@ it.effect("keeps an explicit foreign scope when the host defaults to the selecte
         },
       },
     ]);
+  }),
+);
+
+it.effect("keeps native fields, rich bodies and dependency actions on the selected source", () =>
+  Effect.gen(function* () {
+    const source = { ...standaloneSource, connectionId: "ExactB" };
+    const richBody = {
+      format: "adf" as const,
+      document: '{"type":"doc","version":1,"content":[]}',
+    };
+    const fieldValues = { custom: "value" };
+    const harness = yield* makeHarness([], { sources: [standaloneSource, source] });
+    const input = { projectId: PROJECT_ID, ...source, key: "ENG-7" };
+    yield* harness.call("read_issue_candidates", { ...input, issueType: "Bug" });
+    yield* harness.call("create_issue", { ...input, title: "New", fieldValues });
+    yield* harness.call("set_issue_state", {
+      ...input,
+      state: "3",
+      transitionId: "31",
+      fieldValues,
+    });
+    yield* harness.call("update_issue", { ...input, richBody });
+    yield* harness.call("edit_issue_comment", {
+      ...input,
+      commentId: "c",
+      body: "fallback",
+      richBody,
+    });
+    expect(
+      (yield* harness.call("read_issue_dependencies", {
+        ...input,
+        direction: "blocks",
+        cursor: "native",
+        limit: 7,
+      })).nextCursor,
+    ).toBe("dependency-next");
+    yield* harness.call("set_issue_dependency", {
+      ...input,
+      direction: "blocked-by",
+      targetScope: "OPS",
+      targetKey: "OPS-1",
+      linked: false,
+    });
+    expect(yield* Ref.get(harness.calls)).toMatchObject([
+      { operation: "candidates", input: { connectionId: "ExactB", issueType: "Bug" } },
+      { operation: "create", input: { connectionId: "ExactB", fieldValues } },
+      {
+        operation: "setState",
+        input: { connectionId: "ExactB", state: "3", transitionId: "31", fieldValues },
+      },
+      { operation: "update", input: { connectionId: "ExactB", richBody } },
+      { operation: "editComment", input: { connectionId: "ExactB", richBody } },
+      {
+        operation: "dependencies",
+        input: { connectionId: "ExactB", direction: "blocks", cursor: "native", limit: 7 },
+      },
+      {
+        operation: "setDependency",
+        input: {
+          connectionId: "ExactB",
+          direction: "blocked-by",
+          targetScope: "OPS",
+          targetKey: "OPS-1",
+          linked: false,
+        },
+      },
+    ]);
+    const before = yield* Ref.get(harness.calls);
+    yield* harness
+      .call(
+        "set_issue_dependency",
+        { ...input, direction: "blocks", targetScope: "OPS", targetKey: "OPS-1", linked: true },
+        ["issues"],
+        true,
+      )
+      .pipe(Effect.flip);
+    expect(yield* Ref.get(harness.calls)).toEqual(before);
+  }),
+);
+
+const decodeLegacyIssueWrite = Schema.decodeUnknownSync(
+  Schema.Struct({
+    title: Schema.optional(Schema.String),
+    state: Schema.optional(Schema.String),
+    body: Schema.optional(Schema.String),
+  }),
+);
+
+it.each([
+  ["create_issue", { title: "New", fieldValues: { custom: "value" } }],
+  ["set_issue_state", { key: "ENG-7", state: "3", transitionId: "31" }],
+  ["update_issue", { key: "ENG-7", richBody: { format: "adf", document: "{}" } }],
+  [
+    "edit_issue_comment",
+    { key: "ENG-7", commentId: "c", body: "fallback", richBody: { format: "adf", document: "{}" } },
+  ],
+] as const)("protects advanced %s tool requests from old-server partial writes", (tool, input) => {
+  const codec = IssuesToolkit.tools[tool].parametersSchema;
+  for (const selection of [{}, { connectionId: "ExactB" }]) {
+    const selected = { projectId: PROJECT_ID, ...input, ...selection };
+    const encoded = Schema.encodeUnknownSync(codec)(selected);
+    expect(Schema.decodeUnknownSync(codec)(encoded)).toEqual(selected);
+    expect(() => Schema.decodeUnknownSync(codec)(selected)).toThrow();
+    expect(() => decodeLegacyIssueWrite(encoded)).toThrow();
+  }
+});
+
+it.effect("preserves native rich bodies, item types and external links through issue tools", () =>
+  Effect.gen(function* () {
+    const richBody = {
+      format: "adf" as const,
+      document: '{"type":"doc","version":1,"content":[]}',
+    };
+    const native = {
+      ...detail,
+      itemType: "Task",
+      richBody,
+      externalLinks: [{ title: "Design", url: "https://design.example/item" }],
+      comments: [
+        {
+          id: "c",
+          author: null,
+          body: "fallback",
+          richBody,
+          url: null,
+          createdAt: detail.createdAt,
+        },
+      ],
+    };
+    const harness = yield* makeHarness([], { detail: native });
+    const result = yield* harness.call("read_issue", {
+      projectId: PROJECT_ID,
+      ...gitHostSource,
+      key: "7",
+    });
+    expect(result).toMatchObject({
+      richBody,
+      itemType: "Task",
+      externalLinks: native.externalLinks,
+      comments: [{ richBody }],
+    });
   }),
 );

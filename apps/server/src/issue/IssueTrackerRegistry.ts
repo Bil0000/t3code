@@ -15,7 +15,7 @@ import * as IssueTrackerHostLive from "./IssueTrackerHostLive.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 const sharedHostLimits = new Set(
-  ["gitlab", "azure-devops", "forgejo"].map((kind) => IssueTrackerKind.make(kind)),
+  ["gitlab", "azure-devops", "forgejo", "gitcafe"].map((kind) => IssueTrackerKind.make(kind)),
 );
 
 function withRateLimitBackoff(
@@ -73,6 +73,12 @@ function withRateLimitBackoff(
     ...(api.getHierarchy === undefined
       ? {}
       : { getHierarchy: wrap("getHierarchy", api.getHierarchy) }),
+    ...(api.getDependencies === undefined
+      ? {}
+      : { getDependencies: wrap("getDependencies", api.getDependencies) }),
+    ...(api.setDependency === undefined
+      ? {}
+      : { setDependency: wrap("setDependency", api.setDependency, true) }),
     ...(api.listLabelCandidates === undefined
       ? {}
       : { listLabelCandidates: wrap("listLabelCandidates", api.listLabelCandidates) }),

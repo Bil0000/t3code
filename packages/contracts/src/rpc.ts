@@ -163,6 +163,9 @@ import {
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import {
   IssueCandidates,
+  IssueDependenciesInput,
+  IssueDependenciesPage,
+  IssueSetDependencyInput,
   IssueCandidatesInput,
   IssueAssigneeCandidatesPage,
   IssueEditCommentInput,
@@ -616,6 +619,8 @@ export const WS_METHODS = {
   issuesHistory: "issues.history",
   issuesLinkedPullRequests: "issues.linkedPullRequests",
   issuesHierarchy: "issues.hierarchy",
+  issuesDependencies: "issues.dependencies",
+  issuesSetDependency: "issues.setDependency",
   issuesLabelCandidates: "issues.labelCandidates",
   issuesAssigneeCandidates: "issues.assigneeCandidates",
   issuesEditComment: "issues.editComment",
@@ -1271,7 +1276,7 @@ const WsIssuesCandidatesRpc = Rpc.make(WS_METHODS.issuesCandidates, {
 });
 
 const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
-  payload: issueAccountRequest(IssueCreateInput),
+  payload: issueAccountRequest(IssueCreateInput, "projectId", "title"),
   success: IssueCreateResult,
   error: IssueRpcError,
 });
@@ -1283,13 +1288,13 @@ const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
 });
 
 const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
-  payload: issueAccountRequest(IssueUpdateInput),
+  payload: issueAccountRequest(IssueUpdateInput, "projectId", "title"),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesSetStateRpc = Rpc.make(WS_METHODS.issuesSetState, {
-  payload: issueAccountRequest(IssueSetStateInput),
+  payload: issueAccountRequest(IssueSetStateInput, "projectId", "state"),
   success: Schema.Void,
   error: IssueRpcError,
 });
@@ -1312,6 +1317,18 @@ const WsIssuesLinkedPullRequestsRpc = Rpc.make(WS_METHODS.issuesLinkedPullReques
   error: IssueRpcError,
 });
 
+const WsIssuesDependenciesRpc = Rpc.make(WS_METHODS.issuesDependencies, {
+  payload: issueAccountRequest(IssueDependenciesInput),
+  success: IssueDependenciesPage,
+  error: IssueRpcError,
+});
+
+const WsIssuesSetDependencyRpc = Rpc.make(WS_METHODS.issuesSetDependency, {
+  payload: issueAccountRequest(IssueSetDependencyInput),
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
 const WsIssuesHierarchyRpc = Rpc.make(WS_METHODS.issuesHierarchy, {
   payload: issueAccountRequest(IssuePageRef),
   success: IssueHierarchyPage,
@@ -1331,7 +1348,7 @@ const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidat
 });
 
 const WsIssuesEditCommentRpc = Rpc.make(WS_METHODS.issuesEditComment, {
-  payload: issueAccountRequest(IssueEditCommentInput),
+  payload: issueAccountRequest(IssueEditCommentInput, "projectId", "body"),
   success: Schema.Void,
   error: IssueRpcError,
 });
@@ -2118,6 +2135,8 @@ export const WsIssuesRpcGroup = RpcGroup.make(
   WsIssuesHistoryRpc,
   WsIssuesLinkedPullRequestsRpc,
   WsIssuesHierarchyRpc,
+  WsIssuesDependenciesRpc,
+  WsIssuesSetDependencyRpc,
   WsIssuesLabelCandidatesRpc,
   WsIssuesAssigneeCandidatesRpc,
   WsIssuesEditCommentRpc,

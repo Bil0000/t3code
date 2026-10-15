@@ -375,3 +375,18 @@ it.effect(
       });
     }),
 );
+
+it("keeps Jira mount case distinct when selecting cursors and filtering sources", () => {
+  const source = {
+    ...entry("ExactB"),
+    tracker: IssueTrackerKind.make("jira"),
+    host: "jira.example:8443/Jira",
+  };
+  const other = { ...source, host: "jira.example:8443/jira" };
+  const cursors = { [issueListCursorKey(source)]: "upper", [issueListCursorKey(other)]: "lower" };
+  expect(issueListCursorsOn(cursors, "JIRA.EXAMPLE:8443/Jira", "jira", "ExactB")).toEqual({
+    [issueListCursorKey(source)]: "upper",
+  });
+  expect(issueSourceMatchesList({ state: "all", host: source.host }, other)).toBe(false);
+  expect(issueEntryKey(source)).not.toBe(issueEntryKey(other));
+});

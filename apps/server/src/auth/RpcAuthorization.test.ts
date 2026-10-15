@@ -137,6 +137,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.issuesCandidates,
       WS_METHODS.issuesHistory,
       WS_METHODS.issuesHierarchy,
+      WS_METHODS.issuesDependencies,
       WS_METHODS.issuesLinkedPullRequests,
       WS_METHODS.issuesLabelCandidates,
       WS_METHODS.issuesAssigneeCandidates,
@@ -151,6 +152,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.issuesReact,
       WS_METHODS.issuesEditComment,
       WS_METHODS.issuesSetParent,
+      WS_METHODS.issuesSetDependency,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthSourceControlWriteScope);
     }

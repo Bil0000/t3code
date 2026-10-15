@@ -10,6 +10,11 @@ import * as Schema from "effect/Schema";
 import type * as Effect from "effect/Effect";
 import type {
   IssueCandidates,
+  IssueFieldValues,
+  IssueRichBody,
+  IssueDetail,
+  IssueDependencyDirection,
+  IssueDependenciesPage,
   IssueState,
   IssueWorkflowCategory,
   IssueListSort,
@@ -93,8 +98,11 @@ export interface TrackerIssuePage {
 }
 
 export interface TrackerIssueDetail extends TrackerIssueSummary {
+  readonly capabilities?: IssueCapabilities;
   readonly states?: ReadonlyArray<IssueState>;
   readonly body: string;
+  readonly richBody?: IssueRichBody;
+  readonly externalLinks?: IssueDetail["externalLinks"];
   readonly bodyEditable?: boolean | undefined;
   readonly viewer: string | null;
   readonly viewerPermissions: IssueViewerPermissions;
@@ -107,6 +115,17 @@ export interface TrackerIssueDetail extends TrackerIssueSummary {
 }
 
 export interface IssueTrackerApi {
+  readonly getDependencies?: (
+    input: IssueTarget & IssuePageInput & { readonly direction: IssueDependencyDirection },
+  ) => Effect.Effect<IssueDependenciesPage, IssueTrackerError>;
+  readonly setDependency?: (
+    input: IssueTarget & {
+      readonly direction: IssueDependencyDirection;
+      readonly targetScope: string;
+      readonly targetKey: string;
+      readonly linked: boolean;
+    },
+  ) => Effect.Effect<void, IssueTrackerError>;
   readonly getHistory?: (
     input: IssueTarget & IssuePageInput,
   ) => Effect.Effect<IssueHistoryPage, IssueTrackerError>;
@@ -123,7 +142,11 @@ export interface IssueTrackerApi {
     input: IssueScopeTarget & IssuePageInput,
   ) => Effect.Effect<IssueAssigneeCandidatesPage, IssueTrackerError>;
   readonly editComment?: (
-    input: IssueTarget & { readonly commentId: string; readonly body: string },
+    input: IssueTarget & {
+      readonly commentId: string;
+      readonly body: string;
+      readonly richBody?: IssueRichBody;
+    },
   ) => Effect.Effect<void, IssueTrackerError>;
   readonly setParent?: (
     input: IssueTarget & { readonly parentKey: string | null },
@@ -177,6 +200,7 @@ export interface IssueTrackerApi {
       readonly body: string;
       readonly labels: ReadonlyArray<string>;
       readonly assignees: ReadonlyArray<string>;
+      readonly fieldValues?: IssueFieldValues;
       readonly issueType?: string;
       readonly parentKey?: string;
       readonly templateKey?: string;
@@ -196,6 +220,7 @@ export interface IssueTrackerApi {
     input: IssueTarget & {
       readonly title?: string | undefined;
       readonly body?: string | undefined;
+      readonly richBody?: IssueRichBody | undefined;
       readonly labels?: ReadonlyArray<string> | undefined;
       readonly assignees?: ReadonlyArray<string> | undefined;
     },
@@ -204,6 +229,8 @@ export interface IssueTrackerApi {
   readonly setState?: (
     input: IssueTarget & {
       readonly state: string;
+      readonly transitionId?: string;
+      readonly fieldValues?: IssueFieldValues;
       readonly closeReason?: string | undefined;
     },
   ) => Effect.Effect<void, IssueTrackerError>;
@@ -226,7 +253,10 @@ export interface IssueTrackerApi {
 
   /** Only called when `capabilities.labels` or `capabilities.assignees` is true. */
   readonly listCandidates?: (
-    input: IssueScopeTarget & { readonly key?: string | undefined },
+    input: IssueScopeTarget & {
+      readonly key?: string | undefined;
+      readonly issueType?: string | undefined;
+    },
   ) => Effect.Effect<IssueCandidates, IssueTrackerError>;
 }
 

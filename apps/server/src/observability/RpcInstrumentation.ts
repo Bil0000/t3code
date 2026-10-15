@@ -141,6 +141,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.issuesReact]: "issues",
   [WS_METHODS.issuesHistory]: "issues",
   [WS_METHODS.issuesHierarchy]: "issues",
+  [WS_METHODS.issuesDependencies]: "issues",
+  [WS_METHODS.issuesSetDependency]: "issues",
   [WS_METHODS.issuesLinkedPullRequests]: "issues",
   [WS_METHODS.issuesLabelCandidates]: "issues",
   [WS_METHODS.issuesAssigneeCandidates]: "issues",

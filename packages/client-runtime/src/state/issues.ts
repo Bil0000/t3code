@@ -1,6 +1,7 @@
 import {
   WS_METHODS,
   issueListCursorKey,
+  issueHostKey,
   issueScopeKeyOf,
   issueTrackerHostKey,
   threadIssueKeyOf,
@@ -85,7 +86,9 @@ export function issueSourceMatchesList(
   return (
     (input.projectId === undefined || input.projectId === source.projectId) &&
     (input.connectionId === undefined || input.connectionId === source.connectionId) &&
-    (input.host === undefined || input.host.toLowerCase() === source.host?.toLowerCase())
+    (input.host === undefined ||
+      issueHostKey(input.host) ===
+        (source.host === undefined ? undefined : issueHostKey(source.host)))
   );
 }
 
@@ -121,15 +124,17 @@ export function issueListCursorsOn(
   tracker?: string,
   connectionId?: string,
 ): IssueListCursors {
-  const prefix = `${host.toLowerCase()} `;
+  const prefix = `${issueHostKey(host)} `;
   const account = connectionId === undefined ? "" : `@${encodeURIComponent(connectionId)} `;
   return Object.fromEntries(
     Object.entries(cursors).filter(([key]) => {
       if (account === "" ? key.startsWith("@") : !key.startsWith(account)) return false;
-      const normalized = key.slice(account.length).toLowerCase();
-      if (normalized.startsWith(prefix)) return true;
-      const [kind, ...rest] = normalized.split(" ");
-      return (tracker === undefined || kind === tracker) && rest.join(" ").startsWith(prefix);
+      const [kind = "", cursorHost = ""] = key.slice(account.length).split(" ");
+      if (`${issueHostKey(kind)} ` === prefix) return true;
+      return (
+        (tracker === undefined || kind.toLowerCase() === tracker) &&
+        `${issueHostKey(cursorHost)} ` === prefix
+      );
     }),
   );
 }
@@ -168,6 +173,12 @@ function cursorKeyOf(key: string, sources: ReadonlyArray<IssueListSource>): stri
   const tokens = key.split(" ");
   const account = key.startsWith("@") ? `${tokens.shift()} ` : "";
   const [prefix = "", ...parts] = tokens;
+  if (prefix === "jira" && parts.length >= 2) {
+    const host = parts.shift()!;
+    return `${account}jira ${issueHostKey(host)} ${parts.join(" ").toLowerCase()}`;
+  }
+  if (prefix.includes("/"))
+    return `${account}${issueHostKey(prefix)} ${parts.join(" ").toLowerCase()}`;
   if (prefix === "forgejo" && parts.length >= 2) {
     const host = parts.shift()!;
     return `${account}forgejo ${host.toLowerCase()} ${issueScopeKeyOf({ tracker: prefix, scope: parts.join(" ") })}`;
@@ -179,7 +190,7 @@ function cursorKeyOf(key: string, sources: ReadonlyArray<IssueListSource>): stri
       source.tracker === "forgejo" &&
       (source.connectionId === undefined ? "" : `@${encodeURIComponent(source.connectionId)} `) ===
         account &&
-      source.host.toLowerCase() === host &&
+      issueHostKey(source.host) === host &&
       issueScopeKeyOf({ tracker: source.tracker, scope }) === issueScopeKeyOf(source),
   );
   return `${account}${native ? `${host} ${issueScopeKeyOf({ tracker: "forgejo", scope })}` : tokens.join(" ").toLowerCase()}`;
@@ -188,7 +199,7 @@ function cursorKeyOf(key: string, sources: ReadonlyArray<IssueListSource>): stri
 const scopeOf = (source: IssueListSource, cursors: ReadonlySet<string>) => {
   const qualified = sourceKey(source);
   if (source.connectionId !== undefined) return qualified;
-  const legacy = `${source.host.toLowerCase()} ${issueScopeKeyOf(source)}`;
+  const legacy = `${issueHostKey(source.host)} ${issueScopeKeyOf(source)}`;
   return cursors.has(qualified) || !cursors.has(legacy) ? qualified : legacy;
 };
 
@@ -196,7 +207,7 @@ const heldSources = (held: HeldIssueList) => held.sources ?? held.entries;
 const matchesSource = (error: IssueListPage["errors"][number], source: IssueListSource) =>
   error.projectId === source.projectId &&
   error.connectionId === source.connectionId &&
-  (error.host === undefined || error.host.toLowerCase() === source.host.toLowerCase()) &&
+  (error.host === undefined || issueHostKey(error.host) === issueHostKey(source.host)) &&
   (error.tracker === undefined || error.tracker === source.tracker);
 
 function failedScopes(
@@ -238,7 +249,7 @@ function issueListViewerChanges(
       pool.some(
         (each) =>
           each.tracker === source.tracker &&
-          each.host.toLowerCase() === source.host.toLowerCase() &&
+          issueHostKey(each.host) === issueHostKey(source.host) &&
           each.connectionId !== source.connectionId,
       )
     )
@@ -249,7 +260,7 @@ function issueListViewerChanges(
         pool.some(
           (each) =>
             each.tracker === source.tracker &&
-            each.host.toLowerCase() === source.host.toLowerCase() &&
+            issueHostKey(each.host) === issueHostKey(source.host) &&
             each.scope !== undefined &&
             issueScopeKeyOf({ tracker: each.tracker, scope: each.scope })
               .split("/")
@@ -261,11 +272,11 @@ function issueListViewerChanges(
     }
     const qualified = viewers[issueTrackerHostKey(source)];
     if (qualified !== undefined) return qualified;
-    const host = source.host.toLowerCase();
+    const host = issueHostKey(source.host);
     const legacy = viewers[host];
     if (
       legacy !== undefined &&
-      pool.some((each) => each.host.toLowerCase() === host && each.tracker !== source.tracker)
+      pool.some((each) => issueHostKey(each.host) === host && each.tracker !== source.tracker)
     )
       return undefined;
     return legacy ?? null;
@@ -530,7 +541,7 @@ export function issueScopeKey(
   return JSON.stringify([
     environmentId,
     scope.tracker,
-    scope.host.toLowerCase(),
+    issueHostKey(scope.host),
     issueScopeKeyOf(scope),
     ...(scope.connectionId === undefined ? [] : [scope.connectionId]),
   ]);
@@ -639,7 +650,7 @@ export function createIssueEnvironmentAtoms<R, E>(
       JSON.stringify([
         environmentId,
         input.tracker,
-        input.host?.toLowerCase(),
+        input.host === undefined ? undefined : issueHostKey(input.host),
         ...(input.connectionId === undefined ? [] : [input.connectionId]),
       ]),
     );
@@ -713,6 +724,34 @@ export function createIssueEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
     }),
     hierarchy,
+    dependencies: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:dependencies",
+      tag: WS_METHODS.issuesDependencies,
+      staleTimeMs: 30_000,
+      refreshTrigger: (target) => historyRefresh(target),
+    }),
+    setDependency: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:set-dependency",
+      tag: WS_METHODS.issuesSetDependency,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+      onSuccess: (target, registry) =>
+        refreshDetailAndHistory(target, registry).pipe(
+          Effect.andThen(
+            refreshHistory(
+              {
+                environmentId: target.environmentId,
+                input: {
+                  ...detailRef(target.input),
+                  scope: target.input.targetScope,
+                  key: target.input.targetKey,
+                },
+              },
+              registry,
+            ),
+          ),
+        ),
+    }),
     labelCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:label-candidates",
       tag: WS_METHODS.issuesLabelCandidates,

@@ -335,30 +335,32 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
   }),
 );
 
-it.effect.each([WS_METHODS.issuesEditComment, WS_METHODS.issuesSetParent])(
-  "requires the destination source-control grant for %s",
-  (method) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const command = createCommandPermissions(runtime, method);
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(true),
-            scopes: [AuthSourceControlWriteScope],
-            permissions: [AuthSourceControlWriteScope],
-          }),
-        );
-        registry.set(sessions(other), AsyncResult.success(grant(false)));
-        expect(registry.get(command.permissionAtom(env))).toBe(true);
-        yield* command.authorize(registry, env);
-        expect(registry.get(command.permissionAtom(other))).toBe(false);
-        expect((yield* command.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
-          "EnvironmentAuthorizationError",
-        );
-      }),
-    ),
+it.effect.each([
+  WS_METHODS.issuesEditComment,
+  WS_METHODS.issuesSetParent,
+  WS_METHODS.issuesSetDependency,
+])("requires the destination source-control grant for %s", (method) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const command = createCommandPermissions(runtime, method);
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(true),
+          scopes: [AuthSourceControlWriteScope],
+          permissions: [AuthSourceControlWriteScope],
+        }),
+      );
+      registry.set(sessions(other), AsyncResult.success(grant(false)));
+      expect(registry.get(command.permissionAtom(env))).toBe(true);
+      yield* command.authorize(registry, env);
+      expect(registry.get(command.permissionAtom(other))).toBe(false);
+      expect((yield* command.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+        "EnvironmentAuthorizationError",
+      );
+    }),
+  ),
 );
 
 it.effect("requires the destination operate grant to refresh linked issue snapshots", () =>

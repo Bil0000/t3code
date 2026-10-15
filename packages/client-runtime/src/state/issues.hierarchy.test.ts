@@ -22,9 +22,13 @@ import * as Session from "./session.ts";
 import { createIssueEnvironmentAtoms } from "./issues.ts";
 import { executeAtomQuery } from "./runtime.ts";
 
-it.effect.each(["create", "setParent"] as const)(
-  "refreshes mounted parent and child lists after %s, without reading other hosts",
-  (operation) =>
+it.effect.each(
+  (["create", "setParent", "setDependency"] as const).flatMap((operation) =>
+    [undefined, "ExactB"].map((connectionId) => ({ operation, connectionId })),
+  ),
+)(
+  "refreshes mounted relation pages after $operation for $connectionId only",
+  ({ operation, connectionId }) =>
     Effect.gen(function* () {
       const supervisor = {
         state: yield* SubscriptionRef.make({ phase: "connected" }),
@@ -64,7 +68,7 @@ it.effect.each(["create", "setParent"] as const)(
         read.mockImplementation(((_tag: string, input: { host: string; key: string }) =>
           Effect.sync(() => {
             reads.push(`${input.host}:${input.key}`);
-            if (written && reads.length === 5) refreshed.resolve();
+            if (written && reads.length === 6) refreshed.resolve();
             return { parent: null, children: { items: [], nextCursor: null } };
           })) as unknown as Parameters<typeof read.mockImplementation>[0]);
         const write = vi.spyOn(RpcClient, "requestGuarded");
@@ -76,27 +80,36 @@ it.effect.each(["create", "setParent"] as const)(
         const atoms = createIssueEnvironmentAtoms(runtime);
         const registry = AtomRegistry.make();
         const environmentId = "environment" as EnvironmentId;
-        const reference = {
+        const defaultReference = {
           projectId: "project" as ProjectId,
           tracker: "github" as IssueTrackerKind,
           host: "github.com",
           scope: "org/repo",
           key: "1",
         };
+        const reference = {
+          ...defaultReference,
+          ...(connectionId === undefined ? {} : { connectionId }),
+        };
         const targets = [
           reference,
           { ...reference, key: "2" },
           { ...reference, host: "other.example", key: "3" },
+          {
+            ...defaultReference,
+            key: "3",
+            ...(connectionId === undefined ? { connectionId: "ExactB" } : {}),
+          },
         ];
-        const releases = targets.map((input) =>
-          registry.mount(atoms.hierarchy({ environmentId, input })),
-        );
+        const query = (
+          input: typeof reference,
+        ): Atom.Atom<AsyncResult.AsyncResult<unknown, unknown>> =>
+          operation === "setDependency"
+            ? atoms.dependencies({ environmentId, input: { ...input, direction: "blocks" } })
+            : atoms.hierarchy({ environmentId, input });
+        const releases = targets.map((input) => registry.mount(query(input)));
         try {
-          await Promise.all(
-            targets.map((input) =>
-              executeAtomQuery(registry, atoms.hierarchy({ environmentId, input })),
-            ),
-          );
+          await Promise.all(targets.map((input) => executeAtomQuery(registry, query(input))));
           const result =
             operation === "create"
               ? await atoms.create.run(registry, {
@@ -110,10 +123,21 @@ it.effect.each(["create", "setParent"] as const)(
                     assignees: [],
                   },
                 })
-              : await atoms.setParent.run(registry, {
-                  environmentId,
-                  input: { ...reference, parentKey: "2" },
-                });
+              : operation === "setDependency"
+                ? await atoms.setDependency.run(registry, {
+                    environmentId,
+                    input: {
+                      ...reference,
+                      direction: "blocked-by",
+                      targetScope: "org/repo",
+                      targetKey: "2",
+                      linked: true,
+                    },
+                  })
+                : await atoms.setParent.run(registry, {
+                    environmentId,
+                    input: { ...reference, parentKey: "2" },
+                  });
           expect(result._tag).toBe("Success");
           await refreshed.promise;
           expect(reads.toSorted()).toEqual([
@@ -121,11 +145,21 @@ it.effect.each(["create", "setParent"] as const)(
             "github.com:1",
             "github.com:2",
             "github.com:2",
+            "github.com:3",
             "other.example:3",
           ]);
           expect(write).toHaveBeenCalledExactlyOnceWith(
-            operation === "create" ? WS_METHODS.issuesCreate : WS_METHODS.issuesSetParent,
-            expect.objectContaining({ parentKey: operation === "create" ? "1" : "2" }),
+            operation === "create"
+              ? WS_METHODS.issuesCreate
+              : operation === "setParent"
+                ? WS_METHODS.issuesSetParent
+                : WS_METHODS.issuesSetDependency,
+            expect.objectContaining({
+              ...(connectionId === undefined ? {} : { connectionId }),
+              ...(operation === "setDependency"
+                ? { direction: "blocked-by", targetKey: "2", linked: true }
+                : { parentKey: operation === "create" ? "1" : "2" }),
+            }),
           );
         } finally {
           releases.forEach((release) => release());

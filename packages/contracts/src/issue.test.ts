@@ -8,6 +8,11 @@ import { WS_METHODS, WsIssuesRpcGroup } from "./rpc.ts";
 import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   IssueActor,
+  IssueInputField,
+  IssueCandidates,
+  IssueFieldValues,
+  IssueRichBody,
+  IssueDependenciesPage,
   IssueCandidatesInput,
   IssueCommentsPageInput,
   ThreadIssueLink,
@@ -29,6 +34,8 @@ import {
   IssueSummary,
   IssueTrackerKind,
   issueListCursorKey,
+  issueHostKey,
+  issueTrackerHostKey,
   threadIssueKeyOf,
   threadIssueKeysEqual,
   threadIssueRefOf,
@@ -250,7 +257,7 @@ it("bounds issue continuation requests to 200 rows and preserves hierarchy conti
     limit: 200,
   });
   for (const limit of [0, 201, 1.5]) expect(() => decodePage({ limit })).toThrow();
-  expect(() => decodePage({ cursor: "x".repeat(4097) })).toThrow();
+  expect(() => decodePage({ cursor: "x".repeat(8193) })).toThrow();
   const page = { parent: null, children: { items: [], nextCursor: "next", truncated: true } };
   expect(decodeHierarchy(page)).toEqual(page);
 });
@@ -653,4 +660,76 @@ it("uses account action values that an old tracker schema rejects before dispatc
     expect(() => dispatch(oldBind, request)).toThrow();
   }
   expect(nativeWrites).toEqual([]);
+});
+
+it("bounds native field values and rich JSON before tracker calls", () => {
+  const fields = Schema.decodeUnknownSync(IssueInputField);
+  const values = Schema.decodeUnknownSync(IssueFieldValues);
+  const rich = Schema.decodeUnknownSync(IssueRichBody);
+  const candidates = Schema.decodeUnknownSync(IssueCandidates);
+  const wiki = { format: "jira-wiki", document: "h2. Title\n\n*bold* !keep.png!\n" };
+  expect(rich(wiki)).toEqual(wiki);
+  expect(() => rich({ ...wiki, document: "x".repeat(65_537) })).toThrow();
+  const field = { id: "custom", label: "Choice", kind: "select", required: true };
+  expect(fields({ ...field, options: [{ value: "1", label: "One" }] }).options).toHaveLength(1);
+  expect(() => fields({ ...field, label: "x".repeat(1025) })).toThrow();
+  expect(() =>
+    fields({
+      ...field,
+      options: Array.from({ length: 101 }, () => ({ value: "1", label: "One" })),
+    }),
+  ).toThrow();
+  expect(() =>
+    candidates({
+      labels: [],
+      assignees: [],
+      fields: Array.from({ length: 101 }, () => field),
+      truncated: false,
+    }),
+  ).toThrow();
+  expect(values({ text: "value", users: ["a", "b"] })).toEqual({
+    text: "value",
+    users: ["a", "b"],
+  });
+  expect(() =>
+    values(Object.fromEntries(Array.from({ length: 101 }, (_, i) => [String(i), ""]))),
+  ).toThrow();
+  expect(() => values({ first: "x".repeat(32768), second: "x".repeat(32768) })).toThrow();
+  expect(rich({ format: "adf", document: '{"type":"doc"}' }).format).toBe("adf");
+  expect(() => rich({ format: "adf", document: "not json" })).toThrow();
+  expect(() => rich({ format: "adf", document: JSON.stringify("x".repeat(262144)) })).toThrow();
+});
+
+it("allows 8192-character issue cursors and refuses larger pages", () => {
+  const cursor = "x".repeat(8192);
+  expect(decodePage({ cursor }).cursor).toBe(cursor);
+  expect(() => decodePage({ cursor: cursor + "x" })).toThrow();
+  const dependencies = Schema.decodeUnknownSync(IssueDependenciesPage);
+  expect(dependencies({ items: [], nextCursor: cursor }).nextCursor).toBe(cursor);
+  expect(() => dependencies({ items: [], nextCursor: cursor + "x" })).toThrow();
+});
+
+it("keeps unknown linked pull request draft state absent", () => {
+  const decode = Schema.decodeUnknownSync(IssueLinkedPullRequest);
+  const link = {
+    repository: "acme/web",
+    number: 7,
+    title: "Change",
+    url: "https://gitcafe.example/acme/web/pulls/7",
+    state: null,
+    closesIssue: false,
+  };
+  expect(decode(link)).toEqual(link);
+  expect(decode({ ...link, isDraft: false }).isDraft).toBe(false);
+  expect(decode({ ...link, isDraft: true }).isDraft).toBe(true);
+});
+
+it("keeps Jira instance paths distinct in issue, host and cursor keys", () => {
+  const ref = { tracker: "jira", host: "JIRA.EXAMPLE:8443/Jira", scope: "OPS", key: "OPS-7" };
+  const other = { ...ref, host: "jira.example:8443/jira" };
+  expect(issueHostKey(ref.host)).toBe("jira.example:8443/Jira");
+  expect(issueTrackerHostKey(ref)).not.toBe(issueTrackerHostKey(other));
+  expect(issueListCursorKey(ref)).not.toBe(issueListCursorKey(other));
+  expect(threadIssueKeyOf(ref)).not.toBe(threadIssueKeyOf(other));
+  expect(threadIssueKeyOf(ref)).toBe(threadIssueKeyOf({ ...ref, host: "jira.example:8443/Jira" }));
 });
