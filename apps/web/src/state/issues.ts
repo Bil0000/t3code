@@ -1,5 +1,13 @@
 import { createIssueEnvironmentAtoms } from "@t3tools/client-runtime/state/issues";
-import type { EnvironmentId, IssueListInput, IssueListResult, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  IssueListInput,
+  IssueListResult,
+  IssuePageRef,
+  IssueLinkedPullRequest,
+  ProjectId,
+} from "@t3tools/contracts";
+import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -217,11 +225,36 @@ export const useIssueHistory = createIssuePagedQuery(
   issueEnvironment.history,
   pageOf,
 );
-export const useIssueLinkedPullRequests = createIssuePagedQuery(
+const useLinkedPullRequestPages = createIssuePagedQuery(
   "web-issues:linked-pull-requests",
   issueEnvironment.linkedPullRequests,
   pageOf,
 );
+export function useIssueLinkedPullRequests(
+  environmentId: EnvironmentId | null,
+  input: IssuePageRef | null,
+) {
+  const page = useLinkedPullRequestPages(environmentId, input);
+  const links = new Map<string, IssueLinkedPullRequest>();
+  for (const link of page.items) {
+    const parsed = parseChangeRequestUrl(link.url);
+    let host = link.host?.toLowerCase() ?? link.url;
+    try {
+      host = new URL(link.url).host.toLowerCase() || host;
+    } catch {}
+    const key = JSON.stringify([
+      link.provider ?? input?.tracker,
+      host,
+      parsed?.repository ?? link.repository.toLowerCase(),
+      link.number,
+    ]);
+    links.set(key, {
+      ...link,
+      closesIssue: link.closesIssue || links.get(key)?.closesIssue === true,
+    });
+  }
+  return { ...page, items: [...links.values()] };
+}
 export const useIssueHierarchy = createIssuePagedQuery(
   "web-issues:hierarchy",
   issueEnvironment.hierarchy,
