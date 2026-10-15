@@ -119,7 +119,11 @@ export function forgejoIssue(
     updatedAt: toIsoUtc(issue.updated_at),
     closedAt: issue.closed_at ? toIsoUtc(issue.closed_at) : null,
     assignees: (issue.assignees ?? []).flatMap((user) => forgejoActor(user) ?? []),
-    labels: (issue.labels ?? []).map((label) => ({ name: label.name, color: label.color ?? null })),
+    labels: (issue.labels ?? []).map((label) => ({
+      id: `forgejo-label:${label.id}`,
+      name: label.name,
+      color: label.color ?? null,
+    })),
     milestone: issue.milestone?.title ?? null,
     commentCount: Math.max(0, issue.comments ?? 0),
   };

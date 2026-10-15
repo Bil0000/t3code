@@ -222,10 +222,16 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       path?: string,
     ) {
       if (names.length === 0) return [];
-      const wanted = [...new Set(names)].map((name) => ({
-        name,
-        pattern: new RegExp(`^${RegExpUtils.escape(name)}$`, "iu"),
-      }));
+      const wanted = [...new Set(names)].map((name) => {
+        const id = /^forgejo-label:([1-9]\d*)$/.exec(name)?.[1];
+        const pattern = new RegExp(`^${RegExpUtils.escape(name)}$`, "iu");
+        return {
+          name: id ?? name,
+          id,
+          matches: (label: typeof ForgejoLabel.Type) =>
+            id === undefined ? pattern.test(label.name) : String(label.id) === id,
+        };
+      });
       const repository = yield* readPage(
         target,
         operation,
@@ -234,8 +240,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         ForgejoLabel,
       );
       let labels = repository.rows;
-      const missing = (catalog = labels) =>
-        wanted.filter(({ pattern }) => !catalog.some((label) => pattern.test(label.name)));
+      const missing = (catalog = labels) => wanted.filter(({ matches }) => !catalog.some(matches));
       if (path !== undefined) {
         const issue = yield* getIssue(target, operation, path);
         labels = [...(issue.labels ?? []), ...labels];
@@ -279,13 +284,11 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           operation,
           "At most five labels outside the first native pages can be resolved per write. No fields were changed.",
         );
-      for (const { name, pattern } of unresolved) {
-        if (/^[+-]?\d+$/.test(name) || name === "." || name === "..") continue;
+      for (const { name, id, matches } of unresolved) {
+        if (id === undefined && (/^[+-]?\d+$/.test(name) || name === "." || name === ".."))
+          continue;
         for (const [index, catalog] of catalogs.entries()) {
-          const known =
-            index === 1
-              ? organizationLabelsFound.find((label) => pattern.test(label.name))
-              : undefined;
+          const known = index === 1 ? organizationLabelsFound.find(matches) : undefined;
           const label =
             known ??
             (yield* read(
@@ -300,7 +303,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
               ),
             ));
           if (label === null) continue;
-          if (!pattern.test(label.name) || label.id < 1)
+          if (!matches(label) || label.id < 1)
             return yield* refused(
               operation,
               "Forgejo returned a different native label than requested. No fields were changed.",
@@ -309,8 +312,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           break;
         }
       }
-      const ids = wanted.flatMap(({ pattern }) => {
-        const label = labels.find((candidate) => pattern.test(candidate.name));
+      const ids = wanted.flatMap(({ matches }) => {
+        const label = labels.find(matches);
         return label ? [label.id] : [];
       });
       if (ids.length !== wanted.length || ids.some((id) => id < 1))
@@ -935,6 +938,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
               );
           return {
             items: rows.rows.map((label) => ({
+              id: `forgejo-label:${label.id}`,
               name: label.name,
               color: label.color ?? null,
               description: label.description ?? null,
@@ -1047,9 +1051,10 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
             labels: [...labels.rows, ...organization.rows]
               .filter(
                 (label, index, rows) =>
-                  rows.findIndex((candidate) => candidate.name === label.name) === index,
+                  rows.findIndex((candidate) => candidate.id === label.id) === index,
               )
               .map((label) => ({
+                id: `forgejo-label:${label.id}`,
                 name: label.name,
                 color: label.color ?? null,
                 description: label.description ?? null,

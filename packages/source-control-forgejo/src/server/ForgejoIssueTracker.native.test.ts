@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
-import { IssueCommentsPage } from "@t3tools/contracts";
+import { IssueCommentsPage, IssueLabel } from "@t3tools/contracts";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -11,6 +11,7 @@ import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoIssueTracker from "./ForgejoIssueTracker.ts";
 
 const decodeCommentsPage = Schema.decodeEffect(IssueCommentsPage);
+const decodeLabels = Schema.decodeEffect(Schema.Array(IssueLabel));
 
 it.effect.each([
   {
@@ -265,6 +266,149 @@ it.effect.each([
             return Effect.succeed(
               TestSourceControlHost.processOutput(JSON.stringify(payload), {
                 stderr: "HTTP/1.1 200\n",
+              }),
+            );
+          },
+        },
+      }),
+    ),
+  );
+});
+
+it.effect("retains native label selections through a rename and replacement", () => {
+  const native: Array<{ method: string; path: string }> = [];
+  const baseUrl = "https://forgejo.test:3000/Mount";
+  let renamed = false;
+  let written: unknown;
+  const labels = () => [
+    { id: 3, name: renamed ? "renamed" : "bug", color: "aabbcc" },
+    { id: 4, name: "extra" },
+    { id: 13, name: "3" },
+  ];
+  const issue = () => ({
+    number: 42,
+    title: "Issue",
+    body: "",
+    html_url: baseUrl + "/acme/web/issues/42",
+    user: { login: "viewer" },
+    state: "open",
+    created_at: "2026-10-01T00:00:00Z",
+    updated_at: "2026-10-01T00:00:00Z",
+    labels: [labels()[0]],
+  });
+  return Effect.gen(function* () {
+    const cli = yield* ForgejoCli.make;
+    const tracker = yield* ForgejoIssueTracker.make.pipe(
+      Effect.provideService(ForgejoCli.ForgejoCli, cli),
+    );
+    const ref = { cwd: "/fixture", host: "forgejo.test:3000", scope: "Mount/acme/web", key: "42" };
+    const listing = yield* tracker.listIssues({
+      ...ref,
+      state: "open",
+      involvement: "all",
+      viewer: "viewer",
+      limit: 50,
+    });
+    const detail = yield* tracker.getIssue(ref);
+    const selected = (yield* decodeLabels(detail.labels)).map((label) => label.id ?? label.name);
+    renamed = true;
+    const candidates = yield* tracker.listCandidates!(ref);
+    const repoPage = yield* tracker.listLabelCandidates!(ref);
+    const orgPage = yield* tracker.listLabelCandidates!({ ...ref, cursor: "org:1" });
+    const extra = candidates.labels.find((label) => label.name === "extra")!;
+    native.length = 0;
+    const result = yield* Effect.result(
+      tracker.update!({ ...ref, labels: [...selected, extra.id ?? extra.name] }),
+    );
+    expect(result._tag).toBe("Success");
+    expect(written).toEqual({ labels: [3, 4] });
+    expect(native).toEqual([
+      { method: "GET", path: "repos/acme/web/labels" },
+      { method: "GET", path: "repos/acme/web/issues/42" },
+      { method: "PUT", path: "repos/acme/web/issues/42/labels" },
+    ]);
+    expect(listing.items[0]?.labels).toMatchObject([{ id: "forgejo-label:3", name: "bug" }]);
+    expect(detail.labels).toMatchObject([{ id: "forgejo-label:3", name: "bug" }]);
+    expect(candidates).toMatchObject({
+      labels: [
+        { id: "forgejo-label:3", name: "renamed" },
+        { id: "forgejo-label:4", name: "extra" },
+        { id: "forgejo-label:13", name: "3" },
+        { id: "forgejo-label:90", name: "extra" },
+      ],
+      truncated: true,
+    });
+    expect(repoPage).toMatchObject({
+      items: [{ id: "forgejo-label:3" }, { id: "forgejo-label:4" }, { id: "forgejo-label:13" }],
+      nextCursor: "repo:2",
+      truncated: false,
+    });
+    expect(orgPage).toMatchObject({
+      items: [{ id: "forgejo-label:90", name: "extra" }],
+      nextCursor: null,
+      truncated: false,
+    });
+  }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(
+      FileSystem.FileSystem,
+      FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
+    ),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("Unexpected HTTP transport")),
+    ),
+    Effect.provide(
+      TestSourceControlHost.layer({
+        process: {
+          run: (input) => {
+            if (input.command === "git")
+              return Effect.succeed(
+                TestSourceControlHost.processOutput(
+                  "origin\t" + baseUrl + "/acme/web.git (fetch)\n",
+                ),
+              );
+            if (input.command !== "tea") return Effect.die("Unexpected command " + input.command);
+            if (input.args[0] === "login")
+              return Effect.succeed(
+                TestSourceControlHost.processOutput(
+                  JSON.stringify([
+                    { name: "fixture", url: baseUrl, user: "viewer", default: "true" },
+                  ]),
+                ),
+              );
+            const url = new URL(input.args.at(-1)!);
+            expect(url.origin + "/Mount").toBe(baseUrl);
+            const path = url.pathname.slice("/Mount/api/v1/".length);
+            const method = input.args[input.args.indexOf("--method") + 1]!;
+            native.push({ method, path });
+            if (method === "PUT") written = JSON.parse(input.stdin!);
+            if (path.endsWith("/labels/bug"))
+              return Effect.succeed(
+                TestSourceControlHost.processOutput("{}", { stderr: "HTTP/1.1 404 Not Found\n" }),
+              );
+            const payload =
+              path === "user"
+                ? { login: "viewer" }
+                : path === "repos/acme/web"
+                  ? { full_name: "acme/web", permissions: { push: true, admin: true } }
+                  : path === "repos/acme/web/issues"
+                    ? [issue()]
+                    : path === "repos/acme/web/issues/42"
+                      ? issue()
+                      : path === "repos/acme/web/labels"
+                        ? url.searchParams.get("page") === "1"
+                          ? labels()
+                          : []
+                        : path === "orgs/acme/labels"
+                          ? [{ id: 90, name: "extra" }]
+                          : [];
+            return Effect.succeed(
+              TestSourceControlHost.processOutput(JSON.stringify(payload), {
+                stderr:
+                  path === "repos/acme/web/labels" && url.searchParams.get("page") === "1"
+                    ? 'HTTP/1.1 200\nLink: </next>; rel="next"'
+                    : 'HTTP/1.1 200\nLink: </last>; rel="last"',
               }),
             );
           },

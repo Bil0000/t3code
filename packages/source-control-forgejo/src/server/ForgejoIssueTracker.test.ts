@@ -146,6 +146,93 @@ function tracker(
 
 describe("ForgejoIssueTracker", () => {
   it.effect.each([
+    { values: ["3"], ids: [13] },
+    { values: ["forgejo-label:3"], ids: [3] },
+    { values: ["3", "forgejo-label:3"], ids: [13, 3] },
+  ])("keeps native label tokens distinct from numeric names: $values", ({ values, ids }) =>
+    Effect.gen(function* () {
+      for (const operation of ["create", "update"] as const) {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          if (input.method || input.path.endsWith("/issues/42")) return { stdout: encode(ISSUE) };
+          return {
+            stdout: encode([
+              { id: 3, name: "bug" },
+              { id: 13, name: "3" },
+            ]),
+          };
+        });
+        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        if (operation === "create")
+          yield* api.create!({ ...target, title: "New", body: "", labels: values, assignees: [] });
+        else yield* api.update!({ ...target, labels: values });
+        expect(requests.filter((request) => request.method)).toMatchObject([
+          { body: { labels: ids } },
+        ]);
+        expect(requests).toHaveLength(operation === "create" ? 2 : 3);
+      }
+    }),
+  );
+
+  it.effect.each([
+    "not-found",
+    "foreign-id",
+    "wrong-id",
+    "authentication",
+    "rate-limit",
+    "forbidden",
+  ] as const)("refuses scoped native ID resolution %s before any fields change", (reason) =>
+    Effect.gen(function* () {
+      const requests: ForgejoCli.ForgejoApiInput[] = [];
+      const api = yield* tracker((input) => {
+        requests.push(input);
+        if (input.path === "repos/Mount/acme/web/issues/42") return { stdout: encode(ISSUE) };
+        if (input.path.includes("?")) return { stdout: "[]", stderr: 'Link: </last>; rel="last"' };
+        if (reason === "wrong-id") return { stdout: encode({ id: 100, name: "99" }) };
+        return new ForgejoCli.ForgejoCliError({
+          command: "tea",
+          cwd: "/w",
+          reason: reason === "foreign-id" ? "not-found" : reason,
+          detail:
+            reason === "foreign-id"
+              ? "Label 99 belongs to other/repo."
+              : "Native scoped label refused.",
+        });
+      });
+      const error = yield* Effect.flip(
+        api.update!({
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "Mount/acme/web",
+          key: "42",
+          title: "Changed",
+          labels: ["forgejo-label:99"],
+        }),
+      );
+      expect(error.reason).toBe(
+        reason === "authentication"
+          ? "unauthenticated"
+          : reason === "rate-limit"
+            ? "rate-limited"
+            : "failed",
+      );
+      expect(requests.filter((request) => request.method)).toEqual([]);
+      expect(
+        requests
+          .filter((request) => /\/labels\/[^/?]+$/.test(request.path))
+          .map((request) => request.path),
+      ).toEqual(
+        reason === "not-found" || reason === "foreign-id"
+          ? ["repos/Mount/acme/web/labels/99", "orgs/acme/labels/99"]
+          : ["repos/Mount/acme/web/labels/99"],
+      );
+      expect(requests).toHaveLength(reason === "not-found" || reason === "foreign-id" ? 5 : 4);
+      expect(requests.every((request) => request.repository === "Mount/acme/web")).toBe(true);
+    }),
+  );
+
+  it.effect.each([
     { operation: "create", name: "BUG" },
     { operation: "update", name: "BUG" },
     { operation: "create", name: "bug" },
@@ -399,16 +486,20 @@ describe("ForgejoIssueTracker", () => {
       }),
   );
 
-  it.effect.each([
-    { operation: "create", mode: "large-catalog", count: 5 },
-    { operation: "create", mode: "lookup-limit", count: 17 },
-    { operation: "create", mode: "over-budget", count: 6 },
-    { operation: "update", mode: "large-catalog", count: 7 },
-    { operation: "update", mode: "lookup-limit", count: 19 },
-    { operation: "update", mode: "over-budget", count: 7 },
-  ] as const)(
-    "bounds native label requests for $operation with $mode",
-    ({ operation, mode, count }) =>
+  it.effect.each(
+    (
+      [
+        { operation: "create", mode: "large-catalog", count: 5 },
+        { operation: "create", mode: "lookup-limit", count: 17 },
+        { operation: "create", mode: "over-budget", count: 6 },
+        { operation: "update", mode: "large-catalog", count: 7 },
+        { operation: "update", mode: "lookup-limit", count: 19 },
+        { operation: "update", mode: "over-budget", count: 7 },
+      ] as const
+    ).flatMap((test) => [false, true].map((asIds) => ({ ...test, asIds }))),
+  )(
+    "bounds native label requests for $operation with $mode (IDs=$asIds)",
+    ({ operation, mode, count, asIds }) =>
       Effect.gen(function* () {
         const requests: ForgejoCli.ForgejoApiInput[] = [];
         const names = Array.from(
@@ -438,7 +529,9 @@ describe("ForgejoIssueTracker", () => {
           if (mode === "lookup-limit" && route!.startsWith("orgs/"))
             return {
               stdout: encode(
-                native.find((label) => route!.endsWith(`/${label.name.toUpperCase()}`)),
+                native.find((label) =>
+                  route!.endsWith(`/${asIds ? label.id : label.name.toUpperCase()}`),
+                ),
               ),
             };
           return new ForgejoCli.ForgejoCliError({
@@ -456,7 +549,7 @@ describe("ForgejoIssueTracker", () => {
                 scope: "acme/web",
                 title: "New",
                 body: "",
-                labels: names,
+                labels: asIds ? native.map((label) => `forgejo-label:${label.id}`) : names,
                 assignees: [],
               })
             : api.update!({
@@ -465,7 +558,7 @@ describe("ForgejoIssueTracker", () => {
                 scope: "acme/web",
                 key: "42",
                 title: "Changed title",
-                labels: names,
+                labels: asIds ? native.map((label) => `forgejo-label:${label.id}`) : names,
               }),
         );
         expect(Result.isSuccess(result)).toBe(mode !== "over-budget");
@@ -1748,6 +1841,7 @@ describe("ForgejoIssueTracker", () => {
   it.effect.each([
     { labels: ["Old", "bug", "enhancement", "Old"], ids: [90, 3, 4] },
     { labels: ["bug", "enhancement"], ids: [3, 4] },
+    { labels: ["forgejo-label:90", "forgejo-label:3", "forgejo-label:4"], ids: [90, 3, 4] },
     { labels: [], ids: [] },
   ])("replaces labels without losing retained organization labels: $labels", ({ labels, ids }) =>
     Effect.gen(function* () {
@@ -1817,7 +1911,11 @@ describe("ForgejoIssueTracker", () => {
         });
         const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
         expect(yield* api.listCandidates!(target)).toMatchObject({
-          labels: [{ name: "bug", color: "d73a4a" }, { name: "Org" }],
+          labels: [
+            { id: "forgejo-label:3", name: "bug", color: "d73a4a" },
+            { id: "forgejo-label:91", name: "Org" },
+            { id: "forgejo-label:99", name: "bug" },
+          ],
           truncated: true,
         });
         expect(requests.map((input) => input.path)).toContain("orgs/acme/labels?limit=50&page=1");
