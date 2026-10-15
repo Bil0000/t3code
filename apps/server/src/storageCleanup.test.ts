@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -24,6 +25,7 @@ import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Settings from "./serverSettings.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
+import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -266,6 +268,7 @@ const cleanupFixture = (
     let threads = [shell({ branch: "feature", worktreePath: worktree })];
     let editBeforeRemoval = false;
     let openSessionCwd: string | null = null;
+    let sessionLive = true;
     let fullStatusCalls = 0;
     let snapshotReads = 0;
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
@@ -309,6 +312,9 @@ const cleanupFixture = (
         getThreadShell: (threadId: ThreadId) =>
           Effect.sync(() => threads.find((thread) => thread.id === threadId) ?? null),
       } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
+      Effect.provideService(ProviderSessionManager.ProviderSessionManagerV2, {
+        get: () => Effect.sync(() => (sessionLive ? Option.some({}) : Option.none())),
+      } as unknown as ProviderSessionManager.ProviderSessionManagerV2["Service"]),
       Effect.provideService(Orchestrator.OrchestratorV2, {
         streamDomainEvents: Stream.suspend(() => events),
       } as unknown as Orchestrator.OrchestratorV2["Service"]),
@@ -382,6 +388,9 @@ const cleanupFixture = (
       },
       setThreads: (next: typeof threads) => {
         threads = next;
+      },
+      setSessionLive: (live: boolean) => {
+        sessionLive = live;
       },
       setOpenSessionCwd: (cwd: string | null) => {
         openSessionCwd = cwd;
@@ -593,7 +602,8 @@ describe("storage cleanup reports and local file policies", () => {
           bytes: null,
         });
         expect(walked.filter((directory) => directory.startsWith(root))).toEqual([]);
-        fixture.setOpenSessionCwd(null);
+        // The stored session stays ready after its runtime was released.
+        fixture.setSessionLive(false);
         const removed = yield* fixture.service.runNow;
         expect(removed.entries[0]).toMatchObject({ outcome: "removed" });
         expect(removed.entries[0]?.bytes).toBeGreaterThan(0);
@@ -967,13 +977,6 @@ describe("settled worktree retention", () => {
                   : `Settled for ${scenario === "expired" ? 20 : scenario === "boundary" ? 8 : 0} days`;
         expect(report.entries[0]).toMatchObject({ outcome: removed ? "removed" : "kept", reason });
       }
-      if (scenario === "recent-update" || scenario === "inactive-settling") {
-        // Automatic settlement backdates settledAt; the grace runs from the
-        // settle itself, and another sweep follows once it ends.
-        yield* TestClock.adjust("1 minute");
-        yield* fixture.service.drain;
-        expect(yield* fixture.fs.exists(fixture.worktree)).toBe(false);
-      }
       expect(thread.branch).toBe("feature");
       expect(
         (yield* fixture.command(fixture.repo, ["rev-parse", "--verify", "refs/heads/feature"]))
@@ -1037,7 +1040,7 @@ it.live("keeps saved usage data when removing a settled checkout", () =>
 );
 
 it.live.each(["thread.settled", "stopped", "ready"] as const)(
-  "sweeps for settled cleanup after %s only when a session ended",
+  "leaves settled cleanup to the regular sweeps after %s",
   (trigger) =>
     runCleanupTest(
       Effect.gen(function* () {
@@ -1080,7 +1083,7 @@ it.live.each(["thread.settled", "stopped", "ready"] as const)(
         yield* Deferred.await(handled);
         yield* Deferred.succeed(fixture.resume, undefined);
         yield* fixture.service.drain;
-        expect(fixture.snapshotReads()).toBe(trigger === "stopped" ? 2 : 1);
+        expect(fixture.snapshotReads()).toBe(1);
       }),
     ),
 );

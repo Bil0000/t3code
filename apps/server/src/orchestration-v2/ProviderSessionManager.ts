@@ -201,8 +201,6 @@ export class ProviderSessionManagerV2 extends Context.Service<
 
 interface LiveSessionEntry {
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
-  /** Threads detached while the session stayed up; its release still records their session ended. */
-  readonly detachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
   /**
    * MCP credential session id issued for each attached thread. Revocation on
@@ -664,10 +662,7 @@ export const layerWithOptions = (
           };
           yield* writeProviderSessionEvents({
             runtime: input.entry.runtime,
-            threadIds: new Set([
-              ...input.entry.attachedThreadIds,
-              ...input.entry.detachedThreadIds,
-            ]),
+            threadIds: input.entry.attachedThreadIds,
             type: "provider-session.updated",
             payload,
           });
@@ -2291,7 +2286,6 @@ export const layerWithOptions = (
               const now = yield* Clock.currentTimeMillis;
               const entry: LiveSessionEntry = {
                 attachedThreadIds: new Set([input.threadId]),
-                detachedThreadIds: new Set(),
                 loadedProviderThreadKeyByThread: new Map(),
                 mcpCredentialIdByThread:
                   mcpCredentialId === undefined
@@ -2493,7 +2487,6 @@ export const layerWithOptions = (
               const updatedEntry = {
                 ...entry,
                 attachedThreadIds,
-                detachedThreadIds: new Set([...entry.detachedThreadIds, input.threadId]),
                 loadedProviderThreadKeyByThread,
                 mcpCredentialIdByThread,
                 idleThreadUnloads,

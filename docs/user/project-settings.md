@@ -142,8 +142,7 @@ are, and cleanup covers both the default folder and the custom one.
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected
 environments. Policies are off by default and run on the server at startup, when changed, and
-hourly. With 0 settled days, a settled thread's worktree is removed once its session ends.
-Offline machines keep their existing policies.
+hourly. Offline machines keep their existing policies.
 
 Select a project to set **Automatic worktree cleanup** to **Inherit**, **Off**, or **Custom**.
 Inherit follows each machine's rules; Off keeps that project's worktrees until you remove them
@@ -152,7 +151,7 @@ captures and log retention remain machine-wide.
 
 Worktrees can be removed after a chosen number of inactive days, after a thread settles, after
 merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
-to remove a worktree as soon as it is safe after settlement. Only T3-managed worktrees are eligible.
+to remove a worktree at the next cleanup after settlement. Only T3-managed worktrees are eligible.
 Active sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
 to **Uncommitted changes**, which protects tracked edits and untracked files but deletes ignored
 files such as `.env` and build output. **Any local files** also protects ignored files other than

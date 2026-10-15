@@ -22,7 +22,6 @@ import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
@@ -39,6 +38,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
+import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import { threadHasQueuedTurnStart } from "./orchestration-v2/ThreadSettlementService.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
@@ -177,6 +177,7 @@ const make = Effect.gen(function* () {
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const sql = yield* SqlClient.SqlClient;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
@@ -403,10 +404,6 @@ const make = Effect.gen(function* () {
       );
   });
 
-  // Set when a sweep kept a worktree for the settle-script grace.
-  let settleGraceRetry = false;
-  // Typed separately: the sweep that schedules it is defined before it.
-  let requestGraceSweep: Effect.Effect<void> = Effect.void;
   const cleanWorktrees = Effect.fn("StorageCleanup.cleanWorktrees")(function* (
     serverSettings: ServerSettings,
     now: number,
@@ -499,10 +496,8 @@ const make = Effect.gen(function* () {
           !deleted &&
           thread.settledAt !== null &&
           now - DateTime.toEpochMillis(thread.updatedAt) < SETTLE_SCRIPT_GRACE_MS
-        ) {
-          settleGraceRetry = true;
+        )
           return keep("settled moments ago");
-        }
         const head = yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" });
         const old =
           !deleted &&
@@ -625,13 +620,16 @@ const make = Effect.gen(function* () {
           const sessions = yield* Effect.forEach(sessionRows, (row) =>
             decodeCleanupSession(row.payload_json),
           );
-          if (
-            sessions.some((session) => {
-              const cwd = path.resolve(session.cwd);
-              return cwd === worktreePath || inside(worktreePath, cwd);
-            })
-          )
-            return "provider session is still open";
+          // A stored session can stay ready after its runtime was released,
+          // for example once every thread detached; only a live one holds it.
+          for (const session of sessions) {
+            const cwd = path.resolve(session.cwd);
+            if (
+              (cwd === worktreePath || inside(worktreePath, cwd)) &&
+              Option.isSome(yield* providerSessions.get(session.id))
+            )
+              return "provider session is still open";
+          }
           return null;
         });
         // Most cancelled removals are caught here, before the worktree is walked.
@@ -820,14 +818,6 @@ const make = Effect.gen(function* () {
       bytesFreed,
       omittedCount: Math.max(0, entries.length - REPORT_ENTRY_LIMIT),
     };
-    if (settleGraceRetry) {
-      settleGraceRetry = false;
-      // Worktrees kept for the settle-script grace get another sweep once it ends.
-      yield* Effect.suspend(() => requestGraceSweep).pipe(
-        Effect.delay(Duration.millis(SETTLE_SCRIPT_GRACE_MS)),
-        Effect.forkDetach,
-      );
-    }
     yield* SubscriptionRef.set(reportRef, latestReport);
     return latestReport;
   });
@@ -855,7 +845,6 @@ const make = Effect.gen(function* () {
   const requestSweep = Ref.getAndSet(automaticSweepQueued, true).pipe(
     Effect.flatMap((queued) => (queued ? Effect.void : worker.enqueue(undefined))),
   );
-  requestGraceSweep = requestSweep;
   const runNow = Effect.gen(function* () {
     const completion = yield* Deferred.make<StorageCleanupReport, ServerSettingsError>();
     yield* worker.enqueue(completion);
@@ -901,21 +890,16 @@ const make = Effect.gen(function* () {
       }),
     );
     yield* forkParked(
-      // Deleted threads and immediately removable settled threads wait for
-      // their sessions to end. Moving between live statuses, such as running
-      // to ready, cannot free one. Settling itself does not sweep: the
-      // project's settle script runs in the worktree right after.
-      Stream.runForEach(events, (event) => {
-        const sessionEnded =
-          event.type === "provider-session.updated" &&
-          (event.payload.status === "stopped" || event.payload.status === "error");
-        return ((event.type === "thread.deleted" || sessionEnded) &&
-          anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)) ||
-          (sessionEnded &&
-            anyWorktreePolicy(lastSettings, (rules) => rules.worktreeSettledAfterDays === 0))
+      // A deleted thread's worktree waits for its sessions to end. Moving
+      // between live statuses, such as running to ready, cannot free one.
+      Stream.runForEach(events, (event) =>
+        (event.type === "thread.deleted" ||
+          (event.type === "provider-session.updated" &&
+            (event.payload.status === "stopped" || event.payload.status === "error"))) &&
+        anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)
           ? requestSweep
-          : Effect.void;
-      }).pipe(
+          : Effect.void,
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Storage cleanup event stream failed", { cause }),
         ),

@@ -557,7 +557,7 @@ export function StorageSettingsPanel() {
                   ]
                     .filter(Boolean)
                     .join(". ")}
-                  description="Remove worktrees this many days after their thread settles. Set 0 days to remove them as soon as they are safe to remove. Branches and thread history are kept."
+                  description="Remove worktrees this many days after their thread settles. Set 0 days to remove them at the next cleanup. Branches and thread history are kept."
                   serverScoped={!isProjectScope}
                   control={
                     <RetentionControl
