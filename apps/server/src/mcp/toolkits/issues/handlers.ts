@@ -357,7 +357,7 @@ const make = Effect.gen(function* () {
           input.url !== undefined
             ? link.url === input.url
             : input.key !== undefined &&
-              link.key === input.key &&
+              threadIssueKeysEqual(link, { ...link, key: input.key }) &&
               link.projectId === (input.projectId ?? thread.projectId) &&
               (input.tracker === undefined || link.tracker === input.tracker),
         );

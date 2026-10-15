@@ -769,6 +769,53 @@ describe("issue toolkit handlers", () => {
     }),
   );
 
+  it.effect.each([
+    { source: standaloneSource, key: "ENG-7", url: standaloneDetail.url },
+    {
+      source: { ...jiraSource, scope: "OPS" },
+      key: "OPS-7",
+      url: "https://example.atlassian.net/browse/OPS-7",
+    },
+  ])(
+    "unlinks saved native $key without its source and refuses equivalent duplicates",
+    ({ source, key, url }) =>
+      Effect.gen(function* () {
+        const link = { ...savedLink, ...source, key: key.toLowerCase(), url };
+        const harness = yield* makeHarness([link], { sources: [] });
+        const result = yield* harness.call("unlink_issue", { tracker: source.tracker, key });
+        expect(result).toMatchObject({ ...source, key: link.key, url, wasLinked: true });
+        expect(yield* Ref.get(harness.unlinks)).toEqual([{ threadId: THREAD_ID, key: link }]);
+        expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+        expect(yield* Ref.get(harness.calls)).toEqual([]);
+
+        const ambiguous = yield* makeHarness([link, { ...link, key }], { sources: [] });
+        const error = yield* ambiguous
+          .call("unlink_issue", { tracker: source.tracker, key })
+          .pipe(Effect.flip);
+        expect(error).toMatchObject({ _tag: "IssueOperationError", operation: "unlink" });
+        expect(yield* Ref.get(ambiguous.unlinks)).toEqual([]);
+        expect(yield* Ref.get(ambiguous.resolutions)).toEqual([]);
+        expect(yield* Ref.get(ambiguous.calls)).toEqual([]);
+      }),
+  );
+
+  it.effect("keeps custom tracker saved keys case exact while disconnected", () =>
+    Effect.gen(function* () {
+      const link = { ...savedLink, tracker: IssueTrackerKind.make("custom-tracker"), key: "eng-7" };
+      const harness = yield* makeHarness([link], { sources: [] });
+      const error = yield* harness
+        .call("unlink_issue", { tracker: link.tracker, key: "ENG-7" })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "IssueProjectNotFoundError" });
+      expect(yield* Ref.get(harness.unlinks)).toEqual([]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual(["sources"]);
+      expect(yield* Ref.get(harness.calls)).toEqual([]);
+      yield* harness.call("unlink_issue", { tracker: link.tracker, key: link.key });
+      expect(yield* Ref.get(harness.unlinks)).toEqual([{ threadId: THREAD_ID, key: link }]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual(["sources"]);
+    }),
+  );
+
   it.effect("unlinks only the saved URL on a disconnected host", () =>
     Effect.gen(function* () {
       const otherHost = {
