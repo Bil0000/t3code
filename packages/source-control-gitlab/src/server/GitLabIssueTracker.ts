@@ -708,6 +708,13 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             key: String(issue.number),
             displayKey: `#${issue.number}`,
             url: issue.url,
+            ...(input.assignees.some((id) => !issue.assigneeIds.includes(id))
+              ? {
+                  warnings: [
+                    "The issue was created, but GitLab did not save the requested assignees.",
+                  ],
+                }
+              : {}),
           })),
         ),
 

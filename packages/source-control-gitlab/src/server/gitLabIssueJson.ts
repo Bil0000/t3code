@@ -184,8 +184,17 @@ export function decodeIssueDetailJson(
 
 export function decodeCreatedIssueJson(
   raw: string,
-): Result.Result<{ readonly number: number; readonly url: string }, DecodeFailure> {
-  return Result.map(decodeIssue(raw), (issue) => ({ number: issue.iid, url: issue.web_url }));
+): Result.Result<
+  { readonly number: number; readonly url: string; readonly assigneeIds: ReadonlyArray<string> },
+  DecodeFailure
+> {
+  return Result.map(decodeIssue(raw), (issue) => ({
+    number: issue.iid,
+    url: issue.web_url,
+    assigneeIds: (issue.assignees ?? []).flatMap((actor) =>
+      actor.id === undefined ? [] : [String(actor.id)],
+    ),
+  }));
 }
 
 /**
