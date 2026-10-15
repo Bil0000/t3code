@@ -626,7 +626,7 @@ const make = Effect.gen(function* () {
             const cwd = path.resolve(session.cwd);
             if (
               (cwd === worktreePath || inside(worktreePath, cwd)) &&
-              Option.isSome(yield* providerSessions.get(session.id))
+              (yield* providerSessions.isLive(session.id))
             )
               return "provider session is still open";
           }
