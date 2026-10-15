@@ -189,6 +189,37 @@ function delayedWrite() {
   return { promise, resolve };
 }
 
+it.each(
+  (["labels", "assignees"] as const).flatMap((kind) =>
+    (
+      [
+        ["viewer-a", "viewer-b"],
+        ["viewer-a", null],
+        [null, "viewer-b"],
+        ["viewer-a", "viewer-a"],
+      ] as const
+    ).map(([from, to]) => ({ kind, from, to })),
+  ),
+)("scopes confirmed $kind to viewer $from -> $to", async ({ kind, from, to }) => {
+  state.detail = { ...detail(["W"]), viewer: from };
+  state.update.mockResolvedValue({ _tag: "Success" });
+  await act(async () => render());
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>(`button[aria-label="Change ${kind}"]`)!.click(),
+  );
+  await act(async () => option("Other").click());
+  expect(state.update.mock.calls[0]![0].input[kind]).toEqual(["W", "Other"]);
+  expect(selected("Other")).toBe(true);
+  state.detail = { ...detail(["Z"]), viewer: to };
+  await act(async () => render());
+  expect(selected("Other")).toBe(from === to);
+  expect(selected("Z")).toBe(from !== to);
+  await act(async () => option("T").click());
+  expect(state.update.mock.calls[1]![0].input[kind]).toEqual(
+    from === to ? ["W", "Other", "T"] : ["Z", "T"],
+  );
+});
+
 it.each(["labels", "assignees"] as const)(
   "keeps confirmed %s through failed reads and writes until whole-set ACK, then clears on switch",
   async (kind) => {
