@@ -1431,6 +1431,128 @@ describe("LinearIssueTracker", () => {
     }),
   );
 
+  it.effect.each([
+    { name: "input", code: "BAD_USER_INPUT", detail: "Linear rejected the request input." },
+    {
+      name: "validation",
+      code: "GRAPHQL_VALIDATION_FAILED",
+      detail: "Linear rejected the request input.",
+    },
+    { name: "forbidden", code: "FORBIDDEN", detail: "Linear denied access to this resource." },
+    {
+      name: "internal",
+      code: "INTERNAL_SERVER_ERROR",
+      detail: "Linear could not complete the request.",
+    },
+    { name: "unknown", code: "UNKNOWN_NATIVE_CODE", detail: "Linear returned HTTP 200." },
+    { name: "missing", code: undefined, detail: "Linear returned HTTP 200." },
+    {
+      name: "oversized",
+      code: "BAD_USER_INPUT" + "x".repeat(131_072),
+      detail: "Linear returned HTTP 200.",
+    },
+    { name: "prototype", code: "__proto__", detail: "Linear returned HTTP 200." },
+    { name: "unrecognized casing", code: "bad_user_input", detail: "Linear returned HTTP 200." },
+  ])(
+    "normalizes GraphQL $name codes and preserves raw diagnostics only in cause",
+    ({ code, detail }) =>
+      Effect.gen(function* () {
+        const payload = {
+          errors: [
+            {
+              message: "private-wire-marker " + "x".repeat(131_072),
+              extensions: { code, diagnostic: "private-extension" },
+              path: ["private-path"],
+            },
+          ],
+          extensions: { trace: "private-trace" },
+        };
+        const test = fakeLinear({ T3Viewer: () => Response.json(payload) });
+        const api = yield* test.api;
+        const error = yield* api.viewer().pipe(Effect.flip);
+        expect(error.detail.length).toBeLessThan(160);
+        expect(error).toMatchObject({ operation: "viewer", reason: "failed", detail });
+        expect(error.message).toBe(`linear failed in viewer: ${detail}`);
+        expect(JSON.stringify({ ...error, cause: undefined })).not.toContain("private-");
+        expect(error.cause).toBe(JSON.stringify(payload));
+        expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Viewer"]);
+      }),
+  );
+
+  it.effect.each(["RATELIMITED", "AUTHENTICATION_ERROR"])(
+    "keeps GraphQL %s classification and raw cause without extra requests",
+    (code) =>
+      Effect.gen(function* () {
+        const now = 1_750_000_000_000;
+        yield* TestClock.setTime(now);
+        const payload = { errors: [{ message: "private-graphql-marker", extensions: { code } }] };
+        const test = fakeLinear({
+          T3Viewer: () =>
+            Response.json(payload, {
+              status: 400,
+              headers: { "retry-after": "10" },
+            }),
+        });
+        const api = yield* test.api;
+        const error = yield* api.viewer().pipe(Effect.flip);
+        expect(error.reason).toBe(code === "RATELIMITED" ? "rate-limited" : "unauthenticated");
+        expect(error.detail).toBe(
+          code === "RATELIMITED"
+            ? "Linear's rate limit was reached."
+            : "Linear rejected the API key.",
+        );
+        expect(error.cause).toBe(JSON.stringify(payload));
+        if (code === "RATELIMITED") {
+          expect(error.retryAt).toBe(now + 10_000);
+          expect((yield* api.viewer().pipe(Effect.flip)).reason).toBe("rate-limited");
+        }
+        expect(test.requests).toHaveLength(1);
+      }),
+  );
+
+  it.effect.each([401, 403, 429])("does not read native HTTP %s bodies for diagnostics", (status) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const test = fakeLinear({
+        T3Viewer: () =>
+          new Response(
+            new ReadableStream(
+              {
+                pull() {
+                  reads++;
+                  throw new Error("private-unread-body");
+                },
+              },
+              { highWaterMark: 0 },
+            ),
+            { status, headers: { "retry-after": "10" } },
+          ),
+      });
+      const api = yield* test.api;
+      const error = yield* api.viewer().pipe(Effect.flip);
+      expect(error.reason).toBe(status === 429 ? "rate-limited" : "unauthenticated");
+      expect(error.cause).toBeUndefined();
+      expect(reads).toBe(0);
+      expect(test.requests).toHaveLength(1);
+    }),
+  );
+
+  it.effect("normalizes mutation GraphQL failures without another native request", () =>
+    Effect.gen(function* () {
+      const payload = {
+        errors: [{ message: "private-mutation-marker", extensions: { code: "BAD_USER_INPUT" } }],
+      };
+      const test = fakeLinear({ T3IssueUpdate: () => Response.json(payload) });
+      const api = yield* test.api;
+      const error = yield* api
+        .updateIssue("native-issue", { title: "New title" })
+        .pipe(Effect.flip);
+      expect(error.detail).toBe("Linear rejected the request input.");
+      expect(error.cause).toBe(JSON.stringify(payload));
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3IssueUpdate"]);
+    }),
+  );
+
   it.effect("rejects GraphQL errors even with otherwise valid partial data", () =>
     Effect.gen(function* () {
       const test = fakeLinear({
@@ -1441,7 +1563,9 @@ describe("LinearIssueTracker", () => {
           }),
       });
       const api = yield* test.api;
-      expect((yield* api.viewer().pipe(Effect.flip)).detail).toBe("A field could not be read.");
+      const error = yield* api.viewer().pipe(Effect.flip);
+      expect(error.detail).toBe("Linear returned HTTP 200.");
+      expect(error.cause).toContain("A field could not be read.");
     }),
   );
   it.effect("records rate errors before decoding incomplete native data", () =>

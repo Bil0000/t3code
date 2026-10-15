@@ -625,9 +625,21 @@ const isRateLimited = (errors: ReadonlyArray<GraphQlError> | undefined) =>
 const isUnauthenticated = (errors: ReadonlyArray<GraphQlError> | undefined) =>
   errors?.some((error) => error.extensions?.code === "AUTHENTICATION_ERROR") === true;
 
-/** The first error's text, which Linear writes for people ("Entity not found: Issue"). */
-const errorDetail = (errors: ReadonlyArray<GraphQlError> | undefined, fallback: string) =>
-  errors?.[0]?.message.trim() || fallback;
+const errorDetail = (errors: ReadonlyArray<GraphQlError> | undefined, fallback: string) => {
+  const code = errors?.[0]?.extensions?.code;
+  if (code === undefined || code.length > 64) return fallback;
+  switch (code) {
+    case "BAD_USER_INPUT":
+    case "GRAPHQL_VALIDATION_FAILED":
+      return "Linear rejected the request input.";
+    case "FORBIDDEN":
+      return "Linear denied access to this resource.";
+    case "INTERNAL_SERVER_ERROR":
+      return "Linear could not complete the request.";
+    default:
+      return fallback;
+  }
+};
 
 export const make = Effect.gen(function* () {
   // Only a default-carrying string: nothing in the environment can make it fail.
@@ -749,15 +761,13 @@ export const make = Effect.gen(function* () {
           if (unknown && exhausted.length === 0) yield* recordLimit(undefined, retryAfter);
         });
       const retryAt = latestReset(exhausted);
-      const rateLimited = () =>
+      const rateLimited = (cause?: string) =>
         Effect.gen(function* () {
           yield* recordLimits(true);
-          return yield* fail(
-            operation,
-            "rate-limited",
-            "Linear's rate limit was reached.",
-            retryAt === undefined ? {} : { retryAt },
-          );
+          return yield* fail(operation, "rate-limited", "Linear's rate limit was reached.", {
+            ...(retryAt === undefined ? {} : { retryAt }),
+            ...(cause === undefined ? {} : { cause }),
+          });
         });
       if (response.status === 429) return yield* rateLimited();
       if (response.status === 401 || response.status === 403) {
@@ -786,9 +796,11 @@ export const make = Effect.gen(function* () {
           ),
         ),
       );
-      if (isRateLimited(envelope.errors)) return yield* rateLimited();
+      if (isRateLimited(envelope.errors)) return yield* rateLimited(collected.text);
       if (isUnauthenticated(envelope.errors)) {
-        return yield* fail(operation, "unauthenticated", "Linear rejected the API key.");
+        return yield* fail(operation, "unauthenticated", "Linear rejected the API key.", {
+          cause: collected.text,
+        });
       }
       if (
         response.status < 200 ||
@@ -802,6 +814,7 @@ export const make = Effect.gen(function* () {
           operation,
           "failed",
           errorDetail(envelope.errors, `Linear returned HTTP ${response.status}.`),
+          { cause: collected.text },
         );
       }
       const decoded = yield* Schema.decodeEffect(data)(envelope.data).pipe(
