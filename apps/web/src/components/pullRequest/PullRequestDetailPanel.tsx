@@ -2181,37 +2181,6 @@ export function PullRequestDetailPanel({
                   </span>
                 </Badge>
               ) : null}
-              {showsDeleteBranch ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className="inline-flex shrink-0">
-                        <Button
-                          size="xs"
-                          variant="destructive-outline"
-                          disabled={actionPending || !environmentConnected}
-                          onClick={() => void confirmDeleteBranch()}
-                          aria-label={
-                            pendingAction === "delete-branch"
-                              ? "Deleting branch..."
-                              : "Delete branch"
-                          }
-                        >
-                          <Trash2Icon aria-hidden className="size-3.5" />
-                          <span className="@max-[30rem]/pr-header:hidden">
-                            {pendingAction === "delete-branch" ? "Deleting..." : "Delete branch"}
-                          </span>
-                        </Button>
-                      </span>
-                    }
-                  />
-                  <TooltipPopup side="top">
-                    {environmentConnected
-                      ? `Delete ${detail.headBranch}`
-                      : "Reconnect to delete this branch"}
-                  </TooltipPopup>
-                </Tooltip>
-              ) : null}
               {/* Keep checkout beside the menu so host actions arriving on its left cannot
                   move a different action under the reader's pointer. */}
               {checkoutControl}
@@ -2476,6 +2445,30 @@ export function PullRequestDetailPanel({
                       >
                         <RotateCcwIcon className="size-3.5" />
                         {inlineConfirm.isArmed("revert") ? "Confirm revert?" : "Revert changes"}
+                      </MenuItem>
+                    </>
+                  ) : null}
+                  {showsDeleteBranch ? (
+                    <>
+                      <MenuSeparator />
+                      <MenuItem
+                        variant="destructive"
+                        disabled={actionPending || !environmentConnected}
+                        onClick={() => void confirmDeleteBranch()}
+                      >
+                        <Trash2Icon className="mt-1 size-3.5 shrink-0 self-start" />
+                        <span className="flex min-w-0 flex-col">
+                          <span>
+                            {pendingAction === "delete-branch"
+                              ? "Deleting branch..."
+                              : "Delete branch"}
+                          </span>
+                          <span className="truncate text-xs text-muted-foreground">
+                            {environmentConnected
+                              ? detail.headBranch
+                              : "Reconnect to delete this branch"}
+                          </span>
+                        </span>
                       </MenuItem>
                     </>
                   ) : null}

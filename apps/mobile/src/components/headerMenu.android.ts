@@ -1,4 +1,5 @@
 import type { MenuAction } from "@react-native-menu/menu";
+import type { AndroidHeaderAction } from "./AndroidScreenHeader";
 import type { ScreenHeaderMenuItem } from "./ScreenHeader.types";
 
 export function androidHeaderMenuActions(items: ReadonlyArray<ScreenHeaderMenuItem>): MenuAction[] {
@@ -40,4 +41,17 @@ export function findHeaderMenuAction(
     }
   }
   return undefined;
+}
+
+export function splitAndroidHeaderActions(
+  actions: ReadonlyArray<AndroidHeaderAction>,
+  wide: boolean,
+) {
+  const inline = actions.filter((action) => !action.overflowOnly);
+  const directCount = actions.length > 2 ? (wide ? 3 : 1) : inline.length;
+  const visibleActions = inline.slice(0, directCount);
+  return {
+    visibleActions,
+    overflowActions: actions.filter((action) => !visibleActions.includes(action)),
+  };
 }
