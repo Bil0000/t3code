@@ -25,8 +25,9 @@ async function openUnresolvedLink(url: string): Promise<void> {
   opened.location.href = url;
 }
 
-export type IssueLinkContext = Pick<IssueRef, "projectId" | "connectionId"> & {
+export type IssueLinkContext = Pick<IssueRef, "projectId" | "connectionId" | "tracker"> & {
   readonly environmentId: EnvironmentId;
+  readonly host: string;
 };
 
 export function useOpenIssueLink(
@@ -80,6 +81,13 @@ export function useOpenIssueLink(
       event.stopPropagation();
       const source =
         issueLinkContext?.environmentId === environmentId ? issueLinkContext : undefined;
+      const target = source === undefined ? null : parseIssueUrl(targetUrl, source);
+      const connectionId =
+        source !== undefined &&
+        target?.tracker === source.tracker &&
+        target.host === source.host.trim().toLowerCase()
+          ? source.connectionId
+          : undefined;
       const projectId =
         source?.projectId ??
         (threadRef?.environmentId === environmentId
@@ -90,7 +98,7 @@ export function useOpenIssueLink(
         input: {
           url: targetUrl,
           ...(projectId === undefined ? {} : { projectId }),
-          ...(source?.connectionId === undefined ? {} : { connectionId: source.connectionId }),
+          ...(connectionId === undefined ? {} : { connectionId }),
         },
       })
         .then(async (result) => {

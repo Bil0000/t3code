@@ -374,6 +374,8 @@ describe("native chat issue links", () => {
         linkContext = {
           environmentId: threadRef.environmentId,
           projectId: ProjectId.make("source-project"),
+          tracker: target.tracker,
+          host: target.host,
           connectionId,
         };
         await act(async () => renderer.update(createElement(Hook)));
@@ -397,10 +399,39 @@ describe("native chat issue links", () => {
     },
   );
 
+  it.each([
+    ["linear", "linear.app", "https://github.com/acme/web/issues/42"],
+    ["forgejo", "forgejo.one.test", "https://forgejo.two.test/team/repo/issues/42"],
+    ["forgejo", "forgejo.one.test:8443", "https://forgejo.one.test:9443/team/repo/issues/42"],
+  ])(
+    "keeps the project hint without lending %s account on %s to %s",
+    async (tracker, host, url) => {
+      linkContext = {
+        environmentId: threadRef.environmentId,
+        projectId: ProjectId.make("source-project"),
+        tracker: IssueTrackerKind.make(tracker),
+        host,
+        connectionId: "Account/B",
+      };
+      await act(async () => renderer.update(createElement(Hook)));
+      await act(async () => {
+        open(event(), url);
+      });
+      expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+        environmentId: "env-a",
+        input: { url, projectId: "source-project" },
+      });
+      expect(surfaces(threadRef)).toHaveLength(1);
+      expect(state.openExternal).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not lend the issue's local project or account to another environment", async () => {
     linkContext = {
       environmentId: threadRef.environmentId,
       projectId: ProjectId.make("source-project"),
+      tracker: target.tracker,
+      host: target.host,
       connectionId: "Account/B",
     };
     await act(async () => renderer.update(createElement(Hook)));
@@ -418,6 +449,8 @@ describe("native chat issue links", () => {
     linkContext = {
       environmentId: threadRef.environmentId,
       projectId: ProjectId.make("source-project"),
+      tracker: target.tracker,
+      host: target.host,
       connectionId: "Account/B",
     };
     state.resolve.mockResolvedValue({ _tag: "Failure" });
@@ -684,20 +717,33 @@ it.each([PullRequestMarkdown, PullRequestCommentBody])(
   },
 );
 
-it.each([
-  [false, false],
-  [false, true],
-  [true, false],
-  [true, true],
-])(
-  "keeps the account in a comment link (preview=%s, standalone=%s)",
-  async (previewing, isStandalone) => {
+it.each(
+  [false, true].flatMap((previewing) =>
+    [false, true].flatMap((isStandalone) =>
+      [false, true].map((crossTracker) => ({ previewing, isStandalone, crossTracker })),
+    ),
+  ),
+)(
+  "scopes the account in a comment link (preview=$previewing, standalone=$isStandalone, crossTracker=$crossTracker)",
+  async ({ previewing, isStandalone, crossTracker }) => {
     state.editing = true;
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
-    const url = "https://linear.app/workspace/issue/ENG-42";
+    const url = crossTracker
+      ? "https://github.com/acme/web/issues/42"
+      : "https://linear.app/workspace/issue/ENG-42";
+    const resolved = crossTracker
+      ? {
+          ...target,
+          tracker: IssueTrackerKind.make("github"),
+          host: "github.com",
+          scope: "acme/web",
+          key: "42",
+        }
+      : { ...target, connectionId: "Account/B" };
+    state.resolve.mockResolvedValue({ _tag: "Success", value: resolved });
     try {
       await act(async () =>
         root.render(
@@ -731,11 +777,19 @@ it.each([
         container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!.click(),
       );
       expect(surfaces(isStandalone ? ISSUES_PANEL_REF : threadRef)).toMatchObject([
-        { key: "ENG-42" },
+        {
+          tracker: resolved.tracker,
+          key: resolved.key,
+          ...(crossTracker ? {} : { connectionId: "Account/B" }),
+        },
       ]);
       expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
         environmentId: "env-a",
-        input: { url, projectId: target.projectId, connectionId: "Account/B" },
+        input: {
+          url,
+          projectId: target.projectId,
+          ...(crossTracker ? {} : { connectionId: "Account/B" }),
+        },
       });
       if (!isStandalone) {
         expect(surfaces(ISSUES_PANEL_REF)).toEqual([]);

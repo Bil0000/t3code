@@ -22,7 +22,7 @@ export function IssueCommentContent({
   onChanged,
 }: {
   environmentId: EnvironmentId;
-  reference: IssueRef;
+  reference: IssueRef & { readonly host: string };
   comment: IssueComment;
   canEdit: boolean;
   cwd: string;

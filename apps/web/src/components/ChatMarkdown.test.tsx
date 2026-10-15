@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   IssueResolvedUrl,
   IssueResolveUrlInput,
+  IssueTrackerKind,
   ProjectId,
   ThreadId,
   type AuthEnvironmentScope,
@@ -305,6 +306,8 @@ describe("pull request Markdown issue destinations", () => {
               issueLinkContext: {
                 environmentId,
                 projectId: ProjectId.make("source-project"),
+                tracker: IssueTrackerKind.make("github"),
+                host: "github.com",
                 connectionId,
               },
             }),

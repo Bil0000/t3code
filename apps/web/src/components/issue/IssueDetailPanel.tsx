@@ -1067,7 +1067,11 @@ function IssueDetailContent({
                 cwd={cwd}
                 environmentId={environmentId}
                 threadRef={threadRef}
-                issueLinkContext={{ ...reference, environmentId }}
+                issueLinkContext={{
+                  ...reference,
+                  host: reference.host ?? detail.host,
+                  environmentId,
+                }}
                 label="Description"
                 saving={saving}
                 allowEmpty
@@ -1080,7 +1084,11 @@ function IssueDetailContent({
                 cwd={cwd}
                 environmentId={environmentId}
                 threadRef={threadRef}
-                issueLinkContext={{ ...reference, environmentId }}
+                issueLinkContext={{
+                  ...reference,
+                  host: reference.host ?? detail.host,
+                  environmentId,
+                }}
               />
             ) : (
               <p className="text-sm text-muted-foreground italic">No description.</p>
@@ -1207,7 +1215,7 @@ function IssueDetailContent({
                     >
                       <IssueCommentContent
                         environmentId={environmentId}
-                        reference={reference}
+                        reference={{ ...reference, host: reference.host ?? detail.host }}
                         comment={item.comment}
                         cwd={cwd}
                         threadRef={threadRef}
