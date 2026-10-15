@@ -6,6 +6,10 @@ import {
   IssueCandidates,
   IssueCommentsPageInput,
   IssueUpdateInput,
+  IssueTemplate,
+  IssueTemplatesInput,
+  WS_METHODS,
+  WsIssuesRpcGroup,
   ProjectId,
   IssueTrackerKind,
 } from "./index.ts";
@@ -52,4 +56,48 @@ it("accepts older comment requests and preserves an optional viewer", () => {
   expect(decode(input)).toEqual(input);
   expect(decode({ ...input, viewer: "account-123" })).toEqual({ ...input, viewer: "account-123" });
   expect(() => decode({ ...input, viewer: " " })).toThrow();
+});
+
+it("preserves template selection through its schema and the existing RPC", () => {
+  const decodeInput = Schema.decodeUnknownSync(IssueTemplatesInput);
+  const decode = Schema.decodeUnknownSync(
+    WsIssuesRpcGroup.requests.get(WS_METHODS.issuesTemplates)!.payloadSchema,
+  );
+  const input = {
+    projectId: ProjectId.make("project-1"),
+    tracker: IssueTrackerKind.make("gitlab"),
+    host: "gitlab.com",
+    scope: "acme/web",
+  };
+  for (const flags of [
+    {},
+    { metadataOnly: false },
+    { metadataOnly: true },
+    { templateKey: "Bug" },
+    { metadataOnly: false, templateKey: "Bug" },
+  ]) {
+    const request = { ...input, ...flags };
+    expect(decodeInput(request)).toEqual(request);
+    expect(decode(request)).toEqual(request);
+  }
+  expect(() => decodeInput({ ...input, templateKey: " " })).toThrow();
+  expect(() => decode({ ...input, templateKey: " " })).toThrow();
+});
+
+it("accepts inline and deferred templates while keeping bodies required", () => {
+  const decode = Schema.decodeUnknownSync(IssueTemplate);
+  const template = {
+    key: "Bug",
+    name: "Bug",
+    about: "",
+    title: "",
+    body: "",
+    labels: [],
+    assignees: [],
+  };
+  expect(decode(template)).toEqual(template);
+  for (const contentDeferred of [false, true]) {
+    expect(decode({ ...template, contentDeferred })).toEqual({ ...template, contentDeferred });
+  }
+  expect(() => decode({ ...template, body: undefined, contentDeferred: true })).toThrow();
 });
