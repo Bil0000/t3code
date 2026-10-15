@@ -280,3 +280,36 @@ it("keeps a typed draft when the project changes, then the next template", async
   expect(field("issue-create-title").props.value).toBe("Mine");
   expect(field("issue-create-body").props.value).toBe("A steps");
 });
+
+it("keeps one choice per tracker of a project bound to two, across a reorder", async () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const linear = {
+    ...a,
+    scope: {
+      ...a.scope,
+      tracker: IssueTrackerKind.make("linear"),
+      host: "linear.app",
+      scope: "ENG",
+    },
+  };
+  await render([a, linear]);
+  await render([linear, a]);
+  const options = renderer.root
+    .findAllByType("option")
+    .map((option) => [option.props.value, option.props.children[2]]);
+  expect(options).toEqual([
+    ["0", "ENG"],
+    ["1", "acme/web"],
+  ]);
+  await act(async () =>
+    renderer.root.findByProps({ id: "issue-create-scope" }).parent!.props.onValueChange("0"),
+  );
+  await type("issue-create-title", "Bug");
+  await submit();
+  expect(state.create.mock.calls[0]?.[0].input).toMatchObject({
+    projectId: "a",
+    tracker: "linear",
+  });
+  expect(error.mock.calls.flat().join(" ")).not.toContain("same key");
+  error.mockRestore();
+});

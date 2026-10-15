@@ -251,7 +251,7 @@ export function IssueCreateDialog({
                   <SelectPopup>
                     {scopes.map((entry, index) => (
                       <SelectItem
-                        key={`${entry.environmentId}:${entry.scope.projectId}`}
+                        key={`${entry.environmentId}:${entry.scope.projectId}:${entry.scope.tracker}:${entry.scope.host ?? ""}:${entry.scope.scope}`}
                         value={String(index)}
                       >
                         {entry.projectTitle} · {entry.scope.scope}
