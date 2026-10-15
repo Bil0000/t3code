@@ -183,6 +183,7 @@ import {
   IssueListResult,
   IssueOperationError,
   IssueReactionInput,
+  issueAccountRequest,
   IssueRef,
   IssueResolveUrlInput,
   IssueResolvedUrl,
@@ -1228,111 +1229,111 @@ const IssueRpcError = Schema.Union([
 ]);
 
 const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
-  payload: IssueListInput,
+  payload: issueAccountRequest(IssueListInput),
   success: IssueListResult,
   error: IssueRpcError,
 });
 
 const WsIssuesResolveUrlRpc = Rpc.make(WS_METHODS.issuesResolveUrl, {
-  payload: IssueResolveUrlInput,
+  payload: issueAccountRequest(IssueResolveUrlInput),
   success: IssueResolvedUrl,
   error: IssueRpcError,
 });
 
 const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
-  payload: IssueRef,
+  payload: issueAccountRequest(IssueRef),
   success: IssueDetail,
   error: IssueRpcError,
 });
 
 /** Older comments, one page at a time, past the cursor the detail handed over. */
 const WsIssuesCommentsRpc = Rpc.make(WS_METHODS.issuesComments, {
-  payload: IssueCommentsPageInput,
+  payload: issueAccountRequest(IssueCommentsPageInput),
   success: IssueCommentsPage,
   error: IssueRpcError,
 });
 
 const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
-  payload: IssueTemplatesInput,
+  payload: issueAccountRequest(IssueTemplatesInput),
   success: IssueTemplateList,
   error: IssueRpcError,
 });
 
 /** Read when a label or assignee picker opens, not with every issue. */
 const WsIssuesCandidatesRpc = Rpc.make(WS_METHODS.issuesCandidates, {
-  payload: IssueCandidatesInput,
+  payload: issueAccountRequest(IssueCandidatesInput),
   success: IssueCandidates,
   error: IssueRpcError,
 });
 
 const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
-  payload: IssueCreateInput,
+  payload: issueAccountRequest(IssueCreateInput),
   success: IssueCreateResult,
   error: IssueRpcError,
 });
 
 const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
-  payload: IssueCommentInput,
+  payload: issueAccountRequest(IssueCommentInput),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
-  payload: IssueUpdateInput,
+  payload: issueAccountRequest(IssueUpdateInput),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesSetStateRpc = Rpc.make(WS_METHODS.issuesSetState, {
-  payload: IssueSetStateInput,
+  payload: issueAccountRequest(IssueSetStateInput),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesReactRpc = Rpc.make(WS_METHODS.issuesReact, {
-  payload: IssueReactionInput,
+  payload: issueAccountRequest(IssueReactionInput),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesHistoryRpc = Rpc.make(WS_METHODS.issuesHistory, {
-  payload: IssuePageRef,
+  payload: issueAccountRequest(IssuePageRef),
   success: IssueHistoryPage,
   error: IssueRpcError,
 });
 
 const WsIssuesLinkedPullRequestsRpc = Rpc.make(WS_METHODS.issuesLinkedPullRequests, {
-  payload: IssuePageRef,
+  payload: issueAccountRequest(IssuePageRef),
   success: IssueLinkedPullRequestsPage,
   error: IssueRpcError,
 });
 
 const WsIssuesHierarchyRpc = Rpc.make(WS_METHODS.issuesHierarchy, {
-  payload: IssuePageRef,
+  payload: issueAccountRequest(IssuePageRef),
   success: IssueHierarchyPage,
   error: IssueRpcError,
 });
 
 const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
-  payload: IssueScopePageRef,
+  payload: issueAccountRequest(IssueScopePageRef),
   success: IssueLabelCandidatesPage,
   error: IssueRpcError,
 });
 
 const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
-  payload: IssueScopePageRef,
+  payload: issueAccountRequest(IssueScopePageRef),
   success: IssueAssigneeCandidatesPage,
   error: IssueRpcError,
 });
 
 const WsIssuesEditCommentRpc = Rpc.make(WS_METHODS.issuesEditComment, {
-  payload: IssueEditCommentInput,
+  payload: issueAccountRequest(IssueEditCommentInput),
   success: Schema.Void,
   error: IssueRpcError,
 });
 
 const WsIssuesSetParentRpc = Rpc.make(WS_METHODS.issuesSetParent, {
-  payload: IssueSetParentInput,
+  payload: issueAccountRequest(IssueSetParentInput),
   success: Schema.Void,
   error: IssueRpcError,
 });

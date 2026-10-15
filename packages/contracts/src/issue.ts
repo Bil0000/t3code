@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
 import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
@@ -26,6 +27,59 @@ export const IssueTrackerKind = TrimmedNonEmptyString.check(
 export type IssueTrackerKind = typeof IssueTrackerKind.Type;
 
 const IssueTrackerConnectionId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+
+export function issueAccountRequest<
+  S extends Schema.Struct<{
+    readonly [key: string]: Schema.Constraint & {
+      readonly DecodingServices: never;
+      readonly EncodingServices: never;
+    };
+  }>,
+>(schema: S, field: "projectId" | "key" = "projectId") {
+  const value = schema.fields[field] ?? Schema.optional(ProjectId);
+  const account = Schema.Struct({ value, connectionId: IssueTrackerConnectionId }).annotate({
+    description:
+      "A saved issue account target. Copy this object from the returned reference; put the connection ID inside it, never at the request top level.",
+  });
+  const wire = Schema.Struct({
+    ...schema.fields,
+    connectionId: Schema.optional(Schema.Never),
+    [field]: Schema.optional(Schema.Union([value, account])),
+  });
+  return wire.pipe(
+    Schema.decodeTo(schema, {
+      decode: SchemaGetter.transform((raw) => {
+        const input = raw as Readonly<Record<string, unknown>>;
+        const target = input[field];
+        if (target !== null && typeof target === "object" && "connectionId" in target) {
+          const { [field]: _qualified, ...rest } = input;
+          const value = "value" in target ? target.value : undefined;
+          return {
+            ...rest,
+            ...(value === undefined ? {} : { [field]: value }),
+            connectionId: target.connectionId,
+          } as S["Encoded"];
+        }
+        return input as S["Encoded"];
+      }),
+      encode: SchemaGetter.transform((raw) => {
+        const input = raw as Readonly<Record<string, unknown>>;
+        const { connectionId, ...rest } = input;
+        return (
+          connectionId === undefined
+            ? input
+            : {
+                ...rest,
+                [field]: {
+                  ...(input[field] === undefined ? {} : { value: input[field] }),
+                  connectionId,
+                },
+              }
+        ) as typeof wire.Type;
+      }),
+    }),
+  );
+}
 
 export const IssueActor = Schema.Struct({
   ...PullRequestActor.fields,

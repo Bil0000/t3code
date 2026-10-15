@@ -45,6 +45,7 @@ import {
 } from "./checkpointDiff.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import {
+  issueAccountRequest,
   ThreadIssueKey,
   ThreadIssueLink,
   ThreadIssueLinkSource,
@@ -3810,7 +3811,16 @@ export const OrchestrationV2RpcSchemas = {
     output: OrchestrationV2SearchThreadResult,
   },
   dispatchCommand: {
-    input: OrchestrationV2Command,
+    input: Schema.Union(
+      OrchestrationV2Command.members.map((member) =>
+        SchemaAST.isLiteral(member.fields.type.ast) &&
+        ["thread.issue.link", "thread.issue.unlink", "thread.issue-link.sync"].includes(
+          String(member.fields.type.ast.literal),
+        )
+          ? issueAccountRequest(member, "key")
+          : member,
+      ),
+    ),
     output: OrchestrationV2DispatchCommandResult,
   },
   getTurnDiff: {
