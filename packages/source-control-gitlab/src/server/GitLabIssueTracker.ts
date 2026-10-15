@@ -18,7 +18,6 @@ import {
   type IssueEvent,
   type IssuePageInput,
   type IssueInvolvement,
-  type IssueViewerPermissions,
 } from "@t3tools/contracts";
 import {
   IssueTrackerError,
@@ -36,6 +35,8 @@ import {
   decodeIssueDetailJson,
   decodeIssueListJson,
   decodeIssueOwnAwardPageJson,
+  decodeIssueViewerPermissionsJson,
+  decodeIssueUpdatedMetadataJson,
   decodeLabelEventsJson,
   decodeLinkedMergeRequestsJson,
   decodeProjectLabelsJson,
@@ -43,6 +44,7 @@ import {
   decodeTemplateEntriesJson,
   decodeTemplateJson,
   ISSUE_AWARD_EMOJI_GRAPHQL_QUERY,
+  ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   PAGE_SIZE,
   type GitLabTemplateEntry,
 } from "./gitLabIssueJson.ts";
@@ -96,20 +98,6 @@ const CAPABILITIES: IssueCapabilities = {
   ],
   // GitLab records nothing about why an issue was closed.
   closeReasons: [],
-};
-
-/**
- * Everything granted. GitLab's REST API reports the viewer's role on the project but never whether
- * they opened this issue, and an issue's author may close, reopen and edit it whatever their role.
- * Withholding those controls from the one person entitled to them is the worse mistake, so they
- * are offered and GitLab explains any refusal itself.
- */
-const VIEWER_PERMISSIONS: IssueViewerPermissions = {
-  setState: true,
-  comment: true,
-  edit: true,
-  labels: true,
-  assignees: true,
 };
 
 /** How many of a scope's templates are read in full; each one is a request of its own. */
@@ -226,8 +214,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         .pipe(
           Effect.mapError(fail(input.operation)),
           Effect.flatMap((result) =>
-            input.operation === "listTemplates" && result.stdoutTruncated
-              ? Effect.fail(unreadable(input.operation, "truncated-template-response"))
+            (input.operation === "listTemplates" || input.operation === "update") &&
+            result.stdoutTruncated
+              ? Effect.fail(unreadable(input.operation, "truncated-response"))
               : Effect.succeed(result.stdout.trim()),
           ),
         );
@@ -481,7 +470,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             return {
               ...issue,
               viewer: awardPage.viewer,
-              viewerPermissions: VIEWER_PERMISSIONS,
+              viewerPermissions: awardPage.viewerPermissions,
               reactions: toReactions({ nodes: issueAwards }, awardPage.viewer),
               reactionsTruncated: issueAwards.length >= PAGE_SIZE,
               comments: awardPage.comments,
@@ -517,7 +506,23 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           })),
         ),
 
-      getViewerPermissions: () => Effect.succeed(VIEWER_PERMISSIONS),
+      getViewerPermissions: (input) =>
+        issuePath(input, "getViewerPermissions").pipe(
+          Effect.flatMap(({ number }) =>
+            read({
+              cwd: input.cwd,
+              host: input.host,
+              operation: "getViewerPermissions",
+              path: "graphql",
+              method: "POST",
+              body: {
+                query: ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
+                variables: { fullPath: input.scope.trim(), iid: String(number) },
+              },
+              decode: decodeIssueViewerPermissionsJson,
+            }),
+          ),
+        ),
 
       editComment: (input) =>
         issuePath(input, "editComment").pipe(
@@ -725,7 +730,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           input.assignees === undefined ? Effect.void : assigneeIds("update", input.assignees),
         ]).pipe(
           Effect.flatMap(([{ path }, assignee_ids]) =>
-            write({
+            api({
               cwd: input.cwd,
               host: input.host,
               operation: "update",
@@ -739,7 +744,39 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                   ? {}
                   : { assignee_ids: assignee_ids.length === 0 ? [0] : assignee_ids }),
               },
-            }),
+            }).pipe(
+              Effect.flatMap((raw) => {
+                if (input.labels === undefined && assignee_ids === undefined) return Effect.void;
+                const decoded = decodeIssueUpdatedMetadataJson(raw);
+                const actual = Result.isSuccess(decoded) ? decoded.success : undefined;
+                const fields = [
+                  ["labels", input.labels, actual?.labels],
+                  [
+                    "assignees",
+                    assignee_ids?.map(String),
+                    actual?.assignees?.map((actor) => String(actor.id)),
+                  ],
+                ] as const;
+                const skipped = fields.flatMap(([name, expected, saved]) => {
+                  if (expected === undefined) return [];
+                  if (saved === undefined) return [name];
+                  const wanted = new Set(expected);
+                  const received = new Set(saved);
+                  return wanted.size === received.size &&
+                    [...wanted].every((value) => received.has(value))
+                    ? []
+                    : [name];
+                });
+                return skipped.length === 0
+                  ? Effect.void
+                  : Effect.fail(
+                      refused(
+                        "update",
+                        `GitLab did not save the requested ${skipped.join(" and ")}.`,
+                      ),
+                    );
+              }),
+            ),
           ),
         ),
 
