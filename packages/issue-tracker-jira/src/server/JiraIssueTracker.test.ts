@@ -326,6 +326,7 @@ it.effect(
       const api = yield* f.api;
       const result = yield* api.getIssue(target);
       expect(result.body).toBe("body");
+      expect(result.bodyEditable).toBe(true);
       expect(result.viewer).toBe("native-account");
       expect(result.viewerPermissions).toEqual({
         edit: true,
@@ -1432,5 +1433,132 @@ it.effect("validates Jira project scope before an empty category result and on m
         .pipe(Effect.flip)).reason,
     ).toBe("failed");
     expect(f.calls).toHaveLength(1);
+  }),
+);
+
+it.effect("refuses rich body edits in the existing scope read and preserves title edits", () =>
+  Effect.gen(function* () {
+    const description = {
+      type: "doc",
+      version: 1,
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "mention", attrs: { id: "native-account", text: "@Ada" } },
+            { type: "text", text: " body", marks: [{ type: "strong" }] },
+          ],
+        },
+      ],
+    };
+    const f = fakeJira((request) =>
+      request.method === "GET"
+        ? { body: { ...issue, fields: { ...issue.fields, description } } }
+        : { status: 204 },
+    );
+    const api = yield* f.api;
+    const failure = yield* api.update!({ ...target, body: "@Ada body!" }).pipe(Effect.flip);
+    expect(failure).toMatchObject({ operation: "update", reason: "failed" });
+    expect(failure.detail).toContain("Jira");
+    expect(f.calls).toHaveLength(1);
+    expect(new URL(f.calls[0]!.url).searchParams.get("fields")).toBe("project,status,description");
+    yield* api.update!({ ...target, title: "Safe title" });
+    expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "PUT"]);
+    expect(new URL(f.calls[1]!.url).searchParams.get("fields")).toBe("project,status");
+    expect(body(f.calls[2])).toEqual({ fields: { summary: "Safe title" } });
+  }),
+);
+
+it.effect("writes plain bodies with two native calls and preserves native write denial", () =>
+  Effect.gen(function* () {
+    for (const { status, description } of [
+      { status: 204, description: issue.fields.description },
+      { status: 403, description: issue.fields.description },
+      { status: 204, description: null },
+    ]) {
+      const f = fakeJira((request) =>
+        request.method === "GET"
+          ? { body: { ...issue, fields: { ...issue.fields, description } } }
+          : { status },
+      );
+      const api = yield* f.api;
+      const result = yield* Effect.result(api.update!({ ...target, body: "changed" }));
+      expect(result._tag).toBe(status === 204 ? "Success" : "Failure");
+      if (result._tag === "Failure") expect(result.failure.detail).toContain("403");
+      expect(f.calls.map(({ method }) => method)).toEqual(["GET", "PUT"]);
+      expect(new URL(f.calls[0]!.url).searchParams.get("fields")).toBe(
+        "project,status,description",
+      );
+      expect(body(f.calls[1])).toEqual({
+        fields: {
+          description: {
+            type: "doc",
+            version: 1,
+            content: [{ type: "paragraph", content: [{ type: "text", text: "changed" }] }],
+          },
+        },
+      });
+    }
+  }),
+);
+
+it.effect("reads rich native task text while refusing to overwrite its IDs and state", () =>
+  Effect.gen(function* () {
+    const description = {
+      type: "doc",
+      version: 1,
+      content: [
+        {
+          type: "taskList",
+          attrs: { localId: "list-id" },
+          content: [
+            {
+              type: "taskItem",
+              attrs: { localId: "item-id", state: "TODO" },
+              content: [{ type: "text", text: "Do this" }],
+            },
+          ],
+        },
+      ],
+    };
+    const f = fakeJira((request) => {
+      if (request.url.endsWith("/myself")) return { body: user };
+      if (request.url.includes("/mypermissions?"))
+        return { body: { permissions: { EDIT_ISSUES: { havePermission: true } } } };
+      return {
+        body: {
+          ...issue,
+          changelog: { total: 0, histories: [] },
+          fields: { ...issue.fields, description, comment: { total: 0, comments: [] } },
+        },
+      };
+    });
+    const api = yield* f.api;
+    const detail = yield* api.getIssue(target);
+    expect(detail.body).toBe("- [ ] Do this");
+    expect(detail.bodyEditable).toBe(false);
+    expect(detail.viewerPermissions.edit).toBe(true);
+    f.calls.length = 0;
+    expect((yield* api.update!({ ...target, body: "changed" }).pipe(Effect.flip)).reason).toBe(
+      "failed",
+    );
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.method).toBe("GET");
+  }),
+);
+
+it.effect.each([
+  undefined,
+  { type: "doc", version: 1, content: [{ type: "unknownNode" }] },
+  { type: "doc", version: 1, content: [{ type: "paragraph", content: "invalid" }] },
+])("refuses body writes when the current description is missing or malformed: %j", (description) =>
+  Effect.gen(function* () {
+    const f = fakeJira(() => ({ body: { ...issue, fields: { ...issue.fields, description } } }));
+    const api = yield* f.api;
+    expect((yield* api.update!({ ...target, body: "changed" }).pipe(Effect.flip)).reason).toBe(
+      "failed",
+    );
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.method).toBe("GET");
   }),
 );

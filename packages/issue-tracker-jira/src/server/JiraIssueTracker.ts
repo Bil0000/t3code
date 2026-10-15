@@ -21,6 +21,7 @@ import {
   JiraComment,
   JiraHistoryEntry,
   adfToText,
+  isEditableAdf,
   textToAdf,
   normalizeJiraIssue,
   buildJql,
@@ -129,7 +130,11 @@ const History = Schema.Struct({
 });
 const ScopeIssue = Schema.Struct({
   key: Text,
-  fields: Schema.Struct({ project: Schema.Struct({ id: Text, key: Text }), status: JiraStatus }),
+  fields: Schema.Struct({
+    project: Schema.Struct({ id: Text, key: Text }),
+    status: JiraStatus,
+    description: Schema.optional(Schema.Unknown),
+  }),
 });
 const issueFields = [
   "project",
@@ -187,13 +192,17 @@ export const make = Effect.gen(function* () {
         );
       return issue;
     });
-  const requireScopeIssue = (input: IssueTarget, operation: string) =>
+  const requireScopeIssue = (input: IssueTarget, operation: string, description = false) =>
     Effect.gen(function* () {
       const issue = yield* jira.request({
         host: input.host,
         operation,
         method: "GET",
-        path: "/issue/" + encodeURIComponent(input.key) + "?fields=project,status",
+        path:
+          "/issue/" +
+          encodeURIComponent(input.key) +
+          "?fields=project,status" +
+          (description ? ",description" : ""),
         schema: ScopeIssue,
       });
       if (issue.fields.project.key !== input.scope && issue.fields.project.id !== input.scope)
@@ -435,6 +444,9 @@ export const make = Effect.gen(function* () {
             normalizeJiraIssue(issue, JiraApi.normalizeJiraHost(input.host)),
           )),
           body: yield* JiraApi.attempt("getIssue", () => adfToText(issue.fields.description)),
+          bodyEditable: yield* JiraApi.attempt("getIssue", () =>
+            isEditableAdf(issue.fields.description),
+          ),
           states: [jiraState(issue.fields.status)],
           viewer: who,
           viewerPermissions: toPermissions(rawPermissions),
@@ -775,7 +787,15 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (input.assignees !== undefined && input.assignees.length > 1)
           return yield* JiraApi.failed("update", "A Jira issue can have only one assignee.");
-        yield* requireScopeIssue(input, "update");
+        const issue = yield* requireScopeIssue(input, "update", input.body !== undefined);
+        if (
+          input.body !== undefined &&
+          !(yield* JiraApi.attempt("update", () => isEditableAdf(issue.fields.description)))
+        )
+          return yield* JiraApi.failed(
+            "update",
+            "This description has rich content. Edit it in Jira to preserve its formatting and attachments.",
+          );
         const text = input.body;
         const body =
           text === undefined ? undefined : yield* JiraApi.attempt("update", () => textToAdf(text));
