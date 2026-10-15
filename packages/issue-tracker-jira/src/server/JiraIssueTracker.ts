@@ -34,6 +34,7 @@ import {
 import { jiraRichBody, parseJiraRichBody } from "./jiraAdf.ts";
 import {
   JiraField,
+  jiraFormFieldLimit,
   createReserved,
   transitionReserved,
   jiraInputFields,
@@ -176,7 +177,8 @@ const matchesState = (
 ) => (transition.to.statusCategory.key === "done") === (state === "closed");
 const transitionFields = (transition: (typeof Transitions.Type)["transitions"][number]) => {
   const fields = transition.fields ?? {};
-  if (Object.keys(fields).length > 100) throw new Error("Too many Jira transition fields.");
+  if (Object.keys(fields).length > jiraFormFieldLimit)
+    throw new Error("Too many Jira transition fields.");
   return fields;
 };
 const RemoteLinks = bounded(
@@ -206,20 +208,21 @@ const metadataProgress = (
   startAt: number,
   count: number,
   total: number | undefined,
+  maximum = 100,
 ) => {
   const next = startAt + count;
   if (
     page.startAt !== startAt ||
-    next > 100 ||
+    next > maximum ||
     (page.total === undefined && page.isLast === undefined) ||
-    (page.total !== undefined && (page.total > 100 || page.total < next)) ||
+    (page.total !== undefined && (page.total > maximum || page.total < next)) ||
     (total !== undefined && page.total !== total) ||
     (page.isLast === true && page.total !== undefined && page.total !== next) ||
     (page.isLast === false && page.total !== undefined && page.total === next)
   )
     throw new Error("Inconsistent Jira metadata page.");
   const more = page.isLast === false || (page.isLast !== true && next < (page.total ?? next));
-  if (more && (count === 0 || next >= 100)) throw new Error("Incomplete Jira metadata.");
+  if (more && (count === 0 || next >= maximum)) throw new Error("Incomplete Jira metadata.");
   return { total: page.total, more };
 };
 const formAttempt = <A>(operation: string, run: () => A) =>
@@ -442,7 +445,7 @@ export const make = Effect.gen(function* () {
           schema: Fields,
         });
         const progress = yield* JiraApi.attempt(operation, () =>
-          metadataProgress(page, startAt, page.fields.length, total),
+          metadataProgress(page, startAt, page.fields.length, total, jiraFormFieldLimit),
         );
         total = progress.total;
         more = progress.more;

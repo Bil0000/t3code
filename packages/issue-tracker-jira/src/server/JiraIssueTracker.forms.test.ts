@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Crypto from "effect/Crypto";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { IssueCandidates, IssueFieldValues } from "@t3tools/contracts";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { IssueTrackerError } from "@t3tools/issue-tracker-core/server/IssueTracker";
@@ -11,6 +12,8 @@ import * as JiraIssueTracker from "./JiraIssueTracker.ts";
 
 const target = { cwd: "/tmp", host: "example.atlassian.net", scope: "ENG", key: "ENG-1" };
 const isTrackerError = Schema.is(IssueTrackerError);
+const decodeCandidates = Schema.decodeEffect(IssueCandidates);
+const decodeFieldValues = Schema.decodeEffect(IssueFieldValues);
 const status = { id: "2", name: "Review", statusCategory: { key: "indeterminate" } };
 const document = {
   type: "doc",
@@ -118,6 +121,254 @@ function fixture(
   };
 }
 const create = { ...target, title: "New", body: "", labels: [], assignees: [], issueType: "task" };
+
+function nativeFormFixture(
+  deployment: "cloud" | "data-center",
+  page: (startAt: number) => unknown,
+  writeStatus = 201,
+) {
+  const host = deployment === "cloud" ? target.host : "jira.example.test/Team/Jira";
+  const calls: HttpClientRequest.HttpClientRequest[] = [];
+  const http = HttpClient.make((request) => {
+    calls.push(request);
+    const url = new URL(request.url);
+    const write = request.method === "POST" && url.pathname.endsWith("/issue");
+    const raw = write
+      ? { key: "ENG-2" }
+      : url.pathname.endsWith("/issuetypes/task")
+        ? page(Number(url.searchParams.get("startAt")))
+        : url.pathname.endsWith("/issuetypes")
+          ? {
+              startAt: 0,
+              total: 1,
+              [deployment === "cloud" ? "issueTypes" : "values"]: [{ id: "task", name: "Task" }],
+            }
+          : url.pathname.endsWith("/mypermissions")
+            ? { permissions: { CREATE_ISSUES: { havePermission: true } } }
+            : url.pathname.endsWith("/statuses")
+              ? []
+              : { startAt: 0, total: 0, issues: [] };
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(JSON.stringify(raw), { status: write ? writeStatus : 200 }),
+      ),
+    );
+  });
+  const credential =
+    deployment === "cloud"
+      ? { site: host, email: "ada@example.test", token: "fake-token" }
+      : { deployment, site: "https://" + host, token: "fake-pat" };
+  const transport = JiraApi.make.pipe(
+    Effect.provideService(HttpClient.HttpClient, http),
+    Effect.provideService(
+      IssueTrackerHost,
+      IssueTrackerHost.of({
+        credentials: { get: () => Effect.succeedSome(JSON.stringify(credential)) },
+      }),
+    ),
+    Effect.provide(SourceControlRateLimit.layer),
+    Effect.provideService(
+      Crypto.Crypto,
+      Crypto.make({
+        randomBytes: (size) => new Uint8Array(size),
+        digest: (_algorithm, data) => Effect.succeed(data),
+      }),
+    ),
+  );
+  return {
+    host,
+    calls,
+    api: JiraIssueTracker.make.pipe(Effect.provideServiceEffect(JiraApi.JiraApi, transport)),
+  };
+}
+
+const largeForm = (count: number, required = false) => [
+  fields[0]!,
+  ...Array.from({ length: count - 1 }, (_, index) => ({
+    fieldId: "customfield_" + (index + 1),
+    name: "Field " + (index + 1),
+    required,
+    schema: { type: "string" },
+  })),
+];
+
+it.effect.each(["cloud", "data-center"] as const)(
+  "reads every native create field across pages and writes 101 required values for %s",
+  (deployment) =>
+    Effect.gen(function* () {
+      const metadata = largeForm(102, true);
+      const f = nativeFormFixture(deployment, (startAt) => ({
+        startAt,
+        total: 102,
+        [deployment === "cloud" ? "fields" : "values"]: metadata.slice(startAt, startAt + 100),
+      }));
+      const api = yield* f.api;
+      const candidates = yield* api.listCandidates!({
+        ...target,
+        host: f.host,
+        key: undefined,
+        issueType: "task",
+      });
+      expect((yield* decodeCandidates(candidates)).fields).toHaveLength(101);
+      expect(candidates.fields?.at(-1)).toMatchObject({ id: "customfield_101", required: true });
+      f.calls.length = 0;
+      const fieldValues = yield* decodeFieldValues(
+        Object.fromEntries(metadata.slice(1).map((field) => [field.fieldId, "Set"])),
+      );
+      yield* api.create!({ ...create, host: f.host, fieldValues });
+      expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "GET", "POST"]);
+      expect(f.calls.map(({ url }) => new URL(url).searchParams.get("startAt"))).toEqual([
+        "0",
+        "0",
+        "100",
+        null,
+      ]);
+      const write = f.calls.at(-1)!;
+      expect(write.url).toBe(
+        "https://" + f.host + (deployment === "cloud" ? "/rest/api/3/issue" : "/rest/api/2/issue"),
+      );
+      expect(write.headers.authorization).toBe(
+        deployment === "cloud" ? "Basic " + btoa("ada@example.test:fake-token") : "Bearer fake-pat",
+      );
+      if (write.body._tag !== "Uint8Array") throw new Error("Expected native JSON body.");
+      const payload = JSON.parse(new TextDecoder().decode(write.body.body));
+      expect(payload.fields.customfield_101).toBe("Set");
+      expect(Object.keys(payload.fields)).toHaveLength(104);
+      f.calls.length = 0;
+      const missing = Object.fromEntries(
+        Object.entries(fieldValues).filter(([id]) => id !== "customfield_101"),
+      );
+      yield* api.create!({ ...create, host: f.host, fieldValues: missing }).pipe(Effect.flip);
+      expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "GET"]);
+    }),
+);
+
+it.effect.each(["cloud", "data-center"] as const)(
+  "accepts the terminal 1000th native field with total or isLast for %s",
+  (deployment) =>
+    Effect.gen(function* () {
+      for (const withTotal of [true, false]) {
+        const metadata = largeForm(1000);
+        const f = nativeFormFixture(deployment, (startAt) => ({
+          startAt,
+          ...(withTotal ? { total: 1000 } : { isLast: startAt === 900 }),
+          [deployment === "cloud" ? "fields" : "values"]: metadata.slice(startAt, startAt + 100),
+        }));
+        yield* (yield* f.api).create!({
+          ...create,
+          host: f.host,
+          fieldValues: { customfield_999: "Last" },
+        });
+        expect(f.calls).toHaveLength(12);
+        expect(f.calls.filter(({ method }) => method === "POST")).toHaveLength(1);
+        expect(f.calls.at(-2)?.url).toContain("startAt=900&maxResults=100");
+      }
+    }),
+);
+
+it.effect.each(["cloud", "data-center"] as const)(
+  "refuses incomplete, oversized or inconsistent native field pages before a write for %s",
+  (deployment) =>
+    Effect.gen(function* () {
+      const metadata = largeForm(102);
+      const cases = [
+        { name: "total beyond bound", first: { total: 1001 }, reads: 2 },
+        { name: "oversized page", first: { fields: metadata }, reads: 2 },
+        { name: "empty nonterminal page", first: { fields: [] }, reads: 2 },
+        { name: "missing completion", first: { total: undefined }, reads: 2 },
+        { name: "looped offset", second: { startAt: 0 }, reads: 3 },
+        { name: "changed total", second: { total: 103 }, reads: 3 },
+        { name: "missing total", second: { total: undefined, isLast: false }, reads: 3 },
+        { name: "premature last", first: { isLast: true }, reads: 2 },
+        { name: "false last", second: { isLast: false }, reads: 3 },
+        { name: "duplicate identity", second: { fields: [metadata[0], metadata[0]] }, reads: 3 },
+        {
+          name: "unsafe identity",
+          second: { fields: [{ fieldId: "__proto__" }, metadata[101]] },
+          reads: 3,
+        },
+      ];
+      for (const test of cases) {
+        const f = nativeFormFixture(deployment, (startAt) => {
+          const page = {
+            startAt,
+            total: 102,
+            fields: metadata.slice(startAt, startAt + 100),
+            ...(startAt === 0 ? test.first : test.second),
+          };
+          return deployment === "cloud"
+            ? page
+            : { ...page, fields: undefined, values: page.fields };
+        });
+        yield* (yield* f.api).create!({ ...create, host: f.host }).pipe(Effect.flip);
+        expect(
+          f.calls.map(({ method }) => method),
+          test.name,
+        ).toEqual(Array(test.reads).fill("GET"));
+      }
+      const metadataAtBound = largeForm(1000);
+      const looping = nativeFormFixture(deployment, (startAt) => ({
+        startAt,
+        isLast: false,
+        [deployment === "cloud" ? "fields" : "values"]: metadataAtBound.slice(
+          startAt,
+          startAt + 100,
+        ),
+      }));
+      yield* (yield* looping.api).create!({ ...create, host: looping.host }).pipe(Effect.flip);
+      expect(looping.calls).toHaveLength(11);
+      expect(looping.calls.every(({ method }) => method === "GET")).toBe(true);
+    }),
+);
+
+it.effect.each(["cloud", "data-center"] as const)(
+  "keeps native authorization and rate failures after large metadata reads for %s",
+  (deployment) =>
+    Effect.gen(function* () {
+      const metadata = largeForm(102);
+      for (const status of [403, 429]) {
+        const f = nativeFormFixture(
+          deployment,
+          (startAt) => ({
+            startAt,
+            total: 102,
+            [deployment === "cloud" ? "fields" : "values"]: metadata.slice(startAt, startAt + 100),
+          }),
+          status,
+        );
+        const error = yield* (yield* f.api).create!({ ...create, host: f.host }).pipe(Effect.flip);
+        expect(error.detail).toContain(String(status));
+        expect(error.reason).toBe(status === 429 ? "rate-limited" : "failed");
+        expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "GET", "POST"]);
+      }
+    }),
+);
+
+it.effect("keeps 101 required native transition fields through candidates and writes", () =>
+  Effect.gen(function* () {
+    const metadata = Object.fromEntries(
+      largeForm(102, true)
+        .slice(1)
+        .map((field) => [field.fieldId, field]),
+    );
+    const f = fixture((path) =>
+      path.includes("/transitions?")
+        ? { transitions: [{ id: "advance", to: status, fields: metadata }] }
+        : path === "/search/jql"
+          ? { issues: [] }
+          : undefined,
+    );
+    const api = yield* f.api;
+    const candidates = yield* api.listCandidates!(target);
+    expect((yield* decodeCandidates(candidates)).states?.[0]?.fields).toHaveLength(101);
+    f.calls.length = 0;
+    const fieldValues = Object.fromEntries(Object.keys(metadata).map((id) => [id, "Set"]));
+    yield* api.setState!({ ...target, state: status.id, transitionId: "advance", fieldValues });
+    expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "POST"]);
+    expect(f.calls.at(-1)?.body).toEqual({ transition: { id: "advance" }, fields: fieldValues });
+  }),
+);
 
 it.effect("creates native required select and numeric fields without losing them", () =>
   Effect.gen(function* () {

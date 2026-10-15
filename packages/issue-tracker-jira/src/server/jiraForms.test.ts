@@ -139,3 +139,18 @@ it("uses native string options and unknown schema objects without losing values"
     ),
   ).toEqual({ customfield_7: "red", customfield_8: ["blue"], customfield_9: { native: 1 } });
 });
+it("keeps 1000 editable fields and required values but rejects 1001", () => {
+  const fields = Object.fromEntries(
+    Array.from({ length: 1000 }, (_, index) => [
+      "customfield_" + index,
+      { required: true, schema: { type: "string" } },
+    ]),
+  );
+  const values = Object.fromEntries(Object.keys(fields).map((id) => [id, "Set"]));
+  expect(jiraInputFields(fields, createReserved)).toHaveLength(1000);
+  expect(jiraFieldValues(fields, values, createReserved, true)).toEqual(values);
+  fields.customfield_1000 = { required: true, schema: { type: "string" } };
+  values.customfield_1000 = "Set";
+  expect(() => jiraInputFields(fields, createReserved)).toThrow();
+  expect(() => jiraFieldValues(fields, values, createReserved, true)).toThrow();
+});

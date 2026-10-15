@@ -5,6 +5,7 @@ import { boundedJiraJson } from "./jiraAdf.ts";
 import { textToAdf } from "./jiraJson.ts";
 
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096));
+export const jiraFormFieldLimit = 1000;
 export const JiraField = Schema.Struct({
   fieldId: Schema.optional(Text),
   name: Schema.optional(Text.check(Schema.isMaxLength(1024))),
@@ -138,7 +139,7 @@ export function jiraInputFields(
   fields: Readonly<Record<string, JiraFieldMetadata>>,
   reserved: ReadonlySet<string>,
 ): IssueInputField[] {
-  if (Object.keys(fields).length > 100) throw new Error("Too many Jira fields.");
+  if (Object.keys(fields).length > jiraFormFieldLimit) throw new Error("Too many Jira fields.");
   return Object.entries(fields)
     .filter(([id, field]) => !reserved.has(id) && writable(field))
     .map(([id, field]) => jiraInputField(id, field));
@@ -152,7 +153,7 @@ export function jiraFieldValues(
 ): Record<string, unknown> {
   const entries = Object.entries(values ?? {});
   if (
-    entries.length > 100 ||
+    entries.length > jiraFormFieldLimit ||
     entries.reduce(
       (length, [id, value]) =>
         length +

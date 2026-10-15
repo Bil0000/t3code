@@ -683,17 +683,30 @@ it("bounds native field values and rich JSON before tracker calls", () => {
     candidates({
       labels: [],
       assignees: [],
-      fields: Array.from({ length: 101 }, () => field),
+      fields: Array.from({ length: 1001 }, () => field),
       truncated: false,
     }),
+  ).toThrow();
+  const largeFields = Array.from({ length: 1000 }, (_, i) => ({ ...field, id: `custom_${i}` }));
+  expect(
+    candidates({ labels: [], assignees: [], fields: largeFields, truncated: false }).fields,
+  ).toEqual(largeFields);
+  expect(decodeState({ category: "open", name: "Start", fields: largeFields }).fields).toEqual(
+    largeFields,
+  );
+  expect(() =>
+    decodeState({ category: "open", name: "Start", fields: [...largeFields, field] }),
   ).toThrow();
   expect(values({ text: "value", users: ["a", "b"] })).toEqual({
     text: "value",
     users: ["a", "b"],
   });
+  const largeValues = Object.fromEntries(largeFields.map(({ id }) => [id, "x"]));
+  expect(values(largeValues)).toEqual(largeValues);
   expect(() =>
-    values(Object.fromEntries(Array.from({ length: 101 }, (_, i) => [String(i), ""]))),
+    values(Object.fromEntries(Array.from({ length: 1001 }, (_, i) => [String(i), ""]))),
   ).toThrow();
+  expect(() => values({ users: Array.from({ length: 101 }, () => "x") })).toThrow();
   expect(() => values({ first: "x".repeat(32768), second: "x".repeat(32768) })).toThrow();
   expect(rich({ format: "adf", document: '{"type":"doc"}' }).format).toBe("adf");
   expect(() => rich({ format: "adf", document: "not json" })).toThrow();

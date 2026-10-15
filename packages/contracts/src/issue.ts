@@ -217,7 +217,7 @@ export const IssueFieldValues = Schema.Record(
 ).check(
   Schema.makeFilter(
     (values) =>
-      Object.keys(values).length <= 100 &&
+      Object.keys(values).length <= 1000 &&
       Object.entries(values).reduce(
         (total, [key, value]) =>
           total +
@@ -254,7 +254,7 @@ export type IssueRichBody = typeof IssueRichBody.Type;
 
 export const IssueState = Schema.Struct({
   transitionId: Schema.optional(TrimmedNonEmptyString),
-  fields: Schema.optional(Schema.Array(IssueInputField).check(Schema.isMaxLength(100))),
+  fields: Schema.optional(Schema.Array(IssueInputField).check(Schema.isMaxLength(1000))),
   workflowCategory: Schema.optional(IssueWorkflowCategory),
   id: Schema.optional(TrimmedNonEmptyString),
   category: IssueStateCategory,
@@ -881,7 +881,7 @@ export type IssueAssigneeCandidate = typeof IssueAssigneeCandidate.Type;
 
 /** The labels and people a scope offers, read when a picker opens rather than with every issue. */
 export const IssueCandidates = Schema.Struct({
-  fields: Schema.optional(Schema.Array(IssueInputField).check(Schema.isMaxLength(100))),
+  fields: Schema.optional(Schema.Array(IssueInputField).check(Schema.isMaxLength(1000))),
   states: Schema.optional(Schema.Array(IssueState)),
   labels: Schema.Array(IssueLabelCandidate),
   assignees: Schema.Array(IssueAssigneeCandidate),
