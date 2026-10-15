@@ -1598,4 +1598,43 @@ describe("native issue body editability", () => {
     ]);
     expect(description()).toBeNull();
   });
+  it.each(["viewer", "environment"])(
+    "keeps native body restrictions after a %s switch",
+    async (scope) => {
+      state.detail = { ...state.detail, viewer: "viewer-a", bodyEditable: true };
+      await act(async () => render());
+      await act(async () => button("Edit description")!.click());
+      await act(async () => type(description()!, "Previous scope draft"));
+      state.detail = {
+        ...state.detail,
+        viewer: "viewer-b",
+        body: "Current native body",
+        bodyEditable: false,
+      };
+      const currentEnvironmentId =
+        scope === "environment" ? EnvironmentId.make("other-environment") : environmentId;
+      await act(async () =>
+        root.render(
+          <IssueDetailPanel environmentId={currentEnvironmentId} reference={reference} />,
+        ),
+      );
+      expect(description()).toBeNull();
+      expect(button("Edit description")).toBeUndefined();
+      expect(container.textContent).toContain("Current native body");
+      expect(container.textContent).not.toContain("Previous scope draft");
+      expect(state.write).not.toHaveBeenCalled();
+      await act(async () => button("Edit title")!.click());
+      await act(async () =>
+        type(
+          container.querySelector<HTMLInputElement>('input[aria-label="Issue title"]')!,
+          "Current title",
+        ),
+      );
+      await act(async () => button("Save")!.click());
+      expect(state.write).toHaveBeenCalledExactlyOnceWith({
+        environmentId: currentEnvironmentId,
+        input: { ...reference, title: "Current title" },
+      });
+    },
+  );
 });
