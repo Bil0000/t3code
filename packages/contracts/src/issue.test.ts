@@ -55,6 +55,35 @@ const decodeTemplateRpc = Schema.decodeUnknownSync(
 );
 const decodeScope = Schema.decodeUnknownSync(IssueScopeRef);
 
+it("preserves optional native reactions on issue summaries", () => {
+  const decode = Schema.decodeUnknownSync(IssueSummary);
+  const summary = {
+    tracker: "linear",
+    host: "linear.app",
+    scope: "ENG",
+    key: "ENG-7",
+    displayKey: "ENG-7",
+    title: "Issue",
+    url: "https://linear.app/team/issue/ENG-7/issue",
+    author: null,
+    state: { name: "Open", category: "open" },
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+    closedAt: null,
+    assignees: [],
+    labels: [],
+    commentCount: null,
+  };
+  expect(decode(summary)).toEqual(summary);
+  const reactions = [{ content: "thumbs-up", count: 1, actors: [], viewerHasReacted: true }];
+  expect(decode({ ...summary, reactions, reactionsTruncated: true })).toEqual({
+    ...summary,
+    reactions,
+    reactionsTruncated: true,
+  });
+  expect(() => decode({ ...summary, reactions: [{ ...reactions[0], count: 0 }] })).toThrow();
+});
+
 it("carries an optional native key through the existing candidates RPC", () => {
   const decodeInput = Schema.decodeSync(IssueCandidatesInput);
   const decode = Schema.decodeUnknownSync(

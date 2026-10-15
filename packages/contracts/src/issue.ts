@@ -176,6 +176,8 @@ export const IssueSummary = Schema.Struct({
   labels: Schema.Array(IssueLabel),
   milestone: Schema.optional(Schema.NullOr(Schema.String)),
   labelsTruncated: Schema.optional(Schema.Boolean),
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
+  reactionsTruncated: Schema.optional(Schema.Boolean),
   commentCount: Schema.NullOr(NonNegativeInt),
 });
 export type IssueSummary = typeof IssueSummary.Type;
