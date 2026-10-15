@@ -1019,7 +1019,7 @@ it.live("keeps saved usage data when removing a settled checkout", () =>
 );
 
 it.live.each(["thread.settled", "stopped", "ready"] as const)(
-  "requests a settled cleanup sweep for %s",
+  "sweeps for settled cleanup after %s only when a session ended",
   (trigger) =>
     runCleanupTest(
       Effect.gen(function* () {
@@ -1062,7 +1062,7 @@ it.live.each(["thread.settled", "stopped", "ready"] as const)(
         yield* Deferred.await(handled);
         yield* Deferred.succeed(fixture.resume, undefined);
         yield* fixture.service.drain;
-        expect(fixture.snapshotReads()).toBe(trigger === "ready" ? 1 : 2);
+        expect(fixture.snapshotReads()).toBe(trigger === "stopped" ? 2 : 1);
       }),
     ),
 );

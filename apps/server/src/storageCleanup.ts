@@ -874,14 +874,15 @@ const make = Effect.gen(function* () {
     yield* forkParked(
       // Deleted threads and immediately removable settled threads wait for
       // their sessions to end. Moving between live statuses, such as running
-      // to ready, cannot free one.
+      // to ready, cannot free one. Settling itself does not sweep: the
+      // project's settle script runs in the worktree right after.
       Stream.runForEach(events, (event) => {
         const sessionEnded =
           event.type === "provider-session.updated" &&
           (event.payload.status === "stopped" || event.payload.status === "error");
         return ((event.type === "thread.deleted" || sessionEnded) &&
           anyWorktreePolicy(lastSettings, (rules) => rules.worktreeOnDelete)) ||
-          ((event.type === "thread.settled" || sessionEnded) &&
+          (sessionEnded &&
             anyWorktreePolicy(lastSettings, (rules) => rules.worktreeSettledAfterDays === 0))
           ? requestSweep
           : Effect.void;
