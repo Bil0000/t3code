@@ -427,6 +427,7 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
                       host: link.host,
                       scope: link.scope,
                       key: link.key,
+                      originalURL: link.url,
                       ...(link.snapshot ? { displayKey: link.snapshot.displayKey } : {}),
                     })
                   }
