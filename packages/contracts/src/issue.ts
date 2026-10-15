@@ -258,6 +258,10 @@ export const IssueRichBody = Schema.Union([
     format: Schema.Literal("jira-wiki"),
     document: Schema.String.check(Schema.isMaxLength(65_536)),
   }),
+  Schema.Struct({
+    format: Schema.Literal("azure-html"),
+    document: Schema.String.check(Schema.isMaxLength(65_536)),
+  }),
 ]);
 export type IssueRichBody = typeof IssueRichBody.Type;
 

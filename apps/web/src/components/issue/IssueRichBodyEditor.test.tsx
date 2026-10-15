@@ -453,3 +453,21 @@ it("shows Jira wiki as labelled source instead of rendering Markdown", async () 
   expect(container.querySelector("pre")?.textContent).toBe(document);
   expect(container.querySelector("a, h2, strong, img")).toBeNull();
 });
+
+it("saves an empty Azure HTML description and locks it while pending or disabled", async () => {
+  await render({ value: { format: "azure-html", document: "" } });
+  await act(async () => button("Save").click());
+  expect(save).toHaveBeenCalledExactlyOnceWith({ format: "azure-html", document: "" });
+  save.mockClear();
+  await render({ value: { format: "azure-html", document: "" }, saving: true });
+  expect(container.querySelector("textarea")!.disabled).toBe(true);
+  expect(button("Saving…").disabled).toBe(true);
+  expect(button("Cancel").disabled).toBe(true);
+  await render({ value: { format: "azure-html", document: "" }, disabled: true });
+  expect(container.querySelector("textarea")!.disabled).toBe(true);
+  expect(button("Save").disabled).toBe(true);
+  expect(button("Cancel").disabled).toBe(false);
+  await act(async () => button("Cancel").click());
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(save).not.toHaveBeenCalled();
+});

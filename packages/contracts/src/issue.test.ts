@@ -717,6 +717,11 @@ it("bounds native field values and rich JSON before tracker calls", () => {
   const wiki = { format: "jira-wiki", document: "h2. Title\n\n*bold* !keep.png!\n" };
   expect(rich(wiki)).toEqual(wiki);
   expect(() => rich({ ...wiki, document: "x".repeat(65_537) })).toThrow();
+  const html = { format: "azure-html", document: "<table><tr><td>A</td></tr></table>\r\n" };
+  expect(rich(html)).toEqual(html);
+  expect(rich({ ...html, document: "" })).toEqual({ ...html, document: "" });
+  expect(() => rich({ ...html, document: "x".repeat(65_537) })).toThrow();
+  expect(() => rich({ format: "html", document: "<p>A</p>" })).toThrow();
   const field = { id: "custom", label: "Choice", kind: "select", required: true };
   expect(fields({ ...field, options: [{ value: "1", label: "One" }] }).options).toHaveLength(1);
   expect(() => fields({ ...field, label: "x".repeat(1025) })).toThrow();

@@ -15,6 +15,7 @@ import type {
   IssueLabel,
   IssueReaction,
   IssueReactionContent,
+  IssueRichBody,
   IssueState,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -61,6 +62,7 @@ const Relation = Schema.Struct({ rel: Schema.String, url: Schema.String });
 
 const WorkItem = Schema.Struct({
   rev: Schema.optional(Schema.Int),
+  multilineFieldsFormat: Schema.optional(Schema.Unknown),
   id: Schema.Int,
   url: Schema.optional(Schema.NullOr(Schema.String)),
   fields: Schema.optional(Schema.NullOr(Fields)),
@@ -130,6 +132,9 @@ function toLabels(tags: string | null | undefined): ReadonlyArray<IssueLabel> {
 
 export interface AzureDevOpsWorkItem extends TrackerIssueSummary {
   readonly body: string;
+  readonly bodyFormat: "html" | "markdown" | null;
+  readonly richBody?: IssueRichBody;
+  readonly bodyEditable: boolean;
   readonly workItemType: string | null;
   readonly revision: number | null;
   readonly nativeUrl: string | null;
@@ -149,6 +154,18 @@ function toWorkItem(raw: typeof WorkItem.Type): AzureDevOpsWorkItem | null {
     return null;
   }
   const assignee = toActor(fields["System.AssignedTo"]);
+  const body = fields["System.Description"] ?? "";
+  const formats = raw.multilineFieldsFormat;
+  const nativeFormat =
+    formats === undefined
+      ? "html"
+      : typeof formats === "object" && formats !== null && !Array.isArray(formats)
+        ? "System.Description" in formats
+          ? formats["System.Description"]
+          : "html"
+        : null;
+  const bodyFormat = textFormatOf(nativeFormat);
+  const bodyEditable = bodyFormat !== null && body.length <= 65_536;
   return {
     key: String(raw.id),
     displayKey: `#${raw.id}`,
@@ -162,7 +179,12 @@ function toWorkItem(raw: typeof WorkItem.Type): AzureDevOpsWorkItem | null {
     assignees: assignee === null ? [] : [assignee],
     labels: toLabels(fields["System.Tags"]),
     commentCount: Math.max(0, fields["System.CommentCount"] ?? 0),
-    body: fields["System.Description"] ?? "",
+    body,
+    bodyFormat,
+    bodyEditable,
+    ...(bodyFormat === "html" && bodyEditable
+      ? { richBody: { format: "azure-html" as const, document: body } }
+      : {}),
     workItemType: fields["System.WorkItemType"] ?? null,
     revision: raw.rev ?? null,
     nativeUrl: raw.url ?? null,
@@ -182,6 +204,19 @@ export function decodeWorkItemsJson(
       return toWorkItem(item.value) ?? [];
     }),
   );
+}
+
+const decodeWorkItemsBatch = decodeJsonResult(
+  Schema.Struct({
+    count: Schema.optional(Schema.Int),
+    value: Schema.Array(WorkItem),
+  }).check(
+    Schema.makeFilter((page) => page.count === undefined || page.count === page.value.length),
+  ),
+);
+
+export function decodeWorkItemsBatchJson(raw: string) {
+  return Result.map(decodeWorkItemsBatch(raw), (page) => page.value.map(toWorkItem));
 }
 
 /** Null where az answered with a work item this cannot place, which the caller reports as such. */
@@ -207,6 +242,7 @@ export function azureDevOpsReactionType(content: IssueReactionContent): string |
 
 const Comment = Schema.Struct({
   id: Schema.Int,
+  format: Schema.optional(Schema.Unknown),
   text: Schema.optional(Schema.NullOr(Schema.String)),
   createdDate: Schema.String,
   modifiedDate: Schema.optional(Schema.String),
@@ -232,6 +268,23 @@ const CommentsPage = Schema.Struct({
 
 const decodeCommentsPage = decodeJsonResult(CommentsPage);
 const decodeCommentEntry = Schema.decodeUnknownExit(Comment);
+const decodeComment = decodeJsonResult(Comment);
+
+function textFormatOf(format: unknown): "html" | "markdown" | null {
+  if (format === 0 || (typeof format === "string" && format.toLowerCase() === "markdown"))
+    return "markdown";
+  if (format === 1 || (typeof format === "string" && format.toLowerCase() === "html"))
+    return "html";
+  return null;
+}
+
+export function decodeCommentFormatJson(raw: string) {
+  return Result.map(decodeComment(raw), (comment) => ({
+    id: String(comment.id),
+    format: textFormatOf(comment.format),
+    isDeleted: comment.isDeleted === true,
+  }));
+}
 
 function toReactions(raw: (typeof Comment.Type)["reactions"]): ReadonlyArray<IssueReaction> {
   return (raw ?? []).flatMap((reaction) => {
@@ -261,18 +314,25 @@ export function decodeCommentsJson(
     comments: (page.comments ?? []).flatMap((entry) => {
       const comment = decodeCommentEntry(entry);
       if (Exit.isFailure(comment) || comment.value.isDeleted === true) return [];
+      const body = comment.value.text ?? "";
+      const format = textFormatOf(comment.value.format);
+      const editable = format !== null && body.length <= 65_536;
       return [
         {
           id: String(comment.value.id),
           author: toActor(comment.value.createdBy),
-          body: comment.value.text ?? "",
+          body,
+          ...(format === "html" && editable
+            ? { richBody: { format: "azure-html" as const, document: body } }
+            : {}),
           createdAt: comment.value.createdDate,
           editedAt:
             comment.value.modifiedDate && comment.value.modifiedDate !== comment.value.createdDate
               ? comment.value.modifiedDate
               : null,
-          canEdit:
-            viewer === undefined
+          canEdit: !editable
+            ? false
+            : viewer === undefined
               ? undefined
               : toActor(comment.value.createdBy)?.login.toLowerCase() === viewer.toLowerCase(),
           url: null,
@@ -406,19 +466,4 @@ export function pullRequestNumberOf(relation: typeof Relation.Type): number | nu
   } catch {
     return null;
   }
-}
-
-const Profile = Schema.Struct({
-  emailAddress: Schema.optional(Schema.NullOr(Schema.String)),
-  displayName: Schema.optional(Schema.NullOr(Schema.String)),
-});
-
-const decodeProfile = decodeJsonResult(Profile);
-
-/** `GET profile/profiles/me` names the signed-in account, which WIQL's `@Me` compares against. */
-export function decodeProfileJson(raw: string): Result.Result<string | null, DecodeFailure> {
-  return Result.map(
-    decodeProfile(raw),
-    (profile) => trimmed(profile.emailAddress) ?? trimmed(profile.displayName),
-  );
 }

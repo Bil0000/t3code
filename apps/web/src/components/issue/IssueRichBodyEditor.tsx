@@ -25,6 +25,7 @@ import {
   readIssueAdf,
   safeIssueExternalUrl,
   issueAdfClipboard,
+  issueRichSourceLabel,
   readIssueAdfClipboard,
 } from "./issueAdf";
 
@@ -38,14 +39,15 @@ type IssueRichBodyEditorProps = {
 };
 
 export function IssueRichBodyEditor(props: IssueRichBodyEditorProps) {
-  return props.value.format === "jira-wiki" ? (
-    <IssueWikiBodyEditor {...props} />
-  ) : (
+  const source = issueRichSourceLabel(props.value);
+  return source === null ? (
     <IssueAdfBodyEditor {...props} />
+  ) : (
+    <IssueSourceBodyEditor {...props} source={source} />
   );
 }
 
-function editWikiSource(source: string, next: string) {
+function editRichSource(source: string, next: string) {
   const previous = source.replace(/\r\n?/g, "\n");
   let start = 0;
   while (start < previous.length && start < next.length && previous[start] === next[start]) start++;
@@ -69,30 +71,31 @@ function editWikiSource(source: string, next: string) {
   );
 }
 
-function IssueWikiBodyEditor({
+function IssueSourceBodyEditor({
   value,
+  source,
   label,
   saving,
   disabled = false,
   onSave,
   onCancel,
-}: IssueRichBodyEditorProps) {
+}: IssueRichBodyEditorProps & { source: string }) {
   const [draft, setDraft] = useState(value.document);
   const id = useId();
   const locked = saving || disabled;
   return (
     <div className="flex flex-col gap-2">
-      <Label htmlFor={id}>Jira wiki markup</Label>
+      <Label htmlFor={id}>{source}</Label>
       <Textarea
         id={id}
-        aria-label={label + " · Jira wiki markup"}
+        aria-label={label + " · " + source}
         size="lg"
         value={draft}
         maxLength={65_536}
         disabled={locked}
         onChange={(event) => {
           const next = event.target.value;
-          setDraft((source) => editWikiSource(source, next));
+          setDraft((document) => editRichSource(document, next));
         }}
       />
       <div className="flex justify-end gap-2">
@@ -102,7 +105,7 @@ function IssueWikiBodyEditor({
         <Button
           size="sm"
           disabled={locked || draft.length > 65_536}
-          onClick={() => onSave({ format: "jira-wiki", document: draft })}
+          onClick={() => onSave({ ...value, document: draft })}
         >
           {saving ? "Saving…" : "Save"}
         </Button>
@@ -429,13 +432,14 @@ function IssueAdfBodyEditor({
 }
 
 export function IssueRichBodyView({ value }: { value: IssueRichBody }) {
-  return value.format === "jira-wiki" ? (
+  const source = issueRichSourceLabel(value);
+  return source === null ? (
+    <IssueAdfBodyView value={value} />
+  ) : (
     <div className="flex flex-col gap-1">
-      <p className="text-xs text-muted-foreground">Jira wiki markup</p>
+      <p className="text-xs text-muted-foreground">{source}</p>
       <pre className="whitespace-pre-wrap break-words text-sm">{value.document}</pre>
     </div>
-  ) : (
-    <IssueAdfBodyView value={value} />
   );
 }
 

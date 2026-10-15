@@ -34,10 +34,10 @@ import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import {
   azureDevOpsReactionType,
   decodeCommentsJson,
-  decodeProfileJson,
+  decodeCommentFormatJson,
   decodeUpdatesJson,
   decodeWorkItemJson,
-  decodeWorkItemsJson,
+  decodeWorkItemsBatchJson,
   pullRequestNumberOf,
   type AzureDevOpsWorkItem,
 } from "./azureDevOpsIssueJson.ts";
@@ -53,6 +53,7 @@ const KIND = IssueTrackerKind.make("azure-devops");
 const CAPABILITIES: IssueCapabilities = {
   create: true,
   edit: true,
+  richText: true,
   comment: true,
   editComment: true,
   subIssues: true,
@@ -189,13 +190,29 @@ function parseScope(
   host: string,
   scope: string,
 ): { readonly organization: string; readonly project: string } | null {
+  const base = URL.parse("https://" + host);
   const parts = scope.split("/").flatMap((part) => part.trim() || []);
-  if (parts.length !== 2) return null;
+  if (
+    base === null ||
+    base.username ||
+    base.password ||
+    base.search ||
+    base.hash ||
+    parts.length !== 2
+  )
+    return null;
   const [organization, project] = parts as [string, string];
+  const legacy = base.hostname.endsWith(".visualstudio.com");
+  if (
+    legacy &&
+    (base.pathname !== "/" ||
+      organization.toLowerCase() !== base.hostname.slice(0, -".visualstudio.com".length))
+  )
+    return null;
   return {
-    organization: host.toLowerCase().endsWith(".visualstudio.com")
-      ? `https://${host}`
-      : `https://${host}/${encodeURIComponent(organization)}`,
+    organization: legacy
+      ? base.origin
+      : base.origin + base.pathname.replace(/\/$/, "") + "/" + encodeURIComponent(organization),
     project,
   };
 }
@@ -386,31 +403,138 @@ export const make: Effect.Effect<
       }),
     );
 
+  const workItems = (input: {
+    readonly cwd: string;
+    readonly operation: string;
+    readonly organization: string;
+    readonly project: string;
+    readonly ids: ReadonlyArray<number>;
+    readonly fields?: ReadonlyArray<string>;
+    readonly asOf?: string;
+    readonly expand?: string;
+  }) =>
+    invokeWithBody({
+      cwd: input.cwd,
+      operation: input.operation,
+      args: invokeArgs({ ...input, resource: "workitemsbatch", method: "POST" }),
+      body: {
+        ids: input.ids,
+        errorPolicy: "Fail",
+        ...(input.fields === undefined ? {} : { fields: input.fields }),
+        ...(input.asOf === undefined ? {} : { asOf: input.asOf }),
+        ...(input.expand === undefined ? {} : { $expand: input.expand }),
+      },
+    }).pipe(
+      Effect.flatMap((raw) => {
+        const decoded = decodeWorkItemsBatchJson(raw);
+        if (Result.isFailure(decoded))
+          return Effect.fail(unreadable(input.operation, decoded.failure));
+        const rows = decoded.success.filter((item) => item !== null);
+        return rows.length === input.ids.length &&
+          decoded.success.length === input.ids.length &&
+          new Set(rows.map((item) => item.key)).size === input.ids.length &&
+          rows.every((item) => input.ids.includes(Number(item.key)))
+          ? Effect.succeed(rows)
+          : Effect.fail(
+              refused(input.operation, "Azure returned an incomplete or foreign work item page."),
+            );
+      }),
+    );
+
+  const patchWorkItem = (input: {
+    readonly cwd: string;
+    readonly operation: string;
+    readonly organization: string;
+    readonly project: string;
+    readonly number: number;
+    readonly body: ReadonlyArray<unknown>;
+  }) =>
+    invokeWithBody({
+      cwd: input.cwd,
+      operation: input.operation,
+      args: invokeArgs({ ...input, resource: "batch", method: "PATCH" }),
+      body: [
+        {
+          method: "PATCH",
+          uri:
+            "/" +
+            encodeURIComponent(input.project) +
+            "/_apis/wit/workitems/" +
+            input.number +
+            "?api-version=" +
+            REST_API_VERSION,
+          headers: { "Content-Type": "application/json-patch+json" },
+          body: input.body,
+        },
+      ],
+    }).pipe(
+      Effect.flatMap((raw) => {
+        const decoded = decodeAs(
+          Schema.decodeUnknownResult(
+            Schema.Struct({
+              count: Schema.Int,
+              value: Schema.Array(Schema.Struct({ code: Schema.Int })),
+            }),
+          ),
+        )(raw);
+        if (
+          Result.isFailure(decoded) ||
+          decoded.success.count !== 1 ||
+          decoded.success.value.length !== 1
+        )
+          return Effect.fail(unreadable(input.operation, raw));
+        const code = decoded.success.value[0]!.code;
+        return code >= 200 && code < 300
+          ? Effect.void
+          : Effect.fail(
+              new IssueTrackerError({
+                tracker: KIND,
+                operation: input.operation,
+                reason:
+                  code === 401
+                    ? "unauthenticated"
+                    : code === 404
+                      ? "not-found"
+                      : code === 429
+                        ? "rate-limited"
+                        : "failed",
+                detail: "Azure DevOps refused the work item update (HTTP " + code + ").",
+              }),
+            );
+      }),
+    );
+
   const workItem = (input: {
     readonly cwd: string;
     readonly operation: string;
     readonly organization: string;
     readonly project: string;
     readonly number: number;
+    readonly nativeFormat?: boolean;
   }): Effect.Effect<AzureDevOpsWorkItem, IssueTrackerError> =>
-    read({
-      cwd: input.cwd,
-      operation: input.operation,
-      args: [
-        "boards",
-        "work-item",
-        "show",
-        "--detect",
-        "false",
-        "--organization",
-        input.organization,
-        "--id",
-        String(input.number),
-        "--expand",
-        "relations",
-      ],
-      decode: decodeWorkItemJson,
-    }).pipe(
+    (input.nativeFormat
+      ? workItems({ ...input, ids: [input.number], expand: "Relations" }).pipe(
+          Effect.map((items) => items[0] ?? null),
+        )
+      : read({
+          cwd: input.cwd,
+          operation: input.operation,
+          args: [
+            "boards",
+            "work-item",
+            "show",
+            "--detect",
+            "false",
+            "--organization",
+            input.organization,
+            "--id",
+            String(input.number),
+            "--expand",
+            "relations",
+          ],
+          decode: decodeWorkItemJson,
+        })
+    ).pipe(
       Effect.filterOrFail(
         (item) => item !== null,
         () => notFound(input.operation),
@@ -456,13 +580,14 @@ export const make: Effect.Effect<
       readonly scope: string;
       readonly key: string;
     },
+    nativeFormat = false,
   ) =>
     scoped(operation, input).pipe(
       Effect.flatMap((scope) => {
         const number = parseNumber(input.key);
         return number === null
           ? Effect.fail(notFound(operation))
-          : workItem({ ...scope, number, cwd: input.cwd, operation }).pipe(
+          : workItem({ ...scope, number, cwd: input.cwd, operation, nativeFormat }).pipe(
               Effect.map((item) => ({ ...scope, number, item })),
             );
       }),
@@ -788,17 +913,10 @@ export const make: Effect.Effect<
         )
         .toReversed()
         .map((index) => ({ op: "remove", path: `/relations/${index}` }));
-      yield* invokeWithBody({
+      yield* patchWorkItem({
+        ...scope,
         cwd: input.cwd,
         operation: "setParent",
-        args: invokeArgs({
-          ...scope,
-          resource: "workitems",
-          route: [`id=${scope.number}`],
-          method: "PATCH",
-          query: ["$expand=Relations"],
-        }),
-        mediaType: "application/json-patch+json",
         body: [
           { op: "test", path: "/rev", value: scope.item.revision },
           ...removal,
@@ -882,33 +1000,28 @@ export const make: Effect.Effect<
     kind: KIND,
     capabilities: CAPABILITIES,
 
-    // The profile the token belongs to, which is what WIQL's `@Me` resolves to. Its email is the
-    // `uniqueName` every identity on a work item carries, so the two compare.
     getViewer: (input) =>
-      read({
-        cwd: input.cwd,
-        operation: "getViewer",
-        args: [
-          "devops",
-          "invoke",
-          "--detect",
-          "true",
-          "--area",
-          "profile",
-          "--resource",
-          "profiles",
-          "--api-version",
-          REST_API_VERSION,
-          "--route-parameters",
-          "id=me",
-        ],
-        decode: decodeProfileJson,
-      }).pipe(
-        Effect.filterOrFail(
-          (login) => login !== null,
-          () => refused("getViewer", "Azure DevOps could not name the signed-in account."),
-        ),
-      ),
+      Effect.gen(function* () {
+        const scope = parseScope(input.host, input.scope ?? "");
+        const host = URL.parse("https://" + input.host);
+        if (
+          scope === null ||
+          host === null ||
+          host.port !== "" ||
+          host.pathname !== "/" ||
+          (host.hostname !== "dev.azure.com" && !host.hostname.endsWith(".visualstudio.com"))
+        )
+          return yield* refused(
+            "getViewer",
+            "Choose a supported Azure DevOps organization and project.",
+          );
+        return yield* azure
+          .getCurrentIdentity({
+            cwd: input.cwd,
+            organization: scope.organization,
+          })
+          .pipe(Effect.mapError(fail("getViewer")));
+      }),
 
     listIssues: (input) =>
       Effect.gen(function* () {
@@ -1014,22 +1127,13 @@ export const make: Effect.Effect<
         if (!Result.isSuccess(refs)) return yield* unreadable("listIssues", raw);
         const ids = refs.success.workItems ?? [];
         if (ids.length === 0) return { items: [], nextCursor: null };
-        const rows = yield* read({
+        const rows = yield* workItems({
+          ...scope,
           cwd: input.cwd,
           operation: "listIssues",
-          args: invokeArgs({
-            ...scope,
-            resource: "workitems",
-            query: [
-              `ids=${ids
-                .slice(0, limit)
-                .map((row) => row.id)
-                .join(",")}`,
-              `fields=${LIST_FIELDS.join(",")}`,
-              ...(refs.success.asOf === undefined ? [] : [`asOf=${refs.success.asOf}`]),
-            ],
-          }),
-          decode: decodeWorkItemsJson,
+          ids: ids.slice(0, limit).map((row) => row.id),
+          fields: LIST_FIELDS,
+          ...(refs.success.asOf === undefined ? {} : { asOf: refs.success.asOf }),
         });
         const indexed = new Map(rows.map((row) => [row.key, row]));
         const ordered = ids.slice(0, limit).flatMap(({ id }) => indexed.get(String(id)) ?? []);
@@ -1063,7 +1167,7 @@ export const make: Effect.Effect<
       }),
 
     getIssue: (input) =>
-      target("getIssue", input).pipe(
+      target("getIssue", input, true).pipe(
         Effect.flatMap((scope) =>
           Effect.all(
             [
@@ -1141,6 +1245,29 @@ export const make: Effect.Effect<
           return yield* refused("editComment", "The comment id names no Azure DevOps comment.");
         const scope = yield* target("editComment", input);
         const route = [`workItemId=${scope.number}`, `commentId=${input.commentId}`];
+        const current = yield* read({
+          cwd: input.cwd,
+          operation: "editComment",
+          args: invokeArgs({
+            ...scope,
+            resource: "comments",
+            route,
+            apiVersion: "7.1-preview",
+            query: ["api-version=7.1-preview.4"],
+          }),
+          decode: decodeCommentFormatJson,
+        });
+        if (
+          current.id !== input.commentId ||
+          current.isDeleted ||
+          current.format === null ||
+          (current.format === "html"
+            ? input.richBody?.format !== "azure-html"
+            : input.richBody !== undefined) ||
+          (input.richBody?.document ?? input.body).trim().length === 0 ||
+          (input.richBody?.document ?? input.body).length > 65_536
+        )
+          return yield* refused("editComment", "The comment must keep its native text format.");
         yield* invokeWithBody({
           cwd: input.cwd,
           operation: "editComment",
@@ -1150,9 +1277,9 @@ export const make: Effect.Effect<
             route,
             method: "PATCH",
             apiVersion: "7.1-preview",
-            query: ["format=markdown", "api-version=7.1-preview.4"],
+            query: ["format=" + current.format, "api-version=7.1-preview.4"],
           }),
-          body: { text: input.body },
+          body: { text: input.richBody?.document ?? input.body },
         });
       }),
 
@@ -1236,16 +1363,12 @@ export const make: Effect.Effect<
           );
         if (numbers.length === 0)
           return { parent: null, children: { items: [], nextCursor: null } };
-        const items = yield* read({
+        const items = yield* workItems({
+          ...scope,
+          project: "",
           cwd: input.cwd,
           operation: "getHierarchy",
-          args: invokeArgs({
-            ...scope,
-            project: "",
-            resource: "workitems",
-            query: [`ids=${numbers.join(",")}`],
-          }),
-          decode: decodeWorkItemsJson,
+          ids: numbers.filter((number) => number !== null),
         });
         const native = yield* itemsWorkflow({ ...scope, cwd: input.cwd }, items);
         const related = native.map((item): IssueRelation => ({
@@ -1414,9 +1537,9 @@ export const make: Effect.Effect<
       ),
 
     update: (input) =>
-      target("update", input).pipe(
+      target("update", input, input.body !== undefined || input.richBody !== undefined).pipe(
         Effect.flatMap((scope) => {
-          if (input.body === undefined)
+          if (input.body === undefined && input.richBody === undefined)
             return update({
               ...scope,
               cwd: input.cwd,
@@ -1426,33 +1549,39 @@ export const make: Effect.Effect<
                 ...fieldArgs(input),
               ],
             });
+          if (
+            !scope.item.bodyEditable ||
+            scope.item.revision === null ||
+            (scope.item.bodyFormat === "html"
+              ? input.richBody?.format !== "azure-html" ||
+                (input.body !== undefined && input.body !== input.richBody.document)
+              : input.richBody !== undefined) ||
+            (input.richBody?.document ?? input.body ?? "").length > 65_536
+          )
+            return Effect.fail(
+              refused("update", "The description must keep its native text format."),
+            );
           const fields = {
             ...(input.title === undefined ? {} : { "System.Title": input.title }),
-            "System.Description": input.body,
+            "System.Description": input.richBody?.document ?? input.body,
             ...(input.labels === undefined ? {} : { "System.Tags": input.labels.join("; ") }),
             ...(input.assignees === undefined
               ? {}
               : { "System.AssignedTo": input.assignees[0] ?? "" }),
           };
-          return invokeWithBody({
+          return patchWorkItem({
+            ...scope,
             cwd: input.cwd,
             operation: "update",
-            args: invokeArgs({
-              ...scope,
-              resource: "workitems",
-              route: [`id=${scope.number}`],
-              method: "PATCH",
-            }),
-            mediaType: "application/json-patch+json",
             body: [
+              { op: "test", path: "/rev", value: scope.item.revision },
               ...Object.entries(fields).map(([field, value]) => ({
                 op: "add",
                 path: `/fields/${field}`,
                 value,
               })),
-              { op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" },
             ],
-          }).pipe(Effect.asVoid);
+          });
         }),
       ),
 

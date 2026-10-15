@@ -159,6 +159,7 @@ export interface IssueTrackerApi {
   readonly getViewer: (input: {
     readonly cwd: string;
     readonly host: string;
+    readonly scope?: string;
   }) => Effect.Effect<string, IssueTrackerError>;
 
   readonly listIssues: (

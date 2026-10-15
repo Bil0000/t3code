@@ -106,12 +106,22 @@ interface SupportedProject extends ProjectTrackerBinding {
 function azureDevOpsProjectScope(host: string, displayName: string | undefined): string | null {
   const segments = (displayName ?? "").split("/").filter((part) => part.length > 0);
   const marker = segments.indexOf("_git");
-  if (host.endsWith(".visualstudio.com")) {
+  const authority = URL.parse("https://" + host);
+  if (
+    authority === null ||
+    authority.username ||
+    authority.password ||
+    authority.pathname !== "/" ||
+    authority.search ||
+    authority.hash
+  )
+    return null;
+  if (authority.hostname.endsWith(".visualstudio.com")) {
     if (marker !== 1 && !(marker === 2 && segments[0]?.toLowerCase() === "defaultcollection"))
       return null;
     const project = segments[marker - 1];
     return project
-      ? azureDevOpsIssueScope(host.slice(0, -".visualstudio.com".length), project)
+      ? azureDevOpsIssueScope(authority.hostname.slice(0, -".visualstudio.com".length), project)
       : null;
   }
   const [organization, project] = marker === 2 ? segments : [];
@@ -580,12 +590,18 @@ export const make = Effect.gen(function* () {
       const viewers = new Map<string, string>();
       const viewerReads = new Map<string, Effect.Effect<string, IssueTrackerError>>();
       const viewerKeyOf = (project: SupportedProject) =>
-        project.tracker === "forgejo"
+        project.tracker === "azure-devops"
           ? issueListCursorKey({
               ...project,
-              scope: issueScopeKeyOf(project).split("/").slice(0, -2).join("/"),
+              host: new URL("https://" + project.host).host,
+              scope: issueScopeKeyOf(project).split("/")[0] ?? "",
             })
-          : trackerKeyOf(project);
+          : project.tracker === "forgejo"
+            ? issueListCursorKey({
+                ...project,
+                scope: issueScopeKeyOf(project).split("/").slice(0, -2).join("/"),
+              })
+            : trackerKeyOf(project);
       const viewerInstances = new Map<string, Set<string>>();
       for (const project of supported) {
         const hostKey = issueTrackerHostKey(project);
@@ -605,7 +621,11 @@ export const make = Effect.gen(function* () {
           if (read === undefined) {
             read = yield* Effect.cached(
               project.api
-                .getViewer({ cwd: project.project.workspaceRoot, host: project.host })
+                .getViewer({
+                  cwd: project.project.workspaceRoot,
+                  host: project.host,
+                  ...(project.tracker === "azure-devops" ? { scope: project.scope } : {}),
+                })
                 .pipe(withConnection(project)),
             );
             viewerReads.set(key, read);
@@ -613,6 +633,7 @@ export const make = Effect.gen(function* () {
           const viewer = yield* read;
           if (
             project.tracker === "forgejo" ||
+            project.tracker === "azure-devops" ||
             project.connectionId !== undefined ||
             viewerInstances.get(issueTrackerHostKey(project))!.size > 1
           )

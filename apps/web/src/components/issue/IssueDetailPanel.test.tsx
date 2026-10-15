@@ -2381,3 +2381,144 @@ it("edits DC wiki descriptions and comments as exact source and resets drafts fo
     vi.unstubAllGlobals();
   }
 });
+
+it("edits Azure HTML descriptions and comments as exact source and fails closed elsewhere", async () => {
+  const previous = state.detail;
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.allowed = true;
+  state.toast.mockReset();
+  state.write.mockReset();
+  const environmentId = EnvironmentId.make("azure-html-edit");
+  const reference = {
+    projectId: ProjectId.make("project"),
+    tracker: IssueTrackerKind.make("azure-devops"),
+    host: "dev.azure.com",
+    scope: "acme/Web",
+    key: "7",
+    connectionId: "Account-A",
+  };
+  const source = '<table>\r\n<tr><td><img src="a.png"></td></tr>\r\n</table>\r\n';
+  const commentSource = "<p>Native <b>comment</b></p>\r\n";
+  const htmlDetail = {
+    ...state.detail,
+    ...reference,
+    body: "Markdown fallback must not render",
+    bodyEditable: false,
+    richBody: { format: "azure-html" as const, document: source },
+    comments: [
+      {
+        id: "html-comment",
+        author: null,
+        body: "Comment fallback",
+        richBody: { format: "azure-html" as const, document: commentSource },
+        createdAt: "2026-10-14T00:00:00Z",
+        url: null,
+        canEdit: true,
+      },
+    ],
+    capabilities: { ...state.detail.capabilities, richText: true, edit: true, editComment: true },
+    viewerPermissions: { ...state.detail.viewerPermissions, edit: true },
+  };
+  state.detail = htmlDetail;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (node) => node.textContent === text,
+    )!;
+  const textarea = (label: string) =>
+    container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="' + label + ' · HTML source"]',
+    );
+  const type = async (label: string, value: string) =>
+    act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+        textarea(label)!,
+        value,
+      );
+      textarea(label)!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  const show = (ref = reference) =>
+    act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={ref} />),
+    );
+  try {
+    await show();
+    expect(container.textContent).toContain(source);
+    expect(container.textContent).toContain(commentSource);
+    expect(container.textContent).not.toContain("Markdown fallback must not render");
+    expect(container.querySelector("table, img, b")).toBeNull();
+    expect(container.textContent).toContain("HTML source");
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
+    );
+    let finish!: (value: unknown) => void;
+    state.write.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    await act(async () => button("Save").click());
+    expect(state.write.mock.calls[0]![0].input).toEqual({
+      ...reference,
+      richBody: { format: "azure-html", document: source },
+    });
+    expect(textarea("Description")!.disabled).toBe(true);
+    expect(button("Saving…").disabled).toBe(true);
+    await act(async () =>
+      finish({ _tag: "Failure", cause: Cause.fail(new Error("Azure 412 Precondition")) }),
+    );
+    expect(state.toast).toHaveBeenCalledOnce();
+    expect(textarea("Description")!.disabled).toBe(false);
+    await type("Description", textarea("Description")!.value + "<p>Draft</p>");
+    await act(async () => button("Cancel").click());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
+    );
+    expect(textarea("Description")!.value).toBe(source.replace(/\r\n/g, "\n"));
+    await act(async () => button("Cancel").click());
+    state.write.mockResolvedValue({ _tag: "Success" });
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')!.click(),
+    );
+    await type("Edit comment", "<p>Native <b>edited</b></p>\n");
+    await act(async () => button("Save").click());
+    expect(state.write.mock.calls[1]![0].input).toEqual({
+      ...reference,
+      commentId: "html-comment",
+      body: "Comment fallback",
+      richBody: { format: "azure-html", document: "<p>Native <b>edited</b></p>\r\n" },
+    });
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
+    );
+    await type("Description", "Account A unsaved draft");
+    const nextRef = { ...reference, connectionId: "Account-B" };
+    state.detail = {
+      ...htmlDetail,
+      ...nextRef,
+      richBody: { format: "azure-html", document: "" },
+      comments: [],
+    };
+    await show(nextRef);
+    expect(container.textContent).not.toContain("Account A unsaved draft");
+    expect(textarea("Description")).toBeNull();
+    for (const richBody of [
+      undefined,
+      { format: "html", document: "<p>Unknown</p>" } as unknown as IssueRichBody,
+    ]) {
+      state.detail = { ...htmlDetail, richBody, comments: [] };
+      await show({ ...reference, key: String(richBody?.format) });
+      expect(container.querySelector('[aria-label="Edit description"]')).toBeNull();
+      expect(container.textContent).not.toContain("<p>Unknown</p>");
+    }
+    state.writeAllowed = false;
+    state.detail = { ...htmlDetail, comments: [] };
+    await show({ ...reference, key: "denied" });
+    expect(container.querySelector('[aria-label="Edit description"]')).toBeNull();
+    expect(state.write).toHaveBeenCalledTimes(2);
+  } finally {
+    state.writeAllowed = undefined;
+    await act(async () => root.unmount());
+    container.remove();
+    state.detail = previous;
+    vi.unstubAllGlobals();
+  }
+});

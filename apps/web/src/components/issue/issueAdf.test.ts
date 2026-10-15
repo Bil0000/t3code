@@ -1,6 +1,12 @@
 import { EditorState } from "@tiptap/pm/state";
 import { expect, it } from "vite-plus/test";
-import { readIssueAdf, safeIssueExternalUrl, type AdfNode } from "./issueAdf";
+import type { IssueRichBody } from "@t3tools/contracts";
+import {
+  isEditableIssueRichBody,
+  readIssueAdf,
+  safeIssueExternalUrl,
+  type AdfNode,
+} from "./issueAdf";
 
 const document = {
   version: 1,
@@ -146,4 +152,18 @@ it("accepts native HTTP and HTTPS links", () => {
 it("does not interpret Jira wiki as ADF even when the source contains valid ADF JSON", () => {
   expect(readIssueAdf({ format: "jira-wiki", document: JSON.stringify(document) })).toBeNull();
   expect(readIssueAdf({ format: "jira-wiki", document: "h2. Native wiki\n!media-id!" })).toBeNull();
+});
+
+it("keeps Azure HTML as bounded source and refuses unknown formats", () => {
+  const html = {
+    format: "azure-html",
+    document: '<table><tr><td><img src="a.png"></td></tr></table>',
+  } as const;
+  expect(readIssueAdf(html)).toBeNull();
+  expect(isEditableIssueRichBody(html)).toBe(true);
+  expect(isEditableIssueRichBody({ ...html, document: "" })).toBe(true);
+  expect(isEditableIssueRichBody({ ...html, document: "x".repeat(65_537) })).toBe(false);
+  expect(
+    isEditableIssueRichBody({ format: "html", document: "<p>A</p>" } as unknown as IssueRichBody),
+  ).toBe(false);
 });

@@ -10,6 +10,7 @@ import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSour
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import * as AzureDevOpsIssueTracker from "./AzureDevOpsIssueTracker.ts";
 import {
+  decodeCommentsJson,
   decodeWorkItemJson,
   decodeWorkItemsJson,
   pullRequestNumberOf,
@@ -39,10 +40,33 @@ const WORK_ITEM = {
   ],
 };
 
+const requestBodies = new WeakMap<
+  ReadonlyArray<string>,
+  { ids: number[]; fields?: string[]; asOf?: string; $expand?: string }
+>();
+const patchBodies = new WeakMap<
+  ReadonlyArray<string>,
+  ReadonlyArray<{ method: string; uri: string; headers: Record<string, string>; body: unknown }>
+>();
+
+function readBatch(args: ReadonlyArray<string>) {
+  return args.includes("workitemsbatch") ? (requestBodies.get(args) ?? null) : null;
+}
+
+function nativeResponse(args: ReadonlyArray<string>, raw: string) {
+  const value = JSON.parse(raw);
+  if (args.includes("workitemsbatch") && typeof value.id === "number")
+    return encode({ count: 1, value: [value] });
+  if (args.includes("batch") && typeof value.id === "number")
+    return encode({ count: 1, value: [{ code: 200 }] });
+  return raw;
+}
+
 /** Every `az` command the detail read runs, told apart by its first few arguments. */
 function answer(args: ReadonlyArray<string>): string {
   const resource = args[args.indexOf("--resource") + 1];
-  if (args[0] === "boards") return encode(WORK_ITEM);
+  if (args[0] === "boards" || (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7))
+    return encode(WORK_ITEM);
   if (args[0] === "repos") {
     return encode({
       pullRequestId: 50,
@@ -73,6 +97,7 @@ function answer(args: ReadonlyArray<string>): string {
         {
           id: 1,
           text: "Repro attached.",
+          format: "markdown",
           createdDate: "2026-07-02T00:00:00Z",
           createdBy: { uniqueName: "julius@acme.test", displayName: "Julius" },
           reactions: [
@@ -109,20 +134,591 @@ function answer(args: ReadonlyArray<string>): string {
 }
 
 function tracker(onExecute: (args: ReadonlyArray<string>) => string) {
-  return AzureDevOpsIssueTracker.make.pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        NodeFileSystem.layer,
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* AzureDevOpsIssueTracker.make.pipe(
+      Effect.provide(
         Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
           execute: ({ args }) =>
-            Effect.succeed(TestSourceControlHost.processOutput(onExecute(args))),
+            Effect.gen(function* () {
+              if (args.includes("--in-file")) {
+                const body = JSON.parse(
+                  yield* fs.readFileString(args[args.indexOf("--in-file") + 1]!).pipe(Effect.orDie),
+                );
+                if (args.includes("workitemsbatch")) requestBodies.set(args, body);
+                if (args.includes("batch")) patchBodies.set(args, body);
+              }
+              return TestSourceControlHost.processOutput(nativeResponse(args, onExecute(args)));
+            }),
         }),
       ),
-    ),
-  );
+    );
+  }).pipe(Effect.provide(NodeFileSystem.layer));
 }
 
 describe("AzureDevOpsIssueTracker", () => {
+  it.effect.each(["unauthenticated", "rate-limited", "missing-tool"] as const)(
+    "keeps the native principal failure %s",
+    (reason) =>
+      Effect.gen(function* () {
+        const NativeError =
+          reason === "unauthenticated"
+            ? AzureDevOpsCli.AzureDevOpsCliAuthenticationError
+            : reason === "rate-limited"
+              ? AzureDevOpsCli.AzureDevOpsCliRateLimitError
+              : AzureDevOpsCli.AzureDevOpsCliUnavailableError;
+        const cause = new NativeError({
+          operation: "execute",
+          command: "az",
+          cwd: "/w",
+          argumentCount: 0,
+          cause: "fake native failure",
+        });
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeFileSystem.layer,
+              Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+                getCurrentIdentity: () => Effect.fail(cause),
+                execute: () => Effect.die("Profiles must not be read"),
+              }),
+            ),
+          ),
+        );
+        expect(
+          yield* api
+            .getViewer({
+              cwd: "/w",
+              host: "dev.azure.com",
+              scope: "alpha/Web",
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({ operation: "getViewer", reason, cause });
+      }),
+  );
+  it.effect.each([
+    ["dev.azure.com", "alpha/Web App", "https://dev.azure.com/alpha"],
+    ["dev.azure.com", "beta/Web App", "https://dev.azure.com/beta"],
+    ["legacy.visualstudio.com", "legacy/Web App", "https://legacy.visualstudio.com"],
+    ["legacy.visualstudio.com:443", "legacy/Web App", "https://legacy.visualstudio.com"],
+    ["dev.azure.com:443", "alpha/Web App", "https://dev.azure.com/alpha"],
+  ] as const)(
+    "reads the current account for %s %s without Profiles",
+    ([host, scope, organization]) =>
+      Effect.gen(function* () {
+        const reads: Array<{ cwd: string; organization: string }> = [];
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeFileSystem.layer,
+              Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+                getCurrentIdentity: (input) =>
+                  Effect.sync(() => {
+                    reads.push(input);
+                    return input.organization.includes("/beta")
+                      ? "beta@fake.test"
+                      : "alpha@fake.test";
+                  }),
+                execute: () => Effect.die("Profiles must not be read"),
+              }),
+            ),
+          ),
+        );
+        expect(yield* api.getViewer({ cwd: "/checkout-alpha", host, scope })).toBe(
+          organization.includes("/beta") ? "beta@fake.test" : "alpha@fake.test",
+        );
+        expect(reads).toEqual([{ cwd: "/checkout-alpha", organization }]);
+      }),
+  );
+
+  it.effect.each([
+    { host: "dev.azure.com" },
+    { host: "legacy.visualstudio.com:8443", scope: "legacy/Web" },
+    { host: "dev.azure.com:8443", scope: "alpha/Web" },
+    { host: "dev.azure.com", scope: "alpha" },
+    { host: "legacy.visualstudio.com", scope: "other/Web" },
+    { host: "legacy.visualstudio.com/extra", scope: "legacy/Web" },
+    { host: "user@dev.azure.com", scope: "alpha/Web" },
+    { host: "dev.azure.com?elsewhere", scope: "alpha/Web" },
+  ])("refuses an incomplete or unsafe viewer scope", (input) =>
+    Effect.gen(function* () {
+      const api = yield* AzureDevOpsIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeFileSystem.layer,
+            Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+              getCurrentIdentity: () => Effect.die("Unsafe identity lookup"),
+              execute: () => Effect.die("Profiles must not be read"),
+            }),
+          ),
+        ),
+      );
+      expect((yield* api.getViewer({ cwd: "/w", ...input }).pipe(Effect.flip)).reason).toBe(
+        "failed",
+      );
+    }),
+  );
+  it.effect.each([200, 400, 401, 403, 404, 409, 429, 500])(
+    "checks the inner native update status %s without retrying",
+    (code) =>
+      Effect.gen(function* () {
+        const calls: ReadonlyArray<string>[] = [];
+        const operations: unknown[] = [];
+        const api = yield* tracker((args) => {
+          calls.push(args);
+          if (args.includes("batch")) {
+            const body = patchBodies.get(args)!;
+            expect(body).toHaveLength(1);
+            expect(body[0]).toMatchObject({
+              method: "PATCH",
+              uri: "/Web%20App/_apis/wit/workitems/7?api-version=7.1",
+              headers: { "Content-Type": "application/json-patch+json" },
+            });
+            operations.push(body[0]!.body);
+            return encode({ count: 1, value: [{ code }] });
+          }
+          return encode({
+            ...WORK_ITEM,
+            rev: 6,
+            multilineFieldsFormat: { "System.Description": "Markdown" },
+          });
+        });
+        const result = yield* api.update!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          body: "",
+        }).pipe(Effect.result);
+        expect(Result.isSuccess(result)).toBe(code === 200);
+        if (Result.isFailure(result))
+          expect(result.failure.reason).toBe(
+            code === 401
+              ? "unauthenticated"
+              : code === 404
+                ? "not-found"
+                : code === 429
+                  ? "rate-limited"
+                  : "failed",
+          );
+        expect(calls).toHaveLength(2);
+        expect(operations).toEqual([
+          [
+            { op: "test", path: "/rev", value: 6 },
+            { op: "add", path: "/fields/System.Description", value: "" },
+          ],
+        ]);
+      }),
+  );
+
+  it.effect.each([
+    {},
+    { count: 0, value: [] },
+    { count: 1, value: [{ code: "200" }] },
+    { count: 2, value: [{ code: 200 }, { code: 200 }] },
+  ])("refuses an unreadable native batch update response", (response) =>
+    Effect.gen(function* () {
+      let writes = 0;
+      const api = yield* tracker((args) => {
+        if (args.includes("batch")) {
+          writes++;
+          return encode(response);
+        }
+        return encode({ ...WORK_ITEM, rev: 6 });
+      });
+      const error = yield* api.update!({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        richBody: { format: "azure-html", document: "" },
+      }).pipe(Effect.flip);
+      expect(error.reason).toBe("failed");
+      expect(writes).toBe(1);
+    }),
+  );
+
+  it.each([0, 1, "html", "markdown", null, "other"] as const)(
+    "decodes native multiline format %s without using body syntax",
+    (format) => {
+      const result = decodeWorkItemJson(
+        encode({
+          ...WORK_ITEM,
+          multilineFieldsFormat: { "System.Description": format },
+        }),
+      );
+      expect(Result.isSuccess(result)).toBe(true);
+      if (Result.isFailure(result)) return;
+      expect(result.success?.bodyFormat).toBe(
+        format === 0 || format === "markdown"
+          ? "markdown"
+          : format === 1 || format === "html"
+            ? "html"
+            : null,
+      );
+    },
+  );
+
+  it.each([65_536, 65_537])("bounds native HTML editing at %s characters", (length) => {
+    const body = "x".repeat(length);
+    const result = decodeWorkItemJson(
+      encode({
+        ...WORK_ITEM,
+        fields: { ...WORK_ITEM.fields, "System.Description": body },
+      }),
+    );
+    expect(Result.isSuccess(result)).toBe(true);
+    if (Result.isFailure(result)) return;
+    expect(result.success?.body).toBe(body);
+    expect(result.success?.bodyEditable).toBe(length <= 65_536);
+    expect(result.success?.richBody).toEqual(
+      length <= 65_536 ? { format: "azure-html", document: body } : undefined,
+    );
+  });
+  it.effect.each(["HTML", "Markdown", undefined, "Other"] as const)(
+    "keeps the authoritative description format %s",
+    (format) =>
+      Effect.gen(function* () {
+        const body =
+          '<table>\r\n<tr><td>A &amp; B</td></tr></table><img src="https://fake.test/a.png">';
+        const seen: ReadonlyArray<string>[] = [];
+        const api = yield* tracker((args) => {
+          seen.push(args);
+          if (args[0] === "boards" || readBatch(args) !== null)
+            return encode({
+              ...WORK_ITEM,
+              rev: 6,
+              relations: [],
+              fields: { ...WORK_ITEM.fields, "System.Description": body },
+              ...(format === undefined
+                ? {}
+                : { multilineFieldsFormat: { "System.Description": format } }),
+            });
+          return answer(args);
+        });
+        const detail = yield* api.getIssue({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+        });
+        expect(detail.body).toBe(body);
+        expect(detail.richBody).toEqual(
+          format === "HTML" || format === undefined
+            ? { format: "azure-html", document: body }
+            : undefined,
+        );
+        expect(detail.bodyEditable).toBe(format !== "Other");
+        expect(seen[0]).toEqual(
+          expect.arrayContaining(["devops", "invoke", "workitemsbatch", "project=Web App", "POST"]),
+        );
+        expect(seen).toHaveLength(3);
+      }),
+  );
+
+  it.effect.each(["HTML", "Markdown"] as const)(
+    "preserves existing %s descriptions on ordinary edits",
+    (format) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const before =
+          format === "HTML"
+            ? '<table>\r\n<tr><td>old</td></tr></table><img src="https://fake.test/a.png">'
+            : "**old**";
+        const after = before.replace("old", "new");
+        const calls: ReadonlyArray<string>[] = [];
+        const patches: unknown[] = [];
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeFileSystem.layer,
+              Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+                execute: ({ args }) =>
+                  Effect.gen(function* () {
+                    calls.push(args);
+                    if (args.includes("PATCH"))
+                      patches.push(
+                        JSON.parse(
+                          yield* fs
+                            .readFileString(args[args.indexOf("--in-file") + 1]!)
+                            .pipe(Effect.orDie),
+                        )[0].body,
+                      );
+                    return TestSourceControlHost.processOutput(
+                      nativeResponse(
+                        args,
+                        encode({
+                          ...WORK_ITEM,
+                          rev: 6,
+                          fields: { ...WORK_ITEM.fields, "System.Description": before },
+                          multilineFieldsFormat: { "System.Description": format },
+                        }),
+                      ),
+                    );
+                  }),
+              }),
+            ),
+          ),
+        );
+        yield* api.update!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          ...(format === "HTML"
+            ? { richBody: { format: "azure-html" as const, document: after } }
+            : { body: after }),
+        });
+        expect(patches).toEqual([
+          [
+            { op: "test", path: "/rev", value: 6 },
+            { op: "add", path: "/fields/System.Description", value: after },
+          ],
+        ]);
+        expect(calls).toHaveLength(2);
+      }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect.each([
+    ["HTML", { body: "plain" }],
+    ["Markdown", { richBody: { format: "azure-html", document: "<p>changed</p>" } }],
+    ["HTML", { richBody: { format: "jira-wiki", document: "changed" } }],
+    ["HTML", { body: "different", richBody: { format: "azure-html", document: "<p>changed</p>" } }],
+    ["Other", { richBody: { format: "azure-html", document: "<p>changed</p>" } }],
+    ["HTML", { richBody: { format: "azure-html", document: "x".repeat(65_537) } }],
+  ] as const)("refuses a description format change from %s", ([format, change]) =>
+    Effect.gen(function* () {
+      const calls: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        calls.push(args);
+        return encode({
+          ...WORK_ITEM,
+          rev: 6,
+          multilineFieldsFormat: { "System.Description": format },
+        });
+      });
+      const error = yield* api.update!({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        ...change,
+      }).pipe(Effect.flip);
+      expect(error.reason).toBe("failed");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).not.toContain("PATCH");
+    }),
+  );
+
+  it.effect.each([undefined, "HTML", "Markdown", "Other"] as const)(
+    "does not write a body format for field-only updates on %s",
+    (format) =>
+      Effect.gen(function* () {
+        const calls: ReadonlyArray<string>[] = [];
+        const api = yield* tracker((args) => {
+          calls.push(args);
+          return encode({
+            ...WORK_ITEM,
+            ...(format === undefined
+              ? {}
+              : { multilineFieldsFormat: { "System.Description": format } }),
+          });
+        });
+        const input = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+        yield* api.update!({ ...input, title: "Title", labels: [], assignees: [] });
+        yield* api.setState!({ ...input, state: "Active" });
+        expect(calls).toHaveLength(4);
+        expect(calls.filter((args) => args.includes("update"))).toHaveLength(2);
+        expect(calls.flat().join(" ")).not.toContain("multilineFieldsFormat");
+        expect(calls.flat()).not.toContain("PATCH");
+      }),
+  );
+
+  it.each(["html", "HTML", 1, "markdown", "Markdown", 0, undefined, "other"] as const)(
+    "retains native comment format %s and ownership",
+    (format) => {
+      const body = "<table>\\r\\n<tr><td>text &amp; bytes</td></tr></table>";
+      const result = decodeCommentsJson(
+        encode({
+          comments: [
+            {
+              id: 9,
+              text: body,
+              format,
+              createdDate: "2026-07-02T00:00:00Z",
+              createdBy: { uniqueName: "actor@fake.test" },
+            },
+          ],
+        }),
+        "ACTOR@fake.test",
+      );
+      expect(Result.isSuccess(result)).toBe(true);
+      if (Result.isFailure(result)) return;
+      const comment = result.success.comments[0]!;
+      expect(comment.body).toBe(body);
+      expect(comment.richBody).toEqual(
+        format === 1 || (typeof format === "string" && format.toLowerCase() === "html")
+          ? { format: "azure-html", document: body }
+          : undefined,
+      );
+      expect(comment.canEdit).toBe(format !== undefined && format !== "other");
+      const other = decodeCommentsJson(
+        encode({
+          comments: [
+            {
+              id: 9,
+              text: body,
+              format,
+              createdDate: "2026-07-02T00:00:00Z",
+              createdBy: { uniqueName: "actor@fake.test" },
+            },
+          ],
+        }),
+        "other@fake.test",
+      );
+      expect(Result.isSuccess(other) && other.success.comments[0]?.canEdit).toBe(false);
+    },
+  );
+
+  it.effect.each(["html", "markdown", 1, 0] as const)(
+    "keeps %s comment format through the native CLI",
+    (format) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const html = format === "html" || format === 1;
+        const text = html ? "<table>\r\n<tr><td>new</td></tr></table>" : "**new**";
+        const oldBody = html ? "<p>old native body</p>" : "**old**";
+        const comment = Result.getOrThrow(
+          decodeCommentsJson(
+            encode({
+              comments: [
+                {
+                  id: 9,
+                  format,
+                  text: oldBody,
+                  createdDate: "2026-07-02T00:00:00Z",
+                  createdBy: { uniqueName: "actor@fake.test" },
+                },
+              ],
+            }),
+            "actor@fake.test",
+          ),
+        ).comments[0]!;
+        expect(comment.canEdit).toBe(true);
+        const http: Array<{ method: string; url: string; body: unknown }> = [];
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeFileSystem.layer,
+              Layer.effect(AzureDevOpsCli.AzureDevOpsCli, AzureDevOpsCli.make).pipe(
+                Layer.provide(
+                  TestSourceControlHost.layer({
+                    process: {
+                      run: ({ command, args }) =>
+                        Effect.gen(function* () {
+                          expect(command).toBe("az");
+                          if (args[0] === "boards") {
+                            http.push({
+                              method: "GET",
+                              url: "https://dev.azure.com/acme/Web%20App/_apis/wit/workitems/7",
+                              body: null,
+                            });
+                            return TestSourceControlHost.processOutput(encode(WORK_ITEM));
+                          }
+                          expect(args).toEqual(
+                            expect.arrayContaining([
+                              "--detect",
+                              "false",
+                              "--organization",
+                              "https://dev.azure.com/acme",
+                              "--area",
+                              "wit",
+                            ]),
+                          );
+                          const method = args.includes("PATCH") ? "PATCH" : "GET";
+                          const resource = args[args.indexOf("--resource") + 1]!;
+                          const url =
+                            "https://dev.azure.com/acme/Web%20App/_apis/wit/workitems/7" +
+                            (resource === "comments" ? "/comments/9" : "");
+                          const body = args.includes("--in-file")
+                            ? JSON.parse(
+                                yield* fs
+                                  .readFileString(args[args.indexOf("--in-file") + 1]!)
+                                  .pipe(Effect.orDie),
+                              )
+                            : null;
+                          http.push({ method, url, body });
+                          if (resource === "workitemsbatch")
+                            return TestSourceControlHost.processOutput(encode(WORK_ITEM));
+                          expect(args).toEqual(
+                            expect.arrayContaining(["commentId=9", "api-version=7.1-preview.4"]),
+                          );
+                          if (method === "PATCH")
+                            expect(args).toContain("format=" + (html ? "html" : "markdown"));
+                          return TestSourceControlHost.processOutput(
+                            encode({
+                              id: 9,
+                              format,
+                              text: oldBody,
+                              createdDate: "2026-07-02T00:00:00Z",
+                            }),
+                          );
+                        }),
+                    },
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+        yield* api.editComment!({
+          cwd: "/lending-checkout",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          commentId: "9",
+          body: html ? comment.body : text,
+          ...(html ? { richBody: { format: "azure-html" as const, document: text } } : {}),
+        });
+        expect(http.map((call) => call.method)).toEqual(["GET", "GET", "PATCH"]);
+        expect(http[2]?.body).toEqual({ text });
+      }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect.each([
+    { format: "html", body: "plain" },
+    {
+      format: "markdown",
+      body: "",
+      richBody: { format: "azure-html", document: "<p>changed</p>" },
+    },
+    { format: "other", body: "changed" },
+    { format: undefined, body: "changed" },
+    { format: "html", body: "", richBody: { format: "azure-html", document: "" } },
+    { format: "html", body: "", richBody: { format: "azure-html", document: "x".repeat(65_537) } },
+  ] as const)("refuses unsafe native comment edit $format", (change) =>
+    Effect.gen(function* () {
+      const calls: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        calls.push(args);
+        return args[0] === "boards"
+          ? encode(WORK_ITEM)
+          : encode({ id: 9, format: change.format, createdDate: "2026-07-02T00:00:00Z" });
+      });
+      const error = yield* api.editComment!({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        commentId: "9",
+        ...change,
+      }).pipe(Effect.flip);
+      expect(error.reason).toBe("failed");
+      expect(calls).toHaveLength(2);
+      expect(calls.flat()).not.toContain("PATCH");
+    }),
+  );
+
   it.effect.each(["states", "create-template", "list-templates", "edit-comment"] as const)(
     "uses a CLI-accepted preview version for %s",
     (operation) =>
@@ -148,7 +744,10 @@ describe("AzureDevOpsIssueTracker", () => {
               revisions.push(revision!);
             }
           }
-          if (args[0] === "boards")
+          if (
+            args[0] === "boards" ||
+            (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7)
+          )
             return encode({
               ...WORK_ITEM,
               relations: [],
@@ -164,14 +763,19 @@ describe("AzureDevOpsIssueTracker", () => {
           if (resource === "workitemtypestates")
             return encode({ value: [{ name: "Review", category: "InProgress" }] });
           if (resource === "workitemtypes") return encode({ value: [{ name: "Bug" }] });
-          if (resource === "workitems") return encode(WORK_ITEM);
+          if (resource === "workitemsbatch" || resource === "workitems") return encode(WORK_ITEM);
           if (resource === "templates")
             return encode(
               args.some((arg) => arg.startsWith("templateId="))
                 ? { id: "template", name: "Bug", workItemTypeName: "Bug", fields: {} }
                 : { value: [{ id: "template" }] },
             );
-          if (resource === "comments") return encode({ comments: [] });
+          if (resource === "comments")
+            return encode(
+              args.includes("commentId=1")
+                ? { id: 1, text: "Before", format: "markdown", createdDate: "2026-07-02T00:00:00Z" }
+                : { comments: [] },
+            );
           if (resource === "updates") return encode({ value: [] });
           throw new Error(`Unexpected native resource ${resource}`);
         });
@@ -193,7 +797,9 @@ describe("AzureDevOpsIssueTracker", () => {
           expect((yield* api.listTemplates!(target)).templates[0]?.key).toBe("template");
         else yield* api.editComment!({ ...target, commentId: "1", body: "Changed" });
         expect(revisions).toHaveLength(
-          operation === "list-templates" ? 2 : operation === "states" ? 2 : 1,
+          operation === "list-templates" || operation === "states" || operation === "edit-comment"
+            ? 2
+            : 1,
         );
       }),
   );
@@ -233,7 +839,10 @@ describe("AzureDevOpsIssueTracker", () => {
       const api = yield* tracker((args) => {
         const resource = args[args.indexOf("--resource") + 1];
         paths.push(resource ?? args[0]!);
-        if (args[0] === "boards")
+        if (
+          args[0] === "boards" ||
+          (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7)
+        )
           return encode({
             ...WORK_ITEM,
             relations: [],
@@ -324,7 +933,10 @@ describe("AzureDevOpsIssueTracker", () => {
         let workflowReads = 0;
         const api = yield* tracker((args) => {
           calls += 1;
-          if (args[0] === "boards")
+          if (
+            args[0] === "boards" ||
+            (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7)
+          )
             return encode({
               ...WORK_ITEM,
               relations: [],
@@ -374,7 +986,10 @@ describe("AzureDevOpsIssueTracker", () => {
           calls += 1;
           if (args.slice(0, 3).join(" ") === "devops project show")
             return encode({ id: "a0000000-0000-0000-0000-000000000001", name: "Web App" });
-          if (args[0] === "boards")
+          if (
+            args[0] === "boards" ||
+            (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7)
+          )
             return encode({
               ...WORK_ITEM,
               relations: [
@@ -389,22 +1004,18 @@ describe("AzureDevOpsIssueTracker", () => {
               ],
             });
           const resource = args[args.indexOf("--resource") + 1];
-          if (resource === "workitems")
+          if (resource === "workitemsbatch")
             return encode({
-              value: args
-                .find((arg) => arg.startsWith("ids="))!
-                .slice(4)
-                .split(",")
-                .map((key) => ({
-                  ...WORK_ITEM,
-                  id: Number(key),
-                  fields: {
-                    ...WORK_ITEM.fields,
-                    "System.TeamProject": `Project ${key}`,
-                    "System.WorkItemType": "Bug",
-                    "System.State": "Review",
-                  },
-                })),
+              value: (readBatch(args)?.ids ?? []).map((key) => ({
+                ...WORK_ITEM,
+                id: Number(key),
+                fields: {
+                  ...WORK_ITEM.fields,
+                  "System.TeamProject": `Project ${key}`,
+                  "System.WorkItemType": "Bug",
+                  "System.State": "Review",
+                },
+              })),
             });
           if (resource === "workitemtypes")
             return encode({
@@ -480,7 +1091,7 @@ describe("AzureDevOpsIssueTracker", () => {
           const resource = args[args.indexOf("--resource") + 1];
           if (resource === "wiql")
             return encode({ workItems: Array.from({ length: 101 }, (_, id) => ({ id: id + 7 })) });
-          if (resource === "workitems")
+          if (resource === "workitemsbatch")
             return encode({
               value: Array.from({ length: 100 }, (_, index) => ({
                 ...WORK_ITEM,
@@ -563,44 +1174,66 @@ describe("AzureDevOpsIssueTracker", () => {
                   const inFile = args.indexOf("--in-file");
                   if (inFile >= 0) {
                     expect(args[args.indexOf("--media-type") + 1]).toBe(
-                      "application/json-patch+json",
+                      resource === "batch" ? "application/json" : "application/json-patch+json",
                     );
-                    patches.push(
-                      JSON.parse(yield* fs.readFileString(args[inFile + 1]!).pipe(Effect.orDie)),
+                    const payload = JSON.parse(
+                      yield* fs.readFileString(args[inFile + 1]!).pipe(Effect.orDie),
                     );
-                    return TestSourceControlHost.processOutput(encode({ ...item, id: 55 }));
-                  }
-                  if (args[0] === "boards") {
-                    const id = Number(args[args.indexOf("--id") + 1]);
+                    patches.push(resource === "batch" ? payload[0].body : payload);
                     return TestSourceControlHost.processOutput(
-                      encode({
-                        ...item,
-                        id,
-                        url: `https://dev.azure.com/acme/_apis/wit/workItems/${id}`,
-                      }),
+                      nativeResponse(args, encode({ ...item, id: 55 })),
+                    );
+                  }
+                  if (
+                    args[0] === "boards" ||
+                    (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7)
+                  ) {
+                    const id = Number(
+                      args.find((arg) => arg.startsWith("id="))?.slice(3) ??
+                        args[args.indexOf("--id") + 1],
+                    );
+                    return TestSourceControlHost.processOutput(
+                      nativeResponse(
+                        args,
+                        encode({
+                          ...item,
+                          id,
+                          url: `https://dev.azure.com/acme/_apis/wit/workItems/${id}`,
+                        }),
+                      ),
                     );
                   }
                   if (args[0] === "devops" && args[1] === "project")
                     return TestSourceControlHost.processOutput(
-                      encode({ id: "project-id", name: "Web App", defaultTeam: { id: "team-id" } }),
+                      nativeResponse(
+                        args,
+                        encode({
+                          id: "project-id",
+                          name: "Web App",
+                          defaultTeam: { id: "team-id" },
+                        }),
+                      ),
                     );
                   if (resource === "workitemtypes")
                     return TestSourceControlHost.processOutput(
-                      encode({ value: [{ name: "Bug" }] }),
+                      nativeResponse(args, encode({ value: [{ name: "Bug" }] })),
                     );
                   if (resource === "templates")
                     return TestSourceControlHost.processOutput(
-                      encode({
-                        id: "bug-template",
-                        name: "Bug",
-                        workItemTypeName: "Bug",
-                        fields: {
-                          "System.Title": "Default title",
-                          "Custom.Priority": "High",
-                          "System.Tags": "template-tag",
-                          "System.AssignedTo": "template@acme.test",
-                        },
-                      }),
+                      nativeResponse(
+                        args,
+                        encode({
+                          id: "bug-template",
+                          name: "Bug",
+                          workItemTypeName: "Bug",
+                          fields: {
+                            "System.Title": "Default title",
+                            "Custom.Priority": "High",
+                            "System.Tags": "template-tag",
+                            "System.AssignedTo": "template@acme.test",
+                          },
+                        }),
+                      ),
                     );
                   throw new Error(`Unexpected ${args.join(" ")}`);
                 }),
@@ -687,7 +1320,7 @@ describe("AzureDevOpsIssueTracker", () => {
       ],
     },
   ] as const)(
-    "updates an existing HTML description as native Markdown: $input",
+    "keeps an existing Markdown description in its native format: $input",
     ({ input, fields }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -701,7 +1334,7 @@ describe("AzureDevOpsIssueTracker", () => {
                 execute: ({ args }) =>
                   Effect.gen(function* () {
                     seen.push(args);
-                    if (args.includes("--in-file")) {
+                    if (args.includes("PATCH")) {
                       expect(args).toEqual(
                         expect.arrayContaining([
                           "devops",
@@ -709,13 +1342,12 @@ describe("AzureDevOpsIssueTracker", () => {
                           "--organization",
                           "https://dev.azure.com/acme",
                           "--resource",
-                          "workitems",
+                          "batch",
                           "--api-version",
                           "7.1",
                           "project=Web App",
-                          "id=7",
                           "PATCH",
-                          "application/json-patch+json",
+                          "application/json",
                         ]),
                       );
                       patches.push(
@@ -723,15 +1355,18 @@ describe("AzureDevOpsIssueTracker", () => {
                           yield* fs
                             .readFileString(args[args.indexOf("--in-file") + 1]!)
                             .pipe(Effect.orDie),
-                        ),
+                        )[0].body,
                       );
                     }
                     return TestSourceControlHost.processOutput(
-                      encode({
-                        ...WORK_ITEM,
-                        rev: 6,
-                        multilineFieldsFormat: { "System.Description": "HTML" },
-                      }),
+                      nativeResponse(
+                        args,
+                        encode({
+                          ...WORK_ITEM,
+                          rev: 6,
+                          multilineFieldsFormat: { "System.Description": "Markdown" },
+                        }),
+                      ),
                     );
                   }),
               }),
@@ -745,14 +1380,11 @@ describe("AzureDevOpsIssueTracker", () => {
           key: "7",
           ...input,
         });
-        expect(patches).toEqual([
-          [
-            ...fields,
-            { op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" },
-          ],
-        ]);
+        expect(patches).toEqual([[{ op: "test", path: "/rev", value: 6 }, ...fields]]);
         expect(seen).toHaveLength(2);
-        expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
+        expect(seen[0]).toEqual(
+          expect.arrayContaining(["devops", "invoke", "workitemsbatch", "POST"]),
+        );
       }).pipe(Effect.provide(NodeFileSystem.layer)),
   );
 
@@ -824,8 +1456,19 @@ describe("AzureDevOpsIssueTracker", () => {
                     process: {
                       run: ({ args }) => {
                         seen.push(args);
-                        return args.includes("show")
-                          ? Effect.succeed(TestSourceControlHost.processOutput(encode(WORK_ITEM)))
+                        return !args.includes("PATCH")
+                          ? Effect.succeed(
+                              TestSourceControlHost.processOutput(
+                                nativeResponse(
+                                  args,
+                                  encode({
+                                    ...WORK_ITEM,
+                                    rev: 6,
+                                    multilineFieldsFormat: { "System.Description": "Markdown" },
+                                  }),
+                                ),
+                              ),
+                            )
                           : Effect.fail(cause);
                       },
                     },
@@ -860,7 +1503,10 @@ describe("AzureDevOpsIssueTracker", () => {
       const seen: ReadonlyArray<string>[] = [];
       const api = yield* tracker((args) => {
         seen.push(args);
-        if (args[0] === "boards")
+        if (
+          args[0] === "boards" ||
+          (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7)
+        )
           return encode({
             ...WORK_ITEM,
             url: `${prefix}/_apis/wit/workItems/7`,
@@ -873,16 +1519,12 @@ describe("AzureDevOpsIssueTracker", () => {
             ],
           });
         return encode({
-          value: args
-            .find((arg) => arg.startsWith("ids="))!
-            .slice(4)
-            .split(",")
-            .map((id) => ({
-              ...WORK_ITEM,
-              id: Number(id),
-              url: `${prefix}/_apis/wit/workItems/${id}`,
-              fields: { ...WORK_ITEM.fields, "System.TeamProject": "Other App" },
-            })),
+          value: (readBatch(args)?.ids ?? []).map((id) => ({
+            ...WORK_ITEM,
+            id: Number(id),
+            url: `${prefix}/_apis/wit/workItems/${id}`,
+            fields: { ...WORK_ITEM.fields, "System.TeamProject": "Other App" },
+          })),
         });
       });
       const target = { cwd: "/w", host, scope: "acme/Web App", key: "7", limit: 1 };
@@ -892,14 +1534,14 @@ describe("AzureDevOpsIssueTracker", () => {
         children: { items: [{ key: "8", scope: "acme/Other App" }], nextCursor: "1" },
       });
       expect(seen).toHaveLength(2);
-      expect(seen[1]).toContain("ids=4,8");
+      expect(readBatch(seen[1]!)?.ids).toEqual([4, 8]);
       const second = yield* api.getHierarchy!({ ...target, cursor: first.children.nextCursor! });
       expect(second).toMatchObject({
         parent: { key: "4" },
         children: { items: [{ key: "9" }], nextCursor: null },
       });
       expect(seen).toHaveLength(4);
-      expect(seen[3]).toContain("ids=4,9");
+      expect(readBatch(seen[3]!)?.ids).toEqual([4, 9]);
     }),
   );
 
@@ -956,7 +1598,10 @@ describe("AzureDevOpsIssueTracker", () => {
   it.effect("pages child relations into their own projects", () =>
     Effect.gen(function* () {
       const api = yield* tracker((args) => {
-        if (args[0] === "boards")
+        if (
+          args[0] === "boards" ||
+          (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7)
+        )
           return encode({
             ...WORK_ITEM,
             relations: [8, 9].map((id) => ({
@@ -964,7 +1609,7 @@ describe("AzureDevOpsIssueTracker", () => {
               url: `https://dev.azure.com/acme/_apis/wit/workItems/${id}`,
             })),
           });
-        expect(args).toContain("ids=9");
+        expect(readBatch(args)?.ids).toEqual([9]);
         return encode({
           value: [
             {
@@ -1024,8 +1669,18 @@ describe("AzureDevOpsIssueTracker", () => {
       const paths: ReadonlyArray<string>[] = [];
       const api = yield* tracker((args) => {
         paths.push(args);
-        if (args[0] === "boards") return encode(WORK_ITEM);
-        return encode({ id: 1, createdBy: { uniqueName: "someone@acme.test" } });
+        if (
+          args[0] === "boards" ||
+          (readBatch(args)?.ids.length === 1 && readBatch(args)?.ids[0] === 7)
+        )
+          return encode(WORK_ITEM);
+        return encode({
+          id: 1,
+          text: "Before",
+          format: "markdown",
+          createdDate: "2026-07-02T00:00:00Z",
+          createdBy: { uniqueName: "someone@acme.test" },
+        });
       });
       yield* api.editComment!({
         cwd: "/w",
@@ -1035,7 +1690,7 @@ describe("AzureDevOpsIssueTracker", () => {
         commentId: "1",
         body: "Changed",
       });
-      expect(paths).toHaveLength(2);
+      expect(paths).toHaveLength(3);
       expect(paths.flat()).not.toContain("profiles");
       expect(paths.flat()).toContain("PATCH");
     }),
@@ -1066,8 +1721,24 @@ describe("AzureDevOpsIssueTracker", () => {
                   process: {
                     run: ({ args }) => {
                       seen.push(args);
-                      return args[0] === "boards"
-                        ? Effect.succeed(TestSourceControlHost.processOutput(encode(WORK_ITEM)))
+                      return !args.includes("PATCH")
+                        ? Effect.succeed(
+                            TestSourceControlHost.processOutput(
+                              encode(
+                                args.includes("comments")
+                                  ? {
+                                      id: 1,
+                                      format: "markdown",
+                                      createdDate: "2026-07-02T00:00:00Z",
+                                    }
+                                  : {
+                                      ...WORK_ITEM,
+                                      rev: 6,
+                                      multilineFieldsFormat: { "System.Description": "Markdown" },
+                                    },
+                              ),
+                            ),
+                          )
                         : Effect.fail(cause);
                     },
                   },
@@ -1088,8 +1759,8 @@ describe("AzureDevOpsIssueTracker", () => {
         }),
       );
       expect(error).toMatchObject({ operation: "editComment", reason, cause: { cause } });
-      expect(seen).toHaveLength(2);
-      expect(seen[1]).toEqual(
+      expect(seen).toHaveLength(3);
+      expect(seen[2]).toEqual(
         expect.arrayContaining([
           "PATCH",
           "project=Web App",
@@ -1338,7 +2009,7 @@ describe("AzureDevOpsIssueTracker", () => {
         const resource = args[args.indexOf("--resource") + 1];
         if (resource === "wiql")
           return encode({ workItems: [{ id: 7 }, { id: 8 }], asOf: "2026-07-04T00:00:00Z" });
-        if (resource === "workitems") return encode({ count: 1, value: [WORK_ITEM] });
+        if (resource === "workitemsbatch") return encode({ count: 1, value: [WORK_ITEM] });
         throw new Error(`Unexpected resource ${resource}`);
       });
       const page = yield* api.listIssues({
@@ -1353,8 +2024,7 @@ describe("AzureDevOpsIssueTracker", () => {
       expect(page.items.map((item) => item.key)).toEqual(["7"]);
       expect(page.nextCursor).toBe("2026-07-03T00:00:00Z|7");
       expect(seen).toHaveLength(2);
-      expect(seen[1]).toContain("ids=7");
-      expect(seen[1]).toContain("asOf=2026-07-04T00:00:00Z");
+      expect(readBatch(seen[1]!)).toMatchObject({ ids: [7], asOf: "2026-07-04T00:00:00Z" });
     }),
   );
 
@@ -1374,7 +2044,7 @@ describe("AzureDevOpsIssueTracker", () => {
           return encode({
             workItems: (++queries === 1 ? [3, 2, 1] : [1]).map((id) => ({ id })),
           });
-        if (resource === "workitems")
+        if (resource === "workitemsbatch")
           return encode({
             count: queries === 1 ? 2 : 1,
             value: queries === 1 ? [rows[1], rows[2]] : [rows[0]],
@@ -1448,7 +2118,13 @@ describe("AzureDevOpsIssueTracker", () => {
         const error = yield* Effect.flip(task);
         expect(error.reason).toBe("not-found");
         expect(seen).toHaveLength(1);
-        expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
+        expect(seen[0]).toEqual(
+          expect.arrayContaining(
+            operation === "getIssue" || operation === "update-body"
+              ? ["devops", "invoke", "workitemsbatch", "POST"]
+              : ["boards", "work-item", "show"],
+          ),
+        );
       }),
   );
 
@@ -1470,7 +2146,7 @@ describe("AzureDevOpsIssueTracker", () => {
           key: "7",
           title: "Changed title",
         });
-        expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
+        expect(seen[0]).toEqual(expect.arrayContaining(["boards", "work-item", "show"]));
         expect(seen.at(-1)?.slice(0, 3)).toEqual(["boards", "work-item", "update"]);
         expect(seen).toHaveLength(project === "web app" ? 2 : 3);
       }),

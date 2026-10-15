@@ -1,4 +1,9 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as FileSystem from "effect/FileSystem";
+import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
+import * as AzureDevOpsIssueTracker from "@t3tools/source-control-azure-devops/server/AzureDevOpsIssueTracker";
+import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 import {
   IssueTrackerKind,
   ProjectId,
@@ -73,6 +78,200 @@ const nativeIssue = (account: string) => ({
   attachments: empty,
   reactions: [],
 });
+
+const azureFixture = (sources: ReadonlyArray<{ id: string; host: string; repository: string }>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const identities: Array<{ cwd: string; organization: string }> = [];
+    const requests: Array<{ cwd: string; organization: string; resource: string; body: unknown }> =
+      [];
+    const projects = sources.map((source) => ({
+      ...shell(source.id),
+      repositoryIdentity: {
+        canonicalKey: source.host + "/" + source.repository,
+        provider: "azure-devops" as const,
+        displayName: source.repository,
+        locator: {
+          source: "git-remote" as const,
+          remoteName: "origin",
+          remoteUrl: "https://" + source.host + "/" + source.repository,
+        },
+      },
+    }));
+    const api = yield* AzureDevOpsIssueTracker.make.pipe(
+      Effect.provide(
+        Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+          getCurrentIdentity: (input) =>
+            Effect.sync(() => {
+              identities.push(input);
+              const url = new URL(input.organization);
+              return (url.pathname.slice(1) || url.hostname.split(".")[0]) + "@fake.test";
+            }),
+          execute: ({ cwd, args }) =>
+            Effect.gen(function* () {
+              const organization = args[args.indexOf("--organization") + 1]!;
+              const resource = args[args.indexOf("--resource") + 1]!;
+              const body = args.includes("--in-file")
+                ? JSON.parse(
+                    yield* fs
+                      .readFileString(args[args.indexOf("--in-file") + 1]!)
+                      .pipe(Effect.orDie),
+                  )
+                : null;
+              requests.push({ cwd, organization, resource, body });
+              if (resource === "wiql")
+                return TestSourceControlHost.processOutput(
+                  JSON.stringify({ workItems: [{ id: 7 }] }),
+                );
+              if (resource !== "workitemsbatch")
+                return yield* Effect.die("Unexpected Azure request " + resource);
+              assert.deepEqual(body.ids, [7]);
+              const url = new URL(organization);
+              const account = (url.pathname.slice(1) || url.hostname.split(".")[0]) + "@fake.test";
+              return TestSourceControlHost.processOutput(
+                JSON.stringify({
+                  count: 1,
+                  value: [
+                    {
+                      id: 7,
+                      url: organization + "/_apis/wit/workItems/7",
+                      fields: {
+                        "System.Title": account,
+                        "System.State": "Active",
+                        "System.CreatedDate": "2026-10-15T00:00:00Z",
+                        "System.ChangedDate": "2026-10-15T00:00:00Z",
+                        "System.TeamProject": args
+                          .find((arg) => arg.startsWith("project="))!
+                          .slice(8),
+                        "System.CreatedBy": { uniqueName: account },
+                        "System.AssignedTo": { uniqueName: account },
+                      },
+                    },
+                  ],
+                }),
+              );
+            }),
+        }),
+      ),
+    );
+    const service = yield* IssueService.make.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
+            list: Effect.succeed(new Map()),
+          }),
+          Layer.succeed(
+            IssueTrackerRegistry.IssueTrackerRegistry,
+            IssueTrackerRegistry.fromTrackers([api]),
+          ),
+          Layer.mock(ProjectService.ProjectService)({
+            listShells: () => Effect.succeed(projects),
+            getShell: (id) =>
+              Effect.succeed(Option.fromNullishOr(projects.find((project) => project.id === id))),
+          }),
+          Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+            resolve: (cwd) =>
+              Effect.succeed(
+                projects.find((project) => project.workspaceRoot === cwd)?.repositoryIdentity ??
+                  null,
+              ),
+          }),
+        ),
+      ),
+    );
+    return { service, identities, requests };
+  }).pipe(Effect.provide(NodeFileSystem.layer));
+
+it.effect(
+  "keeps Azure organization actors apart and reuses one principal read for each organization",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* azureFixture([
+        { id: "alpha", host: "dev.azure.com", repository: "alpha/Web App/_git/one" },
+        { id: "worktree", host: "dev.azure.com", repository: "alpha/Web App/_git/one" },
+        { id: "api", host: "dev.azure.com", repository: "alpha/API/_git/two" },
+        { id: "beta", host: "dev.azure.com", repository: "beta/Web App/_git/three" },
+      ]);
+      const result = yield* f.service.list({ state: "all", involvement: "assigned" });
+      assert.isEmpty(result.errors);
+      assert.equal(result.entries.length, 3);
+      assert.deepEqual(f.identities.map((read) => read.organization).sort(), [
+        "https://dev.azure.com/alpha",
+        "https://dev.azure.com/beta",
+      ]);
+      assert.deepEqual(result.viewers, {
+        "azure-devops dev.azure.com alpha/Web App": "alpha@fake.test",
+        "azure-devops dev.azure.com alpha/API": "alpha@fake.test",
+        "azure-devops dev.azure.com beta/Web App": "beta@fake.test",
+      });
+      for (const entry of result.entries)
+        assert.equal(entry.author?.login, entry.scope.split("/")[0] + "@fake.test");
+      const wiql = f.requests.filter((request) => request.resource === "wiql");
+      assert.equal(wiql.length, 3);
+      for (const request of wiql)
+        assert.include(JSON.stringify(request.body), "[System.AssignedTo] = @Me");
+      assert.isFalse(f.requests.some((request) => request.resource === "profiles"));
+    }),
+);
+
+it.effect(
+  "reads an external Azure organization through a lending checkout with the target principal",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* azureFixture([
+        { id: "alpha", host: "dev.azure.com", repository: "alpha/Web/_git/one" },
+      ]);
+      const result = yield* f.service.list({
+        projectId: ProjectId.make("alpha"),
+        tracker: IssueTrackerKind.make("azure-devops"),
+        host: "dev.azure.com",
+        scope: "beta/Web",
+        state: "all",
+        involvement: "authored",
+      });
+      assert.isEmpty(result.errors);
+      assert.deepEqual(f.identities, [
+        { cwd: "/w/alpha", organization: "https://dev.azure.com/beta" },
+      ]);
+      assert.equal(result.entries[0]?.author?.login, "beta@fake.test");
+      assert.equal(result.viewers["azure-devops dev.azure.com beta/web"], "beta@fake.test");
+      assert.equal(f.requests.filter((request) => request.resource === "wiql").length, 1);
+      assert.include(JSON.stringify(f.requests[0]?.body), "[System.CreatedBy] = @Me");
+    }),
+);
+
+it.effect.each(["legacy.visualstudio.com", "legacy.visualstudio.com:443"] as const)(
+  "resolves legacy Azure %s and an encoded project without changing the principal",
+  (host) =>
+    Effect.gen(function* () {
+      const f = yield* azureFixture([{ id: "legacy", host, repository: "Web%20App/_git/one" }]);
+      const result = yield* f.service.list({ state: "all" });
+      assert.isEmpty(result.errors);
+      assert.deepEqual(f.identities, [
+        { cwd: "/w/legacy", organization: "https://legacy.visualstudio.com" },
+      ]);
+      assert.equal(result.entries[0]?.host, host);
+      assert.equal(result.entries[0]?.scope, "legacy/Web App");
+      assert.equal(result.entries[0]?.author?.login, "legacy@fake.test");
+    }),
+);
+
+it.effect("refuses a nonstandard Azure port before account discovery and work item reads", () =>
+  Effect.gen(function* () {
+    const f = yield* azureFixture([
+      {
+        id: "legacy",
+        host: "legacy.visualstudio.com:8443",
+        repository: "Web/_git/one",
+      },
+    ]);
+    const result = yield* f.service.list({ state: "all" });
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0]?.host, "legacy.visualstudio.com:8443");
+    assert.isEmpty(f.identities);
+    assert.isEmpty(f.requests);
+  }),
+);
 
 const fixture = Effect.gen(function* () {
   yield* runMigrations();

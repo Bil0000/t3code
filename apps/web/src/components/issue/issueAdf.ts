@@ -290,8 +290,14 @@ export function readIssueAdfClipboard(value: string) {
   }
 }
 
+export function issueRichSourceLabel(body: IssueRichBody | undefined) {
+  if (body?.format === "jira-wiki") return "Jira wiki markup";
+  if (body?.format === "azure-html") return "HTML source";
+  return null;
+}
+
 export function isEditableIssueRichBody(body: IssueRichBody | undefined) {
-  return body?.format === "jira-wiki"
-    ? body.document.length <= 65_536
+  return issueRichSourceLabel(body) !== null
+    ? body!.document.length <= 65_536
     : readIssueAdf(body) !== null;
 }
