@@ -149,6 +149,15 @@ const ScopeIssue = Schema.Struct({
     description: Schema.optional(Schema.Unknown),
   }),
 });
+const Epic = Schema.Struct({ key: Text });
+const AgileIssue = Schema.Struct({
+  ...JiraIssue.fields,
+  fields: Schema.Struct({
+    ...JiraIssue.fields.fields.fields,
+    epic: Schema.optional(Schema.NullOr(Epic)),
+  }),
+});
+const AgileSearch = Schema.Struct({ ...Search.fields, issues: bounded(AgileIssue, 200) });
 const issueFields = [
   "project",
   "parent",
@@ -283,6 +292,50 @@ export const make = Effect.gen(function* () {
         );
       return issue;
     });
+  const dataCenterParentContext = (input: IssueTarget, selected: typeof JiraIssue.Type) =>
+    Effect.gen(function* () {
+      if (selected.fields.issuetype?.subtask !== false) return null;
+      const current = yield* jira.request({
+        host: input.host,
+        operation: "getHierarchy",
+        method: "GET",
+        path:
+          "/agile/1.0/issue/" +
+          encodeURIComponent(selected.key) +
+          "?fields=" +
+          issueFields.join(",") +
+          ",epic",
+        schema: AgileIssue,
+      });
+      if (
+        current.key !== selected.key ||
+        current.fields.project?.id !== selected.fields.project?.id ||
+        current.fields.issuetype?.subtask !== false
+      )
+        return yield* JiraApi.failed("getHierarchy", "Jira returned inconsistent epic membership.");
+      const ownEpic = yield* jira
+        .request({
+          host: input.host,
+          operation: "getHierarchy",
+          method: "GET",
+          path: "/agile/1.0/epic/" + encodeURIComponent(selected.key),
+          schema: Epic,
+        })
+        .pipe(
+          Effect.catchIf(
+            (error) => JiraApi.isHttpStatus(error, 404),
+            () => Effect.succeed(null),
+          ),
+        );
+      if (ownEpic !== null && ownEpic.key !== selected.key)
+        return yield* JiraApi.failed("getHierarchy", "Jira returned a different epic.");
+      return { current, ownEpic };
+    }).pipe(
+      Effect.catchIf(
+        (error) => JiraApi.isHttpStatus(error, 404) || JiraApi.isHttpStatus(error, 403),
+        () => Effect.succeed(null),
+      ),
+    );
   const permissions = (
     input: IssueScopeTarget & { readonly key?: string | undefined },
     operation: string,
@@ -593,6 +646,9 @@ export const make = Effect.gen(function* () {
               schema: History,
             });
         const richBody = jiraRichBody(issue.fields.description, deployment);
+        const parentContext =
+          deployment === "cloud" ? null : yield* dataCenterParentContext(input, issue);
+        const updateParent = parentContext !== null && parentContext.ownEpic === null;
         return {
           ...(yield* JiraApi.attempt("getIssue", () => normalizeJiraIssue(issue, input.host))),
           body: yield* JiraApi.attempt("getIssue", () => jiraBodyText(issue.fields.description)),
@@ -601,15 +657,15 @@ export const make = Effect.gen(function* () {
             () => deployment === "cloud" && jiraBodyEditable(issue.fields.description),
           ),
           ...(richBody === undefined ? {} : { richBody }),
-          ...(deployment === "cloud"
-            ? {}
-            : { capabilities: { ...CAPABILITIES, updateParent: false } }),
+          ...(deployment === "cloud" ? {} : { capabilities: { ...CAPABILITIES, updateParent } }),
           externalLinks: remoteLinks.flatMap(safeRemoteLink),
           states: [jiraState(issue.fields.status)],
           viewer: who,
           viewerPermissions: {
             ...toPermissions(rawPermissions),
-            ...(deployment === "cloud" ? {} : { updateParent: false }),
+            ...(deployment === "cloud"
+              ? {}
+              : { updateParent: updateParent && allowed(rawPermissions, "EDIT_ISSUES") }),
           },
           comments: page.comments,
           commentsCursor: page.nextCursor,
@@ -633,13 +689,7 @@ export const make = Effect.gen(function* () {
         );
       }),
     getViewerPermissions: (input) =>
-      Effect.gen(function* () {
-        const raw = yield* permissions(input, "getViewerPermissions");
-        return {
-          ...toPermissions(raw),
-          ...((yield* jira.deploymentFor(input.host)) === "cloud" ? {} : { updateParent: false }),
-        };
-      }),
+      permissions(input, "getViewerPermissions").pipe(Effect.map(toPermissions)),
     create: (input) =>
       Effect.gen(function* () {
         if (input.assignees.length > 1)
@@ -792,8 +842,18 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const limit = yield* pageLimit("getHierarchy", input);
         const current = yield* requireIssue(input);
+        const parentContext =
+          (yield* jira.deploymentFor(input.host)) === "cloud"
+            ? null
+            : yield* dataCenterParentContext(input, current);
+        const parentKey = current.fields.parent?.key ?? parentContext?.current.fields.epic?.key;
+        const epic = parentContext?.ownEpic;
+        const epicCursor =
+          epic == null || !input.cursor?.startsWith("epic:") ? undefined : input.cursor.slice(5);
+        if (epicCursor !== undefined)
+          yield* JiraApi.attempt("getHierarchy", () => commentOffset(epicCursor));
         const parent =
-          current.fields.parent === null || current.fields.parent === undefined
+          parentKey === undefined
             ? null
             : yield* jira.request({
                 host: input.host,
@@ -801,24 +861,27 @@ export const make = Effect.gen(function* () {
                 method: "GET",
                 path:
                   "/issue/" +
-                  encodeURIComponent(current.fields.parent.key) +
+                  encodeURIComponent(parentKey) +
                   "?fields=" +
                   issueFields.filter((field) => field !== "description").join(","),
                 schema: JiraIssue,
               });
-        const page = yield* jira.request({
-          host: input.host,
-          operation: "getHierarchy",
-          method: "POST",
-          path: "/search/jql",
-          schema: Search,
-          body: {
-            jql: "parent = " + quoteJiraJql(current.key) + " ORDER BY created DESC",
-            fields: issueFields.filter((field) => field !== "description"),
-            maxResults: limit,
-            ...(input.cursor === undefined ? {} : { nextPageToken: input.cursor }),
-          },
-        });
+        const page =
+          epicCursor === undefined
+            ? yield* jira.request({
+                host: input.host,
+                operation: "getHierarchy",
+                method: "POST",
+                path: "/search/jql",
+                schema: Search,
+                body: {
+                  jql: "parent = " + quoteJiraJql(current.key) + " ORDER BY created DESC",
+                  fields: issueFields.filter((field) => field !== "description"),
+                  maxResults: limit,
+                  ...(input.cursor === undefined ? {} : { nextPageToken: input.cursor }),
+                },
+              })
+            : { issues: [], isLast: true, nextPageToken: undefined };
         if (
           page.issues.length > limit ||
           (page.isLast === false && !page.nextPageToken) ||
@@ -833,31 +896,115 @@ export const make = Effect.gen(function* () {
             "getHierarchy",
             "Jira returned an inconsistent child issue page.",
           );
+        const items = page.issues.map((child) => relation(child, input.host, input.scope));
+        let nextCursor = page.isLast === true ? null : (page.nextPageToken ?? null);
+        if (epic != null && nextCursor === null) {
+          nextCursor = "epic:" + (epicCursor ?? "0");
+          if (items.length < limit) {
+            const children = yield* jira
+              .request({
+                host: input.host,
+                operation: "getHierarchy",
+                method: "GET",
+                path:
+                  "/agile/1.0/epic/" +
+                  encodeURIComponent(current.key) +
+                  "/issue?startAt=" +
+                  (epicCursor ?? "0") +
+                  "&maxResults=" +
+                  (limit - items.length) +
+                  "&fields=" +
+                  issueFields.filter((field) => field !== "description").join(",") +
+                  ",epic",
+                schema: AgileSearch,
+              })
+              .pipe(
+                Effect.catchIf(
+                  (error) => JiraApi.isHttpStatus(error, 403) || JiraApi.isHttpStatus(error, 404),
+                  () => Effect.succeed(null),
+                ),
+              );
+            if (children === null)
+              return {
+                parent: parent === null ? null : relation(parent, input.host, input.scope),
+                children: { items, nextCursor: null, truncated: true },
+              };
+            if (
+              children.issues.length > limit - items.length ||
+              children.issues.some(
+                (child) =>
+                  child.fields.epic?.key !== current.key || child.fields.project === undefined,
+              )
+            )
+              return yield* JiraApi.failed(
+                "getHierarchy",
+                "Jira returned inconsistent epic children.",
+              );
+            items.push(
+              ...children.issues
+                .filter((child) => child.fields.issuetype?.subtask !== true)
+                .map((child) => relation(child, input.host, input.scope)),
+            );
+            nextCursor =
+              children.isLast === true || children.nextPageToken === undefined
+                ? null
+                : "epic:" + children.nextPageToken;
+          }
+        }
         return {
           parent: parent === null ? null : relation(parent, input.host, input.scope),
           children: {
-            items: page.issues.map((child) => relation(child, input.host, input.scope)),
-            nextCursor: page.isLast === true ? null : (page.nextPageToken ?? null),
+            items,
+            nextCursor,
           },
         };
       }),
     setParent: (input) =>
       Effect.gen(function* () {
-        if ((yield* jira.deploymentFor(input.host)) === "data-center")
-          return yield* JiraApi.failed(
-            "setParent",
-            "Change this issue's parent in Jira Data Center.",
-          );
+        const deployment = yield* jira.deploymentFor(input.host);
         const selected = yield* requireIssue(input);
         if (input.parentKey === null && selected.fields.issuetype?.subtask === true)
           return yield* JiraApi.failed(
             "setParent",
             "Jira subtasks must have a parent. Change the issue type in Jira first.",
           );
+        if (deployment === "data-center") {
+          const context = yield* dataCenterParentContext(input, selected);
+          if (context === null || context.ownEpic !== null)
+            return yield* JiraApi.failed(
+              "setParent",
+              "Only base issues can change their Jira Software epic here.",
+            );
+        }
         const parent =
           input.parentKey === null ? null : yield* requireIssue({ ...input, key: input.parentKey });
         if (parent?.key === selected.key)
           return yield* JiraApi.failed("setParent", "An issue cannot be its own parent.");
+        if (deployment === "data-center") {
+          if (parent !== null) {
+            const epic = yield* jira.request({
+              host: input.host,
+              operation: "setParent",
+              method: "GET",
+              path: "/agile/1.0/epic/" + encodeURIComponent(parent.key),
+              schema: Epic,
+            });
+            if (epic.key !== parent.key)
+              return yield* JiraApi.failed("setParent", "Jira returned a different epic.");
+          }
+          yield* jira.request({
+            host: input.host,
+            operation: "setParent",
+            method: "POST",
+            path:
+              "/agile/1.0/epic/" +
+              (parent === null ? "none" : encodeURIComponent(parent.key)) +
+              "/issue",
+            schema: Schema.Undefined,
+            body: { issues: [selected.key] },
+          });
+          return;
+        }
         yield* jira.request({
           host: input.host,
           operation: "setParent",

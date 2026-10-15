@@ -140,6 +140,12 @@ export function dataCenterRequest(input: {
   readonly assigneeName?: string;
 }) {
   const url = new URL("https://jira.invalid" + input.path);
+  const agile =
+    (input.method === "GET" &&
+      /^\/agile\/1\.0\/(?:issue\/[^/]+|epic\/[^/]+(?:\/issue)?)$/u.test(url.pathname)) ||
+    (input.method === "POST" && /^\/agile\/1\.0\/epic\/[^/]+\/issue$/u.test(url.pathname));
+  if (url.pathname.startsWith("/agile/") && !agile)
+    throw new Error("Unsupported Jira Data Center Agile operation.");
   let path = input.path;
   let body = input.body;
   if (url.pathname === "/project/search") path = "/project";
@@ -195,7 +201,7 @@ export function dataCenterRequest(input: {
       else if (input.assigneeName !== undefined) body = { name: input.assigneeName };
     }
   }
-  return { path, body };
+  return { path, body, apiBase: agile ? "/rest" : "/rest/api/2" };
 }
 
 export function dataCenterResponse(path: string, body: unknown, response: unknown): unknown {
@@ -229,6 +235,16 @@ export function dataCenterResponse(path: string, body: unknown, response: unknow
       ...(next < total ? { nextPageToken: String(next) } : {}),
     };
   }
+  if (/^\/agile\/1\.0\/epic\/[^/]+\/issue$/u.test(url.pathname)) {
+    const startAt = offset(url.searchParams.get("startAt"));
+    const limit = pageLimit(Number(url.searchParams.get("maxResults") ?? 100));
+    return dataCenterResponse(
+      "/search/jql",
+      { nextPageToken: String(startAt), maxResults: limit },
+      response,
+    );
+  }
+  if (/^\/agile\/1\.0\/issue\/[^/]+$/u.test(url.pathname)) return issue(response);
   if (/^\/issue\/createmeta\/[^/]+\/issuetypes(?:\/[^/]+)?$/u.test(url.pathname)) {
     const page = record(response);
     const values = array(page.values);

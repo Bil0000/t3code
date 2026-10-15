@@ -99,6 +99,421 @@ function body(request: HttpClientRequest.HttpClientRequest | undefined): unknown
   return JSON.parse(new TextDecoder().decode(request.body.body));
 }
 
+function epicFixture(
+  override?: (
+    request: HttpClientRequest.HttpClientRequest,
+  ) => { body?: unknown; status?: number } | undefined,
+) {
+  let parent: string | null = "ENG-9";
+  const source = (key: string) => ({
+    ...issue,
+    key,
+    changelog: { startAt: 0, total: 0, histories: [] },
+    fields: {
+      ...issue.fields,
+      issuetype: {
+        id: key === "ENG-2" ? "native-epic" : "native-base",
+        name: "Renamed type",
+        subtask: false,
+      },
+      epic: key === "ENG-1" && parent !== null ? { id: 9, key: parent } : null,
+      comment: { total: 0, comments: [] },
+    },
+  });
+  const f = fakeJira((request) => {
+    const custom = override?.(request);
+    if (custom !== undefined) return custom;
+    const url = new URL(request.url);
+    if (request.method === "POST" && /\/agile\/1.0\/epic\/[^/]+\/issue$/.test(url.pathname)) {
+      parent = url.pathname.includes("/none/") ? null : "ENG-2";
+      return { status: 204 };
+    }
+    if (url.pathname.endsWith("/mypermissions"))
+      return { body: { permissions: { EDIT_ISSUES: { havePermission: true } } } };
+    if (url.pathname.endsWith("/myself")) return { body: user };
+    if (url.pathname.endsWith("/remotelink")) return { body: [] };
+    if (url.pathname.endsWith("/search")) {
+      const search = decodeSearchRequest(body(request));
+      return {
+        body: {
+          startAt: search.startAt,
+          total: search.jql.includes('"ENG-2"') ? 1 : 0,
+          issues: search.jql.includes('"ENG-2"')
+            ? [
+                {
+                  ...source("ENG-4"),
+                  fields: {
+                    ...source("ENG-4").fields,
+                    parent: { key: "ENG-2" },
+                    issuetype: { id: "sub", name: "Sub", subtask: true },
+                  },
+                },
+              ]
+            : [],
+        },
+      };
+    }
+    if (/\/agile\/1.0\/epic\/ENG-2\/issue$/.test(url.pathname)) {
+      const startAt = Number(url.searchParams.get("startAt"));
+      const maxResults = Number(url.searchParams.get("maxResults"));
+      const children = ["ENG-1", "ENG-3"].map((key) => ({
+        ...source(key),
+        fields: { ...source(key).fields, epic: { id: 2, key: "ENG-2" } },
+      }));
+      return { body: { startAt, total: 2, issues: children.slice(startAt, startAt + maxResults) } };
+    }
+    if (/\/agile\/1.0\/epic\//.test(url.pathname)) {
+      if (url.pathname.endsWith("/ENG-2") || url.pathname.endsWith("/ENG-9"))
+        return {
+          body: {
+            id: 2,
+            key: url.pathname.endsWith("/ENG-9") ? "ENG-9" : "ENG-2",
+            name: "Renamed epic",
+            summary: "Epic",
+          },
+        };
+      return { status: 404, body: {} };
+    }
+    const key = url.pathname.split("/").at(-1)!;
+    return { body: source(key) };
+  });
+  return {
+    ...f,
+    source,
+    tracker: f.api.pipe(
+      Effect.flatMap((api) =>
+        JiraIssueTracker.make.pipe(Effect.provideService(JiraApi.JiraApi, api)),
+      ),
+    ),
+  };
+}
+
+it.effect("moves and removes a DC epic parent through native Agile routes with readback", () =>
+  Effect.gen(function* () {
+    const f = epicFixture();
+    const tracker = yield* f.tracker;
+    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+    const detail = yield* tracker.getIssue(target);
+    expect(detail.capabilities?.updateParent).toBe(true);
+    expect(detail.viewerPermissions.updateParent).toBe(true);
+    expect((yield* tracker.getViewerPermissions(target)).updateParent).toBeUndefined();
+    expect((yield* tracker.getHierarchy!({ ...target, limit: 10 })).parent?.key).toBe("ENG-9");
+    yield* tracker.setParent!({ ...target, parentKey: "ENG-2" });
+    expect((yield* tracker.getHierarchy!({ ...target, limit: 10 })).parent?.key).toBe("ENG-2");
+    yield* tracker.setParent!({ ...target, parentKey: null });
+    expect((yield* tracker.getHierarchy!({ ...target, limit: 10 })).parent).toBeNull();
+    const writes = f.calls.filter((r) => r.method === "POST" && r.url.includes("/agile/"));
+    expect(writes.map((r) => r.url)).toEqual([
+      `${site}/rest/agile/1.0/epic/ENG-2/issue`,
+      `${site}/rest/agile/1.0/epic/none/issue`,
+    ]);
+    expect(writes.map(body)).toEqual([{ issues: ["ENG-1"] }, { issues: ["ENG-1"] }]);
+    expect(f.calls.every((r) => r.headers.authorization === "Bearer fake-pat")).toBe(true);
+    expect(f.calls.some((r) => r.method === "PUT" || r.url.includes("/subtask/move"))).toBe(false);
+  }),
+);
+
+it.effect("pages both existing DC subtask children and native epic children", () =>
+  Effect.gen(function* () {
+    const f = epicFixture();
+    const tracker = yield* f.tracker;
+    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-2", limit: 1 };
+    const first = yield* tracker.getHierarchy!(target);
+    expect(first.children.items.map((i) => i.key)).toEqual(["ENG-4"]);
+    expect(first.children.nextCursor).not.toBeNull();
+    const second = yield* tracker.getHierarchy!({ ...target, cursor: first.children.nextCursor! });
+    expect(second.children.items.map((i) => i.key)).toEqual(["ENG-1"]);
+    const last = yield* tracker.getHierarchy!({ ...target, cursor: second.children.nextCursor! });
+    expect(last.children.items.map((i) => i.key)).toEqual(["ENG-3"]);
+    expect(last.children.nextCursor).toBeNull();
+  }),
+);
+
+it.effect.each([true, undefined] as const)(
+  "keeps DC subtask or unknown parent edits unavailable: %s",
+  (subtask) =>
+    Effect.gen(function* () {
+      const f = epicFixture((request) =>
+        new URL(request.url).pathname.endsWith("/api/2/issue/ENG-1") && request.method === "GET"
+          ? {
+              body: {
+                ...issue,
+                changelog: { startAt: 0, total: 0, histories: [] },
+                fields: {
+                  ...issue.fields,
+                  comment: { total: 0, comments: [] },
+                  issuetype: {
+                    id: "type",
+                    name: "Type",
+                    ...(subtask === undefined ? {} : { subtask }),
+                  },
+                },
+              },
+            }
+          : undefined,
+      );
+      const tracker = yield* f.tracker;
+      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      expect((yield* tracker.getIssue(target)).capabilities?.updateParent).toBe(false);
+      expect((yield* tracker.getViewerPermissions(target)).updateParent).toBeUndefined();
+      yield* tracker.setParent!({ ...target, parentKey: "ENG-2" }).pipe(Effect.flip);
+      yield* tracker.setParent!({ ...target, parentKey: null }).pipe(Effect.flip);
+      expect(f.calls.some((request) => request.method !== "GET")).toBe(false);
+    }),
+);
+
+it.effect.each([403, 404])(
+  "preserves core DC details and hierarchy when Agile reads return %s",
+  (status) =>
+    Effect.gen(function* () {
+      const f = epicFixture((request) =>
+        request.url.includes("/agile/") ? { status, body: {} } : undefined,
+      );
+      const tracker = yield* f.tracker;
+      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      expect((yield* tracker.getIssue(target)).capabilities?.updateParent).toBe(false);
+      expect((yield* tracker.getViewerPermissions(target)).updateParent).toBeUndefined();
+      expect((yield* tracker.getHierarchy!({ ...target, limit: 10 })).children.items).toEqual([]);
+      yield* tracker.setParent!({ ...target, parentKey: "ENG-2" }).pipe(Effect.flip);
+      expect(f.calls.filter((r) => r.method === "POST" && r.url.includes("/agile/"))).toHaveLength(
+        0,
+      );
+    }),
+);
+
+it.effect.each([400, 401, 403, 404, 429, 500])(
+  "keeps native DC epic mutation HTTP %s without fallback or retry",
+  (status) =>
+    Effect.gen(function* () {
+      const f = epicFixture((request) =>
+        request.method === "POST" && request.url.includes("/agile/")
+          ? { status, body: {} }
+          : undefined,
+      );
+      const tracker = yield* f.tracker;
+      const error = yield* tracker.setParent!({
+        cwd: "/tmp",
+        host,
+        scope: "ENG",
+        key: "ENG-1",
+        parentKey: "ENG-2",
+      }).pipe(Effect.flip);
+      expect(error.detail).toContain(String(status));
+      expect(f.calls.map(({ method }) => method)).toEqual([
+        "GET",
+        "GET",
+        "GET",
+        "GET",
+        "GET",
+        "POST",
+      ]);
+      expect(f.calls.some((r) => r.method === "PUT" || r.url.includes("/subtask/move"))).toBe(
+        false,
+      );
+    }),
+);
+
+it.effect.each([401, 429, 500])("propagates optional Agile read HTTP %s", (status) =>
+  Effect.gen(function* () {
+    const f = epicFixture((request) =>
+      request.url.includes("/agile/") ? { status, body: {} } : undefined,
+    );
+    const tracker = yield* f.tracker;
+    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+    const error = yield* tracker.getHierarchy!({ ...target, limit: 1 }).pipe(Effect.flip);
+    expect(error.detail).toContain(String(status));
+    expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET"]);
+  }),
+);
+
+it.effect.each([403, 404])(
+  "keeps core subtasks when the optional epic child page returns HTTP %s",
+  (status) =>
+    Effect.gen(function* () {
+      const f = epicFixture((request) =>
+        request.method === "GET" && request.url.includes("/agile/1.0/epic/ENG-2/issue")
+          ? { status, body: {} }
+          : undefined,
+      );
+      const tracker = yield* f.tracker;
+      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-2", limit: 10 };
+      const page = yield* tracker.getHierarchy!(target);
+      expect(page.children.items.map((item) => item.key)).toEqual(["ENG-4"]);
+      expect(page.children).toMatchObject({ nextCursor: null, truncated: true });
+      f.calls.length = 0;
+      const continuation = yield* tracker.getHierarchy!({ ...target, cursor: "epic:0" });
+      expect(continuation.children).toEqual({ items: [], nextCursor: null, truncated: true });
+      expect(f.calls.every((request) => request.method === "GET")).toBe(true);
+    }),
+);
+
+it.effect.each([401, 429, 500])(
+  "propagates optional epic child page HTTP %s after reading core subtasks",
+  (status) =>
+    Effect.gen(function* () {
+      const f = epicFixture((request) =>
+        request.method === "GET" && request.url.includes("/agile/1.0/epic/ENG-2/issue")
+          ? { status, body: {} }
+          : undefined,
+      );
+      const error = yield* (yield* f.tracker).getHierarchy!({
+        cwd: "/tmp",
+        host,
+        scope: "ENG",
+        key: "ENG-2",
+        limit: 10,
+      }).pipe(Effect.flip);
+      expect(error.detail).toContain(String(status));
+      expect(
+        f.calls.filter((request) => request.url.includes("/agile/1.0/epic/ENG-2/issue")),
+      ).toHaveLength(1);
+      expect(f.calls.filter((request) => request.url.endsWith("/rest/api/2/search"))).toHaveLength(
+        1,
+      );
+    }),
+);
+
+it.effect.each(["comment", "update", "setState"] as const)(
+  "keeps the DC %s permission preflight to one request and independent of Agile",
+  (operation) =>
+    Effect.gen(function* () {
+      const f = epicFixture((request) => {
+        const path = new URL(request.url).pathname;
+        if (path.includes("/agile/")) return { status: 500, body: {} };
+        if (path.endsWith("/mypermissions"))
+          return {
+            body: {
+              permissions: {
+                EDIT_ISSUES: { havePermission: true },
+                ADD_COMMENTS: { havePermission: true },
+                TRANSITION_ISSUES: { havePermission: true },
+              },
+            },
+          };
+        if (path.endsWith("/transitions"))
+          return request.method === "GET"
+            ? { body: { transitions: [{ id: "advance", to: issue.fields.status }] } }
+            : { status: 204 };
+        if (request.method === "PUT") return { status: 204 };
+        if (request.method === "POST" && path.endsWith("/comment"))
+          return {
+            body: {
+              id: "100",
+              body: "Native comment",
+              author: user,
+              created: issue.fields.created,
+              updated: issue.fields.updated,
+            },
+          };
+        return undefined;
+      });
+      const tracker = yield* f.tracker;
+      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      const permissions = yield* tracker.getViewerPermissions(target);
+      expect(permissions).toMatchObject({ edit: true, comment: true, setState: true });
+      expect(permissions.updateParent).toBeUndefined();
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0]?.url).toContain("/rest/api/2/mypermissions?");
+      if (operation === "comment") yield* tracker.comment!({ ...target, body: "Native comment" });
+      else if (operation === "update") yield* tracker.update!({ ...target, title: "Changed" });
+      else
+        yield* tracker.setState!({
+          ...target,
+          state: issue.fields.status.id,
+          transitionId: "advance",
+        });
+      expect(f.calls.some((request) => request.url.includes("/agile/"))).toBe(false);
+      expect(f.calls.filter((request) => request.method !== "GET")).toHaveLength(1);
+    }),
+);
+
+it.effect.each(["ENG-1", "ENG-3", "OPS-1"])(
+  "refuses a self, non-epic or foreign DC parent %s without writing",
+  (parentKey) =>
+    Effect.gen(function* () {
+      const f = epicFixture((request) =>
+        request.url.includes("/rest/api/2/issue/OPS-1")
+          ? {
+              body: {
+                ...issue,
+                key: "OPS-1",
+                fields: { ...issue.fields, project: { id: "30", key: "OPS" } },
+              },
+            }
+          : undefined,
+      );
+      yield* (yield* f.tracker).setParent!({
+        cwd: "/tmp",
+        host,
+        scope: "ENG",
+        key: "ENG-1",
+        parentKey,
+      }).pipe(Effect.flip);
+      expect(f.calls.every((r) => r.method === "GET")).toBe(true);
+    }),
+);
+
+it.effect(
+  "requires source edit permission in DC parent controls and propagates target denial",
+  () =>
+    Effect.gen(function* () {
+      const f = epicFixture((request) =>
+        request.url.includes("/mypermissions")
+          ? { body: { permissions: { EDIT_ISSUES: { havePermission: false } } } }
+          : request.url.includes("/agile/1.0/epic/ENG-2")
+            ? { status: 403, body: {} }
+            : undefined,
+      );
+      const tracker = yield* f.tracker;
+      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      expect((yield* tracker.getIssue(target)).viewerPermissions.updateParent).toBe(false);
+      expect((yield* tracker.getViewerPermissions(target)).updateParent).toBeUndefined();
+      const error = yield* tracker.setParent!({ ...target, parentKey: "ENG-2" }).pipe(Effect.flip);
+      expect(error.detail).toContain("403");
+      expect(f.calls.every((r) => r.method === "GET")).toBe(true);
+    }),
+);
+
+it.effect.each(["epic:bad", "epic:-1", "epic:1.5"])(
+  "rejects malformed DC epic cursor %s without a child request",
+  (cursor) =>
+    Effect.gen(function* () {
+      const f = epicFixture();
+      yield* (yield* f.tracker).getHierarchy!({
+        cwd: "/tmp",
+        host,
+        scope: "ENG",
+        key: "ENG-2",
+        limit: 1,
+        cursor,
+      }).pipe(Effect.flip);
+      expect(f.calls.every((r) => r.method === "GET")).toBe(true);
+      expect(f.calls.some((r) => r.url.includes("/epic/ENG-2/issue"))).toBe(false);
+    }),
+);
+
+it.effect.each([
+  { startAt: 1, total: 1, issues: [] },
+  { startAt: 0, total: 1, issues: [] },
+  { startAt: 0, total: 0, issues: [issue] },
+])("rejects inconsistent native DC epic child page %j", (page) =>
+  Effect.gen(function* () {
+    const f = epicFixture((request) =>
+      request.url.includes("/agile/1.0/epic/ENG-2/issue") ? { body: page } : undefined,
+    );
+    yield* (yield* f.tracker).getHierarchy!({
+      cwd: "/tmp",
+      host,
+      scope: "ENG",
+      key: "ENG-2",
+      limit: 1,
+      cursor: "epic:0",
+    }).pipe(Effect.flip);
+    expect(f.calls.filter((r) => r.url.includes("/epic/ENG-2/issue"))).toHaveLength(1);
+    expect(f.calls.every((r) => r.method === "GET")).toBe(true);
+  }),
+);
+
 it.effect("probes a DC PAT at the exact base path and pages its native project array", () =>
   Effect.gen(function* () {
     const f = fakeJira((request) => ({

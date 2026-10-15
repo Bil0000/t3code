@@ -95,6 +95,11 @@ export const attempt = <A>(operation: string, run: () => A) =>
     try: run,
     catch: () => failed(operation, "Jira returned invalid or unsupported data."),
   });
+export const isHttpStatus = (error: IssueTrackerError, status: number) =>
+  typeof error.cause === "object" &&
+  error.cause !== null &&
+  "status" in error.cause &&
+  error.cause.status === status;
 
 interface Request<S extends Schema.Top> {
   readonly host: string;
@@ -187,10 +192,15 @@ export const make = Effect.gen(function* () {
           "This Jira credential belongs to another site.",
           "unauthenticated",
         );
-      if (credential.deployment === "data-center" && input.operation === "setParent")
+      if (
+        credential.deployment === "data-center" &&
+        input.operation === "setParent" &&
+        input.method !== "GET" &&
+        !(input.method === "POST" && /^\/agile\/1\.0\/epic\/[^/]+\/issue$/u.test(input.path))
+      )
         return yield* failed(
           input.operation,
-          "Changing a parent is not supported by the Jira Data Center public API.",
+          "Use Jira Software's epic operation to change this Data Center parent.",
         );
       let native =
         credential.deployment === "data-center"
@@ -240,7 +250,7 @@ export const make = Effect.gen(function* () {
         const unsigned = HttpClientRequest.make(input.method)(
           "https://" +
             credential.host +
-            (credential.deployment === "cloud" ? "/rest/api/3" : "/rest/api/2") +
+            (native?.apiBase ?? "/rest/api/3") +
             (native?.path ?? input.path),
         ).pipe(HttpClientRequest.acceptJson);
         const base =
@@ -274,6 +284,7 @@ export const make = Effect.gen(function* () {
                   (response.status === 400
                     ? ". Check required fields and the selected workflow in Jira."
                     : "."),
+                cause: { status: response.status },
                 ...(response.status === 429 && retryAt !== undefined ? { retryAt } : {}),
               })
             : undefined;

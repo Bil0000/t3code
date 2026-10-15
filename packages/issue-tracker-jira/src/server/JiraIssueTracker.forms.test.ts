@@ -638,7 +638,7 @@ it.effect("keeps Data Center native wiki editing and disables unsupported parent
     expect(detail.viewerPermissions.updateParent).toBe(false);
     f.calls.length = 0;
     yield* api.setParent!({ ...target, parentKey: "ENG-2" }).pipe(Effect.flip);
-    expect(f.calls).toEqual([]);
+    expect(f.calls.map(({ method }) => method)).toEqual(["GET"]);
     yield* api.update!({ ...target, body: "native wiki" }).pipe(Effect.flip);
     expect(f.calls.every((call) => call.method === "GET")).toBe(true);
     f.calls.length = 0;
