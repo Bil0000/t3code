@@ -4,11 +4,16 @@ import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { useNavigate } from "@tanstack/react-router";
 import { type MouseEvent, useCallback } from "react";
 
+import {
+  canOpenLinksInApp,
+  resolveBrowserLinkTargetPreference,
+} from "../browser/browserLinkTarget";
+import { useOpenLink } from "../browser/useOpenLink";
 import { readIssueListPreferences } from "../components/issue/issueListPreferences";
 import { toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
 import { ISSUES_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
-import { useProjects, useServerConfigs, useThreadShell } from "../state/entities";
+import { readThreadShell, useProjects, useServerConfigs } from "../state/entities";
 import { issueEnvironment } from "../state/issues";
 import { useAtomCommand } from "../state/use-atom-command";
 
@@ -34,7 +39,7 @@ export function useOpenIssueLink(
   const navigate = useNavigate();
   const serverConfigs = useServerConfigs();
   const projects = useProjects();
-  const thread = useThreadShell(threadRef ?? null);
+  const openLink = useOpenLink(threadRef);
   const resolveUrl = useAtomCommand(issueEnvironment.resolveUrl, { reportFailure: false });
   return useCallback(
     (event, targetUrl, targetEnvironmentId) => {
@@ -61,17 +66,24 @@ export function useOpenIssueLink(
       if (!candidate) return false;
       event.preventDefault();
       event.stopPropagation();
+      const projectId =
+        threadRef?.environmentId === environmentId
+          ? readThreadShell(threadRef)?.projectId
+          : undefined;
       void resolveUrl({
         environmentId,
         input: {
           url: targetUrl,
-          ...(threadRef?.environmentId === environmentId && thread !== null
-            ? { projectId: thread.projectId }
-            : {}),
+          ...(projectId === undefined ? {} : { projectId }),
         },
       })
         .then(async (result) => {
-          if (result._tag === "Failure") return openUnresolvedLink(targetUrl);
+          if (result._tag === "Failure") {
+            return canOpenLinksInApp(threadRef) &&
+              (await resolveBrowserLinkTargetPreference()) === "app"
+              ? openLink(targetUrl)
+              : openUnresolvedLink(targetUrl);
+          }
           const reference = result.value;
           useRightPanelStore.getState().openIssue(resolvedPanelRef, {
             ...(resolvedPanelRef.environmentId === environmentId ? {} : { environmentId }),
@@ -114,6 +126,6 @@ export function useOpenIssueLink(
         });
       return true;
     },
-    [navigate, panelRef, projects, resolveUrl, serverConfigs, thread, threadRef],
+    [navigate, openLink, panelRef, projects, resolveUrl, serverConfigs, threadRef],
   );
 }
