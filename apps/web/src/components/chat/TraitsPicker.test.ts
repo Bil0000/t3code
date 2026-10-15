@@ -123,7 +123,7 @@ describe("reasoning level shortcuts", () => {
         ...reportedInput,
         modelOptions: [{ id: "effort", value: "high" }],
       }),
-    ).toEqual({ prompt: "Ultrathink:\nSolve this" });
+    ).toEqual({ prompt: "Ultrathink:\nSolve this", promptSelectionOffset: 12 });
     expect(
       getReasoningLevelChange({
         ...reportedInput,
@@ -132,13 +132,13 @@ describe("reasoning level shortcuts", () => {
           instanceId: ProviderInstanceId.make("another-codex"),
         },
       }),
-    ).toEqual({ prompt: "Ultrathink:\nSolve this" });
+    ).toEqual({ prompt: "Ultrathink:\nSolve this", promptSelectionOffset: 12 });
     expect(
       getReasoningLevelChange({
         ...reportedInput,
         reportedModelSelection: { ...reportedModelSelection, model: "another-model" },
       }),
-    ).toEqual({ prompt: "Ultrathink:\nSolve this" });
+    ).toEqual({ prompt: "Ultrathink:\nSolve this", promptSelectionOffset: 12 });
   });
 
   it("uses a catalog default for an unset OpenCode variant", () => {
@@ -155,11 +155,12 @@ describe("reasoning level shortcuts", () => {
   it("wraps at both ends, including prompt-controlled ultrathink", () => {
     expect(
       getReasoningLevelChange({ ...input, modelOptions: [{ id: "effort", value: "low" }] }),
-    ).toEqual({ prompt: "Ultrathink:\nSolve this" });
+    ).toEqual({ prompt: "Ultrathink:\nSolve this", promptSelectionOffset: 12 });
     expect(
       getReasoningLevelChange({ ...input, prompt: "Ultrathink:\nSolve this", direction: 1 }),
     ).toEqual({
       prompt: "Solve this",
+      promptSelectionOffset: -12,
       modelOptions: [
         { id: "effort", value: "low" },
         { id: "fastMode", value: true },
@@ -170,9 +171,11 @@ describe("reasoning level shortcuts", () => {
   it("enters and leaves prompt-controlled ultrathink", () => {
     expect(getReasoningLevelChange({ ...input, direction: 1 })).toEqual({
       prompt: "Ultrathink:\nSolve this",
+      promptSelectionOffset: 12,
     });
     expect(getReasoningLevelChange({ ...input, prompt: "Ultrathink:\nSolve this" })).toEqual({
       prompt: "Solve this",
+      promptSelectionOffset: -12,
       modelOptions: [
         { id: "effort", value: "high" },
         { id: "fastMode", value: true },
@@ -189,7 +192,27 @@ describe("reasoning level shortcuts", () => {
     });
     expect(getReasoningLevelChange({ ...input, prompt: "", direction: 1 })).toEqual({
       prompt: "Ultrathink:\n",
+      promptSelectionOffset: 12,
     });
+  });
+
+  it.each([
+    { prompt: "Alpha beta gamma   ", direction: 1 as const },
+    { prompt: "  Alpha beta gamma   ", direction: 1 as const },
+    { prompt: "Ultrathink:\nAlpha beta gamma   ", direction: -1 as const },
+    { prompt: "Ultrathink:\n  Alpha beta gamma   ", direction: 1 as const },
+  ])("keeps both selection endpoints in retained text for $prompt", ({ prompt, direction }) => {
+    const change = getReasoningLevelChange({ ...input, prompt, direction });
+    if (!change || !("promptSelectionOffset" in change)) {
+      throw new Error("Expected an effort prompt change");
+    }
+    const offset = change.promptSelectionOffset;
+    const start = prompt.indexOf("beta") + offset;
+    const end = start + "beta".length;
+    expect(change.prompt.slice(start, end)).toBe("beta");
+    expect(change.prompt.slice(0, start) + "X" + change.prompt.slice(end)).toBe(
+      change.prompt.replace("beta", "X"),
+    );
   });
 
   it.each([

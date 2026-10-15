@@ -6432,13 +6432,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             },
           );
         }
-        if (change.prompt !== promptRef.current) {
+        if ("promptSelectionOffset" in change) {
           const snapshot = readComposerSnapshotStable();
           const selection = composerEditorRef.current?.readSelectionRange() ?? {
             start: snapshot.expandedCursor,
             end: snapshot.expandedCursor,
           };
-          const offset = change.prompt.length - snapshot.value.length;
+          const offset = change.promptSelectionOffset;
           applyPromptReplacementStable(0, promptRef.current.length, change.prompt, {
             expandedCursorAfterReplace: Math.max(0, selection.start + offset),
             expandedSelectionEndAfterReplace: Math.max(0, selection.end + offset),

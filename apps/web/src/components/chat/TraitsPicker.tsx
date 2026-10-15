@@ -311,7 +311,14 @@ export function getReasoningLevelChange(
     descriptor.options[
       (index + input.direction + descriptor.options.length) % descriptor.options.length
     ];
-  return next ? getTraitSelectChange(selected, descriptor, input.prompt, next.id) : null;
+  const change = next ? getTraitSelectChange(selected, descriptor, input.prompt, next.id) : null;
+  if (!change || change.prompt === input.prompt) return change;
+  return {
+    ...change,
+    promptSelectionOffset:
+      change.prompt.length -
+      ("modelOptions" in change ? input.prompt.length : input.prompt.trimEnd().length),
+  };
 }
 
 export function shouldRenderTraitsControls(input: {
