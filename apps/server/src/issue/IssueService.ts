@@ -1164,19 +1164,21 @@ export const make = Effect.gen(function* () {
               .slice(0, parsed.scope.split("/").length)
               .join("/")
           : parsed.scope;
+      const preferred = supported.find(
+        (project) =>
+          project.project.id === preferredProjectId && project.tracker === parsed.tracker,
+      );
+      const selectedAccount = connectionId ?? preferred?.connectionId;
       const onTracker = supported.filter(
-        (project) => project.tracker === parsed.tracker && project.connectionId === connectionId,
+        (project) =>
+          project.tracker === parsed.tracker &&
+          ((connectionId === undefined && preferred === undefined) ||
+            project.connectionId === selectedAccount),
       );
       if (
+        connectionId !== undefined &&
         preferredProjectId !== undefined &&
-        ((connectionId !== undefined &&
-          !onTracker.some((project) => project.project.id === preferredProjectId)) ||
-          supported.some(
-            (project) =>
-              project.project.id === preferredProjectId &&
-              project.tracker === parsed.tracker &&
-              project.connectionId !== connectionId,
-          ))
+        !onTracker.some((project) => project.project.id === preferredProjectId)
       )
         return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
       const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
@@ -1185,36 +1187,37 @@ export const make = Effect.gen(function* () {
         parsed.workspace === undefined
           ? undefined
           : parsed.scope.slice(parsed.workspace.length + 1);
-      const own =
-        preferFirst(
-          onTracker.filter(
-            (project) =>
-              issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
-          ),
-        ) ??
-        (legacyScope === undefined
-          ? undefined
-          : preferFirst(
-              onTracker.filter(
+      const canonicalProjects = onTracker.filter(
+        (project) =>
+          issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
+      );
+      const ownProjects =
+        canonicalProjects.length > 0
+          ? canonicalProjects
+          : legacyScope === undefined
+            ? []
+            : onTracker.filter(
                 (project) =>
                   isStandaloneIssueTracker(project.api) &&
                   !project.scope.includes("/") &&
                   project.scope.toLowerCase() === legacyScope,
-              ),
-            ));
-      const lender =
-        own ??
-        preferFirst(
-          onTracker.filter(
-            (project) =>
-              !isStandaloneIssueTracker(project.api) ||
-              project.tracker === "jira" ||
-              (project.tracker === "linear" &&
-                parsed.workspace !== undefined &&
-                project.scope.includes("/") &&
-                project.scope.split("/")[0]?.toLowerCase() === parsed.workspace),
-          ),
-        );
+              );
+      const own = preferFirst(ownProjects);
+      const lenders =
+        own === undefined
+          ? onTracker.filter(
+              (project) =>
+                !isStandaloneIssueTracker(project.api) ||
+                project.tracker === "jira" ||
+                (project.tracker === "linear" &&
+                  parsed.workspace !== undefined &&
+                  project.scope.includes("/") &&
+                  project.scope.split("/")[0]?.toLowerCase() === parsed.workspace),
+            )
+          : ownProjects;
+      if (new Set(lenders.map((project) => project.connectionId)).size > 1)
+        return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+      const lender = own ?? preferFirst(lenders);
       if (lender === undefined) {
         return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
       }

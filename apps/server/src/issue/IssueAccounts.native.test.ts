@@ -377,9 +377,11 @@ it.effect(
       yield* f.service
         .resolveUrl("https://linear.app/acme/issue/ENG-7", ProjectId.make("A"), a.connectionId)
         .pipe(Effect.flip);
-      yield* f.service
-        .resolveUrl("https://linear.app/acme/issue/ENG-7", ProjectId.make("A"))
-        .pipe(Effect.flip);
+      assert.equal(
+        (yield* f.service.resolveUrl("https://linear.app/acme/issue/ENG-7", ProjectId.make("A")))
+          .connectionId,
+        b.connectionId,
+      );
       const page = yield* f.service.list({
         state: "all",
         cursors: { "linear.app acme/ENG": "old-default-cursor" },
@@ -387,6 +389,49 @@ it.effect(
       assert.deepEqual(page.entries, []);
       assert.equal(f.requests.length, 0);
       assert.equal(f.writes.length, 0);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect(
+  "discovers URL accounts from the current project and refuses ambiguous account lookup",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const a = yield* f.add("token-A");
+      const b = yield* f.add("token-B");
+      yield* f.bind("A", a.connectionId);
+      yield* f.bind("alias", a.connectionId);
+      const url = "https://linear.app/acme/issue/ENG-7";
+      f.requests.length = 0;
+      assert.equal((yield* f.service.resolveUrl(url)).connectionId, a.connectionId);
+      yield* f.bind("B", b.connectionId);
+      yield* f.connections.connect({ tracker: LINEAR, token: "token-default" });
+      yield* f.bind("default");
+      f.requests.length = 0;
+      assert.equal(
+        (yield* f.service.resolveUrl(url, ProjectId.make("B"))).connectionId,
+        b.connectionId,
+      );
+      assert.equal(
+        (yield* f.service.resolveUrl(url, undefined, a.connectionId)).connectionId,
+        a.connectionId,
+      );
+      yield* f.service.resolveUrl(url).pipe(Effect.flip);
+      yield* f.service.resolveUrl(url, ProjectId.make("B"), a.connectionId).pipe(Effect.flip);
+      yield* f.service.resolveUrl(url, undefined, "missing").pipe(Effect.flip);
+      assert.equal(f.requests.length, 0);
+      const selected = yield* f.service.resolveUrl(url, ProjectId.make("B"));
+      assert.equal((yield* f.service.detail(selected)).title, "B");
+      assert.equal(f.requests.length, 2);
+      assert.isTrue(f.requests.every((request) => request.token === "token-B"));
+      yield* f.bind("B", a.connectionId);
+      f.requests.length = 0;
+      assert.equal(
+        (yield* f.service.resolveUrl(url, ProjectId.make("B"))).connectionId,
+        a.connectionId,
+      );
+      yield* f.service.resolveUrl(url, ProjectId.make("B"), b.connectionId).pipe(Effect.flip);
+      assert.equal(f.requests.length, 0);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
