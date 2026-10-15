@@ -6,8 +6,9 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 
+import { issueListCursorKey, issueScopeKeyOf } from "@t3tools/contracts";
+
 import { issueSourceMatchesList } from "@t3tools/client-runtime/state/issues";
-import { issueScopeKeyOf } from "@t3tools/contracts";
 
 import { findScopedProject } from "../pullRequest/pullRequestList.logic";
 
@@ -27,6 +28,7 @@ export function issueCreateSources(
       source.capabilities.create &&
       answer.trackers.find(
         (tracker) =>
+          tracker.connectionId === source.connectionId &&
           tracker.tracker === source.tracker &&
           tracker.host.toLowerCase() === source.host.toLowerCase(),
       )?.configured !== false,
@@ -42,6 +44,7 @@ export function issueListRefreshSource(
 ): IssueScopeRef | null {
   if (!listedEnvironmentIds.includes(environmentId)) return null;
   const matches = (candidate: IssueScopeRef) =>
+    candidate.connectionId === source.connectionId &&
     candidate.tracker === source.tracker &&
     candidate.host?.toLowerCase() === source.host?.toLowerCase() &&
     issueScopeKeyOf(candidate) === issueScopeKeyOf(source);
@@ -75,7 +78,7 @@ export function issueFilterProjects<Project extends ScopedProject>(
     const scopes = sources
       .get(project.environmentId)
       ?.filter((source) => source.projectId === project.id)
-      .map((source) => `${source.tracker} ${source.host.toLowerCase()} ${issueScopeKeyOf(source)}`)
+      .map((source) => issueListCursorKey({ ...source, scope: issueScopeKeyOf(source) }))
       .toSorted();
     const isSelected =
       project.id === selected?.id && project.environmentId === selected.environmentId;

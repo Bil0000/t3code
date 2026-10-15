@@ -434,6 +434,7 @@ export function IssueDetailPanel(props: IssueDetailPanelProps) {
         ref.host,
         ref.scope,
         ref.key,
+        ...(ref.connectionId === undefined ? [] : [ref.connectionId]),
       ])}
       {...props}
     />
@@ -501,13 +502,7 @@ function IssueDetailContent({
       detail.capabilities.states.length > 0
       ? issueEnvironment.candidates({
           environmentId,
-          input: {
-            projectId: reference.projectId,
-            tracker: reference.tracker,
-            host: reference.host,
-            scope: reference.scope,
-            key: reference.key,
-          },
+          input: reference,
         })
       : null,
   );

@@ -100,6 +100,7 @@ export type RightPanelSurface =
       projectId: string;
       tracker: string;
       host?: string;
+      connectionId?: string | undefined;
       scope: string;
       key: string;
       url?: string;
@@ -315,6 +316,7 @@ export interface IssueSurfaceTarget {
   projectId: string;
   tracker: string;
   host?: string;
+  connectionId?: string | undefined;
   scope: string;
   key: string;
   url?: string;
@@ -324,7 +326,9 @@ function issueSurfaceId(target: Omit<IssueSurfaceTarget, "url">): IssueSurface["
   const environment =
     target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
   const host = target.host === undefined ? "" : `${encodeURIComponent(target.host.toLowerCase())}:`;
-  return `issue:${environment}${encodeURIComponent(target.projectId)}:${target.tracker}:${host}${encodeURIComponent(issueScopeKeyOf(target))}:${encodeURIComponent(target.key)}`;
+  const account =
+    target.connectionId === undefined ? "" : `@${encodeURIComponent(target.connectionId)}:`;
+  return `issue:${account}${environment}${encodeURIComponent(target.projectId)}:${target.tracker}:${host}${encodeURIComponent(issueScopeKeyOf(target))}:${encodeURIComponent(target.key)}`;
 }
 
 function issueSurface(target: IssueSurfaceTarget): IssueSurface {
@@ -335,6 +339,7 @@ function issueSurface(target: IssueSurfaceTarget): IssueSurface {
     projectId: target.projectId,
     tracker: target.tracker,
     ...(typeof target.host === "string" ? { host: target.host.toLowerCase() } : {}),
+    ...(target.connectionId === undefined ? {} : { connectionId: target.connectionId }),
     scope: target.scope,
     key: target.key,
     ...(typeof target.url === "string" ? { url: target.url } : {}),
@@ -569,6 +574,11 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     if (surface.kind === "issue") {
                       if (
                         typeof surface.projectId !== "string" ||
+                        (surface.connectionId !== undefined &&
+                          (typeof surface.connectionId !== "string" ||
+                            !surface.connectionId.trim() ||
+                            surface.connectionId.trim() !== surface.connectionId ||
+                            surface.connectionId.length > 128)) ||
                         typeof surface.tracker !== "string" ||
                         typeof surface.scope !== "string" ||
                         typeof surface.key !== "string"

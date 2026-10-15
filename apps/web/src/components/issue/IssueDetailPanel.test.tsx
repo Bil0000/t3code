@@ -37,6 +37,7 @@ const state = vi.hoisted(() => ({
     title: "Issue",
     body: "",
     bodyEditable: undefined as boolean | undefined,
+    connectionId: undefined as string | undefined,
     url: "https://github.com/org/repo/issues/1",
     author: null,
     viewer: null as string | null,
@@ -821,15 +822,21 @@ describe("native issue state controls", () => {
   const environmentId = EnvironmentId.make("environment");
   let container: HTMLDivElement;
   let root: Root;
-  const reference = (tracker: string) => ({
+  const reference = (tracker: string, connectionId?: string) => ({
+    ...(connectionId === undefined ? {} : { connectionId }),
     projectId: ProjectId.make("project"),
     tracker: IssueTrackerKind.make(tracker),
     host: "native.example",
     scope: "ENG",
     key: tracker === "jira" ? "ENG-1" : "1",
   });
-  const render = (tracker: string) =>
-    root.render(<IssueDetailPanel environmentId={environmentId} reference={reference(tracker)} />);
+  const render = (tracker: string, connectionId?: string) =>
+    root.render(
+      <IssueDetailPanel
+        environmentId={environmentId}
+        reference={reference(tracker, connectionId)}
+      />,
+    );
   const buttons = () => [...container.querySelectorAll<HTMLButtonElement>("button")];
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -934,93 +941,98 @@ describe("native issue state controls", () => {
     });
     expect(state.candidatesRead).not.toHaveBeenCalled();
   });
-  it("reads Jira states only on menu open and retries failure without generic writes", async () => {
-    state.candidates.error = "Project states unavailable";
-    state.detail = {
-      ...state.detail,
-      tracker: "jira",
-      state: { category: "open", name: "Todo", id: "todo-id" },
-      states: [{ category: "open", name: "Todo", id: "todo-id" }],
-    };
-    await act(async () => render("jira"));
-    expect(state.candidatesRead).not.toHaveBeenCalled();
-    const trigger = buttons().find((button) => button.textContent?.startsWith("Change state"))!;
-    await act(async () =>
-      trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
-    );
-    expect(document.body.textContent).toContain("Project states unavailable");
-    const items = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
-    expect(
-      items().some((item) => item.textContent === "Close" || item.textContent === "Reopen"),
-    ).toBe(false);
-    await act(async () =>
-      items()
-        .find((item) => item.textContent === "Retry")!
-        .click(),
-    );
-    expect(state.candidates.refresh).toHaveBeenCalledOnce();
-    expect(state.write).not.toHaveBeenCalled();
-    state.candidates = {
-      ...state.candidates,
-      error: null,
-    };
-    const taskStates: ReadonlyArray<IssueState> = [
-      state.detail.state,
-      { category: "open", name: "In Review", id: "review-id" },
-      { category: "closed", name: "Done", id: "done-id" },
-    ];
-    const verified: IssueState = { category: "closed", name: "Verified", id: "verified-id" };
-    state.candidatesRead.mockImplementation(({ input }: { input: unknown }) => {
-      const { key } = decodeCandidatesInput(input);
-      state.candidates.data = {
-        states:
-          key === "ENG-1"
-            ? taskStates
-            : key === "ENG-2"
-              ? [state.detail.state, verified]
-              : [...taskStates, verified],
+  it.each([undefined, "B"])(
+    "reads Jira states only on menu open and retries failure without generic writes (%s)",
+    async (connectionId) => {
+      state.candidates.error = "Project states unavailable";
+      state.detail = {
+        ...state.detail,
+        tracker: "jira",
+        connectionId,
+        state: { category: "open", name: "Todo", id: "todo-id" },
+        states: [{ category: "open", name: "Todo", id: "todo-id" }],
       };
-    });
-    await act(async () => render("jira"));
-    expect(items().map((item) => item.textContent)).toEqual(["In Review", "Done"]);
-    expect(state.candidatesRead).toHaveBeenCalledWith({
-      environmentId,
-      input: reference("jira"),
-    });
-    await act(async () =>
-      items()
-        .find((item) => item.textContent === "In Review")!
-        .click(),
-    );
-    expect(state.write).toHaveBeenCalledWith({
-      environmentId,
-      input: { ...reference("jira"), state: "review-id" },
-    });
-    state.candidatesRead.mockClear();
-    state.write.mockClear();
-    state.detail = { ...state.detail, key: "ENG-2", displayKey: "ENG-2" };
-    await act(async () =>
-      root.render(
-        <IssueDetailPanel
-          environmentId={environmentId}
-          reference={{ ...reference("jira"), key: "ENG-2" }}
-        />,
-      ),
-    );
-    expect(state.candidatesRead).not.toHaveBeenCalled();
-    expect(items()).toHaveLength(0);
-    await act(async () =>
-      buttons()
-        .find((button) => button.textContent?.startsWith("Change state"))!
-        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
-    );
-    expect(items().map((item) => item.textContent)).toEqual(["Verified"]);
-    await act(async () => items()[0]!.click());
-    expect(state.write).toHaveBeenCalledWith({
-      environmentId,
-      input: { ...reference("jira"), key: "ENG-2", state: "verified-id" },
-    });
-  });
+      await act(async () => render("jira", connectionId));
+      expect(state.candidatesRead).not.toHaveBeenCalled();
+      const trigger = buttons().find((button) => button.textContent?.startsWith("Change state"))!;
+      await act(async () =>
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+      );
+      expect(document.body.textContent).toContain("Project states unavailable");
+      const items = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+      expect(
+        items().some((item) => item.textContent === "Close" || item.textContent === "Reopen"),
+      ).toBe(false);
+      await act(async () =>
+        items()
+          .find((item) => item.textContent === "Retry")!
+          .click(),
+      );
+      expect(state.candidates.refresh).toHaveBeenCalledOnce();
+      expect(state.write).not.toHaveBeenCalled();
+      state.candidates = {
+        ...state.candidates,
+        error: null,
+      };
+      const taskStates: ReadonlyArray<IssueState> = [
+        state.detail.state,
+        { category: "open", name: "In Review", id: "review-id" },
+        { category: "closed", name: "Done", id: "done-id" },
+      ];
+      const verified: IssueState = { category: "closed", name: "Verified", id: "verified-id" };
+      state.candidatesRead.mockImplementation(({ input }: { input: unknown }) => {
+        const { key, connectionId: account } = decodeCandidatesInput(input);
+        expect(account).toBe(connectionId);
+        state.candidates.data = {
+          states:
+            key === "ENG-1"
+              ? taskStates
+              : key === "ENG-2"
+                ? [state.detail.state, verified]
+                : [...taskStates, verified],
+        };
+      });
+      await act(async () => render("jira", connectionId));
+      expect(items().map((item) => item.textContent)).toEqual(["In Review", "Done"]);
+      expect(state.candidatesRead).toHaveBeenCalledWith({
+        environmentId,
+        input: reference("jira", connectionId),
+      });
+      await act(async () =>
+        items()
+          .find((item) => item.textContent === "In Review")!
+          .click(),
+      );
+      expect(state.write).toHaveBeenCalledWith({
+        environmentId,
+        input: { ...reference("jira", connectionId), state: "review-id" },
+      });
+      state.candidatesRead.mockClear();
+      state.write.mockClear();
+      state.detail = { ...state.detail, key: "ENG-2", displayKey: "ENG-2" };
+      await act(async () =>
+        root.render(
+          <IssueDetailPanel
+            environmentId={environmentId}
+            reference={{ ...reference("jira", connectionId), key: "ENG-2" }}
+          />,
+        ),
+      );
+      expect(state.candidatesRead).not.toHaveBeenCalled();
+      expect(items()).toHaveLength(0);
+      await act(async () =>
+        buttons()
+          .find((button) => button.textContent?.startsWith("Change state"))!
+          .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+      );
+      expect(items().map((item) => item.textContent)).toEqual(["Verified"]);
+      await act(async () => items()[0]!.click());
+      expect(state.write).toHaveBeenCalledWith({
+        environmentId,
+        input: { ...reference("jira", connectionId), key: "ENG-2", state: "verified-id" },
+      });
+    },
+  );
   it("closes Jira with a comment only after native state retry and a successful post", async () => {
     state.allowed = true;
     state.candidates.error = "Project states unavailable";
@@ -1535,6 +1547,50 @@ describe("native issue body editability", () => {
     container.remove();
     vi.unstubAllGlobals();
   });
+  it.each(["body", "title"])(
+    "drops the previous account's %s editor on an equal native issue and viewer",
+    async (field) => {
+      state.detail = { ...state.detail, connectionId: "A", viewer: "same-viewer" };
+      await act(async () =>
+        root.render(
+          <IssueDetailPanel
+            environmentId={environmentId}
+            reference={{ ...reference, connectionId: "A" }}
+          />,
+        ),
+      );
+      await act(async () => button(field === "body" ? "Edit description" : "Edit title")!.click());
+      const editor = () =>
+        field === "body"
+          ? description()
+          : container.querySelector<HTMLInputElement>('input[aria-label="Issue title"]');
+      await act(async () => type(editor()!, "Private A draft"));
+      state.detail = {
+        ...state.detail,
+        connectionId: "B",
+        body: "Native B body",
+        title: "Native B title",
+      };
+      await act(async () =>
+        root.render(
+          <IssueDetailPanel
+            environmentId={environmentId}
+            reference={{ ...reference, connectionId: "B" }}
+          />,
+        ),
+      );
+      expect(editor()).toBeNull();
+      expect(container.textContent).not.toContain("Private A draft");
+      expect(state.write).not.toHaveBeenCalled();
+      await act(async () => button(field === "body" ? "Edit description" : "Edit title")!.click());
+      await act(async () => type(editor()!, "B change"));
+      await act(async () => button("Save")!.click());
+      expect(state.write).toHaveBeenCalledExactlyOnceWith({
+        environmentId,
+        input: { ...reference, connectionId: "B", [field]: "B change" },
+      });
+    },
+  );
   it("keeps rich descriptions native while saving only the title", async () => {
     state.detail.bodyEditable = false;
     await act(async () => render());

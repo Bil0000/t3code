@@ -92,6 +92,76 @@ import { issueEnvironment } from "~/state/issues";
 import { LinkThreadIssueDialogHost, openLinkThreadIssueDialog } from "./LinkThreadIssueDialog";
 
 const decodeIssueList = Schema.decodeUnknownSync(IssueListResult);
+
+it("links the chosen account and blocks it after that account disappears", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const original = state.list;
+  const a = { ...state.source, connectionId: "A" };
+  const b = { ...a, connectionId: "B" };
+  const rowA = { ...state.linked, ...a, key: "42", title: "A issue" };
+  const rowB = { ...rowA, ...b, title: "B issue" };
+  state.list = { ...original, sources: [a, b], entries: [rowA, rowB], nextCursors: {} };
+  state.read.mockReset().mockResolvedValue({ _tag: "Success", value: rowB });
+  state.link.mockReset().mockResolvedValue({ _tag: "Failure" });
+  state.resolve.mockReset();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = () =>
+    root.render(
+      createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+    );
+  try {
+    openLinkThreadIssueDialog({
+      environmentId: EnvironmentId.make("environment"),
+      threadId: ThreadId.make("thread"),
+    });
+    await act(async () => render());
+    expect(document.body.textContent).toContain("A issue");
+    expect(document.body.textContent).not.toContain("B issue");
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Issue source"]')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    const account = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+      option.textContent?.endsWith(" · B"),
+    )!;
+    await act(async () => account.click());
+    expect(document.body.textContent).toContain("B issue");
+    expect(document.body.textContent).not.toContain("A issue");
+    const row = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("B issue"),
+    )!;
+    await act(async () => row.click());
+    expect(state.link).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "environment",
+      input: expect.objectContaining({ connectionId: "B", key: "42" }),
+    });
+    expect(state.read).not.toHaveBeenCalled();
+    state.list = { ...state.list, sources: [a], entries: [rowA] };
+    await act(async () => render());
+    expect(document.querySelector('[aria-label="Issue key"]')).toBeNull();
+    const url = document.querySelector<HTMLInputElement>('[aria-label="Issue URL"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+        url,
+        rowB.url,
+      );
+      url.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      url.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+    );
+    expect(state.resolve).not.toHaveBeenCalled();
+    expect(state.link).toHaveBeenCalledOnce();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    state.list = original;
+    vi.unstubAllGlobals();
+  }
+});
 const RpcClient = await vi.importActual<typeof import("@t3tools/client-runtime/rpc")>(
   "../../../../../packages/client-runtime/src/rpc/client.ts",
 );

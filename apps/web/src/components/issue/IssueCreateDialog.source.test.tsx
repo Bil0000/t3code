@@ -139,6 +139,34 @@ async function draft() {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
+
+it.each(["B", undefined])(
+  "does not send a removed account draft to another account on the same native scope (%s)",
+  async (connectionId) => {
+    const a = { ...sourceA, scope: { ...sourceA.scope, connectionId: "A" } };
+    const b = {
+      ...a,
+      scope: { ...sourceA.scope, ...(connectionId === undefined ? {} : { connectionId }) },
+    };
+    await render([a, b]);
+    await draft();
+    await render([b]);
+    expect(createButton().disabled).toBe(true);
+    await act(async () => createButton().click());
+    expect(nativeCreate).not.toHaveBeenCalled();
+    await choose("Project", connectionId === undefined ? "Project A" : " · B");
+    expect(document.querySelector<HTMLInputElement>("#issue-create-title")!.value).toBe("");
+    await draft();
+    await act(async () => createButton().click());
+    expect(nativeCreate).toHaveBeenCalledExactlyOnceWith({
+      ...b.scope,
+      title: "Draft meant for A",
+      body: "",
+      labels: [],
+      assignees: [],
+    });
+  },
+);
 async function choose(label: string, title: string) {
   const trigger = document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
   expect(trigger).not.toBeNull();

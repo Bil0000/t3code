@@ -170,6 +170,9 @@ const render = (targetEnvironmentId = environmentId) =>
         projectId: state.detail!.projectId,
         tracker: state.detail!.tracker,
         host: state.detail!.host,
+        ...(state.detail!.connectionId === undefined
+          ? {}
+          : { connectionId: state.detail!.connectionId }),
         scope: state.detail!.scope,
         key: state.detail!.key,
       }}
@@ -188,6 +191,32 @@ function delayedWrite() {
   });
   return { promise, resolve };
 }
+
+it.each(["labels", "assignees"] as const)(
+  "clears confirmed %s when only the account changes",
+  async (kind) => {
+    state.detail = { ...detail(["W"]), connectionId: "A" };
+    state.update.mockResolvedValue({ _tag: "Success" });
+    await act(async () => render());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`button[aria-label="Change ${kind}"]`)!.click(),
+    );
+    await act(async () => option("Other").click());
+    expect(selected("Other")).toBe(true);
+    state.detail = { ...detail(["Z"]), connectionId: "B" };
+    await act(async () => render());
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`button[aria-label="Change ${kind}"]`)!.click(),
+    );
+    expect(selected("Other")).toBe(false);
+    expect(selected("Z")).toBe(true);
+    await act(async () => option("T").click());
+    expect(state.update.mock.calls[1]![0].input).toMatchObject({
+      connectionId: "B",
+      [kind]: ["Z", "T"],
+    });
+  },
+);
 
 it.each(
   (["labels", "assignees"] as const).flatMap((kind) =>

@@ -51,6 +51,7 @@ export function ChatViewIssuePanel({
         projectId: surface.projectId as ProjectId,
         tracker: surface.tracker as IssueTrackerKind,
         ...(surface.host ? { host: surface.host } : {}),
+        ...(surface.connectionId === undefined ? {} : { connectionId: surface.connectionId }),
         scope: surface.scope,
         key: surface.key,
       }}

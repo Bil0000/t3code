@@ -78,8 +78,9 @@ export function IssueCreateDialog({
   onOpenChange: (open: boolean) => void;
   onCreated: (scope: IssueCreateScope, result: IssueCreateResult) => void;
 }) {
-  const [scopeKey, setScopeKey] = useState(() => (scopes[0] ? createScopeKey(scopes[0]) : null));
-  if (scopeKey === null && scopes[0]) setScopeKey(createScopeKey(scopes[0]));
+  const [selectedScope, setSelectedScope] = useState(() => scopes[0] ?? null);
+  if (selectedScope === null && scopes[0]) setSelectedScope(scopes[0]);
+  const scopeKey = selectedScope === null ? null : createScopeKey(selectedScope);
   const scope = scopes.find((entry) => createScopeKey(entry) === scopeKey) ?? null;
   const [templateKey, setTemplateKey] = useState<string>(BLANK);
   const [title, setTitle] = useState("");
@@ -302,7 +303,15 @@ export function IssueCreateDialog({
                   value={scope === null ? null : scopeKey}
                   onValueChange={(value) => {
                     if (value === null) return;
-                    setScopeKey(value);
+                    const next = scopes.find((entry) => createScopeKey(entry) === value);
+                    if (!next) return;
+                    if (
+                      next.scope.connectionId !== selectedScope?.scope.connectionId ||
+                      (next.scope.connectionId !== undefined &&
+                        next.environmentId !== selectedScope?.environmentId)
+                    )
+                      reset();
+                    setSelectedScope(next);
                     setTemplateKey(BLANK);
                     setTemplateDraft(null);
                     setExtras({ labels: [], assignees: [] });
@@ -311,13 +320,18 @@ export function IssueCreateDialog({
                 >
                   <SelectTrigger id="issue-create-scope" size="sm" aria-label="Project">
                     <SelectValue>
-                      {scope ? `${scope.projectTitle} · ${scope.scope.scope}` : "Choose a project"}
+                      {scope
+                        ? `${scope.projectTitle} · ${scope.scope.scope}${scope.scope.connectionId === undefined ? "" : ` · ${scope.scope.connectionId}`}`
+                        : "Choose a project"}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     {scopes.map((entry) => (
                       <SelectItem key={createScopeKey(entry)} value={createScopeKey(entry)}>
                         {entry.projectTitle} · {entry.scope.scope}
+                        {entry.scope.connectionId === undefined
+                          ? ""
+                          : ` · ${entry.scope.connectionId}`}
                       </SelectItem>
                     ))}
                   </SelectPopup>

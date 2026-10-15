@@ -90,6 +90,9 @@ export function useOpenIssueLink(
             projectId: reference.projectId,
             tracker: reference.tracker,
             host: reference.host,
+            ...(reference.connectionId === undefined
+              ? {}
+              : { connectionId: reference.connectionId }),
             scope: reference.scope,
             key: reference.key,
             url: targetUrl,
@@ -103,6 +106,9 @@ export function useOpenIssueLink(
                 selectedProjectId: reference.projectId,
                 ...(reference.host === undefined ? {} : { selectedHost: reference.host }),
                 tracker: reference.tracker,
+                ...(reference.connectionId === undefined
+                  ? {}
+                  : { selectedConnectionId: reference.connectionId }),
                 scope: reference.scope,
                 key: reference.key,
               },

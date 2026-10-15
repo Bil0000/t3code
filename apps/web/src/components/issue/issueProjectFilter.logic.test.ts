@@ -286,3 +286,34 @@ describe("issueFilterProjects", () => {
     expect(choices.map(({ id }) => id)).toEqual(["plain"]);
   });
 });
+
+it("keeps account source sets, refresh representatives and create permissions separate", () => {
+  const a = { ...source("a", "linear", "ENG"), connectionId: "Account" };
+  const b = { ...a, projectId: ProjectId.make("b"), connectionId: "account" };
+  const sources = new Map([[nucbox, [a, b]]]);
+  const filtered = issueFilterProjects([project("a"), project("b")], sources, null);
+  expect(filtered[0]!.repositoryIdentity).not.toEqual(filtered[1]!.repositoryIdentity);
+  expect(
+    issueListRefreshSource(nucbox, [nucbox], { state: "all" }, b, { entries: [], sources: [a] }),
+  ).toEqual(b);
+  expect(
+    issueListRefreshSource(nucbox, [nucbox], { state: "all", connectionId: "Account" }, b, {
+      entries: [],
+      sources: [a, b],
+    }),
+  ).toBeNull();
+  const writable = [a, b].map((entry) => ({
+    ...entry,
+    capabilities: { create: true } as IssueCapabilities,
+  }));
+  const trackers = writable.map((entry) => ({
+    tracker: entry.tracker,
+    host: entry.host,
+    connectionId: entry.connectionId,
+    configured: entry.connectionId === "account",
+    projectCount: 1,
+    capabilities: entry.capabilities,
+    detail: null,
+  }));
+  expect(issueCreateSources({ trackers }, writable)).toEqual([writable[1]]);
+});

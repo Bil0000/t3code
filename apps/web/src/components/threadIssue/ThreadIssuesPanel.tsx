@@ -149,6 +149,7 @@ export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef })
       projectId: link.projectId,
       tracker: link.tracker,
       host: link.host,
+      ...(link.connectionId === undefined ? {} : { connectionId: link.connectionId }),
       scope: link.scope,
       key: link.key,
       url: link.url,

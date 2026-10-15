@@ -51,8 +51,8 @@ vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   const queries = Atom.family((key: string) =>
     Atom.make(() => {
-      const { environmentId } = JSON.parse(key);
-      state.read(environmentId);
+      const { environmentId, input } = JSON.parse(key);
+      state.read(environmentId, input);
       return state.responses.get(environmentId) ?? AsyncResult.initial(true);
     }).pipe(Atom.keepAlive),
   );
@@ -169,6 +169,57 @@ async function refresh() {
 }
 const Page = Route.options.component!;
 await Page.preload?.();
+
+it("keeps equal issue IDs on different accounts in separate rows, tabs and continuations", async () => {
+  const a = { ...issue("1"), connectionId: "A", title: "Account A issue" };
+  const b = { ...a, connectionId: "B", title: "Account B issue" };
+  const aCursor = "@A github github.com org/repo";
+  const bCursor = "@B github github.com org/repo";
+  const base = answer([a, b]);
+  const initial = {
+    ...base,
+    trackers: ["A", "B"].map((connectionId) => ({ ...base.trackers[0]!, connectionId })),
+  };
+  const native = decodeIssueList({ ...initial, nextCursors: { [aCursor]: "2", [bCursor]: "3" } });
+  state.responses.set(environmentA, AsyncResult.success(native));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  state.listPage.mockResolvedValue({
+    _tag: "Success",
+    value: decodeIssueList({
+      ...initial,
+      entries: [{ ...b, key: "2", title: "B tail" }],
+      nextCursors: {},
+    }),
+  });
+  await mount();
+  expect(text()).toContain(a.title);
+  expect(text()).toContain(b.title);
+  const buttons = () => [...container.querySelectorAll<HTMLButtonElement>("button")];
+  await act(async () =>
+    buttons()
+      .find((button) => button.textContent?.includes(b.title))!
+      .click(),
+  );
+  expect(state.search.selectedConnectionId).toBe("B");
+  await act(async () =>
+    buttons()
+      .filter((button) => button.textContent === "Load more")[1]!
+      .click(),
+  );
+  expect(state.listPage).toHaveBeenCalledExactlyOnceWith({
+    environmentId: environmentA,
+    input: expect.objectContaining({ connectionId: "B", cursors: { [bCursor]: "3" } }),
+  });
+  expect(text()).toContain(a.title);
+  expect(text()).toContain("B tail");
+  await mount();
+  const surfaces = Object.values(useRightPanelStore.getState().byThreadKey).flatMap(
+    (state) => state.surfaces,
+  );
+  expect(surfaces).toEqual(
+    expect.arrayContaining([expect.objectContaining({ kind: "issue", connectionId: "B" })]),
+  );
+});
 
 async function mount() {
   await act(async () =>
@@ -292,6 +343,35 @@ async function openFilter(label: string) {
     trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
   );
 }
+
+it("forwards and explicitly clears the account filter without retaining a stale selector", async () => {
+  const base = answer([]);
+  state.responses.set(
+    environmentA,
+    AsyncResult.success({
+      ...base,
+      trackers: ["A", "B"].map((connectionId) => ({ ...base.trackers[0]!, connectionId })),
+    }),
+  );
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  await mount();
+  await openFilter("Filter by tracker");
+  const account = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+    (option) => option.textContent?.endsWith(" · B"),
+  )!;
+  await act(async () => account.click());
+  await mount();
+  expect(state.search.connectionId).toBe("B");
+  expect(state.read.mock.calls.at(-1)![1]).toMatchObject({ connectionId: "B", host: "github.com" });
+  await openFilter("Filter by tracker");
+  const all = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+    (option) => option.textContent === "All trackers",
+  )!;
+  await act(async () => all.click());
+  await mount();
+  expect(state.search).not.toHaveProperty("connectionId");
+  expect(state.search).not.toHaveProperty("host");
+});
 const projectBOption = () =>
   [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((item) =>
     item.textContent?.includes("Project B"),

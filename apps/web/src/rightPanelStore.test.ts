@@ -30,6 +30,47 @@ beforeEach(() => {
 });
 
 describe("rightPanelStore", () => {
+  it("keeps account IDs exact across tabs, persistence and closing", () => {
+    const target = {
+      projectId: "project",
+      tracker: "linear",
+      host: "linear.app",
+      scope: "ENG",
+      key: "ENG-1",
+    };
+    const store = useRightPanelStore.getState();
+    store.openIssue(refA, target);
+    store.openIssue(refA, { ...target, connectionId: "Account/A" });
+    store.openIssue(refA, { ...target, connectionId: "account/A" });
+    store.openIssue(refA, { ...target, connectionId: "Account/A" });
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toHaveLength(3);
+    expect(state.surfaces[0]!.id).toBe("issue:project:linear:linear.app:eng:ENG-1");
+    expect(
+      state.surfaces.slice(1).map((surface) => surface.kind === "issue" && surface.connectionId),
+    ).toEqual(["Account/A", "account/A"]);
+    const persisted = JSON.parse(
+      JSON.stringify({ byThreadKey: useRightPanelStore.getState().byThreadKey }),
+    );
+    useRightPanelStore.setState(migratePersistedRightPanelState(persisted));
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual(state.surfaces);
+    for (const connectionId of [null, "", " Account/A", "x".repeat(129)]) {
+      const invalid = structuredClone(persisted);
+      invalid.byThreadKey[Object.keys(invalid.byThreadKey)[0]!].surfaces[1].connectionId =
+        connectionId;
+      expect(
+        selectThreadRightPanelState(migratePersistedRightPanelState(invalid).byThreadKey, refA)
+          .surfaces,
+      ).toEqual([state.surfaces[0], state.surfaces[2]]);
+    }
+    store.closeSurface(refA, state.surfaces[1]!.id);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([state.surfaces[0], state.surfaces[2]]);
+  });
+
   it("records single and bulk tab closes, newest first", () => {
     const store = useRightPanelStore.getState();
     const pr = pullRequestSurface({

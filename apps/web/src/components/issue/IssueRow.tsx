@@ -22,7 +22,7 @@ export interface EnvironmentIssueEntry extends IssueListEntry {
 
 export type IssueRowTarget = Pick<
   EnvironmentIssueEntry,
-  "environmentId" | "projectId" | "tracker" | "host" | "scope" | "key" | "url"
+  "environmentId" | "projectId" | "tracker" | "host" | "connectionId" | "scope" | "key" | "url"
 >;
 
 /** The page row in the pull-request list's shape: state glyph, then key and title over meta. */

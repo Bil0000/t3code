@@ -6,6 +6,7 @@ import {
   IssueListState,
   IssueListSort,
   IssueListOrder,
+  IssueRef,
   ProjectId,
 } from "@t3tools/contracts";
 
@@ -23,6 +24,7 @@ export interface IssueListPreferences {
   readonly environmentId?: EnvironmentId;
   readonly projectId?: ProjectId;
   readonly host?: string;
+  readonly connectionId?: string;
   readonly q?: string | undefined;
 }
 
@@ -42,6 +44,7 @@ const IssueListPreferencesSchema = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId),
   projectId: Schema.optional(ProjectId),
   host: Schema.optional(BoundedPreference),
+  connectionId: IssueRef.fields.connectionId,
   q: Schema.optional(BoundedPreference),
 });
 const decodePreferences = Schema.decodeUnknownOption(IssueListPreferencesSchema);
@@ -61,6 +64,7 @@ export function issueListPreferences(search: {
   readonly environmentId?: EnvironmentId | undefined;
   readonly projectId?: ProjectId | undefined;
   readonly host?: string | undefined;
+  readonly connectionId?: string | undefined;
   readonly q?: string | undefined;
 }): IssueListPreferences {
   return {
@@ -71,6 +75,7 @@ export function issueListPreferences(search: {
     ...(search.environmentId ? { environmentId: search.environmentId } : {}),
     ...(search.projectId ? { projectId: search.projectId } : {}),
     ...(search.host ? { host: search.host } : {}),
+    ...(search.connectionId === undefined ? {} : { connectionId: search.connectionId }),
     ...(search.q ? { q: search.q } : {}),
   };
 }

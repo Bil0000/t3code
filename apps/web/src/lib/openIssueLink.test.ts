@@ -169,6 +169,27 @@ const event = (patch = {}) => ({
 });
 
 describe("native chat issue links", () => {
+  it("retains the resolved account in the standalone tab and URL without changing list preferences", async () => {
+    standalone = true;
+    writeIssueListPreferences({ who: "all", status: "open", connectionId: "list-account" });
+    state.resolve.mockResolvedValue({
+      _tag: "Success",
+      value: { ...target, connectionId: "Account/B" },
+    });
+    await act(async () => renderer.update(createElement(Hook)));
+    await act(async () => {
+      open(event(), "https://linear.app/workspace/issue/ENG-42", EnvironmentId.make("env-b"));
+    });
+    expect(surfaces(ISSUES_PANEL_REF)).toMatchObject([{ connectionId: "Account/B" }]);
+    expect(state.navigate).toHaveBeenCalledWith({
+      to: "/issues",
+      search: expect.objectContaining({
+        connectionId: "list-account",
+        selectedConnectionId: "Account/B",
+      }),
+    });
+  });
+
   it.each([
     "https://linear.app/workspace/issue/ENG-42/name",
     "https://acme.atlassian.net/browse/ENG-42",

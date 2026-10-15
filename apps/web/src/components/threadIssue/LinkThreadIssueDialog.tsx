@@ -63,7 +63,12 @@ export function LinkThreadIssueDialogHost() {
 
 type IssueSource = NonNullable<IssueListResult["sources"]>[number];
 const sourceValue = (source: IssueSource) =>
-  JSON.stringify([source.tracker, source.host, source.scope]);
+  JSON.stringify([
+    source.tracker,
+    source.host,
+    source.scope,
+    ...(source.connectionId === undefined ? [] : [source.connectionId]),
+  ]);
 
 function LinkThreadIssueDialog({
   threadRef,
@@ -99,7 +104,9 @@ function LinkThreadIssueDialog({
   const sources = held?.sources ?? list.data?.sources ?? [];
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const source =
-    sources.find((candidate) => sourceValue(candidate) === selectedSource) ?? sources[0] ?? null;
+    selectedSource === null
+      ? (sources[0] ?? null)
+      : (sources.find((candidate) => sourceValue(candidate) === selectedSource) ?? null);
   const requestKey = JSON.stringify([filterKey, source === null ? null : sourceValue(source)]);
   const requestContext = useMemo(() => ({ key: requestKey }), [requestKey]);
   const latest = useRef({ requestContext, data: list.data, held });
@@ -109,6 +116,7 @@ function LinkThreadIssueDialog({
   const candidates = (held?.entries ?? list.data?.entries ?? []).filter(
     (entry) =>
       source !== null &&
+      entry.connectionId === source.connectionId &&
       entry.tracker === source.tracker &&
       entry.host === source.host &&
       entry.scope === source.scope &&
@@ -119,6 +127,7 @@ function LinkThreadIssueDialog({
         held?.nextCursors ?? list.data?.nextCursors ?? {},
         source.host,
         source.tracker,
+        source.connectionId,
       )
     : {};
   const hasMore = Object.keys(nextCursors).length > 0;
@@ -157,6 +166,7 @@ function LinkThreadIssueDialog({
   const directRef: (IssueRef & { host: string }) | null =
     source && directKey.trim()
       ? {
+          ...(source.connectionId === undefined ? {} : { connectionId: source.connectionId }),
           projectId: source.projectId,
           tracker: source.tracker,
           host: source.host,
@@ -170,7 +180,14 @@ function LinkThreadIssueDialog({
     const seed = list.data;
     const sentFirstCursors = held?.firstCursors ?? seed.nextCursors;
     setPendingPage(requestContext);
-    const result = await loadPage({ environmentId, input: { ...baseInput, cursors: nextCursors } });
+    const result = await loadPage({
+      environmentId,
+      input: {
+        ...baseInput,
+        ...(source?.connectionId === undefined ? {} : { connectionId: source.connectionId }),
+        cursors: nextCursors,
+      },
+    });
     if (latest.current.requestContext !== requestContext || latest.current.data !== seed) return;
     setPendingPage(null);
     if (result._tag === "Failure") {
@@ -233,12 +250,17 @@ function LinkThreadIssueDialog({
   };
 
   const linkUrl = async () => {
-    if (pendingKey !== null || !nativeUrl.trim()) return;
+    if (pendingKey !== null || !nativeUrl.trim() || (selectedSource !== null && source === null))
+      return;
     setPendingKey("url");
     setError(null);
     const resolved = await resolveUrl({
       environmentId,
-      input: { url: nativeUrl.trim(), ...(thread ? { projectId: thread.projectId } : {}) },
+      input: {
+        url: nativeUrl.trim(),
+        ...(thread ? { projectId: thread.projectId } : {}),
+        ...(source?.connectionId === undefined ? {} : { connectionId: source.connectionId }),
+      },
     });
     if (resolved._tag === "Failure") {
       setPendingKey(null);
@@ -304,7 +326,12 @@ function LinkThreadIssueDialog({
                 size="sm"
                 type="submit"
                 variant="outline"
-                disabled={!canLink || pendingKey !== null || !nativeUrl.trim()}
+                disabled={
+                  !canLink ||
+                  pendingKey !== null ||
+                  !nativeUrl.trim() ||
+                  (selectedSource !== null && source === null)
+                }
               >
                 Link URL
               </Button>
@@ -317,13 +344,16 @@ function LinkThreadIssueDialog({
                 >
                   <SelectTrigger size="sm" className="w-44 shrink-0" aria-label="Issue source">
                     <SelectValue>
-                      {source ? issueTrackerPresentation(source.tracker).providerName : "Source"}
+                      {source
+                        ? `${issueTrackerPresentation(source.tracker).providerName}${source.connectionId === undefined ? "" : ` · ${source.connectionId}`}`
+                        : "Source"}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
                     {sources.map((candidate) => (
                       <SelectItem key={sourceValue(candidate)} value={sourceValue(candidate)}>
                         {issueTrackerPresentation(candidate.tracker).providerName}
+                        {candidate.connectionId === undefined ? "" : ` · ${candidate.connectionId}`}
                       </SelectItem>
                     ))}
                   </SelectPopup>

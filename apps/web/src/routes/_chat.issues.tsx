@@ -131,6 +131,7 @@ export interface IssuesSearch extends IssueListPreferences {
   readonly selectedEnvironmentId?: EnvironmentId;
   readonly selectedProjectId?: ProjectId;
   readonly selectedHost?: string;
+  readonly selectedConnectionId?: string;
   readonly tracker?: string;
   readonly scope?: string;
   readonly key?: string;
@@ -188,6 +189,7 @@ export const Route = createFileRoute("/_chat/issues")({
       ? { issueOrder: raw.issueOrder }
       : {}),
     ...present("host", bounded(raw.host)),
+    ...present("connectionId", typeof raw.connectionId === "string" ? raw.connectionId : undefined),
     ...present<"environmentId", EnvironmentId>("environmentId", bounded(raw.environmentId)),
     ...present<"projectId", ProjectId>("projectId", bounded(raw.projectId)),
     // Always an own key: the router lays this over the parent route's unvalidated search.
@@ -198,6 +200,10 @@ export const Route = createFileRoute("/_chat/issues")({
     ),
     ...present<"selectedProjectId", ProjectId>("selectedProjectId", bounded(raw.selectedProjectId)),
     ...present("selectedHost", bounded(raw.selectedHost)),
+    ...present(
+      "selectedConnectionId",
+      typeof raw.selectedConnectionId === "string" ? raw.selectedConnectionId : undefined,
+    ),
     ...present("tracker", bounded(raw.tracker)),
     ...present("scope", bounded(raw.scope)),
     ...present("key", bounded(raw.key)),
@@ -217,8 +223,15 @@ interface HeldPage {
   readonly restartSources?: ReadonlyArray<IssueScopeRef>;
 }
 
-function trackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "host">): string {
-  return `${tracker.tracker} ${tracker.host.toLowerCase()}`;
+function trackerKey(tracker: {
+  readonly tracker: string;
+  readonly host: string;
+  readonly connectionId?: string | undefined;
+}): string {
+  const key = `${tracker.tracker} ${tracker.host.toLowerCase()}`;
+  return tracker.connectionId === undefined
+    ? key
+    : `@${encodeURIComponent(tracker.connectionId)} ${key}`;
 }
 
 function IssuesRoute() {
@@ -278,6 +291,7 @@ function IssuesRoute() {
     listedEnvironments.map((environment) => environment.environmentId),
     scopedProject?.id,
     search.host,
+    search.connectionId,
   ]);
   const [sortPolicy, setSortPolicy] = useState({
     sourceKey: "",
@@ -311,6 +325,7 @@ function IssuesRoute() {
           }),
       ...(scopedProject ? { projectId: scopedProject.id } : {}),
       ...(search.host ? { host: search.host } : {}),
+      ...(search.connectionId === undefined ? {} : { connectionId: search.connectionId }),
       ...(debouncedQuery ? { query: debouncedQuery } : {}),
     }),
     [
@@ -320,6 +335,7 @@ function IssuesRoute() {
       effectiveSort.order,
       scopedProject,
       search.host,
+      search.connectionId,
       debouncedQuery,
     ],
   );
@@ -441,15 +457,25 @@ function IssuesRoute() {
 
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
   const [loadingMore, setLoadingMore] = useState<string | null>(null);
-  const loadMore = async (environmentId: EnvironmentId, host: string, tracker: string) => {
+  const loadMore = async (
+    environmentId: EnvironmentId,
+    host: string,
+    tracker: string,
+    connectionId?: string,
+  ) => {
     const page = held.get(environmentId);
-    const cursors = page ? issueListCursorsOn(page.nextCursors, host, tracker) : {};
+    const cursors = page ? issueListCursorsOn(page.nextCursors, host, tracker, connectionId) : {};
     if (!page || Object.keys(cursors).length === 0 || loadingMore !== null) return;
     const key = filterKey;
-    setLoadingMore(`${environmentId} ${tracker} ${host}`);
+    setLoadingMore(JSON.stringify([environmentId, tracker, host, connectionId]));
     const result = await loadPage({
       environmentId,
-      input: { ...baseInput, limit: PAGE_SIZE, cursors },
+      input: {
+        ...baseInput,
+        ...(connectionId === undefined ? {} : { connectionId }),
+        limit: PAGE_SIZE,
+        cursors,
+      },
     });
     setLoadingMore(null);
     if (result._tag === "Failure") {
@@ -508,6 +534,7 @@ function IssuesRoute() {
         tracker: canonical.tracker,
         host: canonical.host,
         scope: canonical.scope,
+        ...(canonical.connectionId === undefined ? {} : { connectionId: canonical.connectionId }),
       };
       const query = issueEnvironment.list({
         environmentId,
@@ -520,6 +547,9 @@ function IssuesRoute() {
             ...baseInput,
             projectId: canonical.projectId,
             host: canonical.host,
+            ...(canonical.connectionId === undefined
+              ? {}
+              : { connectionId: canonical.connectionId }),
             limit: PAGE_SIZE,
           },
         }),
@@ -545,7 +575,8 @@ function IssuesRoute() {
             (error) =>
               error.projectId === scope.projectId &&
               (error.tracker === undefined || error.tracker === scope.tracker) &&
-              (error.host === undefined || error.host.toLowerCase() === scope.host.toLowerCase()),
+              (error.host === undefined || error.host.toLowerCase() === scope.host.toLowerCase()) &&
+              error.connectionId === scope.connectionId,
           )
         )
           sourceWrites.current.set(lane, { revision: write.revision, removed: new Set() });
@@ -574,8 +605,8 @@ function IssuesRoute() {
         more: EnvironmentId[];
       }
     >();
-    const groupOf = (tracker: string, host: string) =>
-      byTracker.get(`${tracker} ${host.toLowerCase()}`);
+    const groupOf = (tracker: string, host: string, connectionId?: string) =>
+      byTracker.get(trackerKey({ tracker, host, connectionId }));
     const needle = debouncedQuery.toLowerCase();
     for (const [environmentId, page] of held) {
       for (const tracker of page.answer.trackers) {
@@ -584,8 +615,14 @@ function IssuesRoute() {
         const group = byTracker.get(key)!;
         if (!group.tracker.configured && tracker.configured) group.tracker = tracker;
         if (
-          Object.keys(issueListCursorsOn(page.nextCursors, tracker.host, tracker.tracker)).length >
-          0
+          Object.keys(
+            issueListCursorsOn(
+              page.nextCursors,
+              tracker.host,
+              tracker.tracker,
+              tracker.connectionId,
+            ),
+          ).length > 0
         )
           group.more.push(environmentId);
       }
@@ -610,9 +647,13 @@ function IssuesRoute() {
         const kind = project?.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
         const host = kind ? pullRequestHostOf(project?.repositoryIdentity, kind) : null;
         const group =
-          (error.tracker && error.host ? groupOf(error.tracker, error.host) : undefined) ??
-          (kind && host ? groupOf(kind, host) : undefined) ??
-          [...byTracker.values()][0];
+          (error.tracker && error.host
+            ? groupOf(error.tracker, error.host, error.connectionId)
+            : undefined) ??
+          (kind && host ? groupOf(kind, host, error.connectionId) : undefined) ??
+          (error.connectionId === undefined
+            ? [...byTracker.values()].find((group) => group.tracker.connectionId === undefined)
+            : undefined);
         group?.errors.push({ ...error, environmentId });
       }
     }
@@ -628,20 +669,42 @@ function IssuesRoute() {
 
   const hostOptions = useMemo<ReadonlyArray<PullRequestFilterOption<string>>>(() => {
     const hosts = new Map<string, IssueTrackerSummary>();
-    for (const group of groups) hosts.set(group.tracker.host, group.tracker);
+    for (const group of groups) {
+      const tracker = group.tracker;
+      hosts.set(
+        tracker.connectionId === undefined
+          ? tracker.host
+          : JSON.stringify([tracker.host, tracker.connectionId]),
+        tracker,
+      );
+    }
     return [
       { value: "", label: "All trackers", Icon: Plug2Icon },
-      ...[...hosts.values()].map((tracker) => ({
-        value: tracker.host,
+      ...[...hosts.entries()].map(([value, tracker]) => ({
+        value,
         label:
-          hosts.size > 1 && issueTrackerPresentation(tracker.tracker).providerName === tracker.host
-            ? tracker.host
-            : `${issueTrackerPresentation(tracker.tracker).providerName} (${tracker.host})`,
+          tracker.connectionId !== undefined
+            ? `${issueTrackerPresentation(tracker.tracker).providerName} (${tracker.host}) · ${tracker.connectionId}`
+            : hosts.size > 1 &&
+                issueTrackerPresentation(tracker.tracker).providerName === tracker.host
+              ? tracker.host
+              : `${issueTrackerPresentation(tracker.tracker).providerName} (${tracker.host})`,
         Icon: issueTrackerPresentation(tracker.tracker).Icon,
         ...(tracker.configured ? {} : { unavailable: tracker.detail ?? "Unavailable" }),
       })),
+      ...(search.connectionId !== undefined &&
+      !hosts.has(JSON.stringify([search.host, search.connectionId]))
+        ? [
+            {
+              value: JSON.stringify([search.host, search.connectionId]),
+              label: `${search.host ?? "Tracker"} · ${search.connectionId}`,
+              Icon: Plug2Icon,
+              unavailable: "This account is not available",
+            },
+          ]
+        : []),
     ];
-  }, [groups]);
+  }, [groups, search.host, search.connectionId]);
   const projectOptions = useMemo<ReadonlyArray<PullRequestFilterOption<string>>>(
     () => [
       { value: "", label: "All projects", Icon: LayersIcon },
@@ -675,6 +738,7 @@ function IssuesRoute() {
             ...(next.issueSort ? { issueSort: next.issueSort } : {}),
             ...(next.issueOrder ? { issueOrder: next.issueOrder } : {}),
             ...(next.host ? { host: next.host } : {}),
+            ...(next.connectionId === undefined ? {} : { connectionId: next.connectionId }),
             ...(next.environmentId ? { environmentId: next.environmentId } : {}),
             ...(next.projectId ? { projectId: next.projectId } : {}),
             q: next.q || undefined,
@@ -683,6 +747,9 @@ function IssuesRoute() {
               : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
             ...(next.selectedHost ? { selectedHost: next.selectedHost } : {}),
+            ...(next.selectedConnectionId === undefined
+              ? {}
+              : { selectedConnectionId: next.selectedConnectionId }),
             ...(next.tracker ? { tracker: next.tracker } : {}),
             ...(next.scope ? { scope: next.scope } : {}),
             ...(next.key ? { key: next.key } : {}),
@@ -695,6 +762,7 @@ function IssuesRoute() {
     selectedEnvironmentId: undefined,
     selectedProjectId: undefined,
     selectedHost: undefined,
+    selectedConnectionId: undefined,
     tracker: undefined,
     scope: undefined,
     key: undefined,
@@ -737,6 +805,7 @@ function IssuesRoute() {
             selectedEnvironmentId: surface.environmentId as EnvironmentId | undefined,
             selectedProjectId: surface.projectId as ProjectId,
             selectedHost: surface.host,
+            selectedConnectionId: surface.connectionId,
             tracker: surface.tracker,
             scope: surface.scope,
             key: surface.key,
@@ -752,6 +821,7 @@ function IssuesRoute() {
         selectedEnvironmentId: entry.environmentId,
         selectedProjectId: entry.projectId,
         selectedHost: entry.host,
+        selectedConnectionId: entry.connectionId,
         tracker: entry.tracker,
         scope: entry.scope,
         key: entry.key,
@@ -777,12 +847,16 @@ function IssuesRoute() {
       projectId: search.selectedProjectId,
       tracker: search.tracker,
       ...(search.selectedHost === undefined ? {} : { host: search.selectedHost }),
+      ...(search.selectedConnectionId === undefined
+        ? {}
+        : { connectionId: search.selectedConnectionId }),
       scope: search.scope,
       key: search.key,
     });
   }, [
     rightPanelRef,
     search.selectedHost,
+    search.selectedConnectionId,
     search.tracker,
     search.scope,
     search.key,
@@ -831,8 +905,14 @@ function IssuesRoute() {
   const createScopes = useMemo<ReadonlyArray<IssueCreateScope>>(() => {
     const scopes: IssueCreateScope[] = [];
     const seen = new Set<string>();
-    const known = (environmentId: EnvironmentId, tracker: string, host: string, scope: string) => {
-      const key = issueScopeKey(environmentId, { tracker, host, scope });
+    const known = (
+      environmentId: EnvironmentId,
+      tracker: string,
+      host: string,
+      scope: string,
+      connectionId?: string,
+    ) => {
+      const key = issueScopeKey(environmentId, { tracker, host, scope, connectionId });
       if (seen.has(key)) return true;
       seen.add(key);
       return false;
@@ -840,7 +920,8 @@ function IssuesRoute() {
     for (const [environmentId, page] of held) {
       if (page.sources !== undefined) {
         for (const source of issueCreateSources(page.answer, page.sources)) {
-          if (known(environmentId, source.tracker, source.host, source.scope)) continue;
+          if (known(environmentId, source.tracker, source.host, source.scope, source.connectionId))
+            continue;
           scopes.push({
             environmentId,
             projectTitle: source.projectTitle,
@@ -852,6 +933,7 @@ function IssuesRoute() {
               ? {}
               : { createIssueTypes: source.capabilities.createIssueTypes }),
             scope: {
+              ...(source.connectionId === undefined ? {} : { connectionId: source.connectionId }),
               projectId: source.projectId,
               tracker: source.tracker,
               host: source.host,
@@ -870,7 +952,10 @@ function IssuesRoute() {
         if (!identity || !kind || scope === null) continue;
         const host = pullRequestHostOf(identity, kind);
         const tracker = page.answer.trackers.find(
-          (t) => String(t.tracker) === kind && t.host.toLowerCase() === host.toLowerCase(),
+          (t) =>
+            String(t.tracker) === kind &&
+            t.host.toLowerCase() === host.toLowerCase() &&
+            t.connectionId === undefined,
         );
         if (!tracker?.configured || tracker.capabilities?.create !== true) continue;
         if (known(environmentId, tracker.tracker, host, scope)) continue;
@@ -928,6 +1013,7 @@ function IssuesRoute() {
             <h2 className="flex items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground">
               <presentation.Icon aria-hidden className="size-3.5" />
               {presentation.providerName}
+              {group.tracker.connectionId === undefined ? null : ` · ${group.tracker.connectionId}`}
               {presentation.providerName.toLowerCase() !== group.tracker.host ? (
                 <span className="font-normal">· {group.tracker.host}</span>
               ) : null}
@@ -986,10 +1072,21 @@ function IssuesRoute() {
                 className="self-start"
                 disabled={loadingMore !== null}
                 onClick={() =>
-                  void loadMore(environmentId, group.tracker.host, group.tracker.tracker)
+                  void loadMore(
+                    environmentId,
+                    group.tracker.host,
+                    group.tracker.tracker,
+                    group.tracker.connectionId,
+                  )
                 }
               >
-                {loadingMore === `${environmentId} ${group.tracker.tracker} ${group.tracker.host}`
+                {loadingMore ===
+                JSON.stringify([
+                  environmentId,
+                  group.tracker.tracker,
+                  group.tracker.host,
+                  group.tracker.connectionId,
+                ])
                   ? "Loading…"
                   : "Load more"}
               </Button>
@@ -1092,12 +1189,27 @@ function IssuesRoute() {
                     }}
                   />
                 ) : null}
-                {hostOptions.length > 2 || search.host ? (
+                {hostOptions.length > 2 || search.host || search.connectionId !== undefined ? (
                   <FilterMenu
                     label="Filter by tracker"
-                    value={search.host ?? ""}
+                    value={
+                      search.connectionId === undefined
+                        ? (search.host ?? "")
+                        : JSON.stringify([search.host, search.connectionId])
+                    }
                     options={hostOptions}
-                    onChange={(host) => updateSearch({ host: host || undefined })}
+                    onChange={(value) => {
+                      const tracker = groups.find(
+                        (group) =>
+                          group.tracker.connectionId !== undefined &&
+                          JSON.stringify([group.tracker.host, group.tracker.connectionId]) ===
+                            value,
+                      )?.tracker;
+                      updateSearch({
+                        host: tracker?.host ?? (value || undefined),
+                        connectionId: tracker?.connectionId,
+                      });
+                    }}
                   />
                 ) : null}
                 <IssueSortMenu
@@ -1210,6 +1322,9 @@ function IssuesRoute() {
                   projectId: renderedSurface.projectId as ProjectId,
                   tracker: renderedSurface.tracker as IssueTrackerKind,
                   ...(renderedSurface.host ? { host: renderedSurface.host } : {}),
+                  ...(renderedSurface.connectionId === undefined
+                    ? {}
+                    : { connectionId: renderedSurface.connectionId }),
                   scope: renderedSurface.scope,
                   key: renderedSurface.key,
                 }}
@@ -1226,6 +1341,9 @@ function IssuesRoute() {
                       projectId: renderedSurface.projectId as ProjectId,
                       tracker: renderedSurface.tracker as IssueTrackerKind,
                       ...(renderedSurface.host ? { host: renderedSurface.host } : {}),
+                      ...(renderedSurface.connectionId === undefined
+                        ? {}
+                        : { connectionId: renderedSurface.connectionId }),
                       scope: renderedSurface.scope,
                     },
                     renderedSurface.key,
@@ -1262,6 +1380,9 @@ function IssuesRoute() {
             projectId: scope.scope.projectId,
             tracker: scope.scope.tracker,
             host: scope.scope.host ?? "",
+            ...(scope.scope.connectionId === undefined
+              ? {}
+              : { connectionId: scope.scope.connectionId }),
             scope: scope.scope.scope,
             key: result.key,
             url: result.url,

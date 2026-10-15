@@ -377,6 +377,17 @@ describe("older issue comments across detail re-reads", () => {
     expect(issueCommentsView(changed, { ...loaded, viewer: undefined }).held).not.toBeNull();
   });
 
+  it("drops a retained comment window when only the account changes", () => {
+    const original = detail({ connectionId: "A" });
+    const retained = appendOlderIssueComments(original, null, {
+      comments: [comment("c2", heart)],
+      nextCursor: "page-3",
+    });
+    expect(issueCommentsView(detail({ connectionId: "A" }), retained).held).toBe(retained);
+    expect(issueCommentsView(detail({ connectionId: "B" }), retained).held).toBeNull();
+    expect(issueCommentsView(detail(), retained).held).toBeNull();
+  });
+
   it("keeps loaded pages when a new detail has the same first-page IDs and cursor", () => {
     const refreshed = detail({
       title: "Renamed",
