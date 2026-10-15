@@ -34,6 +34,27 @@ const WORK_ITEM = {
   ],
 };
 
+const WORK_ITEM_TYPES = {
+  value: [
+    {
+      name: "Bug",
+      states: [
+        { name: "Review", category: "InProgress" },
+        { name: "Shipped", category: "Completed" },
+        { name: "Resolved", category: "Resolved" },
+      ],
+    },
+    {
+      name: "Task",
+      states: [
+        { name: "Review", category: "Completed" },
+        { name: "Working", category: "InProgress" },
+      ],
+    },
+    { name: "Retired", isDisabled: true },
+  ],
+};
+
 /** Every `az` command the detail read runs, told apart by its first few arguments. */
 function answer(args: ReadonlyArray<string>): string {
   const resource = args[args.indexOf("--resource") + 1];
@@ -618,6 +639,345 @@ describe("AzureDevOpsIssueTracker", () => {
       }),
   );
 
+  it.effect.each([
+    {
+      state: "closed",
+      ids: [9, 7],
+      expected: [
+        { name: "Review", category: "closed" },
+        { name: "Shipped", category: "closed" },
+      ],
+      clauses: [
+        "([System.WorkItemType] = 'Bug' AND [System.State] IN ('Shipped'))",
+        "([System.WorkItemType] = 'Task' AND [System.State] IN ('Review'))",
+      ],
+    },
+    {
+      state: "open",
+      ids: [10, 8],
+      expected: [
+        { name: "Review", category: "open" },
+        { name: "Resolved", category: "open" },
+      ],
+      clauses: [
+        "([System.WorkItemType] = 'Bug' AND [System.State] IN ('Review','Resolved'))",
+        "([System.WorkItemType] = 'Task' AND [System.State] IN ('Working'))",
+      ],
+    },
+    {
+      state: "all",
+      ids: [10, 9, 8, 7],
+      expected: [
+        { name: "Review", category: "open" },
+        { name: "Review", category: "closed" },
+        { name: "Resolved", category: "open" },
+        { name: "Shipped", category: "closed" },
+      ],
+      clauses: [],
+    },
+  ] as const)(
+    "uses native type-scoped states for $state lists in three requests",
+    ({ state, ids, expected, clauses }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths: string[] = [];
+        let query = "";
+        const rows = [
+          { id: 7, type: "Bug", state: "Shipped" },
+          { id: 8, type: "Bug", state: "Resolved" },
+          { id: 9, type: "Task", state: "Review" },
+          { id: 10, type: "Bug", state: "Review" },
+        ].map(({ id, type, state }) => ({
+          ...WORK_ITEM,
+          id,
+          fields: { ...WORK_ITEM.fields, "System.WorkItemType": type, "System.State": state },
+        }));
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+              execute: ({ args }) =>
+                Effect.gen(function* () {
+                  const resource = args[args.indexOf("--resource") + 1]!;
+                  paths.push(resource);
+                  if (resource === "workitemtypes")
+                    return TestSourceControlHost.processOutput(encode(WORK_ITEM_TYPES));
+                  if (resource === "wiql") {
+                    query = JSON.parse(
+                      yield* fs
+                        .readFileString(args[args.indexOf("--in-file") + 1]!)
+                        .pipe(Effect.orDie),
+                    ).query;
+                    expect(args).toContain("$top=5");
+                    return TestSourceControlHost.processOutput(
+                      encode({ workItems: ids.map((id) => ({ id })) }),
+                    );
+                  }
+                  if (resource === "workitems") {
+                    expect(
+                      args.some(
+                        (arg) => arg.startsWith("fields=") && arg.includes("System.WorkItemType"),
+                      ),
+                    ).toBe(true);
+                    return TestSourceControlHost.processOutput(
+                      encode({ value: rows.filter((row) => ids.some((id) => id === row.id)) }),
+                    );
+                  }
+                  throw new Error(`Unexpected resource ${resource}`);
+                }),
+            }),
+          ),
+        );
+        const page = yield* api.listIssues({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          state,
+          involvement: "assigned",
+          viewer: "julius@acme.test",
+          query: "O'Hare",
+          limit: 4,
+        });
+        expect(page.items.map((row) => row.state)).toEqual(expected);
+        expect(page.items.map((row) => Number(row.key))).toEqual(ids);
+        expect(page.nextCursor).toBeNull();
+        for (const clause of clauses) expect(query).toContain(clause);
+        expect(query).not.toContain("Retired");
+        expect(query).toContain("[System.TeamProject] = 'Web App'");
+        expect(query).toContain("[System.AssignedTo] = @Me");
+        expect(query).toContain("[System.Title] CONTAINS 'O''Hare'");
+        expect(query).toContain("ORDER BY [System.ChangedDate] DESC, [System.Id] DESC");
+        expect(paths).toHaveLength(3);
+        expect(paths.filter((path) => path === "workitemtypes")).toHaveLength(1);
+      }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect.each(["all", "open"] as const)(
+    "reads one inline workflow catalog for 100 types in %s lists",
+    (state) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args) => {
+          const resource = args[args.indexOf("--resource") + 1]!;
+          paths.push(resource);
+          if (resource === "wiql")
+            return encode({ workItems: Array.from({ length: 101 }, (_, i) => ({ id: i + 7 })) });
+          if (resource === "workitems")
+            return encode({
+              value: Array.from({ length: 100 }, (_, i) => ({
+                ...WORK_ITEM,
+                id: i + 7,
+                fields: {
+                  ...WORK_ITEM.fields,
+                  "System.WorkItemType": `Type ${i}`,
+                  "System.State": "Review",
+                },
+              })),
+            });
+          if (resource === "workitemtypes")
+            return encode({
+              value: Array.from({ length: 100 }, (_, i) => ({
+                name: `Type ${i}`,
+                states: [{ name: "Review", category: "InProgress" }],
+              })),
+            });
+          throw new Error(`Unexpected resource ${resource}`);
+        });
+        const page = yield* api.listIssues({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          state,
+          involvement: "all",
+          viewer: "julius@acme.test",
+          limit: 100,
+        });
+        expect(page.items).toHaveLength(100);
+        expect(page.items.every((item) => item.state.category === "open")).toBe(true);
+        expect(page.nextCursor).toBe("2026-07-03T00:00:00Z|106");
+        expect(paths).toHaveLength(3);
+        expect(paths.filter((path) => path === "workitemtypes")).toHaveLength(1);
+      }),
+  );
+
+  it.effect.each([
+    { state: "all", catalog: WORK_ITEM_TYPES, paths: ["wiql"] },
+    {
+      state: "open",
+      catalog: { value: [{ name: "Bug", states: [{ name: "Shipped", category: "Completed" }] }] },
+      paths: ["workitemtypes"],
+    },
+    { state: "closed", catalog: WORK_ITEM_TYPES, paths: ["workitemtypes", "wiql"] },
+  ] as const)(
+    "bounds empty $state list requests to $paths",
+    ({ state, catalog, paths: expected }) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args) => {
+          const resource = args[args.indexOf("--resource") + 1]!;
+          paths.push(resource);
+          if (resource === "workitemtypes") return encode(catalog);
+          if (resource === "wiql") return encode({ workItems: [] });
+          throw new Error(`Unexpected resource ${resource}`);
+        });
+        const page = yield* api.listIssues({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          state,
+          involvement: "all",
+          viewer: "julius@acme.test",
+          limit: 10,
+        });
+        expect(page).toEqual({ items: [], nextCursor: null });
+        expect(paths).toEqual(expected);
+      }),
+  );
+
+  it.effect.each([
+    { state: "open", catalog: { value: [{ name: "Bug" }] }, calls: 1 },
+    { state: "open", catalog: { value: [{ name: "Bug", states: null }] }, calls: 1 },
+    {
+      state: "open",
+      catalog: { value: [{ name: "Bug", states: [{ name: "Shipped", category: "Unknown" }] }] },
+      calls: 1,
+    },
+    {
+      state: "all",
+      catalog: { value: [{ name: "Bug", states: [{ name: "Review", category: "InProgress" }] }] },
+      calls: 3,
+    },
+    {
+      state: "all",
+      catalog: { value: [{ name: "Task", states: [{ name: "Shipped", category: "Completed" }] }] },
+      calls: 3,
+    },
+  ] as const)(
+    "rejects an incomplete $state list workflow catalog: $catalog",
+    ({ state, catalog, calls: expected }) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const api = yield* tracker((args) => {
+          calls++;
+          const resource = args[args.indexOf("--resource") + 1];
+          if (resource === "workitemtypes") return encode(catalog);
+          if (resource === "wiql") return encode({ workItems: [{ id: 7 }] });
+          if (resource === "workitems")
+            return encode({
+              value: [
+                {
+                  ...WORK_ITEM,
+                  fields: {
+                    ...WORK_ITEM.fields,
+                    "System.WorkItemType": "Bug",
+                    "System.State": "Shipped",
+                  },
+                },
+              ],
+            });
+          throw new Error(`Unexpected resource ${resource}`);
+        });
+        const error = yield* Effect.flip(
+          api.listIssues({
+            cwd: "/w",
+            host: "dev.azure.com",
+            scope: "acme/Web App",
+            state,
+            involvement: "all",
+            viewer: "julius@acme.test",
+            limit: 10,
+          }),
+        );
+        expect(error).toMatchObject({ reason: "failed", operation: "getStates" });
+        expect(calls).toBe(expected);
+      }),
+  );
+
+  it.effect.each(["open", "all"] as const)(
+    "preserves native catalog rate limits on %s lists",
+    (state) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const native = new AzureDevOpsCli.AzureDevOpsCliRateLimitError({
+          operation: "execute",
+          command: "az",
+          cwd: "/w",
+          argumentCount: 10,
+          cause: new Error("rate limited"),
+        });
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeFileSystem.layer,
+              Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+                execute: ({ args }) =>
+                  Effect.suspend(() => {
+                    const resource = args[args.indexOf("--resource") + 1]!;
+                    paths.push(resource);
+                    if (resource === "workitemtypes") return Effect.fail(native);
+                    if (resource === "wiql")
+                      return Effect.succeed(
+                        TestSourceControlHost.processOutput(encode({ workItems: [{ id: 7 }] })),
+                      );
+                    if (resource === "workitems")
+                      return Effect.succeed(
+                        TestSourceControlHost.processOutput(
+                          encode({
+                            value: [
+                              {
+                                ...WORK_ITEM,
+                                fields: { ...WORK_ITEM.fields, "System.WorkItemType": "Bug" },
+                              },
+                            ],
+                          }),
+                        ),
+                      );
+                    return Effect.die(`Unexpected resource ${resource}`);
+                  }),
+              }),
+            ),
+          ),
+        );
+        const error = yield* Effect.flip(
+          api.listIssues({
+            cwd: "/w",
+            host: "dev.azure.com",
+            scope: "acme/Web App",
+            state,
+            involvement: "all",
+            viewer: "julius@acme.test",
+            limit: 10,
+          }),
+        );
+        expect(error).toMatchObject({ reason: "rate-limited", cause: native });
+        expect(paths).toEqual(
+          state === "open" ? ["workitemtypes"] : ["wiql", "workitems", "workitemtypes"],
+        );
+      }),
+  );
+
+  it.effect.each(["all", "open", "closed"] as const)(
+    "rejects a malformed %s list cursor before catalog or provider calls",
+    (state) =>
+      Effect.gen(function* () {
+        const api = yield* tracker(() => {
+          throw new Error("Invalid cursors must not call Azure");
+        });
+        const error = yield* Effect.flip(
+          api.listIssues({
+            cwd: "/w",
+            host: "dev.azure.com",
+            scope: "acme/Web App",
+            state,
+            involvement: "all",
+            viewer: "julius@acme.test",
+            cursor: "invalid",
+            limit: 10,
+          }),
+        );
+        expect(error).toMatchObject({ reason: "failed", operation: "listIssues" });
+      }),
+  );
+
   it.effect("lists the native bulk work-item wrapper in one bounded page", () =>
     Effect.gen(function* () {
       const seen: ReadonlyArray<string>[] = [];
@@ -650,12 +1010,17 @@ describe("AzureDevOpsIssueTracker", () => {
       const rows = [1, 2, 3].map((id) => ({
         ...WORK_ITEM,
         id,
-        fields: { ...WORK_ITEM.fields, "System.ChangedDate": `2026-07-0${id}T00:00:00Z` },
+        fields: {
+          ...WORK_ITEM.fields,
+          "System.ChangedDate": `2026-07-0${id}T00:00:00Z`,
+          "System.WorkItemType": "Bug",
+        },
       }));
       let queries = 0;
       const api = yield* tracker((args) => {
         seen.push(args);
         const resource = args[args.indexOf("--resource") + 1];
+        if (resource === "workitemtypes") return encode(WORK_ITEM_TYPES);
         if (resource === "wiql")
           return encode({
             workItems: (++queries === 1 ? [3, 2, 1] : [1]).map((id) => ({ id })),
@@ -682,7 +1047,8 @@ describe("AzureDevOpsIssueTracker", () => {
       const second = yield* api.listIssues({ ...target, cursor: first.nextCursor! });
       expect(second.items.map((item) => item.key)).toEqual(["1"]);
       expect(second.nextCursor).toBeNull();
-      expect(seen).toHaveLength(4);
+      expect(seen).toHaveLength(6);
+      expect(seen.filter((args) => args.includes("workitemtypes"))).toHaveLength(2);
     }),
   );
 

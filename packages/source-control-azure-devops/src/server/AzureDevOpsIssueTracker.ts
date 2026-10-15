@@ -97,6 +97,7 @@ const CREATE_TYPES = ["Issue", "Bug", "Task", "User Story", "Product Backlog Ite
 
 const LIST_FIELDS = [
   "System.Id",
+  "System.WorkItemType",
   "System.Title",
   "System.State",
   "System.CreatedDate",
@@ -115,13 +116,22 @@ const decodeWiql = Schema.decodeUnknownResult(
     workItems: Schema.optional(Schema.NullOr(Schema.Array(Schema.Struct({ id: Schema.Int })))),
   }),
 );
-const decodeTypes = Schema.decodeUnknownResult(
+const WorkItemStates = Schema.Array(
   Schema.Struct({
-    value: Schema.Array(
-      Schema.Struct({ name: Schema.String, isDisabled: Schema.optional(Schema.Boolean) }),
-    ),
+    name: Schema.String,
+    category: Schema.Literals(["Proposed", "InProgress", "Resolved", "Completed", "Removed"]),
   }),
 );
+const WorkItemTypes = Schema.Struct({
+  value: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      isDisabled: Schema.optional(Schema.NullOr(Schema.Boolean)),
+      states: Schema.optional(Schema.NullOr(WorkItemStates)),
+    }),
+  ),
+});
+const decodeTypes = Schema.decodeUnknownResult(WorkItemTypes);
 const decodeTags = Schema.decodeUnknownResult(
   Schema.Struct({ value: Schema.Array(Schema.Struct({ name: Schema.String })) }),
 );
@@ -178,16 +188,11 @@ function involvementClause(involvement: IssueInvolvement): string {
   }
 }
 
-function stateClause(state: "all" | "open" | "closed"): string {
-  const closed = "('Closed', 'Completed', 'Done', 'Removed', 'Resolved')";
-  switch (state) {
-    case "open":
-      return ` AND [System.State] NOT IN ${closed}`;
-    case "closed":
-      return ` AND [System.State] IN ${closed}`;
-    case "all":
-      return "";
-  }
+function nativeStates(rows: typeof WorkItemStates.Type): ReadonlyArray<IssueState> {
+  return rows.map((state) => ({
+    name: state.name,
+    category: state.category === "Completed" || state.category === "Removed" ? "closed" : "open",
+  }));
 }
 
 /** `<iso changed date>|<id>` of the last row handed over, which is where the next page starts. */
@@ -570,30 +575,27 @@ export const make: Effect.Effect<
       decode: decodeAs(
         Schema.decodeUnknownResult(
           Schema.Struct({
-            value: Schema.Array(
-              Schema.Struct({
-                name: Schema.String,
-                category: Schema.Literals([
-                  "Proposed",
-                  "InProgress",
-                  "Resolved",
-                  "Completed",
-                  "Removed",
-                ]),
-              }),
-            ),
+            value: WorkItemStates,
           }),
         ),
       ),
-    }).pipe(
-      Effect.map((page) =>
-        page.value.map((state): IssueState => ({
-          name: state.name,
-          category:
-            state.category === "Completed" || state.category === "Removed" ? "closed" : "open",
-        })),
-      ),
-    );
+    }).pipe(Effect.map((page) => nativeStates(page.value)));
+
+  const workItemTypes = (input: {
+    readonly cwd: string;
+    readonly organization: string;
+    readonly project: string;
+  }) =>
+    read({
+      cwd: input.cwd,
+      operation: "getStates",
+      args: [
+        ...invokeArgs({ ...input, resource: "workitemtypes" }),
+        "--query",
+        "{value: value[].{name: name, isDisabled: isDisabled, states: states[].{name: name, category: category}}}",
+      ],
+      decode: decodeAs(decodeTypes),
+    });
 
   const itemWorkflow = (
     input: { readonly cwd: string; readonly organization: string; readonly project: string },
@@ -614,6 +616,22 @@ export const make: Effect.Effect<
               : Effect.succeed({ item: { ...item, state }, states });
           }),
         );
+
+  const itemsWorkflow = (
+    items: ReadonlyArray<AzureDevOpsWorkItem>,
+    types: typeof WorkItemTypes.Type | undefined,
+  ) => {
+    const states = new Map(
+      types?.value.map((type) => [type.name, nativeStates(type.states ?? [])] as const),
+    );
+    return Effect.forEach(items, (item) => {
+      if (item.workItemType === null) return Effect.succeed(item);
+      const state = states.get(item.workItemType)?.find((state) => state.name === item.state.name);
+      return state === undefined
+        ? Effect.fail(refused("getStates", "The work item state is absent from its workflow."))
+        : Effect.succeed({ ...item, state });
+    });
+  };
 
   return {
     kind: KIND,
@@ -647,88 +665,94 @@ export const make: Effect.Effect<
         ),
       ),
 
-    listIssues: (input) => {
-      if (input.involvement === "mentioned")
-        return Effect.fail(
-          refused("listIssues", "Azure DevOps does not support a mentioned filter."),
-        );
-      const cursor = input.cursor === undefined ? undefined : parseCursor(input.cursor);
-      if (cursor === null) {
-        return Effect.fail(
-          refused("listIssues", "The cursor was not one Azure DevOps handed out."),
-        );
-      }
-      const limit = Math.min(Math.max(input.limit, 1), PAGE_SIZE);
-      const text = input.query?.trim() ?? "";
-      return scoped("listIssues", input).pipe(
-        Effect.flatMap((scope) =>
-          invokeWithBody({
-            cwd: input.cwd,
-            operation: "listIssues",
-            args: invokeArgs({
-              ...scope,
-              resource: "wiql",
-              method: "POST",
-              // One more than the page, which is how a next page reveals itself.
-              query: ["timePrecision=true", `$top=${limit + 1}`],
-            }),
-            body: {
-              query:
-                `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = ${quoted(scope.project)}` +
-                stateClause(input.state) +
-                involvementClause(input.involvement) +
-                (text.length === 0 ? "" : ` AND [System.Title] CONTAINS ${quoted(text)}`) +
-                (cursor === undefined
-                  ? ""
-                  : ` AND ([System.ChangedDate] < ${quoted(cursor.changedAt)} OR ([System.ChangedDate] = ${quoted(cursor.changedAt)} AND [System.Id] < ${cursor.id}))`) +
-                " ORDER BY [System.ChangedDate] DESC, [System.Id] DESC",
-            },
-          }).pipe(
-            Effect.flatMap((raw) => {
-              const decoded = decodeAs(decodeWiql)(raw);
-              return Result.isSuccess(decoded)
-                ? Effect.succeed(decoded.success.workItems ?? [])
-                : Effect.fail(unreadable("listIssues", decoded.failure));
-            }),
-            Effect.flatMap((ids) =>
-              ids.length === 0
-                ? Effect.succeed({ items: [], nextCursor: null })
-                : read({
-                    cwd: input.cwd,
-                    operation: "listIssues",
-                    args: invokeArgs({
-                      ...scope,
-                      resource: "workitems",
-                      query: [
-                        `ids=${ids
-                          .slice(0, limit)
-                          .map((row) => row.id)
-                          .join(",")}`,
-                        `fields=${LIST_FIELDS.join(",")}`,
-                      ],
-                    }),
-                    decode: decodeWorkItemsJson,
-                  }).pipe(
-                    Effect.map((items) => {
-                      const indexed = new Map(items.map((item) => [item.key, item]));
-                      const ordered = ids
-                        .slice(0, limit)
-                        .flatMap(({ id }) => indexed.get(String(id)) ?? []);
-                      const last = ordered.at(-1);
-                      return {
-                        items: ordered,
-                        nextCursor:
-                          ids.length > limit && last !== undefined
-                            ? `${last.updatedAt}|${last.key}`
-                            : null,
-                      };
-                    }),
-                  ),
-            ),
-          ),
-        ),
-      );
-    },
+    listIssues: (input) =>
+      Effect.gen(function* () {
+        if (input.involvement === "mentioned")
+          return yield* refused("listIssues", "Azure DevOps does not support a mentioned filter.");
+        const cursor = input.cursor === undefined ? undefined : parseCursor(input.cursor);
+        if (cursor === null) {
+          return yield* refused("listIssues", "The cursor was not one Azure DevOps handed out.");
+        }
+        const limit = Math.min(Math.max(input.limit, 1), PAGE_SIZE);
+        const text = input.query?.trim() ?? "";
+        const scope = yield* scoped("listIssues", input);
+        let types: typeof WorkItemTypes.Type | undefined;
+        let stateFilter = "";
+        if (input.state !== "all") {
+          types = yield* workItemTypes({ ...scope, cwd: input.cwd });
+          const enabled = types.value.filter((type) => !type.isDisabled);
+          if (enabled.some((type) => type.states === undefined || type.states === null))
+            return yield* refused(
+              "getStates",
+              "Azure returned no workflow states for a work item type.",
+            );
+          const filters = enabled.flatMap((type) => {
+            const states = nativeStates(type.states ?? []).filter(
+              (state) => state.category === input.state,
+            );
+            return states.length === 0
+              ? []
+              : [
+                  `([System.WorkItemType] = ${quoted(type.name)} AND [System.State] IN (${states.map((state) => quoted(state.name)).join(",")}))`,
+                ];
+          });
+          if (filters.length === 0) return { items: [], nextCursor: null };
+          stateFilter = ` AND (${filters.join(" OR ")})`;
+        }
+        const raw = yield* invokeWithBody({
+          cwd: input.cwd,
+          operation: "listIssues",
+          args: invokeArgs({
+            ...scope,
+            resource: "wiql",
+            method: "POST",
+            // One more than the page, which is how a next page reveals itself.
+            query: ["timePrecision=true", `$top=${limit + 1}`],
+          }),
+          body: {
+            query:
+              `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = ${quoted(scope.project)}` +
+              stateFilter +
+              involvementClause(input.involvement) +
+              (text.length === 0 ? "" : ` AND [System.Title] CONTAINS ${quoted(text)}`) +
+              (cursor === undefined
+                ? ""
+                : ` AND ([System.ChangedDate] < ${quoted(cursor.changedAt)} OR ([System.ChangedDate] = ${quoted(cursor.changedAt)} AND [System.Id] < ${cursor.id}))`) +
+              " ORDER BY [System.ChangedDate] DESC, [System.Id] DESC",
+          },
+        });
+        const decoded = decodeAs(decodeWiql)(raw);
+        if (Result.isFailure(decoded)) return yield* unreadable("listIssues", decoded.failure);
+        const ids = decoded.success.workItems ?? [];
+        if (ids.length === 0) return { items: [], nextCursor: null };
+        const rows = yield* read({
+          cwd: input.cwd,
+          operation: "listIssues",
+          args: invokeArgs({
+            ...scope,
+            resource: "workitems",
+            query: [
+              `ids=${ids
+                .slice(0, limit)
+                .map((row) => row.id)
+                .join(",")}`,
+              `fields=${LIST_FIELDS.join(",")}`,
+            ],
+          }),
+          decode: decodeWorkItemsJson,
+        });
+        const indexed = new Map(rows.map((item) => [item.key, item]));
+        const ordered = ids.slice(0, limit).flatMap(({ id }) => indexed.get(String(id)) ?? []);
+        if (types === undefined && ordered.some((item) => item.workItemType !== null))
+          types = yield* workItemTypes({ ...scope, cwd: input.cwd });
+        const items = yield* itemsWorkflow(ordered, types);
+        const last = items.at(-1);
+        return {
+          items,
+          nextCursor:
+            ids.length > limit && last !== undefined ? `${last.updatedAt}|${last.key}` : null,
+        };
+      }),
 
     getIssue: (input) =>
       target("getIssue", input).pipe(
