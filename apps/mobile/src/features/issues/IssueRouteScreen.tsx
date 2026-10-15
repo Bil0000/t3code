@@ -528,6 +528,18 @@ function IssueRouteContent({
             variant="plain"
             actionLabel="Retry"
             onAction={refresh}
+            action={
+              params.originalURL && /^https?:\/\//i.test(params.originalURL) ? (
+                <View className="items-center gap-2">
+                  <MaterialButton label="Retry" tone="primary" onPress={refresh} />
+                  <MaterialButton
+                    label="Open in browser"
+                    tone="text"
+                    onPress={() => void tryOpenExternalUrl(params.originalURL!, "markdown-link")}
+                  />
+                </View>
+              ) : undefined
+            }
           />
         )}
       </ScrollView>

@@ -10,6 +10,7 @@ export type IssueParams = {
   readonly scope: string;
   readonly key: string;
   readonly displayKey?: string;
+  readonly originalURL?: string;
 };
 
 export function issueParamsKey(params: IssueParams) {

@@ -5,7 +5,13 @@ import { createRoot } from "react-dom/client";
 import * as Effect from "effect/Effect";
 import { AtomRegistry } from "effect/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { IssueTrackerKind, ProjectId, type IssueDetail } from "@t3tools/contracts";
+import {
+  IssueOperationError,
+  IssueTrackerKind,
+  ProjectId,
+  type IssueDetail,
+} from "@t3tools/contracts";
+import { Linking } from "react-native";
 import type {
   EnvironmentRegistry as Registry,
   EnvironmentSupervisor as Supervisor,
@@ -258,6 +264,65 @@ it.each([{ environmentId: " " }, { projectId: "" }, { tracker: "Not A Tracker" }
     );
     await act(() => back!.click());
     expect(harness.back).toBe(1);
+    await act(() => root.unmount());
+    registry.dispose();
+  },
+);
+
+it.each([
+  { originalURL: "https://github.com/acme/app/issues/456", opens: true },
+  { originalURL: "javascript:alert(1)", opens: false },
+])(
+  "offers the original link in the browser when $originalURL names no readable issue",
+  async ({ originalURL, opens }) => {
+    let reads = 0;
+    request.mockImplementation((() =>
+      Effect.suspend(() => {
+        reads += 1;
+        return Effect.fail(
+          new IssueOperationError({
+            operation: "getIssue",
+            reason: "not-found",
+            detail: "Issue not found.",
+          }),
+        );
+      })) as unknown as Parameters<typeof request.mockImplementation>[0]);
+    vi.mocked(Linking.openURL).mockClear();
+    const registry = AtomRegistry.make();
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(() =>
+      root.render(
+        <RegistryContext.Provider value={registry}>
+          <IssueRouteScreen
+            route={{
+              params: {
+                environmentId: "environment",
+                projectId: "project",
+                tracker: "github",
+                host: "github.com",
+                scope: "acme/app",
+                key: "456",
+                originalURL,
+              },
+            }}
+          />
+        </RegistryContext.Provider>,
+      ),
+    );
+    await settle();
+    expect(container.textContent).toContain("Couldn't load this issue");
+    const buttons = [...container.querySelectorAll("button")];
+    const browser = buttons.find((button) => button.textContent === "Open in browser");
+    expect(buttons.some((button) => button.textContent === "Retry")).toBe(true);
+    expect(Linking.openURL).not.toHaveBeenCalled();
+    if (opens) {
+      await act(() => browser!.click());
+      expect(Linking.openURL).toHaveBeenCalledWith(originalURL);
+    } else {
+      expect(browser).toBeUndefined();
+    }
+    expect(reads).toBe(1);
     await act(() => root.unmount());
     registry.dispose();
   },

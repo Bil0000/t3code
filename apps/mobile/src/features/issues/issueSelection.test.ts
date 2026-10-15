@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { NavigationState } from "@react-navigation/native";
-import { issueParamsKey, selectedIssueKey } from "./issueSelection";
+import { issueParamsKey, selectedIssueKey, type IssueParams } from "./issueSelection";
 
 const params = {
   environmentId: "environment-one",
@@ -76,4 +76,10 @@ it("selects only the exact Forgejo mount while accepting repository case aliases
   const selected = selection([home, { ...issue, params: native }]);
   expect(selected).toBe(issueParamsKey({ ...native, scope: "Mount/acme/web" }));
   expect(selected).not.toBe(issueParamsKey({ ...native, scope: "mount/Acme/Web" }));
+});
+
+it("keeps the issue selection when an original URL is carried for fallback", () => {
+  const linked: IssueParams = { ...params, originalURL: "https://linear.app/acme/issue/ENG-7" };
+  expect(issueParamsKey(linked)).toBe(issueParamsKey(params));
+  expect(selection([home, { ...issue, params: linked }])).toBe(selection([home, issue]));
 });

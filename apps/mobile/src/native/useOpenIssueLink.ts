@@ -58,6 +58,7 @@ export function useOpenIssueLink(options?: {
             host,
             scope,
             key,
+            originalURL: url,
           });
           return true;
         }

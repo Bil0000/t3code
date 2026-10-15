@@ -97,6 +97,7 @@ vi.mock("../state/issues", async () => {
   return { issueEnvironment: createIssueEnvironmentAtoms(Atom.runtime(environments)) };
 });
 
+import { githubMarkdownLinks } from "@t3tools/shared/githubMarkdownLinks";
 import { useOpenIssueLink } from "./useOpenIssueLink";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -234,8 +235,19 @@ it.each([
       host: "linear.app",
       scope: "eng",
       key: "ENG-7",
+      originalURL: url,
     },
   ]);
+  expect(harness.external).toEqual([]);
+});
+
+it("carries a PR body's generated #N link to the issue route as its original URL", async () => {
+  const href = /\]\(([^)]+)\)/u.exec(
+    githubMarkdownLinks("Stacked on #456", "https://github.com/acme/app/pull/1"),
+  )![1]!;
+  expect(await open(href)).toBe(true);
+  expect(calls).toHaveLength(1);
+  expect(harness.issues).toMatchObject([{ originalURL: "https://github.com/acme/app/issues/456" }]);
   expect(harness.external).toEqual([]);
 });
 
