@@ -63,7 +63,6 @@ import {
   type ChatAttachment as ContractChatAttachment,
   EnvironmentAuthorizationError,
   type EnvironmentId,
-  type IssueTrackerKind,
   type MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -291,8 +290,7 @@ import {
 } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
-import { ThreadIssuesPanel } from "./threadIssue/ThreadIssuesPanel";
-import { IssueDetailPanel } from "./issue/IssueDetailPanel";
+import { ChatViewIssuePanel } from "./ChatViewIssuePanel";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
@@ -11269,47 +11267,13 @@ export default function ChatView(props: ChatViewProps) {
             : undefined
         }
       />
-    ) : renderedRightPanelSurface?.kind === "issues" ? (
-      serverConfig?.environment.capabilities.issues === true && activeThreadRef ? (
-        <ThreadIssuesPanel threadRef={activeThreadRef} />
-      ) : (
-        <PullRequestsUnavailableState
-          title="Issues unavailable"
-          error="Update this environment's T3 Code server to browse linked issues."
-        />
-      )
-    ) : renderedRightPanelSurface?.kind === "issue" && !pullRequestsCapabilityKnown ? (
-      <PullRequestDetailGhost />
-    ) : renderedRightPanelSurface?.kind === "issue" &&
-      serverConfig?.environment.capabilities.issues !== true ? (
-      <PullRequestsUnavailableState
-        title="Issues unavailable"
-        error="Update this environment's T3 Code server to browse issues."
-      />
-    ) : renderedRightPanelSurface?.kind === "issue" ? (
-      <IssueDetailPanel
+    ) : renderedRightPanelSurface?.kind === "issues" ||
+      renderedRightPanelSurface?.kind === "issue" ? (
+      <ChatViewIssuePanel
         key={renderedRightPanelSurface.id}
-        environmentId={
-          (renderedRightPanelSurface.environmentId as EnvironmentId | undefined) ??
-          activeThread.environmentId
-        }
-        reference={{
-          projectId: renderedRightPanelSurface.projectId as ProjectId,
-          tracker: renderedRightPanelSurface.tracker as IssueTrackerKind,
-          ...(renderedRightPanelSurface.host ? { host: renderedRightPanelSurface.host } : {}),
-          scope: renderedRightPanelSurface.scope,
-          key: renderedRightPanelSurface.key,
-        }}
+        surface={renderedRightPanelSurface}
+        environmentById={environmentById}
         threadRef={activeThreadRef}
-        onSelectPullRequest={(target) => {
-          if (activeThreadRef)
-            useRightPanelStore.getState().openPullRequest(activeThreadRef, {
-              ...target,
-              ...(renderedRightPanelSurface.environmentId === undefined
-                ? {}
-                : { environmentId: renderedRightPanelSurface.environmentId }),
-            });
-        }}
       />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
