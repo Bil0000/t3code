@@ -649,8 +649,12 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
               { description: { containsIgnoreCase: input.query } },
             ];
             // `ENG-12`, `#12` or `12` asks for one issue of this team by number.
-            const reference = /^(?:[A-Za-z][A-Za-z0-9]*-|#)?(\d+)$/.exec(input.query.trim());
-            if (reference !== null) or.push({ number: { eq: Number(reference[1]) } });
+            const reference = /^(?:([A-Za-z][A-Za-z0-9]*)-|#)?(\d+)$/.exec(input.query.trim());
+            if (
+              reference !== null &&
+              (reference[1] === undefined || reference[1].toUpperCase() === scope.team)
+            )
+              or.push({ number: { eq: Number(reference[2]) } });
             filter.or = or;
           }
           const page = yield* linear.listIssues({
