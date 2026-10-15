@@ -1,4 +1,5 @@
 import {
+  issueAccountRequest,
   IssueCapabilities,
   IssuePageInput,
   IssueHistoryPage,
@@ -68,7 +69,7 @@ export const IssueTargetInput = Schema.Struct({
   tracker: Schema.optional(
     IssueTrackerKind.annotate({
       description:
-        "Use the exact connectionId returned by list_issue_sources for a selected saved account. Omit it only for the legacy default account. Tracker kind to use with key. Required when the project has more than one issue source. A URL selects its own tracker.",
+        "For a saved account, copy the projectId object returned by list_issue_sources unchanged. A plain projectId selects the legacy default account. Tracker kind to use with key. Required when the project has more than one issue source. A URL selects its own tracker.",
     }),
   ),
   url: Schema.optional(
@@ -219,7 +220,7 @@ export const IssueEntry = Schema.Struct({
   commentCount: IssueSummary.fields.commentCount,
   reactions: IssueSummary.fields.reactions,
   reactionsTruncated: IssueSummary.fields.reactionsTruncated,
-});
+}).pipe(issueAccountRequest);
 export type IssueEntry = typeof IssueEntry.Type;
 
 export const ListIssuesResult = Schema.Struct({
@@ -290,7 +291,7 @@ export const ReadIssueResult = Schema.Struct({
       closesIssue: Schema.Boolean,
     }),
   ),
-});
+}).pipe(issueAccountRequest);
 export type ReadIssueResult = typeof ReadIssueResult.Type;
 
 export const CreateIssueResult = Schema.Struct({
@@ -298,10 +299,10 @@ export const CreateIssueResult = Schema.Struct({
   displayKey: Schema.String,
   warnings: IssueTrackerCreateResult.fields.warnings,
   parentLinked: IssueTrackerCreateResult.fields.parentLinked,
-});
+}).pipe(issueAccountRequest);
 export type CreateIssueResult = typeof CreateIssueResult.Type;
 
-export const IssueWriteResult = Schema.Struct({ ...IssueIdentity });
+export const IssueWriteResult = Schema.Struct({ ...IssueIdentity }).pipe(issueAccountRequest);
 
 export const ThreadIssueEntry = Schema.Struct({
   ...IssueIdentity,
@@ -310,7 +311,7 @@ export const ThreadIssueEntry = Schema.Struct({
   displayKey: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
   state: Schema.NullOr(IssueState),
-});
+}).pipe(issueAccountRequest);
 export type ThreadIssueEntry = typeof ThreadIssueEntry.Type;
 
 export const LinkIssueResult = Schema.Struct({
@@ -318,7 +319,7 @@ export const LinkIssueResult = Schema.Struct({
   alreadyLinked: Schema.Boolean.annotate({
     description: "True when the issue was linked to this thread before the call.",
   }),
-});
+}).pipe(issueAccountRequest);
 export type LinkIssueResult = typeof LinkIssueResult.Type;
 
 export const UnlinkIssueResult = Schema.Struct({
@@ -326,7 +327,7 @@ export const UnlinkIssueResult = Schema.Struct({
   wasLinked: Schema.Boolean.annotate({
     description: "False when the issue was not linked to this thread to begin with.",
   }),
-});
+}).pipe(issueAccountRequest);
 export type UnlinkIssueResult = typeof UnlinkIssueResult.Type;
 
 export const ListThreadIssuesResult = Schema.Struct({
@@ -357,7 +358,7 @@ const ListIssuesTool = Tool.make("list_issues", {
     ),
     limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
     cursors: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-  }),
+  }).pipe(issueAccountRequest),
   success: ListIssuesResult,
   failure: IssueToolError,
   dependencies,
@@ -371,7 +372,7 @@ const ListIssuesTool = Tool.make("list_issues", {
 const ReadIssueTool = Tool.make("read_issue", {
   description:
     "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. If bodyEditable is false, edit its rich description in the native tracker. Use states when present, otherwise capabilities.states, for state changes. Actor authorDetails/assigneeDetails and comment authorDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs, including archived labels; labelsTruncated means the current label set is incomplete. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
-  parameters: IssueTargetInput,
+  parameters: IssueTargetInput.pipe(issueAccountRequest),
   success: ReadIssueResult,
   failure: IssueToolError,
   dependencies,
@@ -391,7 +392,7 @@ const ReadIssueCommentsTool = Tool.make("read_issue_comments", {
     scope: Schema.optional(IssueCommentsPageInput.fields.scope),
     cursor: IssueCommentsPageInput.fields.cursor,
     viewer: IssueCommentsPageInput.fields.viewer,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueCommentsPage,
   failure: IssueToolError,
   dependencies,
@@ -417,7 +418,7 @@ const CreateIssueTool = Tool.make("create_issue", {
     issueType: IssueCreateInput.fields.issueType,
     parentKey: IssueCreateInput.fields.parentKey,
     templateKey: IssueCreateInput.fields.templateKey,
-  }),
+  }).pipe(issueAccountRequest),
   success: CreateIssueResult,
   failure: IssueToolError,
   dependencies,
@@ -436,7 +437,7 @@ const ReadIssueCandidatesTool = Tool.make("read_issue_candidates", {
     tracker: IssueTargetInput.fields.tracker,
     connectionId: IssueTargetInput.fields.connectionId,
     key: IssueCandidatesInput.fields.key,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueCandidates,
   failure: IssueToolError,
   dependencies,
@@ -453,7 +454,7 @@ const CommentOnIssueTool = Tool.make("comment_on_issue", {
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     body: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536)),
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -477,7 +478,7 @@ const SetIssueStateTool = Tool.make("set_issue_state", {
         description: "A reason from capabilities.closeReasons, for a closing state only.",
       }),
     ),
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -490,7 +491,9 @@ const SetIssueStateTool = Tool.make("set_issue_state", {
 
 const LinkIssueTool = Tool.make("link_issue", {
   description: `${LINK_EVERY_ISSUE} Links an issue to a thread so T3 Code shows it beside the thread with its current state. Pass the URL, or key with projectId. Linking an already-linked issue succeeds with alreadyLinked=true.`,
-  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...ThreadTargetInput.fields }),
+  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...ThreadTargetInput.fields }).pipe(
+    issueAccountRequest,
+  ),
   success: LinkIssueResult,
   failure: IssueToolError,
   dependencies,
@@ -504,7 +507,9 @@ const LinkIssueTool = Tool.make("link_issue", {
 const UnlinkIssueTool = Tool.make("unlink_issue", {
   description:
     "Remove an issue link from a thread. The issue itself is not changed. Unlinking an issue that is not linked succeeds with wasLinked=false.",
-  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...ThreadTargetInput.fields }),
+  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...ThreadTargetInput.fields }).pipe(
+    issueAccountRequest,
+  ),
   success: UnlinkIssueResult,
   failure: IssueToolError,
   dependencies,
@@ -537,14 +542,14 @@ const ListIssueSources = Tool.make("list_issue_sources", {
     connectionId: IssueTargetInput.fields.connectionId,
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
-  }),
+  }).pipe(issueAccountRequest),
   success: Schema.Struct({
     sources: Schema.Array(
       Schema.Struct({
         ...IssueScopeRef.fields,
         projectTitle: IssueDetail.fields.projectTitle,
         capabilities: IssueCapabilities,
-      }),
+      }).pipe(issueAccountRequest),
     ),
   }),
   failure: IssueToolError,
@@ -558,7 +563,9 @@ const ListIssueSources = Tool.make("list_issue_sources", {
 
 const ReadIssueHistory = Tool.make("read_issue_history", {
   description: "Read a bounded page of native issue history.",
-  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...IssuePageInput.fields }),
+  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...IssuePageInput.fields }).pipe(
+    issueAccountRequest,
+  ),
   success: IssueHistoryPage,
   failure: IssueToolError,
   dependencies,
@@ -571,7 +578,9 @@ const ReadIssueHistory = Tool.make("read_issue_history", {
 
 const ReadIssueHierarchy = Tool.make("read_issue_hierarchy", {
   description: "Read the parent and one bounded page of sub-issues.",
-  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...IssuePageInput.fields }),
+  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...IssuePageInput.fields }).pipe(
+    issueAccountRequest,
+  ),
   success: IssueHierarchyPage,
   failure: IssueToolError,
   dependencies,
@@ -584,7 +593,9 @@ const ReadIssueHierarchy = Tool.make("read_issue_hierarchy", {
 
 const ReadIssueLinkedPullRequests = Tool.make("read_issue_linked_pull_requests", {
   description: "Read one bounded page of linked pull requests.",
-  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...IssuePageInput.fields }),
+  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...IssuePageInput.fields }).pipe(
+    issueAccountRequest,
+  ),
   success: IssueLinkedPullRequestsPage,
   failure: IssueToolError,
   dependencies,
@@ -606,7 +617,7 @@ const ReadIssueTemplates = Tool.make("read_issue_templates", {
     scope: IssueTargetInput.fields.scope,
     metadataOnly: IssueTemplatesInput.fields.metadataOnly,
     templateKey: IssueTemplatesInput.fields.templateKey,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueTemplateList,
   failure: IssueToolError,
   dependencies,
@@ -626,7 +637,7 @@ const ListIssueLabels = Tool.make("list_issue_labels", {
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
     ...IssuePageInput.fields,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueLabelCandidatesPage,
   failure: IssueToolError,
   dependencies,
@@ -646,7 +657,7 @@ const ListIssueAssignees = Tool.make("list_issue_assignees", {
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
     ...IssuePageInput.fields,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueAssigneeCandidatesPage,
   failure: IssueToolError,
   dependencies,
@@ -666,7 +677,7 @@ const UpdateIssue = Tool.make("update_issue", {
     body: IssueUpdateInput.fields.body,
     labels: IssueUpdateInput.fields.labels,
     assignees: IssueUpdateInput.fields.assignees,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -683,7 +694,7 @@ const EditIssueComment = Tool.make("edit_issue_comment", {
     ...IssueTargetInput.fields,
     commentId: IssueEditCommentInput.fields.commentId,
     body: IssueEditCommentInput.fields.body,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -701,7 +712,7 @@ const SetIssueReaction = Tool.make("set_issue_reaction", {
     subjectId: IssueReactionInput.fields.subjectId,
     content: IssueReactionInput.fields.content,
     reacted: IssueReactionInput.fields.reacted,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -718,7 +729,7 @@ const SetIssueLabels = Tool.make("set_issue_labels", {
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     labels: Schema.Array(TrimmedNonEmptyString),
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -734,7 +745,7 @@ const SetIssueAssignees = Tool.make("set_issue_assignees", {
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     assignees: IssueCreateInput.fields.assignees,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,
@@ -750,7 +761,7 @@ const SetIssueParent = Tool.make("set_issue_parent", {
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     parentKey: IssueSetParentInput.fields.parentKey,
-  }),
+  }).pipe(issueAccountRequest),
   success: IssueWriteResult,
   failure: IssueToolError,
   dependencies,

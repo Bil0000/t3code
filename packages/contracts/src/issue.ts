@@ -35,7 +35,10 @@ export function issueAccountRequest<
       readonly EncodingServices: never;
     };
   }>,
->(schema: S, field: "projectId" | "key" = "projectId") {
+>(
+  schema: S,
+  field: "projectId" | "key" = "projectId",
+): Schema.Codec<S["Type"], Readonly<Record<string, unknown>>> {
   const value = schema.fields[field] ?? Schema.optional(ProjectId);
   const account = Schema.Struct({ value, connectionId: IssueTrackerConnectionId }).annotate({
     description:

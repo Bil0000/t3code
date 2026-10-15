@@ -49,6 +49,12 @@ const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_ID = ThreadId.make("thread-1");
 const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
+const encodeIssueTools = Object.fromEntries(
+  Object.entries(IssuesToolkit.tools).map(([name, tool]) => [
+    name,
+    Schema.encodeUnknownSync(tool.parametersSchema),
+  ]),
+);
 const gitHostSource: IssueService.ProjectTrackerBinding = {
   tracker: GITHUB,
   host: "github.com",
@@ -331,11 +337,14 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   );
   const call = <Name extends keyof typeof IssuesToolkit.tools>(
     name: Name,
-    params: Parameters<typeof toolkit.handle<Name>>[1],
+    params: Tool.Parameters<(typeof IssuesToolkit.tools)[Name]>,
     capabilities: ReadonlyArray<McpInvocationContext.McpCapability> = ["issues"],
     external = false,
   ) =>
-    toolkit.handle(name, params).pipe(
+    Effect.try(() => encodeIssueTools[name]!(params)).pipe(
+      Effect.flatMap((encoded) =>
+        toolkit.handle(name, encoded as Tool.ParametersEncoded<(typeof IssuesToolkit.tools)[Name]>),
+      ),
       Stream.unwrap,
       Stream.runCollect,
       Effect.map(
@@ -356,10 +365,23 @@ describe("issue toolkit handlers", () => {
     () =>
       Effect.gen(function* () {
         const source = { ...standaloneSource, connectionId: "Account" };
-        const harness = yield* makeHarness([], {
-          sources: [source],
-          detail: { ...detail, ...source },
-        });
+        const harness = yield* makeHarness(
+          [
+            {
+              ...source,
+              projectId: PROJECT_ID,
+              key: "ENG-7",
+              url: "https://linear.app/acme/issue/ENG-7",
+              source: "agent",
+              linkedAt: detail.createdAt,
+              snapshot: null,
+            },
+          ],
+          {
+            sources: [source],
+            detail: { ...detail, ...source },
+          },
+        );
         const client = McpSchema.McpServerClient.of({
           clientId: 1,
           protocolVersion: "2025-06-18",
@@ -374,55 +396,116 @@ describe("issue toolkit handlers", () => {
         });
         yield* Effect.gen(function* () {
           const server = yield* McpServer.McpServer;
-          for (const name of [
-            "read_issue",
-            "read_issue_history",
-            "read_issue_hierarchy",
-            "read_issue_linked_pull_requests",
-            "read_issue_comments",
-            "read_issue_candidates",
-            "read_issue_templates",
-            "list_issue_labels",
-            "list_issue_assignees",
-          ]) {
+          const accountInput = {
+            projectId: PROJECT_ID,
+            tracker: LINEAR,
+            connectionId: "Account",
+            key: "ENG-7",
+            cursor: "older",
+            title: "Changed",
+            body: "Body",
+            state: "closed",
+            commentId: "comment-1",
+            subjectId: "issue",
+            content: "thumbs-up",
+            reacted: true,
+            labels: [],
+            assignees: [],
+            parentKey: "ENG-8",
+          };
+          expect(Object.keys(IssuesToolkit.tools)).toHaveLength(23);
+          for (const name of Object.keys(IssuesToolkit.tools)) {
+            if (name === "list_thread_issues") continue;
+            const encoded = encodeIssueTools[name]!(accountInput);
+            expect(encoded).toMatchObject({
+              projectId: { value: PROJECT_ID, connectionId: "Account" },
+            });
+            expect(encoded).not.toHaveProperty("connectionId");
+            const unsafe = yield* server
+              .callTool({ name, arguments: accountInput })
+              .pipe(Effect.result);
+            expect(Result.isFailure(unsafe)).toBe(true);
+          }
+          expect(yield* Ref.get(harness.calls)).toEqual([]);
+          expect(yield* Ref.get(harness.links)).toEqual([]);
+          expect(yield* Ref.get(harness.unlinks)).toEqual([]);
+          for (const name of Object.keys(IssuesToolkit.tools)) {
+            if (["list_issues", "list_issue_sources", "list_thread_issues"].includes(name))
+              continue;
             const result = yield* server.callTool({
               name,
-              arguments: {
-                tracker: LINEAR,
-                connectionId: "Account",
-                key: "ENG-7",
-                cursor: "older",
-              },
+              arguments: encodeIssueTools[name]!(accountInput),
             });
             expect(result.isError).toBe(false);
-            if (name === "read_issue")
+            if (
+              typeof result.structuredContent === "object" &&
+              result.structuredContent !== null &&
+              "projectId" in result.structuredContent
+            ) {
+              expect(result.structuredContent).toMatchObject({
+                projectId: { value: PROJECT_ID, connectionId: "Account" },
+              });
+              expect(result.structuredContent).not.toHaveProperty("connectionId");
+            }
+            if (
+              name === "read_issue" &&
+              typeof result.structuredContent === "object" &&
+              result.structuredContent !== null &&
+              "url" in result.structuredContent
+            ) {
               expect(decodeReadIssue(result.structuredContent).connectionId).toBe("Account");
+              const { url: _url, ...reference } = result.structuredContent;
+              const reused = yield* server.callTool({
+                name: "set_issue_state",
+                arguments: { ...reference, state: "closed" },
+              });
+              expect(reused.isError).toBe(false);
+            }
           }
           const sources = yield* server.callTool({
             name: "list_issue_sources",
-            arguments: { connectionId: "Account" },
+            arguments: encodeIssueTools.list_issue_sources!({ connectionId: "Account" }),
           });
           expect(decodeSourcesResult(sources.structuredContent).sources[0]?.connectionId).toBe(
             "Account",
           );
+          expect(sources.structuredContent).toMatchObject({
+            sources: [
+              {
+                projectId: { value: PROJECT_ID, connectionId: "Account" },
+              },
+            ],
+          });
           const listed = yield* server.callTool({
             name: "list_issues",
-            arguments: { connectionId: "Account" },
+            arguments: encodeIssueTools.list_issues!({ connectionId: "Account" }),
           });
           expect(decodeListIssues(listed.structuredContent).issues[0]?.connectionId).toBe(
             "Account",
           );
+          const beforeThreadList = (yield* Ref.get(harness.calls)).length;
+          const saved = yield* server.callTool({ name: "list_thread_issues", arguments: {} });
+          expect(saved.structuredContent).toMatchObject({
+            issues: [
+              {
+                projectId: { value: PROJECT_ID, connectionId: "Account" },
+              },
+            ],
+          });
+          expect((yield* Ref.get(harness.calls)).length).toBe(beforeThreadList);
           const before = (yield* Ref.get(harness.calls)).length;
           for (const connectionId of [undefined, "account"]) {
-            const result = yield* server.callTool({
-              name: "read_issue",
-              arguments: {
-                tracker: LINEAR,
-                key: "ENG-7",
-                ...(connectionId === undefined ? {} : { connectionId }),
-              },
-            });
-            expect(result.isError).toBe(true);
+            const result = yield* server
+              .callTool({
+                name: "read_issue",
+                arguments: {
+                  tracker: LINEAR,
+                  key: "ENG-7",
+                  ...(connectionId === undefined ? {} : { connectionId }),
+                },
+              })
+              .pipe(Effect.result);
+            expect(Result.isFailure(result) || result.success.isError === true).toBe(true);
           }
           expect((yield* Ref.get(harness.calls)).length).toBe(before);
           expect(
@@ -433,7 +516,7 @@ describe("issue toolkit handlers", () => {
           const denied = yield* server
             .callTool({
               name: "read_issue",
-              arguments: { tracker: LINEAR, connectionId: "Account", key: "ENG-7" },
+              arguments: encodeIssueTools.read_issue!(accountInput),
             })
             .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, invocation([])));
           expect(denied.isError).toBe(true);
