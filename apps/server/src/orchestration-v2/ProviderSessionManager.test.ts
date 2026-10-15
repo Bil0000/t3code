@@ -4527,6 +4527,14 @@ it.effect(
         yield* TestClock.adjust("1 second");
         yield* Effect.yieldNow;
         assert.equal((yield* Ref.get(state)).closeCount, 1);
+        // Every thread detached before the idle release; the stored session
+        // still ends, so storage cleanup stops waiting for it.
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const { providerSessions } = yield* projectionStore.getThreadProjection(secondThreadId);
+        assert.deepStrictEqual(
+          providerSessions.map((session) => session.status),
+          ["stopped"],
+        );
       });
 
       yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));

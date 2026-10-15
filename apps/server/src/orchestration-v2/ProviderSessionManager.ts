@@ -201,6 +201,8 @@ export class ProviderSessionManagerV2 extends Context.Service<
 
 interface LiveSessionEntry {
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
+  /** Threads detached while the session stayed up; its release still records their session ended. */
+  readonly detachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
   /**
    * MCP credential session id issued for each attached thread. Revocation on
@@ -648,7 +650,6 @@ export const layerWithOptions = (
         readonly entry: LiveSessionEntry;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
-        readonly detachedThreadId?: ThreadId;
       }) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
@@ -661,13 +662,12 @@ export const layerWithOptions = (
                 ? (input.detail ?? "Provider runtime failed.")
                 : null,
           };
-          // A detach that released the session already removed its thread
-          // from the attached set; the session row still has to end.
-          const threadIds = new Set(input.entry.attachedThreadIds);
-          if (input.detachedThreadId !== undefined) threadIds.add(input.detachedThreadId);
           yield* writeProviderSessionEvents({
             runtime: input.entry.runtime,
-            threadIds,
+            threadIds: new Set([
+              ...input.entry.attachedThreadIds,
+              ...input.entry.detachedThreadIds,
+            ]),
             type: "provider-session.updated",
             payload,
           });
@@ -898,7 +898,6 @@ export const layerWithOptions = (
         readonly entry: LiveSessionEntry;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
-        readonly detachedThreadId?: ThreadId;
         readonly releasedBackgroundTasks: ReadonlyArray<ReleasedBackgroundTasks>;
         readonly releasedAt: DateTime.Utc;
         readonly replaced: boolean;
@@ -1097,9 +1096,6 @@ export const layerWithOptions = (
                     entry,
                     reason: input.reason,
                     ...(input.detail === undefined ? {} : { detail: input.detail }),
-                    ...(input.detachedThreadId === undefined
-                      ? {}
-                      : { detachedThreadId: input.detachedThreadId }),
                     releasedBackgroundTasks,
                     releasedAt,
                   };
@@ -2295,6 +2291,7 @@ export const layerWithOptions = (
               const now = yield* Clock.currentTimeMillis;
               const entry: LiveSessionEntry = {
                 attachedThreadIds: new Set([input.threadId]),
+                detachedThreadIds: new Set(),
                 loadedProviderThreadKeyByThread: new Map(),
                 mcpCredentialIdByThread:
                   mcpCredentialId === undefined
@@ -2496,6 +2493,7 @@ export const layerWithOptions = (
               const updatedEntry = {
                 ...entry,
                 attachedThreadIds,
+                detachedThreadIds: new Set([...entry.detachedThreadIds, input.threadId]),
                 loadedProviderThreadKeyByThread,
                 mcpCredentialIdByThread,
                 idleThreadUnloads,

@@ -891,6 +891,7 @@ describe("settled worktree retention", () => {
     "dirty",
     "project-off",
     "project-custom",
+    "inactive-settling",
   ] as const)("applies retention and safety checks (%s)", (scenario) =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
@@ -898,7 +899,10 @@ describe("settled worktree retention", () => {
       const days = ["wait", "boundary", "expired", "recent-update"].includes(scenario) ? 8 : 0;
       const rules = {
         ...DEFAULT_SERVER_SETTINGS.storageCleanup,
-        worktreeSettledAfterDays: scenario === "project-custom" ? null : days,
+        worktreeSettledAfterDays:
+          scenario === "project-custom" || scenario === "inactive-settling" ? null : days,
+        // Another rule must not bypass the settle-script grace either.
+        worktreeAfterDays: scenario === "inactive-settling" ? 1 : null,
       };
       fixture.setSettings({
         storageCleanup: rules,
@@ -923,7 +927,9 @@ describe("settled worktree retention", () => {
           scenario === "active"
             ? null
             : at(
-                scenario === "expired" || scenario === "recent-update"
+                scenario === "expired" ||
+                  scenario === "recent-update" ||
+                  scenario === "inactive-settling"
                   ? -20 * DAY_MS
                   : scenario === "boundary"
                     ? -8 * DAY_MS
@@ -934,7 +940,11 @@ describe("settled worktree retention", () => {
                         : -60_000,
               ),
         updatedAt: at(
-          scenario === "recent-update" || scenario === "settle-script" ? 0 : -10 * DAY_MS,
+          scenario === "recent-update" ||
+            scenario === "settle-script" ||
+            scenario === "inactive-settling"
+            ? 0
+            : -10 * DAY_MS,
         ),
       });
       fixture.setThreads([thread]);
@@ -950,14 +960,14 @@ describe("settled worktree retention", () => {
             ? "Not settled"
             : scenario === "wait"
               ? "Settled for 7 of 8 days"
-              : scenario === "settle-script" || scenario === "recent-update"
+              : ["settle-script", "recent-update", "inactive-settling"].includes(scenario)
                 ? "Settled moments ago"
                 : scenario === "dirty"
                   ? "Has uncommitted changes (1 file)"
                   : `Settled for ${scenario === "expired" ? 20 : scenario === "boundary" ? 8 : 0} days`;
         expect(report.entries[0]).toMatchObject({ outcome: removed ? "removed" : "kept", reason });
       }
-      if (scenario === "recent-update") {
+      if (scenario === "recent-update" || scenario === "inactive-settling") {
         // Automatic settlement backdates settledAt; the grace runs from the
         // settle itself, and another sweep follows once it ends.
         yield* TestClock.adjust("1 minute");

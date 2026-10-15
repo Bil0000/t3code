@@ -57,8 +57,8 @@ const decodeCleanupSession = Schema.decodeUnknownEffect(
 );
 
 const DAY_MS = 86_400_000;
-// The project's settle script starts in the worktree right after a thread
-// settles; its open terminal protects the worktree from then on.
+// After a settle, the project's settle script needs time to open its
+// terminal, which then protects the worktree.
 const SETTLE_SCRIPT_GRACE_MS = 60_000;
 
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -492,6 +492,17 @@ const make = Effect.gen(function* () {
           return keep("repository or branch changed");
         const changes = yield* localChangesReason(worktreePath, settings);
         if (changes !== null) return keep(changes);
+        // The project's settle script starts in the worktree right after a
+        // settle. Settling stamps updatedAt now, even when automatic
+        // settlement backdates settledAt to the thread's last activity.
+        if (
+          !deleted &&
+          thread.settledAt !== null &&
+          now - DateTime.toEpochMillis(thread.updatedAt) < SETTLE_SCRIPT_GRACE_MS
+        ) {
+          settleGraceRetry = true;
+          return keep("settled moments ago");
+        }
         const head = yield* git.resolveCommit({ cwd: worktreePath, revision: "HEAD" });
         const old =
           !deleted &&
@@ -502,15 +513,8 @@ const make = Effect.gen(function* () {
             ? null
             : now - DateTime.toEpochMillis(thread.settledAt);
         const settledDays = settledFor === null ? null : Math.floor(settledFor / DAY_MS);
-        // Settling stamps updatedAt now, even when automatic settlement
-        // backdates settledAt to the thread's last activity.
-        const settling =
-          settledFor !== null &&
-          now - DateTime.toEpochMillis(thread.updatedAt) < SETTLE_SCRIPT_GRACE_MS;
-        if (settling && settings.worktreeSettledAfterDays !== null) settleGraceRetry = true;
         const settled =
           settledFor !== null &&
-          !settling &&
           settings.worktreeSettledAfterDays !== null &&
           settledFor >= settings.worktreeSettledAfterDays * DAY_MS;
         let eligible = deleted || old || settled;
@@ -569,9 +573,7 @@ const make = Effect.gen(function* () {
               : settings.worktreeSettledAfterDays !== null
                 ? settledFor === null
                   ? "not settled"
-                  : settling
-                    ? "settled moments ago"
-                    : `settled for ${settledDays} of ${settings.worktreeSettledAfterDays} days`
+                  : `settled for ${settledDays} of ${settings.worktreeSettledAfterDays} days`
                 : settings.worktreeOnMerge
                   ? "not merged"
                   : "has commits beyond the default branch",
