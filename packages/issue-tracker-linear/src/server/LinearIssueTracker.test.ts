@@ -1553,6 +1553,155 @@ describe("LinearIssueTracker", () => {
     }),
   );
 
+  it.effect.each([200, 400])(
+    "classifies native missing issues on HTTP %s before normalization",
+    (status) =>
+      Effect.gen(function* () {
+        const payload = {
+          data: null,
+          errors: [
+            {
+              message: "Entity not found: Issue - Could not find referenced Issue. private-marker",
+              extensions: { code: "INPUT_ERROR" },
+            },
+          ],
+        };
+        const test = fakeLinear({
+          T3Issue: () => Response.json(payload, { status }),
+          T3IssueReference: () => Response.json(payload, { status }),
+          T3Viewer: () => ({ viewer: JULIUS }),
+        });
+        const native = yield* test.api;
+        const lookups = yield* Effect.all([
+          native.getIssue("ENG-404", 10).pipe(Effect.result),
+          native.getIssueReference("ENG-404").pipe(Effect.result),
+        ]);
+        const tracker = yield* test.tracker;
+        for (const action of [
+          tracker.getIssue({ ...target, key: "ENG-404" }),
+          tracker.comment({ ...target, key: "ENG-404", body: "New comment" }),
+        ]) {
+          const error = yield* action.pipe(Effect.flip);
+          expect(error.reason).toBe("not-found");
+          expect(error.detail).toBe(
+            "Linear has no issue by that identifier, or this account cannot see it.",
+          );
+          expect(JSON.stringify(error)).not.toContain("private-marker");
+        }
+        expect(
+          lookups.map((result) =>
+            result._tag === "Success" ? result.success : result.failure.reason,
+          ),
+        ).toEqual([null, null]);
+        expect(test.requests.map(({ operation }) => operation).sort()).toEqual([
+          "T3Issue",
+          "T3Issue",
+          "T3IssueReference",
+          "T3IssueReference",
+          "T3Viewer",
+        ]);
+      }),
+  );
+
+  it.effect.each([
+    {
+      name: "generic",
+      errors: [
+        { message: "Something not found: private-marker", extensions: { code: "UNKNOWN_CODE" } },
+      ],
+      status: 200,
+    },
+    {
+      name: "other entity",
+      errors: [{ message: "Entity not found: IssueLabel - private-marker" }],
+      status: 200,
+    },
+    { name: "server failure", errors: [{ message: "Entity not found: Issue" }], status: 500 },
+    {
+      name: "mixed errors",
+      errors: [
+        { message: "Entity not found: Issue" },
+        { message: "Another failure: private-marker" },
+      ],
+      status: 200,
+    },
+    {
+      name: "partial data",
+      errors: [{ message: "Entity not found: Issue" }],
+      status: 200,
+      data: { issue: issue("ENG-7") },
+    },
+    {
+      name: "authentication",
+      errors: [
+        { message: "Entity not found: Issue", extensions: { code: "AUTHENTICATION_ERROR" } },
+      ],
+      status: 400,
+      reason: "unauthenticated",
+    },
+    {
+      name: "rate limit",
+      errors: [{ message: "Entity not found: Issue", extensions: { code: "RATELIMITED" } }],
+      status: 400,
+      reason: "rate-limited",
+    },
+  ])(
+    "keeps $name lookup errors distinct from a missing issue",
+    ({ errors, status, data, reason }) =>
+      Effect.gen(function* () {
+        for (const operation of ["T3Issue", "T3IssueReference"]) {
+          const payload = { data: data ?? null, errors };
+          const test = fakeLinear({
+            [operation]: () => Response.json(payload, { status, headers: { "retry-after": "10" } }),
+          });
+          const native = yield* test.api;
+          const action =
+            operation === "T3Issue"
+              ? native.getIssue("ENG-404", 10)
+              : native.getIssueReference("ENG-404");
+          const error = yield* action.pipe(Effect.flip);
+          expect(error.reason).toBe(reason ?? "failed");
+          expect(error.cause).toBe(JSON.stringify(payload));
+          expect(error.detail).not.toContain("private-marker");
+          expect(test.requests.map(({ operation }) => operation)).toEqual([operation]);
+        }
+      }),
+  );
+
+  it.effect("keeps native missing-issue messages as failures outside issue lookups", () =>
+    Effect.gen(function* () {
+      const payload = {
+        data: null,
+        errors: [
+          {
+            message: "Entity not found: Issue - private-marker",
+            extensions: { code: "INPUT_ERROR" },
+          },
+        ],
+      };
+      const test = fakeLinear({
+        T3Viewer: () => Response.json(payload),
+        T3IssueUpdate: () => Response.json(payload),
+      });
+      const native = yield* test.api;
+      for (const action of [
+        native.viewer(),
+        native.updateIssue("ENG-404", { title: "New title" }),
+      ]) {
+        const error = yield* action.pipe(Effect.flip);
+        expect(error).toMatchObject({
+          reason: "failed",
+          detail: "Linear returned HTTP 200.",
+          cause: JSON.stringify(payload),
+        });
+      }
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3Viewer",
+        "T3IssueUpdate",
+      ]);
+    }),
+  );
+
   it.effect("rejects GraphQL errors even with otherwise valid partial data", () =>
     Effect.gen(function* () {
       const test = fakeLinear({

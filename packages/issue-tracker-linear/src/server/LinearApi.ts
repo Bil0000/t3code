@@ -810,10 +810,18 @@ export const make = Effect.gen(function* () {
         envelope.data === null
       ) {
         yield* recordLimits();
+        const missingIssue =
+          (operation === "getIssue" || operation === "getIssueReference") &&
+          (response.status === 200 || response.status === 400) &&
+          envelope.data == null &&
+          envelope.errors?.length === 1 &&
+          /^Entity not found: Issue(?:$| - )/.test(envelope.errors[0]?.message ?? "");
         return yield* fail(
           operation,
-          "failed",
-          errorDetail(envelope.errors, `Linear returned HTTP ${response.status}.`),
+          missingIssue ? "not-found" : "failed",
+          missingIssue
+            ? "Linear has no issue by that identifier, or this account cannot see it."
+            : errorDetail(envelope.errors, `Linear returned HTTP ${response.status}.`),
           { cause: collected.text },
         );
       }
@@ -978,7 +986,7 @@ export const make = Effect.gen(function* () {
       Effect.map((data) => data.issue),
       // Linear answers an unknown identifier with an error and no data, not with null.
       Effect.catchIf(
-        (error) => error.reason === "failed" && /not found/i.test(error.detail),
+        (error) => error.reason === "not-found",
         () => Effect.succeed(null),
       ),
     );
@@ -991,7 +999,7 @@ export const make = Effect.gen(function* () {
     ).pipe(
       Effect.map((data) => data.issue),
       Effect.catchIf(
-        (error) => error.reason === "failed" && /not found/i.test(error.detail),
+        (error) => error.reason === "not-found",
         () => Effect.succeed(null),
       ),
     );
