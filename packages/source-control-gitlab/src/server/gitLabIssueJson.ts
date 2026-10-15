@@ -277,7 +277,7 @@ function toIssueNotes(
       createdAt: note.createdAt,
       editedAt: note.updatedAt == null || note.updatedAt === note.createdAt ? null : note.updatedAt,
       canEdit: note.userPermissions?.adminNote ?? false,
-      url: null,
+      url: trimmed(note.url),
     });
   }
   return { comments, events };
@@ -484,7 +484,7 @@ export const ISSUE_AWARD_EMOJI_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: Stri
       notes(last: ${PAGE_SIZE}, before: $cursor) {
         pageInfo { hasPreviousPage startCursor }
         nodes {
-          id body createdAt updatedAt system userPermissions { adminNote }
+          id body url createdAt updatedAt system userPermissions { adminNote }
           author { id username name avatarUrl }
           awardEmoji(first: ${PAGE_SIZE}) { pageInfo { hasNextPage } nodes { name user { username } } }
         }
@@ -503,6 +503,7 @@ const RawAwardPageInfoSchema = Schema.optional(
 const RawGraphNoteSchema = Schema.Struct({
   id: Schema.String,
   body: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.optional(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
   userPermissions: Schema.optional(Schema.Struct({ adminNote: Schema.Boolean })),

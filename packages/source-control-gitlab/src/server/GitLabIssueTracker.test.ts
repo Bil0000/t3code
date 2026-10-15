@@ -4,7 +4,12 @@ import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { IssueCreateResult, IssueDetail, IssueSummary } from "@t3tools/contracts";
+import {
+  IssueCommentsPage,
+  IssueCreateResult,
+  IssueDetail,
+  IssueSummary,
+} from "@t3tools/contracts";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as GitLabCli from "./GitLabCli.ts";
@@ -13,6 +18,7 @@ import * as GitLabIssueTracker from "./GitLabIssueTracker.ts";
 const decodeDetailWire = Schema.decodeEffect(IssueDetail);
 const decodeSummaryWire = Schema.decodeEffect(IssueSummary);
 const decodeCreateWire = Schema.decodeEffect(IssueCreateResult);
+const decodeCommentsWire = Schema.decodeEffect(IssueCommentsPage);
 
 const encode = (value: unknown) => JSON.stringify(value);
 
@@ -144,6 +150,80 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each(["https://gitlab.acme.test:8443/acme/web/-/issues/42#note_7", null, undefined])(
+    "preserves optional native note links in detail and older comments: %s",
+    (url) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* GitLabIssueTracker.make.pipe(
+          Effect.provide(
+            GitLabCli.layer.pipe(
+              Layer.provide(
+                TestSourceControlHost.layer({
+                  process: {
+                    run: (request) => {
+                      const path = request.args[1]!;
+                      paths.push(path);
+                      expect(request.args[request.args.indexOf("--hostname") + 1]).toBe(
+                        "gitlab.acme.test:8443",
+                      );
+                      if (path !== "graphql")
+                        return Effect.succeed(TestSourceControlHost.processOutput(answer(path)));
+                      const sent = JSON.parse(request.stdin!);
+                      expect(sent.variables).toEqual({
+                        fullPath: "acme/web",
+                        iid: "42",
+                        ...(paths.length === 1 ? { cursor: "before-note-8" } : {}),
+                      });
+                      const response = JSON.parse(answer("graphql"));
+                      const note = response.data.project.mergeRequest.notes.nodes[0];
+                      note.updatedAt = "2026-07-04T00:00:00Z";
+                      note.userPermissions = { adminNote: true };
+                      note.awardEmoji.pageInfo = { hasNextPage: true };
+                      if (/\burl\b/.test(sent.query) && url !== undefined) note.url = url;
+                      return Effect.succeed(TestSourceControlHost.processOutput(encode(response)));
+                    },
+                  },
+                }),
+              ),
+            ),
+          ),
+        );
+        const target = { cwd: "/w", host: "gitlab.acme.test:8443", scope: "acme/web", key: "42" };
+        const page = yield* decodeCommentsWire(
+          yield* api.getComments({ ...target, cursor: "before-note-8" }),
+        );
+        expect(page.comments[0]).toMatchObject({
+          url: url ?? null,
+          canEdit: true,
+          editedAt: "2026-07-04T00:00:00Z",
+          body: "Repro attached.",
+          reactionsTruncated: true,
+        });
+        expect(page.comments[0]?.reactions).toContainEqual({
+          content: "thumbs-up",
+          count: 2,
+          actors: ["theo"],
+          viewerHasReacted: true,
+        });
+        expect(paths).toEqual(["graphql"]);
+        const detail = yield* api.getIssue(target);
+        const wire = yield* decodeDetailWire({
+          ...detail,
+          ...target,
+          tracker: "gitlab",
+          projectId: "p1",
+          projectTitle: "Web",
+          writable: true,
+          capabilities: api.capabilities,
+        });
+        expect(wire.comments[0]).toEqual(page.comments[0]);
+        expect(paths).toHaveLength(7);
+        expect(paths.filter((path) => path === "graphql")).toHaveLength(2);
+        expect(paths).not.toContain("user");
+      }),
+  );
+
   it.effect.each([
     { labels: ["bug"], savedLabels: [], assignees: [], savedAssignees: [], missing: ["labels"] },
     {
@@ -684,7 +764,7 @@ describe("GitLabIssueTracker", () => {
           }
           expect(request.query.match(/\bawardEmoji\(/g)).toHaveLength(1);
           expect(request.query).toMatch(
-            /nodes\s*\{\s*id body createdAt updatedAt system userPermissions \{ adminNote \}\s*author\s*\{[^}]*\}\s*awardEmoji\(first: 100\)/,
+            /nodes\s*\{\s*id body url createdAt updatedAt system userPermissions \{ adminNote \}\s*author\s*\{[^}]*\}\s*awardEmoji\(first: 100\)/,
           );
           return answer(path);
         });
