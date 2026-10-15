@@ -28,7 +28,6 @@ import type {
   IssueInvolvement,
   IssueLinkedPullRequest,
   IssueListState,
-  IssueReaction,
   IssueReactionContent,
   IssueSummary,
   IssueTemplateList,
@@ -97,8 +96,6 @@ export interface TrackerIssueDetail extends TrackerIssueSummary {
   readonly body: string;
   readonly viewer: string | null;
   readonly viewerPermissions: IssueViewerPermissions;
-  readonly reactions?: ReadonlyArray<IssueReaction>;
-  readonly reactionsTruncated?: boolean;
   readonly comments: ReadonlyArray<IssueComment>;
   /** Where older comments carry on; null once the conversation is whole. */
   readonly commentsCursor: string | null;
