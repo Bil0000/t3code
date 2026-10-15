@@ -75,6 +75,7 @@ describe("issueCreateSources", () => {
     const current = { ...deleted, projectId: ProjectId.make("current"), projectTitle: "Current" };
     const cursor = "github github.com acme/web";
     const answer = {
+      viewers: {},
       sources: [deleted],
       trackers: [
         {
