@@ -1105,7 +1105,7 @@ export const make = Effect.gen(function* () {
       }
       const scope =
         parsed.tracker === "forgejo"
-          ? parseForgejoRemote(url)!
+          ? parseForgejoRemote(target.href)!
               .path.split("/")
               .slice(0, parsed.scope.split("/").length)
               .join("/")

@@ -306,6 +306,9 @@ describe("resolveGitHostBinding", () => {
       expect(
         yield* service.resolveUrl(`${base}/${repository}/issues/42/summary`, ref.projectId),
       ).toEqual(resolved);
+      expect(yield* service.resolveUrl(` ${base}/${repository}/issues/42 `, ref.projectId)).toEqual(
+        resolved,
+      );
       expect(native).toHaveLength(6);
       expect(contextReads).toBe(1);
       yield* service.setState({ ...resolved, state: "closed" });
