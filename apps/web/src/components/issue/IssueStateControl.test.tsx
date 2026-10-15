@@ -298,3 +298,24 @@ it("cancels a title edit with Escape without leaving the issues page", async () 
   expect(state.navigate).not.toHaveBeenCalled();
   back.mockRestore();
 });
+
+it("keeps a typed comment on Escape, leaves from an empty one, and still sends on Ctrl+Enter", async () => {
+  const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+  await render(open, [], generic);
+  await act(async () => root.render(<IssuesPage />));
+  const box = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Add a comment"]')!;
+  const press = (init: KeyboardEventInit) =>
+    act(async () => {
+      box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+    });
+  await act(async () => type(box, "half a reply"));
+  await press({ key: "Escape" });
+  expect(box.value).toBe("half a reply");
+  expect(back).not.toHaveBeenCalled();
+  await press({ key: "Enter", ctrlKey: true });
+  expect(state.setState.mock.calls.map((call) => call[0].input.body)).toEqual(["half a reply"]);
+  expect(box.value).toBe("");
+  await press({ key: "Escape" });
+  expect(back).toHaveBeenCalledOnce();
+  back.mockRestore();
+});
