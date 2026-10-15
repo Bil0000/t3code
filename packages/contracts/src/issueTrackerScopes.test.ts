@@ -5,6 +5,9 @@ import {
   IssueTrackerScopePage,
   IssueTrackerScopesInput,
 } from "./issue.ts";
+import { WsRpcGroup, WS_METHODS } from "./rpc.ts";
+import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
+import { AuthOrchestrationReadScope } from "./auth.ts";
 
 const encode = Schema.encodeUnknownSync(IssueTrackerScopesInput);
 const decode = Schema.decodeUnknownSync(IssueTrackerScopesInput);
@@ -12,6 +15,12 @@ const decodePage = Schema.decodeUnknownSync(IssueTrackerScopePage);
 const decodeResult = Schema.decodeUnknownSync(IssueTrackerConnectionList);
 
 describe("account scope continuation", () => {
+  it("registers scope paging with a read grant and leaves catalog requests unchanged", () => {
+    expect(WsRpcGroup.requests.has(WS_METHODS.issueTrackersScopes)).toBe(true);
+    expect(clientRpcRequiredScopes(WS_METHODS.issueTrackersScopes, {})).toEqual([
+      AuthOrchestrationReadScope,
+    ]);
+  });
   it("keeps the legacy catalog response unchanged", () => {
     expect(decodeResult({ trackers: [], bindings: {} })).toEqual({ trackers: [], bindings: {} });
   });

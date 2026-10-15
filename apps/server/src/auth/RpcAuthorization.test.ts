@@ -163,6 +163,9 @@ describe("RPC authorization scopes", () => {
   });
 
   it("treats a standalone tracker credential as a setting", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.issueTrackersScopes)).toBe(
+      AuthOrchestrationReadScope,
+    );
     expect(requiredScopeForRpcMethod(WS_METHODS.issueTrackersList)).toBe(
       AuthOrchestrationReadScope,
     );

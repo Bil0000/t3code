@@ -149,6 +149,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.issuesRefreshThreadLinks]: "issues",
 
   [WS_METHODS.issueTrackersList]: "issues",
+  [WS_METHODS.issueTrackersScopes]: "issues",
   [WS_METHODS.issueTrackersConnect]: "issues",
   [WS_METHODS.issueTrackersBindProject]: "issues",
   [WS_METHODS.sourceControlLookupRepository]: "source-control",

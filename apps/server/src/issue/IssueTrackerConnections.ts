@@ -24,6 +24,8 @@ import {
   type IssueTrackerConnection,
   type IssueTrackerConnectionList,
   type IssueTrackerProjectBinding,
+  type IssueTrackerScopePage,
+  type IssueTrackerScopesInput,
   type ProjectId,
 } from "@t3tools/contracts";
 import type { StandaloneIssueTrackerApi } from "@t3tools/issue-tracker-core/server/IssueTracker";
@@ -42,6 +44,9 @@ export class IssueTrackerConnections extends Context.Service<
   {
     /** Every standalone tracker, each probed against its stored credential, and the bindings. */
     readonly list: Effect.Effect<IssueTrackerConnectionList, IssueTrackerConnectionError>;
+    readonly listScopes: (
+      input: IssueTrackerScopesInput,
+    ) => Effect.Effect<IssueTrackerScopePage, IssueTrackerConnectionError>;
     /**
      * Vets the credential with the tracker and stores it only when the tracker accepts it. A null
      * token removes the stored one and unbinds every project that pointed at the tracker.
@@ -142,6 +147,9 @@ const make = Effect.gen(function* () {
           account: matching ? probe.account : null,
           detail: matching ? null : "The credential no longer belongs to this saved account.",
           scopes: matching ? probe.scopes : [],
+          ...(matching && probe.scopesCursor !== undefined
+            ? { scopesCursor: probe.scopesCursor }
+            : {}),
           ...(probe.scopesTruncated === undefined
             ? {}
             : { scopesTruncated: probe.scopesTruncated }),
@@ -202,6 +210,35 @@ const make = Effect.gen(function* () {
       projectBindings: Object.fromEntries(result.bound),
     };
   });
+
+  const listScopes: IssueTrackerConnections["Service"]["listScopes"] = (input) =>
+    Effect.gen(function* () {
+      const api = yield* requireTracker(input.tracker);
+      if (api.listScopes === undefined)
+        return yield* rejected(api.kind, "This tracker does not support browsing more scopes.");
+      if (input.connectionId !== undefined) yield* accountFor(api, input.connectionId);
+      const stored = yield* secrets
+        .get(issueTrackerSecretName(api.kind, input.connectionId))
+        .pipe(Effect.mapError(secretFailure(api.kind, "The stored credential could not be read.")));
+      if (Option.isNone(stored))
+        return yield* rejected(api.kind, "This account is no longer connected.");
+      return yield* api
+        .listScopes(new TextDecoder().decode(stored.value), {
+          cursor: input.cursor,
+          limit: input.limit ?? 100,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new IssueTrackerConnectionError({
+                tracker: api.kind,
+                reason: cause.reason === "unauthenticated" ? "rejected" : "failed",
+                detail: cause.detail,
+                cause,
+              }),
+          ),
+        );
+    });
 
   const saveCredential = (
     api: StandaloneIssueTrackerApi,
@@ -342,6 +379,7 @@ const make = Effect.gen(function* () {
         account: probe.account,
         detail: null,
         scopes: probe.scopes,
+        ...(probe.scopesCursor === undefined ? {} : { scopesCursor: probe.scopesCursor }),
         ...(probe.scopesTruncated === undefined ? {} : { scopesTruncated: probe.scopesTruncated }),
       };
     });
@@ -426,6 +464,7 @@ const make = Effect.gen(function* () {
         account: probe.account,
         detail: null,
         scopes: probe.scopes,
+        ...(probe.scopesCursor === undefined ? {} : { scopesCursor: probe.scopesCursor }),
         ...(probe.scopesTruncated === undefined ? {} : { scopesTruncated: probe.scopesTruncated }),
       };
     }).pipe(mutations.withPermits(1));
@@ -575,7 +614,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(secretFailure(tracker, "The project binding could not be saved.")));
     }).pipe(mutations.withPermits(1));
 
-  return IssueTrackerConnections.of({ list, connect, bindProject });
+  return IssueTrackerConnections.of({ list, listScopes, connect, bindProject });
 });
 
 export const layer = Layer.effect(IssueTrackerConnections, make);

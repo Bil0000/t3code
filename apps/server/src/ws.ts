@@ -1235,6 +1235,7 @@ export const layerWsIssuesRpc = ServerWsIssuesRpcGroup.toLayer(
         threadIssues.refresh(input.threadId, { staleOnly: true }),
 
       [WS_METHODS.issueTrackersList]: () => issueTrackers.list,
+      [WS_METHODS.issueTrackersScopes]: (input) => issueTrackers.listScopes(input),
       [WS_METHODS.issueTrackersConnect]: (input) => issueTrackers.connect(input),
       [WS_METHODS.issueTrackersBindProject]: (input) => issueTrackers.bindProject(input),
     });

@@ -195,6 +195,8 @@ import {
   IssueTrackerConnection,
   IssueTrackerConnectionError,
   IssueTrackerConnectionList,
+  IssueTrackerScopesInput,
+  IssueTrackerScopePage,
   IssueUnavailableError,
   IssueUpdateInput,
 } from "./issue.ts";
@@ -620,6 +622,7 @@ export const WS_METHODS = {
   issuesRefreshThreadLinks: "issues.refreshThreadLinks",
 
   issueTrackersList: "issueTrackers.list",
+  issueTrackersScopes: "issueTrackers.scopes",
   issueTrackersConnect: "issueTrackers.connect",
   issueTrackersBindProject: "issueTrackers.bindProject",
 
@@ -1353,6 +1356,12 @@ const IssueTrackerRpcError = Schema.Union([
 const WsIssueTrackersListRpc = Rpc.make(WS_METHODS.issueTrackersList, {
   payload: Schema.Struct({}),
   success: IssueTrackerConnectionList,
+  error: IssueTrackerRpcError,
+});
+
+const WsIssueTrackersScopesRpc = Rpc.make(WS_METHODS.issueTrackersScopes, {
+  payload: IssueTrackerScopesInput,
+  success: IssueTrackerScopePage,
   error: IssueTrackerRpcError,
 });
 
@@ -2115,6 +2124,7 @@ export const WsIssuesRpcGroup = RpcGroup.make(
   WsIssuesRefreshThreadLinksRpc,
 
   WsIssueTrackersListRpc,
+  WsIssueTrackersScopesRpc,
   WsIssueTrackersConnectRpc,
   WsIssueTrackersBindProjectRpc,
 ).middleware(RpcScopeAuthorization);

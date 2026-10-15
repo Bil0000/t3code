@@ -92,11 +92,15 @@ describe("account-safe issue payloads", () => {
     },
   );
 
-  it("covers 18 targeted RPCs plus 4 refresh/settings RPCs", () => {
+  it("covers 18 targeted RPCs plus 5 refresh/settings RPCs", () => {
     const guarded = new Set(cases.map(([tag]) => tag));
     for (const [tag, input] of [
       [WS_METHODS.issuesRefreshThreadLinks, { threadId: "thread" }],
       [WS_METHODS.issueTrackersList, {}],
+      [
+        WS_METHODS.issueTrackersScopes,
+        { tracker: "linear", cursor: "next", connectionId: "Account" },
+      ],
       [WS_METHODS.issueTrackersConnect, { tracker: "linear", token: null }],
       [WS_METHODS.issueTrackersBindProject, { projectId: "project", binding: null }],
     ] as const) {
@@ -106,7 +110,7 @@ describe("account-safe issue payloads", () => {
       guarded.add(tag as (typeof cases)[number][0]);
     }
     expect([...WsIssuesRpcGroup.requests.keys()].sort()).toEqual([...guarded].sort());
-    expect(guarded.size).toBe(22);
+    expect(guarded.size).toBe(23);
   });
 
   it.each(["thread.issue.link", "thread.issue.unlink", "thread.issue-link.sync"] as const)(

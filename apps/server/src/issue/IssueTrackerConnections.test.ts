@@ -44,6 +44,7 @@ const makeFixture = (input: {
   readonly probeForToken?: StandaloneIssueTrackerApi["probeCredential"];
   readonly host?: string | null;
   readonly getScope?: StandaloneIssueTrackerApi["getScope"];
+  readonly listScopes?: StandaloneIssueTrackerApi["listScopes"];
   readonly credentialWriteFailure?: "before" | "after";
   readonly credentialRestoreFailure?: "before" | "after";
   readonly credentialReadFailure?: 2 | 3;
@@ -92,6 +93,7 @@ const makeFixture = (input: {
           probed.push(token);
         }).pipe(Effect.andThen(input.probeForToken?.(token) ?? input.probe)),
       ...(input.getScope === undefined ? {} : { getScope: input.getScope }),
+      ...(input.listScopes === undefined ? {} : { listScopes: input.listScopes }),
     };
     const service = yield* IssueTrackerConnections.IssueTrackerConnections.pipe(
       Effect.provide(
@@ -588,5 +590,78 @@ it.effect("validates a missing scope with one native lookup only when the catalo
         assert.deepEqual(fixture.writes, []);
       }
     }
+  }),
+);
+
+it.effect("continues one native scope page with the stored credential and no probe", () =>
+  Effect.gen(function* () {
+    const calls: unknown[] = [];
+    const fixture = yield* makeFixture({
+      stored: "selected-token",
+      projectExists: true,
+      probe: Effect.die("Must not probe"),
+      listScopes: (token, input) =>
+        Effect.sync(() => {
+          calls.push([token, input]);
+          return { items: [{ key: "LATER", name: "Later team" }], nextCursor: "next-page" };
+        }),
+    });
+    assert.deepEqual(
+      yield* fixture.service.listScopes({ tracker, cursor: "first-page", limit: 50 }),
+      {
+        items: [{ key: "LATER", name: "Later team" }],
+        nextCursor: "next-page",
+      },
+    );
+    assert.deepEqual(calls, [["selected-token", { cursor: "first-page", limit: 50 }]]);
+    assert.deepEqual(fixture.probed, []);
+    yield* fixture.service
+      .listScopes({ tracker, connectionId: "missing", cursor: "next-page" })
+      .pipe(Effect.flip);
+    assert.equal(calls.length, 1);
+  }),
+);
+
+it.effect("refuses unsupported or disconnected scope paging without a native read", () =>
+  Effect.gen(function* () {
+    for (const stored of [null, "legacy-token"]) {
+      const fixture = yield* makeFixture({
+        stored,
+        projectExists: true,
+        probe: Effect.die("Must not probe"),
+      });
+      const failure = yield* fixture.service
+        .listScopes({ tracker, cursor: "next" })
+        .pipe(Effect.flip);
+      assert.equal(failure.reason, "rejected");
+      assert.deepEqual(fixture.probed, []);
+    }
+    const fixture = yield* makeFixture({
+      stored: null,
+      projectExists: true,
+      probe: Effect.die("Must not probe"),
+      listScopes: () => Effect.die("Must not read a page"),
+    });
+    yield* fixture.service.listScopes({ tracker, cursor: "next" }).pipe(Effect.flip);
+  }),
+);
+
+it.effect("keeps the native scope cursor in connection status and connect results", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture({
+      stored: "token",
+      projectExists: true,
+      probe: Effect.succeed({
+        account: "Account",
+        scopes: [{ key: "TEAM", name: "Team" }],
+        scopesTruncated: true,
+        scopesCursor: "native-next",
+      }),
+    });
+    assert.equal((yield* fixture.service.list).trackers[0]?.scopesCursor, "native-next");
+    assert.equal(
+      (yield* fixture.service.connect({ tracker, token: "new-token" })).scopesCursor,
+      "native-next",
+    );
   }),
 );
