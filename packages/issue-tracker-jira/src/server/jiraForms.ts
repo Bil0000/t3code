@@ -74,11 +74,37 @@ const option = (value: unknown) => {
     throw new Error("Invalid Jira option.");
   return { value: key, label: name ?? key, native: id === undefined ? { value: name } : { id } };
 };
+const cascadingOption = (value: unknown) => {
+  const raw = record(value);
+  const parent = option(raw);
+  const children = raw.children ?? [];
+  if (
+    (typeof raw.id !== "string" && typeof raw.id !== "number") ||
+    !Array.isArray(children) ||
+    children.length > 100
+  )
+    throw new Error("Invalid Jira cascading options.");
+  return {
+    value: parent.value,
+    label: parent.label,
+    children: children.map((value) => {
+      const raw = record(value);
+      const child = option(raw);
+      if (
+        (typeof raw.id !== "string" && typeof raw.id !== "number") ||
+        (raw.children !== undefined && (!Array.isArray(raw.children) || raw.children.length !== 0))
+      )
+        throw new Error("Invalid Jira cascading options.");
+      return { value: child.value, label: child.label };
+    }),
+  };
+};
 function jiraInputField(id: string, field: JiraFieldMetadata): IssueInputField {
   if (!/^[a-zA-Z][a-zA-Z0-9_]{0,99}$/.test(id) || forbidden.has(id))
     throw new Error("Invalid Jira form field.");
   const type = field.schema?.type;
   const custom = field.schema?.custom;
+  const cascading = custom === "com.atlassian.jira.plugin.system.customfieldtypes:cascadingselect";
   const builtin =
     custom === undefined || custom.startsWith("com.atlassian.jira.plugin.system.customfieldtypes:");
   const selectable =
@@ -94,43 +120,49 @@ function jiraInputField(id: string, field: JiraFieldMetadata): IssueInputField {
     ].includes(type ?? "") ||
       (type === "array" &&
         ["string", "option", "version", "component"].includes(field.schema?.items ?? "")));
-  const options = selectable ? field.allowedValues?.map(option) : undefined;
-  const kind: IssueInputField["kind"] = !builtin
-    ? "json"
-    : type === "array" && options
-      ? "multiselect"
-      : options &&
-          options.length > 0 &&
-          [
-            "string",
-            "option",
-            "priority",
-            "resolution",
-            "version",
-            "component",
-            "securitylevel",
-          ].includes(type ?? "")
-        ? "select"
-        : type === "number"
-          ? "number"
-          : type === "date"
-            ? "date"
-            : type === "datetime"
-              ? "datetime"
-              : type === "string"
-                ? custom?.endsWith(":textarea") ||
-                  ["description", "environment"].includes(field.schema?.system ?? "")
-                  ? "textarea"
-                  : "text"
-                : "json";
+  const options = cascading
+    ? field.allowedValues?.map(cascadingOption)
+    : selectable
+      ? field.allowedValues?.map(option).map(({ value, label }) => ({ value, label }))
+      : undefined;
+  const kind: IssueInputField["kind"] = cascading
+    ? "cascading-select"
+    : !builtin
+      ? "json"
+      : type === "array" && options
+        ? "multiselect"
+        : options &&
+            options.length > 0 &&
+            [
+              "string",
+              "option",
+              "priority",
+              "resolution",
+              "version",
+              "component",
+              "securitylevel",
+            ].includes(type ?? "")
+          ? "select"
+          : type === "number"
+            ? "number"
+            : type === "date"
+              ? "date"
+              : type === "datetime"
+                ? "datetime"
+                : type === "string"
+                  ? custom?.endsWith(":textarea") ||
+                    ["description", "environment"].includes(field.schema?.system ?? "")
+                    ? "textarea"
+                    : "text"
+                  : "json";
   return {
     id,
     label: field.name ?? id,
     required: field.required === true && field.hasDefaultValue !== true,
     kind,
     ...(field.description === undefined ? {} : { description: field.description }),
-    ...(kind === "select" || kind === "multiselect"
-      ? { options: options?.map(({ value, label }) => ({ value, label })) }
+    ...(kind === "select" || kind === "multiselect" || kind === "cascading-select"
+      ? { options }
       : {}),
   };
 }
@@ -195,7 +227,28 @@ export function jiraFieldValues(
       });
     } else {
       if (typeof value !== "string") throw new Error("Enter one Jira field value.");
-      if (input.kind === "select") {
+      if (input.kind === "cascading-select") {
+        const selected = record(JSON.parse(value));
+        if (
+          typeof selected.id !== "string" ||
+          Object.keys(selected).some((key) => key !== "id" && key !== "child")
+        )
+          throw new Error("Invalid Jira cascading selection.");
+        const parent = input.options?.find((option) => option.value === selected.id);
+        if (!parent) throw new Error("Invalid Jira cascading selection.");
+        const child = selected.child === undefined ? undefined : record(selected.child);
+        if (
+          child !== undefined &&
+          (typeof child.id !== "string" ||
+            Object.keys(child).some((key) => key !== "id") ||
+            !parent.children?.some((option) => option.value === child.id))
+        )
+          throw new Error("Invalid Jira cascading selection.");
+        result[id] = {
+          id: parent.value,
+          ...(child === undefined ? {} : { child: { id: child.id } }),
+        };
+      } else if (input.kind === "select") {
         const selected = field.allowedValues
           ?.map(option)
           .find((candidate) => candidate.value === value);

@@ -126,6 +126,7 @@ function nativeFormFixture(
   deployment: "cloud" | "data-center",
   page: (startAt: number) => unknown,
   writeStatus = 201,
+  transitionFields?: Record<string, unknown>,
 ) {
   const host = deployment === "cloud" ? target.host : "jira.example.test/Team/Jira";
   const calls: HttpClientRequest.HttpClientRequest[] = [];
@@ -133,6 +134,7 @@ function nativeFormFixture(
     calls.push(request);
     const url = new URL(request.url);
     const write = request.method === "POST" && url.pathname.endsWith("/issue");
+    const transition = url.pathname.endsWith("/transitions");
     const raw = write
       ? { key: "ENG-2" }
       : url.pathname.endsWith("/issuetypes/task")
@@ -143,15 +145,21 @@ function nativeFormFixture(
               total: 1,
               [deployment === "cloud" ? "issueTypes" : "values"]: [{ id: "task", name: "Task" }],
             }
-          : url.pathname.endsWith("/mypermissions")
-            ? { permissions: { CREATE_ISSUES: { havePermission: true } } }
-            : url.pathname.endsWith("/statuses")
-              ? []
-              : { startAt: 0, total: 0, issues: [] };
+          : transition
+            ? { transitions: [{ id: "advance", to: status, fields: transitionFields ?? {} }] }
+            : url.pathname.endsWith("/issue/ENG-1")
+              ? issue
+              : url.pathname.endsWith("/mypermissions")
+                ? { permissions: { CREATE_ISSUES: { havePermission: true } } }
+                : url.pathname.endsWith("/statuses")
+                  ? []
+                  : { startAt: 0, total: 0, issues: [] };
     return Effect.succeed(
       HttpClientResponse.fromWeb(
         request,
-        new Response(JSON.stringify(raw), { status: write ? writeStatus : 200 }),
+        new Response(transition && request.method === "POST" ? null : JSON.stringify(raw), {
+          status: transition && request.method === "POST" ? 204 : write ? writeStatus : 200,
+        }),
       ),
     );
   });
@@ -192,6 +200,122 @@ const largeForm = (count: number, required = false) => [
     schema: { type: "string" },
   })),
 ];
+
+it.effect.each(["cloud", "data-center"] as const)(
+  "writes native cascading parent and child on create and transition for %s",
+  (deployment) =>
+    Effect.gen(function* () {
+      for (const type of ["array", "option"]) {
+        const field = {
+          fieldId: "customfield_cascade",
+          name: "Location",
+          required: true,
+          schema: {
+            type,
+            items: "string",
+            custom: "com.atlassian.jira.plugin.system.customfieldtypes:cascadingselect",
+          },
+          allowedValues: [
+            { id: "10", value: "A", children: [{ id: "11", value: "A1" }] },
+            { id: "20", value: "B", children: [{ id: "21", value: "B1" }] },
+          ],
+        };
+        const f = nativeFormFixture(
+          deployment,
+          () => ({
+            startAt: 0,
+            total: 2,
+            [deployment === "cloud" ? "fields" : "values"]: [fields[0], field],
+          }),
+          201,
+          { customfield_cascade: field },
+        );
+        const api = yield* f.api;
+        const selected = { ...target, host: f.host };
+        const candidates = yield* api.listCandidates!({
+          ...selected,
+          key: undefined,
+          issueType: "task",
+        });
+        expect((yield* decodeCandidates(candidates)).fields?.[0]).toMatchObject({
+          kind: "cascading-select",
+          options: [
+            { value: "10", children: [{ value: "11" }] },
+            { value: "20", children: [{ value: "21" }] },
+          ],
+        });
+        f.calls.length = 0;
+        const value = '{"id":"10","child":{"id":"11"}}';
+        yield* api.create!({
+          ...create,
+          host: f.host,
+          fieldValues: { customfield_cascade: value },
+        });
+        yield* api.setState!({
+          ...selected,
+          state: status.id,
+          transitionId: "advance",
+          fieldValues: { customfield_cascade: value },
+        });
+        expect(f.calls.map(({ method }) => method)).toEqual([
+          "GET",
+          "GET",
+          "POST",
+          "GET",
+          "GET",
+          "POST",
+        ]);
+        const writes = f.calls
+          .filter(({ method }) => method === "POST")
+          .map((call) => {
+            if (call.body._tag !== "Uint8Array") throw new Error("Expected native JSON body.");
+            return JSON.parse(new TextDecoder().decode(call.body.body));
+          });
+        expect(writes).toEqual([
+          {
+            fields: {
+              project: { key: "ENG" },
+              issuetype: { id: "task" },
+              summary: "New",
+              customfield_cascade: { id: "10", child: { id: "11" } },
+            },
+          },
+          {
+            transition: { id: "advance" },
+            fields: { customfield_cascade: { id: "10", child: { id: "11" } } },
+          },
+        ]);
+        for (const invalid of [
+          '{"id":"10","child":{"id":"21"}}',
+          '{"id":"10","extra":true}',
+          '{"id":"10","child":{"id":"11","child":{"id":"12"}}}',
+          '["10","11"]',
+        ]) {
+          f.calls.length = 0;
+          yield* api.create!({
+            ...create,
+            host: f.host,
+            fieldValues: { customfield_cascade: invalid },
+          }).pipe(Effect.flip);
+          yield* api.setState!({
+            ...selected,
+            state: status.id,
+            transitionId: "advance",
+            fieldValues: { customfield_cascade: invalid },
+          }).pipe(Effect.flip);
+          expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "GET", "GET"]);
+        }
+        field.allowedValues[0]!.children = [];
+        f.calls.length = 0;
+        yield* api.create!({
+          ...create,
+          host: f.host,
+          fieldValues: { customfield_cascade: value },
+        }).pipe(Effect.flip);
+        expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET"]);
+      }
+    }),
+);
 
 it.effect.each(["cloud", "data-center"] as const)(
   "reads every native create field across pages and writes 101 required values for %s",

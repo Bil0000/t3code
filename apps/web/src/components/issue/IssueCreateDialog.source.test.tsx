@@ -433,12 +433,18 @@ it("omits cleared optional number, date, JSON and choice controls before the nat
   for (const [id, value] of [
     ["number", "4"],
     ["date", "2026-06-01"],
-    ["json", "{}"],
     ["text", "Clear this text"],
   ]) {
     await set(id!, value!);
     await set(id!, "");
   }
+  await choose("JSON type", "Object");
+  expect(createButton().disabled).toBe(false);
+  await act(async () =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Clear")!
+      .click(),
+  );
   await choose("Choice", "Native choice");
   await choose("Choice", "None");
   await act(async () => createButton().click());

@@ -68,6 +68,9 @@ const decodeTemplateRpc = Schema.decodeUnknownSync(
   WsIssuesRpcGroup.requests.get(WS_METHODS.issuesTemplates)!.payloadSchema,
 );
 const decodeScope = Schema.decodeUnknownSync(IssueScopeRef);
+const decodeNativeField = Schema.decodeUnknownSync(IssueInputField);
+const decodeNativeCandidates = Schema.decodeUnknownSync(IssueCandidates);
+const decodeNativeCreate = Schema.decodeUnknownSync(IssueCreateInput);
 
 it("preserves optional native reactions on issue summaries", () => {
   const decode = Schema.decodeUnknownSync(IssueSummary);
@@ -711,6 +714,47 @@ it("bounds native field values and rich JSON before tracker calls", () => {
   expect(rich({ format: "adf", document: '{"type":"doc"}' }).format).toBe("adf");
   expect(() => rich({ format: "adf", document: "not json" })).toThrow();
   expect(() => rich({ format: "adf", document: JSON.stringify("x".repeat(262144)) })).toThrow();
+});
+
+it("keeps cascading parent and child choices through candidate, transition and create codecs", () => {
+  const field = {
+    id: "customfield_10001",
+    label: "Location",
+    required: true,
+    kind: "cascading-select",
+    options: [{ value: "101", label: "North", children: [{ value: "102", label: "East" }] }],
+  };
+  const candidates = decodeNativeCandidates({
+    labels: [],
+    assignees: [],
+    fields: [field],
+    truncated: false,
+  });
+  expect(candidates.fields).toEqual([field]);
+  expect(decodeState({ category: "open", name: "Start", fields: [field] }).fields).toEqual([field]);
+  const selection = JSON.stringify({ id: "101", child: { id: "102" } });
+  const create = {
+    projectId: "web",
+    tracker: "jira",
+    scope: "ENG",
+    title: "New",
+    body: "",
+    labels: [],
+    assignees: [],
+    fieldValues: { [field.id]: selection },
+  };
+  expect(decodeNativeCreate(create).fieldValues).toEqual(create.fieldValues);
+  expect(() =>
+    decodeNativeField({
+      ...field,
+      options: [
+        {
+          ...field.options[0],
+          children: Array.from({ length: 101 }, () => ({ value: "102", label: "East" })),
+        },
+      ],
+    }),
+  ).toThrow();
 });
 
 it("allows 8192-character issue cursors and refuses larger pages", () => {

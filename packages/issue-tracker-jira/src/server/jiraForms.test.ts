@@ -154,3 +154,87 @@ it("keeps 1000 editable fields and required values but rejects 1001", () => {
   expect(() => jiraInputFields(fields, createReserved)).toThrow();
   expect(() => jiraFieldValues(fields, values, createReserved, true)).toThrow();
 });
+
+const cascadingField = {
+  name: "Location",
+  required: true,
+  schema: {
+    type: "array",
+    items: "string",
+    custom: "com.atlassian.jira.plugin.system.customfieldtypes:cascadingselect",
+  },
+  allowedValues: [
+    { id: "10", value: "A", children: [{ id: "11", value: "A1" }] },
+    { id: "20", value: "B", children: [{ id: "21", value: "B1" }] },
+  ],
+};
+it.each(["array", "option"])("keeps native cascading options for schema %s", (type) => {
+  const fields = {
+    customfield_1: { ...cascadingField, schema: { ...cascadingField.schema, type } },
+  };
+  expect(jiraInputFields(fields, createReserved)).toEqual([
+    {
+      id: "customfield_1",
+      label: "Location",
+      required: true,
+      kind: "cascading-select",
+      options: [
+        { value: "10", label: "A", children: [{ value: "11", label: "A1" }] },
+        { value: "20", label: "B", children: [{ value: "21", label: "B1" }] },
+      ],
+    },
+  ]);
+  for (const value of ['{"id":"10","child":{"id":"11"}}', '{"id":"20"}'])
+    expect(jiraFieldValues(fields, { customfield_1: value }, createReserved, true)).toEqual({
+      customfield_1: JSON.parse(value),
+    });
+});
+it.each([
+  '{"id":"10","child":{"id":"21"}}',
+  '{"id":"unknown"}',
+  '{"id":"10","child":{"id":"11","child":{"id":"12"}}}',
+  '{"id":"10","extra":true}',
+  '{"id":"10","__proto__":{}}',
+  "[]",
+  "null",
+  '["10","11"]',
+  '{"id":10}',
+  "invalid",
+])("rejects malformed or foreign cascading values: %s", (value) => {
+  expect(() =>
+    jiraFieldValues(
+      { customfield_1: cascadingField },
+      { customfield_1: value },
+      createReserved,
+      true,
+    ),
+  ).toThrow();
+});
+it("rejects oversized cascading children and keeps required defaults", () => {
+  expect(() =>
+    jiraInputFields(
+      {
+        customfield_1: {
+          ...cascadingField,
+          allowedValues: [
+            {
+              id: "10",
+              value: "A",
+              children: Array.from({ length: 101 }, (_, i) => ({
+                id: String(i),
+                value: String(i),
+              })),
+            },
+          ],
+        },
+      },
+      createReserved,
+    ),
+  ).toThrow();
+  const fields = { customfield_1: { ...cascadingField, hasDefaultValue: true } };
+  expect(jiraInputFields(fields, createReserved)[0]?.required).toBe(false);
+  expect(jiraFieldValues(fields, {}, createReserved, true)).toEqual({});
+  expect(() =>
+    jiraFieldValues({ customfield_1: cascadingField }, {}, createReserved, true),
+  ).toThrow();
+});

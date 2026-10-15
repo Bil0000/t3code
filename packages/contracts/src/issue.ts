@@ -194,6 +194,7 @@ export const IssueInputField = Schema.Struct({
     "datetime",
     "select",
     "multiselect",
+    "cascading-select",
     "json",
   ]),
   description: Schema.optional(Schema.String.check(Schema.isMaxLength(4096))),
@@ -202,6 +203,14 @@ export const IssueInputField = Schema.Struct({
       Schema.Struct({
         value: Schema.String.check(Schema.isMaxLength(4096)),
         label: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+        children: Schema.optional(
+          Schema.Array(
+            Schema.Struct({
+              value: Schema.String.check(Schema.isMaxLength(4096)),
+              label: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+            }),
+          ).check(Schema.isMaxLength(100)),
+        ),
       }),
     ).check(Schema.isMaxLength(100)),
   ),
