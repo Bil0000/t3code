@@ -2,6 +2,8 @@ import { expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  AuthOrchestrationReadScope,
+  clientRpcRequiredScopes,
   IssueActor,
   IssueCandidates,
   IssueCommentsPageInput,
@@ -116,4 +118,31 @@ it.each([
   expect(threadIssueKeyOf(identity)).not.toBe(
     threadIssueKeyOf({ ...identity, tracker: tracker.toUpperCase() }),
   );
+});
+
+it("registers direct issue URL resolution with the read grant", () => {
+  const rpc = WsIssuesRpcGroup.requests.get(WS_METHODS.issuesResolveUrl);
+  expect(rpc).toBeDefined();
+  if (!rpc) throw new Error("URL resolution is not registered");
+  const decodeInput = Schema.decodeUnknownSync(rpc.payloadSchema);
+  const decodeResult = Schema.decodeUnknownSync(rpc.successSchema);
+  const url = "https://linear.app/workspace/issue/ENG-42/name";
+  const projectId = ProjectId.make("project-1");
+  for (const input of [{ url }, { url, projectId }]) {
+    expect(decodeInput(input)).toEqual(input);
+    expect(clientRpcRequiredScopes(WS_METHODS.issuesResolveUrl, input)).toEqual([
+      AuthOrchestrationReadScope,
+    ]);
+  }
+  const reference = {
+    projectId,
+    tracker: IssueTrackerKind.make("linear"),
+    host: "linear.app",
+    scope: "workspace/ENG",
+    key: "ENG-42",
+    writable: false,
+  };
+  expect(decodeResult(reference)).toEqual(reference);
+  expect(() => decodeResult({ ...reference, host: undefined })).toThrow();
+  expect(() => decodeResult({ ...reference, writable: undefined })).toThrow();
 });

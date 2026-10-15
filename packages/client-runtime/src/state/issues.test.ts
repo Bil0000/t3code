@@ -1,4 +1,5 @@
 import type {
+  AuthSessionState,
   EnvironmentId,
   IssueCapabilities,
   IssueComment,
@@ -9,15 +10,18 @@ import type {
   IssueTrackerKind,
   ProjectId,
 } from "@t3tools/contracts";
+import { AuthOrchestrationReadScope, WS_METHODS, WsIssuesRpcGroup } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcClient from "../rpc/client.ts";
+import * as Session from "./session.ts";
 
 import {
   continueIssueListPage,
@@ -1636,4 +1640,70 @@ describe("held issue list viewers", () => {
       }
     },
   );
+});
+
+it("resolves clicked URLs through the registered RPC only with the read grant", async () => {
+  const url = "https://linear.app/workspace/issue/ENG-42/name";
+  const projectId = "project-1" as ProjectId;
+  const reference = {
+    projectId,
+    tracker: "linear" as IssueTrackerKind,
+    host: "linear.app",
+    scope: "workspace/ENG",
+    key: "ENG-42",
+    writable: true,
+  };
+  const rpc = WsIssuesRpcGroup.requests.get(WS_METHODS.issuesResolveUrl)!;
+  const decodeInput = Schema.decodeUnknownSync(rpc.payloadSchema);
+  const decodeResult = Schema.decodeSync(rpc.successSchema);
+  const request = vi.spyOn(RpcClient, "requestGuarded");
+  request.mockImplementation(((_tag: string, payload: unknown) => {
+    decodeInput(payload);
+    return Effect.succeed(decodeResult(reference));
+  }) as unknown as Parameters<typeof request.mockImplementation>[0]);
+  const run = vi.fn((_environmentId: EnvironmentId, effect: Effect.Effect<unknown>) => effect);
+  const runtime = Atom.runtime(
+    Layer.succeed(
+      EnvironmentRegistry.EnvironmentRegistry,
+      EnvironmentRegistry.EnvironmentRegistry.of({
+        run,
+      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+    ),
+  );
+  const grant: AuthSessionState = {
+    authenticated: true,
+    auth: {
+      policy: "remote-reachable",
+      bootstrapMethods: [],
+      sessionMethods: [],
+      sessionCookieName: "test",
+    },
+    scopes: [AuthOrchestrationReadScope],
+    permissions: [AuthOrchestrationReadScope],
+  };
+  const session = Atom.make(AsyncResult.success(grant));
+  const sessions = Session.createEnvironmentSessionAtoms(runtime);
+  const sessionFactory = vi.spyOn(Session, "createEnvironmentSessionAtoms").mockReturnValue({
+    ...sessions,
+    sessionStateAtom: () => session,
+  });
+  const atoms = createIssueEnvironmentAtoms(runtime);
+  const registry = AtomRegistry.make();
+  const environmentId = "environment-1" as EnvironmentId;
+  try {
+    for (const input of [{ url }, { url, projectId }]) {
+      const result = await atoms.resolveUrl.run(registry, { environmentId, input });
+      expect(result).toMatchObject({ _tag: "Success", value: reference });
+      expect(request).toHaveBeenLastCalledWith("issues.resolveUrl", input);
+    }
+    expect(run.mock.calls.map(([id]) => id)).toEqual([environmentId, environmentId]);
+    registry.set(session, AsyncResult.success({ ...grant, permissions: [] }));
+    const denied = await atoms.resolveUrl.run(registry, { environmentId, input: { url } });
+    expect(denied._tag).toBe("Failure");
+    expect(request).toHaveBeenCalledTimes(2);
+  } finally {
+    registry.dispose();
+    request.mockRestore();
+    sessionFactory.mockRestore();
+  }
 });
