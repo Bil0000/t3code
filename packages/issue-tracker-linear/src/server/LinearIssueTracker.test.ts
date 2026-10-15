@@ -21,6 +21,7 @@ const user = (id: string, displayName: string) => ({
   displayName,
   email: `${displayName}@acme.test`,
   avatarUrl: null,
+  active: true,
 });
 const JULIUS = user("usr_julius", "julius");
 const THEO = user("usr_theo", "theo");
@@ -328,6 +329,9 @@ it.effect.each([
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
+                private: true,
+                visibility: "private",
+                restrictedBy: null,
                 ancestors: [],
                 states: empty,
                 labels: empty,
@@ -656,6 +660,9 @@ describe("LinearIssueTracker", () => {
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
+                private: true,
+                visibility: "private",
+                restrictedBy: null,
                 states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -2005,6 +2012,9 @@ describe("LinearIssueTracker", () => {
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
+                private: true,
+                visibility: "private",
+                restrictedBy: null,
                 states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: {
@@ -2084,6 +2094,9 @@ describe("LinearIssueTracker", () => {
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
+                private: true,
+                visibility: "private",
+                restrictedBy: null,
                 states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 labels: { nodes: [label], pageInfo: { hasNextPage: false, endCursor: null } },
                 members: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -2140,6 +2153,9 @@ describe("LinearIssueTracker", () => {
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
+                private: true,
+                visibility: "private",
+                restrictedBy: null,
                 states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                 labels: {
                   nodes: test.requests
@@ -2228,6 +2244,9 @@ describe("LinearIssueTracker", () => {
                   id: "team_eng",
                   key: "ENG",
                   name: "Engineering",
+                  private: true,
+                  visibility: "private",
+                  restrictedBy: null,
                   states: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                   labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
                   members: {
@@ -2761,10 +2780,11 @@ it.effect("sets and clears parent links while rejecting self and foreign parents
     yield* api.setParent({ ...target, key: "ENG-7", parentKey: "ENG-8" });
     yield* api.setParent({ ...target, key: "ENG-7", parentKey: null });
     yield* api.setParent({ ...target, key: "ENG-7", parentKey: "ENG-7" }).pipe(Effect.flip);
-    yield* api.setParent({ ...target, key: "ENG-7", parentKey: "OPS-8" }).pipe(Effect.flip);
+    yield* api.setParent({ ...target, key: "ENG-7", parentKey: "OPS-8" });
     expect(writes).toEqual([
       { id: "iss_ENG-7", input: { parentId: "iss_ENG-8" } },
       { id: "iss_ENG-7", input: { parentId: null } },
+      { id: "iss_ENG-7", input: { parentId: "iss_OPS-8" } },
     ]);
   }),
 );
@@ -2783,6 +2803,9 @@ it.effect("pages label and member candidates with native cursors and workspace c
               id: "team-1",
               key: "ENG",
               name: "Engineering",
+              private: true,
+              visibility: "private",
+              restrictedBy: null,
               ancestors: [],
               states: empty,
               labels: empty,
@@ -2808,6 +2831,9 @@ it.effect("pages label and member candidates with native cursors and workspace c
               id: "team-1",
               key: "ENG",
               name: "Engineering",
+              private: true,
+              visibility: "private",
+              restrictedBy: null,
               members: { nodes: [JULIUS], pageInfo },
             },
           ],
@@ -2824,7 +2850,7 @@ it.effect("pages label and member candidates with native cursors and workspace c
       nextCursor: "more",
     });
     yield* api.listLabelCandidates({ ...target, scope: "foreign/ENG", limit: 1 }).pipe(Effect.flip);
-    expect(test.requests).toHaveLength(4);
+    expect(test.requests).toHaveLength(5);
   }),
 );
 
@@ -2876,6 +2902,9 @@ it.effect("creates an issue with a checked parent and a plain native template", 
               id: "team-1",
               key: "ENG",
               name: "Engineering",
+              private: true,
+              visibility: "private",
+              restrictedBy: null,
               states: empty,
               labels: empty,
               members: empty,
@@ -3067,6 +3096,9 @@ it.effect.each(["create", "update"] as const)(
         id: "team_eng",
         key: "ENG",
         name: "Engineering",
+        private: true,
+        visibility: "private",
+        restrictedBy: null,
         states: empty,
         labels: { nodes: labels, pageInfo: { hasNextPage: true, endCursor: "labels-250" } },
         members: { nodes: members, pageInfo: { hasNextPage: true, endCursor: "members-250" } },
@@ -3175,6 +3207,9 @@ it.effect.each([
       id: "team_eng",
       key: "ENG",
       name: "Engineering",
+      private: true,
+      visibility: "private",
+      restrictedBy: null,
       states: empty,
       labels: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
       members: empty,
@@ -3247,6 +3282,9 @@ it.effect.each(["foreign", "partial", "inactive", "wrong-id"] as const)(
         id: "team_eng",
         key: "ENG",
         name: "Engineering",
+        private: true,
+        visibility: "private",
+        restrictedBy: null,
         states: empty,
         labels: empty,
         members: { ...empty, pageInfo: { hasNextPage: true, endCursor: "more" } },
@@ -3393,6 +3431,9 @@ it.effect.each([false, true])(
         id: "team_eng",
         key: "ENG",
         name: "Engineering",
+        private: true,
+        visibility: "private",
+        restrictedBy: null,
         states: empty,
         members: empty,
         labels: { ...empty, nodes: [childLabel, other] },
@@ -3402,6 +3443,9 @@ it.effect.each([false, true])(
             id: "team_parent",
             key: "PARENT",
             name: "Parent",
+            private: false,
+            visibility: "public",
+            restrictedBy: null,
             templates: empty,
             labels: {
               nodes: [parentLabel],
@@ -3559,6 +3603,9 @@ it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s
               id: "team_eng",
               key: "ENG",
               name: "Engineering",
+              private: true,
+              visibility: "private",
+              restrictedBy: null,
               states: empty,
               labels: empty,
               members: empty,
@@ -3567,6 +3614,9 @@ it.effect.each([5, 6])("bounds native Linear ancestor catalogs at five teams: %s
                 id: `parent-${n}`,
                 key: `P${n}`,
                 name: "Parent",
+                private: false,
+                visibility: "public",
+                restrictedBy: null,
                 templates: empty,
                 labels: empty,
               })),
@@ -3610,6 +3660,9 @@ it.effect.each(["workspace", "ancestor"] as const)(
                   id: "team_eng",
                   key: "ENG",
                   name: "Engineering",
+                  private: true,
+                  visibility: "private",
+                  restrictedBy: null,
                   states: empty,
                   labels: empty,
                   members: empty,
@@ -3621,6 +3674,9 @@ it.effect.each(["workspace", "ancestor"] as const)(
                             id: "parent",
                             key: "PARENT",
                             name: "Parent",
+                            private: false,
+                            visibility: "public",
+                            restrictedBy: null,
                             templates: catalog,
                           },
                         ]
@@ -3693,6 +3749,9 @@ it.effect.each(["workspace", "team", "ancestor"] as const)(
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
+                private: true,
+                visibility: "private",
+                restrictedBy: null,
                 states: empty,
                 labels: empty,
                 members: empty,
@@ -3702,6 +3761,9 @@ it.effect.each(["workspace", "team", "ancestor"] as const)(
                     id: "parent",
                     key: "PARENT",
                     name: "Parent",
+                    private: false,
+                    visibility: "public",
+                    restrictedBy: null,
                     labels: empty,
                     templates: partial === "ancestor" ? catalog : empty,
                   },
@@ -3744,6 +3806,9 @@ it.effect.each([100, 101])("bounds native workspace template catalogs: %s", (cou
               id: "team_eng",
               key: "ENG",
               name: "Engineering",
+              private: true,
+              visibility: "private",
+              restrictedBy: null,
               ancestors: [],
               states: empty,
               labels: empty,
@@ -3799,6 +3864,9 @@ it.effect("uses workspace-scoped native templates without accepting another team
                 id: "team_eng",
                 key: "ENG",
                 name: "Engineering",
+                private: true,
+                visibility: "private",
+                restrictedBy: null,
                 ancestors: [],
                 states: empty,
                 labels: empty,
@@ -3841,7 +3909,9 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
       const test = fakeLinear({
         T3Team: (variables) => {
           expect(variables.includeAncestorLabels).toBe(operation === "missingLabels");
-          expect(test.requests.at(-1)?.query).toContain("ancestors { id key name labels(");
+          expect(test.requests.at(-1)?.query).toContain(
+            "ancestors { id key name private visibility restrictedBy { id } labels(",
+          );
           expect(test.requests.at(-1)?.query).toContain(
             "labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels)",
           );
@@ -3854,11 +3924,24 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
                   id: "team_eng",
                   key: "ENG",
                   name: "Engineering",
+                  private: true,
+                  visibility: "private",
+                  restrictedBy: null,
                   states: empty,
                   labels: empty,
                   members: { ...empty, nodes: [THEO] },
                   templates: empty,
-                  ancestors: [{ id: "parent", key: "PARENT", name: "Parent", templates: empty }],
+                  ancestors: [
+                    {
+                      id: "parent",
+                      key: "PARENT",
+                      name: "Parent",
+                      private: false,
+                      visibility: "public",
+                      restrictedBy: null,
+                      templates: empty,
+                    },
+                  ],
                 },
               ],
             },
@@ -3925,5 +4008,667 @@ it.effect.each(["create", "assignee", "clearLabels", "labelPage", "missingLabels
                   : "T3IssueUpdate",
             ]),
       ]);
+    }),
+);
+
+it.effect.each([false, true])(
+  "uses active workspace assignees only for public teams: private=%s",
+  (privateTeam) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        private: privateTeam,
+        visibility: privateTeam ? "private" : "public",
+        restrictedBy: null,
+        ancestors: [],
+        states: empty,
+        labels: empty,
+        templates: empty,
+        members: { ...empty, nodes: [JULIUS] },
+      };
+      const template = {
+        id: "outsider-template",
+        name: "Assigned",
+        description: null,
+        content: "",
+        hasFormFields: false,
+        type: "issue",
+        templateData: { assigneeId: THEO.id },
+      };
+      const test = fakeLinear({
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          teams: { nodes: [{ ...team, templates: { ...empty, nodes: [template] } }] },
+          issueLabels: empty,
+        }),
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3AssigneeCandidates: (variables) => ({
+          organization: ORGANIZATION,
+          teams: { nodes: [team] },
+          ...(variables.publicTeam ? { users: { ...empty, nodes: [JULIUS, THEO] } } : {}),
+        }),
+        T3IssueCreate: () => ({
+          issueCreate: {
+            success: true,
+            issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+          },
+        }),
+        T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      });
+      const api = yield* test.tracker;
+      const scoped = { ...target, scope: "acme/ENG" };
+      const candidates = yield* api.listCandidates(scoped);
+      expect(candidates.assignees.map(({ id }) => id)).toEqual(
+        privateTeam ? [JULIUS.id] : [JULIUS.id, THEO.id],
+      );
+      expect(test.requests.map(({ operation }) => operation)).toEqual(
+        privateTeam ? ["T3Team"] : ["T3Team", "T3AssigneeCandidates"],
+      );
+      test.requests.length = 0;
+      expect((yield* api.listAssigneeCandidates(scoped)).items.map(({ id }) => id)).toEqual(
+        privateTeam ? [JULIUS.id] : [JULIUS.id, THEO.id],
+      );
+      expect(test.requests).toHaveLength(2);
+      const templates = yield* api.listTemplates(scoped);
+      expect(templates.templates[0]?.assignees).toEqual([THEO.id]);
+      for (const assignee of [THEO.id, JULIUS.id, null]) {
+        for (const operation of ["create", "update"] as const) {
+          test.requests.length = 0;
+          const assignees = assignee === null ? [] : [assignee];
+          const action =
+            operation === "create"
+              ? api.create({
+                  ...scoped,
+                  title: "New",
+                  body: "",
+                  labels: [],
+                  assignees,
+                  templateKey: template.id,
+                })
+              : api.update({ ...scoped, key: "ENG-7", assignees });
+          if (privateTeam && assignee === THEO.id) {
+            expect((yield* action.pipe(Effect.flip)).reason).toBe("failed");
+            expect(test.requests.some(({ query }) => query.startsWith("mutation"))).toBe(false);
+          } else {
+            yield* action;
+            expect(test.requests.at(-1)?.variables.input).toMatchObject({ assigneeId: assignee });
+            expect(test.requests).toHaveLength(
+              (operation === "create" ? 2 : 3) + (!privateTeam && assignee !== null ? 1 : 0),
+            );
+          }
+        }
+      }
+      expect(test.requests.every(({ authorization }) => authorization === "lin_api_stored")).toBe(
+        true,
+      );
+    }),
+);
+
+it.effect.each(["ENG", "acme/ENG"])(
+  "allows parents in other teams in the observed workspace: %s",
+  (scope) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const test = fakeLinear({
+        T3IssueReference: ({ id }) => ({
+          issue:
+            id === "OPS-404"
+              ? null
+              : issue(
+                  String(id),
+                  id === "OTHER-8" ? { url: "https://linear.app/other/issue/OTHER-8" } : {},
+                ),
+        }),
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          issueLabels: empty,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                private: false,
+                visibility: "public",
+                restrictedBy: null,
+                ancestors: [],
+                states: empty,
+                labels: empty,
+                members: empty,
+                templates: empty,
+              },
+            ],
+          },
+        }),
+        T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
+        T3IssueCreate: () => ({
+          issueCreate: {
+            success: true,
+            issue: { identifier: "ENG-9", url: "https://linear.app/acme/issue/ENG-9" },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      const selected = { ...target, scope };
+      yield* api.setParent({ ...selected, key: "ENG-7", parentKey: "OPS-8" });
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3IssueReference",
+        "T3IssueReference",
+        "T3IssueUpdate",
+      ]);
+      expect(test.requests.at(-1)?.variables).toEqual({
+        id: "iss_ENG-7",
+        input: { parentId: "iss_OPS-8" },
+      });
+      test.requests.length = 0;
+      expect(
+        yield* api.create({
+          ...selected,
+          title: "Child",
+          body: "",
+          labels: [],
+          assignees: [],
+          parentKey: "OPS-8",
+        }),
+      ).toMatchObject({ parentLinked: true });
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3Team",
+        "T3IssueReference",
+        "T3IssueCreate",
+      ]);
+      expect(test.requests.at(-1)?.variables.input).toMatchObject({
+        teamId: "team_eng",
+        parentId: "iss_OPS-8",
+      });
+      for (const parentKey of ["OTHER-8", "OPS-404"]) {
+        for (const action of [
+          api.setParent({ ...selected, key: "ENG-7", parentKey }),
+          api.create({
+            ...selected,
+            title: "Child",
+            body: "",
+            labels: [],
+            assignees: [],
+            parentKey,
+          }),
+        ]) {
+          test.requests.length = 0;
+          yield* action.pipe(Effect.flip);
+          expect(test.requests).toHaveLength(2);
+          expect(test.requests.some(({ query }) => query.startsWith("mutation"))).toBe(false);
+        }
+      }
+      test.requests.length = 0;
+      yield* api.setParent({ ...selected, key: "OPS-7", parentKey: "OPS-8" }).pipe(Effect.flip);
+      expect(test.requests).toHaveLength(1);
+    }),
+);
+
+it.effect.each(["create", "update"] as const)(
+  "resolves public workspace assignee IDs beyond 250 without a scan: %s",
+  (operation) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        private: false,
+        visibility: "public",
+        restrictedBy: null,
+        ancestors: [],
+        states: empty,
+        labels: empty,
+        templates: empty,
+        members: empty,
+      };
+      const test = fakeLinear({
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          issueLabels: empty,
+          teams: { nodes: [team] },
+        }),
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3AssigneeCandidates: ({ first }) => ({
+          organization: ORGANIZATION,
+          teams: { nodes: [team] },
+          users:
+            first === 1
+              ? { ...empty, nodes: [THEO] }
+              : {
+                  nodes: Array.from({ length: 250 }, (_, n) => user(`other-${n}`, "Other")),
+                  pageInfo: { hasNextPage: true, endCursor: "users-250" },
+                },
+        }),
+        T3IssueCreate: () => ({
+          issueCreate: {
+            success: true,
+            issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+          },
+        }),
+        T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      });
+      const api = yield* test.tracker;
+      const scoped = { ...target, scope: "acme/ENG", assignees: [THEO.id] };
+      if (operation === "create")
+        yield* api.create({ ...scoped, title: "New", body: "", labels: [] });
+      else yield* api.update({ ...scoped, key: "ENG-7" });
+      expect(test.requests.map(({ operation: name }) => name)).toEqual([
+        ...(operation === "update" ? ["T3IssueReference"] : []),
+        "T3Team",
+        "T3AssigneeCandidates",
+        "T3AssigneeCandidates",
+        operation === "create" ? "T3IssueCreate" : "T3IssueUpdate",
+      ]);
+      expect(test.requests.at(-2)?.variables).toMatchObject({
+        first: 1,
+        after: null,
+        filter: { active: { eq: true }, id: { eq: THEO.id } },
+      });
+      expect(test.requests.at(-1)?.variables.input).toMatchObject({ assigneeId: THEO.id });
+    }),
+);
+
+it.effect.each(["inactive", "missing-privacy", "foreign-organization", "privacy-changed"] as const)(
+  "refuses unavailable public-team assignees before writes: %s",
+  (failure) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        ...(failure === "missing-privacy" ? {} : { private: false }),
+        visibility: "public",
+        restrictedBy: null,
+        ancestors: [],
+        states: empty,
+        labels: empty,
+        templates: empty,
+        members: { ...empty, nodes: [JULIUS] },
+      };
+      const test = fakeLinear({
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          issueLabels: empty,
+          teams: { nodes: [team] },
+        }),
+        T3AssigneeCandidates: ({ publicTeam }) => ({
+          organization:
+            failure === "foreign-organization" && publicTeam
+              ? { ...ORGANIZATION, id: "org_other" }
+              : ORGANIZATION,
+          teams: {
+            nodes: [
+              {
+                ...team,
+                ...(failure === "privacy-changed" && publicTeam ? { private: true } : {}),
+              },
+            ],
+          },
+          ...(publicTeam
+            ? { users: { ...empty, nodes: [{ ...THEO, active: failure !== "inactive" }] } }
+            : {}),
+        }),
+      });
+      const api = yield* test.tracker;
+      if (failure === "inactive") {
+        expect((yield* api.listCandidates(target)).assignees).toEqual([]);
+        expect((yield* api.listAssigneeCandidates(target)).items).toEqual([]);
+      } else {
+        yield* api.listCandidates(target).pipe(Effect.flip);
+        yield* api.listAssigneeCandidates(target).pipe(Effect.flip);
+      }
+      for (const action of [
+        api.create({ ...target, title: "New", body: "", labels: [], assignees: [THEO.id] }),
+        api.update({ ...target, key: "ENG-7", assignees: [THEO.id] }),
+      ]) {
+        test.requests.length = 0;
+        expect((yield* action.pipe(Effect.flip)).reason).toBe("failed");
+        expect(test.requests.some(({ query }) => query.startsWith("mutation"))).toBe(false);
+      }
+    }),
+);
+
+it.effect.each([false, true])(
+  "continues only the active assignee connection with its cursor: private=%s",
+  (privateTeam) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        private: privateTeam,
+        visibility: privateTeam ? "private" : "public",
+        restrictedBy: null,
+      };
+      const test = fakeLinear({
+        T3AssigneeCandidates: ({ publicTeam, readMembers, after }) => {
+          const page =
+            after === "users-250"
+              ? { ...empty, nodes: [THEO] }
+              : {
+                  nodes: Array.from({ length: 200 }, (_, n) => user(`member-${n}`, "Member")),
+                  pageInfo: { hasNextPage: true, endCursor: "users-250" },
+                };
+          return {
+            organization: ORGANIZATION,
+            teams: { nodes: [{ ...team, ...(readMembers ? { members: page } : {}) }] },
+            ...(publicTeam ? { users: page } : {}),
+          };
+        },
+      });
+      const api = yield* test.tracker;
+      const scoped = { ...target, scope: "acme/ENG", limit: 200 };
+      const first = yield* api.listAssigneeCandidates(scoped);
+      expect(first.items).toHaveLength(200);
+      expect(first.nextCursor).toBe("users-250");
+      const next = yield* api.listAssigneeCandidates({ ...scoped, cursor: first.nextCursor! });
+      expect(next.items.map(({ id }) => id)).toEqual([THEO.id]);
+      expect(next.nextCursor).toBeNull();
+      expect(test.requests).toHaveLength(4);
+      expect(
+        test.requests.map(({ variables }) => [variables.publicTeam, variables.readMembers]),
+      ).toEqual([
+        [false, false],
+        [!privateTeam, privateTeam],
+        [false, false],
+        [!privateTeam, privateTeam],
+      ]);
+      expect(test.requests[3]?.variables).toMatchObject({
+        first: 200,
+        after: "users-250",
+        filter: { active: { eq: true } },
+      });
+      test.requests.length = 0;
+      yield* api.listAssigneeCandidates({ ...scoped, scope: "other/ENG" }).pipe(Effect.flip);
+      expect(test.requests).toHaveLength(1);
+    }),
+);
+
+it.effect.each([401, 429])(
+  "preserves native public assignee errors without a mutation: %s",
+  (status) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        private: false,
+        visibility: "public",
+        restrictedBy: null,
+        ancestors: [],
+        states: empty,
+        labels: empty,
+        templates: empty,
+        members: empty,
+      };
+      const test = fakeLinear({
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          issueLabels: empty,
+          teams: { nodes: [team] },
+        }),
+        T3AssigneeCandidates: () => new Response("{}", { status }),
+      });
+      const api = yield* test.tracker;
+      const error = yield* api
+        .create({ ...target, title: "New", body: "", labels: [], assignees: [THEO.id] })
+        .pipe(Effect.flip);
+      expect(error.reason).toBe(status === 401 ? "unauthenticated" : "rate-limited");
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3Team",
+        "T3AssigneeCandidates",
+      ]);
+    }),
+);
+
+it.effect.each(["cycle", "permission"] as const)("keeps native parent refusal: %s", (failure) =>
+  Effect.gen(function* () {
+    const test = fakeLinear({
+      T3IssueReference: ({ id }) => ({ issue: issue(String(id)) }),
+      T3IssueUpdate: () =>
+        Response.json({
+          errors: [
+            {
+              message: failure,
+              extensions: { code: failure === "cycle" ? "BAD_USER_INPUT" : "FORBIDDEN" },
+            },
+          ],
+        }),
+    });
+    const api = yield* test.tracker;
+    const error = yield* api
+      .setParent({ ...target, key: "ENG-7", parentKey: "OPS-8" })
+      .pipe(Effect.flip);
+    expect(error.reason).toBe("failed");
+    expect(test.requests.map(({ operation }) => operation)).toEqual([
+      "T3IssueReference",
+      "T3IssueReference",
+      "T3IssueUpdate",
+    ]);
+  }),
+);
+
+it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
+  "uses restricted-team native membership within its nearest private boundary: %s",
+  (membership) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const boundary = {
+        id: "private-boundary",
+        key: "PRIVATE",
+        name: "Private",
+        private: true,
+        visibility: "private",
+        restrictedBy: null,
+        labels: empty,
+        templates: empty,
+      };
+      const middle = {
+        id: "restricted-parent",
+        key: "MID",
+        name: "Middle",
+        private: false,
+        visibility: "restricted",
+        restrictedBy: { id: boundary.id },
+        labels: empty,
+        templates: empty,
+      };
+      const outer = { ...boundary, id: "outer-private", key: "OUTER" };
+      const selected = { ...JULIUS, id: `usr_${membership}`, guest: membership !== "boundary" };
+      const memberOf =
+        membership === "boundary"
+          ? boundary.id
+          : membership === "parent-guest"
+            ? middle.id
+            : "team_eng";
+      const template = {
+        id: "restricted-template",
+        name: "Assigned",
+        description: null,
+        content: "",
+        hasFormFields: false,
+        type: "issue",
+        templateData: { assigneeId: selected.id },
+      };
+      const team = {
+        id: "team_eng",
+        key: "ENG",
+        name: "Engineering",
+        private: false,
+        visibility: "restricted",
+        restrictedBy: { id: boundary.id },
+        ancestors: [outer, boundary, middle],
+        states: empty,
+        labels: empty,
+        templates: { ...empty, nodes: [template] },
+        members: { ...empty, nodes: membership === "child-guest" ? [selected] : [] },
+      };
+      let beyondPreview = false;
+      let failure: string | null = null;
+      const nativeTeam = (userPage = false) => ({
+        ...team,
+        ...(failure === "missing-visibility" ? { visibility: undefined } : {}),
+        ...(failure === "unknown-visibility" ? { visibility: "unknown" } : {}),
+        ...(failure === "missing-boundary" ? { restrictedBy: null } : {}),
+        ...(failure === "missing-ancestors" ? { ancestors: [] } : {}),
+        ...(failure === "wrong-boundary" ? { restrictedBy: { id: "foreign-boundary" } } : {}),
+        ...(failure === "visibility-changed" && userPage
+          ? { visibility: "public", restrictedBy: null }
+          : {}),
+      });
+      const test = fakeLinear({
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          issueLabels: empty,
+          teams: { nodes: [nativeTeam()] },
+        }),
+        T3IssueReference: () => ({ issue: issue("ENG-7") }),
+        T3AssigneeCandidates: ({ publicTeam, membershipTeamIds, filter, after, first }) => {
+          if (publicTeam) expect(membershipTeamIds).toEqual([boundary.id, middle.id, team.id]);
+          const wanted = (filter as { id?: { eq: string } }).id?.eq;
+          const preview = beyondPreview && !wanted && !after;
+          const users = wanted
+            ? wanted === selected.id
+              ? [selected]
+              : [THEO]
+            : preview
+              ? Array.from({ length: Number(first) }, (_, n) => user(`outsider-${n}`, "Other"))
+              : after
+                ? [selected]
+                : [THEO, selected];
+          return {
+            organization: ORGANIZATION,
+            teams: { nodes: [nativeTeam(Boolean(publicTeam))] },
+            ...(publicTeam
+              ? {
+                  users: {
+                    pageInfo: preview
+                      ? { hasNextPage: true, endCursor: "raw-250" }
+                      : empty.pageInfo,
+                    nodes: users.map((user) => ({
+                      ...user,
+                      active:
+                        user.id === selected.id && failure === "suspended" ? false : user.active,
+                      ...(failure === "missing-membership"
+                        ? {}
+                        : {
+                            teams: {
+                              nodes: (membershipTeamIds as string[]).includes(
+                                user.id === selected.id ? memberOf : outer.id,
+                              )
+                                ? [{ id: user.id === selected.id ? memberOf : outer.id }]
+                                : [],
+                            },
+                          }),
+                    })),
+                  },
+                }
+              : {}),
+          };
+        },
+        T3IssueCreate: () => ({
+          issueCreate: {
+            success: true,
+            issue: { identifier: "ENG-8", url: "https://linear.app/acme/issue/ENG-8" },
+          },
+        }),
+        T3IssueUpdate: () => ({ issueUpdate: { success: true } }),
+      });
+      const api = yield* test.tracker;
+      expect((yield* api.listCandidates(target)).assignees.map(({ id }) => id)).toEqual([
+        selected.id,
+      ]);
+      expect((yield* api.listAssigneeCandidates(target)).items.map(({ id }) => id)).toEqual([
+        selected.id,
+      ]);
+      expect((yield* api.listTemplates(target)).templates[0]?.assignees).toEqual([selected.id]);
+      for (const assignee of [selected.id, THEO.id]) {
+        for (const action of [
+          api.create({
+            ...target,
+            title: "New",
+            body: "",
+            labels: [],
+            assignees: [assignee],
+            templateKey: template.id,
+          }),
+          api.update({ ...target, key: "ENG-7", assignees: [assignee] }),
+        ]) {
+          test.requests.length = 0;
+          if (assignee === selected.id) {
+            yield* action;
+            expect(test.requests.at(-1)?.variables.input).toMatchObject({
+              assigneeId: selected.id,
+            });
+            expect(test.requests).toHaveLength(test.requests[0]?.operation === "T3Team" ? 3 : 4);
+          } else {
+            yield* action.pipe(Effect.flip);
+            expect(test.requests.some(({ query }) => query.startsWith("mutation"))).toBe(false);
+          }
+        }
+      }
+      for (const action of [
+        api.create({ ...target, title: "Blank", body: "", labels: [], assignees: [] }),
+        api.update({ ...target, key: "ENG-7", assignees: [] }),
+      ]) {
+        test.requests.length = 0;
+        yield* action;
+        expect(test.requests.some(({ operation }) => operation === "T3AssigneeCandidates")).toBe(
+          false,
+        );
+        expect(test.requests.at(-1)?.variables.input).toMatchObject({ assigneeId: null });
+      }
+      beyondPreview = true;
+      const combined = yield* api.listCandidates(target);
+      expect(combined.assignees).toEqual([]);
+      expect(combined.truncated).toBe(true);
+      const page = yield* api.listAssigneeCandidates({ ...target, limit: 200 });
+      expect(page.items).toEqual([]);
+      expect(page.nextCursor).toBe("raw-250");
+      const next = yield* api.listAssigneeCandidates({ ...target, cursor: page.nextCursor! });
+      expect(next.items.map(({ id }) => id)).toEqual([selected.id]);
+      expect(next.nextCursor).toBeNull();
+      for (const action of [
+        api.create({ ...target, title: "New", body: "", labels: [], assignees: [selected.id] }),
+        api.update({ ...target, key: "ENG-7", assignees: [selected.id] }),
+      ]) {
+        test.requests.length = 0;
+        yield* action;
+        expect(test.requests.at(-2)?.variables).toMatchObject({
+          first: 1,
+          filter: { id: { eq: selected.id } },
+          restricted: true,
+          membershipTeamIds: [boundary.id, middle.id, team.id],
+        });
+        expect(test.requests).toHaveLength(test.requests[0]?.operation === "T3Team" ? 4 : 5);
+      }
+      beyondPreview = false;
+      for (failure of [
+        "missing-visibility",
+        "unknown-visibility",
+        "missing-boundary",
+        "missing-ancestors",
+        "wrong-boundary",
+        "visibility-changed",
+        "missing-membership",
+        "suspended",
+      ]) {
+        for (const action of [
+          api.create({ ...target, title: "New", body: "", labels: [], assignees: [selected.id] }),
+          api.update({ ...target, key: "ENG-7", assignees: [selected.id] }),
+        ]) {
+          test.requests.length = 0;
+          yield* action.pipe(Effect.flip);
+          expect(test.requests.some(({ query }) => query.startsWith("mutation"))).toBe(false);
+        }
+      }
     }),
 );

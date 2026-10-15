@@ -410,6 +410,18 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         Effect.flatMap((reference) => requireIssueReference(operation, scope, reference)),
       );
 
+    const resolveParent = (operation: string, key: string, workspace: string | null) =>
+      requireIdentifier(operation, key).pipe(
+        Effect.flatMap(linear.getIssueReference),
+        Effect.flatMap((parent) =>
+          parent === null
+            ? Effect.fail(notFound(operation))
+            : workspace === null || issueWorkspace(parent.url) !== workspace.toLowerCase()
+              ? Effect.fail(failed(operation, "This parent belongs to another Linear workspace."))
+              : Effect.succeed(parent),
+        ),
+      );
+
     const requireTeam = (operation: string, scope: string, includeAncestorLabels = false) =>
       requireScope(operation, scope).pipe(
         Effect.flatMap((parsed) => linear.getTeam(parsed.team, includeAncestorLabels)),
@@ -486,6 +498,25 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         });
       });
 
+    const teamAssignees = (operation: string, scope: LinearApi.LinearTeamScope) =>
+      Effect.gen(function* () {
+        if (scope.team.visibility === "private") return scope.team.members;
+        const result = yield* linear.listAssigneeCandidates({
+          key: scope.team.key,
+          visibility: scope.team.visibility,
+          membershipTeamIds: scope.assigneeTeamIds,
+          first: 250,
+        });
+        const team = result.teams.nodes[0];
+        if (
+          result.organization.id !== scope.organization.id ||
+          result.organization.urlKey !== scope.organization.urlKey ||
+          team?.id !== scope.team.id
+        )
+          return yield* failed(operation, "This Linear team or workspace changed.");
+        return team.members;
+      });
+
     /** One assignee at most: Linear issues have a single assignee. */
     const assigneeId = (
       operation: string,
@@ -497,37 +528,41 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         if (first === undefined) return null;
         if (rest.length > 0)
           return yield* failed(operation, "A Linear issue has one assignee at most.");
-        const byId = scope.team.members.nodes.find((user) => user.id === first);
+        const members = yield* teamAssignees(operation, scope);
+        const byId = members.nodes.find((user) => user.id === first);
         if (byId !== undefined) return byId.id;
-        const matches = scope.team.members.nodes.filter(
+        const matches = members.nodes.filter(
           (user) =>
             user.email?.toLowerCase() === first.toLowerCase() ||
             user.displayName?.toLowerCase() === first.toLowerCase(),
         );
-        if (matches.length === 0 && scope.team.members.pageInfo.hasNextPage) {
+        if (matches.length === 0 && members.pageInfo.hasNextPage) {
           const found = yield* linear.listAssigneeCandidates({
             key: scope.team.key,
+            visibility: scope.team.visibility,
+            membershipTeamIds: scope.assigneeTeamIds,
             first: 1,
             id: first,
           });
           const team = found.teams.nodes[0];
           if (
             found.organization.id !== scope.organization.id ||
+            found.organization.urlKey !== scope.organization.urlKey ||
             team?.id !== scope.team.id ||
             team.members.pageInfo.hasNextPage ||
             team.members.nodes.length !== 1 ||
             team.members.nodes[0]?.id !== first
           )
-            return yield* failed(operation, "Choose an active member of this Linear team.");
+            return yield* failed(operation, "Choose an active assignee for this Linear team.");
           return first;
         }
-        if (matches.length > 1 || scope.team.members.pageInfo.hasNextPage)
+        if (matches.length > 1 || members.pageInfo.hasNextPage)
           return yield* failed(
             operation,
             "Use a member ID. The name or email is ambiguous, or the member list is incomplete.",
           );
         return matches[0] === undefined
-          ? yield* failed(operation, `"${first}" is not a member of this Linear team.`)
+          ? yield* failed(operation, `"${first}" is not an active assignee for this Linear team.`)
           : matches[0].id;
       });
 
@@ -751,7 +786,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           const parent =
             input.parentKey === undefined
               ? null
-              : yield* resolveIssue("create", input.parentKey, input.scope);
+              : yield* resolveParent("create", input.parentKey, scope.organization.urlKey);
           if (
             input.templateKey !== undefined &&
             !scope.templates.some(
@@ -801,7 +836,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           const parent =
             input.parentKey === null
               ? null
-              : yield* resolveIssue("setParent", input.parentKey, input.scope);
+              : yield* resolveParent("setParent", input.parentKey, issueWorkspace(selected.url));
           if (parent?.id === selected.id)
             return yield* failed("setParent", "An issue cannot be its own parent.");
           yield* linear.updateIssue(selected.id, { parentId: parent?.id ?? null });
@@ -881,6 +916,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           const scope = yield* requireScope("listAssigneeCandidates", input.scope);
           const result = yield* linear.listAssigneeCandidates({
             key: scope.team,
+            workspace: scope.workspace,
             first,
             after: input.cursor,
           });
@@ -994,8 +1030,10 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         }),
 
       listCandidates: (input) =>
-        requireTeam("listCandidates", input.scope, true).pipe(
-          Effect.map((scope) => ({
+        Effect.gen(function* () {
+          const scope = yield* requireTeam("listCandidates", input.scope, true);
+          const assignees = yield* teamAssignees("listCandidates", scope);
+          return {
             labels: [
               ...scope.team.labels.nodes,
               ...scope.team.ancestors.flatMap((ancestor) => ancestor.labels?.nodes ?? []),
@@ -1008,11 +1046,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
                 color: label.color,
                 description: label.description ?? null,
               })),
-            assignees: scope.team.members.nodes.map(toActor),
+            assignees: assignees.nodes.map(toActor),
             states: scope.team.states.nodes.map(toState),
-            truncated: scope.truncated,
-          })),
-        ),
+            truncated: scope.truncated || assignees.pageInfo.hasNextPage,
+          };
+        }),
     };
     return api;
   });

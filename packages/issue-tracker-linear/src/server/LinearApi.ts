@@ -43,12 +43,52 @@ export const LinearUser = Schema.Struct({
 });
 export type LinearUser = typeof LinearUser.Type;
 
+const LinearAssignableUser = Schema.Struct({ ...LinearUser.fields, active: Schema.Boolean });
+
 const LinearTeam = Schema.Struct({
   id: Schema.String,
   key: Schema.String,
   name: Schema.String,
 });
 type LinearTeam = typeof LinearTeam.Type;
+const LinearTeamVisibility = Schema.Literals(["public", "private", "restricted"]);
+const LinearTeamAccess = Schema.Struct({
+  private: Schema.Boolean,
+  visibility: LinearTeamVisibility,
+  restrictedBy: Schema.NullOr(Schema.Struct({ id: Schema.String })),
+});
+const LinearAssignmentTeam = Schema.Struct({
+  ...LinearTeam.fields,
+  ...LinearTeamAccess.fields,
+  ancestors: Schema.optional(
+    Schema.Array(Schema.Struct({ id: Schema.String, ...LinearTeamAccess.fields })).check(
+      Schema.isMaxLength(5),
+    ),
+  ),
+});
+const TEAM_ACCESS_FIELDS = "private visibility restrictedBy { id }";
+
+const assigneeTeamIds = (team: typeof LinearAssignmentTeam.Type): ReadonlyArray<string> | null => {
+  if (team.private !== (team.visibility === "private")) return null;
+  if (team.visibility !== "restricted")
+    return team.restrictedBy === null ? (team.visibility === "public" ? [] : [team.id]) : null;
+  const boundary =
+    team.ancestors?.findIndex((ancestor) => ancestor.id === team.restrictedBy?.id) ?? -1;
+  if (boundary < 0 || team.ancestors?.[boundary]?.visibility !== "private") return null;
+  const ancestors = team.ancestors.slice(boundary);
+  if (
+    ancestors.some((ancestor, index) =>
+      index === 0
+        ? !ancestor.private || ancestor.restrictedBy !== null
+        : ancestor.visibility !== "restricted" ||
+          ancestor.private ||
+          ancestor.restrictedBy?.id !== team.restrictedBy?.id,
+    )
+  )
+    return null;
+  const ids = [...ancestors.map((ancestor) => ancestor.id), team.id];
+  return new Set(ids).size === ids.length ? ids : null;
+};
 const LinearOrganization = Schema.Struct({ id: Schema.String, urlKey: Schema.String });
 type LinearOrganization = typeof LinearOrganization.Type;
 
@@ -278,11 +318,11 @@ const TEAM_QUERY = `query T3Team($key: String!, $includeAncestorLabels: Boolean!
   organization { id urlKey templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
   teams(first: 1, filter: { key: { eq: $key } }) {
     nodes {
-      id key name
+      id key name ${TEAM_ACCESS_FIELDS}
       states(first: 100) { nodes { ${STATE_FIELDS} } pageInfo { hasNextPage endCursor } }
-      ancestors { id key name labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
+      ancestors { id key name ${TEAM_ACCESS_FIELDS} labels(first: 250, includeArchived: true) @include(if: $includeAncestorLabels) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } } templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } } }
       labels(first: 250, includeArchived: true) { nodes { ${LABEL_FIELDS} description archivedAt isGroup } pageInfo { hasNextPage endCursor } }
-      members(first: 250) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } }
+      members(first: 250, filter: { active: { eq: true } }) { nodes { ${USER_FIELDS} active } pageInfo { hasNextPage endCursor } }
       templates(first: 100, filter: { type: { eq: "issue" } }) { nodes { ${TEMPLATE_FIELDS} } pageInfo { hasNextPage endCursor } }
     }
   }
@@ -377,10 +417,12 @@ const CommentsData = Schema.Struct({
 });
 const LinearTeamDetail = Schema.Struct({
   ...LinearTeam.fields,
+  ...LinearTeamAccess.fields,
   states: Connection(LinearWorkflowState),
   ancestors: Schema.Array(
     Schema.Struct({
       ...LinearTeam.fields,
+      ...LinearTeamAccess.fields,
       templates: LinearTemplates,
       labels: Schema.optional(
         Schema.Struct({
@@ -391,7 +433,7 @@ const LinearTeamDetail = Schema.Struct({
     }),
   ).check(Schema.isMaxLength(5)),
   labels: Connection(LinearLabel),
-  members: Connection(LinearUser),
+  members: Connection(LinearAssignableUser),
   templates: LinearTemplates,
 });
 type LinearTeamDetail = typeof LinearTeamDetail.Type;
@@ -449,8 +491,36 @@ const LabelCandidatesData = Schema.Struct({
 const AssigneeCandidatesData = Schema.Struct({
   organization: LinearOrganization,
   teams: Schema.Struct({
-    nodes: Schema.Array(Schema.Struct({ ...LinearTeam.fields, members: Connection(LinearUser) })),
+    nodes: Schema.Array(
+      Schema.Struct({
+        ...LinearAssignmentTeam.fields,
+        members: Connection(LinearAssignableUser),
+      }),
+    ),
   }),
+});
+const AssigneeCandidatesResponse = Schema.Struct({
+  organization: LinearOrganization,
+  teams: Schema.Struct({
+    nodes: Schema.Array(
+      Schema.Struct({
+        ...LinearAssignmentTeam.fields,
+        members: Schema.optional(Connection(LinearAssignableUser)),
+      }),
+    ),
+  }),
+  users: Schema.optional(
+    Connection(
+      Schema.Struct({
+        ...LinearAssignableUser.fields,
+        teams: Schema.optional(
+          Schema.Struct({
+            nodes: Schema.Array(Schema.Struct({ id: Schema.String })).check(Schema.isMaxLength(1)),
+          }),
+        ),
+      }),
+    ),
+  ),
 });
 interface NativePageInput {
   readonly identifier: string;
@@ -464,6 +534,7 @@ interface NativePageInput {
 export interface LinearTeamScope {
   readonly organization: LinearOrganization;
   readonly team: LinearTeamDetail;
+  readonly assigneeTeamIds: ReadonlyArray<string>;
   readonly workspaceLabels: ReadonlyArray<LinearLabel>;
   readonly templates: ReadonlyArray<LinearTemplate>;
   readonly templatesTruncated: boolean;
@@ -569,6 +640,9 @@ export class LinearApi extends Context.Service<
       readonly after?: string | undefined;
     }) => Effect.Effect<typeof LabelCandidatesData.Type, IssueTrackerError>;
     readonly listAssigneeCandidates: (input: {
+      readonly visibility?: typeof LinearTeamVisibility.Type;
+      readonly membershipTeamIds?: ReadonlyArray<string>;
+      readonly workspace?: string | undefined;
       readonly id?: string;
       readonly key: string;
       readonly first: number;
@@ -1042,6 +1116,10 @@ export const make = Effect.gen(function* () {
   const getTeam: LinearApi["Service"]["getTeam"] = (key, includeAncestorLabels = false) =>
     execute("getTeam", TEAM_QUERY, { key, includeAncestorLabels }, TeamData).pipe(
       Effect.filterOrFail(
+        (data) => data.teams.nodes.every((team) => assigneeTeamIds(team) !== null),
+        () => fail("getTeam", "failed", "Linear returned an invalid team visibility boundary."),
+      ),
+      Effect.filterOrFail(
         (data) =>
           !includeAncestorLabels ||
           data.teams.nodes.every((team) =>
@@ -1060,7 +1138,11 @@ export const make = Effect.gen(function* () {
         const templatesTruncated = templateCatalogs.some((catalog) => catalog.pageInfo.hasNextPage);
         return {
           organization: data.organization,
-          team,
+          team: {
+            ...team,
+            members: { ...team.members, nodes: team.members.nodes.filter((user) => user.active) },
+          },
+          assigneeTeamIds: assigneeTeamIds(team)!,
           workspaceLabels: data.issueLabels.nodes,
           templates: [
             ...new Map(
@@ -1163,20 +1245,103 @@ export const make = Effect.gen(function* () {
       LabelCandidatesData,
     );
   const listAssigneeCandidates: LinearApi["Service"]["listAssigneeCandidates"] = (input) =>
-    execute(
-      "listAssigneeCandidates",
-      `query T3AssigneeCandidates($key: String!, $first: Int!, $after: String, $filter: UserFilter!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name members(first: $first, after: $after, filter: $filter) { nodes { ${USER_FIELDS} } pageInfo { hasNextPage endCursor } } } } }`,
-      {
-        key: input.key,
-        first: input.first,
-        after: input.after ?? null,
-        filter: {
-          active: { eq: true },
-          ...(input.id === undefined ? {} : { id: { eq: input.id } }),
+    Effect.gen(function* () {
+      const data = yield* execute(
+        "listAssigneeCandidates",
+        `query T3AssigneeCandidates($key: String!, $first: Int!, $after: String, $filter: UserFilter!, $publicTeam: Boolean!, $readMembers: Boolean!, $restricted: Boolean!, $membershipTeamIds: [ID!]!) { organization { id urlKey } teams(first: 1, filter: { key: { eq: $key } }) { nodes { id key name ${TEAM_ACCESS_FIELDS} ancestors { id ${TEAM_ACCESS_FIELDS} } members(first: $first, after: $after, filter: $filter) @include(if: $readMembers) { nodes { ${USER_FIELDS} active } pageInfo { hasNextPage endCursor } } } } users(first: $first, after: $after, filter: $filter) @include(if: $publicTeam) { nodes { ${USER_FIELDS} active teams(first: 1, filter: { id: { in: $membershipTeamIds } }) @include(if: $restricted) { nodes { id } } } pageInfo { hasNextPage endCursor } } }`,
+        {
+          key: input.key,
+          first: input.first,
+          after: input.after ?? null,
+          publicTeam: input.visibility !== undefined && input.visibility !== "private",
+          readMembers: input.visibility === "private",
+          restricted: input.visibility === "restricted",
+          membershipTeamIds: input.membershipTeamIds ?? [],
+          filter: {
+            active: { eq: true },
+            ...(input.id === undefined ? {} : { id: { eq: input.id } }),
+          },
         },
-      },
-      AssigneeCandidatesData,
-    );
+        AssigneeCandidatesResponse,
+      );
+      const team = data.teams.nodes[0];
+      if (team === undefined) return { organization: data.organization, teams: { nodes: [] } };
+      if (
+        input.workspace !== undefined &&
+        data.organization.urlKey.toLowerCase() !== input.workspace
+      )
+        return yield* fail(
+          "listAssigneeCandidates",
+          "failed",
+          "This scope belongs to another Linear workspace.",
+        );
+      const teamIds = assigneeTeamIds(team);
+      if (
+        teamIds === null ||
+        (input.visibility !== undefined &&
+          (team.visibility !== input.visibility ||
+            input.membershipTeamIds === undefined ||
+            teamIds.length !== input.membershipTeamIds.length ||
+            teamIds.some((id, index) => id !== input.membershipTeamIds?.[index])))
+      )
+        return yield* fail(
+          "listAssigneeCandidates",
+          "failed",
+          "This Linear team's privacy changed.",
+        );
+      if (input.visibility === undefined) {
+        const page = yield* listAssigneeCandidates({
+          ...input,
+          visibility: team.visibility,
+          membershipTeamIds: teamIds,
+        });
+        if (
+          page.organization.id !== data.organization.id ||
+          page.organization.urlKey !== data.organization.urlKey ||
+          page.teams.nodes[0]?.id !== team.id
+        )
+          return yield* fail(
+            "listAssigneeCandidates",
+            "failed",
+            "This Linear team or workspace changed.",
+          );
+        return page;
+      }
+      const members = input.visibility === "private" ? team.members : data.users;
+      if (members === undefined)
+        return yield* fail(
+          "listAssigneeCandidates",
+          "failed",
+          "Linear omitted the assignee candidates.",
+        );
+      if (
+        members.nodes.length > input.first ||
+        (input.visibility === "restricted" &&
+          data.users?.nodes.some((user) => user.teams === undefined))
+      )
+        return yield* fail(
+          "listAssigneeCandidates",
+          "failed",
+          "Linear returned invalid assignee membership data.",
+        );
+      const eligibleUsers =
+        input.visibility === "restricted"
+          ? data.users!.nodes.filter((user) =>
+              user.teams!.nodes.some(({ id }) => teamIds.includes(id)),
+            )
+          : members.nodes;
+      return {
+        organization: data.organization,
+        teams: {
+          nodes: [
+            {
+              ...team,
+              members: { ...members, nodes: eligibleUsers.filter((user) => user.active) },
+            },
+          ],
+        },
+      };
+    });
   const updateComment: LinearApi["Service"]["updateComment"] = (id, body) =>
     mutate(
       "editComment",
