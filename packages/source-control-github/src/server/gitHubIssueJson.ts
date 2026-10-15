@@ -350,6 +350,7 @@ const RawCandidatesSchema = Schema.Struct({
  */
 export const ISSUE_TEMPLATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
+    url
     issueTemplates {
       filename name about title body
       assignees(first: 25) { nodes { login } }
@@ -371,6 +372,7 @@ const RawTemplateSchema = Schema.Struct({
 const RawTemplatesSchema = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
+      url: Schema.String,
       issueTemplates: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
     }),
   }),
@@ -748,9 +750,13 @@ export function decodeIssueCandidatesJson(raw: string): Result.Result<
 /** A template that cannot be read is skipped: one malformed form must not take the others. */
 export function decodeIssueTemplatesJson(
   raw: string,
-): Result.Result<ReadonlyArray<IssueTemplate>, DecodeFailure> {
-  return Result.map(decodeTemplates(raw), ({ data }) =>
-    (data.repository.issueTemplates ?? []).flatMap((entry) => {
+): Result.Result<
+  { readonly templates: ReadonlyArray<IssueTemplate>; readonly repositoryUrl: string },
+  DecodeFailure
+> {
+  return Result.map(decodeTemplates(raw), ({ data }) => ({
+    repositoryUrl: data.repository.url,
+    templates: (data.repository.issueTemplates ?? []).flatMap((entry) => {
       const template = decodeTemplate(entry);
       if (Exit.isFailure(template)) return [];
       const key = trimmed(template.value.filename);
@@ -769,7 +775,7 @@ export function decodeIssueTemplatesJson(
         },
       ];
     }),
-  );
+  }));
 }
 
 export function decodeCreatedIssueJson(

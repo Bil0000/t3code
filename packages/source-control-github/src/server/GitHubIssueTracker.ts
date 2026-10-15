@@ -614,7 +614,19 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
           ],
           { concurrency: 2 },
         ).pipe(
-          Effect.map(([templates, blankIssuesEnabled]) => ({ templates, blankIssuesEnabled })),
+          Effect.map(([{ templates, repositoryUrl }, blankIssuesEnabled]) => ({
+            templates,
+            blankIssuesEnabled,
+            externalTemplates: blankIssuesEnabled
+              ? []
+              : [
+                  {
+                    name: "GitHub issue templates",
+                    about: "Choose a template or form on GitHub.",
+                    url: `${repositoryUrl}/issues/new/choose`,
+                  },
+                ],
+          })),
         );
       },
 

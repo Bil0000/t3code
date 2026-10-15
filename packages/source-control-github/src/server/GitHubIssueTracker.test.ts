@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { IssueTrackerKind } from "@t3tools/contracts";
+import { SourceControlRateLimitPausedError } from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import * as GitHubApi from "./GitHubApi.ts";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
@@ -190,6 +192,60 @@ describe("GitHubIssueTracker", () => {
         expect(requests[0]?.body).toMatchObject({ assignees: assignees.slice(0, 10) });
         expect(graphqlReads).toBe(0);
       }),
+  );
+
+  it.effect.each([
+    ["github.com", "https://github.com/acme/web", []],
+    ["ghe.internal:8080", "http://ghe.internal:8080/source/acme/web", []],
+    [
+      "github.com",
+      "https://github.com/acme/web",
+      [{ filename: "bug.md", name: "Bug report", body: "Describe the bug." }],
+    ],
+  ] as const)("offers the native issue chooser on %s when blank issues are disabled", (testCase) =>
+    Effect.gen(function* () {
+      const [host, repositoryUrl, issueTemplates] = testCase;
+      let graphqlRequests = 0;
+      let restRequests = 0;
+      const api = yield* GitHubIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(GitHubApi.GitHubApi)({
+            graphql: (input) => {
+              graphqlRequests += 1;
+              expect(input.host).toBe(host);
+              expect(input.variables).toEqual({ owner: "acme", name: "web" });
+              return Effect.succeed(
+                JSON.stringify({ data: { repository: { url: repositoryUrl, issueTemplates } } }),
+              );
+            },
+            rest: (input) => {
+              restRequests += 1;
+              expect(input.host).toBe(host);
+              return Effect.succeed({
+                status: 200,
+                headers: {},
+                body: "blank_issues_enabled: false\n",
+                truncated: false,
+                invalidUtf8: false,
+              });
+            },
+          }),
+        ),
+      );
+      const result = yield* api.listTemplates!({ cwd: "/w", host, scope: "acme/web" });
+      expect(result.blankIssuesEnabled).toBe(false);
+      expect(result.externalTemplates).toEqual([
+        {
+          name: "GitHub issue templates",
+          about: "Choose a template or form on GitHub.",
+          url: `${repositoryUrl}/issues/new/choose`,
+        },
+      ]);
+      expect(result.templates.map(({ key, body }) => ({ key, body }))).toEqual(
+        issueTemplates.map(({ filename, body }) => ({ key: filename, body })),
+      );
+      expect([graphqlRequests, restRequests]).toEqual([1, 1]);
+    }),
   );
 
   it.effect.each([
@@ -444,7 +500,10 @@ describe("GitHubIssueTracker", () => {
   ] as const)("%s", ([, config, blankIssuesEnabled]) =>
     Effect.gen(function* () {
       const api = yield* tracker(
-        () => JSON.stringify({ data: { repository: { issueTemplates: [] } } }),
+        () =>
+          JSON.stringify({
+            data: { repository: { url: "https://github.com/acme/web", issueTemplates: [] } },
+          }),
         (input) => {
           expect(input.path).toBe("repos/acme/web/contents/.github/ISSUE_TEMPLATE/config.yml");
           expect(input.accept).toBe("application/vnd.github.raw");
@@ -457,33 +516,75 @@ describe("GitHubIssueTracker", () => {
           };
         },
       );
-      expect(
-        yield* api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
-      ).toEqual({ templates: [], blankIssuesEnabled });
+      const result = yield* api.listTemplates!({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+      });
+      expect(result).toMatchObject({ templates: [], blankIssuesEnabled });
+      expect(result.externalTemplates).toHaveLength(blankIssuesEnabled ? 0 : 1);
     }),
   );
 
-  it.effect("enables blank issues when the template config is missing", () =>
-    Effect.gen(function* () {
-      const api = yield* GitHubIssueTracker.make.pipe(
-        Effect.provide(
-          Layer.mock(GitHubApi.GitHubApi)({
-            graphql: () =>
-              Effect.succeed(JSON.stringify({ data: { repository: { issueTemplates: [] } } })),
-            rest: () =>
-              Effect.fail(
-                new GitHubApi.GitHubApiNotFoundError({
-                  host: "github.com",
-                  operation: "listTemplateConfig",
-                }),
-              ),
-          }),
-        ),
-      );
-      expect(
-        yield* api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
-      ).toEqual({ templates: [], blankIssuesEnabled: true });
-    }),
+  it.effect.each([
+    [
+      new GitHubApi.GitHubApiNotFoundError({ host: "github.com", operation: "listTemplateConfig" }),
+      false,
+    ],
+    [
+      new GitHubApi.GitHubApiAuthenticationError({
+        host: "github.com",
+        operation: "listTemplateConfig",
+      }),
+      false,
+    ],
+    [
+      new GitHubApi.GitHubApiRateLimitError({
+        host: "github.com",
+        operation: "listTemplateConfig",
+      }),
+      true,
+    ],
+    [
+      new SourceControlRateLimitPausedError({
+        provider: IssueTrackerKind.make("github"),
+        host: "github.com",
+        retryAt: 1000,
+      }),
+      true,
+    ],
+  ] as const)(
+    "preserves the blank issue policy after a config read error: %s",
+    ([error, rateLimited]) =>
+      Effect.gen(function* () {
+        const api = yield* GitHubIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mock(GitHubApi.GitHubApi)({
+              graphql: () =>
+                Effect.succeed(
+                  JSON.stringify({
+                    data: {
+                      repository: { url: "https://github.com/acme/web", issueTemplates: [] },
+                    },
+                  }),
+                ),
+              rest: () => Effect.fail(error),
+            }),
+          ),
+        );
+        const request = api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" });
+        if (rateLimited) {
+          const result = yield* Effect.flip(request);
+          expect(result.reason).toBe("rate-limited");
+          expect(result.operation).toBe("listTemplateConfig");
+        } else {
+          expect(yield* request).toEqual({
+            templates: [],
+            externalTemplates: [],
+            blankIssuesEnabled: true,
+          });
+        }
+      }),
   );
 
   it.effect("refuses reactions on a comment outside the selected issue", () =>
