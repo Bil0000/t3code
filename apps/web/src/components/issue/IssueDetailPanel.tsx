@@ -506,6 +506,7 @@ function IssueDetailContent({
             tracker: reference.tracker,
             host: reference.host,
             scope: reference.scope,
+            key: reference.key,
           },
         })
       : null,

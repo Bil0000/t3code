@@ -6,6 +6,7 @@ import {
   EnvironmentId,
   IssueTrackerKind,
   ProjectId,
+  IssueCandidatesInput,
   IssueCommentsPageInput,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
@@ -21,6 +22,8 @@ import { AsyncResult, type Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+const decodeCandidatesInput = Schema.decodeUnknownSync(IssueCandidatesInput);
 
 const state = vi.hoisted(() => ({
   detail: {
@@ -830,7 +833,7 @@ describe("native issue state controls", () => {
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     state.write.mockClear().mockResolvedValue({ _tag: "Success" });
-    state.candidatesRead.mockClear();
+    state.candidatesRead.mockReset();
     state.candidates = { data: null, error: null, isPending: false, refresh: vi.fn() };
     state.detail = {
       ...state.detail,
@@ -944,15 +947,6 @@ describe("native issue state controls", () => {
     await act(async () =>
       trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
     );
-    expect(state.candidatesRead).toHaveBeenCalledWith({
-      environmentId,
-      input: {
-        projectId: reference("jira").projectId,
-        tracker: "jira",
-        host: "native.example",
-        scope: "ENG",
-      },
-    });
     expect(document.body.textContent).toContain("Project states unavailable");
     const items = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
     expect(
@@ -968,16 +962,30 @@ describe("native issue state controls", () => {
     state.candidates = {
       ...state.candidates,
       error: null,
-      data: {
-        states: [
-          { category: "open", name: "Todo", id: "todo-id" },
-          { category: "open", name: "In Review", id: "review-id" },
-          { category: "closed", name: "Done", id: "done-id" },
-        ],
-      },
     };
+    const taskStates: ReadonlyArray<IssueState> = [
+      state.detail.state,
+      { category: "open", name: "In Review", id: "review-id" },
+      { category: "closed", name: "Done", id: "done-id" },
+    ];
+    const verified: IssueState = { category: "closed", name: "Verified", id: "verified-id" };
+    state.candidatesRead.mockImplementation(({ input }: { input: unknown }) => {
+      const { key } = decodeCandidatesInput(input);
+      state.candidates.data = {
+        states:
+          key === "ENG-1"
+            ? taskStates
+            : key === "ENG-2"
+              ? [state.detail.state, verified]
+              : [...taskStates, verified],
+      };
+    });
     await act(async () => render("jira"));
     expect(items().map((item) => item.textContent)).toEqual(["In Review", "Done"]);
+    expect(state.candidatesRead).toHaveBeenCalledWith({
+      environmentId,
+      input: reference("jira"),
+    });
     await act(async () =>
       items()
         .find((item) => item.textContent === "In Review")!
@@ -986,6 +994,30 @@ describe("native issue state controls", () => {
     expect(state.write).toHaveBeenCalledWith({
       environmentId,
       input: { ...reference("jira"), state: "review-id" },
+    });
+    state.candidatesRead.mockClear();
+    state.write.mockClear();
+    state.detail = { ...state.detail, key: "ENG-2", displayKey: "ENG-2" };
+    await act(async () =>
+      root.render(
+        <IssueDetailPanel
+          environmentId={environmentId}
+          reference={{ ...reference("jira"), key: "ENG-2" }}
+        />,
+      ),
+    );
+    expect(state.candidatesRead).not.toHaveBeenCalled();
+    expect(items()).toHaveLength(0);
+    await act(async () =>
+      buttons()
+        .find((button) => button.textContent?.startsWith("Change state"))!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+    expect(items().map((item) => item.textContent)).toEqual(["Verified"]);
+    await act(async () => items()[0]!.click());
+    expect(state.write).toHaveBeenCalledWith({
+      environmentId,
+      input: { ...reference("jira"), key: "ENG-2", state: "verified-id" },
     });
   });
   it("closes Jira with a comment only after native state retry and a successful post", async () => {
@@ -1025,15 +1057,6 @@ describe("native issue state controls", () => {
     await act(async () =>
       trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
     );
-    expect(state.candidatesRead).toHaveBeenCalledWith({
-      environmentId,
-      input: {
-        projectId: reference("jira").projectId,
-        tracker: "jira",
-        host: "native.example",
-        scope: "ENG",
-      },
-    });
     const items = () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
     expect(document.body.textContent).toContain("Project states unavailable");
     expect(state.write).not.toHaveBeenCalled();
@@ -1047,16 +1070,26 @@ describe("native issue state controls", () => {
     state.candidates = {
       ...state.candidates,
       error: null,
-      data: {
-        states: [
-          state.detail.state,
-          { category: "closed", name: "Done", id: "10003" },
-          { category: "closed", name: "Canceled", id: "10004" },
-        ],
-      },
     };
+    const taskStates: ReadonlyArray<IssueState> = [
+      state.detail.state,
+      { category: "closed", name: "Done", id: "10003" },
+      { category: "closed", name: "Canceled", id: "10004" },
+    ];
+    state.candidatesRead.mockImplementation(({ input }: { input: unknown }) => {
+      state.candidates.data = {
+        states:
+          decodeCandidatesInput(input).key === "ENG-1"
+            ? taskStates
+            : [...taskStates, { category: "closed", name: "Verified", id: "bug-only" }],
+      };
+    });
     await act(async () => render("jira"));
     expect(items().map((item) => item.textContent)).toEqual(["Done", "Canceled"]);
+    expect(state.candidatesRead).toHaveBeenCalledWith({
+      environmentId,
+      input: reference("jira"),
+    });
     await act(async () =>
       items()
         .find((item) => item.textContent === "Done")!
