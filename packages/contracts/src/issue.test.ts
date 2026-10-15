@@ -26,6 +26,7 @@ import {
   IssueResolvedUrl,
   IssueSummary,
   IssueTrackerKind,
+  issueListCursorKey,
   threadIssueKeyOf,
   threadIssueKeysEqual,
   IssueTrackerProjectBinding,
@@ -376,3 +377,42 @@ it("keeps plugin key case and numeric tracker keys exact", () => {
     );
   }
 });
+
+it.each(["Mount", "Nested/Mount"])(
+  "keeps Forgejo mount %s exact while ignoring owner and repo case",
+  (mount) => {
+    const issue = {
+      tracker: IssueTrackerKind.make("forgejo"),
+      host: "Forgejo.test",
+      scope: `${mount}/Acme/Web`,
+      key: "42",
+    };
+    const alias = { ...issue, host: "forgejo.test", scope: `${mount}/acme/web` };
+    const otherMount = { ...alias, scope: `${mount.toLowerCase()}/acme/web` };
+    expect(threadIssueKeysEqual(issue, alias)).toBe(true);
+    expect(threadIssueKeyOf(issue)).not.toBe(threadIssueKeyOf(otherMount));
+    expect(threadIssueKeysEqual(issue, otherMount)).toBe(false);
+    expect(issueListCursorKey(alias)).not.toBe(issueListCursorKey(otherMount));
+  },
+);
+
+it.each(["forgejo", "github", "gitlab", "azure-devops", "linear", "jira", "plugin"])(
+  "retains %s scope case matching without a Forgejo mount",
+  (tracker) => {
+    const issue = {
+      tracker: IssueTrackerKind.make(tracker),
+      host: "example.test",
+      scope: "Acme/Web",
+      key: "42",
+    };
+    expect(threadIssueKeysEqual(issue, { ...issue, scope: "acme/web" })).toBe(true);
+    if (tracker !== "forgejo") {
+      expect(
+        threadIssueKeysEqual(
+          { ...issue, scope: "Mount/Acme/Web" },
+          { ...issue, scope: "mount/acme/web" },
+        ),
+      ).toBe(true);
+    }
+  },
+);
