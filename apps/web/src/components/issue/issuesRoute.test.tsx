@@ -157,7 +157,7 @@ beforeEach(() => {
   state.listPage.mockReset();
   state.search = { who: "all", status: "open" };
   state.projects = [];
-  state.navigate.mockClear();
+  state.navigate.mockReset();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -512,4 +512,38 @@ it("keeps rows and errors whose names repeat apart by their native identity", as
   expect(text()).toContain("Project: Second failed");
   expect(error.mock.calls.flat().join(" ")).not.toContain("same key");
   error.mockRestore();
+});
+
+it("keeps typing and selection out of history so Back leaves the page", async () => {
+  const { createMemoryHistory, createRootRoute, createRoute, createRouter } =
+    await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
+  const rootRoute = createRootRoute();
+  const history = createMemoryHistory({ initialEntries: ["/", "/issues"], initialIndex: 1 });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([
+      createRoute({ getParentRoute: () => rootRoute, path: "/issues" }),
+    ]),
+    history,
+  });
+  await router.load();
+  state.navigate.mockImplementation((options) => router.navigate({ to: "/issues", ...options }));
+  state.responses.set(environmentA, AsyncResult.success(answer([issue("A")])));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  await mount();
+  const input = container.querySelector<HTMLInputElement>('[aria-label="Search issues"]')!;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    setValue.call(input, "la");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    [...container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Issue A"))!
+      .click(),
+  );
+  expect(history.location.search).toContain("q=la");
+  expect(history.location.search).toContain("key=");
+  expect(history.length).toBe(2);
+  history.back();
+  expect(history.location.pathname).toBe("/");
 });

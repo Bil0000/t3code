@@ -616,6 +616,7 @@ function IssuesRoute() {
             ...(next.key ? { key: next.key } : {}),
           };
         },
+        replace: true,
       }),
     [navigate],
   );
