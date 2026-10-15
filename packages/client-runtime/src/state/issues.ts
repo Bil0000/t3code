@@ -13,6 +13,7 @@ import {
   type IssueListInput,
   type IssueListResult,
   type IssueRef,
+  type IssuePageRef,
   type IssueHierarchyPage,
   type IssueScopeRef,
 } from "@t3tools/contracts";
@@ -75,17 +76,22 @@ export async function readIssueListSourcePage<Q, E>(
 
 export function issueSourceMatchesList(
   input: IssueListInput,
-  source: { readonly projectId: string; readonly host?: string | undefined },
+  source: {
+    readonly projectId: string;
+    readonly host?: string | undefined;
+    readonly connectionId?: string | undefined;
+  },
 ): boolean {
   return (
     (input.projectId === undefined || input.projectId === source.projectId) &&
+    (input.connectionId === undefined || input.connectionId === source.connectionId) &&
     (input.host === undefined || input.host.toLowerCase() === source.host?.toLowerCase())
   );
 }
 
 /** One row's identity across list pages and detail reads; hosts compare case-insensitively. */
 export function issueEntryKey(
-  entry: Pick<IssueListEntry, "projectId" | "host" | "scope" | "key"> & {
+  entry: Pick<IssueListEntry, "projectId" | "host" | "scope" | "key" | "connectionId"> & {
     readonly tracker: string;
   },
 ): string {
@@ -113,11 +119,14 @@ export function issueListCursorsOn(
   cursors: IssueListCursors,
   host: string,
   tracker?: string,
+  connectionId?: string,
 ): IssueListCursors {
   const prefix = `${host.toLowerCase()} `;
+  const account = connectionId === undefined ? "" : `@${encodeURIComponent(connectionId)} `;
   return Object.fromEntries(
     Object.entries(cursors).filter(([key]) => {
-      const normalized = key.toLowerCase();
+      if (account === "" ? key.startsWith("@") : !key.startsWith(account)) return false;
+      const normalized = key.slice(account.length).toLowerCase();
       if (normalized.startsWith(prefix)) return true;
       const [kind, ...rest] = normalized.split(" ");
       return (tracker === undefined || kind === tracker) && rest.join(" ").startsWith(prefix);
@@ -140,6 +149,7 @@ type HeldIssueList = IssueListPage & {
 };
 
 type IssueListSource = {
+  readonly connectionId?: string | undefined;
   readonly projectId: string;
   readonly tracker: string;
   readonly host: string;
@@ -148,30 +158,36 @@ type IssueListSource = {
 
 const sourceKey = (source: IssueListSource) =>
   issueListCursorKey({
+    ...(source.connectionId === undefined ? {} : { connectionId: source.connectionId }),
     tracker: source.tracker,
     host: source.host,
     scope: issueScopeKeyOf(source),
   });
 
 function cursorKeyOf(key: string, sources: ReadonlyArray<IssueListSource>): string {
-  const [prefix = "", ...parts] = key.split(" ");
+  const tokens = key.split(" ");
+  const account = key.startsWith("@") ? `${tokens.shift()} ` : "";
+  const [prefix = "", ...parts] = tokens;
   if (prefix === "forgejo" && parts.length >= 2) {
     const host = parts.shift()!;
-    return `forgejo ${host.toLowerCase()} ${issueScopeKeyOf({ tracker: prefix, scope: parts.join(" ") })}`;
+    return `${account}forgejo ${host.toLowerCase()} ${issueScopeKeyOf({ tracker: prefix, scope: parts.join(" ") })}`;
   }
   const host = prefix.toLowerCase();
   const scope = parts.join(" ");
   const native = sources.some(
     (source) =>
       source.tracker === "forgejo" &&
+      (source.connectionId === undefined ? "" : `@${encodeURIComponent(source.connectionId)} `) ===
+        account &&
       source.host.toLowerCase() === host &&
       issueScopeKeyOf({ tracker: source.tracker, scope }) === issueScopeKeyOf(source),
   );
-  return native ? `${host} ${issueScopeKeyOf({ tracker: "forgejo", scope })}` : key.toLowerCase();
+  return `${account}${native ? `${host} ${issueScopeKeyOf({ tracker: "forgejo", scope })}` : tokens.join(" ").toLowerCase()}`;
 }
 
 const scopeOf = (source: IssueListSource, cursors: ReadonlySet<string>) => {
   const qualified = sourceKey(source);
+  if (source.connectionId !== undefined) return qualified;
   const legacy = `${source.host.toLowerCase()} ${issueScopeKeyOf(source)}`;
   return cursors.has(qualified) || !cursors.has(legacy) ? qualified : legacy;
 };
@@ -179,6 +195,7 @@ const scopeOf = (source: IssueListSource, cursors: ReadonlySet<string>) => {
 const heldSources = (held: HeldIssueList) => held.sources ?? held.entries;
 const matchesSource = (error: IssueListPage["errors"][number], source: IssueListSource) =>
   error.projectId === source.projectId &&
+  error.connectionId === source.connectionId &&
   (error.host === undefined || error.host.toLowerCase() === source.host.toLowerCase()) &&
   (error.tracker === undefined || error.tracker === source.tracker);
 
@@ -211,11 +228,22 @@ function issueListViewerChanges(
   const viewerFor = (
     viewers: IssueListResult["viewers"],
     source: IssueListSource,
-    pool: ReadonlyArray<Pick<IssueListSource, "tracker" | "host"> & { readonly scope?: string }>,
+    pool: ReadonlyArray<
+      Pick<IssueListSource, "tracker" | "host" | "connectionId"> & { readonly scope?: string }
+    >,
   ) => {
+    const scoped = viewers[sourceKey(source)] ?? viewers[issueListCursorKey(source)];
+    if (scoped !== undefined) return scoped;
+    if (
+      pool.some(
+        (each) =>
+          each.tracker === source.tracker &&
+          each.host.toLowerCase() === source.host.toLowerCase() &&
+          each.connectionId !== source.connectionId,
+      )
+    )
+      return undefined;
     if (source.tracker === "forgejo") {
-      const scoped = viewers[sourceKey(source)] ?? viewers[issueListCursorKey(source)];
-      if (scoped !== undefined) return scoped;
       const mount = issueScopeKeyOf(source).split("/").slice(0, -2).join("/");
       if (
         pool.some(
@@ -492,13 +520,19 @@ export function refreshIssueListPage<T extends HeldIssueList>(
 
 export function issueScopeKey(
   environmentId: EnvironmentId,
-  scope: { readonly tracker: string; readonly host: string; readonly scope: string },
+  scope: {
+    readonly tracker: string;
+    readonly host: string;
+    readonly scope: string;
+    readonly connectionId?: string | undefined;
+  },
 ): string {
   return JSON.stringify([
     environmentId,
     scope.tracker,
     scope.host.toLowerCase(),
     issueScopeKeyOf(scope),
+    ...(scope.connectionId === undefined ? [] : [scope.connectionId]),
   ]);
 }
 
@@ -541,18 +575,32 @@ export function createIssueEnvironmentAtoms<R, E>(
     mode: "serial",
     key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
   } as const;
-  const detail = createEnvironmentRpcQueryAtomFamily(runtime, {
+  const detailQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:issues:detail",
     tag: WS_METHODS.issuesDetail,
     staleTimeMs: 30_000,
   });
-  const detailRef = ({ projectId, tracker, host, scope, key }: IssueRef): IssueRef => ({
+  const detailRef = ({
+    projectId,
+    tracker,
+    host,
+    scope,
+    key,
+    connectionId,
+  }: IssueRef): IssueRef => ({
     projectId,
     tracker,
     ...(host === undefined ? {} : { host }),
     scope,
     key,
+    ...(connectionId === undefined ? {} : { connectionId }),
   });
+  const detail = (target: { readonly environmentId: EnvironmentId; readonly input: IssueRef }) =>
+    detailQuery(
+      target.input.connectionId === undefined
+        ? target
+        : { ...target, input: detailRef(target.input) },
+    );
   const refreshDetail = (
     { environmentId, input }: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
     registry: AtomRegistry.AtomRegistry,
@@ -585,15 +633,23 @@ export function createIssueEnvironmentAtoms<R, E>(
   const hierarchyRevision = Atom.family((_key: string) => Atom.make(0));
   const hierarchySignal = (
     environmentId: EnvironmentId,
-    input: Pick<IssueRef, "tracker" | "host">,
-  ) => hierarchyRevision(JSON.stringify([environmentId, input.tracker, input.host?.toLowerCase()]));
+    input: Pick<IssueRef, "tracker" | "host" | "connectionId">,
+  ) =>
+    hierarchyRevision(
+      JSON.stringify([
+        environmentId,
+        input.tracker,
+        input.host?.toLowerCase(),
+        ...(input.connectionId === undefined ? [] : [input.connectionId]),
+      ]),
+    );
   const refreshHierarchy = (
     {
       environmentId,
       input,
     }: {
       readonly environmentId: EnvironmentId;
-      readonly input: Pick<IssueRef, "tracker" | "host">;
+      readonly input: Pick<IssueRef, "tracker" | "host" | "connectionId">;
     },
     registry: AtomRegistry.AtomRegistry,
   ) =>
@@ -601,12 +657,28 @@ export function createIssueEnvironmentAtoms<R, E>(
       const signal = hierarchySignal(environmentId, input);
       registry.set(signal, registry.get(signal) + 1);
     });
-  const hierarchy = createEnvironmentRpcQueryAtomFamily(runtime, {
+  const hierarchyQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:issues:hierarchy",
     tag: WS_METHODS.issuesHierarchy,
     staleTimeMs: 30_000,
     refreshTrigger: ({ environmentId, input }) => hierarchySignal(environmentId, input),
   });
+  const hierarchy = (target: {
+    readonly environmentId: EnvironmentId;
+    readonly input: IssuePageRef;
+  }) =>
+    hierarchyQuery(
+      target.input.connectionId === undefined
+        ? target
+        : {
+            ...target,
+            input: {
+              ...detailRef(target.input),
+              ...(target.input.cursor === undefined ? {} : { cursor: target.input.cursor }),
+              ...(target.input.limit === undefined ? {} : { limit: target.input.limit }),
+            },
+          },
+    );
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:list",
