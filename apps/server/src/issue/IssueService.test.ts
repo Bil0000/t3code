@@ -4,6 +4,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Crypto from "effect/Crypto";
+import * as FileSystem from "effect/FileSystem";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
+import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
+import { refineUnknownRemoteProvider } from "@t3tools/source-control-core/server/discovery";
+import * as ForgejoCli from "@t3tools/source-control-forgejo/server/ForgejoCli";
+import * as ForgejoIssueTracker from "@t3tools/source-control-forgejo/server/ForgejoIssueTracker";
+import * as ForgejoSourceControlProvider from "@t3tools/source-control-forgejo/server/ForgejoSourceControlProvider";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
@@ -32,6 +41,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as IssueService from "./IssueService.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
+import * as ProcessRunner from "../processRunner.ts";
 
 const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
@@ -201,6 +211,218 @@ function makeService(input: {
 }
 
 describe("resolveGitHostBinding", () => {
+  it.effect.each([
+    { name: "SSH root", remote: "git@forgejo.test:acme/web.git", base: "https://forgejo.test" },
+    {
+      name: "HTTPS mount",
+      remote: "https://forgejo.test:3000/mount/acme/web.git",
+      base: "https://forgejo.test:3000/mount",
+    },
+    {
+      name: "HTTPS case-sensitive mount",
+      remote: "https://forgejo.test/Mount/Acme/Web.git",
+      base: "https://forgejo.test/Mount",
+    },
+    {
+      name: "SSH mount",
+      remote: "git@forgejo.test:acme/web.git",
+      base: "https://forgejo.test/mount",
+    },
+    {
+      name: "SSH host alias",
+      remote: "git@ssh.forgejo.test:acme/web.git",
+      base: "https://forgejo.test/mount",
+    },
+  ])("uses the resolved Forgejo web binding: $name", ({ remote, base }) => {
+    const native: { readonly path: string; readonly write: boolean }[] = [];
+    let contextReads = 0;
+    const repository = remote.includes("Acme/Web") ? "Acme/Web" : "acme/web";
+    const url = `${base}/${repository}/issues/42`;
+    return Effect.gen(function* () {
+      const cli = yield* ForgejoCli.make;
+      const tracker = yield* ForgejoIssueTracker.make.pipe(
+        Effect.provideService(ForgejoCli.ForgejoCli, cli),
+      );
+      const provider = yield* ForgejoSourceControlProvider.make.pipe(
+        Effect.provideService(ForgejoCli.ForgejoCli, cli),
+      );
+      const discovery = yield* ForgejoSourceControlProvider.makeDiscovery.pipe(
+        Effect.provideService(ForgejoCli.ForgejoCli, cli),
+      );
+      const { process } = yield* SourceControlHost.SourceControlHost;
+      const identities = yield* RepositoryIdentityResolver.make({
+        refine: (identity) =>
+          provider.refineRepositoryIdentity!({
+            identity,
+            resolveContext: (input) => {
+              contextReads++;
+              return refineUnknownRemoteProvider({
+                specs: [discovery],
+                process,
+                cwd: input.cwd,
+                context: input.context,
+              });
+            },
+          }),
+      }).pipe(
+        Effect.provide(
+          Layer.mock(ProcessRunner.ProcessRunner)({
+            run: (input) =>
+              Effect.succeed({
+                stdout: input.args.includes("--show-toplevel")
+                  ? "/w/p"
+                  : `origin\t${remote} (fetch)\n`,
+                stderr: "",
+                code: ChildProcessSpawner.ExitCode(0),
+                timedOut: false,
+                stdoutTruncated: false,
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              }),
+          }),
+        ),
+      );
+      const identity = yield* identities.resolve("/w/p");
+      expect(identity?.webUrl).toBe(`${base}/${repository}`);
+      const service = yield* makeService({
+        projects: [{ ...project({ id: "p" }), repositoryIdentity: identity }],
+        trackers: [tracker],
+        resolveRepository: identities.resolve,
+      });
+      const [binding] = yield* service.sources(ProjectId.make("p"));
+      const web = new URL(`${base}/${repository}`);
+      expect(contextReads).toBe(1);
+      expect(native).toEqual([]);
+      const ref = { projectId: ProjectId.make("p"), ...binding!, key: "42" };
+      const detail = yield* service.detail(ref);
+      expect(detail).toMatchObject({ url, writable: true });
+      expect(native).toHaveLength(6);
+      expect(contextReads).toBe(1);
+      const resolved = yield* service.resolveUrl(
+        `${base}/${repository.toLowerCase()}/issues/42`,
+        ref.projectId,
+      );
+      expect(
+        yield* service.resolveUrl(`${base}/${repository}/issues/42/summary`, ref.projectId),
+      ).toEqual(resolved);
+      expect(native).toHaveLength(6);
+      expect(contextReads).toBe(1);
+      yield* service.setState({ ...resolved, state: "closed" });
+      expect(binding).toEqual({
+        tracker: IssueTrackerKind.make("forgejo"),
+        host: web.host,
+        scope: web.pathname.slice(1, -repository.length) + repository.toLowerCase(),
+      });
+      expect(resolved).toEqual({ ...ref, writable: true });
+      expect(native.slice(6).map((call) => call.write)).toEqual([false, true]);
+      expect(contextReads).toBe(2);
+      expect(
+        native.every((call) =>
+          call.path.startsWith(`${web.pathname.slice(0, -repository.length)}api/v1/`),
+        ),
+      ).toBe(true);
+      if (base.endsWith("/Mount")) {
+        const aliasStart = native.length;
+        yield* service.setState({ ...ref, scope: "Mount/ACME/WEB", state: "closed" });
+        expect(native.slice(aliasStart).map((call) => call.write)).toEqual([false, true]);
+        const before = native.length;
+        const direct = yield* service
+          .detail({ ...ref, scope: "mount/acme/web" })
+          .pipe(Effect.result);
+        expect(direct._tag).toBe("Failure");
+        expect(native).toHaveLength(before);
+        const foreignMount = yield* service.resolveUrl(
+          "https://forgejo.test/mount/acme/web/issues/42",
+          ref.projectId,
+        );
+        const write = yield* service
+          .setState({ ...foreignMount, state: "closed" })
+          .pipe(Effect.flip);
+        expect({
+          writable: foreignMount.writable,
+          reason: write.reason,
+          calls: native.slice(before),
+        }).toEqual({ writable: false, reason: "read-only", calls: [] });
+      }
+      const foreign = yield* service.resolveUrl(`${base}/acme/other/issues/42`, ref.projectId);
+      expect(foreign.writable).toBe(false);
+      const before = native.length;
+      const refused = yield* service.setState({ ...foreign, state: "closed" }).pipe(Effect.flip);
+      expect(refused).toMatchObject({ reason: "read-only" });
+      expect(native).toHaveLength(before);
+      const unknownHost = yield* service
+        .resolveUrl("https://other.test/acme/web/issues/42", ref.projectId)
+        .pipe(Effect.result);
+      expect(unknownHost._tag).toBe("Failure");
+      expect(native).toHaveLength(before);
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(
+        FileSystem.FileSystem,
+        FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
+      ),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.die("Unexpected HTTP")),
+      ),
+      Effect.provide(
+        TestSourceControlHost.layer({
+          process: {
+            run: (input) => {
+              if (input.command === "git")
+                return Effect.succeed(
+                  TestSourceControlHost.processOutput(`origin\t${remote} (fetch)\n`),
+                );
+              if (input.command !== "tea") return Effect.die(`Unexpected command ${input.command}`);
+              if (input.args[0] === "login")
+                return Effect.succeed(
+                  TestSourceControlHost.processOutput(
+                    JSON.stringify([
+                      {
+                        name: "fixture",
+                        url: base,
+                        ssh_host: remote.includes("ssh.forgejo")
+                          ? "ssh.forgejo.test"
+                          : "forgejo.test",
+                        user: "alice",
+                        default: "true",
+                      },
+                    ]),
+                  ),
+                );
+              const endpoint = input.args.at(-1)!;
+              const path = new URL(endpoint).pathname;
+              native.push({ path, write: input.args.includes("PATCH") });
+              const value = path.endsWith("/issues/42")
+                ? {
+                    number: 42,
+                    title: "Issue",
+                    html_url: url,
+                    user: { login: "alice" },
+                    state: "open",
+                    body: "",
+                    created_at: "2026-10-01T00:00:00Z",
+                    updated_at: "2026-10-01T00:00:00Z",
+                    comments: 0,
+                  }
+                : path.toLowerCase().endsWith("/repos/acme/web")
+                  ? { full_name: repository, permissions: { push: true, admin: true } }
+                  : path.endsWith("/user")
+                    ? { login: "alice" }
+                    : [];
+              return Effect.succeed(
+                TestSourceControlHost.processOutput(JSON.stringify(value), {
+                  stderr: 'HTTP/1.1 200\nLink: <https://fixture.invalid>; rel="last"\n',
+                }),
+              );
+            },
+          },
+        }),
+      ),
+    );
+  });
+
   it.each([
     { host: "acme.visualstudio.com", repository: "platform/_git/repo", scope: "acme/platform" },
     {

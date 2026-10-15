@@ -19,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import {
   issueListCursorKey,
+  issueScopeKeyOf,
   issueTrackerHostKey,
   IssueOperationError,
   IssueTrackerKind,
@@ -61,6 +62,7 @@ import {
 } from "@t3tools/contracts";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { azureDevOpsIssueScope, parseIssueUrl } from "@t3tools/shared/issueUrl";
+import { parseForgejoRemote } from "@t3tools/source-control-forgejo/server/ForgejoCli";
 import {
   IssueTrackerError,
   isStandaloneIssueTracker,
@@ -118,6 +120,15 @@ export function resolveGitHostBinding(
   const identity = project.repositoryIdentity;
   const kind = identity?.provider;
   if (!identity || kind === undefined || kind === "unknown") return null;
+  if (kind === "forgejo" && identity.webUrl !== undefined) {
+    const remote = parseForgejoRemote(identity.webUrl);
+    if (remote !== null)
+      return {
+        tracker: IssueTrackerKind.make(kind),
+        host: remote.host,
+        scope: issueScopeKeyOf({ tracker: kind, scope: remote.path }),
+      };
+  }
   let host = pullRequestHostOf(identity, SourceControlProviderKind.make(kind));
   if (kind === "gitlab") {
     const remote = URL.parse(identity.locator.remoteUrl);
@@ -343,7 +354,7 @@ export const make = Effect.gen(function* () {
           return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
         }
         const scope = ref.scope.trim();
-        const writable = scope.toLowerCase() === own.scope.toLowerCase();
+        const writable = issueScopeKeyOf({ tracker: own.tracker, scope }) === issueScopeKeyOf(own);
         if (
           own.tracker === "linear" &&
           own.scope.includes("/") &&
@@ -1047,6 +1058,13 @@ export const make = Effect.gen(function* () {
           detail: "This is not a recognised issue URL.",
         });
       }
+      const scope =
+        parsed.tracker === "forgejo"
+          ? parseForgejoRemote(url)!
+              .path.split("/")
+              .slice(0, parsed.scope.split("/").length)
+              .join("/")
+          : parsed.scope;
       const onTracker = supported.filter((project) => project.tracker === parsed.tracker);
       const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
         projects.find((project) => project.project.id === preferredProjectId) ?? projects[0];
@@ -1055,7 +1073,12 @@ export const make = Effect.gen(function* () {
           ? undefined
           : parsed.scope.slice(parsed.workspace.length + 1);
       const own =
-        preferFirst(onTracker.filter((project) => project.scope.toLowerCase() === parsed.scope)) ??
+        preferFirst(
+          onTracker.filter(
+            (project) =>
+              issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
+          ),
+        ) ??
         (legacyScope === undefined
           ? undefined
           : preferFirst(
@@ -1112,7 +1135,10 @@ export const make = Effect.gen(function* () {
         tracker: lender.tracker,
         host: lender.host,
         scope:
-          own?.scope ?? (parsed.tracker === "jira" ? parsed.scope.toUpperCase() : parsed.scope),
+          own?.scope ??
+          (parsed.tracker === "jira"
+            ? parsed.scope.toUpperCase()
+            : issueScopeKeyOf({ tracker: parsed.tracker, scope })),
         key: parsed.key,
         writable: own !== undefined,
       };
