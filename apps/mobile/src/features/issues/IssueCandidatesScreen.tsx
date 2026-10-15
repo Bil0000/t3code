@@ -202,7 +202,9 @@ export function IssueCandidatesScreen({
             ) : null}
             {issue && !allowed ? (
               <Text className="text-xs text-foreground-muted">
-                Changing {title.toLowerCase()} isn't available for this issue with your access.
+                {access.connected
+                  ? `Changing ${title.toLowerCase()} isn't available for this issue with your access.`
+                  : `This environment is offline. Reconnect to change ${title.toLowerCase()}.`}
               </Text>
             ) : !labels && issue?.capabilities.maxAssignees === 1 ? (
               <Text className="text-xs text-foreground-muted">
