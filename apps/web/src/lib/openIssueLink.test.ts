@@ -116,7 +116,7 @@ import { PullRequestMarkdown } from "../components/pullRequest/PullRequestMarkdo
 import ChatMarkdown from "../components/ChatMarkdown";
 import { IssueCommentContent } from "../components/issue/IssueConversation";
 import { writeIssueListPreferences } from "../components/issue/issueListPreferences";
-import { useOpenIssueLink } from "./openIssueLink";
+import { useOpenIssueLink, type IssueLinkContext } from "./openIssueLink";
 
 const decodeRepositoryIdentity = Schema.decodeSync(RepositoryIdentity);
 const threadRef = { environmentId: EnvironmentId.make("env-a"), threadId: ThreadId.make("thread") };
@@ -131,11 +131,13 @@ const target = {
 let renderer: ReactTestRenderer;
 let open: ReturnType<typeof useOpenIssueLink>;
 let standalone = false;
+let linkContext: IssueLinkContext | undefined;
 
 function Hook() {
   const handler = useOpenIssueLink(
     standalone ? undefined : threadRef,
     standalone ? PULL_REQUESTS_PANEL_REF : undefined,
+    linkContext,
   );
   useEffect(() => {
     open = handler;
@@ -150,6 +152,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   useRightPanelStore.setState({ byThreadKey: {} });
   standalone = false;
+  linkContext = undefined;
   state.editing = false;
   localStorage.clear();
   state.supported = true;
@@ -356,6 +359,79 @@ describe("native chat issue links", () => {
     expect(state.openExternal).toHaveBeenCalledExactlyOnceWith(url);
     expect(surfaces(ISSUES_PANEL_REF)).toEqual([]);
     expect(state.navigate).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps the current issue account and source project (standalone=%s)",
+    async (isStandalone) => {
+      standalone = isStandalone;
+      state.resolve.mockImplementation(async ({ input }) => ({
+        _tag: "Success",
+        value: { ...target, connectionId: input.connectionId },
+      }));
+      for (const connectionId of ["Account/A", "Account/B", undefined]) {
+        state.resolve.mockClear();
+        linkContext = {
+          environmentId: threadRef.environmentId,
+          projectId: ProjectId.make("source-project"),
+          connectionId,
+        };
+        await act(async () => renderer.update(createElement(Hook)));
+        await act(async () => {
+          open(event(), "https://linear.app/workspace/issue/ENG-42");
+        });
+        expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+          environmentId: "env-a",
+          input: {
+            url: "https://linear.app/workspace/issue/ENG-42",
+            projectId: "source-project",
+            ...(connectionId === undefined ? {} : { connectionId }),
+          },
+        });
+        expect(
+          surfaces(isStandalone ? ISSUES_PANEL_REF : threadRef).some(
+            (surface) => surface.kind === "issue" && surface.connectionId === connectionId,
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it("does not lend the issue's local project or account to another environment", async () => {
+    linkContext = {
+      environmentId: threadRef.environmentId,
+      projectId: ProjectId.make("source-project"),
+      connectionId: "Account/B",
+    };
+    await act(async () => renderer.update(createElement(Hook)));
+    await act(async () => {
+      open(event(), "https://linear.app/workspace/issue/ENG-42", EnvironmentId.make("env-b"));
+    });
+    expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "env-b",
+      input: { url: "https://linear.app/workspace/issue/ENG-42" },
+    });
+  });
+
+  it("does not retry a refused explicit account through the default account", async () => {
+    vi.stubGlobal("desktopBridge", {});
+    linkContext = {
+      environmentId: threadRef.environmentId,
+      projectId: ProjectId.make("source-project"),
+      connectionId: "Account/B",
+    };
+    state.resolve.mockResolvedValue({ _tag: "Failure" });
+    await act(async () => renderer.update(createElement(Hook)));
+    const url = "https://linear.app/workspace/issue/ENG-42";
+    await act(async () => {
+      open(event(), url);
+    });
+    expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "env-a",
+      input: { url, projectId: "source-project", connectionId: "Account/B" },
+    });
+    expect(state.openExternal).toHaveBeenCalledExactlyOnceWith(url);
+    expect(surfaces(threadRef)).toEqual([]);
   });
 
   it("uses the explicit environment without lending another server's project", async () => {
@@ -608,51 +684,67 @@ it.each([PullRequestMarkdown, PullRequestCommentBody])(
   },
 );
 
-it("keeps a comment editor preview link in its thread panel", async () => {
-  state.editing = true;
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
-  const url = "https://linear.app/workspace/issue/ENG-42";
-  try {
-    await act(async () =>
-      root.render(
-        createElement(IssueCommentContent, {
-          environmentId: threadRef.environmentId,
-          reference: target,
-          comment: {
-            id: "comment",
-            body: `[ENG-42](${url})`,
-            author: null,
-            createdAt: "2026-10-14T00:00:00Z",
-            url: null,
+it.each([
+  [false, false],
+  [false, true],
+  [true, false],
+  [true, true],
+])(
+  "keeps the account in a comment link (preview=%s, standalone=%s)",
+  async (previewing, isStandalone) => {
+    state.editing = true;
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const url = "https://linear.app/workspace/issue/ENG-42";
+    try {
+      await act(async () =>
+        root.render(
+          createElement(IssueCommentContent, {
+            environmentId: threadRef.environmentId,
+            reference: { ...target, connectionId: "Account/B" },
+            comment: {
+              id: "comment",
+              body: `[ENG-42](${url})`,
+              author: null,
+              createdAt: "2026-10-14T00:00:00Z",
+              url: null,
+              canEdit: true,
+            },
             canEdit: true,
-          },
-          canEdit: true,
-          cwd: "/repo",
-          threadRef,
-        }),
-      ),
-    );
-    await act(async () =>
-      container.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')!.click(),
-    );
-    const preview = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === "Preview",
-    )!;
-    await act(async () => preview.click());
-    await act(async () => container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!.click());
-    expect(surfaces(threadRef)).toMatchObject([{ key: "ENG-42" }]);
-    expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
-      environmentId: "env-a",
-      input: { url, projectId: "project-a" },
-    });
-    expect(surfaces(ISSUES_PANEL_REF)).toEqual([]);
-    expect(state.navigate).not.toHaveBeenCalled();
-  } finally {
-    await act(async () => root.unmount());
-    container.remove();
-    vi.unstubAllGlobals();
-  }
-});
+            cwd: "/repo",
+            threadRef: isStandalone ? null : threadRef,
+          }),
+        ),
+      );
+      if (previewing) {
+        await act(async () =>
+          container.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')!.click(),
+        );
+        const preview = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent === "Preview",
+        )!;
+        await act(async () => preview.click());
+      }
+      await act(async () =>
+        container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!.click(),
+      );
+      expect(surfaces(isStandalone ? ISSUES_PANEL_REF : threadRef)).toMatchObject([
+        { key: "ENG-42" },
+      ]);
+      expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+        environmentId: "env-a",
+        input: { url, projectId: target.projectId, connectionId: "Account/B" },
+      });
+      if (!isStandalone) {
+        expect(surfaces(ISSUES_PANEL_REF)).toEqual([]);
+        expect(state.navigate).not.toHaveBeenCalled();
+      }
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  },
+);

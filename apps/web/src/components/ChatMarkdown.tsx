@@ -180,7 +180,7 @@ import { useAssetUrlRefresh, useAssetUrlState } from "../assets/assetUrls";
 import { cn } from "../lib/utils";
 import { useRemoteOpenResolution, type RemoteOpenMode } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
-import { useOpenIssueLink } from "../lib/openIssueLink";
+import { useOpenIssueLink, type IssueLinkContext } from "../lib/openIssueLink";
 import { readThreadShell, useProjects } from "../state/entities";
 import { serverEnvironment } from "../state/server";
 import { shellEnvironment } from "../state/shell";
@@ -219,6 +219,7 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
+  issueLinkContext?: IssueLinkContext | undefined;
   /** Panel that receives pull request links, including the standalone PR view. */
   pullRequestPanelRef?: ScopedThreadRef | undefined;
   /** Environment that owns non-thread markdown, such as a pull request panel. */
@@ -2324,6 +2325,7 @@ function useChatMarkdownState({
   cwd,
   threadRef,
   pullRequestPanelRef,
+  issueLinkContext,
   environmentId: explicitEnvironmentId,
   onTaskListChange,
   isStreaming = false,
@@ -2508,7 +2510,7 @@ function useChatMarkdownState({
     );
   }, []);
   const openChangeRequestLink = useOpenChangeRequestLink(threadRef, pullRequestPanelRef);
-  const openIssueLink = useOpenIssueLink(threadRef, pullRequestPanelRef);
+  const openIssueLink = useOpenIssueLink(threadRef, pullRequestPanelRef, issueLinkContext);
   const openDeferredMarkdownLink = useOpenLink(threadRef);
   // Subscribed rather than read at click time: the anchor has to decide
   // synchronously whether to intercept its `_blank`, and a subscription is what

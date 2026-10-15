@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
+import type { IssueLinkContext } from "~/lib/openIssueLink";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 
 import { Button } from "../ui/button";
@@ -26,6 +27,7 @@ export function PullRequestMarkdownEditor({
   cwd,
   environmentId,
   threadRef = null,
+  issueLinkContext,
   placeholder,
   label,
   saving,
@@ -39,6 +41,7 @@ export function PullRequestMarkdownEditor({
   readonly environmentId: EnvironmentId;
   /** Thread the editor sits beside, so links in its preview follow the link target setting. */
   readonly threadRef?: ScopedThreadRef | null;
+  readonly issueLinkContext?: IssueLinkContext | undefined;
   readonly placeholder?: string | undefined;
   readonly label: string;
   readonly saving: boolean;
@@ -112,6 +115,7 @@ export function PullRequestMarkdownEditor({
               cwd={cwd}
               environmentId={environmentId}
               threadRef={threadRef}
+              issueLinkContext={issueLinkContext}
             />
           )}
         </div>

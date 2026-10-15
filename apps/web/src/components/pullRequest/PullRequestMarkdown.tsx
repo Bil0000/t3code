@@ -7,6 +7,7 @@ import type { Options as ReactMarkdownOptions } from "react-markdown";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { cn } from "~/lib/utils";
+import type { IssueLinkContext } from "~/lib/openIssueLink";
 import { PULL_REQUESTS_PANEL_REF } from "~/rightPanelStore";
 
 import ChatMarkdown from "../ChatMarkdown";
@@ -64,6 +65,7 @@ export function PullRequestMarkdown({
   cwd,
   environmentId,
   threadRef,
+  issueLinkContext,
   className,
 }: {
   text: string;
@@ -71,6 +73,7 @@ export function PullRequestMarkdown({
   environmentId: EnvironmentId;
   /** Thread the body is shown beside, so its links can open in that thread's in-app browser. */
   threadRef?: ScopedThreadRef | null;
+  issueLinkContext?: IssueLinkContext | undefined;
   className?: string;
 }) {
   const segments = splitPullRequestBody(text);
@@ -97,6 +100,7 @@ export function PullRequestMarkdown({
               text={segment.kind === "markdown" ? segment.text : `![](<${segment.url}>)`}
               cwd={cwd}
               threadRef={resolvedThreadRef}
+              issueLinkContext={issueLinkContext}
               pullRequestPanelRef={resolvedThreadRef ?? PULL_REQUESTS_PANEL_REF}
               environmentId={environmentId}
               extraRemarkPlugins={extraRemarkPlugins}

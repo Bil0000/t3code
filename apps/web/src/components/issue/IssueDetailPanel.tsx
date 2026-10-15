@@ -1060,6 +1060,7 @@ function IssueDetailContent({
                 cwd={cwd}
                 environmentId={environmentId}
                 threadRef={threadRef}
+                issueLinkContext={{ ...reference, environmentId }}
                 label="Description"
                 saving={saving}
                 allowEmpty
@@ -1072,6 +1073,7 @@ function IssueDetailContent({
                 cwd={cwd}
                 environmentId={environmentId}
                 threadRef={threadRef}
+                issueLinkContext={{ ...reference, environmentId }}
               />
             ) : (
               <p className="text-sm text-muted-foreground italic">No description.</p>

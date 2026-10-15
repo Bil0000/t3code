@@ -1,5 +1,5 @@
 import { pullRequestHostOf, SourceControlProviderKind } from "@t3tools/contracts";
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, IssueRef, ScopedThreadRef } from "@t3tools/contracts";
 import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { useNavigate } from "@tanstack/react-router";
 import { type MouseEvent, useCallback } from "react";
@@ -25,9 +25,14 @@ async function openUnresolvedLink(url: string): Promise<void> {
   opened.location.href = url;
 }
 
+export type IssueLinkContext = Pick<IssueRef, "projectId" | "connectionId"> & {
+  readonly environmentId: EnvironmentId;
+};
+
 export function useOpenIssueLink(
   threadRef?: ScopedThreadRef,
   panelRef?: ScopedThreadRef,
+  issueLinkContext?: IssueLinkContext,
 ): (
   event: Pick<
     MouseEvent<HTMLElement>,
@@ -45,7 +50,8 @@ export function useOpenIssueLink(
     (event, targetUrl, targetEnvironmentId) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
       const resolvedPanelRef = threadRef ?? (panelRef && ISSUES_PANEL_REF);
-      const environmentId = targetEnvironmentId ?? threadRef?.environmentId;
+      const environmentId =
+        targetEnvironmentId ?? issueLinkContext?.environmentId ?? threadRef?.environmentId;
       if (resolvedPanelRef === undefined || environmentId === undefined) return false;
       if (serverConfigs.get(environmentId)?.environment.capabilities.issues !== true) return false;
       const candidate =
@@ -72,15 +78,19 @@ export function useOpenIssueLink(
       if (!candidate) return false;
       event.preventDefault();
       event.stopPropagation();
+      const source =
+        issueLinkContext?.environmentId === environmentId ? issueLinkContext : undefined;
       const projectId =
-        threadRef?.environmentId === environmentId
+        source?.projectId ??
+        (threadRef?.environmentId === environmentId
           ? readThreadShell(threadRef)?.projectId
-          : undefined;
+          : undefined);
       void resolveUrl({
         environmentId,
         input: {
           url: targetUrl,
           ...(projectId === undefined ? {} : { projectId }),
+          ...(source?.connectionId === undefined ? {} : { connectionId: source.connectionId }),
         },
       })
         .then(async (result) => {
@@ -138,6 +148,15 @@ export function useOpenIssueLink(
         });
       return true;
     },
-    [navigate, openLink, panelRef, projects, resolveUrl, serverConfigs, threadRef],
+    [
+      issueLinkContext,
+      navigate,
+      openLink,
+      panelRef,
+      projects,
+      resolveUrl,
+      serverConfigs,
+      threadRef,
+    ],
   );
 }

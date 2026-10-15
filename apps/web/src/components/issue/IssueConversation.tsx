@@ -74,6 +74,7 @@ export function IssueCommentContent({
           environmentId={environmentId}
           label="Edit comment"
           threadRef={threadRef ?? null}
+          issueLinkContext={{ ...reference, environmentId }}
           saving={saving}
           onSave={(next) => void save(next)}
           onCancel={() => setEditing(false)}
@@ -84,6 +85,7 @@ export function IssueCommentContent({
           cwd={cwd}
           environmentId={environmentId}
           threadRef={threadRef ?? null}
+          issueLinkContext={{ ...reference, environmentId }}
         />
       )}
     </>

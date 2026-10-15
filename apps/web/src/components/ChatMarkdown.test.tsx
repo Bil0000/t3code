@@ -4,6 +4,7 @@ import {
   AuthStandardClientScopes,
   EnvironmentId,
   IssueResolvedUrl,
+  IssueResolveUrlInput,
   ProjectId,
   ThreadId,
   type AuthEnvironmentScope,
@@ -75,6 +76,7 @@ vi.mock("../connection/runtime", async () => {
   const SubscriptionRef = await import("effect/SubscriptionRef");
   const services = await import("@t3tools/client-runtime/connection");
   const decodeResolved = Schema.decodeUnknownEffect(IssueResolvedUrl);
+  const decodeInput = Schema.decodeUnknownSync(IssueResolveUrlInput);
   return {
     connectionAtomRuntime: Atom.runtime(
       Layer.succeed(
@@ -84,9 +86,9 @@ vi.mock("../connection/runtime", async () => {
             Effect.gen(function* () {
               const client = {
                 "issues.resolveUrl": (input: Record<string, unknown>) =>
-                  Effect.sync(() => issueLinks.resolve({ environmentId, input })).pipe(
-                    Effect.andThen(decodeResolved),
-                  ),
+                  Effect.sync(() =>
+                    issueLinks.resolve({ environmentId, input: decodeInput(input) }),
+                  ).pipe(Effect.andThen(decodeResolved)),
               } as unknown as RpcSession["client"];
               const session = yield* SubscriptionRef.make(Option.some({ client } as RpcSession));
               return yield* Effect.provideService(
@@ -252,14 +254,15 @@ describe("pull request Markdown issue destinations", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     issueLinks.enabled = true;
     issueLinks.navigate.mockReset();
-    issueLinks.resolve.mockReset().mockReturnValue({
+    issueLinks.resolve.mockReset().mockImplementation(({ input }) => ({
       projectId: ProjectId.make("resolved-project"),
       tracker: "github",
       host: "github.com",
       scope: "example/repo",
       key: "7",
       writable: true,
-    });
+      ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
+    }));
     useRightPanelStore.setState(useRightPanelStore.getInitialState(), true);
     element = document.createElement("div");
     document.body.append(element);
@@ -274,15 +277,21 @@ describe("pull request Markdown issue destinations", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    ["body", false],
-    ["comment", null],
-    ["editor preview", true],
-    ["same environment", true],
-    ["standalone", true],
-  ] as const)(
-    "opens an issue from the %s in its source environment and existing panel",
-    async (surface, sourceIssues) => {
+  it.each(
+    (
+      [
+        ["body", false],
+        ["comment", null],
+        ["editor preview", true],
+        ["same environment", true],
+        ["standalone", true],
+      ] as const
+    ).flatMap(([surface, sourceIssues]) =>
+      [undefined, "Account/B"].map((connectionId) => ({ surface, sourceIssues, connectionId })),
+    ),
+  )(
+    "opens an issue from $surface in its source environment and account $connectionId",
+    async ({ surface, sourceIssues, connectionId }) => {
       const environmentId =
         surface === "same environment" ? threadRef.environmentId : EnvironmentId.make("env-b");
       const props = {
@@ -290,6 +299,15 @@ describe("pull request Markdown issue destinations", () => {
         text,
         environmentId,
         threadRef: surface === "standalone" ? null : threadRef,
+        ...(connectionId === undefined
+          ? {}
+          : {
+              issueLinkContext: {
+                environmentId,
+                projectId: ProjectId.make("source-project"),
+                connectionId,
+              },
+            }),
       };
       await act(async () => {
         root.render(
@@ -332,7 +350,13 @@ describe("pull request Markdown issue destinations", () => {
       });
       expect(issueLinks.resolve).toHaveBeenCalledExactlyOnceWith({
         environmentId,
-        input: { url, ...(surface === "same environment" ? { projectId: "project-a" } : {}) },
+        input: {
+          url,
+          ...(connectionId === undefined && surface === "same environment"
+            ? { projectId: "project-a" }
+            : {}),
+          ...(connectionId === undefined ? {} : { projectId: "source-project", connectionId }),
+        },
       });
       const panelRef = surface === "standalone" ? ISSUES_PANEL_REF : threadRef;
       const panels = useRightPanelStore.getState().byThreadKey;
@@ -342,6 +366,7 @@ describe("pull request Markdown issue destinations", () => {
           kind: "issue",
           ...(panelRef.environmentId === environmentId ? {} : { environmentId }),
           projectId: "resolved-project",
+          ...(connectionId === undefined ? {} : { connectionId }),
           tracker: "github",
           host: "github.com",
           scope: "example/repo",
