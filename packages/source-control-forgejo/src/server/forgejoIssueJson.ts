@@ -46,6 +46,14 @@ export const ForgejoIssue = Schema.Struct({
 export const ForgejoIssueRepository = Schema.Struct({
   ...ForgejoRepository.fields,
   has_issues: Schema.optional(Schema.Boolean),
+  has_pull_requests: Schema.optional(Schema.Boolean),
+  internal_tracker: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        enable_issue_dependencies: Schema.optional(Schema.Boolean),
+      }),
+    ),
+  ),
 });
 
 /** One row of `/issues/{index}/timeline`, which is a comment with a type and a subject. */

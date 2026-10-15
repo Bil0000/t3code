@@ -19,6 +19,7 @@ import {
   type IssuePageInput,
   type IssueLinkedPullRequest,
   type IssueViewerPermissions,
+  type IssueDependency,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import {
@@ -28,6 +29,12 @@ import {
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
 import * as ForgejoCli from "./ForgejoCli.ts";
+import {
+  ForgejoDependencyIssue,
+  forgejoDependency,
+  forgejoDependencyScope,
+  forgejoDependencyPagination,
+} from "./forgejoIssueDependencies.ts";
 import {
   ForgejoIssue,
   ForgejoIssueConfig,
@@ -63,6 +70,7 @@ const CAPABILITIES: IssueCapabilities = {
   subIssues: false,
   createSubIssue: false,
   updateParent: false,
+  dependencies: true,
   listSorts: ["created"],
   listOrders: ["desc"],
   labels: true,
@@ -620,9 +628,190 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         : Effect.succeed({ page, limit: Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE) });
     };
 
+    const dependencyRepository = Effect.fn("ForgejoIssueTracker.dependencyRepository")(function* (
+      input: Target,
+      operation: string,
+    ) {
+      const scope = forgejoDependencyScope(input.scope);
+      if (!scope) return yield* refused(operation, "Invalid Forgejo dependency scope.");
+      const native = yield* cli
+        .resolveRepository({ cwd: input.cwd, host: input.host, repository: input.scope })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new IssueTrackerError({
+                tracker: KIND,
+                operation,
+                reason: reasonFor(error),
+                detail: error.detail,
+                cause: error,
+              }),
+          ),
+        );
+      const base = new URL(native.baseUrl);
+      const mount = base.pathname.replace(/^\/|\/$/g, "");
+      if (
+        base.host.toLowerCase() !== input.host.toLowerCase() ||
+        (scope.mount && scope.mount !== mount) ||
+        native.repository.toLowerCase() !== scope.repository.toLowerCase()
+      )
+        return yield* refused(operation, "Forgejo resolved a different dependency scope.");
+      return native;
+    });
+
+    const readDependency = Effect.fn("ForgejoIssueTracker.readDependency")(function* (
+      input: Target & { readonly key: string },
+      operation: string,
+      baseUrl: string,
+    ) {
+      const { path } = yield* issueTarget(operation, input);
+      const record = yield* read(input, operation, { path }, ForgejoDependencyIssue);
+      const dependency = forgejoDependency(record, baseUrl);
+      const scope = forgejoDependencyScope(input.scope);
+      const actual =
+        dependency && dependency !== "hidden" ? forgejoDependencyScope(dependency.scope) : null;
+      if (
+        !dependency ||
+        dependency === "hidden" ||
+        dependency.key !== input.key ||
+        !actual ||
+        !scope ||
+        actual.repository.toLowerCase() !== scope.repository.toLowerCase()
+      )
+        return yield* refused(operation, "Forgejo returned a different dependency issue.");
+      return dependency;
+    });
+
     return {
       kind: KIND,
       capabilities: CAPABILITIES,
+
+      getDependencies: (input) =>
+        Effect.gen(function* () {
+          const operation = "getDependencies";
+          const match = /^([1-9]\d{0,6})(?::([1-9]\d?))?$/.exec(input.cursor ?? "1");
+          if (!match || Number(match[2] ?? 0) >= PAGE_SIZE)
+            return yield* refused(operation, "The cursor was not one Forgejo handed out.");
+          const page = Number(match[1]);
+          const offset = Number(match[2] ?? 0);
+          const { number } = yield* issueTarget(operation, input);
+          if (!Number.isSafeInteger(number)) return yield* notFound(operation);
+          const native = yield* dependencyRepository(input, operation);
+          const endpoint = input.direction === "blocks" ? "blocks" : "dependencies";
+          const path = `${issuePath(native.repository, number)}/${endpoint}`;
+          const result = yield* request(input, operation, {
+            path: `${path}?limit=${PAGE_SIZE}&page=${page}`,
+          });
+          if (result.stdoutTruncated || result.stderrTruncated)
+            return yield* refused(operation, "Forgejo response exceeded the output limit.");
+          const decoded = decodeJsonResult(Schema.NullOr(Schema.Array(ForgejoDependencyIssue)))(
+            result.stdout,
+          );
+          if (Result.isFailure(decoded))
+            return yield* refused(
+              operation,
+              "Forgejo returned invalid dependencies.",
+              decoded.failure,
+            );
+          const rows = decoded.success ?? [];
+          if (rows.length > PAGE_SIZE || offset > rows.length)
+            return yield* refused(operation, "Forgejo returned an invalid dependency page.");
+          const pagination = forgejoDependencyPagination(
+            result.stderr,
+            new URL(`${native.baseUrl}/api/v1/${path}`),
+            page,
+            rows.length,
+          );
+          if (!pagination)
+            return yield* refused(operation, "Forgejo returned invalid dependency pagination.");
+          const items: IssueDependency[] = [];
+          let hidden = false;
+          let consumed = offset;
+          for (let index = 0; index < rows.length; index++) {
+            const dependency = forgejoDependency(rows[index]!, native.baseUrl);
+            if (!dependency)
+              return yield* refused(operation, "Forgejo returned an invalid dependency issue.");
+            if (dependency === "hidden") hidden = true;
+            if (index < offset || items.length >= Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE))
+              continue;
+            consumed = index + 1;
+            if (dependency !== "hidden") items.push(dependency);
+          }
+          return {
+            items,
+            nextCursor:
+              consumed < rows.length
+                ? `${page}:${consumed}`
+                : pagination.more && page < 9_999_999
+                  ? String(page + 1)
+                  : null,
+            truncated: hidden || !pagination.known || (pagination.more && page === 9_999_999),
+          };
+        }),
+
+      setDependency: (input) =>
+        Effect.gen(function* () {
+          const operation = "setDependency";
+          const source = forgejoDependencyScope(input.scope);
+          const target = forgejoDependencyScope(input.targetScope);
+          const number = parseNumber(input.key);
+          const targetNumber = parseNumber(input.targetKey);
+          if (
+            !source ||
+            !target ||
+            (source.mount && source.mount !== target.mount) ||
+            number === null ||
+            !Number.isSafeInteger(number) ||
+            targetNumber === null ||
+            !Number.isSafeInteger(targetNumber)
+          )
+            return yield* refused(
+              operation,
+              "Invalid Forgejo dependency target. No edge was changed.",
+            );
+          const native = yield* dependencyRepository(input, operation);
+          if (
+            target.mount &&
+            target.mount !== new URL(native.baseUrl).pathname.replace(/^\/|\/$/g, "")
+          )
+            return yield* refused(
+              operation,
+              "The dependency target belongs to a different native mount. No edge was changed.",
+            );
+          const sourceRepository = yield* getRepository(input, operation);
+          const sourceIssue = yield* readDependency(input, operation, native.baseUrl);
+          const targetInput = { ...input, scope: input.targetScope, key: input.targetKey };
+          const sameRepository =
+            source.repository.toLowerCase() === target.repository.toLowerCase();
+          const targetRepository = sameRepository
+            ? sourceRepository
+            : yield* getRepository(targetInput, operation);
+          const targetIssue = yield* readDependency(targetInput, operation, native.baseUrl);
+          const blockedRepository =
+            input.direction === "blocks" ? targetRepository : sourceRepository;
+          const blockedIssue = input.direction === "blocks" ? targetIssue : sourceIssue;
+          if (
+            sourceRepository.full_name.toLowerCase() !== source.repository.toLowerCase() ||
+            targetRepository.full_name.toLowerCase() !== target.repository.toLowerCase() ||
+            sourceIssue.kind !== "issue" ||
+            sourceRepository.archived ||
+            sourceRepository.has_issues === false ||
+            blockedRepository.archived ||
+            blockedRepository.internal_tracker?.enable_issue_dependencies === false ||
+            (blockedIssue.kind === "issue"
+              ? blockedRepository.has_issues === false
+              : blockedRepository.has_pull_requests === false)
+          )
+            return yield* refused(
+              operation,
+              "The native repository does not allow this dependency. No edge was changed.",
+            );
+          yield* write(input, operation, {
+            path: `${issuePath(input.scope, number)}/${input.direction === "blocks" ? "blocks" : "dependencies"}`,
+            method: input.linked ? "POST" : "DELETE",
+            body: { owner: target.owner, repo: target.repo, index: targetNumber },
+          });
+        }),
 
       getViewer: (input) => getViewer({ ...input, scope: "" }, "getViewer"),
 
