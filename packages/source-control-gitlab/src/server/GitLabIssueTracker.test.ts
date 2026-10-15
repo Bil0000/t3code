@@ -140,6 +140,98 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each([
+    { selected: ["2", "3"], saved: [2], warning: true },
+    { selected: ["2", "3"], saved: [3, 2], warning: false },
+    { selected: [], saved: [], warning: false },
+    { selected: ["2"], saved: [], warning: true },
+  ])("keeps created identity and warns for omitted assignees: $selected/$saved", (input) =>
+    Effect.gen(function* () {
+      const requests: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args, stdin) => {
+        requests.push(args);
+        expect(JSON.parse(stdin!)).toEqual({
+          title: "Track release",
+          description: "Release checks",
+          labels: "",
+          assignee_ids: input.selected.map(Number),
+        });
+        return encode({
+          ...ISSUE,
+          assignees: input.saved.map((id) => ({ id, username: "member" + id })),
+        });
+      });
+      const result = yield* api.create!({
+        cwd: "/w",
+        host: "gitlab.acme.test",
+        scope: "acme/web",
+        title: "Track release",
+        body: "Release checks",
+        labels: [],
+        assignees: input.selected,
+      });
+      expect(result).toMatchObject({
+        key: "42",
+        displayKey: "#42",
+        url: ISSUE.web_url,
+      });
+      expect(result.warnings ?? []).toEqual(
+        input.warning
+          ? ["The issue was created, but GitLab did not save the requested assignees."]
+          : [],
+      );
+      expect(requests).toEqual([
+        [
+          "api",
+          "projects/acme%2Fweb/issues",
+          "--hostname",
+          "gitlab.acme.test",
+          "--method",
+          "POST",
+          "--input",
+          "-",
+          "--header",
+          "Content-Type: application/json",
+        ],
+      ]);
+    }),
+  );
+
+  it.effect("preserves native create403 without a retry or follow-up read", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const native = new GitLabCli.GitLabCliCommandError({
+        command: "glab",
+        operation: "execute",
+        cwd: "/w",
+        cause: new Error("HTTP403 Forbidden"),
+      });
+      const api = yield* GitLabIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(GitLabCli.GitLabCli)({
+            execute: () => {
+              calls++;
+              return Effect.fail(native);
+            },
+          }),
+        ),
+      );
+      const error = yield* Effect.flip(
+        api.create!({
+          cwd: "/w",
+          host: "gitlab.acme.test",
+          scope: "acme/web",
+          title: "Track release",
+          body: "",
+          labels: [],
+          assignees: ["2", "3"],
+        }),
+      );
+      expect(error).toMatchObject({ operation: "create", reason: "failed", cause: native });
+      expect(calls).toBe(1);
+    }),
+  );
+
   it.effect.each([false, true])(
     "keeps native author title writes and token refusal: $value",
     (denied) =>

@@ -467,13 +467,21 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                 assignee_ids,
               },
               decode: decodeCreatedIssueJson,
-            }),
+            }).pipe(
+              Effect.map((issue) => ({
+                key: String(issue.number),
+                displayKey: `#${issue.number}`,
+                url: issue.url,
+                ...(assignee_ids.some((id) => !issue.assigneeIds.includes(String(id)))
+                  ? {
+                      warnings: [
+                        "The issue was created, but GitLab did not save the requested assignees.",
+                      ],
+                    }
+                  : {}),
+              })),
+            ),
           ),
-          Effect.map((issue) => ({
-            key: String(issue.number),
-            displayKey: `#${issue.number}`,
-            url: issue.url,
-          })),
         ),
 
       comment: (input) =>
