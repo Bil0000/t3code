@@ -26,7 +26,7 @@ import {
   issueListTargetIncludesSource,
   issueWrites,
   ISSUE_LIST_PAGE_SIZE,
-  type HeldIssueList,
+  type HeldIssueList as BaseHeldIssueList,
   type IssueListSource,
   type IssueSourceWrite,
 } from "./issueList";
@@ -34,6 +34,10 @@ import {
 export type IssueListTarget = {
   readonly environmentId: EnvironmentId;
   readonly input: IssueListInput;
+};
+
+type HeldIssueList = BaseHeldIssueList & {
+  readonly restartSources?: ReadonlyArray<IssueSourceWrite["source"]>;
 };
 
 const pagesFamily = Atom.family((_key: string) =>
@@ -45,7 +49,10 @@ const handledWritesFamily = Atom.family((_key: string) =>
 const initialPages = new WeakMap<IssueListResult, HeldIssueList>();
 const refreshedPages = new WeakMap<HeldIssueList, HeldIssueList>();
 
-function deriveHeld(held: HeldIssueList | null, answer: IssueListResult | null) {
+function deriveHeld(
+  held: HeldIssueList | null,
+  answer: IssueListResult | null,
+): HeldIssueList | null {
   if (answer === null || held?.answer === answer) return held;
   if (held === null) {
     const cached = initialPages.get(answer);
@@ -114,8 +121,10 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
   const state = loading.key === scopeKey ? loading : { page: false, refresh: false, error: null };
   const retryError =
     state.error ??
-    (sources.some(({ held }) =>
-      [...(held?.pendingWrites.values() ?? [])].some((write) => write.failed),
+    (sources.some(
+      ({ held }) =>
+        !!held?.restartSources?.length ||
+        [...(held?.pendingWrites.values() ?? [])].some((write) => write.failed),
     )
       ? "Could not refresh issues."
       : null);
@@ -332,7 +341,15 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
             return;
           }
           const refreshed = refreshWrittenIssueList(latest, response.value, writes, scope);
-          registry.set(pagesFamily(JSON.stringify(target)), refreshed.held);
+          registry.set(pagesFamily(JSON.stringify(target)), {
+            ...refreshed.held,
+            restartSources: latest.restartSources?.filter(
+              (pending) =>
+                response.value.errors.length > 0 ||
+                issueScopeKey(environmentId, { ...pending, host: pending.host ?? "" }) !==
+                  sourceKey,
+            ),
+          });
           registry.update(
             handledWritesFamily(JSON.stringify(target)),
             (previous) => new Map([...previous, ...refreshed.handledWrites]),
@@ -381,7 +398,18 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
       )
         return;
       if (retry && retryError) {
-        const pending = new Map(targets.flatMap((target) => [...pendingWrites(target)]));
+        const pending = new Map(
+          targets.flatMap((target) => [
+            ...(currentHeld(target)?.restartSources ?? []).map((source) => {
+              const sourceKey = issueScopeKey(target.environmentId, {
+                ...source,
+                host: source.host ?? "",
+              });
+              return [sourceKey, { environmentId: target.environmentId, source }] as const;
+            }),
+            ...pendingWrites(target),
+          ]),
+        );
         if (pending.size) {
           await Promise.all(
             [...pending].map(([sourceKey, write]) =>
@@ -452,12 +480,12 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
       );
       if (requests.current.page === controller) delete requests.current.page;
       if (!controller.signal.aborted && activeScope.current === scopeKey)
-        setLoading({
+        setLoading((previous) => ({
           key: scopeKey,
           page: false,
           refresh: false,
-          error: requestErrors(responses),
-        });
+          error: requestErrors(responses) ?? (previous.key === scopeKey ? previous.error : null),
+        }));
     },
     [
       currentHeld,

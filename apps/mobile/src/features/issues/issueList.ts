@@ -6,6 +6,7 @@ import {
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   pullRequestHostOf,
+  issueScopeKeyOf,
   type EnvironmentId,
   type IssueListEntry,
   type IssueListInput,
@@ -156,7 +157,7 @@ export function issueListCanonicalSource(
   const matches = (candidate: IssueScopeRef) =>
     candidate.tracker === source.tracker &&
     candidate.host?.toLowerCase() === source.host?.toLowerCase() &&
-    candidate.scope.toLowerCase() === source.scope.toLowerCase();
+    issueScopeKeyOf(candidate) === issueScopeKeyOf(source);
   const representative = held?.entries.find(matches) ?? held?.sources?.find(matches);
   return representative ? { ...source, projectId: representative.projectId } : source;
 }

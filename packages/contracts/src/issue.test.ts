@@ -206,3 +206,18 @@ it.each([{}, { bodyEditable: false, states: [{ category: "closed", name: "Shippe
     expect(decode(detail)).toEqual(detail);
   },
 );
+
+it("keeps Forgejo mounts distinct while matching owner and repository case aliases", () => {
+  const issue = {
+    tracker: "forgejo",
+    host: "forgejo.test",
+    scope: "Root/Mount/Acme/Web",
+    key: "42",
+  };
+  expect(threadIssueKeyOf(issue)).toBe(
+    threadIssueKeyOf({ ...issue, host: " Forgejo.TEST ", scope: " Root/Mount/acme/web " }),
+  );
+  expect(threadIssueKeyOf(issue)).not.toBe(
+    threadIssueKeyOf({ ...issue, scope: "Root/mount/Acme/Web" }),
+  );
+});

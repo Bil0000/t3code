@@ -67,9 +67,11 @@ it.each([
   { viewer: "A", switchFilter: false, companion: "waiting" },
   { viewer: "A", switchFilter: false, companion: "failed" },
   { viewer: "B", switchFilter: false, companion: "ready" },
+  { viewer: "B", switchFilter: false, companion: null, restartFailure: "request" },
+  { viewer: "B", switchFilter: false, companion: null, restartFailure: "source" },
 ])(
   "restarts only the current changed viewer from page one: %j",
-  async ({ viewer, switchFilter, companion }) => {
+  async ({ viewer, switchFilter, companion, restartFailure }) => {
     const firstRows = Array.from({ length: 50 }, (_, index) => row(`A-${index}`));
     const failed = row("failed", { scope: "group/failed", projectId: ProjectId.make("failed") });
     const other = row("other", {
@@ -80,9 +82,13 @@ it.each([
     });
     const otherTail = row("other-tail", other);
     const first: IssueListResult = {
-      entries: [...firstRows, failed, other],
-      sources: [source(firstRows[0]!), source(failed), source(other)],
-      nextCursors: { [cursor]: "2", [failedCursor]: "F2", [otherCursor]: "O2" },
+      entries: [...firstRows, ...(restartFailure ? [] : [failed]), other],
+      sources: [source(firstRows[0]!), ...(restartFailure ? [] : [source(failed)]), source(other)],
+      nextCursors: {
+        [cursor]: "2",
+        ...(restartFailure ? {} : { [failedCursor]: "F2" }),
+        [otherCursor]: "O2",
+      },
       viewers: { "gitlab gitlab.example": "A", "github github.example": "other" },
       trackers: [],
       errors: [],
@@ -92,15 +98,17 @@ it.each([
       entries: [otherTail],
       viewers: { ...first.viewers, "gitlab gitlab.example": viewer },
       nextCursors: { [otherCursor]: "O3" },
-      errors: [
-        {
-          projectId: failed.projectId,
-          projectTitle: failed.projectTitle,
-          tracker: failed.tracker,
-          host: failed.host,
-          message: "unavailable",
-        },
-      ],
+      errors: restartFailure
+        ? []
+        : [
+            {
+              projectId: failed.projectId,
+              projectTitle: failed.projectTitle,
+              tracker: failed.tracker,
+              host: failed.host,
+              message: "unavailable",
+            },
+          ],
     };
     const fresh: IssueListResult = {
       ...continued,
@@ -112,6 +120,7 @@ it.each([
     const pageRequest = vi.spyOn(RpcClient, "requestGuarded");
     const restarts = viewer === "B" && !switchFilter;
     const replies = restarts ? [first, continued, fresh] : [first, continued];
+    let restartFailed = false;
     const companionPage = Promise.withResolvers<IssueListResult>();
     const continuation = Promise.withResolvers<IssueListResult>();
     const started = Promise.withResolvers<void>();
@@ -128,6 +137,21 @@ it.each([
       if (switchFilter && reply === continued) {
         started.resolve();
         return Effect.promise(() => continuation.promise);
+      }
+      if (restartFailure && reply === fresh && !restartFailed) {
+        restartFailed = true;
+        if (restartFailure === "request") return Effect.fail(new Error("restart failed"));
+        return Effect.succeed({
+          ...fresh,
+          entries: [],
+          errors: [
+            {
+              projectId: firstRows[0]!.projectId,
+              projectTitle: "Project",
+              message: "restart failed",
+            },
+          ],
+        });
       }
       return Effect.succeed(reply);
     }) as unknown as Parameters<typeof pageRequest.mockImplementation>[0]);
@@ -181,7 +205,7 @@ it.each([
           createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
         ),
       );
-      expect(result!.lists[0]?.held.entries).toHaveLength(52);
+      expect(result!.lists[0]?.held.entries).toHaveLength(restartFailure ? 51 : 52);
       if (companion === "waiting" || companion === "failed") {
         await act(async () =>
           registry.set(
@@ -215,6 +239,24 @@ it.each([
         Array(restarts ? (companion === "ready" ? 4 : 3) : 2).fill("issues.list"),
       );
       expect(pageRequest.mock.calls[1]?.[1]).toMatchObject({ cursors: first.nextCursors });
+      if (restartFailure) {
+        expect(result!.lists[0]?.held.entries.map((entry) => entry.key)).toEqual([
+          "other",
+          "other-tail",
+        ]);
+        expect(result!.lists[0]?.held.nextCursors).toEqual({ [otherCursor]: "O3" });
+        expect(result!.loadingMore).toBe(false);
+        expect(result!.refreshing).toBe(false);
+        expect(result!.loadMoreError).toContain("restart failed");
+        await act(async () => result!.loadMore());
+        expect(pageRequest).toHaveBeenCalledTimes(3);
+        replies.push(fresh);
+        await act(async () => result!.loadMore(true));
+        expect(pageRequest).toHaveBeenCalledTimes(4);
+        expect(pageRequest.mock.calls[3]?.[1]).toEqual(pageRequest.mock.calls[2]?.[1]);
+        expect(result!.loadMoreError).toBeNull();
+        expect(result!.lists[0]?.held.pendingWrites.size).toBe(0);
+      }
       if (restarts) {
         expect(pageRequest.mock.calls[companion === "ready" ? 3 : 2]?.[1]).toEqual({
           state: "all",
@@ -224,7 +266,7 @@ it.each([
           limit: 50,
         });
         expect(result!.lists[0]?.held.entries.map((entry) => entry.key)).toEqual([
-          "failed",
+          ...(restartFailure ? [] : ["failed"]),
           "other",
           "other-tail",
           "B-first",
@@ -235,7 +277,9 @@ it.each([
         );
       }
       expect(result!.lists[0]?.held.nextCursors).toEqual(
-        switchFilter ? first.nextCursors : { [failedCursor]: "F2", [otherCursor]: "O3" },
+        switchFilter
+          ? first.nextCursors
+          : { ...(restartFailure ? {} : { [failedCursor]: "F2" }), [otherCursor]: "O3" },
       );
       expect(replies).toEqual([]);
       if (companion) {

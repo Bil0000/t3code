@@ -599,6 +599,17 @@ export const ThreadIssueLink = Schema.Struct({
 });
 export type ThreadIssueLink = typeof ThreadIssueLink.Type;
 
+export function issueScopeKeyOf(
+  ref: Pick<IssueScopeRef, "scope"> & { readonly tracker: string },
+): string {
+  const scope = ref.scope.trim();
+  if (ref.tracker !== "forgejo") return scope.toLowerCase();
+  const segments = scope.split("/");
+  return segments
+    .map((segment, index) => (index < segments.length - 2 ? segment : segment.toLowerCase()))
+    .join("/");
+}
+
 export function threadIssueKeyOf(
   key: Pick<ThreadIssueKey, "host" | "scope" | "key"> & { readonly tracker: string },
 ): string {
@@ -606,7 +617,7 @@ export function threadIssueKeyOf(
     key.tracker === "linear" || key.tracker === "jira"
       ? key.key.trim().toUpperCase()
       : key.key.trim();
-  return `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${key.scope.trim().toLowerCase()}\u0000${nativeKey}`;
+  return `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${issueScopeKeyOf(key)}\u0000${nativeKey}`;
 }
 
 export function threadIssueKeysEqual(left: ThreadIssueKey, right: ThreadIssueKey): boolean {

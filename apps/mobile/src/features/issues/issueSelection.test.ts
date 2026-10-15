@@ -64,3 +64,16 @@ describe("displayed issue selection", () => {
     expect(selection([])).toBeNull();
   });
 });
+
+it("selects only the exact Forgejo mount while accepting repository case aliases", () => {
+  const native = {
+    ...params,
+    tracker: "forgejo",
+    host: "forgejo.test",
+    scope: "Mount/Acme/Web",
+    key: "42",
+  };
+  const selected = selection([home, { ...issue, params: native }]);
+  expect(selected).toBe(issueParamsKey({ ...native, scope: "Mount/acme/web" }));
+  expect(selected).not.toBe(issueParamsKey({ ...native, scope: "mount/Acme/Web" }));
+});

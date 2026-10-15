@@ -978,3 +978,54 @@ describe("held issue pages", () => {
     expect(retried.nextCursors).toEqual({});
   });
 });
+
+it("keeps native Forgejo mounts separate for creation, write refresh and project filters", () => {
+  const upper = entry("42", {
+    tracker: IssueTrackerKind.make("forgejo"),
+    host: "forgejo.test",
+    scope: "Mount/Acme/Web",
+    projectId: ProjectId.make("upper"),
+  });
+  const lower = entry("42", {
+    ...upper,
+    scope: "mount/Acme/Web",
+    projectId: ProjectId.make("lower"),
+  });
+  const held = heldIssueList(
+    answer({
+      entries: [upper, lower],
+      trackers: [],
+      sources: [upper, lower].map((row) => ({ ...row, capabilities })),
+    }),
+  );
+  expect(
+    issueCreateScopes([{ environmentId, held }], []).map((item) => item.scope.projectId),
+  ).toEqual(["upper", "lower"]);
+  expect(issueListCanonicalSource(held, lower).projectId).toBe("lower");
+  const target = { environmentId, input: { state: "open" as const, projectId: upper.projectId } };
+  expect(issueListTargetIncludesSource(target, environmentId, lower, held)).toBe(false);
+  expect(
+    issueListTargetIncludesSource(
+      target,
+      environmentId,
+      { ...upper, projectId: ProjectId.make("alias"), scope: "Mount/acme/web" },
+      held,
+    ),
+  ).toBe(true);
+  const registry = AtomRegistry.make();
+  try {
+    markIssueWritten(registry, environmentId, upper, "42");
+    markIssueWritten(registry, environmentId, lower, "43");
+    expect(
+      [...registry.get(issueWrites)!.sources.values()].map((write) => [
+        write.source.projectId,
+        [...write.removedKeys.keys()],
+      ]),
+    ).toEqual([
+      ["upper", ["42"]],
+      ["lower", ["43"]],
+    ]);
+  } finally {
+    registry.dispose();
+  }
+});

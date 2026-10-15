@@ -1880,3 +1880,241 @@ it("resolves clicked URLs through the registered RPC only with the read grant", 
     sessionFactory.mockRestore();
   }
 });
+
+describe("native Forgejo mount identities and viewers", () => {
+  const upper = entry({
+    key: "42",
+    tracker: "forgejo" as IssueTrackerKind,
+    host: "forgejo.test",
+    scope: "Root/Mount/Acme/Web",
+    projectId: "upper" as ProjectId,
+  });
+  const lower = entry({ ...upper, scope: "Root/mount/Acme/Web", projectId: "lower" as ProjectId });
+  const source = (row: IssueListEntry) => ({ ...row, capabilities: {} as IssueCapabilities });
+  const first = (legacy: boolean, sameMount = false) => {
+    const sibling = sameMount ? { ...lower, scope: "Root/Mount/Other/Api" } : lower;
+    const key = (row: IssueListEntry) =>
+      legacy ? `${row.host} ${row.scope}` : issueListCursorKey(row);
+    const page = {
+      entries: [upper, sibling],
+      sources: [source(upper), source(sibling)],
+      errors: [],
+      nextCursors: { [key(upper)]: "2", [key(sibling)]: "2" },
+      viewers: { [issueListCursorKey(upper)]: "alice", [issueListCursorKey(sibling)]: "bob" },
+    };
+    return {
+      ...page,
+      firstCursors: page.nextCursors,
+      firstKeys: new Set(page.entries.map(issueEntryKey)),
+    };
+  };
+
+  it.each([false, true])("keeps row owners and literal cursors separate, legacy: %s", (legacy) => {
+    const held = first(legacy);
+    const page = {
+      ...held,
+      entries: [entry({ ...upper, key: "43" }), entry({ ...lower, key: "43" })],
+      nextCursors: {},
+    };
+    const next = continueIssueListPage(held, held.nextCursors, page, held.firstCursors);
+    expect(next.entries.map((row) => [row.scope, row.projectId, row.key])).toEqual([
+      [upper.scope, "upper", "42"],
+      [lower.scope, "lower", "42"],
+      [upper.scope, "upper", "43"],
+      [lower.scope, "lower", "43"],
+    ]);
+    const alias = { ...upper, scope: "Root/Mount/acme/web" };
+    const refreshed = refreshIssueListPage(
+      next,
+      {
+        entries: [alias],
+        sources: [source(alias)],
+        errors: [],
+        nextCursors: { [issueListCursorKey(alias)]: "2" },
+        viewers: held.viewers,
+      },
+      { source: alias },
+    );
+    expect(refreshed.entries.map((row) => [row.projectId, row.key])).toEqual([
+      ["lower", "42"],
+      ["upper", "43"],
+      ["lower", "43"],
+      ["upper", "42"],
+    ]);
+    expect(refreshed.nextCursors).toEqual({});
+  });
+
+  it.each([false, true])("restarts only the changed scoped viewer, legacy: %s", (legacy) => {
+    const held = first(legacy);
+    const lowerCursor = Object.keys(held.nextCursors)[1]!;
+    const next = continueIssueListPage(
+      held,
+      { [lowerCursor]: "2" },
+      {
+        ...held,
+        entries: [],
+        nextCursors: {},
+        viewers: {
+          ...held.viewers,
+          [issueListCursorKey(lower)]: "carol",
+          "forgejo forgejo.test": "wrong",
+          "forgejo.test": "wrong",
+        },
+      },
+      held.firstCursors,
+    );
+    expect(next.entries).toEqual([upper]);
+    expect(next.restartSources?.map((row) => [row.projectId, row.scope])).toEqual([
+      ["lower", lower.scope],
+    ]);
+    expect(next.nextCursors).toEqual({ [Object.keys(held.nextCursors)[0]!]: "2" });
+  });
+
+  it.each(["qualified", "legacy", "missing"])(
+    "ignores an ambiguous %s host viewer between native mounts",
+    (kind) => {
+      const held = first(false);
+      const continued = continueIssueListPage(
+        held,
+        held.nextCursors,
+        {
+          ...held,
+          entries: [entry({ ...upper, key: "43" }), entry({ ...lower, key: "43" })],
+          nextCursors: { [issueListCursorKey(upper)]: "3", [issueListCursorKey(lower)]: "3" },
+        },
+        held.firstCursors,
+      );
+      const viewers =
+        kind === "qualified"
+          ? { "forgejo forgejo.test": "carol" }
+          : kind === "legacy"
+            ? { "forgejo.test": "carol" }
+            : {};
+      const next = refreshIssueListPage(continued, { ...held, viewers });
+      expect(next.entries).toHaveLength(4);
+      expect(next.nextCursors).toEqual(continued.nextCursors);
+    },
+  );
+
+  it.each(["forgejo forgejo.test", "forgejo.test"])(
+    "accepts an old %s viewer within one native mount",
+    (viewerKey) => {
+      const initial = first(false, true);
+      const held = { ...initial, viewers: { [viewerKey]: "alice" } };
+      const next = continueIssueListPage(
+        held,
+        held.nextCursors,
+        {
+          ...held,
+          entries: [],
+          nextCursors: {},
+          viewers: { [viewerKey]: "bob" },
+        },
+        held.firstCursors,
+      );
+      expect(next.entries).toEqual([]);
+      expect(next.restartSources).toHaveLength(2);
+    },
+  );
+});
+
+it.each([false, true])(
+  "migrates only the requested Forgejo mount's literal cursor, legacy first: %s",
+  (legacy) => {
+    const upper = entry({
+      key: "42",
+      tracker: "forgejo" as IssueTrackerKind,
+      host: "forgejo.test",
+      scope: "Mount/Acme/Web",
+      projectId: "upper" as ProjectId,
+    });
+    const lower = entry({ ...upper, scope: "mount/Acme/Web", projectId: "lower" as ProjectId });
+    const source = (row: IssueListEntry) => ({ ...row, capabilities: {} as IssueCapabilities });
+    const cursor = (row: IssueListEntry, old: boolean) =>
+      old ? `${row.host} ${row.scope}` : issueListCursorKey(row);
+    const upperKey = cursor(upper, legacy),
+      lowerKey = cursor(lower, legacy);
+    const initial = {
+      entries: [upper, lower],
+      sources: [source(upper), source(lower)],
+      errors: [],
+      nextCursors: { [upperKey]: "2", [lowerKey]: "2" },
+      viewers: { [issueListCursorKey(upper)]: "alice", [issueListCursorKey(lower)]: "bob" },
+    };
+    const held = {
+      ...initial,
+      firstCursors: initial.nextCursors,
+      firstKeys: new Set(initial.entries.map(issueEntryKey)),
+    };
+    const tailed = continueIssueListPage(
+      held,
+      held.nextCursors,
+      {
+        ...initial,
+        entries: [entry({ ...upper, key: "43" }), entry({ ...lower, key: "43" })],
+        nextCursors: { [upperKey]: "3", [lowerKey]: "3" },
+      },
+      held.firstCursors,
+    );
+    const alias = { ...upper, scope: "Mount/acme/web" };
+    const newKey = cursor(alias, !legacy);
+    const fresh = refreshIssueListPage(
+      tailed,
+      {
+        ...initial,
+        entries: [alias],
+        sources: [source(alias)],
+        nextCursors: { [newKey]: "2" },
+      },
+      { source: alias },
+    );
+    expect(fresh.entries.map((row) => [row.projectId, row.key])).toEqual([
+      ["lower", "42"],
+      ["upper", "43"],
+      ["lower", "43"],
+      ["upper", "42"],
+    ]);
+    expect(fresh.nextCursors).toEqual({ [newKey]: "3", [lowerKey]: "3" });
+    expect(fresh.firstCursors).toEqual({ [newKey]: "2", [lowerKey]: "2" });
+    const failed = continueIssueListPage(
+      fresh,
+      { [lowerKey]: "3" },
+      {
+        ...initial,
+        entries: [],
+        nextCursors: {},
+        viewers: { [issueListCursorKey(lower)]: "carol" },
+        errors: [
+          {
+            projectId: lower.projectId,
+            projectTitle: lower.projectTitle,
+            tracker: lower.tracker,
+            host: lower.host,
+            message: "unavailable",
+          },
+        ],
+      },
+      fresh.firstCursors,
+    );
+    expect(failed.entries).toEqual(fresh.entries);
+    expect(failed.nextCursors).toEqual(fresh.nextCursors);
+    const recovered = refreshIssueListPage(
+      failed,
+      {
+        ...initial,
+        entries: [lower],
+        sources: [source(lower)],
+        viewers: { [issueListCursorKey(lower)]: "carol" },
+        nextCursors: { [lowerKey]: "2" },
+      },
+      { source: lower },
+    );
+    expect(recovered.entries.map((row) => [row.projectId, row.key])).toEqual([
+      ["upper", "43"],
+      ["upper", "42"],
+      ["lower", "42"],
+    ]);
+    expect(recovered.nextCursors).toEqual({ [newKey]: "3", [lowerKey]: "2" });
+    expect(recovered.errors).toEqual([]);
+  },
+);
