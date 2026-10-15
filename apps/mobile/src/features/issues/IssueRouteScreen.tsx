@@ -487,6 +487,14 @@ export function IssueRouteScreen({ route }: StaticScreenProps<IssueParams>) {
           <RefreshControl refreshing={pullRefresh.refreshing} onRefresh={pullRefresh.onRefresh} />
         }
       >
+        {issue && result.error ? (
+          <View className="mb-4 gap-2">
+            <Text selectable className="text-sm text-danger-foreground">
+              Couldn't refresh this issue: {result.error}
+            </Text>
+            <MaterialButton label="Retry" loading={result.isPending} onPress={refresh} />
+          </View>
+        ) : null}
         {issue ? (
           <IssueBody key={JSON.stringify(target)} params={params} issue={issue} />
         ) : result.isPending ? (
