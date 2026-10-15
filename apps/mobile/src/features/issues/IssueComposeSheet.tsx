@@ -25,9 +25,9 @@ export function IssueComposeSheet({
   const access = useIssueAccess(params, issue);
   const comment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
-  const [draft, setDraft] = useState<{ title: string; body: string } | null>(null);
-  const title = draft?.title ?? (editing ? (issue?.title ?? "") : "");
-  const body = draft?.body ?? (editing ? (issue?.body ?? "") : "");
+  const [draft, setDraft] = useState<{ title?: string; body?: string }>({});
+  const title = draft.title ?? (editing ? (issue?.title ?? "") : "");
+  const body = draft.body ?? (editing ? (issue?.body ?? "") : "");
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +90,7 @@ export function IssueComposeSheet({
           editable={!busy && Boolean(issue)}
           value={title}
           maxLength={1024}
-          onChangeText={(next) => setDraft({ title: next, body })}
+          onChangeText={(next) => setDraft((held) => ({ ...held, title: next }))}
           className="min-h-12 rounded-[20px] bg-grouped-card px-4 text-base text-foreground"
         />
       ) : null}
@@ -102,7 +102,7 @@ export function IssueComposeSheet({
         editable={!busy && Boolean(issue) && !bodyLocked}
         value={body}
         maxLength={65536}
-        onChangeText={(next) => setDraft({ title, body: next })}
+        onChangeText={(next) => setDraft((held) => ({ ...held, body: next }))}
         className="min-h-36 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
         style={{ textAlignVertical: "top" }}
       />

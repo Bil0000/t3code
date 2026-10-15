@@ -212,3 +212,22 @@ it("says the environment is offline instead of blaming access when it disconnect
   );
   expect(container.textContent).not.toContain("with your access");
 });
+
+it.each([
+  ["Title", "New title", { body: "Teammate body" }, { title: "New title", body: undefined }],
+  ["Description", "My body", { title: "Teammate title" }, { title: undefined, body: "My body" }],
+] as const)(
+  "keeps the refreshed issue's other field after editing %s",
+  async (field, text, refreshed, expected) => {
+    harness.issue = detail(true);
+    await render();
+    await type(field, text);
+    harness.issue = { ...detail(true), ...refreshed };
+    await render();
+    expect(control(field === "Title" ? "Description" : "Title")!.value).toBe(
+      Object.values(refreshed)[0],
+    );
+    await save();
+    expect(sent()).toEqual([expected]);
+  },
+);
