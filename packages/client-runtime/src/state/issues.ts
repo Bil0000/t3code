@@ -126,9 +126,12 @@ export function issueListCursorsOn(
 type IssueListPage = Pick<IssueListResult, "entries" | "nextCursors" | "errors"> & {
   readonly sources?: IssueListResult["sources"];
   readonly viewers?: IssueListResult["viewers"];
+  readonly trackers?: IssueListResult["trackers"];
 };
 type HeldIssueList = IssueListPage & {
-  readonly answer?: Pick<IssueListResult, "viewers">;
+  readonly answer?: Pick<IssueListResult, "viewers"> & {
+    readonly trackers?: IssueListResult["trackers"];
+  };
   readonly scopeViewers?: ReadonlyMap<string, string | null>;
   readonly firstCursors: IssueListCursors;
   readonly firstKeys: ReadonlySet<string>;
@@ -172,19 +175,44 @@ function issueListViewerChanges(
   cursors: ReadonlySet<string>,
 ) {
   const previous = held.viewers ?? held.answer?.viewers;
+  const previousSources = [...heldSources(held), ...(held.trackers ?? held.answer?.trackers ?? [])];
+  const currentSources = [
+    ...previousSources,
+    ...(page.sources ?? []),
+    ...page.entries,
+    ...(page.trackers ?? []),
+  ];
+  const viewerFor = (
+    viewers: IssueListResult["viewers"],
+    source: IssueListSource,
+    pool: ReadonlyArray<Pick<IssueListSource, "tracker" | "host">>,
+  ) => {
+    const qualified = viewers[issueTrackerHostKey(source)];
+    if (qualified !== undefined) return qualified;
+    const host = source.host.toLowerCase();
+    const legacy = viewers[host];
+    if (
+      legacy !== undefined &&
+      pool.some((each) => each.host.toLowerCase() === host && each.tracker !== source.tracker)
+    )
+      return undefined;
+    return legacy ?? null;
+  };
   const scopeViewers = new Map(held.scopeViewers);
   if (previous !== undefined) {
     for (const source of heldSources(held)) {
       const key = issueListCursorKey(source).toLowerCase();
-      if (!scopeViewers.has(key))
-        scopeViewers.set(key, previous[issueTrackerHostKey(source)] ?? null);
+      if (scopeViewers.has(key)) continue;
+      const viewer = viewerFor(previous, source, previousSources);
+      if (viewer !== undefined) scopeViewers.set(key, viewer);
     }
   }
   const changed = new Set<string>();
   if (page.viewers !== undefined) {
     for (const source of sources) {
       const key = issueListCursorKey(source).toLowerCase();
-      const viewer = page.viewers[issueTrackerHostKey(source)] ?? null;
+      const viewer = viewerFor(page.viewers, source, currentSources);
+      if (viewer === undefined) continue;
       if (scopeViewers.has(key) && scopeViewers.get(key) !== viewer)
         changed.add(scopeOf(source, cursors));
       scopeViewers.set(key, viewer);

@@ -92,6 +92,100 @@ describe("held issue list viewers", () => {
     },
   );
 
+  it.each(["B", null])(
+    "resets legacy host-only viewer A to %s without losing unrelated hosts",
+    (viewer) => {
+      const remote = row("remote", { host: "github.corp" });
+      const initial = {
+        ...answer([row("first"), remote], { [cursor]: "A2" }),
+        viewers: { "github.com": "A", "github.corp": "remote" },
+        sources: [source(row("first")), source(remote)],
+      };
+      const held = first(initial);
+      const continued = continueIssueListPage(
+        held,
+        held.nextCursors,
+        {
+          ...initial,
+          entries: [row("A-tail")],
+          nextCursors: { [cursor]: "A3" },
+        },
+        held.firstCursors,
+      );
+      const fresh = {
+        ...initial,
+        entries: [row("B-first"), remote],
+        viewers:
+          viewer === null
+            ? { "github.corp": "remote" }
+            : { "github.com": viewer, "github.corp": "remote" },
+        nextCursors: { [cursor]: "B2" },
+      };
+      const next = refreshIssueListPage(continued, fresh);
+      expect(keys(next)).toEqual(["B-first", "remote"]);
+      expect(next.nextCursors).toEqual({ [cursor]: "B2" });
+      const switched = continueIssueListPage(
+        continued,
+        continued.nextCursors,
+        {
+          ...fresh,
+          entries: [row("B-first")],
+        },
+        continued.firstCursors,
+      );
+      expect(keys(switched)).toEqual(["remote", "B-first"]);
+      expect(switched.nextCursors).toEqual({ [cursor]: "B2" });
+    },
+  );
+
+  it.each([true, false])(
+    "does not borrow a host-only viewer across trackers, with source metadata %s",
+    (sources) => {
+      const other = row("other", {
+        tracker: "gitlab" as IssueTrackerKind,
+        projectId: "other" as ProjectId,
+      });
+      const initial = {
+        ...answer([row("first")], { [cursor]: "A2" }),
+        sources: sources ? [source(row("first")), source(other)] : undefined,
+        trackers: [row("first"), other].map((entry) => ({
+          tracker: entry.tracker,
+          host: entry.host,
+          projectCount: 1,
+          configured: true,
+          capabilities: {} as IssueCapabilities,
+          detail: null,
+        })),
+        viewers: { "github github.com": "A", "gitlab github.com": "other", "github.com": "legacy" },
+      };
+      const held = first(initial);
+      const continued = continueIssueListPage(
+        held,
+        held.nextCursors,
+        {
+          ...initial,
+          entries: [row("A-tail")],
+          nextCursors: { [cursor]: "A3" },
+        },
+        held.firstCursors,
+      );
+      const ambiguous = refreshIssueListPage(continued, {
+        ...initial,
+        viewers: { "github.com": "B" },
+      });
+      expect(keys(ambiguous)).toEqual(["A-tail", "first"]);
+      expect(ambiguous.nextCursors).toEqual({ [cursor]: "A3" });
+      const resolved = refreshIssueListPage(ambiguous, {
+        ...initial,
+        entries: [row("B-first")],
+        viewers: { "github github.com": "B" },
+        nextCursors: { [cursor]: "B2" },
+      });
+      expect(keys(resolved)).toEqual(["B-first"]);
+      expect(resolved.nextCursors).toEqual({ [cursor]: "B2" });
+    },
+  );
+
   it("keeps pagination for the same viewer and for pages without viewer context", () => {
     const held = loaded();
     for (const fresh of [
