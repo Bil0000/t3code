@@ -246,6 +246,7 @@ export const ReadIssueResult = Schema.Struct({
   updatedAt: Schema.String,
   closedAt: Schema.NullOr(Schema.String),
   body: Schema.String,
+  bodyEditable: IssueDetail.fields.bodyEditable,
   commentCount: Schema.optional(IssueDetail.fields.commentCount),
   reactions: IssueDetail.fields.reactions,
   reactionsTruncated: IssueDetail.fields.reactionsTruncated,
@@ -257,6 +258,7 @@ export const ReadIssueResult = Schema.Struct({
       author: Schema.NullOr(Schema.String),
       authorDetails: Schema.optional(IssueComment.fields.author),
       body: Schema.String,
+      url: Schema.optional(IssueComment.fields.url),
       createdAt: Schema.String,
       editedAt: IssueComment.fields.editedAt,
       canEdit: IssueComment.fields.canEdit,
@@ -354,7 +356,7 @@ const ListIssuesTool = Tool.make("list_issues", {
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. Actor authorDetails/assigneeDetails and comment authorDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs, including archived labels; labelsTruncated means the current label set is incomplete. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
+    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. If bodyEditable is false, edit its rich description in the native tracker. Use states when present, otherwise capabilities.states, for state changes. Actor authorDetails/assigneeDetails and comment authorDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs, including archived labels; labelsTruncated means the current label set is incomplete. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
   parameters: IssueTargetInput,
   success: ReadIssueResult,
   failure: IssueToolError,

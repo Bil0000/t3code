@@ -421,6 +421,7 @@ const make = Effect.gen(function* () {
           updatedAt: detail.updatedAt,
           closedAt: detail.closedAt,
           body: detail.body,
+          ...(detail.bodyEditable === undefined ? {} : { bodyEditable: detail.bodyEditable }),
           commentCount: detail.commentCount,
           ...(detail.reactions === undefined ? {} : { reactions: detail.reactions }),
           ...(detail.reactionsTruncated === undefined
@@ -435,6 +436,7 @@ const make = Effect.gen(function* () {
             author: comment.author?.login ?? null,
             authorDetails: comment.author,
             body: comment.body,
+            ...(comment.url === undefined ? {} : { url: comment.url }),
             createdAt: comment.createdAt,
             ...(comment.editedAt === undefined ? {} : { editedAt: comment.editedAt }),
             ...(comment.canEdit === undefined ? {} : { canEdit: comment.canEdit }),

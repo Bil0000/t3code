@@ -20,7 +20,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
-import type { Tool } from "effect/ai";
+import { McpSchema, McpServer, type Tool } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -29,12 +29,16 @@ import * as JiraIssueTracker from "@t3tools/issue-tracker-jira/server/JiraIssueT
 
 import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
 import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
-import { decodeIssueSearchJson } from "@t3tools/source-control-github/server/gitHubIssueJson";
+import {
+  decodeIssueDetailJson,
+  decodeIssueSearchJson,
+} from "@t3tools/source-control-github/server/gitHubIssueJson";
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
 import { v2PullRequestThread } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
@@ -343,7 +347,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       ),
       Effect.provide(layerDependencies),
     );
-  return { links, unlinks, resolutions, call, calls };
+  return { links, unlinks, resolutions, call, calls, layerDependencies };
 });
 
 describe("issue toolkit handlers", () => {
@@ -428,8 +432,117 @@ describe("issue toolkit handlers", () => {
       }),
   );
 
+  it.effect("preserves body edit safety and native states through registered MCP reads", () =>
+    Effect.gen(function* () {
+      const client = McpSchema.McpServerClient.of({
+        clientId: 1,
+        protocolVersion: "2025-06-18",
+        clientCapabilities: {},
+        clientInfo: { name: "issues-test", version: "1" },
+        initializePayload: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "issues-test", version: "1" },
+        },
+        getClient: Effect.die("unused"),
+      });
+      for (const metadata of [
+        {},
+        { bodyEditable: true, states: [] },
+        {
+          bodyEditable: false,
+          states: [
+            { id: "review-id", category: "open" as const, name: "Needs review" },
+            { id: "shipped-id", category: "closed" as const, name: "Shipped" },
+          ],
+        },
+      ]) {
+        const harness = yield* makeHarness([], { detail: { ...detail, ...metadata } });
+        yield* Effect.gen(function* () {
+          const server = yield* McpServer.McpServer;
+          const request = { name: "read_issue", arguments: { projectId: PROJECT_ID, key: "7" } };
+          const result = yield* server.callTool(request);
+          expect(result.isError).toBe(false);
+          const read = decodeReadIssue(result.structuredContent);
+          if (metadata.bodyEditable === undefined) {
+            expect(read).not.toHaveProperty("bodyEditable");
+            expect(read).not.toHaveProperty("states");
+          } else {
+            expect(read.bodyEditable).toBe(metadata.bodyEditable);
+            expect(read.states).toEqual(metadata.states);
+          }
+          const denied = yield* server
+            .callTool(request)
+            .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, invocation([])));
+          expect(denied.isError).toBe(true);
+          expect(yield* Ref.get(harness.calls)).toEqual([
+            { operation: "detail", input: { projectId: PROJECT_ID, ...gitHostSource, key: "7" } },
+          ]);
+        }).pipe(
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["issues"])),
+          Effect.provide(
+            McpHttpServer.toolkitRegistration(IssuesToolkit, IssuesHandlers.layer).pipe(
+              Layer.provideMerge(McpServer.McpServer.layer),
+              Layer.provide(harness.layerDependencies),
+            ),
+          ),
+        );
+      }
+    }),
+  );
+
   const decodeReadIssue = Schema.decodeUnknownSync(IssuesToolkit.tools.read_issue.successSchema);
   const decodeListIssues = Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.successSchema);
+
+  it.effect.each(["https://github.com/T3Tools/T3Code/issues/7#issuecomment-123456", null])(
+    "preserves the newest native comment URL %s through the MCP output codec",
+    (url) =>
+      Effect.gen(function* () {
+        const comment = {
+          id: "IC_nativeOpaqueId",
+          author: null,
+          body: "Native comment",
+          createdAt: detail.createdAt,
+          url,
+        };
+        const decoded = decodeIssueDetailJson(
+          JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  number: 7,
+                  title: detail.title,
+                  url: detail.url,
+                  state: "OPEN",
+                  createdAt: detail.createdAt,
+                  updatedAt: detail.updatedAt,
+                  comments: {
+                    totalCount: 1,
+                    nodes: [comment],
+                    pageInfo: { hasPreviousPage: false },
+                  },
+                },
+              },
+            },
+          }),
+        );
+        expect(Result.isSuccess(decoded)).toBe(true);
+        if (Result.isFailure(decoded) || decoded.success === null)
+          throw new Error("Fixture decode failed");
+        expect(decoded.success.comments[0]?.url).toBe(url);
+        const harness = yield* makeHarness([], { detail: { ...detail, ...decoded.success } });
+        const read = decodeReadIssue(yield* harness.call("read_issue", { key: "7" }));
+        expect(read.commentsCursor).toBeNull();
+        expect(read.comments[0]).toHaveProperty("url", url);
+        const legacy = decodeReadIssue({
+          ...read,
+          comments: read.comments.map(({ url: _url, ...comment }) => comment),
+        });
+        expect(legacy.comments[0]).not.toHaveProperty("url");
+        expect((yield* Ref.get(harness.calls)).map((call) => call.operation)).toEqual(["detail"]);
+      }),
+  );
 
   it.effect.each([true, false])(
     "retains native actors, dates and counts with IDs=%s through registered reads",
