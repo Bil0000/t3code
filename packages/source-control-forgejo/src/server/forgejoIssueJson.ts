@@ -36,6 +36,7 @@ export const ForgejoIssue = Schema.Struct({
   closed_at: Schema.optional(Schema.NullOr(Schema.String)),
   assignees: Schema.optional(Schema.NullOr(Schema.Array(ForgejoUser))),
   labels: Schema.optional(Schema.NullOr(Schema.Array(ForgejoLabel))),
+  milestone: Schema.optional(Schema.NullOr(Schema.Struct({ title: Schema.String }))),
   comments: Schema.optional(Schema.Int),
   is_locked: Schema.optional(Schema.Boolean),
   /** Present on a row that is really a pull request, which the issue listing also returns. */
@@ -101,7 +102,9 @@ function toIsoUtc(value: string): string {
   return Option.match(DateTime.make(value), { onNone: () => value, onSome: DateTime.formatIso });
 }
 
-export function forgejoIssue(issue: typeof ForgejoIssue.Type): TrackerIssueSummary {
+export function forgejoIssue(
+  issue: typeof ForgejoIssue.Type,
+): TrackerIssueSummary & { readonly milestone: string | null } {
   return {
     key: String(issue.number),
     displayKey: `#${issue.number}`,
@@ -117,6 +120,7 @@ export function forgejoIssue(issue: typeof ForgejoIssue.Type): TrackerIssueSumma
     closedAt: issue.closed_at ? toIsoUtc(issue.closed_at) : null,
     assignees: (issue.assignees ?? []).flatMap((user) => forgejoActor(user) ?? []),
     labels: (issue.labels ?? []).map((label) => ({ name: label.name, color: label.color ?? null })),
+    milestone: issue.milestone?.title ?? null,
     commentCount: Math.max(0, issue.comments ?? 0),
   };
 }

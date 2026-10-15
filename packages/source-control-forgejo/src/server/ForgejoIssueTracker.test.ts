@@ -928,6 +928,39 @@ describe("ForgejoIssueTracker", () => {
   );
 
   it.effect.each([
+    { name: "populated", milestone: { title: "Release 1" } },
+    { name: "null", milestone: null },
+    { name: "absent", milestone: undefined },
+  ])("keeps the $name native milestone in list and detail", ({ milestone }) =>
+    Effect.gen(function* () {
+      const requests: ForgejoCli.ForgejoApiInput[] = [];
+      const native = { ...ISSUE, milestone };
+      const api = yield* tracker((input) => {
+        requests.push(input);
+        if (input.path.startsWith("repos/acme/web/issues?"))
+          return { stdout: encode([native]), stderr: 'Link: </last>; rel="last"' };
+        if (input.path === "repos/acme/web/issues/42") return { stdout: encode(native) };
+        return answer(input.path);
+      });
+      const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+      expect(
+        (yield* api.listIssues({
+          ...target,
+          state: "all",
+          involvement: "all",
+          viewer: "julius",
+          limit: 50,
+        })).items[0],
+      ).toHaveProperty("milestone", milestone?.title ?? null);
+      expect(requests).toHaveLength(1);
+      expect(yield* api.getIssue(target)).toHaveProperty("milestone", milestone?.title ?? null);
+      expect(requests).toHaveLength(9);
+      expect(requests.every((request) => request.method === undefined)).toBe(true);
+      expect(requests.some((request) => request.path.includes("milestone"))).toBe(false);
+    }),
+  );
+
+  it.effect.each([
     { path: "/Acme/Web/issues/42", allowed: true },
     { path: "/api/v1/repos/Acme/Web/issues/42", allowed: true },
     { path: "/Mount/Acme/Web/issues/42", mount: "Mount/", allowed: true },
