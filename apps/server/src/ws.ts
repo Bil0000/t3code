@@ -2788,6 +2788,7 @@ const layerWsCoreRpc = (
               input.resource._tag === "tool-output-image" ||
               // GitHub media names the repository it authenticates through itself.
               input.resource._tag === "github-media" ||
+              input.resource._tag === "linear-media" ||
               (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
             ) {
               return yield* issueAssetUrl({ resource: input.resource });

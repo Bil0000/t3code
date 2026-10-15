@@ -6,6 +6,8 @@ import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  IssueTrackerKind,
+  ProjectId,
   ThreadId,
   AuthOrchestrationOperateScope,
   ORCHESTRATION_V2_WS_METHODS,
@@ -444,6 +446,19 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
     yield* client[WS_METHODS.assetsCreateUrl]({
       resource: { _tag: "attachment", attachmentId: "image" },
     });
+    yield* client[WS_METHODS.assetsCreateUrl]({
+      resource: {
+        _tag: "linear-media",
+        issue: {
+          projectId: ProjectId.make("project"),
+          tracker: IssueTrackerKind.make("linear"),
+          scope: "workspace/ENG",
+          key: "ENG-12",
+          connectionId: "account-b",
+        },
+        url: "https://uploads.linear.app/workspace/file/image.png",
+      },
+    });
     for (const resource of [
       { _tag: "workspace-file", threadId: ThreadId.make("thread"), path: "file.txt" },
       { _tag: "media-file", threadId: ThreadId.make("thread"), path: "/repo/image.png" },
@@ -456,7 +471,7 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
         requiredPermission: AuthFilesystemReadScope,
       });
     }
-    expect(handled).toBe(1);
+    expect(handled).toBe(2);
   }).pipe(Effect.scoped),
 );
 
