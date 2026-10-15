@@ -113,4 +113,70 @@ describe("parseIssueUrl", () => {
       expect(parseIssueUrl(url, { tracker, host: "other.acme.test" })).toBeNull();
     },
   );
+
+  it.each([
+    [
+      "https://acme.visualstudio.com/platform/_workitems/edit/55",
+      "acme.visualstudio.com",
+      "acme/platform",
+    ],
+    [
+      "https://dev.azure.com/acme/My Project/_workitems/edit/55",
+      "dev.azure.com",
+      "acme/my project",
+    ],
+    [
+      "https://dev.azure.com/acme/My%20Project/_workitems/edit/55",
+      "dev.azure.com",
+      "acme/my project",
+    ],
+    [
+      "https://dev.azure.com/acme/My%2520Project/_workitems/edit/55",
+      "dev.azure.com",
+      "acme/my%20project",
+    ],
+    [
+      "https://acme.visualstudio.com/My%20Project/_workitems/edit/55",
+      "acme.visualstudio.com",
+      "acme/my project",
+    ],
+    [
+      "https://acme.visualstudio.com/DefaultCollection/My%20Project/_workitems/edit/55",
+      "acme.visualstudio.com",
+      "acme/my project",
+    ],
+    [
+      "https://acme.visualstudio.com/defaultcollection/My%2520Project/_workitems/edit/55",
+      "acme.visualstudio.com",
+      "acme/my%20project",
+    ],
+    [
+      "https://dev.azure.com/My%20Org/Project/_workitems/edit/55",
+      "dev.azure.com",
+      "my org/project",
+    ],
+    [
+      "https://dev.azure.com/My%2520Org/Project/_workitems/edit/55",
+      "dev.azure.com",
+      "my%20org/project",
+    ],
+  ])("decodes Azure project paths once for %s", (url, host, scope) => {
+    expect(parseIssueUrl(url)).toEqual({ tracker: "azure-devops", host, scope, key: "55" });
+  });
+
+  it.each([
+    "https://dev.azure.com/acme/My%2FProject/_workitems/edit/55",
+    "https://dev.azure.com/acme/My%5CProject/_workitems/edit/55",
+    "https://dev.azure.com/acme/My%ZZProject/_workitems/edit/55",
+    "https://dev.azure.com/acme/%20/_workitems/edit/55",
+    "https://dev.azure.com/My%2FOrg/Project/_workitems/edit/55",
+    "https://dev.azure.com/My%5COrg/Project/_workitems/edit/55",
+    "https://dev.azure.com/My%ZZOrg/Project/_workitems/edit/55",
+    "https://acme.visualstudio.com/My%2FProject/_workitems/edit/55",
+    "https://acme.visualstudio.com/My%5CProject/_workitems/edit/55",
+    "https://acme.visualstudio.com/DefaultCollection/My%ZZProject/_workitems/edit/55",
+    "https://acme.visualstudio.com/%20/_workitems/edit/55",
+  ])("rejects invalid Azure project paths in %s", (url) => {
+    expect(parseIssueUrl(url)).toBeNull();
+  });
 });
