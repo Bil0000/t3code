@@ -27,6 +27,8 @@ const state = vi.hoisted(() => {
     linked,
     list: {
       entries: [linked],
+      viewers: {} as Record<string, string>,
+      trackers: [],
       sources: [source],
       nextCursors: { "github.com org/repo": "next" } as IssueListCursors,
       errors: [],
@@ -42,14 +44,20 @@ vi.mock("~/state/entities", () => ({
 }));
 vi.mock("~/state/queries", () => ({ useDebouncedValue: (value: string) => value }));
 vi.mock("~/state/session", () => ({ useEnvironmentScope: () => true }));
-vi.mock("~/state/issues", () => ({
-  issueEnvironment: {
-    list: () => null,
-    detail: () => null,
-    listPage: "page",
-    resolveUrl: "resolve",
-  },
-}));
+vi.mock("~/state/issues", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const queries = Atom.family((answer: typeof state.list) =>
+    Atom.make(AsyncResult.success(answer)).pipe(Atom.keepAlive),
+  );
+  return {
+    issueEnvironment: {
+      list: () => queries(state.list),
+      detail: () => null,
+      listPage: "page",
+      resolveUrl: "resolve",
+    },
+  };
+});
 vi.mock("~/state/threads", () => ({ threadEnvironment: { linkIssue: "link" } }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
@@ -59,13 +67,9 @@ vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@t3tools/client-runtime/state/runtime")>()),
   executeAtomQuery: () => state.read(),
 }));
-vi.mock("~/state/query", () => ({
+vi.mock("~/state/query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/query")>()),
   formatEnvironmentQueryError: () => "failed",
-  useEnvironmentQuery: () => ({
-    data: state.list,
-    isPending: false,
-    error: null,
-  }),
 }));
 
 import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
@@ -174,6 +178,102 @@ it("shows a source page failure and retries its qualified cursor without paging 
     vi.unstubAllGlobals();
   }
 });
+
+it.each([false, true])(
+  "drops the old account's candidates after a new account page, empty: %s",
+  async (empty) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const cursor = "github github.com org/repo";
+    const row = (key: string) => ({ ...state.linked, key, title: `Issue ${key}` });
+    state.list = {
+      ...state.list,
+      entries: [row("A-first")],
+      viewers: { "github github.com": "A" },
+      nextCursors: { [cursor]: "A2" },
+    };
+    const page = (key: string | null, viewer: string, next: string | null) => ({
+      entries: key === null ? [] : [row(key)],
+      viewers: { "github github.com": viewer },
+      sources: [state.source],
+      errors: [],
+      nextCursors: next === null ? {} : { [cursor]: next },
+    });
+    state.load
+      .mockReset()
+      .mockResolvedValueOnce({ _tag: "Success", value: page("A-tail", "A", "A3") })
+      .mockResolvedValueOnce({
+        _tag: "Success",
+        value: page(empty ? null : "B-tail", "B", empty ? null : "B2"),
+      })
+      .mockResolvedValueOnce({
+        _tag: "Success",
+        value: {
+          ...page(null, "B", null),
+          errors: [
+            {
+              projectId: state.source.projectId,
+              projectTitle: "Project",
+              tracker: "github",
+              host: "github.com",
+              message: "Provider offline",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({ _tag: "Success", value: page("B-retried", "B", null) });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const more = () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Load more",
+      );
+    const text = () => document.body.textContent ?? "";
+    try {
+      openLinkThreadIssueDialog({
+        environmentId: EnvironmentId.make("environment"),
+        threadId: ThreadId.make("thread"),
+      });
+      await act(async () =>
+        root.render(
+          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+        ),
+      );
+      expect(text()).toContain("Issue A-first");
+      await act(async () => more()!.click());
+      expect(text()).toContain("Issue A-first");
+      expect(text()).toContain("Issue A-tail");
+      await act(async () => more()!.click());
+      expect(text()).not.toContain("Issue A-first");
+      expect(text()).not.toContain("Issue A-tail");
+      if (empty) {
+        expect(text()).toContain("No issues to link.");
+        expect(more()).toBeUndefined();
+      } else {
+        expect(text()).toContain("Issue B-tail");
+        await act(async () => more()!.click());
+        expect(text()).toContain("Provider offline");
+        expect(text()).toContain("Issue B-tail");
+        await act(async () => more()!.click());
+        expect(text()).toContain("Issue B-tail");
+        expect(text()).toContain("Issue B-retried");
+        expect(text()).not.toContain("Issue A-first");
+        expect(text()).not.toContain("Issue A-tail");
+        expect(text()).not.toContain("Provider offline");
+        expect(more()).toBeUndefined();
+      }
+      expect(state.load.mock.calls.map(([request]) => request.input.cursors)).toEqual(
+        empty
+          ? [{ [cursor]: "A2" }, { [cursor]: "A3" }]
+          : [{ [cursor]: "A2" }, { [cursor]: "A3" }, { [cursor]: "B2" }, { [cursor]: "B2" }],
+      );
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it.each(["key", "url", "listed", "unsupported-url"])(
   "reuses detail for a direct link and preserves no-detail URL paths (%s)",

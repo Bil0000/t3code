@@ -5,8 +5,6 @@ import {
   threadIssueKeysEqual,
   type IssueRef,
   type IssueListResult,
-  type IssueListEntry,
-  type IssueListCursors,
   type ScopedThreadRef,
   type ThreadIssueSnapshot,
 } from "@t3tools/contracts";
@@ -20,7 +18,6 @@ import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import {
   continueIssueListPage,
   issueEntryKey,
-  mergeIssueListPage,
   issueListCursorsOn,
 } from "@t3tools/client-runtime/state/issues";
 import { threadEnvironment } from "~/state/threads";
@@ -93,12 +90,10 @@ function LinkThreadIssueDialog({
     sources.find((candidate) => sourceValue(candidate) === selectedSource) ?? sources[0] ?? null;
   const [pages, setPages] = useState<{
     seed: IssueListResult;
-    entries: ReadonlyArray<IssueListEntry>;
-    cursors: IssueListCursors;
-    errors: IssueListResult["errors"];
+    page: ReturnType<typeof continueIssueListPage>;
   } | null>(null);
-  const held = pages?.seed === list.data ? pages : null;
-  const candidates = mergeIssueListPage(list.data?.entries ?? [], held?.entries ?? []).filter(
+  const held = pages?.seed === list.data ? pages.page : null;
+  const candidates = (held?.entries ?? list.data?.entries ?? []).filter(
     (entry) =>
       source !== null &&
       entry.tracker === source.tracker &&
@@ -107,7 +102,11 @@ function LinkThreadIssueDialog({
       !(thread?.issues ?? []).some((link) => threadIssueKeysEqual(link, entry)),
   );
   const nextCursors = source
-    ? issueListCursorsOn(held?.cursors ?? list.data?.nextCursors ?? {}, source.host, source.tracker)
+    ? issueListCursorsOn(
+        held?.nextCursors ?? list.data?.nextCursors ?? {},
+        source.host,
+        source.tracker,
+      )
     : {};
   const hasMore = Object.keys(nextCursors).length > 0;
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
@@ -141,25 +140,13 @@ function LinkThreadIssueDialog({
       setError(formatEnvironmentQueryError(result.cause));
       return;
     }
-    const continued = continueIssueListPage(
-      {
-        entries: held?.entries ?? [],
-        nextCursors: held?.cursors ?? seed.nextCursors,
-        firstCursors: seed.nextCursors,
-        firstKeys: new Set(seed.entries.map(issueEntryKey)),
-        errors: held?.errors ?? seed.errors,
-        sources: seed.sources,
-      },
-      nextCursors,
-      result.value,
-      seed.nextCursors,
-    );
-    setPages({
-      seed,
-      entries: continued.entries,
-      cursors: continued.nextCursors,
-      errors: continued.errors,
-    });
+    const page = held ?? {
+      ...seed,
+      firstCursors: seed.nextCursors,
+      firstKeys: new Set(seed.entries.map(issueEntryKey)),
+    };
+    const continued = continueIssueListPage(page, nextCursors, result.value, page.firstCursors);
+    setPages({ seed, page: continued });
     setError(continued.errors.map(({ message }) => message).join(" · ") || null);
   };
 
