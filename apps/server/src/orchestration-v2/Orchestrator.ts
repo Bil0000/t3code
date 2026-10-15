@@ -3168,6 +3168,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ...links,
               {
                 tracker: command.tracker,
+                ...(command.connectionId === undefined
+                  ? {}
+                  : { connectionId: command.connectionId }),
                 host: command.host.trim().toLowerCase(),
                 scope: command.scope.trim(),
                 key: command.key.trim(),

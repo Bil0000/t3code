@@ -78,6 +78,7 @@ import Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
 import Migration0062 from "./Migrations/062_ThreadFailureLookupIndex.ts";
 import Migration0063 from "./Migrations/063_IssueTrackerBindings.ts";
 import Migration0064 from "./Migrations/064_IssueTrackerBindingHost.ts";
+import Migration0065 from "./Migrations/065_IssueTrackerAccounts.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -156,6 +157,7 @@ export const migrationEntries = [
   [62, "ThreadFailureLookupIndex", Migration0062],
   [63, "IssueTrackerBindings", Migration0063],
   [64, "IssueTrackerBindingHost", Migration0064],
+  [65, "IssueTrackerAccounts", Migration0065],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

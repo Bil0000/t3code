@@ -46,6 +46,7 @@ function listThreadIssues(
     issues: (thread.issues ?? []).map((link) => ({
       projectId: link.projectId,
       tracker: link.tracker,
+      ...(link.connectionId === undefined ? {} : { connectionId: link.connectionId }),
       host: link.host,
       scope: link.scope,
       key: link.key,
@@ -110,6 +111,7 @@ const make = Effect.gen(function* () {
   const requireSource = Effect.fn("IssuesToolkit.requireSource")(function* (
     requestedProject: ProjectId | undefined,
     requestedTracker: IssueTrackerKind | undefined,
+    connectionId: string | undefined,
   ) {
     const { project } = yield* requireProject(requestedProject);
     const sources = yield* issues.sources(project.id);
@@ -119,7 +121,8 @@ const make = Effect.gen(function* () {
       requestedTracker === undefined
         ? sources
         : sources.filter((source) => source.tracker === requestedTracker);
-    const binding = matches.length === 1 ? matches[0] : undefined;
+    const selected = matches.filter((source) => source.connectionId === connectionId);
+    const binding = selected.length === 1 ? selected[0] : undefined;
     if (binding === undefined)
       return yield* new IssueSourceSelectionError({
         projectId: project.id,
@@ -140,7 +143,7 @@ const make = Effect.gen(function* () {
     yield* McpInvocationContext.requireMcpCapability("issues");
     if (input.url !== undefined) {
       const preferred = input.projectId ?? (yield* callerThread())?.projectId;
-      const resolved = yield* issues.resolveUrl(input.url, preferred);
+      const resolved = yield* issues.resolveUrl(input.url, preferred, input.connectionId);
       return { ...resolved, url: input.url } satisfies ResolvedTarget;
     }
     if (input.key === undefined) return yield* new IssueTargetIncompleteError();
@@ -149,6 +152,7 @@ const make = Effect.gen(function* () {
       return {
         projectId: project.id,
         tracker: input.tracker,
+        ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
         host: input.host,
         scope: input.scope,
         key: input.key,
@@ -156,10 +160,15 @@ const make = Effect.gen(function* () {
         writable: false,
       } satisfies ResolvedTarget;
     }
-    const { project, binding } = yield* requireSource(input.projectId, input.tracker);
+    const { project, binding } = yield* requireSource(
+      input.projectId,
+      input.tracker,
+      input.connectionId,
+    );
     return {
       projectId: project.id,
       tracker: binding.tracker,
+      ...(binding.connectionId === undefined ? {} : { connectionId: binding.connectionId }),
       host: input.host ?? binding.host,
       scope: input.scope ?? binding.scope,
       key: input.key,
@@ -174,6 +183,7 @@ const make = Effect.gen(function* () {
   ) => ({
     projectId: target.projectId,
     tracker: target.tracker,
+    ...(target.connectionId === undefined ? {} : { connectionId: target.connectionId }),
     host: target.host,
     scope: target.scope,
     key: target.key,
@@ -183,6 +193,7 @@ const make = Effect.gen(function* () {
   const refOf = (target: ResolvedTarget): IssueRef & { readonly host: string } => ({
     projectId: target.projectId,
     tracker: target.tracker,
+    ...(target.connectionId === undefined ? {} : { connectionId: target.connectionId }),
     host: target.host,
     scope: target.scope,
     key: target.key,
@@ -245,7 +256,11 @@ const make = Effect.gen(function* () {
     ),
     read_issue_templates: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { project, binding } = yield* requireSource(input.projectId, input.tracker);
+        const { project, binding } = yield* requireSource(
+          input.projectId,
+          input.tracker,
+          input.connectionId,
+        );
         return yield* issues.templates({
           projectId: project.id,
           ...binding,
@@ -258,7 +273,11 @@ const make = Effect.gen(function* () {
     ),
     list_issue_labels: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { project, binding } = yield* requireSource(input.projectId, input.tracker);
+        const { project, binding } = yield* requireSource(
+          input.projectId,
+          input.tracker,
+          input.connectionId,
+        );
         return yield* issues.labelCandidates({
           projectId: project.id,
           ...binding,
@@ -271,7 +290,11 @@ const make = Effect.gen(function* () {
     ),
     list_issue_assignees: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { project, binding } = yield* requireSource(input.projectId, input.tracker);
+        const { project, binding } = yield* requireSource(
+          input.projectId,
+          input.tracker,
+          input.connectionId,
+        );
         return yield* issues.assigneeCandidates({
           projectId: project.id,
           ...binding,
@@ -345,6 +368,7 @@ const make = Effect.gen(function* () {
         const result = yield* issues.list({
           projectId: project.id,
           state: input.state ?? "open",
+          ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
           ...(input.stateCategories === undefined
             ? {}
             : { stateCategories: input.stateCategories }),
@@ -359,6 +383,7 @@ const make = Effect.gen(function* () {
           issues: result.entries.map((entry) => ({
             projectId: entry.projectId,
             tracker: entry.tracker,
+            ...(entry.connectionId === undefined ? {} : { connectionId: entry.connectionId }),
             host: entry.host,
             scope: entry.scope,
             key: entry.key,
@@ -388,6 +413,7 @@ const make = Effect.gen(function* () {
           nextCursors: result.nextCursors,
           errors: result.errors.map((error) => ({
             projectId: error.projectId,
+            ...(error.connectionId === undefined ? {} : { connectionId: error.connectionId }),
             message: error.message,
           })),
         };
@@ -463,6 +489,7 @@ const make = Effect.gen(function* () {
           return yield* issues.comments({
             projectId: project.id,
             tracker: input.tracker,
+            ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
             ...(input.host === undefined ? {} : { host: input.host }),
             scope: input.scope,
             key: input.key,
@@ -480,7 +507,11 @@ const make = Effect.gen(function* () {
     ),
     create_issue: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
-        const { project, binding } = yield* requireSource(input.projectId, input.tracker);
+        const { project, binding } = yield* requireSource(
+          input.projectId,
+          input.tracker,
+          input.connectionId,
+        );
         const created = yield* issues.create({
           projectId: project.id,
           ...binding,
@@ -501,7 +532,11 @@ const make = Effect.gen(function* () {
     ),
     read_issue_candidates: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { project, binding } = yield* requireSource(input.projectId, input.tracker);
+        const { project, binding } = yield* requireSource(
+          input.projectId,
+          input.tracker,
+          input.connectionId,
+        );
         return yield* issues.candidates({
           projectId: project.id,
           ...binding,
@@ -554,6 +589,7 @@ const make = Effect.gen(function* () {
             link.projectId === (input.projectId ?? thread.projectId)) &&
           threadIssueKeysEqual(link, {
             tracker: input.tracker ?? link.tracker,
+            ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
             host: input.host ?? link.host,
             scope: input.scope ?? link.scope,
             key: input.key ?? link.key,

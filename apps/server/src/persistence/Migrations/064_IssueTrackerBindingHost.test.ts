@@ -35,11 +35,13 @@ it.effect("keeps existing tracker bindings and stores each new binding's verifie
         updatedAt: "2026-10-14T01:00:00Z",
       });
       const stored = yield* bindings.list;
-      assert.deepEqual(stored.get(ProjectId.make("new-project")), saved);
-      assert.deepEqual(stored.get(ProjectId.make("old-project")), {
-        tracker: IssueTrackerKind.make("linear"),
-        scope: "ENG",
-      });
+      assert.deepEqual(stored.get(ProjectId.make("new-project")), [saved]);
+      assert.deepEqual(stored.get(ProjectId.make("old-project")), [
+        {
+          tracker: IssueTrackerKind.make("linear"),
+          scope: "ENG",
+        },
+      ]);
     }).pipe(Effect.provide(IssueTrackerBindings.layer));
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

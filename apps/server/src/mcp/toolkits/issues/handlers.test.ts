@@ -351,6 +351,161 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
 });
 
 describe("issue toolkit handlers", () => {
+  it.effect(
+    "preserves account selectors in registered tools and refuses default shorthand for explicit bindings",
+    () =>
+      Effect.gen(function* () {
+        const source = { ...standaloneSource, connectionId: "Account" };
+        const harness = yield* makeHarness([], {
+          sources: [source],
+          detail: { ...detail, ...source },
+        });
+        const client = McpSchema.McpServerClient.of({
+          clientId: 1,
+          protocolVersion: "2025-06-18",
+          clientCapabilities: {},
+          clientInfo: { name: "issues-test", version: "1" },
+          initializePayload: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "issues-test", version: "1" },
+          },
+          getClient: Effect.die("unused"),
+        });
+        yield* Effect.gen(function* () {
+          const server = yield* McpServer.McpServer;
+          for (const name of [
+            "read_issue",
+            "read_issue_history",
+            "read_issue_hierarchy",
+            "read_issue_linked_pull_requests",
+            "read_issue_comments",
+            "read_issue_candidates",
+            "read_issue_templates",
+            "list_issue_labels",
+            "list_issue_assignees",
+          ]) {
+            const result = yield* server.callTool({
+              name,
+              arguments: {
+                tracker: LINEAR,
+                connectionId: "Account",
+                key: "ENG-7",
+                cursor: "older",
+              },
+            });
+            expect(result.isError).toBe(false);
+            if (name === "read_issue")
+              expect(decodeReadIssue(result.structuredContent).connectionId).toBe("Account");
+          }
+          const sources = yield* server.callTool({
+            name: "list_issue_sources",
+            arguments: { connectionId: "Account" },
+          });
+          expect(decodeSourcesResult(sources.structuredContent).sources[0]?.connectionId).toBe(
+            "Account",
+          );
+          const listed = yield* server.callTool({
+            name: "list_issues",
+            arguments: { connectionId: "Account" },
+          });
+          expect(decodeListIssues(listed.structuredContent).issues[0]?.connectionId).toBe(
+            "Account",
+          );
+          const before = (yield* Ref.get(harness.calls)).length;
+          for (const connectionId of [undefined, "account"]) {
+            const result = yield* server.callTool({
+              name: "read_issue",
+              arguments: {
+                tracker: LINEAR,
+                key: "ENG-7",
+                ...(connectionId === undefined ? {} : { connectionId }),
+              },
+            });
+            expect(result.isError).toBe(true);
+          }
+          expect((yield* Ref.get(harness.calls)).length).toBe(before);
+          expect(
+            (yield* Ref.get(harness.calls)).every(
+              (call) => (call.input as { connectionId?: string }).connectionId === "Account",
+            ),
+          ).toBe(true);
+          const denied = yield* server
+            .callTool({
+              name: "read_issue",
+              arguments: { tracker: LINEAR, connectionId: "Account", key: "ENG-7" },
+            })
+            .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, invocation([])));
+          expect(denied.isError).toBe(true);
+          expect((yield* Ref.get(harness.calls)).length).toBe(before);
+        }).pipe(
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["issues"])),
+          Effect.provide(
+            McpHttpServer.toolkitRegistration(IssuesToolkit, IssuesHandlers.layer).pipe(
+              Layer.provideMerge(McpServer.McpServer.layer),
+              Layer.provide(harness.layerDependencies),
+            ),
+          ),
+        );
+      }),
+  );
+
+  it.effect("keeps mutation and saved-link selection on the exact account", () =>
+    Effect.gen(function* () {
+      const source = { ...standaloneSource, connectionId: "Account" };
+      const saved = (connectionId: string): ThreadIssueLink => ({
+        ...source,
+        connectionId,
+        projectId: PROJECT_ID,
+        key: "ENG-7",
+        url: "https://linear.app/acme/issue/ENG-7",
+        source: "agent",
+        linkedAt: detail.createdAt,
+        snapshot: null,
+      });
+      const harness = yield* makeHarness([saved("Account"), saved("account")], {
+        sources: [source],
+        detail: { ...detail, ...source },
+      });
+      const denied = yield* harness
+        .call(
+          "update_issue",
+          { tracker: LINEAR, connectionId: "Account", key: "ENG-7", title: "Denied" },
+          ["issues"],
+          true,
+        )
+        .pipe(Effect.flip);
+      expect(denied).toMatchObject({ _tag: "OrchestratorMcpFailure", code: "capability_denied" });
+      expect(yield* Ref.get(harness.calls)).toEqual([]);
+      yield* harness.call("update_issue", {
+        tracker: LINEAR,
+        connectionId: "Account",
+        key: "ENG-7",
+        title: "Selected",
+      });
+      yield* harness.call("create_issue", {
+        tracker: LINEAR,
+        connectionId: "Account",
+        title: "Created",
+      });
+      yield* harness.call("unlink_issue", {
+        tracker: LINEAR,
+        connectionId: "Account",
+        key: "ENG-7",
+      });
+      const unlinks = yield* Ref.get(harness.unlinks);
+      expect(unlinks.map((request) => request.key.connectionId)).toEqual(["Account"]);
+      expect(
+        (yield* Ref.get(harness.calls)).every(
+          (call) => (call.input as { connectionId?: string }).connectionId === "Account",
+        ),
+      ).toBe(true);
+      const output = yield* harness.call("list_thread_issues", {});
+      expect(output.issues.map((issue) => issue.connectionId)).toEqual(["Account", "account"]);
+    }),
+  );
+
   const decodeSourcesResult = Schema.decodeUnknownSync(
     IssuesToolkit.tools.list_issue_sources.successSchema,
   );

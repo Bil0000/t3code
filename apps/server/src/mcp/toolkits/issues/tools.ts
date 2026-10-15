@@ -62,12 +62,13 @@ const dependencies = [
  * here is a checkout of that repository, read-only when none is.
  */
 export const IssueTargetInput = Schema.Struct({
+  connectionId: IssueScopeRef.fields.connectionId,
   host: IssueScopeRef.fields.host,
   scope: Schema.optional(IssueScopeRef.fields.scope),
   tracker: Schema.optional(
     IssueTrackerKind.annotate({
       description:
-        "Tracker kind to use with key. Required when the project has more than one issue source. A URL selects its own tracker.",
+        "Use the exact connectionId returned by list_issue_sources for a selected saved account. Omit it only for the legacy default account. Tracker kind to use with key. Required when the project has more than one issue source. A URL selects its own tracker.",
     }),
   ),
   url: Schema.optional(
@@ -157,14 +158,19 @@ export class IssueSourceSelectionError extends Schema.TaggedError<IssueSourceSel
     projectId: ProjectId,
     tracker: Schema.optional(IssueTrackerKind),
     sources: Schema.Array(
-      Schema.Struct({ tracker: IssueTrackerKind, host: Schema.String, scope: Schema.String }),
+      Schema.Struct({
+        connectionId: IssueScopeRef.fields.connectionId,
+        tracker: IssueTrackerKind,
+        host: Schema.String,
+        scope: Schema.String,
+      }),
     ),
   },
 ) {
   override get message(): string {
     return this.tracker === undefined
-      ? "This project has multiple issue sources. Pass tracker from the available sources."
-      : "The selected tracker does not identify one issue source. Choose tracker from the available sources.";
+      ? "This project has multiple issue sources. Pass tracker and the saved account connectionId from the available sources."
+      : "The selected tracker does not identify one issue source. Choose tracker and the saved account connectionId from the available sources.";
   }
 }
 
@@ -185,6 +191,7 @@ export type IssueToolError = typeof IssueToolError.Type;
 
 /** How a tool names an issue back: enough to pass to any other issue tool. */
 const IssueIdentity = {
+  connectionId: IssueScopeRef.fields.connectionId,
   projectId: ProjectId,
   tracker: IssueTrackerKind,
   host: Schema.String,
@@ -219,7 +226,13 @@ export const ListIssuesResult = Schema.Struct({
   issues: Schema.Array(IssueEntry),
   /** Pass back as `cursors` to read the next slice of each scope that has one. */
   nextCursors: Schema.Record(Schema.String, Schema.String),
-  errors: Schema.Array(Schema.Struct({ projectId: ProjectId, message: Schema.String })),
+  errors: Schema.Array(
+    Schema.Struct({
+      projectId: ProjectId,
+      connectionId: IssueScopeRef.fields.connectionId,
+      message: Schema.String,
+    }),
+  ),
 });
 export type ListIssuesResult = typeof ListIssuesResult.Type;
 
@@ -331,6 +344,7 @@ const ListIssuesTool = Tool.make("list_issues", {
     projectId: Schema.optional(
       ProjectId.annotate({ description: "Project to list. Omit for this thread's project." }),
     ),
+    connectionId: IssueListInput.fields.connectionId,
     stateCategories: IssueListInput.fields.stateCategories,
     sort: IssueListInput.fields.sort,
     order: IssueListInput.fields.order,
@@ -392,6 +406,7 @@ const CreateIssueTool = Tool.make("create_issue", {
   description: `File an issue in a project's configured issue source. Omit projectId for this thread's project. Omit tracker only when the project has one issue source; with multiple sources, pass tracker from list_issues or the source selection error. Read native labels, assignees and issue type IDs with read_issue_candidates when needed. Pass the chosen type ID as issueType; do not guess a type when several are offered. ${LINK_EVERY_ISSUE}`,
   parameters: Schema.Struct({
     tracker: IssueTargetInput.fields.tracker,
+    connectionId: IssueTargetInput.fields.connectionId,
     projectId: Schema.optional(
       ProjectId.annotate({ description: "Project to file in. Omit for this thread's project." }),
     ),
@@ -419,6 +434,7 @@ const ReadIssueCandidatesTool = Tool.make("read_issue_candidates", {
   parameters: Schema.Struct({
     projectId: IssueTargetInput.fields.projectId,
     tracker: IssueTargetInput.fields.tracker,
+    connectionId: IssueTargetInput.fields.connectionId,
     key: IssueCandidatesInput.fields.key,
   }),
   success: IssueCandidates,
@@ -518,6 +534,7 @@ const ListIssueSources = Tool.make("list_issue_sources", {
   parameters: Schema.Struct({
     projectId: IssueTargetInput.fields.projectId,
     tracker: IssueTargetInput.fields.tracker,
+    connectionId: IssueTargetInput.fields.connectionId,
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
   }),
@@ -584,6 +601,7 @@ const ReadIssueTemplates = Tool.make("read_issue_templates", {
   parameters: Schema.Struct({
     projectId: IssueTargetInput.fields.projectId,
     tracker: IssueTargetInput.fields.tracker,
+    connectionId: IssueTargetInput.fields.connectionId,
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
     metadataOnly: IssueTemplatesInput.fields.metadataOnly,
@@ -604,6 +622,7 @@ const ListIssueLabels = Tool.make("list_issue_labels", {
   parameters: Schema.Struct({
     projectId: IssueTargetInput.fields.projectId,
     tracker: IssueTargetInput.fields.tracker,
+    connectionId: IssueTargetInput.fields.connectionId,
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
     ...IssuePageInput.fields,
@@ -623,6 +642,7 @@ const ListIssueAssignees = Tool.make("list_issue_assignees", {
   parameters: Schema.Struct({
     projectId: IssueTargetInput.fields.projectId,
     tracker: IssueTargetInput.fields.tracker,
+    connectionId: IssueTargetInput.fields.connectionId,
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
     ...IssuePageInput.fields,

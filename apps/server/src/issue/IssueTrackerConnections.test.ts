@@ -13,10 +13,12 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Crypto from "effect/Crypto";
 import * as Option from "effect/Option";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
+import * as IssueTrackerAccounts from "../persistence/IssueTrackerAccounts.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as IssueTrackerConnections from "./IssueTrackerConnections.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
@@ -143,18 +145,33 @@ const makeFixture = (input: {
                     }
                   }),
               }),
+              Layer.succeed(
+                Crypto.Crypto,
+                Crypto.make({
+                  randomBytes: (size) => new Uint8Array(size).fill(1),
+                  digest: (_algorithm, data) => Effect.succeed(data),
+                }),
+              ),
+              Layer.mock(IssueTrackerAccounts.IssueTrackerAccountsRepository)({
+                list: Effect.succeed([]),
+                set: () => Effect.void,
+                remove: () => Effect.void,
+              }),
               Layer.mock(IssueTrackerBindings.IssueTrackerBindingsRepository)({
-                list: Effect.sync(() => new Map(saved)),
+                list: Effect.sync(
+                  () => new Map(Array.from(saved, ([id, binding]) => [id, [binding]])),
+                ),
                 set: (input) =>
                   Effect.sync(() => {
                     writes.push(input);
                     if (input.binding === null) saved.delete(input.projectId);
                     else saved.set(input.projectId, input.binding);
                   }),
-                removeTracker: (tracker) =>
+                removeTracker: (tracker, connectionId) =>
                   Effect.sync(() => {
                     for (const [projectId, binding] of saved)
-                      if (binding.tracker === tracker) saved.delete(projectId);
+                      if (binding.tracker === tracker && binding.connectionId === connectionId)
+                        saved.delete(projectId);
                   }),
               }),
               Layer.mock(ProjectService.ProjectService)({
@@ -427,6 +444,7 @@ it.effect("unbinds a project without a credential, probe, or live project", () =
       projectExists: false,
       probe: Effect.die("Unexpected credential probe"),
     });
+    fixture.saved.set(projectId, binding);
     yield* fixture.service.bindProject({ projectId, binding: null });
     assert.deepEqual(fixture.probed, []);
     assert.equal(fixture.writes.length, 1);

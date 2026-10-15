@@ -1,6 +1,6 @@
 /**
  * The server's `IssueTrackerHost`: standalone tracker credentials out of the secret store, one
- * per tracker kind. The name is stable across releases so a saved key survives upgrades.
+ * per account. Legacy default names stay stable so saved keys survive upgrades.
  *
  * @module issue/IssueTrackerHostLive
  */
@@ -13,8 +13,11 @@ import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrack
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 
-export function issueTrackerSecretName(tracker: IssueTrackerKind): string {
-  return `issue-tracker-${Buffer.from(tracker, "utf8").toString("base64url")}-token`;
+export function issueTrackerSecretName(tracker: IssueTrackerKind, connectionId?: string): string {
+  const key = `issue-tracker-${Buffer.from(tracker, "utf8").toString("base64url")}`;
+  return connectionId === undefined
+    ? `${key}-token`
+    : `${key}-${Buffer.from(connectionId, "utf8").toString("base64url")}-token`;
 }
 
 const decoder = new TextDecoder();
@@ -23,8 +26,10 @@ const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   return IssueTrackerHost.IssueTrackerHost.of({
     credentials: {
-      get: (tracker) =>
-        secrets.get(issueTrackerSecretName(tracker)).pipe(
+      get: (tracker, connectionId) =>
+        Effect.flatMap(IssueTrackerHost.ConnectionId, (selected) =>
+          secrets.get(issueTrackerSecretName(tracker, connectionId ?? selected)),
+        ).pipe(
           Effect.map(Option.map((bytes) => decoder.decode(bytes))),
           Effect.mapError(
             (cause) =>

@@ -70,6 +70,8 @@ import {
   type IssueTrackerApi,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
+import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
+
 import * as IssueTrackerBindings from "../persistence/IssueTrackerBindings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
@@ -83,6 +85,7 @@ export interface ProjectTrackerBinding {
   readonly tracker: IssueTrackerKind;
   readonly host: string;
   readonly scope: string;
+  readonly connectionId?: string | undefined;
 }
 
 /** A project the registry has a tracker for, ready to serve reads and writes. */
@@ -193,6 +196,7 @@ export class IssueService extends Context.Service<
       readonly tracker?: IssueTrackerKind | undefined;
       readonly host?: string | undefined;
       readonly scope?: string | undefined;
+      readonly connectionId?: string | undefined;
     }) => Effect.Effect<NonNullable<IssueListResult["sources"]>, IssueError>;
     readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
@@ -231,6 +235,7 @@ export class IssueService extends Context.Service<
     readonly resolveUrl: (
       url: string,
       preferredProjectId?: ProjectId,
+      connectionId?: string,
     ) => Effect.Effect<
       IssueRef & { readonly host: string; readonly writable: boolean },
       IssueError
@@ -250,42 +255,57 @@ export const make = Effect.gen(function* () {
    * to a tracker this build does not ship is dropped rather than reported, since there is nothing
    * the user can do about it here.
    */
-  const resolveStandaloneBinding = (
+  const resolveStandaloneBindings = (
     project: OrchestrationProjectShell,
-    bound: ReadonlyMap<ProjectId, IssueTrackerProjectBinding>,
-  ): ProjectTrackerBinding | null => {
-    const binding = bound.get(project.id);
-    const api = binding === undefined ? null : registry.get(binding.tracker);
-    if (binding === undefined || api === null || !isStandaloneIssueTracker(api)) return null;
-    const host = binding.host ?? api.standalone.host;
-    if (host === null) return null;
-    return { tracker: binding.tracker, host: host.trim().toLowerCase(), scope: binding.scope };
-  };
+    bound: ReadonlyMap<ProjectId, ReadonlyArray<IssueTrackerProjectBinding>>,
+  ): ReadonlyArray<ProjectTrackerBinding> =>
+    (bound.get(project.id) ?? []).flatMap((binding) => {
+      const api = registry.get(binding.tracker);
+      if (api === null || !isStandaloneIssueTracker(api)) return [];
+      const host = binding.host ?? api.standalone.host;
+      return host === null
+        ? []
+        : [
+            {
+              tracker: binding.tracker,
+              host: host.trim().toLowerCase(),
+              scope: binding.scope,
+              ...(binding.connectionId === undefined ? {} : { connectionId: binding.connectionId }),
+            },
+          ];
+    });
 
-  /** Where a project's issues live: its git host's tracker, its bound standalone one, or both. */
   const resolveProjectTracker = (
     project: OrchestrationProjectShell,
-    bound: ReadonlyMap<ProjectId, IssueTrackerProjectBinding>,
+    bound: ReadonlyMap<ProjectId, ReadonlyArray<IssueTrackerProjectBinding>>,
     refreshRepository = false,
   ): Effect.Effect<ReadonlyArray<ProjectTrackerBinding>> =>
-    Effect.all([
-      (refreshRepository
-        ? repositoryIdentities.resolve(project.workspaceRoot, { refresh: true })
-        : project.repositoryIdentity != null
-          ? Effect.succeed(project.repositoryIdentity)
-          : repositoryIdentities.resolve(project.workspaceRoot)
-      ).pipe(
-        Effect.map((repositoryIdentity) =>
-          resolveGitHostBinding({ ...project, repositoryIdentity }),
-        ),
-      ),
-      Effect.succeed(resolveStandaloneBinding(project, bound)),
-    ]).pipe(Effect.map((resolved) => resolved.filter((binding) => binding !== null)));
+    (refreshRepository
+      ? repositoryIdentities.resolve(project.workspaceRoot, { refresh: true })
+      : project.repositoryIdentity != null
+        ? Effect.succeed(project.repositoryIdentity)
+        : repositoryIdentities.resolve(project.workspaceRoot)
+    ).pipe(
+      Effect.map((repositoryIdentity) => {
+        const git = resolveGitHostBinding({ ...project, repositoryIdentity });
+        return [...(git === null ? [] : [git]), ...resolveStandaloneBindings(project, bound)];
+      }),
+    );
+
+  const withConnection = (project: ProjectTrackerBinding) =>
+    Effect.provideService(IssueTrackerHost.ConnectionId, project.connectionId);
+  const accountFields = (project: ProjectTrackerBinding) =>
+    project.connectionId === undefined ? {} : { connectionId: project.connectionId };
+  const trackerKeyOf = (project: ProjectTrackerBinding) =>
+    project.connectionId === undefined
+      ? issueTrackerHostKey(project)
+      : issueListCursorKey({ ...project, scope: "" });
 
   const listProjects = (filter: {
     readonly projectId?: IssueListInput["projectId"];
     readonly host?: string | undefined;
     readonly refreshRepository?: boolean;
+    readonly connectionId?: string | undefined;
   }) =>
     (filter.projectId === undefined
       ? projects.listShells()
@@ -301,7 +321,9 @@ export const make = Effect.gen(function* () {
       ),
       Effect.flatMap((shells) =>
         bindings.list.pipe(
-          Effect.orElseSucceed(() => new Map<ProjectId, IssueTrackerProjectBinding>()),
+          Effect.orElseSucceed(
+            () => new Map<ProjectId, ReadonlyArray<IssueTrackerProjectBinding>>(),
+          ),
           Effect.flatMap((bound) =>
             Effect.forEach(
               shells,
@@ -323,6 +345,8 @@ export const make = Effect.gen(function* () {
         >();
         for (const candidate of bound.flat()) {
           if (host !== undefined && candidate.host !== host) continue;
+          if (filter.connectionId !== undefined && candidate.connectionId !== filter.connectionId)
+            continue;
           const api = registry.get(candidate.tracker);
           if (api === null) {
             const key = issueTrackerHostKey(candidate);
@@ -355,7 +379,7 @@ export const make = Effect.gen(function* () {
     listProjects({ projectId: ref.projectId, refreshRepository }).pipe(
       Effect.flatMap(({ supported }) => {
         const own = supported.find((candidate) => candidate.tracker === ref.tracker);
-        if (own === undefined) {
+        if (own === undefined || own.connectionId !== ref.connectionId) {
           return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
         }
         const host = ref.host?.trim().toLowerCase() ?? own.host;
@@ -402,6 +426,7 @@ export const make = Effect.gen(function* () {
         key: ref.key,
       })
       .pipe(
+        withConnection(project),
         Effect.mapError(toIssueError(operation)),
         Effect.flatMap((permissions) =>
           !allowed(permissions)
@@ -416,6 +441,7 @@ export const make = Effect.gen(function* () {
                   current.tracker === project.tracker &&
                   current.host === project.host &&
                   current.scope === project.scope &&
+                  current.connectionId === project.connectionId &&
                   current.project.workspaceRoot === project.project.workspaceRoot
                     ? Effect.void
                     : Effect.fail(readOnly(operation)),
@@ -427,7 +453,12 @@ export const make = Effect.gen(function* () {
   const sources: IssueService["Service"]["sources"] = (projectId) =>
     listProjects({ projectId }).pipe(
       Effect.map(({ supported }) =>
-        supported.map(({ tracker, host, scope }) => ({ tracker, host, scope })),
+        supported.map((project) => ({
+          tracker: project.tracker,
+          host: project.host,
+          scope: project.scope,
+          ...accountFields(project),
+        })),
       ),
     );
 
@@ -442,7 +473,8 @@ export const make = Effect.gen(function* () {
                 issueScopeKeyOf(project) ===
                   issueScopeKeyOf({ tracker: project.tracker, scope: input.scope })),
           )
-          .map(({ project, api, tracker, host, scope }) => ({
+          .map(({ project, api, tracker, host, scope, connectionId }) => ({
+            ...(connectionId === undefined ? {} : { connectionId }),
             projectId: project.id,
             projectTitle: project.title,
             tracker,
@@ -482,6 +514,7 @@ export const make = Effect.gen(function* () {
           trackersByHost.set(source.host, kinds);
         }
         for (const [key, project] of scopes) {
+          if (project.connectionId !== undefined) continue;
           const legacy = continuing[`${project.host} ${project.scope}`];
           if (legacy === undefined || continuing[key] !== undefined) continue;
           if (trackersByHost.get(project.host)!.size > 1)
@@ -500,7 +533,7 @@ export const make = Effect.gen(function* () {
               ...project,
               scope: issueScopeKeyOf(project).split("/").slice(0, -2).join("/"),
             })
-          : issueTrackerHostKey(project);
+          : trackerKeyOf(project);
       const viewerInstances = new Map<string, Set<string>>();
       for (const project of supported) {
         const hostKey = issueTrackerHostKey(project);
@@ -519,12 +552,19 @@ export const make = Effect.gen(function* () {
           let read = viewerReads.get(key);
           if (read === undefined) {
             read = yield* Effect.cached(
-              project.api.getViewer({ cwd: project.project.workspaceRoot, host: project.host }),
+              project.api
+                .getViewer({ cwd: project.project.workspaceRoot, host: project.host })
+                .pipe(withConnection(project)),
             );
             viewerReads.set(key, read);
           }
           const viewer = yield* read;
-          if (project.tracker === "forgejo") viewers.set(issueListCursorKey(project), viewer);
+          if (
+            project.tracker === "forgejo" ||
+            project.connectionId !== undefined ||
+            viewerInstances.get(issueTrackerHostKey(project))!.size > 1
+          )
+            viewers.set(issueListCursorKey(project), viewer);
           const hostKey = issueTrackerHostKey(project);
           if (viewerInstances.get(hostKey)!.size === 1) viewers.set(hostKey, viewer);
           return viewer;
@@ -532,12 +572,13 @@ export const make = Effect.gen(function* () {
 
       // Every project counts, including worktrees of a scope read once below.
       for (const project of supported) {
-        const existing = trackers.get(issueTrackerHostKey(project));
+        const existing = trackers.get(trackerKeyOf(project));
         trackers.set(
-          issueTrackerHostKey(project),
+          trackerKeyOf(project),
           existing === undefined
             ? {
                 tracker: project.tracker,
+                ...accountFields(project),
                 host: project.host,
                 projectCount: 1,
                 capabilities: project.api.capabilities,
@@ -548,9 +589,9 @@ export const make = Effect.gen(function* () {
         );
       }
       const recordFailure = (project: SupportedProject, failure: IssueTrackerError) => {
-        const existing = trackers.get(issueTrackerHostKey(project));
+        const existing = trackers.get(trackerKeyOf(project));
         if (existing !== undefined && isTrackerUnusable(failure))
-          trackers.set(issueTrackerHostKey(project), {
+          trackers.set(trackerKeyOf(project), {
             ...existing,
             configured: false,
             detail: failure.detail,
@@ -572,6 +613,7 @@ export const make = Effect.gen(function* () {
                 projectId: project.project.id,
                 projectTitle: project.project.title,
                 tracker: project.tracker,
+                ...accountFields(project),
                 host: project.host,
                 message: `This tracker does not support ${involvement} issue lists.`,
               });
@@ -590,6 +632,7 @@ export const make = Effect.gen(function* () {
                 projectId: project.project.id,
                 projectTitle: project.project.title,
                 tracker: project.tracker,
+                ...accountFields(project),
                 host: project.host,
                 message: "This tracker does not support the selected issue order.",
               });
@@ -598,22 +641,24 @@ export const make = Effect.gen(function* () {
             const cursor = continuing?.[key];
             const page = yield* viewerFor(project).pipe(
               Effect.flatMap((viewer) =>
-                project.api.listIssues({
-                  cwd: project.project.workspaceRoot,
-                  host: project.host,
-                  scope: project.scope,
-                  state: input.state,
-                  ...(input.stateCategories === undefined
-                    ? {}
-                    : { stateCategories: input.stateCategories }),
-                  ...(input.sort === undefined ? {} : { sort: input.sort }),
-                  ...(input.order === undefined ? {} : { order: input.order }),
-                  involvement,
-                  viewer,
-                  limit,
-                  query: input.query,
-                  cursor,
-                }),
+                project.api
+                  .listIssues({
+                    cwd: project.project.workspaceRoot,
+                    host: project.host,
+                    scope: project.scope,
+                    state: input.state,
+                    ...(input.stateCategories === undefined
+                      ? {}
+                      : { stateCategories: input.stateCategories }),
+                    ...(input.sort === undefined ? {} : { sort: input.sort }),
+                    ...(input.order === undefined ? {} : { order: input.order }),
+                    involvement,
+                    viewer,
+                    limit,
+                    query: input.query,
+                    cursor,
+                  })
+                  .pipe(withConnection(project)),
               ),
               Effect.result,
             );
@@ -623,6 +668,7 @@ export const make = Effect.gen(function* () {
                 projectId: project.project.id,
                 projectTitle: project.project.title,
                 tracker: project.tracker,
+                ...accountFields(project),
                 host: project.host,
                 message: page.failure.detail,
               });
@@ -632,6 +678,7 @@ export const make = Effect.gen(function* () {
               entries.push({
                 ...item,
                 tracker: project.tracker,
+                ...accountFields(project),
                 host: project.host,
                 scope: project.scope,
                 projectId: project.project.id,
@@ -668,6 +715,7 @@ export const make = Effect.gen(function* () {
           projectId: project.project.id,
           projectTitle: project.project.title,
           tracker: project.tracker,
+          ...accountFields(project),
           host: project.host,
           scope: project.scope,
           capabilities: project.api.capabilities,
@@ -691,10 +739,12 @@ export const make = Effect.gen(function* () {
             key: input.key,
           })
           .pipe(
+            withConnection(project),
             Effect.mapError(toIssueError("detail")),
             Effect.map((issue): IssueDetail => ({
               ...issue,
               tracker: project.tracker,
+              ...accountFields(project),
               host: project.host,
               scope: project.scope,
               projectId: project.project.id,
@@ -718,7 +768,7 @@ export const make = Effect.gen(function* () {
             cursor: input.cursor,
             ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
           })
-          .pipe(Effect.mapError(toIssueError("comments"))),
+          .pipe(withConnection(project), Effect.mapError(toIssueError("comments"))),
       ),
     );
 
@@ -736,7 +786,7 @@ export const make = Effect.gen(function* () {
                 ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
                 limit: input.limit ?? DEFAULT_LIST_LIMIT,
               })
-              .pipe(Effect.mapError(toIssueError("history"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("history"))),
       ),
     );
 
@@ -755,7 +805,7 @@ export const make = Effect.gen(function* () {
                 ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
                 limit: input.limit ?? DEFAULT_LIST_LIMIT,
               })
-              .pipe(Effect.mapError(toIssueError("linkedPullRequests"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("linkedPullRequests"))),
       ),
     );
 
@@ -773,7 +823,7 @@ export const make = Effect.gen(function* () {
                 ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
                 limit: input.limit ?? DEFAULT_LIST_LIMIT,
               })
-              .pipe(Effect.mapError(toIssueError("hierarchy"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("hierarchy"))),
       ),
     );
 
@@ -790,7 +840,7 @@ export const make = Effect.gen(function* () {
                 ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
                 limit: input.limit ?? DEFAULT_LIST_LIMIT,
               })
-              .pipe(Effect.mapError(toIssueError("labelCandidates"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("labelCandidates"))),
       ),
     );
 
@@ -807,7 +857,7 @@ export const make = Effect.gen(function* () {
                 ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
                 limit: input.limit ?? DEFAULT_LIST_LIMIT,
               })
-              .pipe(Effect.mapError(toIssueError("assigneeCandidates"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("assigneeCandidates"))),
       ),
     );
 
@@ -824,7 +874,7 @@ export const make = Effect.gen(function* () {
                 ...(input.metadataOnly === undefined ? {} : { metadataOnly: input.metadataOnly }),
                 ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
               })
-              .pipe(Effect.mapError(toIssueError("templates"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("templates"))),
       ),
     );
 
@@ -845,7 +895,7 @@ export const make = Effect.gen(function* () {
                 scope: project.scope,
                 ...(input.key === undefined ? {} : { key: input.key }),
               })
-              .pipe(Effect.mapError(toIssueError("candidates"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("candidates"))),
       ),
     );
 
@@ -882,7 +932,7 @@ export const make = Effect.gen(function* () {
           ...(input.parentKey === undefined ? {} : { parentKey: input.parentKey }),
           ...(input.templateKey === undefined ? {} : { templateKey: input.templateKey }),
         })
-        .pipe(Effect.mapError(toIssueError("create")));
+        .pipe(withConnection(project), Effect.mapError(toIssueError("create")));
     });
 
   const comment: IssueService["Service"]["comment"] = (input) =>
@@ -910,7 +960,7 @@ export const make = Effect.gen(function* () {
                     key: input.key,
                     body: input.body,
                   })
-                  .pipe(Effect.mapError(toIssueError("comment"))),
+                  .pipe(withConnection(project), Effect.mapError(toIssueError("comment"))),
               ),
             );
       }),
@@ -965,7 +1015,7 @@ export const make = Effect.gen(function* () {
                 labels: input.labels,
                 assignees: input.assignees,
               })
-              .pipe(Effect.mapError(toIssueError("update"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("update"))),
           ),
         );
       }),
@@ -1001,7 +1051,7 @@ export const make = Effect.gen(function* () {
                 state: input.state,
                 closeReason: input.closeReason,
               })
-              .pipe(Effect.mapError(toIssueError("setState"))),
+              .pipe(withConnection(project), Effect.mapError(toIssueError("setState"))),
           ),
         );
       }),
@@ -1034,7 +1084,7 @@ export const make = Effect.gen(function* () {
           content: input.content,
           reacted: input.reacted,
         })
-        .pipe(Effect.mapError(toIssueError("react")));
+        .pipe(withConnection(project), Effect.mapError(toIssueError("react")));
     });
 
   const editComment: IssueService["Service"]["editComment"] = (input) =>
@@ -1056,7 +1106,7 @@ export const make = Effect.gen(function* () {
           commentId: input.commentId,
           body: input.body,
         })
-        .pipe(Effect.mapError(toIssueError("editComment")));
+        .pipe(withConnection(project), Effect.mapError(toIssueError("editComment")));
     });
 
   const setParent: IssueService["Service"]["setParent"] = (input) =>
@@ -1078,10 +1128,14 @@ export const make = Effect.gen(function* () {
           key: input.key,
           parentKey: input.parentKey,
         })
-        .pipe(Effect.mapError(toIssueError("setParent")));
+        .pipe(withConnection(project), Effect.mapError(toIssueError("setParent")));
     });
 
-  const resolveUrl: IssueService["Service"]["resolveUrl"] = (url, preferredProjectId) =>
+  const resolveUrl: IssueService["Service"]["resolveUrl"] = (
+    url,
+    preferredProjectId,
+    connectionId,
+  ) =>
     Effect.gen(function* () {
       const target = yield* Effect.try({
         try: () => new URL(url),
@@ -1110,7 +1164,21 @@ export const make = Effect.gen(function* () {
               .slice(0, parsed.scope.split("/").length)
               .join("/")
           : parsed.scope;
-      const onTracker = supported.filter((project) => project.tracker === parsed.tracker);
+      const onTracker = supported.filter(
+        (project) => project.tracker === parsed.tracker && project.connectionId === connectionId,
+      );
+      if (
+        preferredProjectId !== undefined &&
+        ((connectionId !== undefined &&
+          !onTracker.some((project) => project.project.id === preferredProjectId)) ||
+          supported.some(
+            (project) =>
+              project.project.id === preferredProjectId &&
+              project.tracker === parsed.tracker &&
+              project.connectionId !== connectionId,
+          ))
+      )
+        return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
       const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
         projects.find((project) => project.project.id === preferredProjectId) ?? projects[0];
       const legacyScope =
@@ -1158,7 +1226,7 @@ export const make = Effect.gen(function* () {
             scope: lender.scope,
             key: parsed.key,
           })
-          .pipe(Effect.mapError(toIssueError("resolveUrl")));
+          .pipe(withConnection(lender), Effect.mapError(toIssueError("resolveUrl")));
         const canonical = parseIssueUrl(issue.url);
         if (
           canonical === null ||
@@ -1178,6 +1246,7 @@ export const make = Effect.gen(function* () {
       return {
         projectId: lender.project.id,
         tracker: lender.tracker,
+        ...accountFields(lender),
         host: lender.host,
         scope:
           own?.scope ??

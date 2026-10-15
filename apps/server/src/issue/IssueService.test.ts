@@ -182,7 +182,7 @@ function makeService(input: {
             return new Map(
               Object.entries(input.bindings ?? {}).map(([id, binding]) => [
                 id as ProjectId,
-                binding,
+                [binding],
               ]),
             );
           }),

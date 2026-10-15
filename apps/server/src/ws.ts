@@ -1215,7 +1215,7 @@ export const layerWsIssuesRpc = ServerWsIssuesRpcGroup.toLayer(
       [WS_METHODS.issuesResolveUrl]: (input) =>
         Effect.annotateCurrentSpan(
           input.projectId === undefined ? {} : { "project.id": input.projectId },
-        ).pipe(Effect.andThen(issues.resolveUrl(input.url, input.projectId))),
+        ).pipe(Effect.andThen(issues.resolveUrl(input.url, input.projectId, input.connectionId))),
       [WS_METHODS.issuesComments]: (input) => issues.comments(input),
       [WS_METHODS.issuesTemplates]: (input) => issues.templates(input),
       [WS_METHODS.issuesCandidates]: (input) => issues.candidates(input),
