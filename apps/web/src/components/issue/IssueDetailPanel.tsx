@@ -33,7 +33,7 @@ import {
   SendIcon,
   SmilePlusIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useIssueViewRefresh } from "~/hooks/useIssueViewRefresh";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -458,6 +458,16 @@ function IssueDetailContent({
 
   const [tab, setTab] = useState<"summary" | "history">("summary");
   const [createSubIssue, setCreateSubIssue] = useState(false);
+  const [dependenciesRevision, setDependenciesRevision] = useState(0);
+  const refreshedDependenciesRevision = useRef(dependenciesRevision);
+  useEffect(() => {
+    if (refreshedDependenciesRevision.current === dependenciesRevision) return;
+    refreshedDependenciesRevision.current = dependenciesRevision;
+    appAtomRegistry.update(
+      issueEnvironment.historyRefresh({ environmentId, input: reference }),
+      (revision) => revision + 1,
+    );
+  }, [dependenciesRevision, environmentId, reference]);
   const linkedPages = useIssueLinkedPullRequests(
     environmentId,
     detail?.capabilities.linkedPullRequests ? reference : null,
@@ -931,10 +941,7 @@ function IssueDetailContent({
               disabled={detailQuery.isPending}
               onClick={() => {
                 detailQuery.refresh();
-                appAtomRegistry.update(
-                  issueEnvironment.historyRefresh({ environmentId, input: reference }),
-                  (revision) => revision + 1,
-                );
+                setDependenciesRevision((revision) => revision + 1);
                 linkedPages.refresh();
                 if (activeTab === "summary" && detail.capabilities.subIssues)
                   appAtomRegistry.refresh(
@@ -1211,7 +1218,7 @@ function IssueDetailContent({
               ) : null}
               {detail.capabilities.dependencies === true ? (
                 <IssueDependencies
-                  key={issueEntryKey(detail)}
+                  key={JSON.stringify([issueEntryKey(detail), dependenciesRevision])}
                   environmentId={environmentId}
                   reference={reference}
                   detail={detail}

@@ -22,7 +22,7 @@ import { useIssueViewRefresh } from "../hooks/useIssueViewRefresh";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import type { EnvironmentQueryTarget } from "./pullRequests";
-import { formatEnvironmentQueryError, useEnvironmentQuery } from "./query";
+import { formatEnvironmentQueryError } from "./query";
 
 export const issueEnvironment = createIssueEnvironmentAtoms(connectionAtomRuntime);
 
@@ -180,12 +180,16 @@ function createIssuePagedQuery<
             input: cursor === undefined ? input : { ...input, cursor },
           })),
     );
+    const first = answers[0]?.value ?? null;
+    const refreshPages = useCallback(() => {
+      setCursors({ key, seed: first, values: [] });
+      refresh();
+    }, [key, first, refresh]);
     useIssueViewRefresh(
-      refresh,
+      refreshPages,
       environmentId === null || input === null ? [] : [{ environmentId, input }],
       key,
     );
-    const first = answers[0]?.value ?? null;
     const retained = cursors.seed === first;
     if (values.length > 0 && !retained) setCursors({ key, seed: first, values: [] });
     const activeAnswers = retained ? answers : answers.slice(0, 1);
@@ -193,7 +197,7 @@ function createIssuePagedQuery<
       answer.value === null ? null : page(answer.value),
     );
     const last = activeAnswers.at(-1);
-    const nextCursor = pages.at(-1)?.nextCursor ?? null;
+    const nextCursor = last?.error == null ? (pages.at(-1)?.nextCursor ?? null) : null;
     const failedCursor =
       last?.error !== null && last?.error !== undefined ? values.at(-1) : undefined;
     return {
@@ -218,7 +222,7 @@ function createIssuePagedQuery<
           );
         setCursors({ key, seed: first, values: [...values, nextCursor] });
       },
-      refresh,
+      refresh: refreshPages,
     };
   };
 }
@@ -283,35 +287,14 @@ export const useIssueAssigneeCandidates = createIssuePagedQuery(
   pageOf,
 );
 
+const useDependencyPages = createIssuePagedQuery(
+  "web-issues:dependencies",
+  issueEnvironment.dependencies,
+  pageOf,
+);
 export function useIssueDependencies(environmentId: EnvironmentId, input: IssueDependenciesInput) {
-  const identity = JSON.stringify([environmentId, input]);
-  const [page, setPage] = useState<{ identity: string; cursor?: string }>({ identity });
-  const cursor = page.identity === identity ? page.cursor : undefined;
-  const query = useEnvironmentQuery(
-    issueEnvironment.dependencies({
-      environmentId,
-      input: { ...input, ...(cursor === undefined ? {} : { cursor }) },
-    }),
-  );
-  return {
-    items: query.data?.items ?? [],
-    truncated: query.data?.truncated === true,
-    hasMore:
-      query.error === null && query.data?.nextCursor != null && query.data.nextCursor !== cursor,
-    isPending: query.isPending,
-    error: query.error,
-    loadMore: () => {
-      if (
-        !query.isPending &&
-        query.error === null &&
-        query.data?.nextCursor &&
-        query.data.nextCursor !== cursor
-      )
-        setPage({ identity, cursor: query.data.nextCursor });
-    },
-    refresh: () => {
-      setPage({ identity });
-      appAtomRegistry.refresh(issueEnvironment.dependencies({ environmentId, input }));
-    },
-  };
+  const page = useDependencyPages(environmentId, input);
+  const items = new Map<string, (typeof page.items)[number]>();
+  for (const item of page.items) items.set(JSON.stringify([item.kind, item.scope, item.key]), item);
+  return { ...page, items: [...items.values()] };
 }

@@ -377,7 +377,7 @@ it.each(["supported", "unmounted", "unsupported", "failed-detail", "failed-relat
   },
 );
 
-it("reads one dependency page per direction, replaces pages and retries a failed read", async () => {
+it("reads one dependency page per direction, accumulates pages and retries a failed read", async () => {
   const nativeRef = { ...reference, connectionId: "Account-B" };
   const decodeDependencies = Schema.decodeUnknownSync(IssueDependenciesPage);
   state.read.mockImplementation((tag, input) => {
@@ -462,7 +462,7 @@ it("reads one dependency page per direction, replaces pages and retries a failed
     );
   });
   expect(blocks.textContent).toContain("Next native PR");
-  expect(blocks.textContent).not.toContain("First native PR");
+  expect(blocks.textContent).toContain("First native PR");
   expect(blockedBy.textContent).toContain("First native PR");
   state.failedDependencies = true;
   await act(async () => {
@@ -483,6 +483,156 @@ it("reads one dependency page per direction, replaces pages and retries a failed
   expect(blockedBy.textContent).not.toContain("Native dependency read failed");
   expect(state.writes).not.toHaveBeenCalled();
 });
+
+it.each(["success", "failed-refresh", "unsupported", "unmounted"])(
+  "refreshes dependency directions from the first page after continuation (%s)",
+  async (kind) => {
+    const nativeRef = { ...reference, connectionId: "Account-B" };
+    const supported = kind !== "unsupported";
+    const decodeDependencies = Schema.decodeUnknownSync(IssueDependenciesPage);
+    state.read.mockImplementation((tag, input) => {
+      if (tag === WS_METHODS.issuesDetail)
+        return decodeDetail({
+          ...issue,
+          ...nativeRef,
+          title: state.newer ? "New issue" : "Old issue",
+          capabilities: {
+            ...capabilities,
+            linkedPullRequests: false,
+            subIssues: false,
+            events: true,
+            dependencies: supported,
+          },
+        });
+      if (tag === WS_METHODS.issuesHistory) return decodeHistory({ items: [], nextCursor: null });
+      if (tag === WS_METHODS.issuesDependencies)
+        return decodeDependencies({
+          items: Array.from({ length: input.cursor ? 1 : 50 }, (_, index) => ({
+            scope: "native/repo",
+            key: input.cursor ? "51" : String(index + 1),
+            displayKey: input.cursor ? "#51" : `#${index + 1}`,
+            title: `${state.newer ? "New" : "Old"} ${input.direction} ${input.cursor ? "tail" : index + 1}`,
+            kind: "pull-request",
+            url: `https://native.example/pulls/${input.cursor ? "51" : index + 1}`,
+            state: { category: "open", name: "open" },
+          })),
+          nextCursor: input.cursor ? null : "native-tail",
+        });
+      throw new Error(`Unexpected RPC ${tag}`);
+    });
+    await act(async () =>
+      root.render(
+        <RegistryContext.Provider value={appAtomRegistry}>
+          <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
+        </RegistryContext.Provider>,
+      ),
+    );
+    await act(async () => {
+      await executeAtomQuery(
+        appAtomRegistry,
+        issueEnvironment.detail({ environmentId, input: nativeRef }),
+      );
+    });
+    if (supported) {
+      await act(async () => {
+        await Promise.all(
+          (["blocks", "blocked-by"] as const).map((direction) =>
+            executeAtomQuery(
+              appAtomRegistry,
+              issueEnvironment.dependencies({
+                environmentId,
+                input: { ...nativeRef, direction, limit: 100 },
+              }),
+            ),
+          ),
+        );
+      });
+      for (const title of ["Blocks", "Blocked by"]) {
+        const section = container.querySelector(`[aria-label="${title}"]`)!;
+        await act(async () =>
+          [...section.querySelectorAll<HTMLButtonElement>("button")]
+            .find((node) => node.textContent === "Load more dependencies")!
+            .click(),
+        );
+        expect(section.querySelectorAll("a")).toHaveLength(51);
+        expect(section.textContent).toContain("tail");
+      }
+    }
+    if (kind === "unmounted") {
+      await act(async () => button("History").click());
+      await act(async () => {
+        await executeAtomQuery(
+          appAtomRegistry,
+          issueEnvironment.history({ environmentId, input: nativeRef }),
+        );
+      });
+    }
+    const before = state.read.mock.calls.length;
+    state.newer = true;
+    state.failedDependencies = kind === "failed-refresh";
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Refresh issue"]')!.click(),
+    );
+    await act(async () => {
+      await executeAtomQuery(
+        appAtomRegistry,
+        issueEnvironment.detail({ environmentId, input: nativeRef }),
+      );
+    });
+    expect(container.textContent).toContain("New issue");
+    const reads = state.read.mock.calls
+      .slice(before)
+      .filter(([tag]) => tag === WS_METHODS.issuesDependencies);
+    if (!supported || kind === "unmounted") {
+      expect(reads).toEqual([]);
+    } else {
+      expect(reads.map(([, input]) => input)).toEqual(
+        expect.arrayContaining(
+          (["blocks", "blocked-by"] as const).map((direction) => ({
+            ...nativeRef,
+            direction,
+            limit: 100,
+          })),
+        ),
+      );
+      expect(reads).toHaveLength(2);
+      for (const [title, direction] of [
+        ["Blocks", "blocks"],
+        ["Blocked by", "blocked-by"],
+      ]) {
+        const section = container.querySelector(`[aria-label="${title}"]`)!;
+        expect(section.textContent).not.toContain("tail");
+        if (kind === "failed-refresh") {
+          expect(section.textContent).toContain("Retry dependencies");
+          expect(section.textContent).not.toContain("Load more dependencies");
+          expect(section.textContent).not.toContain(`New ${direction}`);
+          state.failedDependencies = false;
+          await act(async () =>
+            [...section.querySelectorAll<HTMLButtonElement>("button")]
+              .find((node) => node.textContent === "Retry dependencies")!
+              .click(),
+          );
+          expect(section.querySelectorAll("a")).toHaveLength(50);
+          expect(section.textContent).toContain(`New ${direction} 1`);
+          expect(section.textContent).not.toContain("tail");
+          state.failedDependencies = true;
+        } else {
+          expect(section.querySelectorAll("a")).toHaveLength(50);
+          expect(section.textContent).toContain(`New ${direction} 1`);
+          expect(section.textContent).not.toContain(`Old ${direction}`);
+          await act(async () =>
+            [...section.querySelectorAll<HTMLButtonElement>("button")]
+              .find((node) => node.textContent === "Load more dependencies")!
+              .click(),
+          );
+          expect(section.querySelectorAll("a")).toHaveLength(51);
+          expect(section.textContent).toContain(`New ${direction} tail`);
+        }
+      }
+    }
+    expect(state.writes).not.toHaveBeenCalled();
+  },
+);
 
 it.each([true, false])(
   "uses updateParent permission instead of edit and keeps native external task links (%s)",

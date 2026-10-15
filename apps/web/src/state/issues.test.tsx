@@ -28,13 +28,24 @@ vi.mock("@t3tools/client-runtime/state/issues", async () => {
       hierarchy: family,
       labelCandidates: family,
       assigneeCandidates: family,
+      dependencies: family,
     }),
   };
 });
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { issueEnvironment, useIssueHistory, type IssuePagedView } from "./issues";
-import type { IssueEvent, IssueHistoryPage } from "@t3tools/contracts";
+import {
+  issueEnvironment,
+  useIssueHistory,
+  useIssueDependencies,
+  type IssuePagedView,
+} from "./issues";
+import type {
+  IssueDependenciesInput,
+  IssueDependenciesPage,
+  IssueEvent,
+  IssueHistoryPage,
+} from "@t3tools/contracts";
 
 const environmentId = EnvironmentId.make("environment");
 const input = {
@@ -161,3 +172,131 @@ it("keeps a failed continuation available for retry without dropping earlier ite
     refresh.mockRestore();
   }
 });
+
+it.each(["blocks", "blocked-by"] as const)(
+  "accumulates and deduplicates %s pages, resets refresh and input identity, and guards cursor loops",
+  async (direction) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let target: IssueDependenciesInput = { ...input, direction, limit: 100 };
+    let environment = environmentId;
+    let dependencies!: IssuePagedView<IssueDependenciesPage["items"][number]>;
+    const relation = (key: string, kind: "issue" | "pull-request" = "issue") => ({
+      scope: input.scope,
+      key,
+      displayKey: key,
+      title: key,
+      kind,
+      url: `https://jira.example/${key}`,
+      state: { category: "open" as const, name: "open" },
+    });
+    const firstItems = Array.from({ length: 50 }, (_, index) => relation(String(index)));
+    const atom = (cursor?: string) =>
+      issueEnvironment.dependencies({
+        environmentId: environment,
+        input: cursor === undefined ? target : { ...target, cursor },
+      }) as Atom.Writable<AsyncResult.AsyncResult<IssueDependenciesPage, unknown>>;
+    const first = atom();
+    const tail = atom("tail");
+    const last = atom("last");
+    appAtomRegistry.set(
+      first,
+      AsyncResult.success({ items: firstItems, nextCursor: "tail", truncated: true }),
+    );
+    appAtomRegistry.set(
+      tail,
+      AsyncResult.success({
+        items: [relation("49"), relation("50"), relation("50", "pull-request")],
+        nextCursor: "last",
+      }),
+    );
+    appAtomRegistry.set(last, AsyncResult.success({ items: [relation("51")], nextCursor: "tail" }));
+    function DependenciesProbe() {
+      const current = useIssueDependencies(environment, target);
+      useEffect(() => {
+        dependencies = current;
+      }, [current]);
+      return null;
+    }
+    const render = () =>
+      createElement(
+        RegistryContext.Provider,
+        { value: appAtomRegistry },
+        createElement(DependenciesProbe),
+      );
+    await act(async () => {
+      root = create(render());
+    });
+    await act(async () => dependencies.loadMore());
+    expect(dependencies.items).toEqual([
+      ...firstItems,
+      relation("50"),
+      relation("50", "pull-request"),
+    ]);
+    expect(dependencies.truncated).toBe(true);
+    await act(async () => appAtomRegistry.set(tail, AsyncResult.failure(Cause.fail("offline"))));
+    expect(dependencies.items).toEqual(firstItems);
+    expect(dependencies.error).not.toBeNull();
+    expect(dependencies.hasMore).toBe(true);
+    await act(async () =>
+      appAtomRegistry.set(
+        tail,
+        AsyncResult.success({
+          items: [relation("49"), relation("50"), relation("50", "pull-request")],
+          nextCursor: "last",
+        }),
+      ),
+    );
+    await act(async () => dependencies.loadMore());
+    expect(dependencies.items).toHaveLength(53);
+    expect(dependencies.hasMore).toBe(false);
+    await act(async () => dependencies.loadMore());
+    expect(dependencies.items).toHaveLength(53);
+    const refresh = vi.spyOn(appAtomRegistry, "refresh");
+    try {
+      await act(async () => dependencies.refresh());
+      expect(refresh).toHaveBeenCalledExactlyOnceWith(first);
+      expect(dependencies.items).toEqual(firstItems);
+      await act(async () => appAtomRegistry.set(first, AsyncResult.failure(Cause.fail("offline"))));
+      expect(dependencies.error).toBe("The environment request failed.");
+      expect(dependencies.items).toEqual([]);
+      expect(dependencies.hasMore).toBe(false);
+      await act(async () =>
+        appAtomRegistry.set(first, AsyncResult.success({ items: firstItems, nextCursor: "tail" })),
+      );
+      await act(async () => dependencies.loadMore());
+      const targets = [
+        { ...target, key: "ENG-2" },
+        { ...target, connectionId: "Account-B" },
+        {
+          ...target,
+          direction: direction === "blocks" ? ("blocked-by" as const) : ("blocks" as const),
+        },
+      ];
+      for (const next of targets) {
+        target = next;
+        appAtomRegistry.set(
+          atom(),
+          AsyncResult.success({ items: [relation("new")], nextCursor: "tail" }),
+        );
+        appAtomRegistry.set(
+          atom("tail"),
+          AsyncResult.success({ items: [relation("new-tail")], nextCursor: null }),
+        );
+        await act(async () => root!.update(render()));
+        expect(dependencies.items).toEqual([relation("new")]);
+        expect(dependencies.error).toBeNull();
+        await act(async () => dependencies.loadMore());
+        expect(dependencies.items).toEqual([relation("new"), relation("new-tail")]);
+      }
+      environment = EnvironmentId.make("other-environment");
+      appAtomRegistry.set(
+        atom(),
+        AsyncResult.success({ items: [relation("other")], nextCursor: null }),
+      );
+      await act(async () => root!.update(render()));
+      expect(dependencies.items).toEqual([relation("other")]);
+    } finally {
+      refresh.mockRestore();
+    }
+  },
+);
