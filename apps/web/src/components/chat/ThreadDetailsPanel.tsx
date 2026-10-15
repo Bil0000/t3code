@@ -19,6 +19,7 @@ import { memo, type ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
+import { ThreadDetailsIssueRows } from "./ThreadDetailsIssueRows";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 
@@ -170,6 +171,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {!props.gitCwd || !props.isGitRepo ? (
+            <ThreadDetailsIssueRows threadRef={activeThreadRef} />
           ) : null}
 
           {density === "full" && !props.draftId ? (
