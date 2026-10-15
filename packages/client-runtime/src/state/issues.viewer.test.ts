@@ -3,19 +3,23 @@ import type {
   IssueCapabilities,
   IssueListEntry,
   IssueListInput,
-  IssueListResult,
   IssueTrackerKind,
   ProjectId,
 } from "@t3tools/contracts";
-import { issueListCursorKey } from "@t3tools/contracts";
+import { IssueListResult, issueListCursorKey } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcClient from "../rpc/client.ts";
+import { executeAtomQuery } from "./runtime.ts";
 import {
   continueIssueListPage,
   createIssueEnvironmentAtoms,
@@ -78,8 +82,266 @@ const loaded = (key = cursor) => {
 };
 const keys = (page: { entries: IssueListResult["entries"] }) =>
   page.entries.map((entry) => entry.key);
+const decodeIssueList = Schema.decodeUnknownSync(IssueListResult);
 
 describe("held issue list viewers", () => {
+  it.each(["qualified", "legacy", "missing"])(
+    "keeps known mount viewers when a %s host frame is ambiguous",
+    (kind) => {
+      const upper = row("upper-first", {
+        tracker: "forgejo" as IssueTrackerKind,
+        host: "forge.example",
+        scope: "Mount/acme/web",
+      });
+      const lower = row("lower-first", { ...upper, scope: "mount/acme/web" });
+      const upperCursor = issueListCursorKey(upper);
+      const lowerCursor = issueListCursorKey(lower);
+      const initial = {
+        ...answer([upper, lower], { [upperCursor]: "2", [lowerCursor]: "2" }),
+        sources: [source(upper), source(lower)],
+        viewers: { [upperCursor]: "alice", [lowerCursor]: "bob" },
+      };
+      const held = first(initial);
+      const tailed = continueIssueListPage(
+        held,
+        held.nextCursors,
+        {
+          ...initial,
+          entries: [row("upper-tail", upper), row("lower-tail", lower)],
+          nextCursors: { [upperCursor]: "3", [lowerCursor]: "3" },
+        },
+        held.firstCursors,
+      );
+      const viewers: Record<string, string> =
+        kind === "qualified"
+          ? { "forgejo forge.example": "legacy" }
+          : kind === "legacy"
+            ? { "forge.example": "legacy" }
+            : {};
+      const unknown = refreshIssueListPage(tailed, { ...initial, viewers });
+      expect(keys(unknown).toSorted()).toEqual([
+        "lower-first",
+        "lower-tail",
+        "upper-first",
+        "upper-tail",
+      ]);
+      expect(unknown.nextCursors).toEqual(tailed.nextCursors);
+      const changed = refreshIssueListPage(
+        unknown,
+        {
+          ...initial,
+          sources: [source(lower)],
+          entries: [lower],
+          nextCursors: { [lowerCursor]: "2" },
+          viewers: { [lowerCursor]: "charlie", "forgejo forge.example": "charlie" },
+        },
+        { source: lower },
+      );
+      expect(keys(changed).toSorted()).toEqual(["lower-first", "upper-first", "upper-tail"]);
+      expect(changed.nextCursors).toEqual({ [upperCursor]: "3", [lowerCursor]: "2" });
+    },
+  );
+
+  it.each(["forgejo forge.example", "forge.example"])(
+    "accepts old %s viewers for several repositories in one exact native mount",
+    (viewerKey) => {
+      const upper = row("upper-first", {
+        tracker: "forgejo" as IssueTrackerKind,
+        host: "forge.example",
+        scope: "Mount/acme/web",
+      });
+      const lower = row("lower-first", { ...upper, scope: "Mount/other/api" });
+      const upperCursor = issueListCursorKey(upper);
+      const lowerCursor = issueListCursorKey(lower);
+      const initial = {
+        ...answer([upper, lower], { [upperCursor]: "2", [lowerCursor]: "2" }),
+        sources: [source(upper), source(lower)],
+        viewers: { [viewerKey]: "alice" },
+      };
+      const held = first(initial);
+      const tailed = continueIssueListPage(
+        held,
+        held.nextCursors,
+        {
+          ...initial,
+          entries: [row("upper-tail", upper), row("lower-tail", lower)],
+          nextCursors: { [upperCursor]: "3", [lowerCursor]: "3" },
+        },
+        held.firstCursors,
+      );
+      const changed = refreshIssueListPage(
+        tailed,
+        {
+          ...initial,
+          entries: [lower],
+          sources: [source(lower)],
+          nextCursors: { [lowerCursor]: "2" },
+          viewers: { [viewerKey]: "bob" },
+        },
+        { source: lower },
+      );
+      expect(keys(changed).toSorted()).toEqual(["lower-first", "upper-first", "upper-tail"]);
+      expect(changed.nextCursors).toEqual({ [upperCursor]: "3", [lowerCursor]: "2" });
+    },
+  );
+
+  it.each(["bob", "charlie"])(
+    "uses scoped native viewers through the actual list query and continuation: %s",
+    async (viewer) => {
+      const runtime = Atom.runtime(
+        Layer.effect(
+          EnvironmentRegistry.EnvironmentRegistry,
+          Effect.gen(function* () {
+            const state = yield* SubscriptionRef.make({ phase: "connected" } as const);
+            const session = yield* SubscriptionRef.make(Option.some({}));
+            const supervisor = {
+              state,
+              session,
+            } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+            return EnvironmentRegistry.EnvironmentRegistry.of({
+              run: (_id, effect) =>
+                Effect.provideService(
+                  effect,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+              followStream: (_id, stream) =>
+                Stream.provideService(
+                  stream,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+          }),
+        ),
+      );
+      const registry = AtomRegistry.make();
+      const atoms = createIssueEnvironmentAtoms(runtime);
+      const capabilities: IssueCapabilities = {
+        create: false,
+        edit: false,
+        comment: false,
+        labels: false,
+        assignees: false,
+        reactions: false,
+        templates: false,
+        linkedPullRequests: false,
+        events: false,
+        search: true,
+        states: [],
+        closeReasons: [],
+      };
+      const nativeSource = (entry: IssueListEntry) => ({
+        projectId: entry.projectId,
+        projectTitle: entry.projectTitle,
+        tracker: entry.tracker,
+        host: entry.host,
+        scope: entry.scope,
+        capabilities,
+      });
+      const upper = row("upper-first", {
+        tracker: "forgejo" as IssueTrackerKind,
+        host: "forge.example",
+        scope: "Mount/acme/web",
+      });
+      const lower = row("lower-first", { ...upper, scope: "mount/acme/web" });
+      const upperCursor = issueListCursorKey(upper);
+      const lowerCursor = issueListCursorKey(lower);
+      const initial = {
+        ...answer([upper, lower], { [upperCursor]: "2", [lowerCursor]: "2" }),
+        sources: [nativeSource(upper), nativeSource(lower)],
+        viewers: { [upperCursor]: "alice", [lowerCursor]: "bob" },
+      };
+      const pageTwo = {
+        ...initial,
+        entries: [],
+        sources: [nativeSource(lower)],
+        viewers: { [lowerCursor]: viewer, "forgejo forge.example": viewer },
+        nextCursors: {},
+      };
+      const replies = [
+        initial,
+        {
+          ...initial,
+          entries: [row("upper-tail", upper), row("lower-tail", lower)],
+          nextCursors: { [upperCursor]: "3", [lowerCursor]: "3" },
+        },
+        pageTwo,
+        ...(viewer === "charlie" ? [{ ...pageTwo, entries: [row("charlie-first", lower)] }] : []),
+      ];
+      const reads: Array<{ tag: string; input: unknown }> = [];
+      const request = vi.spyOn(RpcClient, "request");
+      const respond = ((tag: string, input: unknown) =>
+        Effect.sync(() => {
+          reads.push({ tag, input });
+          const reply = replies.shift();
+          if (reply === undefined) throw new Error("Unexpected native list read");
+          return decodeIssueList(reply);
+        })) as unknown as Parameters<typeof request.mockImplementation>[0];
+      request.mockImplementation(respond);
+      const guarded = vi.spyOn(RpcClient, "requestGuarded");
+      guarded.mockImplementation(
+        respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
+      );
+      const input = { state: "open" as const, involvement: "assigned" as const, limit: 50 };
+      const environmentId = "environment" as EnvironmentId;
+      const read = async (input: IssueListInput) => {
+        const result = await atoms.listPage.run(registry, { environmentId, input });
+        if (result._tag !== "Success") throw new Error("Native page read failed");
+        return result.value;
+      };
+      try {
+        const firstRead = await executeAtomQuery(registry, atoms.list({ environmentId, input }), {
+          reportFailure: false,
+        });
+        if (firstRead._tag !== "Success") throw new Error("Native first query failed");
+        const held = first(firstRead.value);
+        const tailed = continueIssueListPage(
+          held,
+          held.nextCursors,
+          await read({ ...input, cursors: held.nextCursors }),
+          held.firstCursors,
+        );
+        const next = continueIssueListPage(
+          tailed,
+          { [lowerCursor]: "3" },
+          await read({ ...input, cursors: { [lowerCursor]: "3" } }),
+          tailed.firstCursors,
+        );
+        expect(next.restartSources).toEqual(viewer === "charlie" ? [nativeSource(lower)] : []);
+        let completed = next;
+        for (const restart of next.restartSources ?? [])
+          completed = refreshIssueListPage(
+            completed,
+            await read({ ...input, projectId: restart.projectId, host: restart.host }),
+            { source: lower },
+          );
+        expect(keys(completed).toSorted()).toEqual(
+          viewer === "charlie"
+            ? ["charlie-first", "upper-first", "upper-tail"]
+            : ["lower-first", "lower-tail", "upper-first", "upper-tail"],
+        );
+        expect(completed.nextCursors).toEqual({ [upperCursor]: "3" });
+        expect(reads.map(({ tag }) => tag)).toEqual(
+          Array(viewer === "charlie" ? 4 : 3).fill("issues.list"),
+        );
+        expect(reads[0]!.input).toEqual(input);
+        expect(reads[2]!.input).toEqual({ ...input, cursors: { [lowerCursor]: "3" } });
+        if (viewer === "charlie")
+          expect(reads[3]!.input).toEqual({
+            ...input,
+            projectId: lower.projectId,
+            host: lower.host,
+          });
+        expect(replies).toEqual([]);
+      } finally {
+        registry.dispose();
+        request.mockRestore();
+        guarded.mockRestore();
+      }
+    },
+  );
+
   it.each([false, true])(
     "removes a native mount's old first cursor after alias migration, legacy first: %s",
     (legacy) => {
@@ -96,7 +358,7 @@ describe("held issue list viewers", () => {
       const page = {
         ...answer([upper, lower], { [old]: "2", [other]: "upper-2" }),
         sources: [source(upper), source(lower)],
-        viewers: { "forgejo forge.example": "A" },
+        viewers: { [issueListCursorKey(upper)]: "A", [issueListCursorKey(lower)]: "A" },
       };
       const initial = first(page);
       const held = continueIssueListPage(
@@ -108,7 +370,7 @@ describe("held issue list viewers", () => {
       const switched = continueIssueListPage(
         held,
         { [next]: "3" },
-        { ...page, entries: [], nextCursors: {}, viewers: { "forgejo forge.example": "B" } },
+        { ...page, entries: [], nextCursors: {}, viewers: { [issueListCursorKey(lower)]: "B" } },
         held.firstCursors,
       );
       expect(switched.entries).toEqual([upper]);
@@ -189,7 +451,7 @@ describe("held issue list viewers", () => {
       const initial = {
         ...answer([upper, lower], { [upperCursor]: "2", [lowerCursor]: "2" }),
         sources: [source(upper), source(lower)],
-        viewers: { "forgejo forge.example": "A" },
+        viewers: { [issueListCursorKey(upper)]: "A", [issueListCursorKey(lower)]: "A" },
       };
       expect(issueEntryKey(upper)).not.toBe(
         issueEntryKey({ ...lower, projectId: upper.projectId }),
@@ -231,7 +493,7 @@ describe("held issue list viewers", () => {
         ...initial,
         entries: [],
         sources: [source(current)],
-        viewers: { "forgejo forge.example": "B" },
+        viewers: { [issueListCursorKey(current)]: "B" },
         nextCursors: {},
       };
       const switched = continueIssueListPage(
@@ -270,7 +532,7 @@ describe("held issue list viewers", () => {
           sources: [source(upper)],
           nextCursors: {},
           errors: [failed],
-          viewers: { "forgejo forge.example": "B" },
+          viewers: { [issueListCursorKey(upper)]: "B" },
         },
         completed.firstCursors,
       );
@@ -285,7 +547,7 @@ describe("held issue list viewers", () => {
           entries: [],
           sources: [source(upper)],
           nextCursors: {},
-          viewers: { "forgejo forge.example": "B" },
+          viewers: { [issueListCursorKey(upper)]: "B" },
         },
         unavailable.firstCursors,
       );
@@ -308,13 +570,18 @@ describe("held issue list viewers", () => {
         [issueListCursorKey(lower)]: "2",
       }),
       sources: [source(upper), source(lower)],
-      viewers: { "forgejo forge.example": "A" },
+      viewers: { [issueListCursorKey(upper)]: "A", [issueListCursorKey(lower)]: "A" },
     };
     const held = first(page);
     const next = continueIssueListPage(
       held,
       held.nextCursors,
-      { ...page, entries: [], nextCursors: {}, viewers: { "forgejo forge.example": "B" } },
+      {
+        ...page,
+        entries: [],
+        nextCursors: {},
+        viewers: { [issueListCursorKey(upper)]: "B", [issueListCursorKey(lower)]: "B" },
+      },
       held.firstCursors,
     );
     expect(next.entries).toEqual([]);

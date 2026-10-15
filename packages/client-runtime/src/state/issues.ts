@@ -211,8 +211,26 @@ function issueListViewerChanges(
   const viewerFor = (
     viewers: IssueListResult["viewers"],
     source: IssueListSource,
-    pool: ReadonlyArray<Pick<IssueListSource, "tracker" | "host">>,
+    pool: ReadonlyArray<Pick<IssueListSource, "tracker" | "host"> & { readonly scope?: string }>,
   ) => {
+    if (source.tracker === "forgejo") {
+      const scoped = viewers[sourceKey(source)] ?? viewers[issueListCursorKey(source)];
+      if (scoped !== undefined) return scoped;
+      const mount = issueScopeKeyOf(source).split("/").slice(0, -2).join("/");
+      if (
+        pool.some(
+          (each) =>
+            each.tracker === source.tracker &&
+            each.host.toLowerCase() === source.host.toLowerCase() &&
+            each.scope !== undefined &&
+            issueScopeKeyOf({ tracker: each.tracker, scope: each.scope })
+              .split("/")
+              .slice(0, -2)
+              .join("/") !== mount,
+        )
+      )
+        return undefined;
+    }
     const qualified = viewers[issueTrackerHostKey(source)];
     if (qualified !== undefined) return qualified;
     const host = source.host.toLowerCase();
