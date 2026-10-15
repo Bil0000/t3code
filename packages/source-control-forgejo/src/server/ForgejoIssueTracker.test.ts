@@ -231,6 +231,68 @@ describe("ForgejoIssueTracker", () => {
       }),
   );
 
+  it.effect.each(
+    [
+      { path: "/Acme/Web/issues/42", allowed: true },
+      { path: "/api/v1/repos/Acme/Web/issues/42", allowed: true },
+      { path: "/Mount/Acme/Web/issues/42", mount: "Mount/", allowed: true },
+      { path: "/Mount/api/v1/repos/Acme/Web/issues/42", mount: "Mount/", allowed: true },
+      { path: "/Acme/Web/issues/42", host: "other.test:3000", allowed: false },
+      { path: "/Acme/Web/issues/42", host: "forgejo.test:3001", allowed: false },
+      { path: "/Acme/Other/issues/42", allowed: false },
+      { path: "/Other/Web/issues/42", allowed: false },
+      { path: "/Acme/Web/issues/41", allowed: false },
+      { path: "/Acme/Web/issues/42", id: 8, allowed: false },
+      { path: "/other/Acme/Web/issues/42", mount: "Mount/", allowed: false },
+      { path: "/mount/Acme/Web/issues/42", mount: "Mount/", allowed: false },
+      { path: "/Mount/api/v1/Repos/Acme/Web/issues/42", mount: "Mount/", allowed: false },
+      { path: "/Acme/Web/Issues/42", allowed: false },
+      { path: "/Acme/Web/issues/42", protocol: "ftp", allowed: false },
+    ].flatMap((test) => [true, false].map((reacted) => ({ ...test, reacted }))),
+  )(
+    "checks canonical comment membership for $path reacted=$reacted",
+    ({
+      path,
+      host = "forgejo.test:3000",
+      mount = "",
+      id = 7,
+      protocol = "https",
+      allowed,
+      reacted,
+    }) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          return { stdout: encode({ id, issue_url: `${protocol}://${host}${path}` }) };
+        });
+        const target = {
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: `${mount}acme/web`,
+          key: "42",
+        };
+        const mutation = api.setReaction!({
+          ...target,
+          subjectId: "7",
+          content: "thumbs-up",
+          reacted,
+        });
+        if (allowed) yield* mutation;
+        else expect(yield* Effect.flip(mutation)).toMatchObject({ reason: "failed" });
+        expect(requests).toHaveLength(allowed ? 2 : 1);
+        expect(requests[0]).toMatchObject({ path: `repos/${target.scope}/issues/comments/7` });
+        expect(requests[0]?.method).toBeUndefined();
+        if (allowed)
+          expect(requests[1]).toMatchObject({
+            path: `repos/${target.scope}/issues/comments/7/reactions`,
+            method: reacted ? "POST" : "DELETE",
+            body: { content: "+1" },
+          });
+        else expect(requests.every((request) => request.method === undefined)).toBe(true);
+      }),
+  );
+
   it.effect.each([
     { reacted: true, method: "POST", issueUrl: "https://forgejo.test:3000/acme/web/issues/42" },
     {

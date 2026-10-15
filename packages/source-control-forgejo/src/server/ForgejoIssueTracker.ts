@@ -693,13 +693,15 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
             const segments = input.scope.split("/").map(encodeURIComponent);
             const scopePath = segments.slice(-2).join("/");
             const mountPath = segments.slice(0, -2).join("/");
-            const issueSuffix = `/${scopePath}/issues/${number}`;
             const ownerPath = url?.pathname.replace(/\/$/, "");
+            const nativeScopePath = ownerPath?.split("/").slice(-4, -2).join("/");
+            const issueSuffix = `/${nativeScopePath}/issues/${number}`;
             if (
               String(comment.id) !== input.subjectId ||
               url === null ||
               !["http:", "https:"].includes(url.protocol) ||
               url.host.toLowerCase() !== input.host.toLowerCase() ||
+              nativeScopePath?.toLowerCase() !== scopePath.toLowerCase() ||
               !ownerPath?.endsWith(issueSuffix) ||
               (mountPath !== "" &&
                 ownerPath !== `/${mountPath}${issueSuffix}` &&
