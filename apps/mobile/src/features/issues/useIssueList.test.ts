@@ -499,6 +499,163 @@ effectIt.effect.each(["connecting", "failed-connected"])(
     }),
 );
 
+effectIt.effect(
+  "retries a failed viewer restart after a partial manual refresh before its sibling",
+  () =>
+    Effect.gen(function* () {
+      const current = row("A-first");
+      const other = row("other", {
+        tracker: IssueTrackerKind.make("github"),
+        host: "github.example",
+        scope: "group/other",
+        projectId: ProjectId.make("other"),
+      });
+      const first: IssueListResult = {
+        entries: [current, other],
+        sources: [source(current), source(other)],
+        viewers: { "gitlab gitlab.example": "A", "github github.example": "other" },
+        trackers: [],
+        errors: [],
+        nextCursors: { [cursor]: "2", [otherCursor]: "O2" },
+      };
+      const changed: IssueListResult = {
+        ...first,
+        entries: [row("other-tail", other)],
+        viewers: { ...first.viewers, "gitlab gitlab.example": "B" },
+        nextCursors: { [otherCursor]: "O3" },
+      };
+      const failed: IssueListResult = {
+        ...first,
+        entries: [other],
+        viewers: { "github github.example": "other" },
+        errors: [
+          {
+            projectId: current.projectId,
+            projectTitle: current.projectTitle,
+            tracker: current.tracker,
+            host: current.host,
+            message: "restart failed",
+          },
+        ],
+        nextCursors: { [otherCursor]: "O2" },
+      };
+      const runtime = Atom.runtime(
+        Layer.effect(
+          EnvironmentRegistry.EnvironmentRegistry,
+          Effect.gen(function* () {
+            const supervisor = {
+              state: yield* SubscriptionRef.make({
+                ...AVAILABLE_CONNECTION_STATE,
+                phase: "connected" as const,
+              }),
+              session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
+            } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+            return EnvironmentRegistry.EnvironmentRegistry.of({
+              run: (_id, effect) =>
+                Effect.provideService(
+                  effect,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+              followStream: (_id, stream) =>
+                Stream.provideService(
+                  stream,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisor,
+                ),
+            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+          }),
+        ),
+      );
+      Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+      let reads = 0;
+      const request = vi.spyOn(RpcClient, "request");
+      request.mockImplementation((() =>
+        Effect.sync(() => (++reads === 1 ? first : failed))) as unknown as Parameters<
+        typeof request.mockImplementation
+      >[0]);
+      const page = vi.spyOn(RpcClient, "requestGuarded");
+      const pages: IssueListInput[] = [];
+      page.mockImplementation(((_tag: string, input: IssueListInput) => {
+        pages.push(input);
+        if (pages.length === 1) return Effect.succeed(changed);
+        if (pages.length === 2) return Effect.fail(new Error("restart failed"));
+        return Effect.succeed({
+          ...first,
+          entries: input.cursors ? [row("other-tail-2", other)] : [row("B-first")],
+          sources: [source(input.cursors ? other : current)],
+          viewers: input.cursors
+            ? { "github github.example": "other" }
+            : { "gitlab gitlab.example": "B" },
+          nextCursors: {},
+        });
+      }) as unknown as Parameters<typeof page.mockImplementation>[0]);
+      const targets: IssueListTarget[] = [
+        {
+          environmentId: EnvironmentId.make("restart-refresh"),
+          input: { state: "all", involvement: "assigned", limit: 50 },
+        },
+      ];
+      const registry = AtomRegistry.make();
+      const query = issueEnvironment.list(targets[0]!);
+      const release = registry.mount(query);
+      const root = createRoot(document.createElement("div"));
+      let result: ReturnType<typeof useIssueList>;
+      function Probe() {
+        const current = useIssueList(targets);
+        useLayoutEffect(() => {
+          result = current;
+        });
+        return null;
+      }
+      try {
+        yield* AtomRegistry.getResult(registry, query);
+        yield* Effect.promise(() =>
+          act(async () =>
+            root.render(
+              createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
+            ),
+          ),
+        );
+        yield* Effect.promise(() => act(async () => result!.loadMore()));
+        expect(result!.loadMoreError).toContain("restart failed");
+        yield* Effect.promise(() => act(async () => result!.onRefresh()));
+        expect(result!.loadMoreError).toContain("restart failed");
+        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
+          "other-tail",
+          "other",
+        ]);
+        expect(result!.lists[0]!.held.nextCursors).toEqual({ [otherCursor]: "O3" });
+        expect(reads).toBe(2);
+        expect(pages).toHaveLength(2);
+        yield* Effect.promise(() => act(async () => result!.loadMore()));
+        expect(pages).toHaveLength(2);
+        yield* Effect.promise(() => act(async () => result!.loadMore(true)));
+        const restart = { ...targets[0]!.input, projectId: current.projectId, host: current.host };
+        expect(pages).toEqual([
+          { ...targets[0]!.input, cursors: first.nextCursors },
+          restart,
+          restart,
+        ]);
+        expect(reads).toBe(2);
+        expect(result!.loadMoreError).toBeNull();
+        expect(result!.lists[0]!.held.entries.map((entry) => entry.key)).toEqual([
+          "other-tail",
+          "other",
+          "B-first",
+        ]);
+        expect(result!.lists[0]!.held.nextCursors).toEqual({ [otherCursor]: "O3" });
+        expect(result!.lists[0]!.held.errors).toEqual([]);
+      } finally {
+        yield* Effect.promise(() => act(async () => root.unmount()));
+        release();
+        registry.dispose();
+        request.mockRestore();
+        page.mockRestore();
+      }
+    }),
+);
+
 effectIt.effect("keeps an exhausted native list terminal after a first-page refresh", () =>
   Effect.gen(function* () {
     const runtime = Atom.runtime(

@@ -59,6 +59,7 @@ type HeldIssueList = IssueListPage & {
     readonly trackers?: IssueListResult["trackers"];
   };
   readonly scopeViewers?: ReadonlyMap<string, string | null>;
+  readonly restartSources?: ReadonlyArray<IssueScopeRef>;
   readonly firstCursors: IssueListCursors;
   readonly firstKeys: ReadonlySet<string>;
 };
@@ -337,7 +338,11 @@ export function refreshIssueListPage<T extends HeldIssueList>(
     ].map(keyOf),
   );
   const failed = failedScopes(
-    [...(fresh.sources ?? []), ...heldSources(held)],
+    [
+      ...(fresh.sources ?? []),
+      ...heldSources(held),
+      ...(held.restartSources ?? []).map((pending) => ({ ...pending, host: pending.host ?? "" })),
+    ],
     fresh.errors,
     cursors,
   );
@@ -422,7 +427,10 @@ export function refreshIssueListPage<T extends HeldIssueList>(
   return {
     ...held,
     entries: mergeIssueListPage(kept, taken),
-    restartSources: [],
+    restartSources: (held.restartSources ?? []).filter((pending) => {
+      const key = scopeOf({ ...pending, host: pending.host ?? "" }, cursors);
+      return failed.has(key) || (isBound(key) && !covered(key));
+    }),
     scopeViewers,
     firstKeys: new Set([
       ...kept.map(issueEntryKey).filter((key) => held.firstKeys.has(key)),

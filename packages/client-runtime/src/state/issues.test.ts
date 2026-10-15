@@ -1597,6 +1597,67 @@ describe("held issue list viewers", () => {
     }
   });
 
+  it.each([
+    { tracker: "github", includeFailedSource: true },
+    { tracker: "github", includeFailedSource: false },
+    { tracker: "forgejo", includeFailedSource: true },
+    { tracker: "forgejo", includeFailedSource: false },
+  ])(
+    "keeps failed or bound uncovered source restarts across refreshes: %j",
+    ({ tracker, includeFailedSource }) => {
+      const current = source(
+        row("B-first", { tracker: tracker as IssueTrackerKind, scope: "Mount/Acme/App" }),
+      );
+      const other = source(
+        row("other", {
+          tracker: tracker as IssueTrackerKind,
+          scope: tracker === "forgejo" ? "mount/Acme/App" : "Mount/Acme/Other",
+          projectId: "other" as ProjectId,
+        }),
+      );
+      for (const legacy of [false, true]) {
+        const otherKey = legacy ? `${other.host} ${other.scope}` : issueListCursorKey(other);
+        const pending = {
+          ...first({ ...answer([], {}, "B"), sources: [current, other] }),
+          restartSources: [current, other],
+        };
+        const fresh = {
+          ...answer([other], { [otherKey]: "O2" }, "B"),
+          sources: includeFailedSource ? [current, other] : [other],
+          errors: [
+            {
+              projectId: current.projectId,
+              projectTitle: current.projectTitle,
+              tracker: current.tracker,
+              host: current.host,
+              message: "down",
+            },
+          ],
+        };
+        const failed = refreshIssueListPage(pending, fresh);
+        expect(failed.restartSources).toEqual([current]);
+        expect(failed.restartSources?.[0]).toBe(current);
+        expect(failed.errors).toEqual(fresh.errors);
+        expect(refreshIssueListPage(failed, fresh).restartSources).toEqual([current]);
+        const uncovered = refreshIssueListPage(
+          pending,
+          { ...fresh, errors: [], sources: [other] },
+          { source: other },
+        );
+        expect(uncovered.restartSources).toEqual([current]);
+        const removed = refreshIssueListPage(pending, { ...fresh, sources: [other], errors: [] });
+        expect(removed.restartSources).toEqual([]);
+        const recovered = refreshIssueListPage(
+          failed,
+          { ...fresh, entries: [current], sources: [current], errors: [], nextCursors: {} },
+          { source: current },
+        );
+        expect(recovered.restartSources).toEqual([]);
+        expect(recovered.nextCursors).toEqual({ [otherKey]: "O2" });
+      }
+    },
+  );
+
   it.each(["gitlab gitlab.example group/app", "gitlab.example group/app"])(
     "keeps a completed 75-row scope terminal after an unchanged first refresh: %s",
     async (cursor) => {
