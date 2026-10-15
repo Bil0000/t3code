@@ -114,9 +114,12 @@ function TrackerRow({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const selected =
-    accounts.find((account) => accountKey(account) === selectedKey) ?? accounts[0] ?? tracker;
-  const current = adding ? tracker : selected;
-  const draftKey = adding ? NEW_ACCOUNT : accountKey(selected);
+    selectedKey === null
+      ? (accounts[0] ?? tracker)
+      : accounts.find((account) => accountKey(account) === selectedKey);
+  const unavailable = !adding && selected === undefined;
+  const current = adding ? tracker : (selected ?? tracker);
+  const draftKey = adding ? NEW_ACCOUNT : (selectedKey ?? accountKey(current));
   const Icon = TRACKER_ICONS[tracker.tracker];
   const canEdit = useAtomValue(issueTrackerEnvironment.connect.permissionAtom(environmentId));
   const connect = useAtomCommand(issueTrackerEnvironment.connect, {
@@ -134,7 +137,7 @@ function TrackerRow({
   const [failure, setFailure] = useState<string | null>(null);
 
   const submit = async (token: string | null) => {
-    if (!canEdit || busy) return;
+    if (!canEdit || busy || unavailable) return;
     setBusy(true);
     setFailure(null);
     try {
@@ -145,7 +148,7 @@ function TrackerRow({
           token: multipleAccounts ? { value: token } : token,
           ...(adding
             ? { addAccount: true }
-            : selected.connectionId === undefined
+            : selected?.connectionId === undefined
               ? {}
               : { connectionId: selected.connectionId }),
         },
@@ -161,14 +164,15 @@ function TrackerRow({
     }
   };
 
-  const status =
-    adding || !selected.connected ? (
-      <Badge variant="outline">Not connected</Badge>
-    ) : selected.account === null ? (
-      <Badge variant="destructive">Not verified</Badge>
-    ) : (
-      <Badge variant="secondary">Connected as {selected.account}</Badge>
-    );
+  const status = unavailable ? (
+    <Badge variant="outline">Account unavailable</Badge>
+  ) : adding || !selected?.connected ? (
+    <Badge variant="outline">Not connected</Badge>
+  ) : selected.account === null ? (
+    <Badge variant="destructive">Not verified</Badge>
+  ) : (
+    <Badge variant="secondary">Connected as {selected.account}</Badge>
+  );
 
   return (
     <div className="first:rounded-t-xl last:rounded-b-xl">
@@ -195,11 +199,11 @@ function TrackerRow({
                 Add account
               </Button>
             ) : null}
-            {!adding && selected.connected ? (
+            {!adding && (selected?.connected || unavailable) ? (
               <Button
                 size="xs"
                 variant="outline"
-                disabled={!canEdit || busy}
+                disabled={!canEdit || busy || unavailable}
                 onClick={() => void submit(null)}
               >
                 Disconnect
@@ -207,9 +211,9 @@ function TrackerRow({
             ) : null}
           </div>
         </div>
-        {multipleAccounts && accounts.length > 0 ? (
+        {multipleAccounts && (accounts.length > 0 || unavailable) ? (
           <Select
-            value={adding ? NEW_ACCOUNT : accountKey(selected)}
+            value={adding ? NEW_ACCOUNT : (selectedKey ?? accountKey(current))}
             disabled={busy}
             onValueChange={(value) => {
               if (value === null || value === NEW_ACCOUNT || busy) return;
@@ -219,9 +223,16 @@ function TrackerRow({
             }}
           >
             <SelectTrigger aria-label={`${tracker.displayName} account`} size="sm">
-              <SelectValue>{adding ? "New account" : accountLabel(selected)}</SelectValue>
+              <SelectValue>
+                {adding ? "New account" : selected ? accountLabel(selected) : "Account unavailable"}
+              </SelectValue>
             </SelectTrigger>
             <SelectPopup>
+              {unavailable ? (
+                <SelectItem value={selectedKey!} disabled>
+                  Account unavailable
+                </SelectItem>
+              ) : null}
               {adding ? (
                 <SelectItem value={NEW_ACCOUNT} disabled>
                   New account
@@ -235,7 +246,7 @@ function TrackerRow({
             </SelectPopup>
           </Select>
         ) : null}
-        {!adding && selected.detail ? (
+        {!adding && selected?.detail ? (
           <p className="text-xs text-destructive">{selected.detail}</p>
         ) : null}
         <form
@@ -245,7 +256,7 @@ function TrackerRow({
             if (packed !== null) void submit(packed);
           }}
         >
-          <fieldset disabled={!canEdit || busy} className="contents">
+          <fieldset disabled={!canEdit || busy || unavailable} className="contents">
             <div className="grid gap-1.5">
               <Label htmlFor={fields === undefined ? inputId : undefined}>
                 {current.credential.label}
@@ -281,7 +292,10 @@ function TrackerRow({
                   <div key={field.key} className="grid gap-1">
                     <Label htmlFor={id}>{field.label}</Label>
                     {field.secret ? (
-                      <SecretInput {...props} configured={!adding && selected.connected} />
+                      <SecretInput
+                        {...props}
+                        configured={!adding && (selected?.connected ?? false)}
+                      />
                     ) : (
                       <Input {...props} autoComplete="off" spellCheck={false} />
                     )}
@@ -293,13 +307,17 @@ function TrackerRow({
                   <SecretInput
                     id={inputId}
                     size="sm"
-                    configured={!adding && selected.connected}
+                    configured={!adding && (selected?.connected ?? false)}
                     value={draft[""] ?? ""}
                     onChange={(event) => setDraft({ "": event.target.value })}
                   />
                 ) : null}
-                <Button type="submit" size="sm" disabled={!canEdit || busy || packed === null}>
-                  {!adding && selected.connected ? "Replace" : "Connect"}
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={!canEdit || busy || unavailable || packed === null}
+                >
+                  {!adding && (selected?.connected || unavailable) ? "Replace" : "Connect"}
                 </Button>
                 {adding ? (
                   <Button

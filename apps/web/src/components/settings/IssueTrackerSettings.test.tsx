@@ -185,6 +185,53 @@ function connected(...accounts: IssueTrackerConnection[]) {
 }
 
 describe("issue tracker accounts", () => {
+  it.each([true, false])(
+    "keeps a removed selected account unavailable when another account remains: %s",
+    async (retainA) => {
+      connected(account("A"), account("B"));
+      await render();
+      expect(container.querySelector('[aria-label="Linear account"]')?.textContent).toContain("A");
+      await choose("Linear account", "B");
+      await type(input("API key"), "draft-B");
+      connected(...(retainA ? [account("A")] : []));
+      await render();
+      if (retainA) {
+        await click(button("Disconnect"));
+        expect(state.connect).not.toHaveBeenCalled();
+      }
+      expect(container.querySelector('[aria-label="Linear account"]')?.textContent).toContain(
+        "Account unavailable",
+      );
+      expect(input("API key").value).toBe("draft-B");
+      expect(input("API key").closest("fieldset")?.disabled).toBe(true);
+      expect(button("Replace").disabled).toBe(true);
+      expect(button("Disconnect").disabled).toBe(true);
+      await click(button("Replace"));
+      await click(button("Disconnect"));
+      await act(async () => {
+        container
+          .querySelector("form")!
+          .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      });
+      expect(state.connect).not.toHaveBeenCalled();
+      if (retainA) {
+        await choose("Linear account", "linear.app · A");
+        expect(input("API key").value).toBe("");
+        await type(input("API key"), "rotated-A");
+        await click(button("Replace"));
+        expect(state.connect).toHaveBeenLastCalledWith({
+          environmentId: local,
+          input: { tracker: linear, connectionId: "A", token: { value: "rotated-A" } },
+        });
+        await click(button("Disconnect"));
+        expect(state.connect).toHaveBeenLastCalledWith({
+          environmentId: local,
+          input: { tracker: linear, connectionId: "A", token: { value: null } },
+        });
+      }
+    },
+  );
+
   it("adds two accounts and rotates or disconnects only the selected account despite matching names", async () => {
     await render();
     await click(button("Add account"));
