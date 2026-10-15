@@ -281,13 +281,19 @@ function IssuesRoute() {
   ]);
   const [sortPolicy, setSortPolicy] = useState({
     sourceKey: "",
-    ...issueSortOptions([{ capabilities: undefined }]),
+    environments: new Map<EnvironmentId, ReturnType<typeof issueSortOptions>>(),
   });
-  const sortOptions =
-    sortPolicy.sourceKey === sortSourceKey
-      ? sortPolicy
-      : issueSortOptions([{ capabilities: undefined }]);
-  const effectiveSort = supportedIssueSort(search.issueSort, search.issueOrder, sortOptions);
+  const knownSortPolicies =
+    sortPolicy.sourceKey === sortSourceKey ? [...sortPolicy.environments.values()] : [];
+  const sortOptions = issueSortOptions(
+    knownSortPolicies.map(({ sorts, orders }) => ({
+      capabilities: { listSorts: sorts, listOrders: orders },
+    })),
+  );
+  const effectiveSort =
+    knownSortPolicies.length === 0
+      ? { sort: search.issueSort ?? "updated", order: search.issueOrder ?? "desc" }
+      : supportedIssueSort(search.issueSort, search.issueOrder, sortOptions);
   const debouncedQuery = useDebouncedValue(search.q ?? "", 300);
   const baseInput = useMemo<IssueListInput>(
     () => ({
@@ -334,22 +340,24 @@ function IssuesRoute() {
   );
   const list = useIssueList(targets);
   if (list.answers.length > 0) {
-    const next = {
-      sourceKey: sortSourceKey,
-      ...issueSortOptions(
-        list.answers.flatMap(([, answer]) =>
-          (answer.sources ?? answer.trackers)
-            .filter((source) => !("configured" in source) || source.configured)
-            .map((source) => ({ capabilities: source.capabilities })),
-        ),
-      ),
-    };
-    if (
-      sortPolicy.sourceKey !== next.sourceKey ||
-      sortPolicy.sorts.join() !== next.sorts.join() ||
-      sortPolicy.orders.join() !== next.orders.join()
-    )
-      setSortPolicy(next);
+    const next = new Map(sortPolicy.sourceKey === sortSourceKey ? sortPolicy.environments : []);
+    let changed = sortPolicy.sourceKey !== sortSourceKey;
+    for (const [environmentId, answer] of list.answers) {
+      const policy = issueSortOptions(
+        (answer.sources ?? answer.trackers)
+          .filter((source) => !("configured" in source) || source.configured)
+          .map((source) => ({ capabilities: source.capabilities })),
+      );
+      const previous = next.get(environmentId);
+      if (
+        previous?.sorts.join() !== policy.sorts.join() ||
+        previous?.orders.join() !== policy.orders.join()
+      ) {
+        next.set(environmentId, policy);
+        changed = true;
+      }
+    }
+    if (changed) setSortPolicy({ sourceKey: sortSourceKey, environments: next });
   }
   const [refreshedPages] = useState(() => new WeakMap<HeldPage, HeldPage>());
   const held = useMemo(() => {

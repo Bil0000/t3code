@@ -8,6 +8,8 @@ import {
   WS_METHODS,
   ProjectId,
   type IssueListEntry,
+  type IssueListInput,
+  type IssueCapabilities,
 } from "@t3tools/contracts";
 import { EnvironmentRegistry, EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
 import * as Effect from "effect/Effect";
@@ -423,6 +425,175 @@ it("labels both native mount scopes when their issue numbers match", async () =>
 const RpcClient = await vi.importActual<typeof import("@t3tools/client-runtime/rpc")>(
   "../../../../../packages/client-runtime/src/rpc/client.ts",
 );
+async function nativeSortSetup(
+  respond: (environmentId: EnvironmentId, input: IssueListInput) => Effect.Effect<IssueListResult>,
+) {
+  const { createIssueEnvironmentAtoms } = await vi.importActual<
+    typeof import("@t3tools/client-runtime/state/issues")
+  >("@t3tools/client-runtime/state/issues");
+  const runtime = Atom.runtime(
+    Layer.effect(
+      EnvironmentRegistry.EnvironmentRegistry,
+      Effect.gen(function* () {
+        const connection = yield* SubscriptionRef.make({ phase: "connected" } as const);
+        const session = yield* SubscriptionRef.make(Option.some({}));
+        const supervisor = (environmentId: EnvironmentId) =>
+          ({
+            target: { environmentId },
+            state: connection,
+            session,
+          }) as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+        return EnvironmentRegistry.EnvironmentRegistry.of({
+          run: (id, effect) =>
+            Effect.provideService(
+              effect,
+              EnvironmentSupervisor.EnvironmentSupervisor,
+              supervisor(id),
+            ),
+          followStream: (id, stream) =>
+            Stream.provideService(
+              stream,
+              EnvironmentSupervisor.EnvironmentSupervisor,
+              supervisor(id),
+            ),
+        } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      }),
+    ),
+  );
+  const atoms = createIssueEnvironmentAtoms(runtime);
+  const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
+  const request = vi.spyOn(RpcClient, "request").mockImplementation(((tag, input) =>
+    Effect.gen(function* () {
+      expect(tag).toBe(WS_METHODS.issuesList);
+      const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+      return yield* respond(supervisor.target.environmentId, input as IssueListInput);
+    })) as typeof RpcClient.request);
+  return () => {
+    list.mockRestore();
+    request.mockRestore();
+  };
+}
+const nativeSortCapabilities: IssueCapabilities = {
+  create: false,
+  edit: false,
+  comment: false,
+  labels: false,
+  assignees: false,
+  reactions: false,
+  templates: false,
+  linkedPullRequests: false,
+  events: false,
+  search: true,
+  states: [],
+  closeReasons: [],
+  listSorts: ["updated", "created", "comments"],
+  listOrders: ["desc", "asc"],
+};
+
+it("requests the saved native sort once while capabilities are unknown", async () => {
+  const environments = state.environments;
+  state.environments = environments.slice(0, 1);
+  state.search = { who: "all", status: "open", issueSort: "created", issueOrder: "asc" };
+  const reads: Array<IssueListInput> = [];
+  const restore = await nativeSortSetup((_id, input) =>
+    Effect.sync(() => {
+      reads.push(input);
+      const value = answer([issue("1")]);
+      return decodeIssueList({
+        ...value,
+        trackers: [{ ...value.trackers[0], capabilities: nativeSortCapabilities }],
+      });
+    }),
+  );
+  try {
+    await mount();
+    expect(text()).toContain("Issue 1");
+    expect(reads.map(({ sort, order }) => [sort, order])).toEqual([["created", "asc"]]);
+    await mount();
+    expect(reads).toHaveLength(1);
+  } finally {
+    state.environments = environments;
+    restore();
+  }
+});
+
+it("retains native sort refusals while another environment's fallback page is pending", async () => {
+  state.search = { who: "all", status: "open", issueSort: "comments" };
+  const reads: Array<{ environmentId: EnvironmentId; input: IssueListInput }> = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const restore = await nativeSortSetup((environmentId, input) => {
+    reads.push({ environmentId, input });
+    const entry =
+      environmentId === environmentA
+        ? issue("A")
+        : {
+            ...issue("B"),
+            tracker: IssueTrackerKind.make("gitlab"),
+            host: "gitlab.com",
+            url: "https://gitlab.com/org/repo/-/issues/1",
+          };
+    const value = answer([entry]);
+    const refused = environmentId === environmentB && input.sort === "comments";
+    const result = decodeIssueList({
+      ...value,
+      entries: refused ? [] : value.entries,
+      errors: refused
+        ? [
+            {
+              projectId: entry.projectId,
+              projectTitle: entry.projectTitle,
+              tracker: entry.tracker,
+              host: entry.host,
+              message: "This tracker does not support the selected issue order.",
+            },
+          ]
+        : [],
+      trackers: [
+        {
+          ...value.trackers[0],
+          tracker: entry.tracker,
+          host: entry.host,
+          capabilities: {
+            ...nativeSortCapabilities,
+            listSorts:
+              environmentId === environmentA
+                ? ["updated", "created", "comments"]
+                : ["updated", "created"],
+          },
+        },
+      ],
+    });
+    return environmentId === environmentB && input.sort === "updated"
+      ? Effect.promise(async () => {
+          await gate;
+          return result;
+        })
+      : Effect.succeed(result);
+  });
+  try {
+    await mount();
+    expect(text()).toContain("Issue A");
+    expect(container.querySelector('[aria-label="Sort: Recently updated"]')).not.toBeNull();
+    await mount();
+    expect(reads.map(({ environmentId, input }) => [environmentId, input.sort])).toEqual([
+      [environmentA, "comments"],
+      [environmentB, "comments"],
+      [environmentA, "updated"],
+      [environmentB, "updated"],
+    ]);
+    await act(async () => release());
+    expect(text()).toContain("Issue B");
+    await mount();
+    expect(reads).toHaveLength(4);
+  } finally {
+    release();
+    restore();
+  }
+});
+
 it.each([
   { viewer: "B", empty: false },
   { viewer: "B", empty: true },
