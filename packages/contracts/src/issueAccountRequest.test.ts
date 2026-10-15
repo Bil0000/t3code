@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-import { IssueRef, IssueUpdateInput, ThreadIssueKey } from "./issue.ts";
+import { issueAccountRequest, IssueRef, IssueUpdateInput, ThreadIssueKey } from "./issue.ts";
 import { ORCHESTRATION_V2_WS_METHODS, OrchestrationV2Command } from "./orchestrationV2.ts";
 import { WsIssuesRpcGroup, WsRpcGroup, WS_METHODS } from "./rpc.ts";
 
@@ -63,6 +63,13 @@ const encodeUpdate = Schema.encodeUnknownSync(IssueUpdateInput);
 const encodeThreadKey = Schema.encodeUnknownSync(ThreadIssueKey);
 
 describe("account-safe issue payloads", () => {
+  it("retains constructor inputs for generated RPC clients", () => {
+    const payload = issueAccountRequest(IssueRef);
+    expectTypeOf<(typeof payload)["~type.make.in"]>().toEqualTypeOf<
+      (typeof IssueRef)["~type.make.in"]
+    >();
+  });
+
   it.each(cases)(
     "keeps %s decoded targets plain and default wire values unchanged",
     (tag, input) => {

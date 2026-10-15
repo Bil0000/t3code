@@ -38,7 +38,8 @@ export function issueAccountRequest<
 >(
   schema: S,
   field: "projectId" | "key" = "projectId",
-): Schema.Codec<S["Type"], Readonly<Record<string, unknown>>> {
+): Schema.Codec<S["Type"], Readonly<Record<string, unknown>>> &
+  Pick<S, "~type.make.in" | "~type.make"> {
   const value = schema.fields[field] ?? Schema.optional(ProjectId);
   const account = Schema.Struct({ value, connectionId: IssueTrackerConnectionId }).annotate({
     description:
