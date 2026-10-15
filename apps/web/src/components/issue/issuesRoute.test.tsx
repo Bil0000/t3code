@@ -311,3 +311,30 @@ it.each([
     expect(state.listPage).toHaveBeenCalledTimes(1 + restarts);
   },
 );
+
+it("refreshes each first page over the last refreshed list, not the continuation", async () => {
+  const cursor = "github github.com org/repo";
+  const first = (keys: ReadonlyArray<string>) =>
+    AsyncResult.success({ ...answer(keys.map(issue)), nextCursors: { [cursor]: "2" } });
+  state.responses.set(environmentA, first(["1", "2"]));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  state.listPage.mockResolvedValue({ _tag: "Success", value: answer([issue("3")]) });
+  await mount();
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Load more")!
+      .click(),
+  );
+  expect(text()).toContain("Issue 3");
+  state.responses.set(environmentA, first(["3", "1"]));
+  await refresh();
+  expect(text()).toContain("Issue 3");
+  state.read.mockClear();
+  state.responses.set(environmentA, first(["1", "2"]));
+  await refresh();
+  expect(text()).toContain("Issue 1");
+  expect(text()).toContain("Issue 2");
+  expect(text()).not.toContain("Issue 3");
+  expect(state.read.mock.calls.map(([id]) => id).sort()).toEqual([environmentA, environmentB]);
+  expect(state.listPage).toHaveBeenCalledOnce();
+});
