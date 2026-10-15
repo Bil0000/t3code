@@ -559,6 +559,7 @@ function IssueDetailContent({
     blocked === null && capability && permission;
   const canComment = may(detail.capabilities.comment, detail.viewerPermissions.comment);
   const canEdit = may(detail.capabilities.edit, detail.viewerPermissions.edit);
+  const canEditBody = canEdit && detail.bodyEditable !== false;
   const canLabel = may(detail.capabilities.labels, detail.viewerPermissions.labels);
   const canAssign = may(detail.capabilities.assignees, detail.viewerPermissions.assignees);
   const canReact = blocked === null && detail.capabilities.reactions;
@@ -1049,14 +1050,14 @@ function IssueDetailContent({
           <section className="group flex flex-col gap-2 rounded-lg border border-border/60 p-3">
             <div className="flex items-start gap-1">
               <span className="min-w-0 flex-1 text-xs text-muted-foreground">Description</span>
-              {canEdit && editing !== "body" ? (
+              {canEditBody && editing !== "body" ? (
                 <PullRequestEditButton
                   aria-label="Edit description"
                   onClick={() => setEditing("body")}
                 />
               ) : null}
             </div>
-            {editing === "body" ? (
+            {editing === "body" && canEditBody ? (
               <PullRequestMarkdownEditor
                 value={detail.body}
                 cwd={cwd}

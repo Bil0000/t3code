@@ -36,6 +36,7 @@ const state = vi.hoisted(() => ({
     displayKey: "#1",
     title: "Issue",
     body: "",
+    bodyEditable: undefined as boolean | undefined,
     url: "https://github.com/org/repo/issues/1",
     author: null,
     viewer: null as string | null,
@@ -1470,3 +1471,131 @@ it.each([
     }
   },
 );
+
+describe("native issue body editability", () => {
+  const environmentId = EnvironmentId.make("environment");
+  const reference = {
+    projectId: ProjectId.make("project"),
+    tracker: IssueTrackerKind.make("jira"),
+    host: "acme.atlassian.net",
+    scope: "ENG",
+    key: "ENG-1",
+  };
+  let container: HTMLDivElement;
+  let root: Root;
+  const render = () =>
+    root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />);
+  const button = (label: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (element) => element.getAttribute("aria-label") === label || element.textContent === label,
+    );
+  const description = () =>
+    container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Description"]');
+  const type = (element: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")!.set!.call(
+      element,
+      value,
+    );
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    state.allowed = true;
+    state.write.mockReset().mockResolvedValue({ _tag: "Success" });
+    state.detail = {
+      ...state.detail,
+      ...reference,
+      body: "Original body",
+      bodyEditable: undefined,
+      url: "https://acme.atlassian.net/browse/ENG-1",
+      comments: [],
+      events: [],
+      reactions: undefined,
+      writable: true,
+      viewerPermissions: { ...state.detail.viewerPermissions, edit: true },
+      capabilities: {
+        ...state.detail.capabilities,
+        edit: true,
+        comment: false,
+        events: false,
+        reactions: false,
+        linkedPullRequests: false,
+        subIssues: false,
+        labels: false,
+        assignees: false,
+        states: [],
+      },
+    };
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+  it("keeps rich descriptions native while saving only the title", async () => {
+    state.detail.bodyEditable = false;
+    await act(async () => render());
+    expect(button("Edit description")).toBeUndefined();
+    expect(description()).toBeNull();
+    expect(container.textContent).toContain("Original body");
+    expect(container.querySelector('a[aria-label="Open on Jira"]')?.getAttribute("href")).toBe(
+      state.detail.url,
+    );
+    await act(async () => button("Edit title")!.click());
+    await act(async () =>
+      type(
+        container.querySelector<HTMLInputElement>('input[aria-label="Issue title"]')!,
+        "Renamed",
+      ),
+    );
+    await act(async () => button("Save")!.click());
+    expect(state.write).toHaveBeenCalledExactlyOnceWith({
+      environmentId,
+      input: { ...reference, title: "Renamed" },
+    });
+  });
+  it.each([undefined, true])("edits the body when bodyEditable is %s", async (bodyEditable) => {
+    state.detail.bodyEditable = bodyEditable;
+    await act(async () => render());
+    await act(async () => button("Edit description")!.click());
+    await act(async () => type(description()!, "Updated body"));
+    await act(async () => button("Save")!.click());
+    expect(state.write).toHaveBeenCalledExactlyOnceWith({
+      environmentId,
+      input: { ...reference, body: "Updated body" },
+    });
+    expect(description()).toBeNull();
+  });
+  it("removes an active body editor when the native body becomes read-only", async () => {
+    state.detail.bodyEditable = true;
+    await act(async () => render());
+    await act(async () => button("Edit description")!.click());
+    await act(async () => type(description()!, "Local draft"));
+    state.detail = { ...state.detail, bodyEditable: false };
+    await act(async () => render());
+    expect(description()).toBeNull();
+    expect(button("Edit description")).toBeUndefined();
+    expect(button("Edit title")).toBeDefined();
+    expect(container.textContent).toContain("Original body");
+    expect(state.write).not.toHaveBeenCalled();
+  });
+  it("keeps a refused body draft for retry", async () => {
+    state.write
+      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("denied")) })
+      .mockResolvedValueOnce({ _tag: "Success" });
+    await act(async () => render());
+    await act(async () => button("Edit description")!.click());
+    await act(async () => type(description()!, "Retry body"));
+    await act(async () => button("Save")!.click());
+    expect(description()?.value).toBe("Retry body");
+    await act(async () => button("Save")!.click());
+    expect(state.write.mock.calls.map(([target]) => target.input.body)).toEqual([
+      "Retry body",
+      "Retry body",
+    ]);
+    expect(description()).toBeNull();
+  });
+});
