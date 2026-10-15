@@ -420,6 +420,70 @@ it("toggles the issue panel with its advertised shortcut and keeps the URL in st
   expect(state.navigate).not.toHaveBeenCalled();
 });
 
+it("closes the active issue tab with the close shortcut and selects the next one", async () => {
+  const selected = {
+    environmentId: environmentA,
+    projectId: "project",
+    tracker: "github",
+    host: "github.com",
+    scope: "org/repo",
+    key: "7",
+  };
+  useRightPanelStore.getState().openIssue(ISSUES_PANEL_REF, selected);
+  useRightPanelStore.getState().openIssue(ISSUES_PANEL_REF, { ...selected, key: "8" });
+  state.responses.set(environmentA, AsyncResult.success(answer([])));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  await mount();
+  const keys = () =>
+    selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      ISSUES_PANEL_REF,
+    ).surfaces.map((surface) => (surface.kind === "issue" ? surface.key : surface.id));
+  const press = (init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", {
+      key: "w",
+      code: "KeyW",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    act(() => {
+      document.body.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  };
+  const handled = new KeyboardEvent("keydown", {
+    key: "w",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  handled.preventDefault();
+  act(() => {
+    document.body.dispatchEvent(handled);
+  });
+  const palette = document.createElement("div");
+  palette.dataset.commandPalette = "true";
+  document.body.append(palette);
+  expect(press()).toBe(false);
+  palette.remove();
+  expect(press({ repeat: true })).toBe(true);
+  expect(keys()).toEqual(["7", "8"]);
+
+  expect(press()).toBe(true);
+  expect(keys()).toEqual(["7"]);
+  expect(
+    state.navigate.mock.lastCall![0].search({ who: "all", status: "open", q: undefined }),
+  ).toMatchObject({ selectedEnvironmentId: environmentA, key: "7" });
+
+  act(() => useRightPanelStore.getState().close(ISSUES_PANEL_REF));
+  expect(press()).toBe(false);
+  expect(keys()).toEqual(["7"]);
+  act(() => useRightPanelStore.getState().closeAllSurfaces(ISSUES_PANEL_REF));
+  expect(press()).toBe(false);
+});
+
 it("keeps rows and errors whose names repeat apart by their native identity", async () => {
   const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
   const failure = (projectId: string, message: string) => ({
