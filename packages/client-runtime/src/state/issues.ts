@@ -1,6 +1,7 @@
 import {
   WS_METHODS,
   issueListCursorKey,
+  issueTrackerHostKey,
   threadIssueKeyOf,
   type EnvironmentId,
   type IssueCapabilities,
@@ -123,8 +124,11 @@ export function issueListCursorsOn(
 
 type IssueListPage = Pick<IssueListResult, "entries" | "nextCursors" | "errors"> & {
   readonly sources?: IssueListResult["sources"];
+  readonly viewers?: IssueListResult["viewers"];
 };
 type HeldIssueList = IssueListPage & {
+  readonly answer?: Pick<IssueListResult, "viewers">;
+  readonly scopeViewers?: ReadonlyMap<string, string | null>;
   readonly firstCursors: IssueListCursors;
   readonly firstKeys: ReadonlySet<string>;
 };
@@ -160,6 +164,34 @@ function failedScopes(
   );
 }
 
+function issueListViewerChanges(
+  held: HeldIssueList,
+  page: IssueListPage,
+  sources: ReadonlyArray<IssueListSource>,
+  cursors: ReadonlySet<string>,
+) {
+  const previous = held.viewers ?? held.answer?.viewers;
+  const scopeViewers = new Map(held.scopeViewers);
+  if (previous !== undefined) {
+    for (const source of heldSources(held)) {
+      const key = issueListCursorKey(source).toLowerCase();
+      if (!scopeViewers.has(key))
+        scopeViewers.set(key, previous[issueTrackerHostKey(source)] ?? null);
+    }
+  }
+  const changed = new Set<string>();
+  if (page.viewers !== undefined) {
+    for (const source of sources) {
+      const key = issueListCursorKey(source).toLowerCase();
+      const viewer = page.viewers[issueTrackerHostKey(source)] ?? null;
+      if (scopeViewers.has(key) && scopeViewers.get(key) !== viewer)
+        changed.add(scopeOf(source, cursors));
+      scopeViewers.set(key, viewer);
+    }
+  }
+  return { scopeViewers, changed };
+}
+
 export function continueIssueListPage<T extends HeldIssueList>(
   held: T,
   sent: IssueListCursors,
@@ -177,6 +209,12 @@ export function continueIssueListPage<T extends HeldIssueList>(
   const sources = [...heldSources(held), ...(page.sources ?? []), ...page.entries];
   const retried = sources.filter((source) => sentScopes.has(scopeOf(source, cursors)));
   const failed = failedScopes(sources, page.errors, cursors);
+  const { scopeViewers, changed } = issueListViewerChanges(
+    held,
+    page,
+    retried.filter((source) => !failed.has(scopeOf(source, cursors))),
+    cursors,
+  );
   const representatives = new Map<string, Pick<IssueListEntry, "projectId" | "projectTitle">>();
   for (const representative of [...page.entries, ...(page.sources ?? [])]) {
     const scope = scopeOf(representative, cursors);
@@ -195,18 +233,35 @@ export function continueIssueListPage<T extends HeldIssueList>(
       : { ...row, projectId: representative.projectId, projectTitle: representative.projectTitle };
   };
   const firstKeys = new Set<string>();
-  const rebound = held.entries.map((entry) => {
-    const row = rebind(entry);
-    if (held.firstKeys.has(issueEntryKey(entry))) firstKeys.add(issueEntryKey(row));
-    return row;
-  });
+  const rebound = held.entries
+    .filter((entry) => !changed.has(scopeOf(entry, cursors)))
+    .map((entry) => {
+      const row = rebind(entry);
+      if (held.firstKeys.has(issueEntryKey(entry))) firstKeys.add(issueEntryKey(row));
+      return row;
+    });
+  for (const entry of page.entries) {
+    if (changed.has(scopeOf(entry, cursors))) firstKeys.add(issueEntryKey(entry));
+  }
   const kept = Object.entries(held.nextCursors).filter(
     ([key]) => sent[key] === undefined || failed.has(key.toLowerCase()),
   );
   return {
     ...held,
     entries: mergeIssueListPage(rebound, page.entries),
+    scopeViewers,
     firstKeys,
+    firstCursors:
+      changed.size === 0
+        ? held.firstCursors
+        : {
+            ...Object.fromEntries(
+              Object.entries(held.firstCursors).filter(([key]) => !changed.has(key.toLowerCase())),
+            ),
+            ...Object.fromEntries(
+              Object.entries(page.nextCursors).filter(([key]) => changed.has(key.toLowerCase())),
+            ),
+          },
     sources: held.sources?.map(rebind) ?? page.sources,
     nextCursors: { ...Object.fromEntries(kept), ...page.nextCursors },
     errors: [
@@ -249,6 +304,15 @@ export function refreshIssueListPage<T extends HeldIssueList>(
       ? new Set(fresh.sources.map((each) => scopeOf(each, cursors)))
       : null;
   const isBound = (key: string) => bound === null || bound.has(key.toLowerCase());
+  const { scopeViewers, changed } = issueListViewerChanges(
+    held,
+    fresh,
+    [...heldSources(held), ...(fresh.sources ?? []), ...fresh.entries].filter((each) => {
+      const key = scopeOf(each, cursors);
+      return covered(key) && isBound(key);
+    }),
+    cursors,
+  );
   const taken = fresh.entries.filter((entry) => covered(scopeOf(entry, cursors)));
   const freshKeys = new Set(taken.map(issueEntryKey));
   const representatives = new Map<string, string>();
@@ -277,7 +341,8 @@ export function refreshIssueListPage<T extends HeldIssueList>(
       (continuing.has(key.toLowerCase()) &&
         tails.has(key.toLowerCase()) &&
         !shifted.has(key.toLowerCase()) &&
-        !changedOwners.has(key.toLowerCase())));
+        !changedOwners.has(key.toLowerCase()) &&
+        !changed.has(key.toLowerCase())));
   const pick = (cursors: IssueListCursors, take: (key: string) => boolean) =>
     Object.fromEntries(Object.entries(cursors).filter(([key]) => take(key)));
   const kept = held.entries.filter((entry) => {
@@ -288,6 +353,7 @@ export function refreshIssueListPage<T extends HeldIssueList>(
       (!covered(scope) ||
         (continuing.has(scope) &&
           !changedOwners.has(scope) &&
+          !changed.has(scope) &&
           !held.firstKeys.has(key) &&
           (typeof options.removed === "string"
             ? key !== options.removed
@@ -297,6 +363,7 @@ export function refreshIssueListPage<T extends HeldIssueList>(
   return {
     ...held,
     entries: mergeIssueListPage(kept, taken),
+    scopeViewers,
     firstKeys: new Set([
       ...kept.map(issueEntryKey).filter((key) => held.firstKeys.has(key)),
       ...taken.map(issueEntryKey),
