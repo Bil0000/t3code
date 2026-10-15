@@ -84,3 +84,46 @@ it("keeps the first label and remaining count visible in compact rows as labels 
   await render({ ...entry, labels: [] });
   expect(visibleLabels()).toEqual([]);
 });
+
+it.each([false, true])(
+  "shows current project names across rows (showScope=%s)",
+  async (showScope) => {
+    const select = vi.fn();
+    const first = { ...entry, projectTitle: "Web workspace" };
+    const second = {
+      ...entry,
+      projectId: ProjectId.make("second-project"),
+      projectTitle: "API workspace",
+      scope: "org/api",
+    };
+    const render = (current: EnvironmentIssueEntry) =>
+      act(async () =>
+        root.render(
+          <>
+            {[current, second].map((row) => (
+              <IssueRow
+                key={row.scope}
+                entry={row}
+                selected={false}
+                showScope={showScope}
+                showTracker
+                environmentLabel="Remote"
+                onSelect={select}
+              />
+            ))}
+          </>,
+        ),
+      );
+    await render(first);
+    const rows = () => [...container.querySelectorAll<HTMLButtonElement>("button")];
+    expect(rows()[0]!.textContent).toContain("Web workspace");
+    expect(rows()[1]!.textContent).toContain("API workspace");
+    const rebound = { ...first, projectId: second.projectId, projectTitle: "New representative" };
+    await render(rebound);
+    expect(rows()[0]!.textContent).toContain("New representative");
+    expect(container.textContent).not.toContain("Web workspace");
+    expect(rows()[1]!.textContent).toContain("API workspace");
+    await act(async () => rows()[0]!.click());
+    expect(select).toHaveBeenCalledExactlyOnceWith(rebound);
+  },
+);

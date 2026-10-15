@@ -88,6 +88,7 @@ function IssueRowImpl({
           meta={
             <>
               <PullRequestRowAuthor actor={entry.author} />
+              <span className="truncate">{entry.projectTitle}</span>
               {showTracker ? (
                 <span className="inline-flex shrink-0 items-center gap-1">
                   <tracker.Icon aria-hidden className="size-3" />
