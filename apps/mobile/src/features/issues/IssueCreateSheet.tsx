@@ -12,6 +12,12 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { ListFilterMenu } from "../workspace/ListFilterMenu";
 import { PullRequestSheetContent as SheetContent } from "../pull-requests/PullRequestSheetContent";
 import { issueCreateBlocked, resolveIssueType } from "./issueDetail";
+import {
+  fillIssueTemplate,
+  issueTemplateBodyRead,
+  issueTemplateCatalogRead,
+  selectedIssueTemplate,
+} from "./issueTemplate";
 import type { IssueCreateScope } from "./issueList";
 import { useOpenIssue } from "./useOpenIssue";
 import { markIssueWritten } from "./issueList";
@@ -29,6 +35,14 @@ export function IssueCreateSheet({
   const [templateKey, setTemplateKey] = useState(BLANK);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [titleEdited, setTitleEdited] = useState(false);
+  const [bodyEdited, setBodyEdited] = useState(false);
+  const [templateDraft, setTemplateDraft] = useState<{
+    scopeIndex: number;
+    key: string;
+    title: boolean;
+    body: boolean;
+  } | null>(null);
   const [extras, setExtras] = useState<{
     labels: ReadonlyArray<string>;
     assignees: ReadonlyArray<string>;
@@ -41,11 +55,26 @@ export function IssueCreateSheet({
   const canWrite = useAtomValue(
     issueEnvironment.create.permissionAtom(scope?.environmentId ?? null),
   );
+  const catalogRead = issueTemplateCatalogRead(scope);
   const templatesQuery = useEnvironmentQuery(
-    scope?.templates
-      ? issueEnvironment.templates({ environmentId: scope.environmentId, input: scope.scope })
-      : null,
+    catalogRead ? issueEnvironment.templates(catalogRead) : null,
   );
+  const bodyRead = issueTemplateBodyRead(scope, templatesQuery.data, templateKey);
+  const selectedQuery = useEnvironmentQuery(bodyRead ? issueEnvironment.templates(bodyRead) : null);
+  const chosenTemplate = selectedIssueTemplate(templateKey, templatesQuery, selectedQuery);
+  if (
+    templateDraft &&
+    templateDraft.scopeIndex === scopeIndex &&
+    templateDraft.key === templateKey &&
+    chosenTemplate.template
+  ) {
+    const filled = fillIssueTemplate(templateDraft, chosenTemplate.template, { title, body });
+    setTitle(filled.title);
+    setBody(filled.body);
+    setExtras({ labels: filled.labels, assignees: filled.assignees });
+    setTemplateDraft(null);
+  }
+  const templateRead = templatesQuery.error ? templatesQuery : selectedQuery;
   const templates = templatesQuery.data?.templates ?? [];
   const externalTemplates = templatesQuery.data?.externalTemplates ?? [];
   const blankAllowed = templatesQuery.data?.blankIssuesEnabled ?? true;
@@ -56,23 +85,24 @@ export function IssueCreateSheet({
   );
   const issueTypes = candidatesQuery.data?.issueTypes ?? [];
   const chosenIssueType = resolveIssueType(issueTypes, issueType);
-  const blocked = issueCreateBlocked({
-    hasScope: scope !== null,
-    canWrite,
-    templates: scope?.templates
-      ? { pending: templatesQuery.isPending, list: templatesQuery.data }
-      : null,
-    blankChosen: templateKey === BLANK,
-    issueTypes:
-      scope?.createIssueTypes === true
-        ? {
-            pending: candidatesQuery.isPending,
-            error: candidatesQuery.error,
-            count: issueTypes.length,
-            chosen: chosenIssueType,
-          }
+  const blocked =
+    issueCreateBlocked({
+      hasScope: scope !== null,
+      canWrite,
+      templates: scope?.templates
+        ? { pending: templatesQuery.isPending, list: templatesQuery.data }
         : null,
-  });
+      blankChosen: templateKey === BLANK,
+      issueTypes:
+        scope?.createIssueTypes === true
+          ? {
+              pending: candidatesQuery.isPending,
+              error: candidatesQuery.error,
+              count: issueTypes.length,
+              chosen: chosenIssueType,
+            }
+          : null,
+    }) ?? chosenTemplate.blocked;
   const select = (event: string) => {
     let selection: unknown;
     try {
@@ -87,18 +117,23 @@ export function IssueCreateSheet({
       if (!Number.isInteger(index) || !scopes[index]) return;
       setScopeIndex(index);
       setTemplateKey(BLANK);
+      setTemplateDraft(null);
       setExtras({ labels: [], assignees: [] });
       setIssueType(null);
     } else if (field === "template") {
       const template = templates.find((entry) => entry.key === value);
       setTemplateKey(template ? template.key : BLANK);
-      if (!template) {
-        setExtras({ labels: [], assignees: [] });
-        return;
-      }
-      if (title.trim().length === 0) setTitle(template.title);
-      if (body.trim().length === 0) setBody(template.body);
-      setExtras({ labels: template.labels, assignees: template.assignees });
+      setExtras({ labels: [], assignees: [] });
+      setTemplateDraft(
+        template
+          ? {
+              scopeIndex,
+              key: template.key,
+              title: !titleEdited,
+              body: !bodyEdited,
+            }
+          : null,
+      );
     } else if (field === "type" && issueTypes.some((type) => type.id === value)) {
       setIssueType(value);
     }
@@ -230,7 +265,11 @@ export function IssueCreateSheet({
         editable={!busy}
         value={title}
         maxLength={1024}
-        onChangeText={setTitle}
+        onChangeText={(next) => {
+          setTitleEdited(true);
+          setTemplateDraft((held) => (held ? { ...held, title: false } : null));
+          setTitle(next);
+        }}
         className="min-h-12 rounded-[20px] bg-grouped-card px-4 text-base text-foreground"
       />
       <TextInput
@@ -241,7 +280,11 @@ export function IssueCreateSheet({
         editable={!busy}
         value={body}
         maxLength={65536}
-        onChangeText={setBody}
+        onChangeText={(next) => {
+          setBodyEdited(true);
+          setTemplateDraft((held) => (held ? { ...held, body: false } : null));
+          setBody(next);
+        }}
         className="min-h-36 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
         style={{ textAlignVertical: "top" }}
       />
@@ -256,12 +299,14 @@ export function IssueCreateSheet({
         </Text>
       ) : null}
       {blocked ? <Text className="text-xs text-foreground-muted">{blocked}</Text> : null}
-      {scope?.templates && templatesQuery.error ? (
+      {scope?.templates && (templatesQuery.error || chosenTemplate.retry) ? (
         <View className="gap-2">
-          <Text selectable className="text-sm text-danger-foreground">
-            {templatesQuery.error}
-          </Text>
-          <MaterialButton label="Retry templates" tone="text" onPress={templatesQuery.refresh} />
+          {templateRead.error ? (
+            <Text selectable className="text-sm text-danger-foreground">
+              {templateRead.error}
+            </Text>
+          ) : null}
+          <MaterialButton label="Retry templates" tone="text" onPress={templateRead.refresh} />
         </View>
       ) : null}
       {scope?.createIssueTypes === true && candidatesQuery.error ? (
