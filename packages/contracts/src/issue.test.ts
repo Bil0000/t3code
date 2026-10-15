@@ -43,6 +43,7 @@ import {
 const decodeDescriptor = Schema.decodeEffect(StandaloneIssueTrackerDescriptor);
 const decodeComments = Schema.decodeUnknownSync(IssueCommentsPageInput);
 const decodeThreadLink = Schema.decodeUnknownSync(ThreadIssueLink);
+const encodeThreadLink = Schema.encodeUnknownSync(ThreadIssueLink);
 const decodeActor = Schema.decodeEffect(IssueActor);
 const decodeCreate = Schema.decodeEffect(IssueCreateInput);
 const decodeCreated = Schema.decodeEffect(IssueCreateResult);
@@ -574,7 +575,8 @@ it("retains selected account identity through refs and same-native-key thread li
     linkedAt: "2026-10-15T00:00:00Z",
     snapshot: null,
   };
-  expect(decodeThreadLink(link)).toEqual(link);
+  expect(decodeThreadLink(encodeThreadLink(link))).toEqual(link);
+  expect(() => decodeThreadLink(link)).toThrow();
   expect(decodeScope(threadIssueRefOf(link))).toEqual({
     projectId: link.projectId,
     tracker: key.tracker,
