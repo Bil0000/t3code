@@ -32,22 +32,26 @@ export function selectedIssueKey(state: Pick<NavigationState, "routes" | "index"
     if (route.name.startsWith("PullRequest")) return null;
     if (route.name !== "Issue") continue;
     const params = route.params as Partial<Record<keyof IssueParams, unknown>> | undefined;
-    return params &&
-      typeof params.environmentId === "string" &&
-      typeof params.projectId === "string" &&
-      typeof params.tracker === "string" &&
-      typeof params.host === "string" &&
-      typeof params.scope === "string" &&
-      typeof params.key === "string"
-      ? issueParamsKey({
-          environmentId: params.environmentId,
-          projectId: params.projectId,
-          tracker: params.tracker,
-          host: params.host,
-          scope: params.scope,
-          key: params.key,
-        })
-      : null;
+    try {
+      return params &&
+        typeof params.environmentId === "string" &&
+        typeof params.projectId === "string" &&
+        typeof params.tracker === "string" &&
+        typeof params.host === "string" &&
+        typeof params.scope === "string" &&
+        typeof params.key === "string"
+        ? issueParamsKey({
+            environmentId: params.environmentId,
+            projectId: params.projectId,
+            tracker: params.tracker,
+            host: params.host,
+            scope: params.scope,
+            key: params.key,
+          })
+        : null;
+    } catch {
+      return null;
+    }
   }
   return null;
 }

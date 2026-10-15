@@ -53,7 +53,7 @@ import {
   type IssueOlderComments,
 } from "./issueComments";
 import { IssueReactions } from "./IssueReactions";
-import type { IssueParams } from "./issueSelection";
+import { issueParamsKey, type IssueParams } from "./issueSelection";
 import { issueStatus } from "./issueStatus";
 import { issueTarget, markIssueTargetWritten, useIssueAccess } from "./useIssueAccess";
 
@@ -389,8 +389,30 @@ function IssueBody(props: { readonly params: IssueParams; readonly issue: IssueD
 }
 
 export function IssueRouteScreen({ route }: StaticScreenProps<IssueParams>) {
-  const params = route.params;
   const returnToList = useAndroidWorkspaceBack("issues");
+  try {
+    issueParamsKey(route.params);
+  } catch {
+    return (
+      <EmptyState
+        title="Couldn't open this issue"
+        detail="This link is incomplete or invalid."
+        variant="plain"
+        actionLabel="Back to issues"
+        onAction={returnToList}
+      />
+    );
+  }
+  return <IssueRouteContent params={route.params} returnToList={returnToList} />;
+}
+
+function IssueRouteContent({
+  params,
+  returnToList,
+}: {
+  readonly params: IssueParams;
+  readonly returnToList: () => void;
+}) {
   const { layout } = useAdaptiveWorkspaceLayout();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();

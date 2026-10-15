@@ -14,7 +14,7 @@ import * as RpcClient from "../../../../../packages/client-runtime/src/rpc/clien
 
 type Props = { readonly children?: ReactNode; readonly onPress?: () => void };
 
-const harness = vi.hoisted(() => ({ focus: () => {} }));
+const harness = vi.hoisted(() => ({ focus: () => {}, back: 0 }));
 
 vi.mock("react-native", () => ({
   ActivityIndicator: () => null,
@@ -62,7 +62,7 @@ vi.mock("../layout/workspace-sidebar-toolbar", () => ({
   AndroidWorkspaceSidebarButton: () => null,
 }));
 vi.mock("../workspace/useAndroidWorkspaceNavigation", () => ({
-  useAndroidWorkspaceBack: () => vi.fn(),
+  useAndroidWorkspaceBack: () => () => harness.back++,
 }));
 vi.mock("../pull-requests/PullRequestControls", () => ({
   PullRequestCardGroup: () => null,
@@ -223,3 +223,42 @@ it("keeps a cached issue on a failed refresh, says so, and recovers through Retr
   await act(() => root.unmount());
   registry.dispose();
 });
+
+it.each([{ environmentId: " " }, { projectId: "" }, { tracker: "Not A Tracker" }])(
+  "shows a way back instead of reading an issue from invalid link params %j",
+  async (change) => {
+    harness.back = 0;
+    const registry = AtomRegistry.make();
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(() =>
+      root.render(
+        <RegistryContext.Provider value={registry}>
+          <IssueRouteScreen
+            route={{
+              params: {
+                environmentId: "environment",
+                projectId: "project",
+                tracker: "github",
+                host: "github.com",
+                scope: "org/repo",
+                key: "1",
+                ...change,
+              },
+            }}
+          />
+        </RegistryContext.Provider>,
+      ),
+    );
+    await settle();
+    expect(request).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Couldn't open this issue");
+    const back = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Back to issues",
+    );
+    await act(() => back!.click());
+    expect(harness.back).toBe(1);
+    await act(() => root.unmount());
+    registry.dispose();
+  },
+);

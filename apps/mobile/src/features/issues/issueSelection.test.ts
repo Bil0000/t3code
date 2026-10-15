@@ -17,6 +17,33 @@ function selection(routes: NavigationState["routes"], index = routes.length - 1)
 }
 
 describe("displayed issue selection", () => {
+  it.each([
+    ["tracker", "GitHub"],
+    ["environmentId", " "],
+    ["projectId", " "],
+  ])("ignores an issue route with invalid %s", (field, value) => {
+    expect(selection([home, { ...issue, params: { ...params, [field]: value } }])).toBeNull();
+    expect(() => issueParamsKey({ ...params, [field]: value })).toThrow();
+  });
+
+  it.each([
+    ["linear", "eng-7", "ENG-7"],
+    ["jira", "eng-7", "ENG-7"],
+    ["github", "Case-Sensitive", "Case-Sensitive"],
+    ["custom-tracker", "Case-Sensitive", "Case-Sensitive"],
+  ])("keeps native key rules for %s", (tracker, key, expectedKey) => {
+    expect(selection([home, { ...issue, params: { ...params, tracker, key } }])).toBe(
+      `environment-one:project-one\u0000${tracker}\u0000linear.app\u0000eng\u0000${expectedKey}`,
+    );
+  });
+
+  it.each([undefined, {}, { ...params, tracker: 7 }])(
+    "ignores missing or mistyped issue params: %j",
+    (invalidParams) => {
+      expect(selection([home, { ...issue, params: invalidParams }])).toBeNull();
+    },
+  );
+
   it("matches the list row key for the same environment and keeps environments and trackers apart", () => {
     expect(selection([home, issue])).toBe(issueParamsKey({ ...params, host: "linear.app" }));
     expect(selection([home, { ...issue, params: { ...params, tracker: "jira" } }])).not.toBe(
@@ -33,5 +60,7 @@ describe("displayed issue selection", () => {
     );
     expect(selection([home, issue, { key: "thread", name: "Thread" }])).toBeNull();
     expect(selection([home, issue, { key: "pr", name: "PullRequest" }])).toBeNull();
+    expect(selection([home, issue], 0)).toBeNull();
+    expect(selection([])).toBeNull();
   });
 });
