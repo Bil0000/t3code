@@ -1,3 +1,4 @@
+import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import type {
   EnvironmentId,
@@ -18,7 +19,6 @@ import {
   groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
   matchesPullRequestQuery,
-  parsePullRequestQuery,
   pullRequestStatsBatches,
   pullRequestStatsKeysToRequest,
   pullRequestStatsRefreshBatches,

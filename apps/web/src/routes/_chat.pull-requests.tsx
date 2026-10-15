@@ -1,3 +1,4 @@
+import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import { useShortcutModifierState } from "~/shortcutModifierState";
@@ -58,7 +59,6 @@ import {
   groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
   matchesPullRequestQuery,
-  parsePullRequestQuery,
   narrowPullRequestsToFilters,
   mergePullRequestDiffStats,
   partitionPullRequestsWithPriority,

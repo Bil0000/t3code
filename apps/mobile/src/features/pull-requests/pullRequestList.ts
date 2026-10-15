@@ -1,3 +1,4 @@
+import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
 import type {
   EnvironmentId,
   PullRequestListEntry,
@@ -189,8 +190,9 @@ export function filterPullRequestList<
   connectedEnvironmentIds?: ReadonlySet<string>,
 ) {
   const normalize = (value: string) => value.toLowerCase();
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const { filters } = controls;
+  const parsed = parsePullRequestQuery(query);
+  const words = parsed.text.toLowerCase().split(/\s+/).filter(Boolean);
+  const filters = { ...controls.filters, ...parsed.filters };
   const filtered = entries.filter((entry) => {
     if (controls.state !== "all" && entry.state !== controls.state) return false;
     if (controls.projectId && entry.projectId !== controls.projectId) return false;

@@ -1,3 +1,4 @@
+import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { useNavigation } from "@react-navigation/native";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -81,6 +82,7 @@ export function PullRequestsScreen(
   const debouncedQuery = useDebouncedValue(tab.query.trim(), 180);
   // Dismissal must restore the cached unfiltered list before restoring its offset.
   const query = tab.searchMode === "resting" ? "" : debouncedQuery;
+  const parsedQuery = useMemo(() => parsePullRequestQuery(query), [query]);
   const listControls = usePullRequestListControls();
   const selectedEnvironmentId = listControls.environmentId;
   const environmentId = environments.some((item) => item.environmentId === selectedEnvironmentId)
@@ -126,13 +128,13 @@ export function PullRequestsScreen(
           input: {
             state: controls.state,
             involvement: controls.involvement,
-            filters: controls.filters,
+            filters: { ...controls.filters, ...parsedQuery.filters },
             limit: PR_LIST_PAGE_SIZE,
             ...(controls.projectId ? { projectId: ProjectId.make(controls.projectId) } : {}),
-            ...(query ? { query } : {}),
+            ...(parsedQuery.text ? { query: parsedQuery.text } : {}),
           },
         })),
-    [environments, environmentId, configs, controls, query],
+    [environments, environmentId, configs, controls, parsedQuery],
   );
   const result = usePullRequestList(targets);
   const connectedTargets = targets.filter((target) =>

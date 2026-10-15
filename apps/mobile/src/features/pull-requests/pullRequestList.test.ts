@@ -105,6 +105,37 @@ describe("recycled PR list rows", () => {
   });
 });
 
+describe("mobile PR draft queries", () => {
+  const rows = [entry(1), entry(2, { isDraft: true })];
+
+  it.each([
+    ["draft:false", [1]],
+    ["draft:true", [2]],
+    ["DRAFT:FALSE", [1]],
+    ["", [2, 1]],
+  ])("filters %s on local and host search", (query, expected) => {
+    for (const localSearchHosts of [new Set<string>(), new Set(["github.com"])]) {
+      expect(
+        filterPullRequestList(rows, DEFAULT_PR_LIST_CONTROLS, {}, query, localSearchHosts).map(
+          (row) => row.number,
+        ),
+      ).toEqual(expected);
+    }
+  });
+
+  it("lets the typed draft qualifier override the menu and keeps free text", () => {
+    expect(
+      filterPullRequestList(
+        rows,
+        { ...DEFAULT_PR_LIST_CONTROLS, filters: { draft: "only" } },
+        {},
+        "draft:false Change 1",
+        new Set(["github.com"]),
+      ).map((row) => row.number),
+    ).toEqual([1]);
+  });
+});
+
 describe("mobile PR list pagination", () => {
   it("continues only the repositories that have more, preserving the query and filters", () => {
     const first = pullRequestListHead(
