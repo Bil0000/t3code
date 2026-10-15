@@ -201,6 +201,9 @@ it.each(["linear", "jira"])(
       const rows = element.querySelectorAll<HTMLButtonElement>(`button[aria-label="${link.url}"]`);
       expect(rows).toHaveLength(1);
       expect(rows[0]?.textContent).toContain("ENG-7: Saved issue");
+      expect(rows[0]?.closest("section")?.getAttribute("aria-label")).toBe(
+        isGitRepo && gitCwd ? "Version Control" : "Workspace",
+      );
       expect(element.querySelectorAll(".lucide-git-branch")).toHaveLength(
         isGitRepo && gitCwd ? 1 : 0,
       );
@@ -228,9 +231,9 @@ it.each(["full", "compact", "essential"] as const)(
   async (density) => {
     state.density = density;
     await act(async () => root.render(<ThreadDetailsPanel {...props} isGitRepo={false} />));
-    expect(
-      element.querySelectorAll(`button[aria-label="${state.thread.issues[0]!.url}"]`),
-    ).toHaveLength(1);
+    const rows = element.querySelectorAll(`button[aria-label="${state.thread.issues[0]!.url}"]`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.closest("section")?.getAttribute("aria-label")).toBe("Workspace");
   },
 );
 
