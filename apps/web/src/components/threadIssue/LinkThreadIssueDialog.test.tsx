@@ -8,6 +8,7 @@ import {
   IssueListResult,
   ThreadId,
   WS_METHODS,
+  WsIssuesRpcGroup,
   type IssueListCursors,
 } from "@t3tools/contracts";
 import { EnvironmentRegistry, EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
@@ -19,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom, AsyncResult } from "effect/reactivity";
+import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 
 const state = vi.hoisted(() => {
   const source = {
@@ -1010,6 +1012,137 @@ it.each(["key", "url", "listed", "unsupported-url"])(
     } finally {
       await act(async () => root.unmount());
       container.remove();
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+it.each([
+  ["cross-tracker", "linear", "linear.app", "https://acme.atlassian.net/browse/ENG-42", undefined],
+  [
+    "cross-host",
+    "jira",
+    "acme.atlassian.net",
+    "https://other.atlassian.net/browse/ENG-42",
+    undefined,
+  ],
+  [
+    "cross-port",
+    "forgejo",
+    "forgejo.test:8443",
+    "https://forgejo.test:9443/team/repo/issues/42",
+    undefined,
+  ],
+  ["same-source", "jira", "ACME.ATLASSIAN.NET", "https://acme.atlassian.net/browse/ENG-42", "B"],
+  [
+    "same-port",
+    "forgejo",
+    "forgejo.test:8443",
+    "https://forgejo.test:8443/team/repo/issues/42",
+    "B",
+  ],
+  ["choice", "jira", "acme.atlassian.net", "https://acme.atlassian.net/browse/ENG-42", "B"],
+  ["refused", "jira", "acme.atlassian.net", "https://acme.atlassian.net/browse/ENG-42", "B"],
+] as const)(
+  "scopes the pasted URL account (%s)",
+  async (scenario, tracker, host, url, connectionId) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const original = state.list;
+    const selected = {
+      ...state.source,
+      tracker,
+      host,
+      scope: tracker === "jira" ? "ENG" : tracker === "linear" ? "acme/ENG" : "team/repo",
+      connectionId: "B",
+    };
+    const first = { ...state.source, tracker: "linear", host: "linear.app", connectionId: "A" };
+    state.list = {
+      ...original,
+      sources: scenario === "choice" ? [first, selected] : [selected],
+      entries: [],
+      nextCursors: {},
+    };
+    const query = Atom.make(AsyncResult.success(decodeIssueList(state.list))).pipe(Atom.keepAlive);
+    const list = vi.spyOn(issueEnvironment, "list").mockReturnValue(query);
+    const payload = WsIssuesRpcGroup.requests.get(WS_METHODS.issuesResolveUrl)!.payloadSchema;
+    let decoded: unknown;
+    const resolved = {
+      projectId: "project",
+      ...parseIssueUrl(url, { tracker, host })!,
+      writable: true,
+      ...(connectionId === undefined ? {} : { connectionId }),
+    };
+    state.resolve.mockReset().mockImplementation(async ({ input }) => {
+      decoded = Schema.decodeSync(payload)(Schema.encodeSync(payload)(input));
+      return scenario === "refused" ? { _tag: "Failure" } : AsyncResult.success(resolved);
+    });
+    state.link.mockReset().mockResolvedValue(AsyncResult.success(undefined));
+    state.read.mockReset();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      openLinkThreadIssueDialog({
+        environmentId: EnvironmentId.make("environment"),
+        threadId: ThreadId.make("thread"),
+      });
+      await act(async () =>
+        root.render(
+          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+        ),
+      );
+      if (scenario === "choice") {
+        await act(async () =>
+          document
+            .querySelector<HTMLButtonElement>('[aria-label="Issue source"]')!
+            .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+        );
+        const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((node) =>
+          node.textContent?.endsWith(" · B"),
+        )!;
+        await act(async () => option.click());
+      }
+      const input = document.querySelector<HTMLInputElement>('[aria-label="Issue URL"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, url);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () =>
+        input
+          .closest("form")!
+          .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+      );
+      expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+        environmentId: "environment",
+        input: {
+          url,
+          projectId: "project",
+          ...(connectionId === undefined ? {} : { connectionId }),
+        },
+      });
+      expect(decoded).toEqual({
+        url,
+        projectId: "project",
+        ...(connectionId === undefined ? {} : { connectionId }),
+      });
+      expect(state.read).not.toHaveBeenCalled();
+      if (scenario === "refused") {
+        expect(state.link).not.toHaveBeenCalled();
+        expect(input.value).toBe(url);
+        expect(document.body.textContent).toContain("failed");
+        expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+      } else {
+        expect(state.link).toHaveBeenCalledExactlyOnceWith({
+          environmentId: "environment",
+          input: { threadId: "thread", ...resolved, url, source: "manual" },
+        });
+        expect(document.querySelector('[role="dialog"]')).toBeNull();
+      }
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.list = original;
+      list.mockRestore();
       vi.unstubAllGlobals();
     }
   },

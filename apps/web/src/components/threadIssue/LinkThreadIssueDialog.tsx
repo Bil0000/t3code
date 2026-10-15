@@ -9,6 +9,7 @@ import {
   type ThreadIssueSnapshot,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
+import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -254,12 +255,19 @@ function LinkThreadIssueDialog({
       return;
     setPendingKey("url");
     setError(null);
+    const target = source === null ? null : parseIssueUrl(nativeUrl.trim(), source);
+    const connectionId =
+      source !== null &&
+      target?.tracker === source.tracker &&
+      target.host === source.host.trim().toLowerCase()
+        ? source.connectionId
+        : undefined;
     const resolved = await resolveUrl({
       environmentId,
       input: {
         url: nativeUrl.trim(),
         ...(thread ? { projectId: thread.projectId } : {}),
-        ...(source?.connectionId === undefined ? {} : { connectionId: source.connectionId }),
+        ...(connectionId === undefined ? {} : { connectionId }),
       },
     });
     if (resolved._tag === "Failure") {
