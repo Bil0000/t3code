@@ -1071,11 +1071,21 @@ it.effect("lets Jira token permissions decide edits without reading a viewer", (
           },
         };
       }
+      if (request.url.endsWith("/comment/c1"))
+        return {
+          body: {
+            id: "c1",
+            body: issue.fields.description,
+            author: user,
+            created: issue.fields.created,
+            updated: issue.fields.updated,
+          },
+        };
       return { body: issue };
     });
     const api = yield* f.api;
     yield* api.editComment!({ ...target, commentId: "c1", body: "new" });
-    expect(f.calls).toHaveLength(2);
+    expect(f.calls).toHaveLength(3);
     allowed = false;
     yield* api.editComment!({
       ...target,
@@ -1089,6 +1099,169 @@ it.effect("lets Jira token permissions decide edits without reading a viewer", (
         (request) => request.url.includes("/myself") || request.url.includes("/mypermissions"),
       ),
     ).toBe(false);
+  }),
+);
+
+it.effect.each([200, 403])(
+  "safely edits an exact older comment with native PUT status %s",
+  (status) =>
+    Effect.gen(function* () {
+      const comment = {
+        id: "9001",
+        body: issue.fields.description,
+        author: user,
+        created: issue.fields.created,
+        updated: issue.fields.updated,
+      };
+      const f = fakeJira((request) => {
+        if (request.method === "PUT") return { status, body: comment };
+        return { body: request.url.endsWith("/comment/9001") ? comment : issue };
+      });
+      const api = yield* f.api;
+      const result = yield* Effect.result(
+        api.editComment!({
+          ...target,
+          commentId: "9001",
+          body: "changed",
+          viewer: "spoofed",
+        }),
+      );
+      expect(result._tag).toBe(status === 200 ? "Success" : "Failure");
+      if (result._tag === "Failure") expect(result.failure.detail).toContain("403");
+      expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "PUT"]);
+      expect(f.calls.map(({ url }) => new URL(url).pathname)).toEqual([
+        "/rest/api/3/issue/ENG-1",
+        "/rest/api/3/issue/ENG-1/comment/9001",
+        "/rest/api/3/issue/ENG-1/comment/9001",
+      ]);
+      expect(body(f.calls[2])).toEqual({
+        body: {
+          type: "doc",
+          version: 1,
+          content: [{ type: "paragraph", content: [{ type: "text", text: "changed" }] }],
+        },
+      });
+    }),
+);
+
+const richCommentBody = {
+  type: "doc",
+  version: 1,
+  content: [
+    { type: "paragraph", content: [{ type: "text", text: "rich", marks: [{ type: "strong" }] }] },
+  ],
+};
+
+it.effect.each([
+  richCommentBody,
+  {
+    type: "doc",
+    version: 1,
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "mention", attrs: { id: "native-account", text: "@Ada" } }],
+      },
+    ],
+  },
+  {
+    type: "doc",
+    version: 1,
+    content: [
+      {
+        type: "taskList",
+        attrs: { localId: "list" },
+        content: [{ type: "taskItem", attrs: { localId: "task", state: "TODO" } }],
+      },
+    ],
+  },
+  undefined,
+  { type: "doc", version: 1, content: [{ type: "paragraph", content: "invalid" }] },
+])("refuses unsafe native comment replacement before PUT: %j", (currentBody) =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => ({
+      body: request.url.includes("/comment/")
+        ? {
+            id: "9001",
+            body: currentBody,
+            created: issue.fields.created,
+            updated: issue.fields.updated,
+          }
+        : issue,
+    }));
+    const api = yield* f.api;
+    expect(
+      (yield* api.editComment!({ ...target, commentId: "9001", body: "changed" }).pipe(Effect.flip))
+        .reason,
+    ).toBe("failed");
+    expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET"]);
+    expect(f.calls[1]?.url).toBe(
+      "https://example.atlassian.net/rest/api/3/issue/ENG-1/comment/9001",
+    );
+  }),
+);
+
+it.effect.each([403, 404])("preserves native comment GET denial %s without a write", (status) =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) =>
+      request.url.includes("/comment/") ? { status } : { body: issue },
+    );
+    const api = yield* f.api;
+    const error = yield* api.editComment!({ ...target, commentId: "9001", body: "changed" }).pipe(
+      Effect.flip,
+    );
+    expect(error.detail).toContain(String(status));
+    expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET"]);
+  }),
+);
+
+it.effect("refuses a foreign project before reading or editing its comment", () =>
+  Effect.gen(function* () {
+    const f = fakeJira(() => ({
+      body: { ...issue, fields: { ...issue.fields, project: { id: "99", key: "OTHER" } } },
+    }));
+    const api = yield* f.api;
+    expect(
+      (yield* api.editComment!({ ...target, commentId: "9001", body: "changed" }).pipe(Effect.flip))
+        .reason,
+    ).toBe("not-found");
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.method).toBe("GET");
+  }),
+);
+
+it.effect("marks rich old comments read-only without extra viewer or comment reads", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => {
+      if (request.url.includes("/mypermissions?"))
+        return { body: { permissions: { EDIT_ALL_COMMENTS: { havePermission: true } } } };
+      if (new URL(request.url).pathname.endsWith("/comment"))
+        return {
+          body: {
+            startAt: 50,
+            total: 52,
+            comments: [issue.fields.description, richCommentBody].map((body, index) => ({
+              id: String(9000 + index),
+              body,
+              author: user,
+              created: issue.fields.created,
+              updated: issue.fields.updated,
+            })),
+          },
+        };
+      return { body: issue };
+    });
+    const api = yield* f.api;
+    const page = yield* api.getComments({ ...target, cursor: "50", viewer: user.accountId });
+    expect(page.comments).toEqual([
+      expect.objectContaining({ id: "9001", body: "rich", canEdit: false }),
+      expect.objectContaining({ id: "9000", body: "body", canEdit: true }),
+    ]);
+    expect(f.calls).toHaveLength(3);
+    expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+    expect(f.calls.some(({ url }) => url.includes("/myself") || url.includes("/comment/"))).toBe(
+      false,
+    );
   }),
 );
 

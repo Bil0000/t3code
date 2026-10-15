@@ -276,7 +276,8 @@ export const make = Effect.gen(function* () {
             (allowed(granted, "EDIT_ALL_COMMENTS") ||
               (input.viewer !== undefined &&
                 input.viewer === comment.author?.accountId &&
-                allowed(granted, "EDIT_OWN_COMMENTS"))),
+                allowed(granted, "EDIT_OWN_COMMENTS"))) &&
+            isEditableAdf(comment.body),
           url:
             "https://" +
             JiraApi.normalizeJiraHost(input.host) +
@@ -585,16 +586,29 @@ export const make = Effect.gen(function* () {
     editComment: (input) =>
       Effect.gen(function* () {
         yield* requireScopeIssue(input, "editComment");
+        const path =
+          "/issue/" +
+          encodeURIComponent(input.key) +
+          "/comment/" +
+          encodeURIComponent(input.commentId);
+        const comment = yield* jira.request({
+          host: input.host,
+          operation: "editComment",
+          method: "GET",
+          path,
+          schema: JiraComment,
+        });
+        if (!(yield* JiraApi.attempt("editComment", () => isEditableAdf(comment.body))))
+          return yield* JiraApi.failed(
+            "editComment",
+            "This comment has rich content. Edit it in Jira to preserve its formatting and attachments.",
+          );
         const body = yield* JiraApi.attempt("editComment", () => textToAdf(input.body));
         yield* jira.request({
           host: input.host,
           operation: "editComment",
           method: "PUT",
-          path:
-            "/issue/" +
-            encodeURIComponent(input.key) +
-            "/comment/" +
-            encodeURIComponent(input.commentId),
+          path,
           schema: JiraComment,
           body: { body },
         });
