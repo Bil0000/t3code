@@ -18,6 +18,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   responses: new Map<string, AsyncResult.AsyncResult<IssueListResult, unknown>>(),
   read: vi.fn(),
+  listPage: vi.fn(),
   search: { who: "all", status: "open" } as Record<string, string>,
   projects: [] as ReadonlyArray<object>,
   navigate: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
     ...(await importOriginal<typeof import("@t3tools/client-runtime/state/issues")>()),
     createIssueEnvironmentAtoms: () => ({
       list: (target: unknown) => queries(JSON.stringify(target)),
+      listPage: {},
     }),
   };
 });
@@ -62,7 +64,7 @@ vi.mock("~/state/environments", () => ({
   useIssuesSupported: () => true,
 }));
 vi.mock("~/state/queries", () => ({ useDebouncedValue: (value: string) => value }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.listPage }));
 vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => {} }));
 vi.mock("~/hooks/useNavigateBack", () => ({ useEscapeToGoBack: () => {} }));
 vi.mock("~/panelAnimations", () => ({
@@ -147,6 +149,7 @@ beforeEach(() => {
   localStorage.clear();
   state.responses.clear();
   state.read.mockClear();
+  state.listPage.mockReset();
   state.search = { who: "all", status: "open" };
   state.projects = [];
   container = document.createElement("div");
@@ -255,3 +258,56 @@ it("keeps every project selectable while the list is narrowed to one tracker hos
   await mount();
   expect(await projectChoices()).toEqual(["All projects", "Project A", "Project B"]);
 });
+
+it.each([
+  ["another account", "bob", 1],
+  ["the same account", "alice", 0],
+] as const)(
+  "reads a page-two scope's first page once after %s answers it",
+  async (_, viewer, restarts) => {
+    const cursor = "github github.com org/repo";
+    const otherCursor = "gitlab gitlab.com org/repo";
+    const viewers = (name: string) => ({ "github github.com": name, "gitlab gitlab.com": "alice" });
+    const other = { ...issue("G1"), tracker: IssueTrackerKind.make("gitlab"), host: "gitlab.com" };
+    const first = answer([issue("A1"), other]);
+    state.responses.set(
+      environmentA,
+      AsyncResult.success({
+        ...first,
+        trackers: [
+          ...first.trackers,
+          { ...first.trackers[0]!, tracker: other.tracker, host: other.host },
+        ],
+        viewers: viewers("alice"),
+        nextCursors: { [cursor]: "2", [otherCursor]: "g2" },
+      }),
+    );
+    state.responses.set(environmentB, AsyncResult.success(answer([])));
+    state.listPage.mockImplementation(async ({ input }) => ({
+      _tag: "Success",
+      value: { ...answer(input.cursors ? [] : [issue("B1")]), viewers: viewers(viewer) },
+    }));
+    await mount();
+    await act(async () =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Load more")!
+        .click(),
+    );
+    const inputs = state.listPage.mock.calls.map(([target]) => target.input);
+    expect(inputs).toHaveLength(1 + restarts);
+    expect(inputs[0].cursors).toEqual({ [cursor]: "2" });
+    for (const input of inputs.slice(1)) {
+      expect(input.cursors).toBeUndefined();
+      expect(input).toMatchObject({ projectId: "project", host: "github.com" });
+    }
+    expect(text()).toContain(restarts > 0 ? "Issue B1" : "Issue A1");
+    expect(text()).toContain("Issue G1");
+    expect(
+      [...container.querySelectorAll("button")].filter(
+        (button) => button.textContent === "Load more",
+      ),
+    ).toHaveLength(1);
+    await mount();
+    expect(state.listPage).toHaveBeenCalledTimes(1 + restarts);
+  },
+);

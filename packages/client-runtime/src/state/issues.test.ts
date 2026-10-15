@@ -5,6 +5,7 @@ import type {
   IssueComment,
   IssueCommentsPageInput,
   IssueListEntry,
+  IssueListInput,
   IssueListResult,
   IssueTrackerKind,
   ProjectId,
@@ -1652,6 +1653,128 @@ describe("held issue list viewers", () => {
     expect(keys(refreshIssueListPage(next, answer([row("A-again")], { [cursor]: "A2" })))).toEqual([
       "A-again",
     ]);
+  });
+
+  it.each([
+    { cursor: "gitlab shared.example acme/app", viewer: "B" },
+    { cursor: "shared.example acme/app", viewer: "B" },
+    { cursor: "gitlab shared.example acme/app", viewer: "A" },
+    { cursor: "shared.example acme/app", viewer: "A" },
+  ])("restarts a changed viewer from page one once: %j", async ({ cursor, viewer }) => {
+    const { atoms, registry, dispose } = issueReadHarness();
+    const native = row("A-first", {
+      tracker: "gitlab" as IssueTrackerKind,
+      host: "shared.example",
+      projectId: "old" as ProjectId,
+    });
+    const current = { ...native, projectId: "current" as ProjectId };
+    const failed = row("failed-first", {
+      ...native,
+      projectId: "failed" as ProjectId,
+      scope: "acme/failed",
+    });
+    const unrelated = row("other-first", { host: native.host });
+    const failedCursor = "gitlab shared.example acme/failed";
+    const otherCursor = "github shared.example acme/app";
+    const firstRows = Array.from({ length: 50 }, (_, index) => row(`A-${index}`, native));
+    const initial = {
+      ...answer([...firstRows, failed, unrelated], {
+        [cursor]: "2",
+        [failedCursor]: "failed-2",
+        [otherCursor]: "other-2",
+      }),
+      sources: [source(native), source(failed), source(unrelated)],
+      viewers: { "gitlab shared.example": "A", "github shared.example": "other" },
+    };
+    const pageTwo = {
+      ...initial,
+      entries: viewer === "B" ? [] : [row("A-tail", current)],
+      sources: [source(current), source(current), source(failed)],
+      viewers: { "gitlab shared.example": viewer },
+      nextCursors: {},
+      errors: [
+        {
+          projectId: failed.projectId,
+          projectTitle: failed.projectTitle,
+          tracker: failed.tracker,
+          host: failed.host,
+          message: "unavailable",
+        },
+      ],
+    };
+    const firstForB = {
+      ...initial,
+      entries: [row("B-only", current)],
+      sources: [source(current)],
+      viewers: { "gitlab shared.example": "B" },
+      nextCursors: {},
+    };
+    const replies = viewer === "B" ? [initial, pageTwo, firstForB] : [initial, pageTwo];
+    const request = vi.spyOn(RpcClient, "requestGuarded");
+    request.mockImplementation((() => Effect.succeed(replies.shift()!)) as unknown as Parameters<
+      typeof request.mockImplementation
+    >[0]);
+    const read = async (input: IssueListInput) => {
+      const result = await atoms.listPage.run(registry, {
+        environmentId: "environment" as EnvironmentId,
+        input,
+      });
+      if (result._tag !== "Success") throw new Error("list read failed");
+      return result.value;
+    };
+    try {
+      const input = { state: "all" as const, involvement: "assigned" as const, limit: 50 };
+      const held = first(await read(input));
+      const sent = { [cursor]: "2", [failedCursor]: "failed-2" };
+      const next = continueIssueListPage(
+        held,
+        sent,
+        await read({ ...input, cursors: sent }),
+        held.firstCursors,
+      );
+      let completed = next;
+      for (const restart of next.restartSources ?? []) {
+        const fresh = await read({ ...input, projectId: restart.projectId, host: restart.host });
+        completed = refreshIssueListPage(completed, fresh, {
+          source: { ...restart, host: restart.host! },
+        });
+      }
+      expect(request.mock.calls.map(([tag]) => tag)).toEqual(
+        Array(viewer === "B" ? 3 : 2).fill("issues.list"),
+      );
+      expect(request.mock.calls.map(([, payload]) => payload)).toEqual([
+        input,
+        { ...input, cursors: sent },
+        ...(viewer === "B" ? [{ ...input, projectId: current.projectId, host: current.host }] : []),
+      ]);
+      expect(replies).toEqual([]);
+      expect(keys(completed).toSorted()).toEqual(
+        (viewer === "B"
+          ? ["B-only", "failed-first", "other-first"]
+          : [...firstRows.map((row) => row.key), "A-tail", "failed-first", "other-first"]
+        ).toSorted(),
+      );
+      expect(completed.nextCursors).toEqual({
+        [failedCursor]: "failed-2",
+        [otherCursor]: "other-2",
+      });
+      expect(completed.errors).toEqual(pageTwo.errors);
+      if (viewer === "B")
+        expect(completed.firstKeys).toEqual(
+          new Set([
+            issueEntryKey(row("B-only", current)),
+            issueEntryKey(failed),
+            issueEntryKey(unrelated),
+          ]),
+        );
+      expect(next.restartSources).toEqual(viewer === "B" ? [source(current)] : []);
+      expect(completed.restartSources).toEqual([]);
+      const stale = continueIssueListPage(next, sent, pageTwo, held.firstCursors);
+      expect(stale).toBe(next);
+    } finally {
+      dispose();
+      request.mockRestore();
+    }
   });
 
   it.each(["assigned", "all"] as const)(
