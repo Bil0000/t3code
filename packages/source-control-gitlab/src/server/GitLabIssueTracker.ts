@@ -403,6 +403,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           path: `projects/${projectPath(input.scope)}/issues?${query([
             ["state", state],
             ["scope", "all"],
+            ["with_labels_details", "true"],
             ...involvementParams(input),
             // GitLab's own `search` matches title and description, URL-encoded like every other
             // value here, so no text in it can become a parameter of its own.

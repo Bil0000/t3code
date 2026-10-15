@@ -4,13 +4,14 @@ import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { IssueDetail } from "@t3tools/contracts";
+import { IssueDetail, IssueSummary } from "@t3tools/contracts";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabIssueTracker from "./GitLabIssueTracker.ts";
 
 const decodeDetailWire = Schema.decodeEffect(IssueDetail);
+const decodeSummaryWire = Schema.decodeEffect(IssueSummary);
 
 const encode = (value: unknown) => JSON.stringify(value);
 
@@ -142,6 +143,95 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each([true, false])(
+    "carries native detailed label colors to the list wire: %s",
+    (detailed) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args) => {
+          paths.push(args[1]!);
+          const requested =
+            new URL(args[1]!, "https://gitlab.acme.test/").searchParams.get(
+              "with_labels_details",
+            ) === "true";
+          return encode([
+            {
+              ...ISSUE,
+              labels:
+                detailed && requested
+                  ? [
+                      { id: 17, name: "bug", color: "#d73a4a", description: "A defect" },
+                      "legacy",
+                      { name: "plain", color: null },
+                      { name: " ", color: "#ffffff" },
+                    ]
+                  : ["bug", "legacy", "plain", " "],
+            },
+          ]);
+        });
+        const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web" };
+        const page = yield* api.listIssues({
+          ...target,
+          state: "all",
+          involvement: "all",
+          viewer: "julius",
+          limit: 1,
+        });
+        expect(page.items).toHaveLength(1);
+        const wire = yield* decodeSummaryWire({
+          ...page.items[0]!,
+          ...target,
+          tracker: "gitlab",
+        });
+        expect(wire.labels).toEqual([
+          { name: "bug", color: detailed ? "#d73a4a" : null },
+          { name: "legacy", color: null },
+          { name: "plain", color: null },
+        ]);
+        expect(wire.author?.id).toBe("1");
+        expect(wire.assignees[0]?.id).toBe("2");
+        expect(page.nextCursor).toBe("2");
+        expect(wire.labelsTruncated).not.toBe(true);
+        expect(paths).toHaveLength(1);
+        expect(
+          new URL(paths[0]!, "https://gitlab.acme.test/").searchParams.get("with_labels_details"),
+        ).toBe("true");
+      }),
+  );
+
+  it.effect.each([true, false])("keeps all 121 native detail labels complete: %s", (detailed) =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const labels = Array.from({ length: 121 }, (_, i) => ({
+        name: String(i + 1),
+        color: "#d73a4a",
+      }));
+      const api = yield* tracker((args) => {
+        paths.push(args[1]!);
+        return args[1] === "projects/acme%2Fweb/issues/42"
+          ? encode({ ...ISSUE, labels: detailed ? labels : labels.map((label) => label.name) })
+          : answer(args[1]!);
+      });
+      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const issue = yield* api.getIssue(target);
+      const wire = yield* decodeDetailWire({
+        ...issue,
+        ...target,
+        tracker: "gitlab",
+        projectId: "p1",
+        projectTitle: "Web",
+        writable: true,
+        capabilities: api.capabilities,
+      });
+      expect(wire.labels).toHaveLength(121);
+      expect(wire.labels.at(-1)).toEqual({ name: "121", color: detailed ? "#d73a4a" : null });
+      expect(wire.labelsTruncated).not.toBe(true);
+      expect(wire.viewerPermissions).toMatchObject({ edit: true, labels: true, assignees: true });
+      expect(paths).toHaveLength(6);
+      expect(paths.filter((path) => path === "projects/acme%2Fweb/issues/42")).toHaveLength(1);
+    }),
+  );
+
   it.effect.each([false, true])(
     "keeps native author title writes and token refusal: $value",
     (denied) =>
@@ -1297,7 +1387,7 @@ describe("GitLabIssueTracker", () => {
         cursor: "3",
       });
       expect(paths[0]).toBe(
-        "projects/acme%2Fweb/issues?state=opened&scope=all&assignee_username=julius&order_by=updated_at&sort=desc&per_page=1&page=3",
+        "projects/acme%2Fweb/issues?state=opened&scope=all&with_labels_details=true&assignee_username=julius&order_by=updated_at&sort=desc&per_page=1&page=3",
       );
       expect(page.items[0]?.key).toBe("42");
       expect(page.nextCursor).toBe("4");

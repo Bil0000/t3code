@@ -37,6 +37,12 @@ const RawUserSchema = Schema.Struct({
   avatar_url: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+const RawProjectLabelSchema = Schema.Struct({
+  name: Schema.String,
+  color: Schema.optional(Schema.NullOr(Schema.String)),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 const RawIssueSchema = Schema.Struct({
   iid: Schema.Int,
   title: Schema.String,
@@ -48,7 +54,9 @@ const RawIssueSchema = Schema.Struct({
   updated_at: Schema.String,
   closed_at: Schema.optional(Schema.NullOr(Schema.String)),
   assignees: Schema.optional(Schema.NullOr(Schema.Array(RawUserSchema))),
-  labels: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+  labels: Schema.optional(
+    Schema.NullOr(Schema.Array(Schema.Union([Schema.String, RawProjectLabelSchema]))),
+  ),
   milestone: Schema.optional(Schema.NullOr(Schema.Struct({ title: Schema.String }))),
   user_notes_count: Schema.optional(Schema.NullOr(Schema.Int)),
 });
@@ -73,12 +81,6 @@ const RawLinkedMergeRequestSchema = Schema.Struct({
   references: Schema.optional(
     Schema.NullOr(Schema.Struct({ full: Schema.optional(Schema.NullOr(Schema.String)) })),
   ),
-});
-
-const RawProjectLabelSchema = Schema.Struct({
-  name: Schema.String,
-  color: Schema.optional(Schema.NullOr(Schema.String)),
-  description: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 /** A row of `GET /projects/:id/templates/issues`, which names a template but carries none of it. */
@@ -120,11 +122,12 @@ function toActor(raw: typeof RawUserSchema.Type | null | undefined): IssueActor 
       };
 }
 
-/** GitLab returns label names only on an issue, so there is no colour to carry. */
-function toLabels(raw: ReadonlyArray<string> | null | undefined): ReadonlyArray<IssueLabel> {
+function toLabels(raw: (typeof RawIssueSchema.Type)["labels"]): ReadonlyArray<IssueLabel> {
   return (raw ?? []).flatMap((label) => {
-    const name = trimmed(label);
-    return name === null ? [] : [{ name, color: null }];
+    const name = trimmed(typeof label === "string" ? label : label.name);
+    return name === null
+      ? []
+      : [{ name, color: typeof label === "string" ? null : trimmed(label.color) }];
   });
 }
 
