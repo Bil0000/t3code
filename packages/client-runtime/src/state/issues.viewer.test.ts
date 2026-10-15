@@ -7,6 +7,7 @@ import type {
   IssueTrackerKind,
   ProjectId,
 } from "@t3tools/contracts";
+import { issueListCursorKey } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -19,6 +20,7 @@ import {
   continueIssueListPage,
   createIssueEnvironmentAtoms,
   issueEntryKey,
+  issueScopeKey,
   refreshIssueListPage,
 } from "./issues.ts";
 
@@ -78,6 +80,247 @@ const keys = (page: { entries: IssueListResult["entries"] }) =>
   page.entries.map((entry) => entry.key);
 
 describe("held issue list viewers", () => {
+  it.each([false, true])(
+    "removes a native mount's old first cursor after alias migration, legacy first: %s",
+    (legacy) => {
+      const upper = row("42", {
+        tracker: "forgejo" as IssueTrackerKind,
+        host: "forge.example",
+        scope: "Mount/acme/web",
+      });
+      const lower = row("42", { ...upper, scope: "mount/acme/web" });
+      const qualified = issueListCursorKey(lower);
+      const old = legacy ? `${lower.host} ${lower.scope}` : qualified;
+      const next = legacy ? qualified : `${lower.host} ${lower.scope}`;
+      const other = issueListCursorKey(upper);
+      const page = {
+        ...answer([upper, lower], { [old]: "2", [other]: "upper-2" }),
+        sources: [source(upper), source(lower)],
+        viewers: { "forgejo forge.example": "A" },
+      };
+      const initial = first(page);
+      const held = continueIssueListPage(
+        initial,
+        { [old]: "2" },
+        { ...page, entries: [row("43", lower)], nextCursors: { [next]: "3" } },
+        initial.firstCursors,
+      );
+      const switched = continueIssueListPage(
+        held,
+        { [next]: "3" },
+        { ...page, entries: [], nextCursors: {}, viewers: { "forgejo forge.example": "B" } },
+        held.firstCursors,
+      );
+      expect(switched.entries).toEqual([upper]);
+      expect(switched.firstCursors).toEqual({ [other]: "upper-2" });
+      expect(switched.nextCursors).toEqual({ [other]: "upper-2" });
+      expect(switched.restartSources).toEqual([source(lower)]);
+    },
+  );
+
+  it("keeps a plugin's folded scope and qualified viewer on the native host", () => {
+    const native = row("42", {
+      tracker: "forgejo" as IssueTrackerKind,
+      host: "forge.example",
+      scope: "Mount/acme/web",
+    });
+    const plugin = row("42", {
+      ...native,
+      tracker: "custom" as IssueTrackerKind,
+      scope: "MOUNT/ACME/WEB",
+    });
+    const nativeCursor = `${native.host} ${native.scope}`;
+    const pluginCursor = issueListCursorKey(plugin);
+    const page = {
+      ...answer([native, plugin], { [nativeCursor]: "2", [pluginCursor]: "plugin-2" }),
+      sources: [source(native), source(plugin)],
+      viewers: { "forgejo forge.example": "A", "custom forge.example": "plugin" },
+    };
+    const held = first(page);
+    const switched = continueIssueListPage(
+      held,
+      { [nativeCursor]: "2" },
+      {
+        ...page,
+        entries: [],
+        sources: [source(native)],
+        nextCursors: {},
+        viewers: { "forgejo forge.example": "B", "forge.example": "ambiguous" },
+      },
+      held.firstCursors,
+    );
+    expect(switched.entries).toEqual([plugin]);
+    expect(switched.nextCursors).toEqual({ [pluginCursor]: "plugin-2" });
+    expect(switched.restartSources).toEqual([source(native)]);
+    const continued = continueIssueListPage(
+      switched,
+      { [pluginCursor]: "plugin-2" },
+      {
+        ...page,
+        entries: [row("43", { ...plugin, scope: plugin.scope.toLowerCase() })],
+        sources: [source(plugin)],
+        nextCursors: {},
+        viewers: { "custom forge.example": "plugin" },
+      },
+      switched.firstCursors,
+    );
+    expect(keys(continued)).toEqual(["42", "43"]);
+    expect(continued.restartSources).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "keeps native mount scopes apart through refresh, viewer restart and retry, legacy: %s",
+    (legacy) => {
+      const upper = row("42", {
+        tracker: "forgejo" as IssueTrackerKind,
+        host: "forge.example",
+        scope: "Root/Mount/acme/web",
+        projectId: "upper" as ProjectId,
+      });
+      const lower = row("42", {
+        ...upper,
+        scope: "Root/mount/Acme/Web",
+        projectId: "lower" as ProjectId,
+      });
+      const cursorFor = (entry: IssueListEntry) =>
+        legacy ? `${entry.host} ${entry.scope}` : issueListCursorKey(entry);
+      const upperCursor = cursorFor(upper);
+      const lowerCursor = cursorFor(lower);
+      const initial = {
+        ...answer([upper, lower], { [upperCursor]: "2", [lowerCursor]: "2" }),
+        sources: [source(upper), source(lower)],
+        viewers: { "forgejo forge.example": "A" },
+      };
+      expect(issueEntryKey(upper)).not.toBe(
+        issueEntryKey({ ...lower, projectId: upper.projectId }),
+      );
+      const held = first(initial);
+      const tailed = continueIssueListPage(
+        held,
+        held.nextCursors,
+        {
+          ...initial,
+          entries: [row("43", upper), row("43", lower)],
+          nextCursors: { [upperCursor]: "3", [lowerCursor]: "3" },
+        },
+        held.firstCursors,
+      );
+      const fresh = refreshIssueListPage(
+        tailed,
+        {
+          ...initial,
+          entries: [row("44", lower)],
+          nextCursors: { [lowerCursor]: "2" },
+          sources: [source(lower)],
+        },
+        { source: lower },
+      );
+      expect(fresh.entries.map((entry) => [entry.scope, entry.key])).toEqual(
+        expect.arrayContaining([
+          [upper.scope, "42"],
+          [upper.scope, "43"],
+          [lower.scope, "44"],
+        ]),
+      );
+      expect(fresh.nextCursors).toEqual({ [upperCursor]: "3", [lowerCursor]: "2" });
+      expect(issueScopeKey("environment" as EnvironmentId, upper)).not.toBe(
+        issueScopeKey("environment" as EnvironmentId, lower),
+      );
+      const current = { ...lower, projectId: "current" as ProjectId, projectTitle: "Current" };
+      const pageTwo = {
+        ...initial,
+        entries: [],
+        sources: [source(current)],
+        viewers: { "forgejo forge.example": "B" },
+        nextCursors: {},
+      };
+      const switched = continueIssueListPage(
+        tailed,
+        { [lowerCursor]: "3" },
+        pageTwo,
+        tailed.firstCursors,
+      );
+      expect(switched.entries).toEqual([upper, row("43", upper)]);
+      expect(switched.nextCursors).toEqual({ [upperCursor]: "3" });
+      expect(switched.restartSources).toEqual([source(current)]);
+      expect(switched.sources).toEqual([source(upper), source(current)]);
+      const completed = refreshIssueListPage(
+        switched,
+        { ...pageTwo, entries: [row("9001", current)] },
+        { source: current },
+      );
+      expect(completed.entries.map((entry) => [entry.scope, entry.key])).toEqual([
+        [upper.scope, "42"],
+        [upper.scope, "43"],
+        [lower.scope, "9001"],
+      ]);
+      const failed = {
+        projectId: upper.projectId,
+        projectTitle: upper.projectTitle,
+        tracker: upper.tracker,
+        host: upper.host,
+        message: "Native scope unavailable",
+      };
+      const unavailable = continueIssueListPage(
+        completed,
+        { [upperCursor]: "3" },
+        {
+          ...initial,
+          entries: [],
+          sources: [source(upper)],
+          nextCursors: {},
+          errors: [failed],
+          viewers: { "forgejo forge.example": "B" },
+        },
+        completed.firstCursors,
+      );
+      expect(unavailable.entries).toEqual(completed.entries);
+      expect(unavailable.nextCursors).toEqual({ [upperCursor]: "3" });
+      expect(unavailable.restartSources).toEqual([]);
+      const retried = continueIssueListPage(
+        unavailable,
+        { [upperCursor]: "3" },
+        {
+          ...initial,
+          entries: [],
+          sources: [source(upper)],
+          nextCursors: {},
+          viewers: { "forgejo forge.example": "B" },
+        },
+        unavailable.firstCursors,
+      );
+      expect(retried.entries).toEqual([row("9001", current)]);
+      expect(retried.errors).toEqual([]);
+      expect(retried.restartSources).toEqual([source(upper)]);
+    },
+  );
+
+  it("restarts both native mounts when both authoritative viewers change", () => {
+    const upper = row("42", {
+      tracker: "forgejo" as IssueTrackerKind,
+      host: "forge.example",
+      scope: "Mount/acme/web",
+    });
+    const lower = row("42", { ...upper, scope: "mount/acme/web" });
+    const page = {
+      ...answer([upper, lower], {
+        [issueListCursorKey(upper)]: "2",
+        [issueListCursorKey(lower)]: "2",
+      }),
+      sources: [source(upper), source(lower)],
+      viewers: { "forgejo forge.example": "A" },
+    };
+    const held = first(page);
+    const next = continueIssueListPage(
+      held,
+      held.nextCursors,
+      { ...page, entries: [], nextCursors: {}, viewers: { "forgejo forge.example": "B" } },
+      held.firstCursors,
+    );
+    expect(next.entries).toEqual([]);
+    expect(next.restartSources).toEqual([source(upper), source(lower)]);
+  });
+
   it.each([
     { cursor: "gitlab shared.example acme/app", viewer: "B" },
     { cursor: "shared.example acme/app", viewer: "B" },
