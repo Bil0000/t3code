@@ -110,6 +110,7 @@ export const LinearIssue = Schema.Struct({
   completedAt: Schema.NullOr(Schema.String),
   canceledAt: Schema.NullOr(Schema.String),
   state: LinearWorkflowState,
+  projectMilestone: Schema.optional(Schema.NullOr(Schema.Struct({ name: Schema.String }))),
   creator: Schema.NullOr(LinearUser),
   assignee: Schema.NullOr(LinearUser),
   labels: Connection(LinearLabel),
@@ -199,6 +200,7 @@ const ISSUE_FIELDS = `
   id identifier number title url description createdAt updatedAt completedAt canceledAt
   team { key }
   state { ${STATE_FIELDS} }
+  projectMilestone { name }
   creator { ${USER_FIELDS} }
   assignee { ${USER_FIELDS} }
 `;

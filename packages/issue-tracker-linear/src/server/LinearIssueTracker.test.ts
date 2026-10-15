@@ -5,9 +5,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
+import * as Schema from "effect/Schema";
 import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { HttpClient, HttpClientResponse } from "effect/http";
-import { IssueTrackerKind } from "@t3tools/contracts";
+import { IssueSummary, IssueTrackerKind } from "@t3tools/contracts";
 import type { StandaloneIssueTrackerApi } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 
@@ -148,6 +149,55 @@ function fakeLinear(
 }
 
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
+const decodeIssueSummary = Schema.decodeEffect(IssueSummary);
+
+it.effect.each([{ name: "Release 7" }, null, undefined])(
+  "retains native project milestones in list, detail, and wire summaries: %j",
+  (projectMilestone) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const native = issue("ENG-7", {
+        projectMilestone,
+        comments: empty,
+        history: empty,
+        attachments: empty,
+        reactions: [],
+      });
+      const test = fakeLinear({
+        T3Issues: () => ({ organization: ORGANIZATION, issues: { ...empty, nodes: [native] } }),
+        T3Issue: () => ({ issue: native }),
+        T3Viewer: () => ({ viewer: JULIUS }),
+      });
+      const api = yield* test.tracker;
+      const page = yield* api.listIssues({
+        ...target,
+        state: "all",
+        involvement: "all",
+        viewer: JULIUS.id,
+        limit: 20,
+      });
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Issues"]);
+      const detail = yield* api.getIssue({ ...target, key: "ENG-7" });
+      const milestone = projectMilestone?.name ?? null;
+      for (const summary of [page.items[0]!, detail]) {
+        expect(summary.milestone).toBe(milestone);
+        const wire = yield* decodeIssueSummary({
+          ...summary,
+          tracker: IssueTrackerKind.make("linear"),
+          host: target.host,
+          scope: target.scope,
+        });
+        expect(wire.milestone).toBe(milestone);
+      }
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3Issues",
+        "T3Issue",
+        "T3Viewer",
+      ]);
+      for (const request of test.requests.filter(({ operation }) => operation !== "T3Viewer"))
+        expect(request.query).toContain("projectMilestone { name }");
+    }),
+);
 
 describe("LinearIssueTracker", () => {
   it.effect("classifies native duplicates as closed without adding a writable close reason", () =>

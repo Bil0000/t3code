@@ -189,6 +189,7 @@ function toSummary(
       color: label.color,
     })),
     labelsTruncated: issue.labels.pageInfo.hasNextPage,
+    milestone: issue.projectMilestone?.name ?? null,
     commentCount,
   };
 }
