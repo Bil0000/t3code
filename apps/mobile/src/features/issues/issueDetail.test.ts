@@ -480,6 +480,38 @@ describe("linked pull request destination", () => {
   const url = "https://gitlab.com/acme/api/-/merge_requests/7";
   const both = { repositoryIdentity: true, pullRequests: true, threadPullRequests: true };
 
+  it("selects the native provider when another provider has the same host and repository", () => {
+    const github = project("wrong-github", "env", "github", "code.example/acme/api");
+    const gitlab = project("right-gitlab", "env", "gitlab", "code.example/acme/api");
+    const link = "https://code.example/acme/api/-/merge_requests/7";
+    expect(linkedPullRequestContext(link, "env", [linear, github, gitlab], both)).toEqual({
+      environmentId: "env",
+      projectId: "right-gitlab",
+    });
+  });
+
+  it("uses the external link when only another provider has a matching checkout", () => {
+    const github = project("wrong-github", "env", "github", "code.example/acme/api");
+    const link = "https://code.example/acme/api/-/merge_requests/7";
+    expect(linkedPullRequestContext(link, "env", [linear, github], both)).toBeNull();
+  });
+
+  it("only borrows a checkout from the native provider with the host-read capability", () => {
+    const github = project("wrong-github", "env", "github", "code.example/acme/api");
+    const gitlab = project("gitlab-lender", "env", "gitlab", "code.example/acme/web");
+    const link = "https://code.example/acme/api/-/merge_requests/7";
+    expect(linkedPullRequestContext(link, "env", [github, gitlab], both)).toEqual({
+      environmentId: "env",
+      projectId: "gitlab-lender",
+    });
+    expect(
+      linkedPullRequestContext(link, "env", [github, gitlab], {
+        ...both,
+        threadPullRequests: false,
+      }),
+    ).toBeNull();
+  });
+
   it("prefers the exact repository, then a same-host lender, in this environment only", () => {
     expect(linkedPullRequestContext(url, "env", [linear, lender, exact], both)).toEqual({
       environmentId: "env",

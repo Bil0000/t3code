@@ -119,17 +119,15 @@ export function linkedPullRequestContext(
   capabilities: ExecutionEnvironmentCapabilities | undefined,
 ) {
   const link = parseChangeRequestUrl(url);
-  if (link === null || capabilities?.pullRequests !== true) return null;
+  const provider = sourceControlClients.findByChangeRequestUrl(url);
+  if (link === null || provider === undefined || capabilities?.pullRequests !== true) return null;
   const local = projects.filter((project) => project.environmentId === environmentId);
   const serves = (
     project: EnvironmentProject,
     check: "isChangeRequestInRepository" | "canReadChangeRequestOnHost",
   ) => {
     const identity = project.repositoryIdentity;
-    return (
-      identity?.provider !== undefined &&
-      sourceControlClients.get(identity.provider)[check](identity, link)
-    );
+    return identity?.provider === provider.kind && provider[check](identity, link);
   };
   const project =
     local.find((candidate) => serves(candidate, "isChangeRequestInRepository")) ??
