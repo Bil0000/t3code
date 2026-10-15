@@ -933,19 +933,15 @@ describe("settled worktree retention", () => {
                         ? 0
                         : -60_000,
               ),
-        updatedAt: at(scenario === "recent-update" ? 0 : -10 * DAY_MS),
+        updatedAt: at(
+          scenario === "recent-update" || scenario === "settle-script" ? 0 : -10 * DAY_MS,
+        ),
       });
       fixture.setThreads([thread]);
       if (scenario === "dirty")
         yield* fixture.fs.writeFileString(`${fixture.worktree}/tracked.txt`, "edit\n");
       const report = yield* fixture.service.runNow;
-      const removed = [
-        "immediate",
-        "expired",
-        "boundary",
-        "recent-update",
-        "project-custom",
-      ].includes(scenario);
+      const removed = ["immediate", "expired", "boundary", "project-custom"].includes(scenario);
       expect(yield* fixture.fs.exists(fixture.worktree)).toBe(!removed);
       expect(report.counts.removed).toBe(removed ? 1 : 0);
       if (scenario !== "project-off") {
@@ -954,12 +950,19 @@ describe("settled worktree retention", () => {
             ? "Not settled"
             : scenario === "wait"
               ? "Settled for 7 of 8 days"
-              : scenario === "settle-script"
+              : scenario === "settle-script" || scenario === "recent-update"
                 ? "Settled moments ago"
                 : scenario === "dirty"
                   ? "Has uncommitted changes (1 file)"
-                  : `Settled for ${scenario === "expired" || scenario === "recent-update" ? 20 : scenario === "boundary" ? 8 : 0} days`;
+                  : `Settled for ${scenario === "expired" ? 20 : scenario === "boundary" ? 8 : 0} days`;
         expect(report.entries[0]).toMatchObject({ outcome: removed ? "removed" : "kept", reason });
+      }
+      if (scenario === "recent-update") {
+        // Automatic settlement backdates settledAt; the grace runs from the
+        // settle itself, and another sweep follows once it ends.
+        yield* TestClock.adjust("1 minute");
+        yield* fixture.service.drain;
+        expect(yield* fixture.fs.exists(fixture.worktree)).toBe(false);
       }
       expect(thread.branch).toBe("feature");
       expect(

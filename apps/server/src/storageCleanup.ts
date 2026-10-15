@@ -22,6 +22,7 @@ import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
@@ -402,6 +403,10 @@ const make = Effect.gen(function* () {
       );
   });
 
+  // Set when a sweep kept a worktree for the settle-script grace.
+  let settleGraceRetry = false;
+  // Typed separately: the sweep that schedules it is defined before it.
+  let requestGraceSweep: Effect.Effect<void> = Effect.void;
   const cleanWorktrees = Effect.fn("StorageCleanup.cleanWorktrees")(function* (
     serverSettings: ServerSettings,
     now: number,
@@ -497,11 +502,17 @@ const make = Effect.gen(function* () {
             ? null
             : now - DateTime.toEpochMillis(thread.settledAt);
         const settledDays = settledFor === null ? null : Math.floor(settledFor / DAY_MS);
+        // Settling stamps updatedAt now, even when automatic settlement
+        // backdates settledAt to the thread's last activity.
+        const settling =
+          settledFor !== null &&
+          now - DateTime.toEpochMillis(thread.updatedAt) < SETTLE_SCRIPT_GRACE_MS;
+        if (settling && settings.worktreeSettledAfterDays !== null) settleGraceRetry = true;
         const settled =
           settledFor !== null &&
+          !settling &&
           settings.worktreeSettledAfterDays !== null &&
-          settledFor >=
-            Math.max(settings.worktreeSettledAfterDays * DAY_MS, SETTLE_SCRIPT_GRACE_MS);
+          settledFor >= settings.worktreeSettledAfterDays * DAY_MS;
         let eligible = deleted || old || settled;
         let removalReason = deleted
           ? "thread was deleted"
@@ -558,7 +569,7 @@ const make = Effect.gen(function* () {
               : settings.worktreeSettledAfterDays !== null
                 ? settledFor === null
                   ? "not settled"
-                  : settledFor < SETTLE_SCRIPT_GRACE_MS
+                  : settling
                     ? "settled moments ago"
                     : `settled for ${settledDays} of ${settings.worktreeSettledAfterDays} days`
                 : settings.worktreeOnMerge
@@ -807,6 +818,14 @@ const make = Effect.gen(function* () {
       bytesFreed,
       omittedCount: Math.max(0, entries.length - REPORT_ENTRY_LIMIT),
     };
+    if (settleGraceRetry) {
+      settleGraceRetry = false;
+      // Worktrees kept for the settle-script grace get another sweep once it ends.
+      yield* Effect.suspend(() => requestGraceSweep).pipe(
+        Effect.delay(Duration.millis(SETTLE_SCRIPT_GRACE_MS)),
+        Effect.forkDetach,
+      );
+    }
     yield* SubscriptionRef.set(reportRef, latestReport);
     return latestReport;
   });
@@ -834,6 +853,7 @@ const make = Effect.gen(function* () {
   const requestSweep = Ref.getAndSet(automaticSweepQueued, true).pipe(
     Effect.flatMap((queued) => (queued ? Effect.void : worker.enqueue(undefined))),
   );
+  requestGraceSweep = requestSweep;
   const runNow = Effect.gen(function* () {
     const completion = yield* Deferred.make<StorageCleanupReport, ServerSettingsError>();
     yield* worker.enqueue(completion);
