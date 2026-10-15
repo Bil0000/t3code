@@ -11,14 +11,20 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { act, createElement, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
+import { it as effectIt } from "@effect/vitest";
 
 import * as RpcClient from "../../../../../packages/client-runtime/src/rpc/client.ts";
 import * as EnvironmentRegistry from "../../../../../packages/client-runtime/src/connection/registry.ts";
 import * as EnvironmentSupervisor from "../../../../../packages/client-runtime/src/connection/supervisor.ts";
+import { AVAILABLE_CONNECTION_STATE } from "../../../../../packages/client-runtime/src/connection/model.ts";
+import type { RpcSession } from "../../../../../packages/client-runtime/src/rpc/session.ts";
 import { createIssueEnvironmentAtoms } from "@t3tools/client-runtime/state/issues";
 import * as Layer from "effect/Layer";
 
@@ -256,4 +262,195 @@ it.each([
       pageRequest.mockRestore();
     }
   },
+);
+
+effectIt.effect.each(["connecting", "failed-connected"])(
+  "manually refreshes ready targets beside a %s peer",
+  (peerState) =>
+    Effect.gen(function* () {
+      const readyId = EnvironmentId.make(`ready-${peerState}`);
+      const peerId = EnvironmentId.make(`peer-${peerState}`);
+      const readyProject = ProjectId.make("ready-project");
+      const peerProject = ProjectId.make("peer-project");
+      const first: IssueListResult = {
+        entries: Array.from({ length: 50 }, (_, index) =>
+          row(`ready-${index}`, { projectId: readyProject }),
+        ),
+        nextCursors: { [cursor]: "2" },
+        viewers: { "gitlab gitlab.example": "A" },
+        trackers: [],
+        errors: [],
+      };
+      const peer: IssueListResult = {
+        ...first,
+        entries: [row("peer", { projectId: peerProject })],
+        nextCursors: { [cursor]: "peer-2" },
+        errors:
+          peerState === "connecting"
+            ? [{ projectId: peerProject, projectTitle: "Peer", message: "saved warning" }]
+            : [],
+      };
+      const supervisors = new Map<
+        EnvironmentId,
+        EnvironmentSupervisor.EnvironmentSupervisor["Service"]
+      >();
+      const runtime = Atom.runtime(
+        Layer.effect(
+          EnvironmentRegistry.EnvironmentRegistry,
+          Effect.gen(function* () {
+            for (const id of [readyId, peerId]) {
+              supervisors.set(id, {
+                state: yield* SubscriptionRef.make({
+                  ...AVAILABLE_CONNECTION_STATE,
+                  phase: "connected" as const,
+                }),
+                session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
+              } as EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+            }
+            return EnvironmentRegistry.EnvironmentRegistry.of({
+              run: (id, effect) =>
+                Effect.provideService(
+                  effect,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisors.get(id)!,
+                ),
+              followStream: (id, stream) =>
+                Stream.provideService(
+                  stream,
+                  EnvironmentSupervisor.EnvironmentSupervisor,
+                  supervisors.get(id)!,
+                ),
+            } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+          }),
+        ),
+      );
+      Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+      const reads: Array<ProjectId | undefined> = [];
+      let peerFails = false;
+      const refreshed = Promise.withResolvers<void>();
+      const request = vi.spyOn(RpcClient, "request");
+      request.mockImplementation(((_tag: string, input: IssueListInput) =>
+        Effect.suspend(() => {
+          reads.push(input.projectId);
+          if (
+            input.projectId === readyProject &&
+            reads.filter((id) => id === readyProject).length === 2
+          )
+            refreshed.resolve();
+          return input.projectId === peerProject
+            ? peerFails
+              ? Effect.fail(new Error("query failed"))
+              : Effect.succeed(peer)
+            : Effect.succeed(first);
+        })) as unknown as Parameters<typeof request.mockImplementation>[0]);
+      const page = vi.spyOn(RpcClient, "requestGuarded");
+      page.mockImplementation((() =>
+        Effect.succeed({
+          ...first,
+          entries: [row("ready-tail", { projectId: readyProject })],
+          nextCursors: {},
+        })) as unknown as Parameters<typeof page.mockImplementation>[0]);
+      const targets: IssueListTarget[] = [
+        { environmentId: readyId, input: { state: "all", limit: 50, projectId: readyProject } },
+        { environmentId: peerId, input: { state: "all", limit: 50, projectId: peerProject } },
+      ];
+      const registry = AtomRegistry.make();
+      const releases = targets.map((target) => registry.mount(issueEnvironment.list(target)));
+      const root = createRoot(document.createElement("div"));
+      let result: ReturnType<typeof useIssueList>;
+      let refresh: Promise<void> | undefined;
+      function Probe() {
+        const current = useIssueList(targets);
+        useLayoutEffect(() => {
+          result = current;
+        });
+        return null;
+      }
+      try {
+        yield* Effect.all(
+          targets.map((target) => AtomRegistry.getResult(registry, issueEnvironment.list(target))),
+        );
+        yield* Effect.promise(() =>
+          act(async () =>
+            root.render(
+              createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
+            ),
+          ),
+        );
+        const peerQuery = issueEnvironment.list(targets[1]!);
+        if (peerState === "connecting") {
+          const waiting = Promise.withResolvers<void>();
+          const unsubscribe = registry.subscribe(peerQuery, (value) => {
+            if (value.waiting) waiting.resolve();
+          });
+          const releaseAct = Promise.withResolvers<void>();
+          const flush = Promise.resolve(act(async () => releaseAct.promise));
+          const supervisor = supervisors.get(peerId)!;
+          yield* SubscriptionRef.set(supervisor.state, {
+            ...AVAILABLE_CONNECTION_STATE,
+            phase: "connecting" as const,
+          });
+          yield* Effect.promise(() => waiting.promise);
+          releaseAct.resolve();
+          yield* Effect.promise(() => flush);
+          unsubscribe();
+        } else {
+          peerFails = true;
+          const failed = Promise.withResolvers<void>();
+          const unsubscribe = registry.subscribe(peerQuery, (value) => {
+            if (value._tag === "Failure" && !value.waiting) failed.resolve();
+          });
+          yield* Effect.promise(() =>
+            act(async () => {
+              registry.refresh(peerQuery);
+              await failed.promise;
+            }),
+          );
+          unsubscribe();
+          peerFails = false;
+        }
+        let complete = false;
+        const readySettled = Promise.withResolvers<void>();
+        const unsubscribe = registry.subscribe(issueEnvironment.list(targets[0]!), (value) => {
+          if (!value.waiting && reads.filter((id) => id === readyProject).length === 2)
+            readySettled.resolve();
+        });
+        yield* Effect.promise(() =>
+          act(async () => {
+            refresh = result!.onRefresh().then(() => {
+              complete = true;
+            });
+            await refreshed.promise;
+            await readySettled.promise;
+          }),
+        );
+        unsubscribe();
+        expect(complete).toBe(true);
+        expect(result!.refreshing).toBe(false);
+        if (peerState === "connecting") {
+          expect(reads.filter((id) => id === peerProject)).toHaveLength(1);
+          const held = result!.lists.find((source) => source.environmentId === peerId)!.held;
+          expect(held.entries).toEqual(peer.entries);
+          expect(held.nextCursors).toEqual(peer.nextCursors);
+          expect(held.errors).toEqual(peer.errors);
+          yield* Effect.promise(() => act(async () => result!.loadMore()));
+          expect(page).toHaveBeenCalledExactlyOnceWith("issues.list", {
+            ...targets[0]!.input,
+            cursors: first.nextCursors,
+          });
+        } else {
+          expect(reads.filter((id) => id === peerProject)).toHaveLength(3);
+          expect(result!.errors).toEqual([]);
+          expect(page).not.toHaveBeenCalled();
+        }
+        expect(reads.filter((id) => id === readyProject)).toHaveLength(2);
+      } finally {
+        yield* Effect.promise(() => act(async () => root.unmount()));
+        yield* Effect.promise(() => refresh ?? Promise.resolve());
+        for (const release of releases) release();
+        registry.dispose();
+        request.mockRestore();
+        page.mockRestore();
+      }
+    }),
 );

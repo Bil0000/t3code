@@ -164,6 +164,10 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
   const refreshTargets = useCallback(
     async (selected: ReadonlyArray<IssueListTarget>) => {
       if (activeScope.current !== scopeKey || !selected.length || requests.current.refresh) return;
+      const ready = selected.filter(
+        (target) => !registry.get(issueEnvironment.list(target)).waiting,
+      );
+      if (!ready.length) return;
       requests.current.page?.abort();
       delete requests.current.page;
       for (const controller of requests.current.sources) controller.abort();
@@ -172,7 +176,7 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
       requests.current.refresh = controller;
       setLoading({ key: scopeKey, page: false, refresh: true, error: state.error });
       const responses = await Promise.allSettled(
-        selected.map(async (target) => {
+        ready.map(async (target) => {
           const pending = pendingWrites(target);
           for (const [sourceKey, write] of pending)
             requests.current.writes.set(JSON.stringify([target, sourceKey]), write.revision);
