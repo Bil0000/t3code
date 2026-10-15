@@ -337,10 +337,12 @@ function LinkThreadIssueDialog({
               </Button>
             </form>
             <div className="flex gap-2">
-              {sources.length > 1 ? (
+              {sources.length > 1 || (sources.length > 0 && source === null) ? (
                 <Select
                   value={source === null ? "" : sourceValue(source)}
-                  onValueChange={(next) => setSelectedSource(next)}
+                  onValueChange={(next, details) => {
+                    if (details.reason !== "none") setSelectedSource(next);
+                  }}
                 >
                   <SelectTrigger size="sm" className="w-44 shrink-0" aria-label="Issue source">
                     <SelectValue>

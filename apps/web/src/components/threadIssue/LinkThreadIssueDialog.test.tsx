@@ -18,7 +18,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom } from "effect/reactivity";
+import { Atom, AsyncResult } from "effect/reactivity";
 
 const state = vi.hoisted(() => {
   const source = {
@@ -27,7 +27,20 @@ const state = vi.hoisted(() => {
     host: "github.com",
     scope: "org/repo",
     projectTitle: "Project",
-    capabilities: { search: true },
+    capabilities: {
+      create: false,
+      edit: false,
+      comment: false,
+      labels: false,
+      assignees: false,
+      reactions: false,
+      templates: false,
+      linkedPullRequests: false,
+      events: false,
+      search: true,
+      states: [],
+      closeReasons: [],
+    },
   };
   const linked = {
     ...source,
@@ -36,6 +49,13 @@ const state = vi.hoisted(() => {
     title: "Already linked",
     url: "https://github.com/org/repo/issues/1",
     state: { category: "open", name: "open" },
+    author: null,
+    createdAt: "2026-10-14T00:00:00Z",
+    updatedAt: "2026-10-14T00:00:00Z",
+    closedAt: null,
+    labels: [],
+    assignees: [],
+    commentCount: 0,
   };
   return {
     source,
@@ -93,14 +113,22 @@ import { LinkThreadIssueDialogHost, openLinkThreadIssueDialog } from "./LinkThre
 
 const decodeIssueList = Schema.decodeUnknownSync(IssueListResult);
 
-it("links the chosen account and blocks it after that account disappears", async () => {
+it("blocks a removed account and keeps drafts for explicitly choosing its replacement", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const original = state.list;
   const a = { ...state.source, connectionId: "A" };
   const b = { ...a, connectionId: "B" };
-  const rowA = { ...state.linked, ...a, key: "42", title: "A issue" };
+  const rowA = {
+    ...state.linked,
+    ...a,
+    key: "42",
+    url: "https://github.com/org/repo/issues/42",
+    title: "A issue",
+  };
   const rowB = { ...rowA, ...b, title: "B issue" };
   state.list = { ...original, sources: [a, b], entries: [rowA, rowB], nextCursors: {} };
+  const query = Atom.make(AsyncResult.success(decodeIssueList(state.list))).pipe(Atom.keepAlive);
+  const list = vi.spyOn(issueEnvironment, "list").mockReturnValue(query);
   state.read.mockReset().mockResolvedValue({ _tag: "Success", value: rowB });
   state.link.mockReset().mockResolvedValue({ _tag: "Failure" });
   state.resolve.mockReset();
@@ -139,26 +167,76 @@ it("links the chosen account and blocks it after that account disappears", async
       input: expect.objectContaining({ connectionId: "B", key: "42" }),
     });
     expect(state.read).not.toHaveBeenCalled();
+    for (const [label, value] of [
+      ["Issue URL", rowB.url],
+      ["Search issues", "draft query"],
+      ["Issue scope", "org/repo"],
+      ["Issue key", "42"],
+    ]) {
+      const input = document.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          input,
+          value,
+        );
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
     state.list = { ...state.list, sources: [a], entries: [rowA] };
-    await act(async () => render());
+    await act(async () =>
+      appAtomRegistry.set(query, AsyncResult.success(decodeIssueList(state.list))),
+    );
     expect(document.querySelector('[aria-label="Issue key"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Issue source"]')).not.toBeNull();
     const url = document.querySelector<HTMLInputElement>('[aria-label="Issue URL"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-        url,
-        rowB.url,
-      );
-      url.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    expect(url.value).toBe(rowB.url);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Search issues"]')?.disabled).toBe(
+      true,
+    );
     await act(async () =>
       url.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
     );
     expect(state.resolve).not.toHaveBeenCalled();
     expect(state.link).toHaveBeenCalledOnce();
+    await act(async () => {
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Issue source"]')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    const replacement = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.endsWith(" · A"),
+    )!;
+    await act(async () => replacement.click());
+    for (const [label, value] of [
+      ["Issue URL", rowB.url],
+      ["Search issues", "draft query"],
+      ["Issue scope", "org/repo"],
+      ["Issue key", "42"],
+    ])
+      expect(document.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)?.value).toBe(
+        value,
+      );
+    state.read.mockResolvedValue({ _tag: "Success", value: rowA });
+    state.link.mockResolvedValueOnce({ _tag: "Success" });
+    await act(async () => {
+      document
+        .querySelector<HTMLInputElement>('[aria-label="Issue key"]')!
+        .closest("form")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(state.read).toHaveBeenCalledOnce();
+    expect(state.resolve).not.toHaveBeenCalled();
+    expect(state.link).toHaveBeenCalledTimes(2);
+    expect(state.link).toHaveBeenLastCalledWith({
+      environmentId: "environment",
+      input: expect.objectContaining({ connectionId: "A", key: "42", url: rowA.url }),
+    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   } finally {
     await act(async () => root.unmount());
     container.remove();
     state.list = original;
+    list.mockRestore();
     vi.unstubAllGlobals();
   }
 });
