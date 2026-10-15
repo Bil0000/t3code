@@ -68,6 +68,9 @@ export const JiraIssue = Schema.Struct({
     reporter: Schema.optional(Schema.NullOr(JiraUser)),
     assignee: Schema.optional(Schema.NullOr(JiraUser)),
     labels: Schema.optional(Schema.Array(NonEmpty)),
+    fixVersions: Schema.optional(
+      Schema.Array(Schema.Struct({ name: NonEmpty })).check(Schema.isMaxLength(100)),
+    ),
     comment: Schema.optional(
       Schema.Struct({
         total: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -242,6 +245,7 @@ export function normalizeJiraIssue(value: unknown, host: string): TrackerIssueSu
     closedAt: fields.resolutiondate ? jiraDate(fields.resolutiondate) : null,
     assignees: fields.assignee ? [jiraActor(fields.assignee)] : [],
     labels: (fields.labels ?? []).map((name) => ({ name, color: null })),
+    milestone: fields.fixVersions?.map((version) => version.name).join(", ") || null,
     commentCount: fields.comment?.total ?? 0,
   };
 }

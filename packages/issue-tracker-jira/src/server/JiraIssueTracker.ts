@@ -144,6 +144,7 @@ const issueFields = [
   "updated",
   "resolutiondate",
   "comment",
+  "fixVersions",
 ];
 const permissionNames =
   "CREATE_ISSUES,EDIT_ISSUES,ADD_COMMENTS,ASSIGN_ISSUES,TRANSITION_ISSUES,EDIT_ALL_COMMENTS,EDIT_OWN_COMMENTS";

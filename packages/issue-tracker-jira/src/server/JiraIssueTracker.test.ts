@@ -5,6 +5,8 @@ import * as SourceControlRateLimit from "@t3tools/source-control-core/server/Sou
 import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
+import * as Schema from "effect/Schema";
+import { IssueSummary, IssueTrackerKind } from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 
@@ -17,6 +19,7 @@ const packed = JSON.stringify({
   token: "fake-token",
 });
 const target = { cwd: "/tmp", host: "example.atlassian.net", scope: "ENG", key: "ENG-1" };
+const decodeIssueSummary = Schema.decodeEffect(IssueSummary);
 const user = { accountId: "native-account", displayName: "Ada" };
 const issue = {
   id: "1",
@@ -100,6 +103,80 @@ function body(request: HttpClientRequest.HttpClientRequest | undefined): unknown
   if (request?.body._tag !== "Uint8Array") throw new Error("Expected JSON request");
   return JSON.parse(new TextDecoder().decode(request.body.body));
 }
+
+it.effect.each([
+  { fixVersions: undefined },
+  { fixVersions: [] },
+  { fixVersions: [{ name: "Version 7" }] },
+  { fixVersions: [{ name: "Version 7" }, { name: "Version 8" }] },
+])("retains native fix versions in list, detail, and wire summaries: %j", ({ fixVersions }) =>
+  Effect.gen(function* () {
+    const native = {
+      ...issue,
+      changelog: { startAt: 0, total: 0, histories: [] },
+      fields: { ...issue.fields, fixVersions, comment: { total: 0, startAt: 0, comments: [] } },
+    };
+    const f = fakeJira((request) => {
+      if (request.url.includes("/search/jql")) return { body: { issues: [native], isLast: true } };
+      if (request.url.endsWith("/myself")) return { body: user };
+      if (request.url.includes("/mypermissions?")) return { body: { permissions: {} } };
+      return { body: native };
+    });
+    const api = yield* f.api;
+    const page = yield* api.listIssues({
+      ...target,
+      state: "all",
+      involvement: "all",
+      viewer: user.accountId,
+      limit: 20,
+    });
+    expect(f.calls).toHaveLength(1);
+    const detail = yield* api.getIssue(target);
+    const milestone = fixVersions?.map(({ name }) => name).join(", ") || null;
+    for (const summary of [page.items[0]!, detail]) {
+      expect(summary.milestone).toBe(milestone);
+      const wire = yield* decodeIssueSummary({
+        ...summary,
+        tracker: IssueTrackerKind.make("jira"),
+        host: target.host,
+        scope: target.scope,
+      });
+      expect(wire.milestone).toBe(milestone);
+    }
+    expect(f.calls).toHaveLength(4);
+    expect(body(f.calls[0])).toMatchObject({ fields: expect.arrayContaining(["fixVersions"]) });
+    expect(new URL(f.calls[1]!.url).searchParams.get("fields")?.split(",")).toContain(
+      "fixVersions",
+    );
+    expect(f.calls.map(({ method }) => method)).toEqual(["POST", "GET", "GET", "GET"]);
+  }),
+);
+
+it.effect.each([null, 100, 101])(
+  "enforces the native fix-version shape and saved 100-version limit: %s",
+  (count) =>
+    Effect.gen(function* () {
+      const fixVersions =
+        count === null ? null : Array.from({ length: count }, () => ({ name: "Version" }));
+      const f = fakeJira(() => ({
+        body: { issues: [{ ...issue, fields: { ...issue.fields, fixVersions } }], isLast: true },
+      }));
+      const api = yield* f.api;
+      const request = api.listIssues({
+        ...target,
+        state: "all",
+        involvement: "all",
+        viewer: user.accountId,
+        limit: 20,
+      });
+      if (count === 100)
+        expect((yield* request).items[0]?.milestone).toBe(
+          fixVersions?.map(({ name }) => name).join(", "),
+        );
+      else expect((yield* request.pipe(Effect.flip)).reason).toBe("failed");
+      expect(f.calls).toHaveLength(1);
+    }),
+);
 
 it("accepts Jira Cloud hosts and rejects non-tenant destinations", () => {
   expect(JiraApi.normalizeJiraHost("https://EXAMPLE.atlassian.net/")).toBe("example.atlassian.net");
