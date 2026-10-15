@@ -377,6 +377,41 @@ describe("issue picker confirmed set across sheet close and reopen", () => {
   });
 });
 
+describe("issue picker confirmed set across a viewer change", () => {
+  it.each([
+    { kind: "labels" as const, id: "ui", native: ["bug"] },
+    { kind: "assignees" as const, id: "u-2", native: [] },
+  ])(
+    "drops $kind held for another viewer and keeps it for the same viewer",
+    ({ kind, id, native }) => {
+      const registry = AtomRegistry.make();
+      try {
+        for (const [from, to, held] of [
+          ["A", "B", false],
+          ["A", null, false],
+          [null, "B", false],
+          ["A", "A", true],
+        ] as const) {
+          const before = detail({ viewer: from });
+          const key = issuePickerKey(environmentId, before, kind);
+          const release = registry.mount(issuePickerConfirmed(key));
+          registry.set(issuePickerConfirmed(key), pick(before, kind, null, id));
+          const after = detail({ viewer: to });
+          clearAcknowledgedIssuePicker(registry, key, after, kind, environmentId);
+          const confirmed = registry.get(issuePickerConfirmed(key));
+          expect(issuePickerIds(after, kind, confirmed, environmentId)).toEqual(
+            held ? [...native, id] : native,
+          );
+          expect(confirmed !== null).toBe(held);
+          release();
+        }
+      } finally {
+        registry.dispose();
+      }
+    },
+  );
+});
+
 describe("issue picker write across sheet close and reopen", () => {
   it("refuses a second write while the first is pending, then writes from its confirmed set", async () => {
     const registry = AtomRegistry.make({ defaultIdleTTL: 1, timeoutResolution: 1 });
