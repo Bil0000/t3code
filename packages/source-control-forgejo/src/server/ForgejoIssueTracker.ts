@@ -830,11 +830,13 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         }),
 
       setState: (input) =>
-        issueTarget("setState", input).pipe(
-          Effect.flatMap(({ path }) =>
-            write(input, "setState", { path, method: "PATCH", body: { state: input.state } }),
-          ),
-        ),
+        !CAPABILITIES.states.some((state) => state.name === input.state)
+          ? Effect.fail(refused("setState", "Forgejo supports only the open and closed states."))
+          : issueTarget("setState", input).pipe(
+              Effect.flatMap(({ path }) =>
+                write(input, "setState", { path, method: "PATCH", body: { state: input.state } }),
+              ),
+            ),
 
       setReaction: (input) =>
         Effect.gen(function* () {

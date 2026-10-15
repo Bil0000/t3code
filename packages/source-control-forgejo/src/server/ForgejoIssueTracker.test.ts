@@ -927,6 +927,38 @@ describe("ForgejoIssueTracker", () => {
       }),
   );
 
+  it.effect.each(["done", "CLOSED", "Open", " closed ", "open", "closed"])(
+    "accepts only exact native state names: %s",
+    (state) =>
+      Effect.gen(function* () {
+        const requests: ForgejoCli.ForgejoApiInput[] = [];
+        const api = yield* tracker((input) => {
+          requests.push(input);
+          return { stdout: "{}" };
+        });
+        const result = yield* Effect.result(
+          api.setState!({
+            cwd: "/w",
+            host: "forgejo.test:3000",
+            scope: "Mount/acme/web",
+            key: "42",
+            state,
+          }),
+        );
+        const supported = state === "open" || state === "closed";
+        expect(Result.isSuccess(result)).toBe(supported);
+        if (supported)
+          expect(requests).toMatchObject([
+            { path: "repos/Mount/acme/web/issues/42", method: "PATCH", body: { state } },
+          ]);
+        else
+          expect(result).toMatchObject({
+            failure: { _tag: "IssueTrackerError", operation: "setState", reason: "failed" },
+          });
+        expect(requests).toHaveLength(supported ? 1 : 0);
+      }),
+  );
+
   it.effect.each([
     { name: "populated", milestone: { title: "Release 1" } },
     { name: "null", milestone: null },
