@@ -3,6 +3,7 @@ import {
   type OrchestrationV2Run,
   OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
+  OrchestrationV2ProviderThreadJson,
   OrchestrationV2StoredEvent,
   ProviderThreadId,
   RunAttemptId,
@@ -208,6 +209,10 @@ export class EventSinkV2 extends Context.Service<EventSinkV2, EventSinkV2Shape>(
 /**
  * IMPLEMENTATIONS
  */
+const decodeProviderThreadPayload = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationV2ProviderThreadJson),
+);
+
 const layerBase: Layer.Layer<
   EventSinkV2,
   never,
@@ -548,7 +553,14 @@ const layerBase: Layer.Layer<
             WHERE provider_thread_id = ${input.expected.id}
             LIMIT 1
           `;
-          if (rows[0]?.payload_json !== expectedJson) {
+          const currentJson = rows[0]?.payload_json;
+          const canonicalJson =
+            currentJson === undefined
+              ? undefined
+              : yield* decodeProviderThreadPayload(currentJson).pipe(
+                  Effect.flatMap(ProjectionStore.encodeProviderThreadPayload),
+                );
+          if (canonicalJson !== expectedJson) {
             return {
               committed: false as const,
               storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
