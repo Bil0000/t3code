@@ -412,6 +412,38 @@ describe("issue picker confirmed set across a viewer change", () => {
   );
 });
 
+it.each(["labels", "assignees"] as const)(
+  "keeps cached %s and drops an unknown owner's whole set after a new detail",
+  (kind) => {
+    const registry = AtomRegistry.make();
+    const before = detail({ viewer: null });
+    const key = issuePickerKey(environmentId, before, kind);
+    const held = pick(before, kind, null, "added-by-A");
+    try {
+      registry.set(issuePickerConfirmed(key), held);
+      clearAcknowledgedIssuePicker(registry, key, before, kind, environmentId);
+      expect(
+        issuePickerIds(before, kind, registry.get(issuePickerConfirmed(key)), environmentId),
+      ).toEqual(held.ids);
+      const after = detail({
+        viewer: null,
+        labels: [{ name: "native-B", color: null }],
+        assignees: [{ id: "native-B", login: "B", name: null, avatarUrl: null }],
+      });
+      clearAcknowledgedIssuePicker(registry, key, after, kind, environmentId);
+      const confirmed = registry.get(issuePickerConfirmed(key));
+      expect(issuePickerIds(after, kind, confirmed, environmentId)).toEqual(["native-B"]);
+      expect(nextIssuePickerIds(after, kind, confirmed, "next", environmentId)).toEqual([
+        "native-B",
+        "next",
+      ]);
+      expect(confirmed).toBeNull();
+    } finally {
+      registry.dispose();
+    }
+  },
+);
+
 describe("issue picker write across sheet close and reopen", () => {
   it("refuses a second write while the first is pending, then writes from its confirmed set", async () => {
     const registry = AtomRegistry.make({ defaultIdleTTL: 1, timeoutResolution: 1 });

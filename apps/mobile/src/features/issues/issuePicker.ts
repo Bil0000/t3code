@@ -70,6 +70,7 @@ export function heldIssuePicker(
     confirmed.environmentId !== environmentId ||
     confirmed.kind !== kind ||
     confirmed.base.viewer !== issue.viewer ||
+    (issue.viewer === null && confirmed.base !== issue) ||
     confirmed.base.tracker !== issue.tracker ||
     issueEntryKey(confirmed.base) !== issueEntryKey(issue)
   )

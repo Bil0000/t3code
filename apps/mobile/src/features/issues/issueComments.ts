@@ -11,6 +11,7 @@ export type IssueOlderComments = {
   readonly issue: string;
   readonly viewer: string | null;
   readonly seed: string | null;
+  readonly firstPage: ReadonlyArray<IssueComment>;
   readonly firstIds: ReadonlyArray<string>;
   readonly comments: ReadonlyArray<IssueComment>;
   readonly cursor: string | null;
@@ -20,6 +21,7 @@ export function issueCommentsView(detail: IssueDetail, older: IssueOlderComments
   const held =
     older?.issue === issueEntryKey(detail) &&
     older.viewer === detail.viewer &&
+    (detail.viewer !== null || older.firstPage === detail.comments) &&
     older.seed === detail.commentsCursor &&
     older.firstIds.length === detail.comments.length &&
     older.firstIds.every((id, index) => id === detail.comments[index]?.id)
@@ -41,6 +43,7 @@ export function appendOlderIssueComments(
     issue: issueEntryKey(detail),
     viewer: detail.viewer,
     seed: detail.commentsCursor,
+    firstPage: detail.comments,
     firstIds: detail.comments.map((comment) => comment.id),
     comments: prependIssueComments(
       issueCommentsView(detail, older).held?.comments ?? [],
@@ -125,6 +128,7 @@ export function issueReactionsView(
     )
       return true;
     const reactions = reactionBase(issue, comments, value.subjectId);
+    if (issue.viewer === null && reactions !== undefined && reactions !== value.base) return false;
     return (
       reactions === value.base ||
       (reactions?.find((reaction) => reaction.content === value.content)?.viewerHasReacted ??

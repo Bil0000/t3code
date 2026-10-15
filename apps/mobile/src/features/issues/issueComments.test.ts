@@ -180,6 +180,31 @@ describe("older issue comments across detail re-reads", () => {
     expect(issueCommentsView(detail({ viewer: "b" }), loadedUnknown).held).toBeNull();
   });
 
+  it.each(["viewer", null])(
+    "keeps cached older comments and fences a new unknown-owner first page: %s",
+    (viewer) => {
+      const before = detail({ viewer });
+      const loaded = appendOlderIssueComments(before, null, {
+        comments: [comment("c2", [{ ...heart[0]!, viewerHasReacted: true }])],
+        nextCursor: null,
+      });
+      expect(issueCommentsView({ ...before }, loaded).held).toBe(loaded);
+      const after = { ...before, comments: [...before.comments] };
+      const fresh = issueCommentsView(after, loaded);
+      expect(fresh.comments.map((each) => each.id)).toEqual(
+        viewer === null ? ["c3"] : ["c2", "c3"],
+      );
+      expect(fresh.cursor).toBe(viewer === null ? "page-2" : null);
+      if (viewer !== null) return;
+      const reloaded = appendOlderIssueComments(after, fresh.held, {
+        comments: [comment("c2", heart)],
+        nextCursor: null,
+      });
+      expect(issueCommentsView(after, reloaded).comments[0]?.reactions).toEqual(heart);
+      expect(issueCommentsView({ ...after }, reloaded).cursor).toBeNull();
+    },
+  );
+
   it("shows a confirmed reaction on a held comment so the next tap removes it", () => {
     const reacted = reactOnOlderIssueComment(loaded, "c2", "heart", true);
     expect(issueCommentsView(first, reacted).comments[0]?.reactions).toEqual([
@@ -249,11 +274,45 @@ describe("confirmed mobile issue reactions", () => {
     expect(afterLate.held).toBeNull();
     const unknown = detail({ reactions: heart, viewer: null });
     const unknownHeld = confirmIssueReaction(environmentId, unknown, [], null, "heart", true);
-    expect(
-      issueReactionsView(environmentId, { ...unknown, reactions: [...heart] }, [], unknownHeld)
-        .held,
-    ).not.toBeNull();
+    expect(issueReactionsView(environmentId, { ...unknown }, [], unknownHeld).held).not.toBeNull();
   });
+
+  it.each(
+    [undefined, "c3"].flatMap((subjectId) =>
+      ["viewer", null].flatMap((viewer) =>
+        [false, true].map((reacted) => ({ subjectId, viewer, reacted })),
+      ),
+    ),
+  )(
+    "keeps cached reactions but trusts refreshed unknown owners: %j",
+    ({ subjectId, viewer, reacted }) => {
+      const reactions = [{ ...heart[0]!, count: 2, viewerHasReacted: !reacted }];
+      const before = detail({ viewer, reactions, comments: [comment("c3", reactions)] });
+      const held = confirmIssueReaction(
+        environmentId,
+        before,
+        before.comments,
+        null,
+        "heart",
+        reacted,
+        subjectId,
+      );
+      const cached = { ...before, comments: [...before.comments] };
+      const shown = issueReactionsView(environmentId, cached, cached.comments, held);
+      expect(subjectId === undefined ? shown.reactions : shown.comments[0]?.reactions).toEqual([
+        { ...heart[0]!, count: reacted ? 3 : 1, viewerHasReacted: reacted },
+      ]);
+      const native = [...reactions];
+      const after = { ...before, reactions: native, comments: [comment("c3", native)] };
+      const fresh = issueReactionsView(environmentId, after, after.comments, held);
+      expect(subjectId === undefined ? fresh.reactions : fresh.comments[0]?.reactions).toEqual(
+        viewer === null
+          ? reactions
+          : [{ ...heart[0]!, count: reacted ? 3 : 1, viewerHasReacted: reacted }],
+      );
+      expect(fresh.held).toBe(viewer === null ? null : held);
+    },
+  );
 
   it("holds a confirmed remove against a later add read and removes a last reaction", () => {
     const added = confirmIssueReaction(environmentId, first, first.comments, null, "heart", true);
