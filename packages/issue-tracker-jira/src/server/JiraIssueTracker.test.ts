@@ -1563,6 +1563,42 @@ it.effect("pages label candidates and the bounded Jira assignee search", () =>
   }),
 );
 
+it.effect("continues filtered Jira assignee windows after short and empty results", () =>
+  Effect.gen(function* () {
+    const windows = [
+      [user],
+      [],
+      Array.from({ length: 100 }, (_, index) => ({ ...user, accountId: `later-${index}` })),
+    ];
+    const f = fakeJira((request) => ({
+      body: windows[Number(new URL(request.url).searchParams.get("startAt")) / 100] ?? [],
+    }));
+    const api = yield* f.api;
+    let cursor: string | undefined;
+    for (const [index, users] of windows.entries()) {
+      const page = yield* api.listAssigneeCandidates!({ ...target, limit: 100, cursor });
+      expect(page.items.map(({ id }) => id)).toEqual(users.map(({ accountId }) => accountId));
+      expect(page.nextCursor).toBe(String((index + 1) * 100));
+      expect(page.truncated).toBeUndefined();
+      expect(f.calls).toHaveLength(index + 1);
+      cursor = page.nextCursor!;
+    }
+    expect(yield* api.listAssigneeCandidates!({ ...target, limit: 100, cursor: "900" })).toEqual({
+      items: [],
+      nextCursor: null,
+      truncated: true,
+    });
+    yield* api.listAssigneeCandidates!({ ...target, cursor: "1000" }).pipe(Effect.flip);
+    expect(f.calls.map(({ url }) => new URL(url).search)).toEqual([
+      "?project=ENG&startAt=0&maxResults=100",
+      "?project=ENG&startAt=100&maxResults=100",
+      "?project=ENG&startAt=200&maxResults=100",
+      "?project=ENG&startAt=900&maxResults=100",
+    ]);
+    expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+  }),
+);
+
 it.effect("preserves changelog fields outside the old common event kinds", () =>
   Effect.gen(function* () {
     const f = fakeJira((request) => ({
