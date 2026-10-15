@@ -801,6 +801,10 @@ export function createIssueEnvironmentAtoms<R, E>(
       label: "environment-data:issues:candidates",
       tag: WS_METHODS.issuesCandidates,
       staleTimeMs: 60_000,
+      refreshTrigger: ({ environmentId, input }) =>
+        input.key === undefined
+          ? undefined
+          : historyRefresh({ environmentId, input: { ...input, key: input.key } }),
     }),
     create: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:create",

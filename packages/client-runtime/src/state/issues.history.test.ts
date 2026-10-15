@@ -276,3 +276,158 @@ it.effect.each([
     });
   }),
 );
+
+it.effect.each(
+  [undefined, "ExactB"].flatMap((connectionId) =>
+    ["state", "failed-state", "manual"].map((operation) => ({ connectionId, operation })),
+  ),
+)(
+  "refreshes only affected issue candidates after $operation for $connectionId",
+  ({ connectionId, operation }) =>
+    Effect.gen(function* () {
+      const supervisor = {
+        state: yield* SubscriptionRef.make({ phase: "connected" }),
+        session: yield* SubscriptionRef.make(Option.some({})),
+      } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+      yield* Effect.promise(async () => {
+        const runtime = Atom.runtime(
+          Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
+            run: (_id, effect) =>
+              Effect.provideService(
+                effect,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+            followStream: (_id, stream) =>
+              Stream.provideService(
+                stream,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+          } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+        );
+        const session: AuthSessionState = {
+          authenticated: true,
+          auth: {
+            policy: "remote-reachable",
+            bootstrapMethods: [],
+            sessionMethods: [],
+            sessionCookieName: "test",
+          },
+          scopes: [AuthSourceControlWriteScope],
+          permissions: [AuthSourceControlWriteScope],
+        };
+        const sessionAtom = Atom.make(AsyncResult.success(session));
+        const sessions = vi.spyOn(Session, "createEnvironmentSessionAtoms").mockReturnValue({
+          sessionStateAtom: () => sessionAtom,
+        } as unknown as ReturnType<typeof Session.createEnvironmentSessionAtoms>);
+        let transition = "11";
+        const read = vi.spyOn(RpcClient, "request").mockImplementation((() =>
+          Effect.sync(() => ({
+            states: [
+              {
+                name: transition === "11" ? "Start progress" : "Done",
+                category: "open",
+                transitionId: transition,
+              },
+            ],
+            labels: [],
+            assignees: [],
+            truncated: false,
+          }))) as unknown as typeof RpcClient.request);
+        const write = vi.spyOn(RpcClient, "requestGuarded");
+        write.mockImplementation((() =>
+          operation === "failed-state"
+            ? Effect.fail("Denied")
+            : Effect.sync(() => {
+                transition = "31";
+              })) as unknown as Parameters<typeof write.mockImplementation>[0]);
+        const atoms = createIssueEnvironmentAtoms(runtime);
+        const registry = AtomRegistry.make();
+        const environmentId = EnvironmentId.make("environment");
+        const defaultReference = {
+          projectId: ProjectId.make("project"),
+          tracker: IssueTrackerKind.make("jira"),
+          host: "jira.example/Jira",
+          scope: "ENG",
+          key: "ENG-1",
+        };
+        const reference = {
+          ...defaultReference,
+          ...(connectionId === undefined ? {} : { connectionId }),
+        };
+        const { key: _key, ...scope } = reference;
+        const targets = [
+          { environmentId, input: reference },
+          {
+            environmentId,
+            input: {
+              key: reference.key,
+              scope: reference.scope,
+              host: reference.host,
+              tracker: reference.tracker,
+              projectId: reference.projectId,
+              ...(connectionId === undefined ? {} : { connectionId }),
+            },
+          },
+          { environmentId, input: { ...reference, issueType: "10000" } },
+          { environmentId, input: scope },
+          {
+            environmentId,
+            input: { ...reference, connectionId: connectionId === undefined ? "ExactB" : "exactb" },
+          },
+          { environmentId: EnvironmentId.make("other"), input: reference },
+          { environmentId, input: { ...reference, host: "jira.example/jira" } },
+          { environmentId, input: { ...reference, scope: "OPS" } },
+          { environmentId, input: { ...reference, key: "ENG-2" } },
+          ...(connectionId === undefined ? [] : [{ environmentId, input: defaultReference }]),
+        ];
+        const queries = targets.map((target) => atoms.candidates(target));
+        atoms.candidates({ environmentId, input: { ...reference, issueType: "unopened" } });
+        const releases = queries.map((query) => registry.mount(query));
+        try {
+          await Promise.all(queries.map((query) => executeAtomQuery(registry, query)));
+          releases[2]!();
+          const before = read.mock.calls.length;
+          if (operation === "manual") {
+            transition = "31";
+            registry.update(
+              atoms.historyRefresh({ environmentId, input: reference }),
+              (value) => value + 1,
+            );
+          } else {
+            const result = await atoms.setState.run(registry, {
+              environmentId,
+              input: { ...reference, state: "progress", transitionId: "11" },
+            });
+            expect(result._tag).toBe(operation === "failed-state" ? "Failure" : "Success");
+          }
+          for (const query of queries.slice(0, 2)) {
+            expect(await executeAtomQuery(registry, query)).toMatchObject({
+              _tag: "Success",
+              value: { states: [{ transitionId: transition }] },
+            });
+          }
+          expect(read.mock.calls.length - before).toBe(operation === "failed-state" ? 0 : 2);
+          for (const query of queries.slice(3)) {
+            expect(await executeAtomQuery(registry, query)).toMatchObject({
+              _tag: "Success",
+              value: { states: [{ transitionId: "11" }] },
+            });
+          }
+          expect(read.mock.calls.length - before).toBe(operation === "failed-state" ? 0 : 2);
+          expect(await executeAtomQuery(registry, queries[2]!)).toMatchObject({
+            _tag: "Success",
+            value: { states: [{ transitionId: transition }] },
+          });
+          expect(read.mock.calls.length - before).toBe(operation === "failed-state" ? 0 : 3);
+        } finally {
+          releases.forEach((release) => release());
+          registry.dispose();
+          read.mockRestore();
+          write.mockRestore();
+          sessions.mockRestore();
+        }
+      });
+    }),
+);
