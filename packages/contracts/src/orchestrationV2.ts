@@ -2922,7 +2922,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     ...ThreadIssueKey.fields,
     snapshot: ThreadIssueSnapshot,
-    linkedAt: Schema.optional(ThreadIssueLink.fields.linkedAt),
+    linkedAt: Schema.optional(IsoDateTime),
     linkId: Schema.optional(Schema.NullOr(CommandId)),
   }),
   /** Start or stop the server watching a linked pull request for this thread's agent. */

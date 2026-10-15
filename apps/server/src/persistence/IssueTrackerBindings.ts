@@ -4,7 +4,12 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
-import { IssueTrackerKind, IssueTrackerProjectBinding, ProjectId } from "@t3tools/contracts";
+import {
+  IssueTrackerKind,
+  IssueTrackerProjectBinding,
+  ProjectId,
+  TrimmedNonEmptyString,
+} from "@t3tools/contracts";
 
 import {
   PersistenceDecodeError,
@@ -14,11 +19,26 @@ import {
 
 const BindingRow = Schema.Struct({
   projectId: ProjectId,
-  tracker: IssueTrackerKind,
+  tracker: Schema.Union([
+    IssueTrackerKind,
+    Schema.fromJsonString(
+      Schema.Struct({
+        tracker: IssueTrackerKind,
+        connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+      }),
+    ),
+  ]),
+  nativeTracker: IssueTrackerKind,
   scope: Schema.String,
   host: Schema.NullOr(Schema.String),
   connectionId: Schema.NullOr(Schema.String),
-});
+}).check(
+  Schema.makeFilter((row) =>
+    typeof row.tracker === "string"
+      ? row.tracker === row.nativeTracker && row.connectionId === null
+      : row.tracker.tracker === row.nativeTracker && row.tracker.connectionId === row.connectionId,
+  ),
+);
 
 /**
  * Which standalone issue tracker scope each project reads beside its git host's own issues. A
@@ -62,8 +82,8 @@ const make = Effect.gen(function* () {
     Result: BindingRow,
     execute: () =>
       sql`
-        SELECT project_id AS "projectId", tracker AS "tracker", scope AS "scope", host, connection_id AS "connectionId"
-        FROM issue_tracker_bindings ORDER BY project_id, tracker
+        SELECT project_id AS "projectId", tracker, native_tracker AS "nativeTracker", scope, host, connection_id AS "connectionId"
+        FROM issue_tracker_bindings ORDER BY project_id, native_tracker
       `,
   });
 
@@ -74,7 +94,7 @@ const make = Effect.gen(function* () {
         for (const row of rows) {
           const bindings = grouped.get(row.projectId) ?? [];
           bindings.push({
-            tracker: row.tracker,
+            tracker: row.nativeTracker,
             scope: row.scope,
             ...(row.host === null ? {} : { host: row.host }),
             ...(row.connectionId === null ? {} : { connectionId: row.connectionId }),
@@ -89,11 +109,11 @@ const make = Effect.gen(function* () {
       (input.binding === null
         ? input.tracker === undefined
           ? sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId}`
-          : sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId} AND tracker = ${input.tracker}`
+          : sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId} AND native_tracker = ${input.tracker}`
         : sql`
-            INSERT INTO issue_tracker_bindings (project_id, tracker, scope, host, connection_id, updated_at)
-            VALUES (${input.projectId}, ${input.binding.tracker}, ${input.binding.scope}, ${input.binding.host ?? null}, ${input.binding.connectionId ?? null}, ${input.updatedAt})
-            ON CONFLICT (project_id, tracker)
+            INSERT INTO issue_tracker_bindings (project_id, tracker, native_tracker, scope, host, connection_id, updated_at)
+            VALUES (${input.projectId}, ${input.binding.connectionId === undefined ? input.binding.tracker : JSON.stringify({ tracker: input.binding.tracker, connectionId: input.binding.connectionId })}, ${input.binding.tracker}, ${input.binding.scope}, ${input.binding.host ?? null}, ${input.binding.connectionId ?? null}, ${input.updatedAt})
+            ON CONFLICT (project_id, native_tracker)
             DO UPDATE SET tracker = excluded.tracker, scope = excluded.scope, host = excluded.host, connection_id = excluded.connection_id, updated_at = excluded.updated_at
           `
       ).pipe(
@@ -103,7 +123,7 @@ const make = Effect.gen(function* () {
         ),
       ),
     removeTracker: (tracker, connectionId) =>
-      sql`DELETE FROM issue_tracker_bindings WHERE tracker = ${tracker} AND connection_id IS ${connectionId ?? null}`.pipe(
+      sql`DELETE FROM issue_tracker_bindings WHERE native_tracker = ${tracker} AND connection_id IS ${connectionId ?? null}`.pipe(
         Effect.asVoid,
         Effect.mapError(
           (cause) => new PersistenceSqlError({ operation: "removeIssueTrackerBindings", cause }),

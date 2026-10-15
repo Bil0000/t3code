@@ -901,7 +901,7 @@ export const ThreadIssueLink = Schema.Struct({
   source: ThreadIssueLinkSource,
   linkedAt: IsoDateTime,
   snapshot: Schema.NullOr(ThreadIssueSnapshot),
-});
+}).pipe(issueAccountRequest);
 export type ThreadIssueLink = typeof ThreadIssueLink.Type;
 
 export function issueScopeKeyOf(
