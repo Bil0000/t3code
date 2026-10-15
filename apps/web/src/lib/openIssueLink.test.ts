@@ -9,10 +9,12 @@ import {
   IssueTrackerKind,
   ProjectId,
   ThreadId,
+  RepositoryIdentity,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
 
 const state = vi.hoisted(() => ({
@@ -28,6 +30,16 @@ const state = vi.hoisted(() => ({
   shellListeners: new Set<() => void>(),
   editing: false,
   permission: {},
+  identity: {
+    provider: "forgejo",
+    canonicalKey: "git.acme.test/team/repo",
+    locator: {
+      source: "git-remote" as const,
+      remoteName: "origin",
+      remoteUrl: "https://fake-token@git.acme.test:8443/team/repo.git",
+    },
+    webUrl: undefined as string | undefined,
+  },
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 vi.mock("@effect/atom-react", () => ({
@@ -60,11 +72,7 @@ vi.mock("../state/entities", async () => {
     useProjects: () => [
       {
         environmentId: "env-a",
-        repositoryIdentity: {
-          provider: "forgejo",
-          canonicalKey: "git.acme.test/team/repo",
-          locator: { remoteUrl: "https://fake-token@git.acme.test:8443/team/repo.git" },
-        },
+        repositoryIdentity: state.identity,
       },
     ],
     useServerConfigs: () =>
@@ -110,6 +118,7 @@ import { IssueCommentContent } from "../components/issue/IssueConversation";
 import { writeIssueListPreferences } from "../components/issue/issueListPreferences";
 import { useOpenIssueLink } from "./openIssueLink";
 
+const decodeRepositoryIdentity = Schema.decodeSync(RepositoryIdentity);
 const threadRef = { environmentId: EnvironmentId.make("env-a"), threadId: ThreadId.make("thread") };
 const target = {
   projectId: ProjectId.make("native-project"),
@@ -146,6 +155,15 @@ beforeEach(async () => {
   state.supported = true;
   state.previewGrant = false;
   state.shell = { projectId: "project-a" };
+  state.identity = {
+    ...state.identity,
+    canonicalKey: "git.acme.test/team/repo",
+    locator: {
+      ...state.identity.locator,
+      remoteUrl: "https://fake-token@git.acme.test:8443/team/repo.git",
+    },
+    webUrl: undefined,
+  };
   __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
   state.resolve.mockResolvedValue({ _tag: "Success", value: target });
   state.openExternal.mockResolvedValue(undefined);
@@ -169,6 +187,61 @@ const event = (patch = {}) => ({
 });
 
 describe("native chat issue links", () => {
+  it.each(["not a URL", "ssh://ssh.acme.test/team/repo"])(
+    "keeps the legacy HTTPS authority when a resolved web URL is unusable (%s)",
+    async (webUrl) => {
+      state.identity = { ...state.identity, webUrl };
+      await act(async () => renderer.update(createElement(Hook)));
+      await act(async () =>
+        expect(open(event(), "https://git.acme.test:8443/team/repo/issues/42")).toBe(true),
+      );
+      expect(state.resolve).toHaveBeenCalledOnce();
+    },
+  );
+  it.each(["team/repo", "Root/Mount/Team/Repo"])(
+    "recognizes the resolved Forgejo web authority for an SSH identity (%s)",
+    async (scope) => {
+      const webUrl = `https://git.acme.test:8443/${scope}`;
+      const identity = decodeRepositoryIdentity({
+        ...state.identity,
+        canonicalKey: "ssh.acme.test/team/repo",
+        locator: { ...state.identity.locator, remoteUrl: "git@ssh.acme.test:team/repo.git" },
+        webUrl,
+      });
+      state.identity = { ...identity, provider: "forgejo", webUrl: identity.webUrl };
+      const resolved = {
+        ...target,
+        tracker: IssueTrackerKind.make("forgejo"),
+        host: "git.acme.test:8443",
+        scope,
+        key: "42",
+      };
+      state.resolve.mockResolvedValue({ _tag: "Success", value: resolved });
+      await act(async () => renderer.update(createElement(Hook)));
+      const url = `${webUrl}/issues/42`;
+      await act(async () => expect(open(event(), url)).toBe(true));
+      expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+        environmentId: threadRef.environmentId,
+        input: { url, projectId: "project-a" },
+      });
+      expect(surfaces(threadRef)).toMatchObject([
+        { tracker: "forgejo", host: resolved.host, scope, key: "42", url },
+      ]);
+      state.resolve.mockClear();
+      for (const [outside, environmentId] of [
+        ["https://git.acme.test:9443/team/repo/issues/42", threadRef.environmentId],
+        ["https://unrelated.example/team/repo/issues/42", threadRef.environmentId],
+        [`${webUrl}/docs/42`, threadRef.environmentId],
+        [url, EnvironmentId.make("env-b")],
+      ] as const) {
+        const click = event();
+        expect(open(click, outside, environmentId)).toBe(false);
+        expect(click.preventDefault).not.toHaveBeenCalled();
+      }
+      expect(state.resolve).not.toHaveBeenCalled();
+    },
+  );
+
   it("retains the resolved account in the standalone tab and URL without changing list preferences", async () => {
     standalone = true;
     writeIssueListPreferences({ who: "all", status: "open", connectionId: "list-account" });
