@@ -34,15 +34,17 @@ export function useOpenIssueLink(options?: {
           projects.some((project) => {
             const identity = project.repositoryIdentity;
             const tracker = identity?.provider;
-            return (
-              project.environmentId === target &&
-              tracker !== undefined &&
-              tracker !== "unknown" &&
-              parseIssueUrl(url, {
-                tracker,
-                host: pullRequestHostOf(identity, SourceControlProviderKind.make(tracker)),
-              }) !== null
-            );
+            if (project.environmentId !== target || tracker === undefined || tracker === "unknown")
+              return false;
+            const kind = SourceControlProviderKind.make(tracker);
+            let host = pullRequestHostOf(identity, kind);
+            if (tracker === "forgejo" && identity?.webUrl !== undefined) {
+              host = pullRequestHostOf(
+                { canonicalKey: host, locator: { remoteUrl: identity.webUrl } },
+                kind,
+              );
+            }
+            return parseIssueUrl(url, { tracker, host }) !== null;
           }));
       if (candidate) {
         const resolved = await issueEnvironment.resolveUrl.run(registry, {

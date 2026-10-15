@@ -3,10 +3,12 @@ import { RegistryContext } from "@effect/atom-react";
 import {
   AuthOrchestrationReadScope,
   EnvironmentId,
+  RepositoryIdentity,
   WS_METHODS,
   type AuthSessionState,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -99,6 +101,8 @@ vi.mock("../state/issues", async () => {
 
 import { githubMarkdownLinks } from "@t3tools/shared/githubMarkdownLinks";
 import { useOpenIssueLink } from "./useOpenIssueLink";
+
+const decodeRepositoryIdentity = Schema.decodeSync(RepositoryIdentity);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -250,6 +254,68 @@ it("carries a PR body's generated #N link to the issue route as its original URL
   expect(harness.issues).toMatchObject([{ originalURL: "https://github.com/acme/app/issues/456" }]);
   expect(harness.external).toEqual([]);
 });
+
+it.each(["team/repo", "Root/Mount/Team/Repo"])(
+  "opens an SSH Forgejo checkout's issue at its resolved web authority (%s)",
+  async (scope) => {
+    const webUrl = `https://git.acme.test:8443/${scope}`;
+    harness.projects = [
+      {
+        environmentId: "thread-env",
+        id: "forgejo-project",
+        repositoryIdentity: decodeRepositoryIdentity({
+          canonicalKey: "ssh.acme.test/team/repo",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "git@ssh.acme.test:team/repo.git",
+          },
+          webUrl,
+          provider: "forgejo",
+        }),
+      },
+    ];
+    const url = `${webUrl}/issues/42`;
+    expect(await open(url)).toBe(true);
+    expect(calls).toEqual([
+      {
+        environmentId: EnvironmentId.make("thread-env"),
+        input: { url, projectId: "thread-project" },
+      },
+    ]);
+    expect(harness.issues).toMatchObject([{ projectId: "server-project", originalURL: url }]);
+    calls = [];
+    for (const outside of [
+      "https://git.acme.test:9443/team/repo/issues/42",
+      "https://unrelated.internal/team/repo/issues/42",
+      `${webUrl}/docs/42`,
+    ]) {
+      await open(outside);
+    }
+    await open(url, { context: { environmentId: "panel-env", projectId: "panel-project" } });
+    expect(calls).toEqual([]);
+  },
+);
+
+it.each(["not a URL", "ssh://ssh.acme.test/team/repo"])(
+  "keeps the remote's HTTPS authority when the resolved web URL is unusable (%s)",
+  async (webUrl) => {
+    harness.projects = [
+      {
+        environmentId: "thread-env",
+        id: "forgejo-project",
+        repositoryIdentity: {
+          provider: "forgejo",
+          canonicalKey: "git.acme.test/team/repo",
+          locator: { remoteUrl: "https://git.acme.test:8443/team/repo.git" },
+          webUrl,
+        },
+      },
+    ];
+    expect(await open("https://git.acme.test:8443/team/repo/issues/42")).toBe(true);
+    expect(calls).toHaveLength(1);
+  },
+);
 
 it.each(["https://github.com/acme/app/issues/7", "https://code.panel.internal/acme/app/issues/7"])(
   "asks the source panel's environment and project, not the thread's, for %s",
