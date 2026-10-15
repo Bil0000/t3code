@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
@@ -26,6 +27,9 @@ const ISSUE = {
 /** Every endpoint the detail read touches, answered by the path `glab api` is given. */
 function answer(path: string): string {
   if (path === "user") return encode({ username: "julius" });
+  if (path.startsWith("projects/acme%2Fweb/issues/42/award_emoji")) {
+    return encode([{ id: 1, name: "eyes", user: { username: "theo" } }]);
+  }
   if (path === "projects/acme%2Fweb/issues/42") return encode(ISSUE);
   if (path.startsWith("projects/acme%2Fweb/issues/42/resource_label_events")) {
     return encode([
@@ -74,9 +78,8 @@ function answer(path: string): string {
         currentUser: { username: "julius" },
         project: {
           mergeRequest: {
-            awardEmoji: { nodes: [{ name: "eyes", user: { username: "theo" } }] },
             notes: {
-              pageInfo: { hasNextPage: false },
+              pageInfo: { hasPreviousPage: false, startCursor: "native-note-7" },
               nodes: [
                 {
                   id: "gid://gitlab/Note/7",
@@ -126,6 +129,151 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect("shows a new reply beyond 100 notes and pages back into older notes", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      let count = 100;
+      const notes = Array.from({ length: 101 }, (_, index) => ({
+        id: `gid://gitlab/Note/${index + 1}`,
+        body: `Reply ${index + 1}`,
+        createdAt: DateTime.formatIso(
+          DateTime.add(DateTime.makeUnsafe("2026-07-01T00:00:00Z"), { minutes: index }),
+        ),
+        author: { username: "julius" },
+      }));
+      const api = yield* tracker((args, stdin) => {
+        const path = args[1]!;
+        paths.push(path);
+        if (path === "projects/acme%2Fweb/issues/42/notes") {
+          expect(args).toContain("POST");
+          expect(JSON.parse(stdin!)).toEqual({ body: "Reply 101" });
+          count++;
+          return "{}";
+        }
+        if (path === "projects/acme%2Fweb/issues/42")
+          return encode({ ...ISSUE, user_notes_count: count });
+        if (path !== "graphql") return answer(path);
+        const request = JSON.parse(stdin!);
+        const backward = request.query.includes("notes(last: 100, before: $cursor)");
+        const cursor = request.variables.cursor;
+        const position = cursor === undefined ? undefined : Number(cursor.split("-").at(-1)) - 1;
+        const start = backward ? Math.max(0, (position ?? count) - 100) : (position ?? -1) + 1;
+        const end = backward ? (position ?? count) : Math.min(count, start + 100);
+        return encode({
+          data: {
+            currentUser: { username: "julius" },
+            project: {
+              mergeRequest: {
+                notes: {
+                  pageInfo: backward
+                    ? { hasPreviousPage: start > 0, startCursor: `native-note-${start + 1}` }
+                    : { hasNextPage: end < count, endCursor: `native-note-${end}` },
+                  nodes: notes.slice(start, end),
+                },
+              },
+            },
+          },
+        });
+      });
+      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const initial = yield* api.getIssue(target);
+      expect(initial.comments).toHaveLength(100);
+      expect(initial.commentsCursor).toBeNull();
+      expect(paths).toHaveLength(6);
+      yield* api.comment!({ ...target, body: "Reply 101" });
+      const refreshed = yield* api.getIssue(target);
+      expect(refreshed.commentCount).toBe(101);
+      expect(refreshed.comments.map((comment) => comment.id)).toEqual(
+        Array.from({ length: 100 }, (_, index) => String(index + 2)),
+      );
+      expect(refreshed.commentsCursor).toBe("native-note-2");
+      expect(refreshed.historyTruncated).toBe(true);
+      expect(paths).toHaveLength(13);
+      const older = yield* api.getComments({ ...target, cursor: refreshed.commentsCursor! });
+      expect(older.comments.map((comment) => comment.id)).toEqual(["1"]);
+      expect(older.nextCursor).toBeNull();
+      expect(paths).toHaveLength(14);
+      expect(paths.filter((path) => path === "graphql")).toHaveLength(3);
+      expect(paths).not.toContain("user");
+    }),
+  );
+
+  it.effect.each(["getIssue", "getComments"] as const)(
+    "uses valid native issue fields in %s and preserves viewer reactions",
+    (operation) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args, stdin) => {
+          const path = args[1]!;
+          paths.push(path);
+          if (path.includes("/award_emoji")) {
+            expect(path).toBe("projects/acme%2Fweb/issues/42/award_emoji?per_page=100&page=1");
+            return encode([
+              { id: 1, name: "thumbsup", user: { username: "Julius" } },
+              { id: 2, name: "thumbsup", user: { username: "theo" } },
+            ]);
+          }
+          if (path !== "graphql") return answer(path);
+          const request = JSON.parse(stdin!);
+          if (/mergeRequest: issue\([^)]*\)\s*\{\s*awardEmoji/.test(request.query)) {
+            return encode({
+              errors: [{ message: "Field 'awardEmoji' doesn't exist on type 'Issue'" }],
+            });
+          }
+          expect(request.query.match(/\bawardEmoji\(/g)).toHaveLength(1);
+          expect(request.query).toMatch(
+            /nodes\s*\{\s*id body createdAt system\s*author\s*\{[^}]*\}\s*awardEmoji\(first: 100\)/,
+          );
+          return answer(path);
+        });
+        const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+        if (operation === "getIssue") {
+          const detail = yield* api.getIssue(target);
+          expect(detail.viewer).toBe("julius");
+          expect(detail.reactions).toEqual([
+            { content: "thumbs-up", count: 2, actors: ["theo"], viewerHasReacted: true },
+          ]);
+          expect(detail.reactionsTruncated).toBe(false);
+          expect(paths).toHaveLength(6);
+          expect(paths).not.toContain("user");
+        } else {
+          const page = yield* api.getComments({ ...target, cursor: "native-note-7" });
+          expect(page.comments[0]?.reactions).toEqual([
+            { content: "thumbs-up", count: 2, actors: ["theo"], viewerHasReacted: true },
+          ]);
+          expect(paths).toEqual(["graphql"]);
+        }
+      }),
+  );
+
+  it.effect.each(["invalid JSON", "missing page info", "missing viewer"] as const)(
+    "refuses a continuation with %s instead of returning an empty terminal page",
+    (failure) =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const api = yield* tracker(() => {
+          reads++;
+          if (failure === "invalid JSON") return "{";
+          const response = JSON.parse(answer("graphql"));
+          if (failure === "missing page info")
+            delete response.data.project.mergeRequest.notes.pageInfo;
+          else response.data.currentUser = null;
+          return encode(response);
+        });
+        const error = yield* Effect.flip(
+          api.getComments({
+            cwd: "/w",
+            host: "gitlab.com",
+            scope: "acme/web",
+            key: "42",
+            cursor: "native-note-7",
+          }),
+        );
+        expect(error).toMatchObject({ operation: "getComments", reason: "failed" });
+        expect(reads).toBe(1);
+      }),
+  );
+
   it.effect.each([
     { mode: "body", name: "missing content", raw: "{}", truncated: false },
     { mode: "body", name: "null content", raw: '{"content":null}', truncated: false },
@@ -515,9 +663,8 @@ describe("GitLabIssueTracker", () => {
             currentUser: { username: "julius" },
             project: {
               mergeRequest: {
-                awardEmoji: { nodes: [] },
                 notes: {
-                  pageInfo: { hasNextPage: true, endCursor: "native-next" },
+                  pageInfo: { hasPreviousPage: true, startCursor: "native-next" },
                   nodes: [
                     {
                       id: "gid://gitlab/Note/107",
@@ -563,18 +710,22 @@ describe("GitLabIssueTracker", () => {
       const api = yield* tracker((args) => {
         const path = args[1]!;
         paths.push(path);
+        if (path.includes("/award_emoji"))
+          return encode(
+            Array.from({ length: 100 }, (_, id) => ({
+              id,
+              name: "eyes",
+              user: { username: "theo" },
+            })),
+          );
         if (path !== "graphql") return answer(path);
         return encode({
           data: {
             currentUser: { username: "julius" },
             project: {
               mergeRequest: {
-                awardEmoji: {
-                  pageInfo: { hasNextPage: true },
-                  nodes: [{ name: "eyes", user: { username: "theo" } }],
-                },
                 notes: {
-                  pageInfo: { hasNextPage: true, endCursor: "native-next" },
+                  pageInfo: { hasPreviousPage: true, startCursor: "native-next" },
                   nodes: [
                     {
                       id: "gid://gitlab/Note/108",

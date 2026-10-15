@@ -26,6 +26,7 @@ import * as GitLabCli from "./GitLabCli.ts";
 import {
   decodeCreatedIssueJson,
   decodeIssueAwardPageJson,
+  decodeIssueAwardsJson,
   decodeIssueDetailJson,
   decodeIssueListJson,
   decodeIssueOwnAwardPageJson,
@@ -39,7 +40,7 @@ import {
   PAGE_SIZE,
   type GitLabTemplateEntry,
 } from "./gitLabIssueJson.ts";
-import { decodeViewerJson, gitLabAwardName } from "./gitLabMergeRequestJson.ts";
+import { decodeViewerJson, gitLabAwardName, toReactions } from "./gitLabMergeRequestJson.ts";
 
 const KIND = IssueTrackerKind.make("gitlab");
 
@@ -373,7 +374,13 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                   path,
                   decode: decodeIssueDetailJson,
                 }),
-                viewer({ cwd: input.cwd, host: input.host, operation: "getIssue" }),
+                read({
+                  cwd: input.cwd,
+                  host: input.host,
+                  operation: "getIssue",
+                  path: paged(`${path}/award_emoji`, 1),
+                  decode: decodeIssueAwardsJson,
+                }),
                 read({
                   cwd: input.cwd,
                   host: input.host,
@@ -399,14 +406,14 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
               { concurrency: 4 },
             ),
           ),
-          Effect.map(([issue, viewerLogin, labelEvents, closing, related, awardPage]) => {
+          Effect.map(([issue, issueAwards, labelEvents, closing, related, awardPage]) => {
             const closingKeys = new Set(closing.map((link) => `${link.repository}!${link.number}`));
             return {
               ...issue,
-              viewer: viewerLogin,
+              viewer: awardPage.viewer,
               viewerPermissions: VIEWER_PERMISSIONS,
-              reactions: awardPage.reactions,
-              reactionsTruncated: awardPage.reactionsTruncated,
+              reactions: toReactions({ nodes: issueAwards }, awardPage.viewer),
+              reactionsTruncated: issueAwards.length >= PAGE_SIZE,
               comments: awardPage.comments,
               commentsCursor: awardPage.nextCursor,
               historyTruncated: awardPage.nextCursor !== null || labelEvents.rawCount >= PAGE_SIZE,

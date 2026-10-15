@@ -402,17 +402,12 @@ export function decodeTemplateJson(
   }));
 }
 
-/**
- * Awards on the issue and on every note of it, in one read, shaped exactly like the merge request
- * query so its decoder answers for both: `mergeRequest` is an alias for the issue field.
- */
 export const ISSUE_AWARD_EMOJI_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: String!, $cursor: String) {
   currentUser { username }
   project(fullPath: $fullPath) {
     mergeRequest: issue(iid: $iid) {
-      awardEmoji(first: ${PAGE_SIZE}) { pageInfo { hasNextPage } nodes { name user { username } } }
-      notes(first: ${PAGE_SIZE}, after: $cursor) {
-        pageInfo { hasNextPage endCursor }
+      notes(last: ${PAGE_SIZE}, before: $cursor) {
+        pageInfo { hasPreviousPage startCursor }
         nodes {
           id body createdAt system
           author { id username name avatarUrl }
@@ -450,14 +445,29 @@ const RawGraphNoteSchema = Schema.Struct({
 const decodeIssueAwardPage = decodeJsonResult(
   Schema.Struct({
     data: Schema.Struct({
+      currentUser: Schema.Struct({ username: Schema.String.check(Schema.isPattern(/\S/)) }),
       project: Schema.Struct({
         mergeRequest: Schema.Struct({
-          awardEmoji: RawAwardPageInfoSchema,
-          notes: Schema.Struct({ nodes: Schema.Array(Schema.NullOr(RawGraphNoteSchema)) }),
+          notes: Schema.Struct({
+            pageInfo: Schema.Struct({
+              hasPreviousPage: Schema.Boolean,
+              startCursor: Schema.NullOr(Schema.String),
+            }),
+            nodes: Schema.Array(Schema.NullOr(RawGraphNoteSchema)),
+          }),
         }),
       }),
     }),
   }),
+);
+
+export const decodeIssueAwardsJson = decodeJsonResult(
+  Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      user: Schema.optional(Schema.NullOr(Schema.Struct({ username: Schema.String }))),
+    }),
+  ),
 );
 
 function nativeId(id: string | undefined): number | undefined {
@@ -477,8 +487,12 @@ export function decodeIssueAwardPageJson(raw: string) {
       );
       return {
         ...awards,
+        viewer: data.currentUser.username.trim(),
+        nextCursor:
+          issue.notes.pageInfo.hasPreviousPage === true
+            ? trimmed(issue.notes.pageInfo.startCursor)
+            : null,
         events: notes.events,
-        reactionsTruncated: issue.awardEmoji?.pageInfo?.hasNextPage === true,
         comments: notes.comments.map((comment) => ({
           ...comment,
           reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
