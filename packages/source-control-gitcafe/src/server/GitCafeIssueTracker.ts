@@ -250,8 +250,14 @@ export const make = Effect.gen(function* () {
             ? undefined
             : STATES.filter(
                 (value) =>
-                  value !== "triage" &&
-                  input.stateCategories!.includes(value) &&
+                  (value === "triage"
+                    ? input.stateCategories!.some(
+                        (category) =>
+                          category === "backlog" ||
+                          category === "unstarted" ||
+                          category === "started",
+                      )
+                    : input.stateCategories!.includes(value)) &&
                   (input.state === "all" || Json.state(value).category === input.state),
               );
         if (states?.length === 0) return { items: [], nextCursor: null };

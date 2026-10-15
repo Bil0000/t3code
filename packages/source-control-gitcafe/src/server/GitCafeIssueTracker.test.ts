@@ -311,6 +311,50 @@ describe("GitCafeIssueTracker", () => {
     }).pipe(Effect.provide(fake.layer));
   });
 
+  it.effect.each([
+    {
+      categories: ["backlog", "unstarted", "started"],
+      state: "open",
+      states: ["triage", "backlog", "unstarted", "started"],
+    },
+    { categories: ["backlog"], state: "open", states: ["triage", "backlog"] },
+    { categories: ["unstarted"], state: "open", states: ["triage", "unstarted"] },
+    { categories: ["started"], state: "open", states: ["triage", "started"] },
+    { categories: ["completed", "canceled"], state: "closed", states: ["completed", "canceled"] },
+    { categories: ["backlog", "unstarted", "started"], state: "closed", states: [] },
+  ] as const)(
+    "keeps triage reachable for $state categories $categories",
+    ({ categories, state, states }) => {
+      const fake = harness({
+        "GET /repos/owner/repo/issues/": ({ query }: Sent) => ({
+          items: query.getAll("states").includes("triage") ? [issue] : [],
+          next: null,
+        }),
+      });
+      return Effect.gen(function* () {
+        const api = yield* GitCafeIssueTracker.make;
+        const result = yield* api.listIssues({
+          ...target,
+          state,
+          stateCategories: categories,
+          involvement: "all",
+          viewer: "alice",
+          limit: 50,
+        });
+        assert.strictEqual(result.items.length, states.some((value) => value === "triage") ? 1 : 0);
+        if (states.length === 0) assert.strictEqual(fake.sent.length, 0);
+        else {
+          assert.strictEqual(fake.sent.length, 1);
+          assert.deepStrictEqual(fake.sent[0]!.query.getAll("states"), [...states]);
+          if (result.items.length > 0) {
+            assert.strictEqual(result.items[0]?.state.id, "triage");
+            assert.strictEqual(result.items[0]?.state.category, "open");
+          }
+        }
+      }).pipe(Effect.provide(fake.layer));
+    },
+  );
+
   it.effect("handles terminal pages, empty categories and account changes without guessing", () => {
     const fake = harness({ "GET /repos/owner/repo/issues/": page });
     return Effect.gen(function* () {
