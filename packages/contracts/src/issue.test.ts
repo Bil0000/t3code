@@ -23,6 +23,7 @@ import {
   IssueTrackerProjectBinding,
   StandaloneIssueTrackerDescriptor,
   ThreadIssueLink,
+  threadIssueKeyOf,
 } from "./issue.ts";
 
 const decodeDescriptor = Schema.decodeEffect(StandaloneIssueTrackerDescriptor);
@@ -35,6 +36,21 @@ const decodeTemplateRpc = Schema.decodeUnknownSync(
   WsIssuesRpcGroup.requests.get(WS_METHODS.issuesTemplates)!.payloadSchema,
 );
 const decodeTemplate = Schema.decodeUnknownSync(IssueTemplate);
+
+it.each([
+  { tracker: "linear", key: "eng-7", canonical: "ENG-7", equal: true },
+  { tracker: "jira", key: "ops-7", canonical: "OPS-7", equal: true },
+  { tracker: "custom-tracker", key: "eng-7", canonical: "ENG-7", equal: false },
+  { tracker: "github", key: "7", canonical: "7", equal: true },
+  { tracker: "gitlab", key: "7", canonical: "07", equal: false },
+])("matches $tracker keys with their native case rules", ({ tracker, key, canonical, equal }) => {
+  const identity = { tracker, host: "example.com", scope: "workspace/team", key: canonical };
+  const saved = { tracker, host: " Example.COM ", scope: " Workspace/TEAM ", key: ` ${key} ` };
+  expect(threadIssueKeyOf(saved) === threadIssueKeyOf(identity)).toBe(equal);
+  expect(threadIssueKeyOf(identity)).not.toBe(
+    threadIssueKeyOf({ ...identity, tracker: tracker.toUpperCase() }),
+  );
+});
 
 it("carries template selection through the existing RPC and retains required inline bodies", () => {
   const input = {

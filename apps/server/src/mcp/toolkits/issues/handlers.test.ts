@@ -731,14 +731,25 @@ describe("issue toolkit handlers", () => {
     }),
   );
 
-  it.effect("links by key through the thread's project and reads the URL from the tracker", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness();
-      const result = yield* harness.call("link_issue", { key: "7" });
-      expect(result.url).toBe(detail.url);
-      expect(result.scope).toBe("T3Tools/T3Code");
-      expect((yield* Ref.get(harness.links))[0]?.url).toBe(detail.url);
-    }),
+  it.effect.each([
+    { source: gitHostSource, issueDetail: detail, key: "7" },
+    { source: standaloneSource, issueDetail: standaloneDetail, key: "eng-7" },
+  ])(
+    "links key $key through the thread's project and reads the native URL",
+    ({ source, issueDetail, key }) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness([], { sources: [source], detail: issueDetail });
+        const result = yield* harness.call("link_issue", { key });
+        expect(result.url).toBe(issueDetail.url);
+        expect(result.scope).toBe(source.scope);
+        expect((yield* Ref.get(harness.links))[0]).toMatchObject({
+          ref: { ...source, key },
+          url: issueDetail.url,
+        });
+        expect(yield* Ref.get(harness.calls)).toEqual([
+          { operation: "detail", input: { projectId: PROJECT_ID, ...source, key } },
+        ]);
+      }),
   );
 
   it.effect("unlinks a saved key after its source is disconnected or changed", () =>

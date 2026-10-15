@@ -2669,6 +2669,24 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       refreshes: true,
       alreadyLinked: true,
     },
+    {
+      name: "lowercase legacy key",
+      scope: "eng",
+      key: "eng-1",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-1/new-title",
+      refreshes: true,
+      alreadyLinked: true,
+    },
+    {
+      name: "lowercase canonical key",
+      scope: "workspace-a/eng",
+      key: "eng-1",
+      savedUrl: "https://linear.app/workspace-a/issue/ENG-1/old-title",
+      nativeUrl: "https://linear.app/workspace-a/issue/ENG-1/new-title",
+      refreshes: true,
+      alreadyLinked: true,
+    },
   ])("checks saved Linear issue identity: $name", (testCase) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -2678,7 +2696,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         tracker: IssueTrackerKind.make("linear"),
         host: "linear.app",
         scope: testCase.scope,
-        key: "ENG-1",
+        key: testCase.key ?? "ENG-1",
         projectId,
       };
       yield* orchestrator.dispatch({
@@ -2791,6 +2809,16 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
               }
             }
           }
+          yield* orchestrator.dispatch({
+            type: "thread.issue.link",
+            commandId: CommandId.make(`linear-link-duplicate-${testCase.name}`),
+            threadId,
+            ...ref,
+            key: ref.key.toUpperCase(),
+            url: testCase.savedUrl,
+            source: "agent",
+          });
+          assert.equal((yield* orchestrator.getThreadShell(threadId))?.issues?.length, 1);
           assert.deepEqual(yield* orchestrator.getThreadProjection(threadId), before);
           assert.equal(reads, 0);
           yield* service.refresh(threadId);
@@ -2803,7 +2831,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             assert.deepEqual(after, before);
           }
           assert.equal(after.thread.issues?.[0]?.url, testCase.savedUrl);
-          assert.deepEqual(yield* service.unlink({ threadId, key: ref }), { wasLinked: true });
+          assert.deepEqual(
+            yield* service.unlink({ threadId, key: { ...ref, key: ref.key.toUpperCase() } }),
+            { wasLinked: true },
+          );
           assert.deepEqual((yield* orchestrator.getThreadShell(threadId))?.issues, []);
         }),
       );
