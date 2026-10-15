@@ -151,6 +151,83 @@ function fakeLinear(
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
 const decodeIssueSummary = Schema.decodeEffect(IssueSummary);
 
+it.effect.each([
+  { template: true, assignee: null },
+  { template: true, assignee: THEO.id },
+  { template: true, assignee: JULIUS.id },
+  { template: false, assignee: null },
+])(
+  "preserves explicit assignee selection over native template defaults: %j",
+  ({ template, assignee }) =>
+    Effect.gen(function* () {
+      const empty = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
+      const preset = {
+        id: "preset-assignee",
+        name: "Assigned template",
+        description: null,
+        content: "Steps",
+        type: "issue",
+        hasFormFields: false,
+        templateData: { assigneeId: THEO.id },
+      };
+      let appliedAssignee: unknown = "no-write";
+      const test = fakeLinear({
+        T3Team: () => ({
+          organization: ORGANIZATION,
+          issueLabels: empty,
+          teams: {
+            nodes: [
+              {
+                id: "team_eng",
+                key: "ENG",
+                name: "Engineering",
+                ancestors: [],
+                states: empty,
+                labels: empty,
+                members: { ...empty, nodes: [THEO, JULIUS] },
+                templates: { ...empty, nodes: [preset] },
+              },
+            ],
+          },
+        }),
+        T3IssueCreate: (variables) => {
+          const input = variables.input as Record<string, unknown>;
+          appliedAssignee = Object.hasOwn(input, "assigneeId")
+            ? input.assigneeId
+            : input.templateId === preset.id
+              ? preset.templateData.assigneeId
+              : null;
+          return {
+            issueCreate: {
+              success: true,
+              issue: {
+                identifier: "ENG-8",
+                url: "https://linear.app/acme/issue/ENG-8",
+              },
+            },
+          };
+        },
+      });
+      const api = yield* test.tracker;
+      const created = yield* api.create({
+        ...target,
+        scope: "acme/ENG",
+        title: "New",
+        body: "Steps",
+        labels: [],
+        assignees: assignee === null ? [] : [assignee],
+        ...(template ? { templateKey: preset.id } : {}),
+      });
+      expect(appliedAssignee).toBe(assignee);
+      expect(created.key).toBe("ENG-8");
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Team", "T3IssueCreate"]);
+      expect(test.requests[1]?.variables.input).toMatchObject({ assigneeId: assignee });
+      if (template)
+        expect(test.requests[1]?.variables.input).toMatchObject({ templateId: preset.id });
+      else expect(test.requests[1]?.variables.input).not.toHaveProperty("templateId");
+    }),
+);
+
 it.effect("retains normalized list reactions and native viewer flags in one request", () =>
   Effect.gen(function* () {
     const vocabulary = [

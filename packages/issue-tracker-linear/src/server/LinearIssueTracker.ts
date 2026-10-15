@@ -754,7 +754,7 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
             labelIds: labels,
             ...(parent === null ? {} : { parentId: parent.id }),
             ...(input.templateKey === undefined ? {} : { templateId: input.templateKey }),
-            ...(assignee === null ? {} : { assigneeId: assignee }),
+            assigneeId: assignee,
           });
           return {
             key: created.identifier,
