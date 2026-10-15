@@ -77,6 +77,65 @@ const keys = (page: { entries: IssueListResult["entries"] }) =>
   page.entries.map((entry) => entry.key);
 
 describe("held issue list viewers", () => {
+  it.each([
+    { from: cursor, to: "github.com acme/app", migrateFirst: false },
+    { from: cursor, to: "github.com acme/app", migrateFirst: true },
+    { from: "github.com acme/app", to: cursor, migrateFirst: false },
+    { from: "github.com acme/app", to: cursor, migrateFirst: true },
+  ])("resets viewer cursors across native cursor aliases: %j", ({ from, to, migrateFirst }) => {
+    const other = row("other-first", {
+      tracker: "gitlab" as IssueTrackerKind,
+      projectId: "other" as ProjectId,
+    });
+    const otherCursor = "gitlab github.com acme/app";
+    const initial = {
+      ...answer([row("first"), other], { [from]: "A2", [otherCursor]: "O2" }),
+      sources: [source(row("first")), source(other)],
+      viewers: { "github github.com": "A", "gitlab github.com": "other" },
+    };
+    const held = first(initial);
+    const continued = continueIssueListPage(
+      held,
+      held.nextCursors,
+      {
+        ...initial,
+        entries: [row("A-tail"), row("other-tail", other)],
+        nextCursors: { [from]: "A3", [otherCursor]: "O3" },
+      },
+      held.firstCursors,
+    );
+    const before = migrateFirst
+      ? continueIssueListPage(
+          continued,
+          { [from]: "A3" },
+          {
+            ...initial,
+            entries: [row("A-more")],
+            nextCursors: { [to]: "A4" },
+          },
+          continued.firstCursors,
+        )
+      : continued;
+    const sent = migrateFirst ? { [to]: "A4" } : { [from]: "A3" };
+    const switched = continueIssueListPage(
+      before,
+      sent,
+      {
+        ...initial,
+        viewers: { "github github.com": "B" },
+        entries: [row("B-first")],
+        nextCursors: { [to]: "B2" },
+      },
+      before.firstCursors,
+    );
+    expect(keys(switched).toSorted()).toEqual(["B-first", "other-first", "other-tail"]);
+    expect(switched.nextCursors).toEqual({ [to]: "B2", [otherCursor]: "O3" });
+    expect(switched.firstCursors).toEqual({ [to]: "B2", [otherCursor]: "O2" });
+    expect(switched.firstKeys).toEqual(
+      new Set([issueEntryKey(row("B-first")), issueEntryKey(other)]),
+    );
+  });
+
   it.each([cursor, "github.com acme/app"])(
     "drops old private rows and resets %s on a changed or missing viewer",
     (key) => {

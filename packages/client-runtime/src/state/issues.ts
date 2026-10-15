@@ -275,6 +275,13 @@ export function continueIssueListPage<T extends HeldIssueList>(
   const kept = Object.entries(held.nextCursors).filter(
     ([key]) => sent[key] === undefined || failed.has(key.toLowerCase()),
   );
+  const changedSources = retried.filter((source) => changed.has(scopeOf(source, cursors)));
+  const changedCursorKeys = (values: IssueListCursors) => {
+    const keys = new Set(Object.keys(values).map((key) => key.toLowerCase()));
+    return new Set(changedSources.map((source) => scopeOf(source, keys)));
+  };
+  const changedFirst = changedCursorKeys(held.firstCursors);
+  const changedNext = changedCursorKeys(page.nextCursors);
   return {
     ...held,
     entries: mergeIssueListPage(rebound, page.entries),
@@ -285,10 +292,14 @@ export function continueIssueListPage<T extends HeldIssueList>(
         ? held.firstCursors
         : {
             ...Object.fromEntries(
-              Object.entries(held.firstCursors).filter(([key]) => !changed.has(key.toLowerCase())),
+              Object.entries(held.firstCursors).filter(
+                ([key]) => !changedFirst.has(key.toLowerCase()),
+              ),
             ),
             ...Object.fromEntries(
-              Object.entries(page.nextCursors).filter(([key]) => changed.has(key.toLowerCase())),
+              Object.entries(page.nextCursors).filter(([key]) =>
+                changedNext.has(key.toLowerCase()),
+              ),
             ),
           },
     sources: held.sources?.map(rebind) ?? page.sources,
