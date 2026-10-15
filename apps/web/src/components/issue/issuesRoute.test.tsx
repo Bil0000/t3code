@@ -105,7 +105,11 @@ vi.mock("~/components/issue/IssueCreateDialog", () => ({ IssueCreateDialog: () =
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { useRightPanelStore } from "~/rightPanelStore";
+import {
+  ISSUES_PANEL_REF,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+} from "~/rightPanelStore";
 import { issueEnvironment } from "~/state/issues";
 import { Route, type IssuesSearch } from "../../routes/_chat.issues";
 
@@ -478,6 +482,72 @@ it("removes projects after an authoritative empty unfiltered answer", async () =
   await refresh();
   expect(container.querySelector('button[aria-label^="Filter by project:"]')).toBeNull();
 });
+
+it.each(["Linux", "MacIntel"])(
+  "closes the active issue with the platform shortcut (%s)",
+  async (platform) => {
+    const system = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    const selected = {
+      environmentId: environmentA,
+      projectId: "project",
+      tracker: "github",
+      host: "github.com",
+      connectionId: "Account/B",
+      scope: "org/repo",
+      key: "7",
+    };
+    const panels = useRightPanelStore.getState();
+    panels.openIssue(ISSUES_PANEL_REF, selected);
+    panels.openIssue(ISSUES_PANEL_REF, { ...selected, key: "8" });
+    state.responses.set(environmentA, AsyncResult.success(answer([])));
+    state.responses.set(environmentB, AsyncResult.success(answer([])));
+    const keys = () =>
+      selectThreadRightPanelState(
+        useRightPanelStore.getState().byThreadKey,
+        ISSUES_PANEL_REF,
+      ).surfaces.map((surface) => (surface.kind === "issue" ? surface.key : surface.id));
+    const press = (init: KeyboardEventInit = {}, handled = false) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "w",
+        code: "KeyW",
+        ctrlKey: platform === "Linux",
+        metaKey: platform === "MacIntel",
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      if (handled) event.preventDefault();
+      act(() => document.body.dispatchEvent(event));
+      return event.defaultPrevented;
+    };
+    try {
+      await mount();
+      press({}, true);
+      expect(keys()).toEqual(["7", "8"]);
+      const palette = document.createElement("div");
+      palette.dataset.commandPalette = "true";
+      container.append(palette);
+      expect(press()).toBe(false);
+      palette.remove();
+      expect(press({ repeat: true })).toBe(true);
+      expect(keys()).toEqual(["7", "8"]);
+      expect(press()).toBe(true);
+      expect(keys()).toEqual(["7"]);
+      expect(state.search).toMatchObject({
+        selectedEnvironmentId: environmentA,
+        selectedConnectionId: selected.connectionId,
+        key: "7",
+      });
+      act(() => panels.close(ISSUES_PANEL_REF));
+      expect(press()).toBe(false);
+      expect(keys()).toEqual(["7"]);
+      act(() => panels.closeAllSurfaces(ISSUES_PANEL_REF));
+      expect(press()).toBe(false);
+    } finally {
+      system.mockRestore();
+    }
+  },
+);
 
 it("toggles the selected issue panel with the existing keyboard shortcut", async () => {
   state.responses.set(environmentA, AsyncResult.success(answer([issue("A")])));
