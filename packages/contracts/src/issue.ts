@@ -927,6 +927,20 @@ export const IssueTrackerScope = Schema.Struct({
 });
 export type IssueTrackerScope = typeof IssueTrackerScope.Type;
 
+export const IssueTrackerScopePage = Schema.Struct({
+  items: Schema.Array(IssueTrackerScope),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+});
+export type IssueTrackerScopePage = typeof IssueTrackerScopePage.Type;
+
+export const IssueTrackerScopesInput = Schema.Struct({
+  tracker: IssueTrackerKind,
+  connectionId: Schema.optional(IssueTrackerConnectionId),
+  cursor: TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+});
+export type IssueTrackerScopesInput = typeof IssueTrackerScopesInput.Type;
+
 /**
  * A standalone tracker as the settings page sees it: the descriptor, whether a credential is
  * stored and still works, and the scopes it can reach. `scopes` is empty until connected.
@@ -942,6 +956,7 @@ export const IssueTrackerConnection = Schema.Struct({
   detail: Schema.NullOr(TrimmedNonEmptyString),
   scopes: Schema.Array(IssueTrackerScope),
   scopesTruncated: Schema.optional(Schema.Boolean),
+  scopesCursor: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type IssueTrackerConnection = typeof IssueTrackerConnection.Type;
 

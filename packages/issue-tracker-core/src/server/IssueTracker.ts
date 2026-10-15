@@ -33,6 +33,7 @@ import type {
   IssueTemplateList,
   IssueTrackerKind,
   IssueTrackerScope,
+  IssueTrackerScopePage,
   IssueViewerPermissions,
   StandaloneIssueTrackerDescriptor,
 } from "@t3tools/contracts";
@@ -248,6 +249,7 @@ export interface StandaloneIssueTrackerApi extends IssueTrackerApi {
       readonly host?: string;
       readonly accountId?: string;
       readonly scopesTruncated?: boolean;
+      readonly scopesCursor?: string | null | undefined;
     },
     IssueTrackerError
   >;
@@ -255,6 +257,10 @@ export interface StandaloneIssueTrackerApi extends IssueTrackerApi {
     token: string,
     scope: string,
   ) => Effect.Effect<IssueTrackerScope | null, IssueTrackerError>;
+  readonly listScopes?: (
+    token: string,
+    input: IssuePageInput,
+  ) => Effect.Effect<IssueTrackerScopePage, IssueTrackerError>;
 }
 
 export function isStandaloneIssueTracker(api: IssueTrackerApi): api is StandaloneIssueTrackerApi {
