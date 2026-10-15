@@ -151,6 +151,138 @@ function fakeLinear(
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
 const decodeIssueSummary = Schema.decodeEffect(IssueSummary);
 
+it.effect("retains normalized list reactions and native viewer flags in one request", () =>
+  Effect.gen(function* () {
+    const vocabulary = [
+      ["👍", "thumbs-up"],
+      ["👎", "thumbs-down"],
+      ["😄", "laugh"],
+      ["🎉", "hooray"],
+      ["😕", "confused"],
+      ["❤️", "heart"],
+      ["🚀", "rocket"],
+      ["👀", "eyes"],
+    ];
+    const reactions = vocabulary.flatMap(([emoji], index) => [
+      { id: `mine-${index}`, emoji, user: JULIUS },
+      { id: `other-${index}`, emoji, user: THEO },
+    ]);
+    const test = fakeLinear({
+      T3Issues: () => ({
+        organization: ORGANIZATION,
+        viewer: { id: JULIUS.id },
+        issues: {
+          nodes: [
+            issue("ENG-7", {
+              reactions: [...reactions, { id: "custom", emoji: "custom", user: null }],
+            }),
+          ],
+          pageInfo: { hasNextPage: true, endCursor: "next" },
+        },
+      }),
+    });
+    const api = yield* test.tracker;
+    const page = yield* api.listIssues({
+      ...target,
+      state: "all",
+      involvement: "all",
+      viewer: THEO.id,
+      limit: 20,
+      cursor: "previous",
+    });
+    const expected = vocabulary.map(([, content]) => ({
+      content,
+      count: 2,
+      actors: ["theo"],
+      viewerHasReacted: true,
+    }));
+    const summary = page.items[0]!;
+    expect(summary).toMatchObject({ reactions: expected, reactionsTruncated: false });
+    const wire = yield* decodeIssueSummary({
+      ...summary,
+      tracker: IssueTrackerKind.make("linear"),
+      host: target.host,
+      scope: target.scope,
+    });
+    expect(wire).toMatchObject({ reactions: expected, reactionsTruncated: false });
+    expect(page.nextCursor).toBe("next");
+    expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Issues"]);
+    expect(test.requests[0]?.variables.after).toBe("previous");
+    expect(test.requests[0]?.query).toContain("viewer { id }");
+    expect(test.requests[0]?.query).toContain("reactions { id emoji user {");
+  }),
+);
+
+it.effect.each([JULIUS.id, undefined])(
+  "bounds list reaction actor previews without losing counts, native viewer %s",
+  (viewerId) =>
+    Effect.gen(function* () {
+      const reactions = [
+        { id: "mine", emoji: "👍", user: JULIUS },
+        ...Array.from({ length: 21 }, (_, index) => ({
+          id: `other-${index}`,
+          emoji: "👍",
+          user: user(`other-${index}`, `other-${index}`),
+        })),
+        { id: "anonymous", emoji: "👍", user: null },
+      ];
+      const test = fakeLinear({
+        T3Issues: () => ({
+          organization: ORGANIZATION,
+          ...(viewerId === undefined ? {} : { viewer: { id: viewerId } }),
+          issues: {
+            nodes: [issue("ENG-7", { reactions })],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      const page = yield* api.listIssues({
+        ...target,
+        state: "all",
+        involvement: "all",
+        viewer: JULIUS.id,
+        limit: 20,
+      });
+      expect(page.items[0]).toMatchObject({
+        reactions: [{ content: "thumbs-up", count: 23, viewerHasReacted: viewerId !== undefined }],
+        reactionsTruncated: true,
+      });
+      expect(page.items[0]?.reactions?.[0]?.actors).toHaveLength(20);
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Issues"]);
+    }),
+);
+
+it.effect.each([[], undefined])(
+  "keeps empty and absent native list reactions distinct: %j",
+  (reactions) =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3Issues: () => ({
+          organization: ORGANIZATION,
+          viewer: { id: JULIUS.id },
+          issues: {
+            nodes: [issue("ENG-7", { reactions })],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      const page = yield* api.listIssues({
+        ...target,
+        state: "all",
+        involvement: "all",
+        viewer: JULIUS.id,
+        limit: 20,
+      });
+      if (reactions === undefined) {
+        expect(page.items[0]).not.toHaveProperty("reactions");
+        expect(page.items[0]).not.toHaveProperty("reactionsTruncated");
+      } else expect(page.items[0]).toMatchObject({ reactions: [], reactionsTruncated: false });
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Issues"]);
+    }),
+);
+
 it.effect.each([{ name: "Release 7" }, null, undefined])(
   "retains native project milestones in list, detail, and wire summaries: %j",
   (projectMilestone) =>

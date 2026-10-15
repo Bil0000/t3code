@@ -171,7 +171,9 @@ function userName(user: LinearApi.LinearUser): string {
 function toSummary(
   issue: LinearApi.LinearIssue,
   commentCount: TrackerIssueSummary["commentCount"] = null,
-): TrackerIssueSummary {
+  viewerId: string | null = null,
+) {
+  const reactions = issue.reactions === undefined ? null : toReactions(issue.reactions, viewerId);
   return {
     key: issue.identifier,
     displayKey: issue.identifier,
@@ -191,6 +193,9 @@ function toSummary(
     labelsTruncated: issue.labels.pageInfo.hasNextPage,
     milestone: issue.projectMilestone?.name ?? null,
     commentCount,
+    ...(reactions === null
+      ? {}
+      : { reactions: reactions.values, reactionsTruncated: reactions.truncated }),
   };
 }
 
@@ -668,7 +673,10 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           const issues = yield* Effect.forEach(page.nodes, (issue) =>
             requireIssueReference("listIssues", input.scope, issue),
           );
-          return { items: issues.map((issue) => toSummary(issue)), nextCursor: page.nextCursor };
+          return {
+            items: issues.map((issue) => toSummary(issue, null, page.viewerId)),
+            nextCursor: page.nextCursor,
+          };
         });
       },
 
@@ -680,11 +688,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
             viewerId,
           ]);
           const issue = yield* requireIssueReference("getIssue", input.scope, nativeIssue);
-          const reactions = toReactions(issue.reactions, viewer);
           return {
             ...toSummary(
               issue,
               issue.comments.pageInfo.hasNextPage ? null : issue.comments.nodes.length,
+              viewer,
             ),
             body: issue.description ?? "",
             ...(issue.team.states === undefined
@@ -692,8 +700,6 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
               : { states: issue.team.states.nodes.map(toState) }),
             viewer,
             viewerPermissions: VIEWER_PERMISSIONS,
-            reactions: reactions.values,
-            reactionsTruncated: reactions.truncated,
             comments: issue.comments.nodes.map((comment) => toComment(comment, viewer)),
             commentsCursor: issue.comments.pageInfo.hasNextPage
               ? issue.comments.pageInfo.endCursor

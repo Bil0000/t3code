@@ -114,6 +114,7 @@ export const LinearIssue = Schema.Struct({
   creator: Schema.NullOr(LinearUser),
   assignee: Schema.NullOr(LinearUser),
   labels: Connection(LinearLabel),
+  reactions: Schema.optional(Schema.Array(LinearReaction)),
 });
 export type LinearIssue = typeof LinearIssue.Type;
 
@@ -215,8 +216,9 @@ const PROBE_QUERY = `query T3ProbeCredential {
 }`;
 const LIST_QUERY = `query T3Issues($first: Int, $last: Int, $after: String, $before: String, $orderBy: PaginationOrderBy!, $filter: IssueFilter!) {
   organization { id urlKey }
+  viewer { id }
   issues(first: $first, last: $last, after: $after, before: $before, filter: $filter, orderBy: $orderBy) {
-    nodes { ${ISSUE_FIELDS} labels(first: 20, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor hasPreviousPage startCursor } } }
+    nodes { ${ISSUE_FIELDS} labels(first: 20, includeArchived: true) { nodes { ${LABEL_FIELDS} } pageInfo { hasNextPage endCursor hasPreviousPage startCursor } } reactions { ${REACTION_FIELDS} } }
     pageInfo { hasNextPage endCursor hasPreviousPage startCursor }
   }
 }`;
@@ -334,6 +336,7 @@ const ProbeData = Schema.Struct({
 });
 const ListData = Schema.Struct({
   organization: LinearOrganization,
+  viewer: Schema.optional(Schema.Struct({ id: Schema.String })),
   issues: Schema.Struct({
     nodes: Schema.Array(LinearIssue),
     pageInfo: Schema.Struct({
@@ -492,6 +495,7 @@ export class LinearApi extends Context.Service<
     }) => Effect.Effect<
       {
         readonly organization: LinearOrganization;
+        readonly viewerId: string | null;
         readonly nodes: ReadonlyArray<LinearIssue>;
         readonly nextCursor: string | null;
       },
@@ -873,6 +877,7 @@ export const make = Effect.gen(function* () {
     ).pipe(
       Effect.map((data) => ({
         organization: data.organization,
+        viewerId: data.viewer?.id ?? null,
         nodes: input.order === "asc" ? data.issues.nodes.toReversed() : data.issues.nodes,
         nextCursor:
           input.order === "asc"
