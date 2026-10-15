@@ -152,13 +152,19 @@ describe("reasoning level shortcuts", () => {
     ).toEqual([{ id: "variant", value: "low" }]);
   });
 
-  it("stops at both ends", () => {
+  it("wraps at both ends, including prompt-controlled ultrathink", () => {
     expect(
       getReasoningLevelChange({ ...input, modelOptions: [{ id: "effort", value: "low" }] }),
-    ).toBeNull();
+    ).toEqual({ prompt: "Ultrathink:\nSolve this" });
     expect(
       getReasoningLevelChange({ ...input, prompt: "Ultrathink:\nSolve this", direction: 1 }),
-    ).toBeNull();
+    ).toEqual({
+      prompt: "Solve this",
+      modelOptions: [
+        { id: "effort", value: "low" },
+        { id: "fastMode", value: true },
+      ],
+    });
   });
 
   it("enters and leaves prompt-controlled ultrathink", () => {
@@ -194,17 +200,37 @@ describe("reasoning level shortcuts", () => {
     ["opencode", "variant"],
     ["antigravity", "thinking"],
   ])("uses %s model choices in catalog order", (provider, id) => {
-    expect(
-      getReasoningLevelChange({
-        ...input,
-        provider: ProviderDriverKind.make(provider),
-        models: modelWith([CONTEXT_WINDOW, selectDescriptor(id, options, "high")]),
-      })?.modelOptions,
-    ).toEqual([
-      { id: "contextWindow", value: "1m" },
-      { id, value: "low" },
-    ]);
+    for (const [current, direction, expected] of [
+      ["high", -1, "low"],
+      ["low", -1, "ultrathink"],
+      ["ultrathink", 1, "low"],
+    ] as const) {
+      expect(
+        getReasoningLevelChange({
+          ...input,
+          provider: ProviderDriverKind.make(provider),
+          models: modelWith([CONTEXT_WINDOW, selectDescriptor(id, options, current)]),
+          direction,
+        })?.modelOptions,
+      ).toEqual([
+        { id: "contextWindow", value: "1m" },
+        { id, value: expected },
+      ]);
+    }
   });
+
+  it.each([1, -1] as const)(
+    "leaves a single effort choice unchanged in direction %s",
+    (direction) => {
+      expect(
+        getReasoningLevelChange({
+          ...input,
+          models: modelWith([selectDescriptor("effort", options.slice(0, 1), "low")]),
+          direction,
+        }),
+      ).toBeNull();
+    },
+  );
 
   it.each(["agent", "contextWindow"])("does not change %s options", (id) => {
     expect(
@@ -218,6 +244,12 @@ describe("reasoning level shortcuts", () => {
   it("does nothing without an available effort choice", () => {
     expect(getReasoningLevelChange({ ...input, models: [] })).toBeNull();
     expect(getReasoningLevelChange({ ...input, models: modelWith([]) })).toBeNull();
+    expect(
+      getReasoningLevelChange({
+        ...input,
+        models: modelWith([selectDescriptor("effort", [], "low")]),
+      }),
+    ).toBeNull();
     expect(
       getReasoningLevelChange({
         ...input,

@@ -306,8 +306,11 @@ export function getReasoningLevelChange(
       : (getProviderOptionCurrentValue(descriptor, modelSelection, input.reportedModelSelection) ??
         getProviderOptionCurrentValue(descriptor));
   const index = descriptor.options.findIndex((option) => option.id === current);
-  if (index < 0) return null;
-  const next = descriptor.options[index + input.direction];
+  if (index < 0 || descriptor.options.length < 2) return null;
+  const next =
+    descriptor.options[
+      (index + input.direction + descriptor.options.length) % descriptor.options.length
+    ];
   return next ? getTraitSelectChange(selected, descriptor, input.prompt, next.id) : null;
 }
 
