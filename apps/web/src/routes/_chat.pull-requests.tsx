@@ -1,4 +1,7 @@
-import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
+import {
+  applyPullRequestDraftFilterChange,
+  parsePullRequestQuery,
+} from "@t3tools/client-runtime/pull-request-query";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import { useShortcutModifierState } from "~/shortcutModifierState";
@@ -2072,16 +2075,22 @@ function PullRequestsRouteView() {
       involvement={search.involvement}
       involvementOptions={INVOLVEMENT_TABS}
       onInvolvement={(involvement) => updateListScope({ involvement })}
-      filters={menuFilters}
-      onFilters={(next) =>
+      filters={{ ...menuFilters, draft: localFilters.draft }}
+      onFilters={(value) => {
+        const { query, filters: next } = applyPullRequestDraftFilterChange(
+          typedQuery,
+          menuFilters,
+          value,
+        );
         updateListScope({
+          q: query || undefined,
           draft: next.draft,
           review: next.review,
           checks: next.checks,
           author: next.author,
           labels: next.labels?.flatMap((group) => group),
-        })
-      }
+        });
+      }}
       authorOptions={facets.authors}
       labelOptions={facets.labels}
       host={search.host}

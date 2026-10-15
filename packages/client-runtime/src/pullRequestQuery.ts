@@ -144,3 +144,20 @@ export function parsePullRequestQuery(raw: string): {
     },
   };
 }
+
+export function applyPullRequestDraftFilterChange(
+  raw: string,
+  previousFilters: PullRequestListFilters,
+  nextFilters: PullRequestListFilters,
+) {
+  const draft = parsePullRequestQuery(raw).filters.draft ?? previousFilters.draft;
+  if (nextFilters.draft === draft)
+    return { query: raw, filters: { ...nextFilters, draft: previousFilters.draft } };
+  return {
+    query: [...raw.matchAll(QUERY_TOKEN)]
+      .map(([token]) => token)
+      .filter((token) => parsePullRequestQuery(token).filters.draft === undefined)
+      .join(" "),
+    filters: nextFilters,
+  };
+}

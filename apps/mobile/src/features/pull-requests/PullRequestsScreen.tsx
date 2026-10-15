@@ -1,4 +1,7 @@
-import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
+import {
+  applyPullRequestDraftFilterChange,
+  parsePullRequestQuery,
+} from "@t3tools/client-runtime/pull-request-query";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { useNavigation } from "@react-navigation/native";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -83,6 +86,8 @@ export function PullRequestsScreen(
   // Dismissal must restore the cached unfiltered list before restoring its offset.
   const query = tab.searchMode === "resting" ? "" : debouncedQuery;
   const parsedQuery = useMemo(() => parsePullRequestQuery(query), [query]);
+  const typedQuery = tab.searchMode === "resting" ? "" : tab.query;
+  const typedDraft = useMemo(() => parsePullRequestQuery(typedQuery).filters.draft, [typedQuery]);
   const listControls = usePullRequestListControls();
   const selectedEnvironmentId = listControls.environmentId;
   const environmentId = environments.some((item) => item.environmentId === selectedEnvironmentId)
@@ -288,9 +293,19 @@ export function PullRequestsScreen(
               }))}
               environmentId={environmentId}
               onEnvironmentChange={listControls.setEnvironmentId}
-              value={controls}
+              value={{
+                ...controls,
+                filters: { ...controls.filters, draft: typedDraft ?? controls.filters.draft },
+              }}
               onChange={(next) => {
-                listControls.setControls(environmentId, next);
+                const update = applyPullRequestDraftFilterChange(
+                  typedQuery,
+                  controls.filters,
+                  next.filters,
+                );
+                listControls.setControls(environmentId, { ...next, filters: update.filters });
+                if (update.query !== typedQuery)
+                  workspace.dispatch({ type: "query", tab: "pullRequests", query: update.query });
                 void listRef.current?.scrollToOffset({
                   offset: Platform.OS === "ios" ? -insets.top : 0,
                   animated: false,
