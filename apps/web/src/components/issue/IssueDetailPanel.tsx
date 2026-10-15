@@ -51,6 +51,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button, InlineButton } from "../ui/button";
@@ -873,7 +874,13 @@ function IssueDetailContent({
               variant="ghost"
               aria-label="Refresh issue"
               disabled={detailQuery.isPending}
-              onClick={detailQuery.refresh}
+              onClick={() => {
+                detailQuery.refresh();
+                appAtomRegistry.update(
+                  issueEnvironment.historyRefresh({ environmentId, input: reference }),
+                  (revision) => revision + 1,
+                );
+              }}
             >
               <RefreshIcon size="sm" refreshing={detailQuery.isPending} />
             </Button>

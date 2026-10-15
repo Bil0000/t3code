@@ -12,6 +12,7 @@ import {
   type IssueListInput,
   type IssueListResult,
   type IssueRef,
+  type IssueHierarchyPage,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -451,6 +452,31 @@ export function createIssueEnvironmentAtoms<R, E>(
     { environmentId, input }: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
     registry: AtomRegistry.AtomRegistry,
   ) => Effect.sync(() => registry.refresh(detail({ environmentId, input: detailRef(input) })));
+  const historyRevision = Atom.family((_key: string) =>
+    Atom.make(0).pipe(Atom.setIdleTTL(5 * 60_000)),
+  );
+  const historyRefresh = ({
+    environmentId,
+    input,
+  }: {
+    readonly environmentId: EnvironmentId;
+    readonly input: IssueRef;
+  }) =>
+    historyRevision(
+      JSON.stringify([
+        environmentId,
+        input.host === undefined ? input.projectId : null,
+        threadIssueKeyOf({ ...input, host: input.host ?? "" }),
+      ]),
+    );
+  const refreshHistory = (
+    target: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
+    registry: AtomRegistry.AtomRegistry,
+  ) => Effect.sync(() => registry.update(historyRefresh(target), (revision) => revision + 1));
+  const refreshDetailAndHistory = (
+    target: { readonly environmentId: EnvironmentId; readonly input: IssueRef },
+    registry: AtomRegistry.AtomRegistry,
+  ) => refreshDetail(target, registry).pipe(Effect.andThen(refreshHistory(target, registry)));
   const hierarchyRevision = Atom.family((_key: string) => Atom.make(0));
   const hierarchySignal = (
     environmentId: EnvironmentId,
@@ -470,6 +496,12 @@ export function createIssueEnvironmentAtoms<R, E>(
       const signal = hierarchySignal(environmentId, input);
       registry.set(signal, registry.get(signal) + 1);
     });
+  const hierarchy = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:issues:hierarchy",
+    tag: WS_METHODS.issuesHierarchy,
+    staleTimeMs: 30_000,
+    refreshTrigger: ({ environmentId, input }) => hierarchySignal(environmentId, input),
+  });
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:list",
@@ -490,22 +522,20 @@ export function createIssueEnvironmentAtoms<R, E>(
       },
     }),
     detail,
+    historyRefresh,
     history: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:history",
       tag: WS_METHODS.issuesHistory,
       staleTimeMs: 30_000,
+      refreshTrigger: (target) =>
+        target.input.cursor === undefined ? historyRefresh(target) : undefined,
     }),
     linkedPullRequests: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:linked-pull-requests",
       tag: WS_METHODS.issuesLinkedPullRequests,
       staleTimeMs: 30_000,
     }),
-    hierarchy: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:issues:hierarchy",
-      tag: WS_METHODS.issuesHierarchy,
-      staleTimeMs: 30_000,
-      refreshTrigger: ({ environmentId, input }) => hierarchySignal(environmentId, input),
-    }),
+    hierarchy,
     labelCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:label-candidates",
       tag: WS_METHODS.issuesLabelCandidates,
@@ -561,22 +591,36 @@ export function createIssueEnvironmentAtoms<R, E>(
       tag: WS_METHODS.issuesCreate,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: (target, registry) =>
-        target.input.parentKey === undefined ? Effect.void : refreshHierarchy(target, registry),
+      onSuccess: (target, registry, result) =>
+        target.input.parentKey === undefined
+          ? Effect.void
+          : refreshHierarchy(target, registry).pipe(
+              Effect.andThen(
+                result.parentLinked === false
+                  ? Effect.void
+                  : refreshHistory(
+                      {
+                        environmentId: target.environmentId,
+                        input: { ...target.input, key: target.input.parentKey },
+                      },
+                      registry,
+                    ),
+              ),
+            ),
     }),
     comment: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:comment",
       tag: WS_METHODS.issuesComment,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshDetailAndHistory,
     }),
     editComment: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:edit-comment",
       tag: WS_METHODS.issuesEditComment,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshDetailAndHistory,
     }),
     setParent: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:set-parent",
@@ -584,21 +628,53 @@ export function createIssueEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
       onSuccess: (target, registry) =>
-        refreshDetail(target, registry).pipe(Effect.andThen(refreshHierarchy(target, registry))),
+        Effect.gen(function* () {
+          const held = registry
+            .getNodes()
+            .get(hierarchy({ environmentId: target.environmentId, input: detailRef(target.input) }))
+            ?.valueOption() as
+            | Option.Option<AsyncResult.AsyncResult<IssueHierarchyPage, unknown>>
+            | undefined;
+          const oldParent =
+            Option.getOrNull(Option.flatMap(held ?? Option.none(), AsyncResult.value))?.parent ??
+            null;
+          yield* refreshDetailAndHistory(target, registry);
+          yield* refreshHierarchy(target, registry);
+          if (target.input.parentKey !== null)
+            yield* refreshHistory(
+              {
+                environmentId: target.environmentId,
+                input: { ...target.input, key: target.input.parentKey },
+              },
+              registry,
+            );
+          if (
+            oldParent !== null &&
+            (oldParent.scope.toLowerCase() !== target.input.scope.toLowerCase() ||
+              oldParent.key !== target.input.parentKey)
+          )
+            yield* refreshHistory(
+              {
+                environmentId: target.environmentId,
+                input: { ...target.input, scope: oldParent.scope, key: oldParent.key },
+              },
+              registry,
+            );
+        }),
     }),
     update: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:update",
       tag: WS_METHODS.issuesUpdate,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshDetailAndHistory,
     }),
     setState: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:set-state",
       tag: WS_METHODS.issuesSetState,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
-      onSuccess: refreshDetail,
+      onSuccess: refreshDetailAndHistory,
     }),
     react: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:react",

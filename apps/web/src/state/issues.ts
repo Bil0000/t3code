@@ -107,9 +107,8 @@ function createIssueQueries<Input, A>(
         : family(key),
     );
     const refresh = useCallback(() => {
-      for (const target of JSON.parse(key) as ReadonlyArray<EnvironmentQueryTarget<Input>>) {
-        appAtomRegistry.refresh(atomFor(target));
-      }
+      const target = (JSON.parse(key) as ReadonlyArray<EnvironmentQueryTarget<Input>>)[0];
+      if (target !== undefined) appAtomRegistry.refresh(atomFor(target));
     }, [key]);
     return { answers, refresh };
   };
@@ -200,6 +199,10 @@ function createIssuePagedQuery<
           return;
         }
         if (nextCursor === null || values.includes(nextCursor) || last?.isPending) return;
+        if (environmentId !== null && input !== null)
+          appAtomRegistry.refresh(
+            family({ environmentId, input: { ...input, cursor: nextCursor } }),
+          );
         setCursors({ key, seed: first, values: [...values, nextCursor] });
       },
       refresh,

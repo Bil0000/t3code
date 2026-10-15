@@ -77,6 +77,7 @@ const state = vi.hoisted(() => ({
     },
   },
   write: vi.fn(),
+  detailRefresh: vi.fn(),
   projects: [] as EnvironmentProject[],
   allowed: true,
   toast: vi.fn(),
@@ -91,11 +92,17 @@ const state = vi.hoisted(() => ({
 vi.mock("~/state/entities", () => ({ useProjects: () => state.projects }));
 vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
-  const pages = Atom.family((_key: string) =>
-    Atom.make(
-      AsyncResult.success<IssueLinkedPullRequestsPage>({ items: [], nextCursor: null }),
-    ).pipe(Atom.keepAlive),
-  );
+  const pages = Atom.family((_key: string) => {
+    const value = Atom.make<AsyncResult.AsyncResult<IssueLinkedPullRequestsPage, unknown>>(
+      AsyncResult.success({ items: [], nextCursor: null }),
+    ).pipe(Atom.keepAlive);
+    return Atom.writable(
+      (get) => get(value),
+      (get, result: AsyncResult.AsyncResult<IssueLinkedPullRequestsPage, unknown>) =>
+        get.set(value, result),
+      () => undefined,
+    ).pipe(Atom.keepAlive);
+  });
   return {
     ...(await importOriginal<typeof import("@t3tools/client-runtime/state/issues")>()),
     createIssueEnvironmentAtoms: () => ({
@@ -128,7 +135,7 @@ vi.mock("~/state/query", async (importOriginal) => ({
             data: state.detail,
             error: null,
             isPending: false,
-            refresh: vi.fn(),
+            refresh: state.detailRefresh,
           },
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.write }));
@@ -136,9 +143,11 @@ vi.mock("~/state/issues", async (importOriginal) => {
   const original = await importOriginal<typeof import("~/state/issues")>();
   const { Atom } = await import("effect/reactivity");
   const command = { permissionAtom: () => Atom.make(state.allowed) };
+  const historyRevisions = Atom.family((_key: string) => Atom.make(0).pipe(Atom.keepAlive));
   return {
     issueEnvironment: {
       detail: () => ({ kind: "detail" }),
+      historyRefresh: (target: unknown) => historyRevisions(JSON.stringify(target)),
       candidates: (target: unknown) => {
         state.candidatesRead(target);
         return { kind: "states" };
@@ -167,6 +176,44 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
 const decodeCommentPageInput = Schema.decodeUnknownSync(IssueCommentsPageInput);
+
+it("refreshes the issue and its scoped history from the header", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.detailRefresh.mockClear();
+  const environmentId = EnvironmentId.make("manual-environment");
+  const reference = {
+    projectId: ProjectId.make("project"),
+    tracker: IssueTrackerKind.make("github"),
+    host: "github.com",
+    scope: "org/repo",
+    key: "1",
+  };
+  const { issueEnvironment } = await import("~/state/issues");
+  const signal = issueEnvironment.historyRefresh({ environmentId, input: reference });
+  appAtomRegistry.set(signal, 0);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+    );
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('button[aria-label="Refresh issue"]')!.click(),
+    );
+    expect(state.detailRefresh).toHaveBeenCalledOnce();
+    expect(appAtomRegistry.get(signal)).toBe(1);
+    const other = issueEnvironment.historyRefresh({
+      environmentId,
+      input: { ...reference, key: "2" },
+    });
+    expect(appAtomRegistry.get(other)).toBe(0);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
 
 it.each(["success", "comment-failure", "close-failure", "linear", "no-state-permission", "closed"])(
   "posts before closing with a comment and preserves partial success (%s)",

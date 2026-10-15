@@ -10,9 +10,16 @@ vi.mock("../connection/runtime", () => ({ connectionAtomRuntime: {} }));
 vi.mock("../hooks/useIssueViewRefresh", () => ({ useIssueViewRefresh: () => {} }));
 vi.mock("@t3tools/client-runtime/state/issues", async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
-  const pages = Atom.family((_key: string) =>
-    Atom.make(AsyncResult.success({ items: [], nextCursor: null })).pipe(Atom.keepAlive),
-  );
+  const pages = Atom.family((_key: string) => {
+    const value = Atom.make<AsyncResult.AsyncResult<unknown, unknown>>(
+      AsyncResult.success({ items: [], nextCursor: null }),
+    ).pipe(Atom.keepAlive);
+    return Atom.writable(
+      (get) => get(value),
+      (get, result: AsyncResult.AsyncResult<unknown, unknown>) => get.set(value, result),
+      () => undefined,
+    ).pipe(Atom.keepAlive);
+  });
   const family = (target: unknown) => pages(JSON.stringify(target));
   return {
     createIssueEnvironmentAtoms: () => ({
@@ -87,6 +94,36 @@ it("drops retained pages when the native first page changes with the same cursor
   });
   expect(view.items.map((item) => item.id)).toEqual(["replacement"]);
   expect(view.hasMore).toBe(true);
+});
+
+it("refreshes only the first history page while older pages are held", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const first = issueEnvironment.history({ environmentId, input }) as Atom.Writable<
+    AsyncResult.AsyncResult<IssueHistoryPage, unknown>
+  >;
+  const next = issueEnvironment.history({
+    environmentId,
+    input: { ...input, cursor: "refresh-tail" },
+  }) as Atom.Writable<AsyncResult.AsyncResult<IssueHistoryPage, unknown>>;
+  appAtomRegistry.set(
+    first,
+    AsyncResult.success({ items: [event("first")], nextCursor: "refresh-tail" }),
+  );
+  appAtomRegistry.set(next, AsyncResult.success({ items: [event("tail")], nextCursor: null }));
+  await act(async () => {
+    root = create(
+      createElement(RegistryContext.Provider, { value: appAtomRegistry }, createElement(Probe)),
+    );
+  });
+  await act(async () => view.loadMore());
+  expect(view.items.map((item) => item.id)).toEqual(["first", "tail"]);
+  const refresh = vi.spyOn(appAtomRegistry, "refresh");
+  try {
+    await act(async () => view.refresh());
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(first);
+  } finally {
+    refresh.mockRestore();
+  }
 });
 
 it("keeps a failed continuation available for retry without dropping earlier items", async () => {

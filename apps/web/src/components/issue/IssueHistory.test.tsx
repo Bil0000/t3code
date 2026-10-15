@@ -13,11 +13,16 @@ vi.mock("~/connection/runtime", () => ({ connectionAtomRuntime: {} }));
 vi.mock("~/hooks/useIssueViewRefresh", () => ({ useIssueViewRefresh: () => {} }));
 vi.mock("@t3tools/client-runtime/state/issues", async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
-  const pages = Atom.family((_key: string) =>
-    Atom.make(AsyncResult.success<IssueHistoryPage>({ items: [], nextCursor: null })).pipe(
-      Atom.keepAlive,
-    ),
-  );
+  const pages = Atom.family((_key: string) => {
+    const value = Atom.make<AsyncResult.AsyncResult<IssueHistoryPage, unknown>>(
+      AsyncResult.success({ items: [], nextCursor: null }),
+    ).pipe(Atom.keepAlive);
+    return Atom.writable(
+      (get) => get(value),
+      (get, result: AsyncResult.AsyncResult<IssueHistoryPage, unknown>) => get.set(value, result),
+      () => undefined,
+    ).pipe(Atom.keepAlive);
+  });
   return {
     createIssueEnvironmentAtoms: () => ({
       history: (target: unknown) => pages(JSON.stringify(target)),
