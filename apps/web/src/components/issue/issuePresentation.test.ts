@@ -44,8 +44,28 @@ describe("resolveIssueStatePresentation", () => {
           workflowCategory,
           name,
           ...(workflowCategory === "canceled" ? { closeReason: "canceled" } : {}),
+          ...(workflowCategory === "completed" ? { closeReason: "completed" } : {}),
         }),
       ).toEqual({ Icon, toneClassName, label: name });
+    },
+  );
+
+  it.each([
+    ["not-planned", "canceled", "Closed as not planned", CircleSlashIcon],
+    ["completed", "completed", "Closed as completed", CircleCheckIcon],
+    ["duplicate", "completed", "Closed", CircleCheckIcon],
+    [undefined, "completed", "Closed", CircleCheckIcon],
+  ] as const)(
+    "keeps close reason %s with the workflow glyph",
+    (closeReason, workflowCategory, label, Icon) => {
+      expect(
+        resolveIssueStatePresentation({
+          category: "closed",
+          name: "closed",
+          workflowCategory,
+          ...(closeReason === undefined ? {} : { closeReason }),
+        }),
+      ).toMatchObject({ label, Icon });
     },
   );
 

@@ -127,3 +127,27 @@ it.each([false, true])(
     expect(select).toHaveBeenCalledExactlyOnceWith(rebound);
   },
 );
+
+it.each([
+  ["not-planned", "canceled", "Closed as not planned"],
+  ["completed", "completed", "Closed as completed"],
+] as const)(
+  "names native close reason %s in the row glyph",
+  async (closeReason, workflowCategory, label) => {
+    await act(async () =>
+      root.render(
+        <IssueRow
+          entry={{
+            ...entry,
+            state: { category: "closed", name: "closed", workflowCategory, closeReason },
+          }}
+          selected={false}
+          showScope={false}
+          showTracker={false}
+          onSelect={vi.fn()}
+        />,
+      ),
+    );
+    expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(label);
+  },
+);

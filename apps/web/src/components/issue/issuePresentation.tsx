@@ -49,8 +49,14 @@ const STATE_PRESENTATION = {
  * so a workflow tracker's "In Review" reads as itself.
  */
 export function resolveIssueStatePresentation(state: IssueState) {
+  const label =
+    state.name === "closed"
+      ? state.closeReason === "completed" || state.closeReason === "not-planned"
+        ? `Closed as ${state.closeReason.replaceAll("-", " ")}`
+        : "Closed"
+      : state.name;
   if (state.workflowCategory !== undefined)
-    return { ...STATE_PRESENTATION[state.workflowCategory], label: state.name };
+    return { ...STATE_PRESENTATION[state.workflowCategory], label };
   if (state.category === "open") {
     return {
       ...PULL_REQUEST_STATE_PRESENTATION.open,
@@ -67,12 +73,7 @@ export function resolveIssueStatePresentation(state: IssueState) {
   }
   return {
     ...PULL_REQUEST_STATE_PRESENTATION.merged,
-    label:
-      state.name === "closed"
-        ? state.closeReason === "completed"
-          ? "Closed as completed"
-          : "Closed"
-        : state.name,
+    label,
     Icon: CircleCheckIcon,
   };
 }
