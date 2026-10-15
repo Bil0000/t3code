@@ -73,7 +73,7 @@ const option = (value: unknown) => {
     throw new Error("Invalid Jira option.");
   return { value: key, label: name ?? key, native: id === undefined ? { value: name } : { id } };
 };
-export function jiraInputField(id: string, field: JiraFieldMetadata): IssueInputField {
+function jiraInputField(id: string, field: JiraFieldMetadata): IssueInputField {
   if (!/^[a-zA-Z][a-zA-Z0-9_]{0,99}$/.test(id) || forbidden.has(id))
     throw new Error("Invalid Jira form field.");
   const type = field.schema?.type;
