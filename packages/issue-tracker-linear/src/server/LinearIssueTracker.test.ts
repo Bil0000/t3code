@@ -1070,6 +1070,69 @@ describe("LinearIssueTracker", () => {
       ]);
     }),
   );
+  it.effect.each([
+    { scope: "acme/OPS", query: "ENG-12", numbered: false },
+    { scope: "acme/OPS", query: "eng-12", numbered: false },
+    { scope: "ENG", query: "ENG-12", numbered: true },
+    { scope: "acme/ENG", query: "eng-12", numbered: true },
+    { scope: "acme/ENG", query: "12", numbered: true },
+    { scope: "acme/OPS", query: "12", numbered: true },
+    { scope: "acme/ENG", query: "#12", numbered: true },
+    { scope: "acme/OPS", query: "#12", numbered: true },
+    { scope: "acme/ENG", query: " ENG-12 ", numbered: true },
+    { scope: "acme/ENG", query: "OTHER-12", numbered: false },
+    { scope: "acme/ENG", query: "ENG-12x", numbered: false },
+    { scope: "acme/ENG", query: "ENG-#12", numbered: false },
+    { scope: "acme/ENG", query: "fix ENG-12", numbered: false },
+  ])("searches $query within $scope without dropping its team", ({ scope, query, numbered }) =>
+    Effect.gen(function* () {
+      const team = scope.split("/").at(-1)!;
+      const textMatch = issue(`${team}-99`, { title: query });
+      const test = fakeLinear({
+        T3Issues: (variables) => {
+          const filter = variables.filter as {
+            or: Array<{ number?: { eq: number } }>;
+          };
+          return {
+            organization: ORGANIZATION,
+            issues: {
+              nodes: [
+                textMatch,
+                ...(filter.or.some((branch) => branch.number?.eq === 12)
+                  ? [issue(`${team}-12`)]
+                  : []),
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          };
+        },
+      });
+      const api = yield* test.tracker;
+      const page = yield* api.listIssues({
+        ...target,
+        scope,
+        query,
+        state: "all",
+        involvement: "all",
+        viewer: JULIUS.id,
+        limit: 20,
+      });
+      expect(test.requests.map((request) => request.operation)).toEqual(["T3Issues"]);
+      expect(test.requests[0]?.variables.filter).toEqual({
+        team: { key: { eq: team } },
+        or: [
+          { title: { containsIgnoreCase: query } },
+          { description: { containsIgnoreCase: query } },
+          ...(numbered ? [{ number: { eq: 12 } }] : []),
+        ],
+      });
+      expect(page.items.map((item) => item.key)).toEqual([
+        `${team}-99`,
+        ...(numbered ? [`${team}-12`] : []),
+      ]);
+    }),
+  );
+
   it.effect.each(["ENG", "acme/ENG"])("lists summaries with scope %s in one request", (scope) =>
     Effect.gen(function* () {
       const { tracker, requests } = fakeLinear({
