@@ -117,6 +117,17 @@ export function parseIssueUrl(
       : null;
   }
 
+  if (url.pathname.startsWith("/groups/")) {
+    const group =
+      /^\/groups\/([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)\/-\/(?:epics|work_items)\/([1-9]\d*)\/?$/u.exec(
+        url.pathname,
+      );
+    const link = claim("gitlab", host, group);
+    return link && !url.username && !url.password
+      ? { ...link, scope: `group:${link.scope}` }
+      : null;
+  }
+
   // GitLab, self-hosted included: /{group}/[{subgroup}/...]{repo}/-/issues/{n}
   const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/(?:issues|work_items)\/(\d+)(?:\/|$)/u.exec(
     url.pathname,

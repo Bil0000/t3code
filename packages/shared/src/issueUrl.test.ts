@@ -3,6 +3,34 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseIssueUrl } from "./issueUrl.ts";
 
 describe("parseIssueUrl", () => {
+  it.each(["epics", "work_items"])("keeps GitLab group %s separate from project issues", (path) => {
+    expect(
+      parseIssueUrl(`https://git.internal:8443/groups/Acme/Platform/-/${path}/42#note_1`),
+    ).toEqual({
+      tracker: "gitlab",
+      host: "git.internal:8443",
+      scope: "group:acme/platform",
+      key: "42",
+    });
+    expect(parseIssueUrl("https://git.internal:8443/acme/platform/-/work_items/42")?.scope).toBe(
+      "acme/platform",
+    );
+    expect(parseIssueUrl(`https://git.internal/groups/acme/-/${path}/42`)?.scope).toBe(
+      "group:acme",
+    );
+  });
+
+  it.each([
+    "https://user@git.internal/groups/acme/-/epics/42",
+    "https://git.internal/groups/acme%2Fplatform/-/epics/42",
+    "https://git.internal/groups/acme/-/issues/42",
+    "https://git.internal/groups/acme/-/epics/0",
+    "https://git.internal/groups/acme/-/work_items/42/extra",
+    "https://git.internal/groups/acme/-/epics/9007199254740992",
+  ])("rejects an invalid GitLab group reference %s", (url) => {
+    expect(parseIssueUrl(url)).toBeNull();
+  });
+
   it.each(["git.cafe", "staging.git.cafe"])("reads native GitCafe issues on %s", (host) => {
     expect(parseIssueUrl(`https://${host}/Team/Repo/issues/42`)).toEqual({
       tracker: "gitcafe",

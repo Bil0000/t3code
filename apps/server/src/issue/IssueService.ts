@@ -395,7 +395,9 @@ export const make = Effect.gen(function* () {
           return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
         }
         const scope = ref.scope.trim();
-        const writable = issueScopeKeyOf({ tracker: own.tracker, scope }) === issueScopeKeyOf(own);
+        const writable =
+          !(own.tracker === "gitlab" && scope.toLowerCase().startsWith("group:")) &&
+          issueScopeKeyOf({ tracker: own.tracker, scope }) === issueScopeKeyOf(own);
         if (
           own.tracker === "linear" &&
           own.scope.includes("/") &&
@@ -1377,7 +1379,9 @@ export const make = Effect.gen(function* () {
             ? parsed.scope.toUpperCase()
             : issueScopeKeyOf({ tracker: parsed.tracker, scope })),
         key: parsed.key,
-        writable: own !== undefined,
+        writable:
+          own !== undefined &&
+          !(parsed.tracker === "gitlab" && scope.toLowerCase().startsWith("group:")),
       };
     });
 

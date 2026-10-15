@@ -18,12 +18,14 @@ import {
   type IssueEvent,
   type IssuePageInput,
   type IssueInvolvement,
+  type IssueViewerPermissions,
 } from "@t3tools/contracts";
 import {
   IssueTrackerError,
   type IssueTrackerApi,
   type IssueScopeTarget,
   type IssueTarget,
+  type TrackerIssueDetail,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -55,11 +57,17 @@ import {
   decodeWorkItemEnvelope,
   decodeWorkItemJson,
   decodeWorkItemMutationJson,
+  decodeEpicJson,
+  decodeEpicHistoryJson,
+  EPIC_QUERY,
+  EPIC_HISTORY_QUERY,
   WORK_ITEM_HIERARCHY_QUERY,
   WORK_ITEM_PARENT_MUTATION,
   WORK_ITEM_QUERY,
   type GitLabWorkItem,
   type GitLabWorkItemWithHierarchy,
+  type GitLabEpic,
+  type GitLabEpicActivity,
 } from "./gitLabIssueHierarchy.ts";
 
 const EditCommentPermissions = Schema.Struct({
@@ -115,6 +123,45 @@ const CAPABILITIES: IssueCapabilities = {
   // GitLab records nothing about why an issue was closed.
   closeReasons: [],
 };
+
+const EPIC_CAPABILITIES: IssueCapabilities = {
+  create: false,
+  edit: false,
+  comment: false,
+  editComment: false,
+  subIssues: true,
+  createSubIssue: false,
+  updateParent: false,
+  subIssueNoun: "Work items",
+  labels: false,
+  assignees: false,
+  reactions: false,
+  templates: false,
+  linkedPullRequests: false,
+  events: true,
+  search: false,
+  states: [],
+  closeReasons: [],
+};
+const EPIC_PERMISSIONS: IssueViewerPermissions = {
+  updateParent: false,
+  setState: false,
+  comment: false,
+  edit: false,
+  labels: false,
+  assignees: false,
+};
+
+function groupPath(scope: string): string | null {
+  const trimmed = scope.trim();
+  return /^group:/i.test(trimmed) ? trimmed.slice(6) : null;
+}
+
+function epicActor(actor: GitLabEpic["author"]): IssueActor | null {
+  return actor === null
+    ? null
+    : { id: actor.id, login: actor.username, name: actor.name, avatarUrl: actor.avatarUrl };
+}
 
 /** How many of a scope's templates are read in full; each one is a request of its own. */
 const TEMPLATE_LIMIT = 20;
@@ -316,6 +363,14 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         ? Effect.succeed(item)
         : Effect.fail(refused(operation, "The work item does not belong to this project."));
 
+    const groupWorkItem = (input: IssueTarget, item: GitLabWorkItem, operation: string) =>
+      item.iid === input.key &&
+      item.project === null &&
+      item.workItemType.name === "Epic" &&
+      item.namespace.fullPath.toLowerCase() === groupPath(input.scope)?.toLowerCase()
+        ? Effect.void
+        : Effect.fail(refused(operation, "The work item is not an Epic in this group."));
+
     const workItem = (
       input: IssueTarget,
       operation: string,
@@ -324,12 +379,21 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       Effect.gen(function* () {
         const iid = parseNumber(input.key);
         if (iid === null || !Number.isSafeInteger(iid)) return yield* notFound(operation);
+        const group = groupPath(input.scope);
+        if (
+          group !== null &&
+          (!input.scope.trim().startsWith("group:") ||
+            group
+              .split("/")
+              .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)))
+        )
+          return yield* notFound(operation);
         const raw = yield* nativeGraphql(
           input,
           operation,
           page === undefined ? WORK_ITEM_QUERY : WORK_ITEM_HIERARCHY_QUERY,
           {
-            fullPath: input.scope.trim(),
+            fullPath: group ?? input.scope.trim(),
             iid: input.key,
             ...page,
           },
@@ -338,7 +402,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
         const selected = decoded.success.data.namespace?.workItem;
         if (selected === undefined || selected === null) return yield* notFound(operation);
-        yield* projectWorkItem(input, selected, operation);
+        if (group === null) yield* projectWorkItem(input, selected, operation);
+        else yield* groupWorkItem(input, selected, operation);
         return selected;
       });
 
@@ -378,13 +443,15 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           refused(operation, "GitLab returned a work item URL outside this host."),
         );
       return Effect.succeed({
-        scope: item.namespace.fullPath,
+        scope: item.project === null ? `group:${item.namespace.fullPath}` : item.namespace.fullPath,
         key: item.iid,
         displayKey: `${item.project === null ? "&" : "#"}${item.iid}`,
         title: item.title,
         url: item.webUrl,
         itemType: item.workItemType.name,
-        ...(item.project === null ? { externalOnly: true } : {}),
+        ...(item.project === null && item.workItemType.name !== "Epic"
+          ? { externalOnly: true }
+          : {}),
         state:
           item.state === "CLOSED"
             ? {
@@ -402,6 +469,217 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       parent.project !== null &&
       parent.project.fullPath === child.project?.fullPath &&
       parent.namespace.fullPath === child.namespace.fullPath;
+
+    const epicParent = (child: GitLabWorkItem, parent: GitLabWorkItem) =>
+      parent.project === null &&
+      parent.workItemType.name === "Epic" &&
+      (child.project === null
+        ? child.workItemType.name === "Epic"
+        : child.workItemType.name === "Issue" &&
+          child.project.fullPath === child.namespace.fullPath);
+
+    const epicActivity = (
+      page: GitLabEpicActivity | null | undefined,
+      after: string | undefined,
+      first: number,
+      operation: string,
+    ) =>
+      Effect.gen(function* () {
+        if (
+          page == null ||
+          page.nodes.length > first ||
+          (page.pageInfo.hasNextPage &&
+            (!page.pageInfo.endCursor ||
+              page.pageInfo.endCursor.length > 4096 ||
+              page.pageInfo.endCursor === after)) ||
+          page.nodes.some(
+            ({ notes }) =>
+              notes.pageInfo.hasNextPage ||
+              notes.nodes.length !== 1 ||
+              notes.nodes[0]?.system !== true,
+          )
+        )
+          return yield* refused(operation, "GitLab returned an incomplete epic activity page.");
+        const items = page.nodes
+          .flatMap(({ notes }) => notes.nodes)
+          .map((note): IssueEvent => {
+            const event = toSystemEvent(note.body);
+            const label = note.id.startsWith("gid://gitlab/LabelNote/");
+            return {
+              id: note.id,
+              kind:
+                event?.kind ??
+                (label && /^added .+ labels?$/.test(note.body)
+                  ? "labeled"
+                  : label && /^removed .+ labels?$/.test(note.body)
+                    ? "unlabeled"
+                    : "updated"),
+              actor: epicActor(note.author),
+              createdAt: note.createdAt,
+              detail: event === null ? note.body.trim() || null : event.detail,
+            };
+          });
+        if (new Set(items.map((event) => event.id)).size !== items.length)
+          return yield* refused(operation, "GitLab returned duplicate epic activity.");
+        return {
+          items,
+          nextCursor: page.pageInfo.hasNextPage ? `activity:${page.pageInfo.endCursor}` : null,
+        };
+      });
+
+    const epicHistory = (input: IssueTarget & IssuePageInput) =>
+      Effect.gen(function* () {
+        const group = groupPath(input.scope);
+        const iid = parseNumber(input.key);
+        const first = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
+        const after = input.cursor?.startsWith("activity:") ? input.cursor.slice(9) : undefined;
+        if (
+          group === null ||
+          !input.scope.trim().startsWith("group:") ||
+          group
+            .split("/")
+            .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)) ||
+          iid === null ||
+          !Number.isSafeInteger(iid) ||
+          !Number.isSafeInteger(first) ||
+          first < 1 ||
+          (input.cursor !== undefined && (!after || after.length > 4096))
+        )
+          return yield* notFound("getHistory");
+        const raw = yield* nativeGraphql(input, "getHistory", EPIC_HISTORY_QUERY, {
+          fullPath: group,
+          iid: input.key,
+          first,
+          after: after ?? null,
+        });
+        const decoded = decodeEpicHistoryJson(raw);
+        if (Result.isFailure(decoded)) return yield* unreadable("getHistory", decoded.failure);
+        const selected = decoded.success.data.namespace?.workItem;
+        if (selected == null) return yield* notFound("getHistory");
+        yield* groupWorkItem(input, selected, "getHistory");
+        yield* relation(input, selected, "getHistory");
+        const widgets = selected.widgets.filter(
+          (widget) => widget.__typename === "WorkItemWidgetNotes",
+        );
+        if (widgets.length !== 1)
+          return yield* refused(
+            "getHistory",
+            "GitLab returned an unreadable epic activity widget.",
+          );
+        return yield* epicActivity(widgets[0]?.discussions, after, first, "getHistory");
+      });
+
+    const epic = (
+      input: IssueTarget & { readonly cursor?: string | undefined },
+      operation: string,
+    ) =>
+      Effect.gen(function* () {
+        const group = groupPath(input.scope);
+        const iid = parseNumber(input.key);
+        if (
+          group === null ||
+          !input.scope.trim().startsWith("group:") ||
+          group
+            .split("/")
+            .some((part) => !part || part === "." || part === ".." || /[:\\%?#\s]/.test(part)) ||
+          iid === null ||
+          !Number.isSafeInteger(iid) ||
+          (input.cursor !== undefined &&
+            (input.cursor.length === 0 ||
+              input.cursor.length > 4096 ||
+              input.cursor.startsWith("activity:")))
+        )
+          return yield* notFound(operation);
+        const raw = yield* nativeGraphql(input, operation, EPIC_QUERY, {
+          fullPath: group,
+          iid: input.key,
+          before: input.cursor ?? null,
+          includeHistory: operation === "getIssue",
+          first: PAGE_SIZE,
+          after: null,
+        });
+        const decoded = decodeEpicJson(raw);
+        if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
+        const selected = decoded.success.data.namespace?.workItem;
+        if (selected === undefined || selected === null) return yield* notFound(operation);
+        yield* groupWorkItem(input, selected, operation);
+        const reference = yield* relation(input, selected, operation);
+        const notes = selected.widgets.filter(
+          (widget) => widget.__typename === "WorkItemWidgetNotes",
+        );
+        const page = notes[0]?.notes;
+        if (
+          notes.length !== 1 ||
+          page === undefined ||
+          page.nodes.length > PAGE_SIZE ||
+          (page.pageInfo.hasPreviousPage &&
+            (!page.pageInfo.startCursor ||
+              page.pageInfo.startCursor.length > 4096 ||
+              page.pageInfo.startCursor === input.cursor))
+        )
+          return yield* refused(operation, "GitLab returned an unreadable epic notes page.");
+        const comments = page.nodes
+          .filter((note) => !note.system)
+          .map((note) => ({
+            id: note.id,
+            author: epicActor(note.author),
+            body: note.body,
+            createdAt: note.createdAt,
+            editedAt: note.lastEditedAt,
+            url: note.url,
+            canEdit: false,
+          }));
+        const activity =
+          operation === "getIssue"
+            ? yield* epicActivity(notes[0]?.discussions, undefined, PAGE_SIZE, operation)
+            : { items: [], nextCursor: null };
+        const nextCursor = page.pageInfo.hasPreviousPage ? page.pageInfo.startCursor : null;
+        return {
+          selected,
+          reference,
+          viewer: decoded.success.data.currentUser?.username ?? null,
+          comments,
+          events: activity.items,
+          historyNextCursor: activity.nextCursor,
+          nextCursor,
+        };
+      });
+
+    const epicDetail = (input: IssueTarget): Effect.Effect<TrackerIssueDetail, IssueTrackerError> =>
+      epic(input, "getIssue").pipe(
+        Effect.map(
+          ({ selected, reference, viewer, comments, events, nextCursor, historyNextCursor }) => {
+            const labels = selected.widgets.find(
+              (widget) => widget.__typename === "WorkItemWidgetLabels",
+            )?.labels;
+            const assignees = selected.widgets.find(
+              (widget) => widget.__typename === "WorkItemWidgetAssignees",
+            )?.assignees;
+            return {
+              ...reference,
+              capabilities: EPIC_CAPABILITIES,
+              viewerPermissions: EPIC_PERMISSIONS,
+              body: selected.description ?? "",
+              bodyEditable: false,
+              author: epicActor(selected.author),
+              viewer,
+              createdAt: selected.createdAt,
+              updatedAt: selected.updatedAt,
+              closedAt: selected.closedAt,
+              assignees: assignees?.nodes.flatMap((actor) => epicActor(actor) ?? []) ?? [],
+              labels:
+                labels?.nodes.map((label) => ({ name: label.title, color: label.color })) ?? [],
+              labelsTruncated: labels?.pageInfo.hasNextPage ?? false,
+              commentCount: null,
+              comments,
+              commentsCursor: nextCursor,
+              events,
+              linkedPullRequests: [],
+              historyTruncated: historyNextCursor !== null,
+            };
+          },
+        ),
+      );
 
     const writableParent = (parent: GitLabWorkItem, operation: string) =>
       parent.workItemType.name === "Issue" &&
@@ -489,6 +767,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       input: { readonly scope: string; readonly key: string },
       operation: string,
     ): Effect.Effect<{ readonly number: number; readonly path: string }, IssueTrackerError> => {
+      if (groupPath(input.scope) !== null)
+        return Effect.fail(refused(operation, "Group epics are read-only."));
       const number = parseNumber(input.key);
       return number === null
         ? Effect.fail(notFound(operation))
@@ -557,6 +837,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       endpoint: string,
       decode: (raw: string) => Result.Result<ReadonlyArray<A>, unknown>,
     ) => {
+      if (groupPath(input.scope) !== null)
+        return Effect.fail(refused(operation, "Group epics are read-only."));
       const page = parsePage(input.cursor);
       if (page === null)
         return Effect.fail(refused(operation, "The cursor was not one GitLab handed out."));
@@ -623,16 +905,21 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
               "GitLab returned an inconsistent hierarchy page.",
             );
           if (
-            children.nodes.some((child) => !projectParent(child, selected)) ||
+            children.nodes.some(
+              (child) =>
+                child.id === selected.id ||
+                (!projectParent(child, selected) && !epicParent(child, selected)),
+            ) ||
             new Set(children.nodes.map((child) => child.id)).size !== children.nodes.length ||
-            new Set(children.nodes.map((child) => child.iid)).size !== children.nodes.length ||
+            new Set(
+              children.nodes.map(
+                (child) =>
+                  `${child.project === null ? "group:" : ""}${child.namespace.fullPath}:${child.iid}`,
+              ),
+            ).size !== children.nodes.length ||
             (widget.parent !== null &&
-              !projectParent(selected, widget.parent) &&
-              !(
-                selected.workItemType.name === "Issue" &&
-                widget.parent.workItemType.name === "Epic" &&
-                widget.parent.project === null
-              ))
+              (widget.parent.id === selected.id ||
+                (!projectParent(selected, widget.parent) && !epicParent(selected, widget.parent))))
           )
             return yield* refused(
               "getHierarchy",
@@ -652,6 +939,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
       setParent: (input) =>
         Effect.gen(function* () {
+          if (groupPath(input.scope) !== null)
+            return yield* refused("setParent", "Group epics are read-only.");
           if (input.parentKey === input.key)
             return yield* refused("setParent", "An issue cannot be its own parent.");
           const child = yield* workItem(input, "setParent");
@@ -665,6 +954,10 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       getViewer: (input) => viewer({ cwd: input.cwd, host: input.host, operation: "getViewer" }),
 
       listIssues: (input) => {
+        if (groupPath(input.scope) !== null)
+          return Effect.fail(
+            refused("listIssues", "Group epics cannot be listed as project issues."),
+          );
         if (input.involvement === "mentioned") {
           return Effect.fail(refused("listIssues", "GitLab cannot filter issues by mentions."));
         }
@@ -710,8 +1003,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         );
       },
 
-      getIssue: (input) =>
-        issuePath(input, "getIssue").pipe(
+      getIssue: (input) => {
+        if (groupPath(input.scope) !== null) return epicDetail(input);
+        return issuePath(input, "getIssue").pipe(
           Effect.flatMap(({ number, path }) =>
             Effect.all(
               [
@@ -790,10 +1084,15 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                 })),
               ),
           ),
-        ),
+        );
+      },
 
-      getComments: (input) =>
-        issuePath(input, "getComments").pipe(
+      getComments: (input) => {
+        if (groupPath(input.scope) !== null)
+          return epic(input, "getComments").pipe(
+            Effect.map(({ comments, nextCursor }) => ({ comments, nextCursor })),
+          );
+        return issuePath(input, "getComments").pipe(
           Effect.flatMap(({ number }) =>
             awards({
               cwd: input.cwd,
@@ -808,10 +1107,12 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             comments: page.comments,
             nextCursor: page.nextCursor,
           })),
-        ),
+        );
+      },
 
-      getViewerPermissions: (input) =>
-        issuePath(input, "getViewerPermissions").pipe(
+      getViewerPermissions: (input) => {
+        if (groupPath(input.scope) !== null) return Effect.succeed(EPIC_PERMISSIONS);
+        return issuePath(input, "getViewerPermissions").pipe(
           Effect.flatMap(({ number }) =>
             read({
               cwd: input.cwd,
@@ -834,7 +1135,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
               ),
             ),
           ),
-        ),
+        );
+      },
 
       editComment: (input) =>
         issuePath(input, "editComment").pipe(
@@ -894,6 +1196,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
       getHistory: (input) =>
         Effect.gen(function* () {
+          if (groupPath(input.scope) !== null) return yield* epicHistory(input);
           const match = /^(notes|labels|states):([1-9]\d{0,6})$/.exec(input.cursor ?? "notes:1");
           if (match === null)
             return yield* refused(
@@ -1009,6 +1312,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
 
       create: (input) =>
         Effect.gen(function* () {
+          if (groupPath(input.scope) !== null)
+            return yield* refused("create", "Group epics are read-only.");
           const assignee_ids = yield* assigneeIds("create", input.assignees);
           const parent =
             input.parentKey === undefined
@@ -1213,6 +1518,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         ),
 
       listTemplates: (input) => {
+        if (groupPath(input.scope) !== null)
+          return Effect.fail(refused("listTemplates", "Group epics are read-only."));
         if (input.metadataOnly && input.templateKey !== undefined)
           return Effect.fail(
             refused("listTemplates", "Choose a template catalog or one template body."),
@@ -1257,8 +1564,10 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         );
       },
 
-      listCandidates: (input) =>
-        Effect.all(
+      listCandidates: (input) => {
+        if (groupPath(input.scope) !== null)
+          return Effect.fail(refused("listCandidates", "Group epics are read-only."));
+        return Effect.all(
           [
             read({
               cwd: input.cwd,
@@ -1282,7 +1591,8 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             assignees,
             truncated: labels.length >= PAGE_SIZE || assignees.length >= PAGE_SIZE,
           })),
-        ),
+        );
+      },
     };
   },
 );

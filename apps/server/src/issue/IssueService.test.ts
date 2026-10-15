@@ -2175,6 +2175,137 @@ it.effect(
     }),
 );
 
+it.effect(
+  "resolves group epics with the same host and checkout without aliasing project IIDs",
+  () =>
+    Effect.gen(function* () {
+      const gitlab = IssueTrackerKind.make("gitlab");
+      const reads: unknown[] = [];
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "web",
+            provider: "gitlab",
+            host: "git.internal:8443",
+            repository: "acme/platform",
+          }),
+        ],
+        trackers: [
+          fakeTracker({
+            kind: gitlab,
+            getIssue: (input) =>
+              Effect.sync(() => {
+                reads.push(input);
+                return {
+                  ...issue(input.key),
+                  url: `https://git.internal:8443/groups/acme/platform/-/work_items/${input.key}`,
+                };
+              }),
+          }),
+        ],
+      });
+      const group = yield* service.resolveUrl(
+        "https://git.internal:8443/groups/acme/platform/-/epics/42",
+      );
+      expect(group).toMatchObject({
+        projectId: "web",
+        tracker: "gitlab",
+        host: "git.internal:8443",
+        scope: "group:acme/platform",
+        key: "42",
+        writable: false,
+      });
+      expect(yield* service.detail(group)).toMatchObject({
+        scope: "group:acme/platform",
+        writable: false,
+      });
+      expect(reads).toEqual([
+        { cwd: "/w/web", host: "git.internal:8443", scope: "group:acme/platform", key: "42" },
+      ]);
+      const own = yield* service.resolveUrl(
+        "https://git.internal:8443/acme/platform/-/work_items/42",
+      );
+      expect(own).toMatchObject({ scope: "acme/platform", key: "42", writable: true });
+      for (const host of ["git.internal", "git.internal:9443"]) {
+        expect(
+          yield* service
+            .resolveUrl(`https://${host}/groups/acme/platform/-/epics/42`)
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "IssueUnavailableError" });
+      }
+    }),
+);
+
+it.effect(
+  "keeps GitLab group scopes read-only even when a stored repository claims the group marker",
+  () =>
+    Effect.gen(function* () {
+      const gitlab = IssueTrackerKind.make("gitlab");
+      const native = () => Effect.die("Group mutations must stop before native reads or writes");
+      const base = fakeTracker();
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "web",
+            provider: "gitlab",
+            host: "git.internal",
+            repository: "group:acme/platform",
+          }),
+        ],
+        trackers: [
+          fakeTracker({
+            kind: gitlab,
+            capabilities: {
+              ...base.capabilities,
+              create: true,
+              reactions: true,
+              editComment: true,
+              updateParent: true,
+              dependencies: true,
+            },
+            getViewerPermissions: native,
+            create: native,
+            comment: native,
+            update: native,
+            setState: native,
+            editComment: native,
+            setParent: native,
+            setReaction: native,
+            setDependency: native,
+          }),
+        ],
+      });
+      const ref = {
+        projectId: ProjectId.make("web"),
+        tracker: gitlab,
+        scope: "group:acme/platform",
+        key: "42",
+      };
+      expect(
+        yield* service.resolveUrl("https://git.internal/groups/acme/platform/-/epics/42"),
+      ).toMatchObject({ ...ref, writable: false });
+      expect(yield* service.detail(ref)).toMatchObject({ writable: false });
+      for (const mutation of [
+        service.create({ ...ref, title: "New", body: "", labels: [], assignees: [] }),
+        service.comment({ ...ref, body: "Comment" }),
+        service.update({ ...ref, title: "Edit" }),
+        service.setState({ ...ref, state: "closed" }),
+        service.editComment({ ...ref, commentId: "7", body: "Edit" }),
+        service.setParent({ ...ref, parentKey: "7" }),
+        service.react({ ...ref, content: "heart", reacted: true }),
+        service.setDependency({
+          ...ref,
+          direction: "blocked-by",
+          targetScope: "acme/platform",
+          targetKey: "7",
+          linked: true,
+        }),
+      ]) {
+        expect(yield* mutation.pipe(Effect.flip)).toMatchObject({ reason: "read-only" });
+      }
+    }),
+);
+
 it.effect("keeps a GitLab HTTP remote's port when its canonical repository key omits it", () =>
   Effect.gen(function* () {
     const gitlab = IssueTrackerKind.make("gitlab");

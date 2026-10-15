@@ -111,7 +111,7 @@ function tracker(answer: (args: ReadonlyArray<string>, body: Record<string, unkn
   );
 }
 
-it.effect("reads one native task page and preserves a group epic as an external parent", () =>
+it.effect("reads one native task page and preserves a group epic as an internal parent", () =>
   Effect.gen(function* () {
     let calls = 0;
     const api = yield* tracker((args, body) => {
@@ -140,11 +140,11 @@ it.effect("reads one native task page and preserves a group epic as an external 
     );
     expect(calls).toBe(1);
     expect(page.parent).toMatchObject({
-      scope: "acme",
+      scope: "group:acme",
       key: "7",
       itemType: "Epic",
-      externalOnly: true,
     });
+    expect(page.parent?.externalOnly).not.toBe(true);
     expect(page.children.items).toMatchObject([{ scope: "acme/web", key: "43", itemType: "Task" }]);
     expect(page.children.nextCursor).toBe("page-2");
   }),
