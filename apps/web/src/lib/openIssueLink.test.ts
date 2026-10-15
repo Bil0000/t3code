@@ -10,6 +10,9 @@ import {
   ThreadId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
 
 const state = vi.hoisted(() => ({
   supported: true,
@@ -18,6 +21,10 @@ const state = vi.hoisted(() => ({
   toast: vi.fn(),
   toastClose: vi.fn(),
   navigate: vi.fn(),
+  openPreview: vi.fn(),
+  previewGrant: false,
+  shell: { projectId: "project-a" },
+  shellListeners: new Set<() => void>(),
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
@@ -25,37 +32,53 @@ vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),
-  readEnvironmentScope: () => false,
+  readEnvironmentScope: () => state.previewGrant,
   useEnvironmentScope: () => false,
   usePreparedConnection: () => ({ _tag: "None" }),
 }));
 vi.mock("../remoteOpen", () => ({
   useRemoteOpenResolution: () => ({ state: { mode: "local-exec" }, isResolved: true }),
 }));
-vi.mock("../state/entities", () => ({
-  readEnvironmentSupportsServerBrowser: () => false,
-  readThreadShell: () => null,
-  useProjects: () => [
-    {
-      environmentId: "env-a",
-      repositoryIdentity: {
-        provider: "forgejo",
-        canonicalKey: "git.acme.test/team/repo",
-        locator: { remoteUrl: "https://fake-token@git.acme.test:8443/team/repo.git" },
+vi.mock("../state/entities", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    readEnvironmentSupportsServerBrowser: () => false,
+    readThreadShell: () => state.shell,
+    useThreadShell: () =>
+      useSyncExternalStore(
+        (listener) => {
+          state.shellListeners.add(listener);
+          return () => state.shellListeners.delete(listener);
+        },
+        () => state.shell,
+      ),
+    useProjects: () => [
+      {
+        environmentId: "env-a",
+        repositoryIdentity: {
+          provider: "forgejo",
+          canonicalKey: "git.acme.test/team/repo",
+          locator: { remoteUrl: "https://fake-token@git.acme.test:8443/team/repo.git" },
+        },
       },
-    },
-  ],
-  useServerConfigs: () =>
-    new Map([
-      ["env-a", { environment: { capabilities: { issues: state.supported } } }],
-      ["env-b", { environment: { capabilities: { issues: state.supported } } }],
-    ]),
-  useThreadShell: () => ({ projectId: "project-a" }),
+    ],
+    useServerConfigs: () =>
+      new Map([
+        ["env-a", { environment: { capabilities: { issues: state.supported } } }],
+        ["env-b", { environment: { capabilities: { issues: state.supported } } }],
+      ]),
+  };
+});
+vi.mock("../state/issues", () => ({ issueEnvironment: { resolveUrl: "resolveUrl" } }));
+vi.mock("../state/use-atom-command", () => ({
+  useAtomCommand: (command: unknown) =>
+    command === "resolveUrl" ? state.resolve : state.openPreview,
 }));
-vi.mock("../state/issues", () => ({ issueEnvironment: { resolveUrl: {} } }));
-vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => state.resolve }));
 vi.mock("../localApi", () => ({
   readLocalApi: () => ({ shell: { openExternal: state.openExternal } }),
+  ensureLocalApi: () => {
+    throw new Error("Settings storage is unavailable.");
+  },
 }));
 vi.mock("../components/ui/toast", () => ({
   toastManager: { add: state.toast, close: state.toastClose },
@@ -66,8 +89,13 @@ import {
   selectThreadRightPanelState,
   useRightPanelStore,
 } from "../rightPanelStore";
+import {
+  __resetClientSettingsPersistenceForTests,
+  __setClientSettingsForTests,
+} from "../hooks/useSettings";
 import { PullRequestCommentBody } from "../components/pullRequest/PullRequestCommentBody";
 import { PullRequestMarkdown } from "../components/pullRequest/PullRequestMarkdown";
+import ChatMarkdown from "../components/ChatMarkdown";
 import { useOpenIssueLink } from "./openIssueLink";
 
 const threadRef = { environmentId: EnvironmentId.make("env-a"), threadId: ThreadId.make("thread") };
@@ -102,6 +130,9 @@ beforeEach(async () => {
   useRightPanelStore.setState({ byThreadKey: {} });
   standalone = false;
   state.supported = true;
+  state.previewGrant = false;
+  state.shell = { projectId: "project-a" };
+  __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
   state.resolve.mockResolvedValue({ _tag: "Success", value: target });
   state.openExternal.mockResolvedValue(undefined);
   await act(async () => {
@@ -291,6 +322,100 @@ describe("native chat issue links", () => {
     expect(tab).toEqual({ opener: null, location: { href: url } });
     expect(state.openExternal).not.toHaveBeenCalled();
     expect(state.toast).not.toHaveBeenCalled();
+  });
+
+  describe("when the server rejects the link and links open in the app", () => {
+    const url = "https://linear.app/workspace/issue/ENG-42";
+    beforeEach(() => {
+      vi.stubGlobal("desktopBridge", { preview: {} });
+      __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, browserLinkTarget: "app" });
+      state.previewGrant = true;
+      state.resolve.mockResolvedValue({ _tag: "Failure" });
+    });
+
+    it("opens the link in the thread's in-app browser", async () => {
+      state.openPreview.mockResolvedValue(
+        AsyncResult.success({
+          threadId: threadRef.threadId,
+          tabId: "tab-issue",
+          navStatus: { _tag: "Loading", url, title: "" },
+          canGoBack: false,
+          canGoForward: false,
+          updatedAt: "2026-10-15T00:00:00.000Z",
+        }),
+      );
+      await act(async () => {
+        open(event(), url);
+      });
+      expect(state.resolve).toHaveBeenCalledOnce();
+      expect(state.openPreview).toHaveBeenCalledExactlyOnceWith({
+        environmentId: threadRef.environmentId,
+        input: expect.objectContaining({ threadId: threadRef.threadId, url }),
+      });
+      expect(surfaces(threadRef)).toMatchObject([{ kind: "preview", resourceId: "tab-issue" }]);
+      expect(state.openExternal).not.toHaveBeenCalled();
+      expect(state.toast).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["the preview grant is missing", () => (state.previewGrant = false)],
+      [
+        "the in-app browser fails",
+        () => state.openPreview.mockResolvedValue(AsyncResult.failure(Cause.fail("offline"))),
+      ],
+    ])("opens the system browser once when %s", async (_, fail) => {
+      fail();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      await act(async () => {
+        open(event(), url);
+      });
+      expect(state.openExternal).toHaveBeenCalledExactlyOnceWith(url);
+      expect(state.toast).not.toHaveBeenCalled();
+    });
+
+    it("opens nothing when the saved setting cannot be read", async () => {
+      __resetClientSettingsPersistenceForTests();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const windowOpen = vi.spyOn(window, "open");
+      await act(async () => {
+        open(event(), url);
+      });
+      expect(state.toast).toHaveBeenCalledOnce();
+      expect(state.openPreview).not.toHaveBeenCalled();
+      expect(state.openExternal).not.toHaveBeenCalled();
+      expect(windowOpen).not.toHaveBeenCalled();
+      expect(state.resolve).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("reads the thread's project on click without re-parsing mounted markdown on shell updates", async () => {
+    const url = "https://linear.app/workspace/issue/ENG-42";
+    const parses = vi.fn();
+    const countParses = [() => parses];
+    let body!: ReactTestRenderer;
+    await act(async () => {
+      body = create(
+        createElement(ChatMarkdown, {
+          text: `[ENG-42](${url})`,
+          cwd: "/repo",
+          threadRef,
+          extraRemarkPlugins: countParses,
+        }),
+      );
+    });
+    const mounted = parses.mock.calls.length;
+    await act(async () => {
+      state.shell = { projectId: "project-b" };
+      for (const listener of state.shellListeners) listener();
+    });
+    expect(parses).toHaveBeenCalledTimes(mounted);
+    const link = body.root.findAll((node) => node.type === "a" && node.props.href === url)[0]!;
+    await act(async () => link.props.onClick(event()));
+    expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+      environmentId: threadRef.environmentId,
+      input: { url, projectId: "project-b" },
+    });
+    await act(async () => body.unmount());
   });
 
   it("does not open an issue before a delayed resolver answer", async () => {

@@ -41,7 +41,6 @@ vi.mock("../state/session", async (importOriginal) => ({
 vi.mock("../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => false,
   readThreadShell: () => null,
-  useThreadShell: () => null,
   useProjects: () => [],
   useServerConfigs: () => new Map(),
 }));

@@ -166,8 +166,7 @@ vi.mock("../state/session", async (importOriginal) => {
 });
 vi.mock("../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => false,
-  readThreadShell: () => null,
-  useThreadShell: () => (issueLinks.enabled ? { projectId: "project-a" } : null),
+  readThreadShell: () => (issueLinks.enabled ? { projectId: "project-a" } : null),
   useProjects: () => [],
   useServerConfigs: () =>
     new Map(
