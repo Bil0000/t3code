@@ -537,4 +537,22 @@ describe("whole issue picker sets before native acknowledgement", () => {
     expect(heldIssuePicker(base, "labels", completed, "another-environment")).toBeNull();
     expect(heldIssuePicker(base, "assignees", completed, environmentId)).toBeNull();
   });
+
+  it.each([
+    ["a", "b"],
+    ["a", null],
+    [null, "b"],
+  ])("drops a set confirmed as %s once the issue reads as %s", (before, after) => {
+    const base = detail({ labels: [workspace], viewer: before });
+    const completed: IssuePickerConfirmed = {
+      base,
+      environmentId,
+      kind: "labels",
+      ids: ["W", "Other"],
+    };
+    expect(heldIssuePicker({ ...base }, "labels", completed, environmentId)).toBe(completed);
+    expect(
+      heldIssuePicker({ ...base, viewer: after }, "labels", completed, environmentId),
+    ).toBeNull();
+  });
 });

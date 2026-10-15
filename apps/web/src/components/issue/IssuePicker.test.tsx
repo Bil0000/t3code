@@ -26,7 +26,7 @@ vi.mock("~/state/query", () => ({
 }));
 
 const environmentId = EnvironmentId.make("environment");
-function detail(ids: string[]): IssueDetail {
+function detail(ids: string[], viewer = "viewer"): IssueDetail {
   return {
     projectId: ProjectId.make("project"),
     projectTitle: "Project",
@@ -39,7 +39,7 @@ function detail(ids: string[]): IssueDetail {
     url: "https://linear.app/workspace/issue/ENG-42",
     author: null,
     body: "",
-    viewer: "viewer",
+    viewer,
     state: { category: "open", name: "Open" },
     writable: true,
     commentCount: 0,
@@ -165,52 +165,55 @@ it.each(["labels", "assignees"] as const)(
   },
 );
 
-it("does not apply an old completed write to the same issue on another environment", async () => {
-  let issue = detail(["W"]);
-  let targetEnvironmentId = environmentId;
-  let finish!: (value: unknown) => void;
-  state.update
-    .mockReturnValueOnce(
-      new Promise((done) => {
-        finish = done;
-      }),
-    )
-    .mockResolvedValueOnce({ _tag: "Success" });
-  const render = async () =>
-    act(async () =>
-      root.render(
-        <IssueLabelPicker
-          detail={issue}
-          reference={{
-            projectId: issue.projectId,
-            tracker: issue.tracker,
-            host: issue.host,
-            scope: issue.scope,
-            key: issue.key,
-          }}
-          environmentId={targetEnvironmentId}
-          allowed
-          disabledReason=""
-          onUpdated={undefined}
-        />,
-      ),
+it.each(["environment", "account"] as const)(
+  "does not apply an old completed write to the same issue on another %s",
+  async (change) => {
+    let issue = detail(["W"]);
+    let targetEnvironmentId = environmentId;
+    let finish!: (value: unknown) => void;
+    state.update
+      .mockReturnValueOnce(
+        new Promise((done) => {
+          finish = done;
+        }),
+      )
+      .mockResolvedValueOnce({ _tag: "Success" });
+    const render = async () =>
+      act(async () =>
+        root.render(
+          <IssueLabelPicker
+            detail={issue}
+            reference={{
+              projectId: issue.projectId,
+              tracker: issue.tracker,
+              host: issue.host,
+              scope: issue.scope,
+              key: issue.key,
+            }}
+            environmentId={targetEnvironmentId}
+            allowed
+            disabledReason=""
+            onUpdated={undefined}
+          />,
+        ),
+      );
+    await render();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('button[aria-label="Change labels"]')!.click(),
     );
-  await render();
-  await act(async () =>
-    container.querySelector<HTMLButtonElement>('button[aria-label="Change labels"]')!.click(),
-  );
-  const option = (id: string) =>
-    [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((element) =>
-      element.textContent?.includes(id),
-    )!;
-  await act(async () => option("Other").click());
-  issue = detail(["Z"]);
-  targetEnvironmentId = EnvironmentId.make("another-environment");
-  await render();
-  await act(async () => finish({ _tag: "Success" }));
-  await act(async () => option("T").click());
-  expect(state.update.mock.calls[1]?.[0]).toMatchObject({
-    environmentId: targetEnvironmentId,
-    input: { labels: ["Z", "T"] },
-  });
-});
+    const option = (id: string) =>
+      [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((element) =>
+        element.textContent?.includes(id),
+      )!;
+    await act(async () => option("Other").click());
+    issue = detail(["Z"], change === "account" ? "another-viewer" : "viewer");
+    if (change === "environment") targetEnvironmentId = EnvironmentId.make("another-environment");
+    await render();
+    await act(async () => finish({ _tag: "Success" }));
+    await act(async () => option("T").click());
+    expect(state.update.mock.calls[1]?.[0]).toMatchObject({
+      environmentId: targetEnvironmentId,
+      input: { labels: ["Z", "T"] },
+    });
+  },
+);
