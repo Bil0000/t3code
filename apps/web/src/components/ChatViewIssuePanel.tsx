@@ -25,8 +25,9 @@ export function ChatViewIssuePanel({
     (surface.kind === "issue" ? (surface.environmentId as EnvironmentId | undefined) : undefined) ??
     threadRef.environmentId;
   const serverConfig = environmentById.get(environmentId)?.serverConfig ?? null;
+  if (serverConfig === null) return <PullRequestDetailGhost />;
   if (surface.kind === "issues") {
-    return serverConfig?.environment.capabilities.issues === true ? (
+    return serverConfig.environment.capabilities.issues === true ? (
       <ThreadIssuesPanel threadRef={threadRef} />
     ) : (
       <PullRequestsUnavailableState
@@ -35,7 +36,6 @@ export function ChatViewIssuePanel({
       />
     );
   }
-  if (serverConfig === null) return <PullRequestDetailGhost />;
   if (serverConfig.environment.capabilities.issues !== true) {
     return (
       <PullRequestsUnavailableState
