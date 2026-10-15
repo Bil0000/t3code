@@ -85,6 +85,189 @@ const keys = (page: { entries: IssueListResult["entries"] }) =>
 const decodeIssueList = Schema.decodeUnknownSync(IssueListResult);
 
 describe("held issue list viewers", () => {
+  it.each(["gitlab gitlab.example group/app", "gitlab.example group/app"])(
+    "keeps a completed 75-row scope terminal after an unchanged first refresh: %s",
+    async (cursor) => {
+      const supervisor = {} as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+      const runtime = Atom.runtime(
+        Layer.succeed(
+          EnvironmentRegistry.EnvironmentRegistry,
+          EnvironmentRegistry.EnvironmentRegistry.of({
+            run: (_environmentId, effect) =>
+              Effect.provideService(
+                effect,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+          } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+        ),
+      );
+      const registry = AtomRegistry.make();
+      const atoms = createIssueEnvironmentAtoms(runtime);
+      const nativeRows = (from: number, to: number) =>
+        Array.from({ length: to - from + 1 }, (_, index) => row(String(from + index))).map(
+          (row) => ({
+            ...row,
+            tracker: "gitlab" as IssueTrackerKind,
+            host: "gitlab.example",
+            scope: "group/app",
+          }),
+        );
+      const initial: IssueListResult = {
+        entries: nativeRows(1, 50),
+        nextCursors: { [cursor]: "2" },
+        viewers: { "gitlab gitlab.example": "A" },
+        trackers: [],
+        errors: [],
+      };
+      const last = { ...initial, entries: nativeRows(51, 75), nextCursors: {} };
+      const replies = [initial, last, initial];
+      const request = vi.spyOn(RpcClient, "requestGuarded");
+      request.mockImplementation((() => Effect.succeed(replies.shift()!)) as unknown as Parameters<
+        typeof request.mockImplementation
+      >[0]);
+      const read = async (input: IssueListInput) => {
+        const result = await atoms.listPage.run(registry, {
+          environmentId: "environment" as EnvironmentId,
+          input,
+        });
+        if (result._tag !== "Success") throw new Error("list read failed");
+        return result.value;
+      };
+      try {
+        const input = { state: "all" as const, involvement: "assigned" as const, limit: 50 };
+        const answer = await read(input);
+        const first = {
+          answer,
+          entries: answer.entries,
+          nextCursors: answer.nextCursors,
+          firstCursors: answer.nextCursors,
+          firstKeys: new Set(answer.entries.map(issueEntryKey)),
+          errors: answer.errors,
+        };
+        const completed = continueIssueListPage(
+          first,
+          first.nextCursors,
+          await read({ ...input, cursors: first.nextCursors }),
+          first.firstCursors,
+        );
+        expect(completed.entries).toHaveLength(75);
+        expect(completed.nextCursors).toEqual({});
+        const refreshed = refreshIssueListPage(completed, await read(input));
+        expect(refreshed.nextCursors).toEqual({});
+        expect(refreshed.entries.toSorted((a, b) => Number(a.key) - Number(b.key))).toEqual(
+          nativeRows(1, 75),
+        );
+        expect(refreshed.firstCursors).toEqual(first.firstCursors);
+        expect(refreshed.firstKeys).toEqual(first.firstKeys);
+        expect(refreshIssueListPage(refreshed, initial).nextCursors).toEqual({});
+        expect(request.mock.calls.map(([, payload]) => payload)).toEqual([
+          input,
+          { ...input, cursors: first.nextCursors },
+          input,
+        ]);
+        expect(replies).toEqual([]);
+      } finally {
+        registry.dispose();
+        request.mockRestore();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps completed native mounts separate through a scoped case-alias refresh, legacy: %s",
+    (legacy) => {
+      const upper = row("42", {
+        tracker: "forgejo" as IssueTrackerKind,
+        host: "forge.example",
+        scope: "Root/Mount/ACME/Web",
+      });
+      const lower = row("42", {
+        ...upper,
+        scope: "Root/mount/acme/web",
+        projectId: "lower" as ProjectId,
+      });
+      const current = { ...upper, scope: "Root/Mount/acme/web" };
+      const cursorFor = (row: IssueListEntry) =>
+        legacy ? `${row.host} ${row.scope}` : issueListCursorKey(row);
+      const upperCursor = cursorFor(upper),
+        lowerCursor = cursorFor(lower),
+        freshCursor = cursorFor(current);
+      const initial = {
+        entries: [upper, lower],
+        sources: [source(upper), source(lower)],
+        nextCursors: { [upperCursor]: "2", [lowerCursor]: "other-2" },
+        viewers: { [issueListCursorKey(upper)]: "A", [issueListCursorKey(lower)]: "A" },
+        errors: [],
+      };
+      const first = {
+        ...initial,
+        firstCursors: initial.nextCursors,
+        firstKeys: new Set(initial.entries.map(issueEntryKey)),
+      };
+      const tail = row("tail", upper);
+      const completed = continueIssueListPage(
+        first,
+        { [upperCursor]: "2" },
+        { ...initial, entries: [tail], nextCursors: {} },
+        first.firstCursors,
+      );
+      const fresh = {
+        ...initial,
+        entries: [current],
+        sources: [source(current)],
+        nextCursors: { [freshCursor]: "2" },
+      };
+      const refreshed = refreshIssueListPage(completed, fresh, { source: current });
+      expect(refreshed.entries).toEqual([lower, tail, current]);
+      expect(refreshed.nextCursors).toEqual({ [lowerCursor]: "other-2" });
+      expect(refreshed.firstCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
+      expect(refreshed.firstKeys).toEqual(new Set([issueEntryKey(lower), issueEntryKey(current)]));
+      const failed = refreshIssueListPage(
+        refreshed,
+        {
+          ...fresh,
+          entries: [],
+          nextCursors: {},
+          errors: [
+            {
+              projectId: upper.projectId,
+              projectTitle: upper.projectTitle,
+              tracker: upper.tracker,
+              host: upper.host,
+              message: "down",
+            },
+          ],
+        },
+        { source: current },
+      );
+      expect(failed.entries).toEqual(refreshed.entries);
+      expect(failed.nextCursors).toEqual(refreshed.nextCursors);
+      const switched = refreshIssueListPage(
+        refreshed,
+        { ...fresh, viewers: { [issueListCursorKey(current)]: "B" } },
+        { source: current },
+      );
+      expect(switched.entries).toEqual([lower, current]);
+      expect(switched.nextCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
+      const rebound = { ...current, projectId: "replacement" as ProjectId };
+      const replaced = refreshIssueListPage(
+        refreshed,
+        { ...fresh, entries: [rebound], sources: [source(rebound)] },
+        { source: rebound },
+      );
+      expect(replaced.entries).toEqual([lower, rebound]);
+      expect(replaced.nextCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
+      const terminal = refreshIssueListPage(
+        refreshed,
+        { ...fresh, nextCursors: {} },
+        { source: current },
+      );
+      expect(terminal.entries).toEqual([lower, current]);
+      expect(terminal.nextCursors).toEqual({ [lowerCursor]: "other-2" });
+    },
+  );
+
   it.each(["qualified", "legacy", "missing"])(
     "keeps known mount viewers when a %s host frame is ambiguous",
     (kind) => {

@@ -964,7 +964,7 @@ describe("refreshIssueListPage", () => {
   });
 
   it.each(["github.com acme/app", "github github.com acme/app"])(
-    "restores an exhausted scope's cursor after an unchanged first-page refresh: %s",
+    "restores an exhausted cursor when its first-page token changes: %s",
     (scope) => {
       const first = {
         entries: rows(1, 2),
@@ -987,11 +987,11 @@ describe("refreshIssueListPage", () => {
       expect(completed.nextCursors).toEqual({});
       const fresh = refreshIssueListPage(completed, {
         entries: rows(1, 2),
-        nextCursors: { [scope]: "2" },
+        nextCursors: { [scope]: "fresh-2" },
         errors: [],
       });
       expect(fresh.entries).toEqual(rows(1, 4));
-      expect(fresh.nextCursors).toEqual({ [scope]: "2" });
+      expect(fresh.nextCursors).toEqual({ [scope]: "fresh-2" });
       expect(fresh.firstKeys).toEqual(first.firstKeys);
       const failed = refreshIssueListPage(fresh, {
         entries: [],
@@ -1002,7 +1002,7 @@ describe("refreshIssueListPage", () => {
       expect(failed.nextCursors).toEqual(fresh.nextCursors);
       const next = continueIssueListPage(
         failed,
-        { [scope]: "2" },
+        { [scope]: "fresh-2" },
         {
           entries: rows(3, 5),
           nextCursors: {},

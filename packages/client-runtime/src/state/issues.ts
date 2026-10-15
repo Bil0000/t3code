@@ -425,13 +425,24 @@ export function refreshIssueListPage<T extends HeldIssueList>(
       .map((row) => scopeOf(row, cursors)),
   );
   const continuing = new Set(Object.keys(fresh.nextCursors).map(keyOf));
+  const firstCursors = new Map(
+    Object.entries(held.firstCursors).map(([key, cursor]) => [keyOf(key), cursor]),
+  );
+  const pending = new Set(Object.keys(held.nextCursors).map(keyOf));
+  const exhausted = new Set(
+    Object.entries(fresh.nextCursors)
+      .filter(
+        ([key, cursor]) => !pending.has(keyOf(key)) && firstCursors.get(keyOf(key)) === cursor,
+      )
+      .map(([key]) => keyOf(key)),
+  );
   const keep = (key: string) => {
     const scope = keyOf(key);
     return (
       isBound(scope) &&
       (!covered(scope) ||
         (continuing.has(scope) &&
-          tails.has(scope) &&
+          (tails.has(scope) || exhausted.has(scope)) &&
           !shifted.has(scope) &&
           !changedOwners.has(scope) &&
           !changed.has(scope)))
