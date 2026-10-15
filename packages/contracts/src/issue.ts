@@ -276,6 +276,8 @@ export const IssueDetail = Schema.Struct({
   /** The signed-in account, so a comment edit is offered only on the viewer's own remarks. */
   viewer: Schema.NullOr(TrimmedNonEmptyString),
   body: Schema.String,
+  bodyEditable: Schema.optional(Schema.Boolean),
+  states: Schema.optional(Schema.Array(IssueState)),
   reactions: Schema.optional(Schema.Array(IssueReaction)),
   comments: Schema.Array(IssueComment),
   /** Where older comments carry on; null once the conversation is whole. */

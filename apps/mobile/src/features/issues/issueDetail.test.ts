@@ -71,6 +71,7 @@ const denied = {
   react: false,
   commentReact: false,
   edit: false,
+  editBody: false,
   labels: false,
   assignees: false,
   states: [],
@@ -124,6 +125,7 @@ describe("issue access", () => {
       react: true,
       commentReact: true,
       edit: true,
+      editBody: true,
       labels: true,
       assignees: true,
       states: [{ category: "closed", name: "Done" }],
@@ -218,6 +220,51 @@ describe("issue access", () => {
     expect(
       generic({ category: "closed", name: "Done", closeReason: "completed" }, ["completed"]).states,
     ).toEqual([{ category: "open", name: "open" }]);
+  });
+
+  it("offers the issue's own workflow states over the tracker-wide list", () => {
+    const issue = detail();
+    const access = (states: IssueDetail["states"], state = issue.state) =>
+      issueAccess({ ...issue, state, ...(states ? { states } : {}) }, grants).states;
+    expect(
+      access([
+        { category: "open", name: "In progress" },
+        { category: "open", name: "Review" },
+        { category: "closed", name: "Shipped" },
+      ]),
+    ).toEqual([
+      { category: "open", name: "Review" },
+      { category: "closed", name: "Shipped" },
+    ]);
+    expect(
+      access(
+        [
+          { category: "open", name: "To Do" },
+          { category: "open", name: "Doing" },
+          { category: "closed", name: "Done" },
+        ],
+        { category: "open", name: "To Do" },
+      ),
+    ).toEqual([
+      { category: "open", name: "Doing" },
+      { category: "closed", name: "Done" },
+    ]);
+    expect(access(undefined)).toEqual([{ category: "closed", name: "Done" }]);
+    expect(issueAccess({ ...issue, states: [] }, grants)).toMatchObject({
+      states: [],
+      closeReasons: [],
+    });
+  });
+
+  it("keeps the title editable when the description cannot round-trip", () => {
+    const issue = detail();
+    expect(issueAccess({ ...issue, bodyEditable: false }, grants)).toMatchObject({
+      edit: true,
+      editBody: false,
+    });
+    expect(issueAccess({ ...issue, bodyEditable: true }, grants).editBody).toBe(true);
+    expect(issueAccess(issue, grants).editBody).toBe(true);
+    expect(issueAccess(issue, { ...grants, update: false }).editBody).toBe(false);
   });
 
   it("does not offer state changes or close reasons when the viewer cannot set state", () => {

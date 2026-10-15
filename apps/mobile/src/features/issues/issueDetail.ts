@@ -40,34 +40,34 @@ export function issueAccess(
   react: boolean;
   commentReact: boolean;
   edit: boolean;
+  editBody: boolean;
   labels: boolean;
   assignees: boolean;
   states: ReadonlyArray<IssueState>;
   closeReasons: ReadonlyArray<string>;
 } {
   const writable = detail !== null && grants.connected && detail.writable;
+  const states = detail?.states ?? detail?.capabilities.states ?? [];
   const reactionsAllowed =
     writable && grants.react && detail.capabilities.reactionContents?.length !== 0;
   const statesAllowed =
-    writable &&
-    grants.setState &&
-    detail.viewerPermissions.setState &&
-    detail.capabilities.states.length > 0;
+    writable && grants.setState && detail.viewerPermissions.setState && states.length > 0;
   const closeReasons = statesAllowed
     ? detail.capabilities.closeReasons.filter(
         (reason) => detail.state.category !== "closed" || reason !== detail.state.closeReason,
       )
     : [];
-  const categoryOnly = detail?.capabilities.states.every(
-    (state) => state.name.toLowerCase() === state.category,
-  );
+  const categoryOnly = states.every((state) => state.name.toLowerCase() === state.category);
+  const edit =
+    writable && grants.update && detail.capabilities.edit && detail.viewerPermissions.edit;
   return {
     react: reactionsAllowed && detail.capabilities.reactions,
     commentReact:
       reactionsAllowed && (detail.capabilities.commentReactions ?? detail.capabilities.reactions),
     comment:
       writable && grants.comment && detail.capabilities.comment && detail.viewerPermissions.comment,
-    edit: writable && grants.update && detail.capabilities.edit && detail.viewerPermissions.edit,
+    edit,
+    editBody: edit && detail.bodyEditable !== false,
     labels:
       writable &&
       grants.update &&
@@ -80,7 +80,7 @@ export function issueAccess(
       detail.capabilities.assignees &&
       detail.viewerPermissions.assignees,
     states: statesAllowed
-      ? detail.capabilities.states.filter((state) =>
+      ? states.filter((state) =>
           categoryOnly
             ? state.category !== detail.state.category ||
               (state.category === "closed" && closeReasons.length > 0)

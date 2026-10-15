@@ -7,6 +7,7 @@ import {
   IssueActor,
   IssueCandidates,
   IssueCommentsPageInput,
+  IssueDetail,
   IssueUpdateInput,
   IssueTemplate,
   IssueTemplatesInput,
@@ -146,3 +147,62 @@ it("registers direct issue URL resolution with the read grant", () => {
   expect(() => decodeResult({ ...reference, host: undefined })).toThrow();
   expect(() => decodeResult({ ...reference, writable: undefined })).toThrow();
 });
+
+it.each([{}, { bodyEditable: false, states: [{ category: "closed", name: "Shipped" }] }])(
+  "accepts old and native issue detail fields %j",
+  (native) => {
+    const decode = Schema.decodeUnknownSync(IssueDetail);
+    const detail = {
+      tracker: IssueTrackerKind.make("linear"),
+      host: "linear.app",
+      scope: "team",
+      key: "TEAM-1",
+      displayKey: "TEAM-1",
+      projectId: ProjectId.make("project"),
+      projectTitle: "Project",
+      title: "Issue",
+      url: "https://example.com/issue",
+      author: null,
+      state: { category: "open", name: "In progress" },
+      createdAt: "2026-10-01T00:00:00Z",
+      updatedAt: "2026-10-01T00:00:00Z",
+      closedAt: null,
+      assignees: [],
+      labels: [],
+      commentCount: 0,
+      writable: true,
+      viewer: "viewer",
+      body: "",
+      comments: [],
+      commentsCursor: null,
+      events: [],
+      linkedPullRequests: [],
+      capabilities: {
+        create: true,
+        edit: true,
+        comment: true,
+        labels: true,
+        assignees: true,
+        reactions: true,
+        templates: false,
+        linkedPullRequests: true,
+        events: true,
+        search: true,
+        states: [
+          { category: "open", name: "IN PROGRESS" },
+          { category: "closed", name: "Done" },
+        ],
+        closeReasons: ["completed"],
+      },
+      viewerPermissions: {
+        setState: true,
+        comment: true,
+        edit: true,
+        labels: true,
+        assignees: true,
+      },
+      ...native,
+    };
+    expect(decode(detail)).toEqual(detail);
+  },
+);

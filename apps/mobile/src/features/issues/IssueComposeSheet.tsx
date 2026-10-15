@@ -2,7 +2,7 @@ import { RegistryContext } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { use, useRef, useState } from "react";
-import { Platform } from "react-native";
+import { Linking, Platform } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { MaterialButton } from "../../components/MaterialButton";
 import { issueEnvironment } from "../../state/issues";
@@ -32,7 +32,10 @@ export function IssueComposeSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const allowed = editing ? access.edit : access.comment;
-  const changed = editing ? title.trim() !== issue?.title || body !== issue?.body : true;
+  const bodyLocked = editing && !access.editBody;
+  const changed = editing
+    ? title.trim() !== issue?.title || (!bodyLocked && body !== issue?.body)
+    : true;
   const canSubmit =
     allowed && changed && (editing ? title.trim().length > 0 : body.trim().length > 0);
   const submit = async () => {
@@ -47,7 +50,7 @@ export function IssueComposeSheet({
             input: {
               ...target.input,
               ...(title.trim() !== issue?.title ? { title: title.trim() } : {}),
-              ...(body !== issue?.body ? { body } : {}),
+              ...(!bodyLocked && body !== issue?.body ? { body } : {}),
             },
           })
         : await comment({ ...target, input: { ...target.input, body } });
@@ -96,13 +99,24 @@ export function IssueComposeSheet({
         accessibilityLabel={editing ? "Description" : "Comment"}
         placeholder={editing ? "Description" : "Write a comment…"}
         placeholderTextColorClassName="accent-foreground-muted"
-        editable={!busy && Boolean(issue)}
+        editable={!busy && Boolean(issue) && !bodyLocked}
         value={body}
         maxLength={65536}
         onChangeText={(next) => setDraft({ title, body: next })}
         className="min-h-36 rounded-[20px] bg-grouped-card p-4 text-base text-foreground"
         style={{ textAlignVertical: "top" }}
       />
+      {issue && allowed && bodyLocked ? (
+        <>
+          <Text className="text-xs text-foreground-muted">
+            This description has formatting that can't be edited here.
+          </Text>
+          <MaterialButton
+            label="Edit description in browser"
+            onPress={() => void Linking.openURL(issue.url)}
+          />
+        </>
+      ) : null}
       {issue && !allowed ? (
         <Text className="text-xs text-foreground-muted">
           {editing ? "Editing" : "Commenting"} isn't available for this issue with your access.
