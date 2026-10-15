@@ -286,10 +286,8 @@ import {
   pullRequestPanelContext,
   threadPullRequestPanelTarget,
 } from "./pullRequest/pullRequestDetail.logic";
-import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
-import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
+import { ChatViewPullRequestPanel } from "./ChatViewPullRequestPanel";
 import { ChatViewIssuePanel } from "./ChatViewIssuePanel";
-import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
@@ -11165,20 +11163,14 @@ export default function ChatView(props: ChatViewProps) {
           workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
-    ) : renderedRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
-      <PullRequestDetailGhost />
-    ) : renderedRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
-      <PullRequestsUnavailableState
-        title="Pull requests unavailable"
-        error="Update this environment's T3 Code server to browse pull requests."
-      />
     ) : renderedRightPanelSurface?.kind === "pull-request" ? (
       // No onClose: the surface tab's own X owns closing here, and a second X in the header
       // would be the same action twice. The thread context also drops the checkout button, so it
       // is only right for the thread's own pull request, whose branch is already under the
       // reader's feet. A link the agent wrote can open any other one here, and that one has to be
       // checkable out like it is anywhere else.
-      <PullRequestDetailPanel
+      <ChatViewPullRequestPanel
+        environmentById={environmentById}
         getShortcutContext={getShortcutContext}
         shortcutsEnabled={
           rightPanelOpen && activeRightPanelSurface?.id === renderedRightPanelSurface.id
