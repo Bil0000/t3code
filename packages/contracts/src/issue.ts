@@ -25,6 +25,8 @@ export const IssueTrackerKind = TrimmedNonEmptyString.check(
 ).pipe(Schema.brand("IssueTrackerKind"));
 export type IssueTrackerKind = typeof IssueTrackerKind.Type;
 
+const IssueTrackerConnectionId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+
 export const IssueActor = Schema.Struct({
   ...PullRequestActor.fields,
   id: Schema.optional(TrimmedNonEmptyString),
@@ -114,6 +116,7 @@ export type IssueReaction = typeof IssueReaction.Type;
  * but the service refuses to write to it.
  */
 export const IssueRef = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   projectId: ProjectId,
   tracker: IssueTrackerKind,
   host: Schema.optional(TrimmedNonEmptyString),
@@ -123,6 +126,7 @@ export const IssueRef = Schema.Struct({
 export type IssueRef = typeof IssueRef.Type;
 
 export const IssueResolveUrlInput = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   url: Schema.String,
   projectId: Schema.optional(ProjectId),
 });
@@ -137,6 +141,7 @@ export type IssueResolvedUrl = typeof IssueResolvedUrl.Type;
 
 /** A scope with no issue in it, for reads about the container itself: templates, candidates. */
 export const IssueScopeRef = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   projectId: ProjectId,
   tracker: IssueTrackerKind,
   host: Schema.optional(TrimmedNonEmptyString),
@@ -183,6 +188,7 @@ export const IssueSummary = Schema.Struct({
 export type IssueSummary = typeof IssueSummary.Type;
 
 export const IssueListEntry = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   ...IssueSummary.fields,
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
@@ -309,6 +315,7 @@ export const IssueViewerPermissions = Schema.Struct({
 export type IssueViewerPermissions = typeof IssueViewerPermissions.Type;
 
 export const IssueDetail = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   states: Schema.optional(Schema.Array(IssueState)),
   ...IssueSummary.fields,
   projectId: ProjectId,
@@ -357,8 +364,12 @@ export function issueListCursorKey(source: {
   readonly tracker: string;
   readonly host: string;
   readonly scope: string;
+  readonly connectionId?: string | undefined;
 }): string {
-  return `${issueTrackerHostKey(source)} ${source.scope}`;
+  const key = `${issueTrackerHostKey(source)} ${source.scope}`;
+  return source.connectionId === undefined
+    ? key
+    : `@${encodeURIComponent(source.connectionId)} ${key}`;
 }
 
 export const IssueListCursors = Schema.Record(
@@ -368,6 +379,7 @@ export const IssueListCursors = Schema.Record(
 export type IssueListCursors = typeof IssueListCursors.Type;
 
 export const IssueListInput = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   stateCategories: Schema.optional(
     Schema.Array(IssueWorkflowCategory).check(Schema.isMaxLength(5)),
   ),
@@ -389,6 +401,7 @@ export type IssueListInput = typeof IssueListInput.Type;
 
 /** One tracker account the workspace has projects on, and whether it can be read right now. */
 export const IssueTrackerSummary = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   tracker: IssueTrackerKind,
   host: TrimmedNonEmptyString,
   projectCount: PositiveInt,
@@ -400,6 +413,7 @@ export const IssueTrackerSummary = Schema.Struct({
 export type IssueTrackerSummary = typeof IssueTrackerSummary.Type;
 
 export const IssueListProjectError = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,
@@ -418,6 +432,7 @@ export const IssueListResult = Schema.Struct({
         host: TrimmedNonEmptyString,
         scope: TrimmedNonEmptyString,
         capabilities: IssueCapabilities,
+        connectionId: Schema.optional(IssueTrackerConnectionId),
       }),
     ),
   ),
@@ -734,6 +749,7 @@ export type ThreadIssueLinkSource = typeof ThreadIssueLinkSource.Type;
  * outlives the project whose binding supplied the default.
  */
 export const ThreadIssueKey = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   tracker: IssueTrackerKind,
   host: TrimmedNonEmptyString,
   scope: TrimmedNonEmptyString,
@@ -777,13 +793,18 @@ export function issueScopeKeyOf(
 }
 
 export function threadIssueKeyOf(
-  key: Pick<ThreadIssueKey, "host" | "scope" | "key"> & { readonly tracker: string },
+  key: Pick<ThreadIssueKey, "host" | "scope" | "key" | "connectionId"> & {
+    readonly tracker: string;
+  },
 ): string {
   const nativeKey =
     key.tracker === "linear" || key.tracker === "jira"
       ? key.key.trim().toUpperCase()
       : key.key.trim();
-  return `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${issueScopeKeyOf(key)}\u0000${nativeKey}`;
+  const identity = `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${issueScopeKeyOf(key)}\u0000${nativeKey}`;
+  return key.connectionId === undefined
+    ? identity
+    : `@${encodeURIComponent(key.connectionId)}\u0000${identity}`;
 }
 
 export function threadIssueKeysEqual(left: ThreadIssueKey, right: ThreadIssueKey): boolean {
@@ -794,6 +815,7 @@ export function threadIssueKeysEqual(left: ThreadIssueKey, right: ThreadIssueKey
 export function threadIssueRefOf(link: ThreadIssueLink): IssueRef {
   return {
     projectId: link.projectId,
+    ...(link.connectionId === undefined ? {} : { connectionId: link.connectionId }),
     tracker: link.tracker,
     host: link.host,
     scope: link.scope,
@@ -833,6 +855,7 @@ export type StandaloneIssueTrackerDescriptor = typeof StandaloneIssueTrackerDesc
 
 /** Which standalone tracker scope a project's issues come from, beside its git host's own. */
 export const IssueTrackerProjectBinding = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   tracker: IssueTrackerKind,
   scope: TrimmedNonEmptyString,
   host: Schema.optional(TrimmedNonEmptyString),
@@ -851,6 +874,7 @@ export type IssueTrackerScope = typeof IssueTrackerScope.Type;
  * stored and still works, and the scopes it can reach. `scopes` is empty until connected.
  */
 export const IssueTrackerConnection = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   ...StandaloneIssueTrackerDescriptor.fields,
   /** A credential is stored. It may still be rejected, which `account` being null reports. */
   connected: Schema.Boolean,
@@ -864,6 +888,10 @@ export const IssueTrackerConnection = Schema.Struct({
 export type IssueTrackerConnection = typeof IssueTrackerConnection.Type;
 
 export const IssueTrackerConnectionList = Schema.Struct({
+  accounts: Schema.optional(Schema.Array(IssueTrackerConnection)),
+  projectBindings: Schema.optional(
+    Schema.Record(ProjectId, Schema.Array(IssueTrackerProjectBinding)),
+  ),
   trackers: Schema.Array(IssueTrackerConnection),
   /** Which standalone tracker scope each bound project reads; a project absent here reads none. */
   bindings: Schema.Record(ProjectId, IssueTrackerProjectBinding),
@@ -872,12 +900,15 @@ export type IssueTrackerConnectionList = typeof IssueTrackerConnectionList.Type;
 
 /** A credential for one standalone tracker; `null` disconnects it and unbinds its projects. */
 export const IssueTrackerConnectInput = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
+  addAccount: Schema.optional(Schema.Boolean),
   tracker: IssueTrackerKind,
   token: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
 });
 export type IssueTrackerConnectInput = typeof IssueTrackerConnectInput.Type;
 
 export const IssueTrackerBindProjectInput = Schema.Struct({
+  tracker: Schema.optional(IssueTrackerKind),
   projectId: ProjectId,
   /** Null unbinds. */
   binding: Schema.NullOr(IssueTrackerProjectBinding),

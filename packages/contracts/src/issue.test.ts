@@ -31,7 +31,12 @@ import {
   issueListCursorKey,
   threadIssueKeyOf,
   threadIssueKeysEqual,
+  threadIssueRefOf,
   IssueTrackerProjectBinding,
+  IssueListProjectError,
+  IssueTrackerConnectionList,
+  IssueTrackerConnectInput,
+  IssueTrackerBindProjectInput,
   StandaloneIssueTrackerDescriptor,
 } from "./issue.ts";
 
@@ -478,4 +483,116 @@ it("preserves optional issue body edit safety on the wire", () => {
     expect(decode({ bodyEditable })).toEqual({ bodyEditable });
   }
   expect(() => decode({ bodyEditable: "false" })).toThrow();
+});
+
+it("keeps legacy tracker inputs and preserves explicit account selectors", () => {
+  const connect = Schema.decodeUnknownSync(IssueTrackerConnectInput);
+  const bind = Schema.decodeUnknownSync(IssueTrackerBindProjectInput);
+  for (const input of [
+    { tracker: "linear", token: "token" },
+    { tracker: "linear", token: "token", addAccount: true },
+    { tracker: "linear", token: null, connectionId: "account-a" },
+  ])
+    expect(connect(input)).toEqual(input);
+  const input = {
+    projectId: "project",
+    binding: { tracker: "linear", scope: "acme/ENG", connectionId: "account-a" },
+  };
+  expect(bind(input)).toEqual(input);
+  expect(bind({ projectId: "project", binding: null, tracker: "linear" })).toEqual({
+    projectId: "project",
+    binding: null,
+    tracker: "linear",
+  });
+  expect(bind({ projectId: "project", binding: null })).toEqual({
+    projectId: "project",
+    binding: null,
+  });
+  expect(() => connect({ tracker: "linear", token: null, connectionId: "" })).toThrow();
+});
+
+it("preserves all per-tracker project bindings without changing legacy records", () => {
+  const decode = Schema.decodeUnknownSync(IssueTrackerConnectionList);
+  const linear = { tracker: "linear", scope: "acme/ENG", connectionId: "account-a" };
+  const jira = {
+    tracker: "jira",
+    scope: "OPS",
+    host: "example.atlassian.net",
+    connectionId: "account-b",
+  };
+  const legacy = { trackers: [], bindings: { project: { tracker: "linear", scope: "acme/ENG" } } };
+  expect(decode(legacy)).toEqual(legacy);
+  const current = {
+    ...legacy,
+    accounts: [
+      {
+        tracker: "linear",
+        displayName: "Linear",
+        host: "linear.app",
+        scopeNoun: "team",
+        credential: { label: "Token", helpUrl: null },
+        connected: true,
+        account: "Alice",
+        detail: null,
+        scopes: [],
+        connectionId: "account-a",
+      },
+    ],
+    projectBindings: { project: [linear, jira] },
+  };
+  expect(decode(current)).toEqual(current);
+});
+
+it("keeps explicit accounts separate in source cursor keys and preserves legacy keys", () => {
+  const source = { tracker: "linear", host: "LINEAR.APP", scope: "acme/ENG" };
+  expect(issueListCursorKey(source)).toBe("linear linear.app acme/ENG");
+  const a = { ...source, connectionId: "account-a" };
+  const b = { ...source, connectionId: "account-b" };
+  expect(issueListCursorKey(a)).not.toBe(issueListCursorKey(b));
+  expect(issueListCursorKey(a)).not.toBe(issueListCursorKey(source));
+});
+
+it("retains selected account identity through refs and same-native-key thread links", () => {
+  const key = {
+    tracker: IssueTrackerKind.make("linear"),
+    host: "linear.app",
+    scope: "acme/ENG",
+    key: "eng-7",
+  };
+  const selected = { ...key, connectionId: "account-a" };
+  expect(threadIssueKeysEqual(selected, { ...selected, key: "ENG-7" })).toBe(true);
+  expect(threadIssueKeysEqual(selected, { ...selected, connectionId: "account-b" })).toBe(false);
+  expect(threadIssueKeysEqual(selected, key)).toBe(false);
+  const link = {
+    ...selected,
+    projectId: ProjectId.make("project"),
+    source: "manual" as const,
+    url: "https://linear.app/acme/issue/ENG-7",
+    linkedAt: "2026-10-15T00:00:00Z",
+    snapshot: null,
+  };
+  expect(decodeThreadLink(link)).toEqual(link);
+  expect(decodeScope(threadIssueRefOf(link))).toEqual({
+    projectId: link.projectId,
+    tracker: key.tracker,
+    host: key.host,
+    scope: key.scope,
+    connectionId: "account-a",
+  });
+});
+
+it("keeps account-specific native list errors distinct from legacy errors", () => {
+  const decode = Schema.decodeUnknownSync(IssueListProjectError);
+  const error = {
+    projectId: "project",
+    projectTitle: "Project",
+    message: "Failed",
+    tracker: "linear",
+    host: "linear.app",
+  };
+  expect(decode(error)).toEqual(error);
+  expect(decode({ ...error, connectionId: "Account-A" })).toEqual({
+    ...error,
+    connectionId: "Account-A",
+  });
 });

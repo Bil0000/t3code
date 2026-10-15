@@ -15,6 +15,11 @@ import type * as Option from "effect/Option";
 
 import type { IssueTrackerError } from "./IssueTracker.ts";
 
+export const ConnectionId = Context.Reference<string | undefined>(
+  "@t3tools/issue-tracker-core/server/IssueTrackerHost/ConnectionId",
+  { defaultValue: () => undefined },
+);
+
 export class IssueTrackerHost extends Context.Service<
   IssueTrackerHost,
   {
@@ -22,6 +27,7 @@ export class IssueTrackerHost extends Context.Service<
       /** Read fresh on each call, so a credential saved in Settings applies without a restart. */
       readonly get: (
         tracker: IssueTrackerKind,
+        connectionId?: string | undefined,
       ) => Effect.Effect<Option.Option<string>, IssueTrackerError>;
     };
   }
