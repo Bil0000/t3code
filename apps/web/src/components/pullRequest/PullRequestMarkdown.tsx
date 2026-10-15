@@ -67,6 +67,7 @@ export function PullRequestMarkdown({
   environmentId,
   threadRef,
   issueLinkContext,
+  pullRequestPanelRef,
   className,
 }: {
   text: string;
@@ -75,6 +76,7 @@ export function PullRequestMarkdown({
   /** Thread the body is shown beside, so its links can open in that thread's in-app browser. */
   threadRef?: ScopedThreadRef | null;
   issueLinkContext?: IssueLinkContext | undefined;
+  pullRequestPanelRef?: ScopedThreadRef | undefined;
   className?: string;
 }) {
   const segments = splitPullRequestBody(text);
@@ -108,7 +110,9 @@ export function PullRequestMarkdown({
               cwd={cwd}
               threadRef={resolvedThreadRef}
               issueLinkContext={issueLinkContext}
-              pullRequestPanelRef={resolvedThreadRef ?? PULL_REQUESTS_PANEL_REF}
+              pullRequestPanelRef={
+                pullRequestPanelRef ?? resolvedThreadRef ?? PULL_REQUESTS_PANEL_REF
+              }
               environmentId={environmentId}
               extraRemarkPlugins={extraRemarkPlugins}
               githubMedia

@@ -10,7 +10,7 @@ import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { useOpenLink } from "../browser/useOpenLink";
 import { useClientSettings } from "../hooks/useSettings";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
-import { useRightPanelStore } from "../rightPanelStore";
+import { PULL_REQUESTS_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import { useProjects, useServerConfigs } from "../state/entities";
@@ -210,7 +210,7 @@ export function useOpenChangeRequestLink(
           url: targetUrl,
           number: parsed.number,
         });
-        if (!resolvedThreadRef) {
+        if (!resolvedThreadRef && resolvedPanelRef === PULL_REQUESTS_PANEL_REF) {
           void navigate({
             to: "/pull-requests",
             search: (previous) => ({

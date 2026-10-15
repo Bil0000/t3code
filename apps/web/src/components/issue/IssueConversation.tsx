@@ -9,6 +9,7 @@ import type {
 import { useState } from "react";
 
 import { issueEnvironment } from "~/state/issues";
+import { ISSUES_PANEL_REF } from "~/rightPanelStore";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { PullRequestActorLabel, PullRequestMetaLine } from "../pullRequest/pullRequestPresentation";
@@ -123,6 +124,7 @@ export function IssueCommentContent({
           label="Edit comment"
           threadRef={threadRef ?? null}
           issueLinkContext={{ ...reference, environmentId }}
+          pullRequestPanelRef={threadRef ?? ISSUES_PANEL_REF}
           saving={saving}
           onSave={(next) => void save(next)}
           onCancel={() => setEditing(false)}
@@ -136,6 +138,7 @@ export function IssueCommentContent({
           environmentId={environmentId}
           threadRef={threadRef ?? null}
           issueLinkContext={{ ...reference, environmentId }}
+          pullRequestPanelRef={threadRef ?? ISSUES_PANEL_REF}
         />
       )}
     </>

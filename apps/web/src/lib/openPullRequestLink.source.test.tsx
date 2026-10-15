@@ -7,6 +7,7 @@ import { EnvironmentId, IssueTrackerKind, ProjectId, ThreadId } from "@t3tools/c
 
 const state = vi.hoisted(() => ({
   read: vi.fn(),
+  navigate: vi.fn(),
   preview: vi.fn(),
   command: vi.fn(),
   configs: new Map(
@@ -21,7 +22,7 @@ const state = vi.hoisted(() => ({
     ]),
   ),
 }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) =>
     atom === "edit-permission"
@@ -107,7 +108,9 @@ import { PullRequestCommentBody } from "../components/pullRequest/PullRequestCom
 import { PullRequestMarkdownContext } from "../components/pullRequest/PullRequestMarkdown";
 import { IssueCommentContent } from "../components/issue/IssueConversation";
 import ChatMarkdown from "../components/ChatMarkdown";
+import { PullRequestMarkdownEditor } from "../components/pullRequest/PullRequestMarkdownEditor";
 import {
+  ISSUES_PANEL_REF,
   PULL_REQUESTS_PANEL_REF,
   selectThreadRightPanelState,
   useRightPanelStore,
@@ -140,7 +143,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function show(surface: string, text = `[PR 42](${url})`) {
+async function show(surface: string, text = `[PR 42](${url})`, standaloneIssue = false) {
   const environmentId = EnvironmentId.make(
     surface === "same-environment" || surface === "raw-chat" ? "env-a" : "env-b",
   );
@@ -152,7 +155,7 @@ async function show(surface: string, text = `[PR 42](${url})`) {
     key: "ENG-7",
     connectionId: "Account/B",
   };
-  const owner = surface === "standalone" ? null : threadRef;
+  const owner = surface === "standalone" || standaloneIssue ? null : threadRef;
   await act(async () =>
     root.render(
       surface === "raw-chat" ? (
@@ -161,7 +164,7 @@ async function show(surface: string, text = `[PR 42](${url})`) {
         <IssueCommentContent
           environmentId={environmentId}
           reference={reference}
-          threadRef={threadRef}
+          threadRef={owner}
           cwd="/repo"
           canEdit
           comment={{
@@ -183,6 +186,7 @@ async function show(surface: string, text = `[PR 42](${url})`) {
             environmentId={environmentId}
             threadRef={owner}
             issueLinkContext={{ ...reference, environmentId }}
+            {...(standaloneIssue ? { pullRequestPanelRef: owner ?? ISSUES_PANEL_REF } : {})}
           />
         </PullRequestMarkdownContext>
       ),
@@ -261,4 +265,91 @@ it("confirms a reference through the source PR preview before opening it", async
     { projectId: "project-env-b", environmentId: "env-b", number: 42 },
   ]);
   expect(state.command).not.toHaveBeenCalled();
+});
+
+const panel = (ref: typeof threadRef) =>
+  selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).surfaces;
+
+it.each(["body", "comment", "editor-preview"])(
+  "keeps a PR link from a standalone issue %s in the Issues panel",
+  async (surface) => {
+    const environmentId = await show(surface, undefined, true);
+    await act(async () => container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!.click());
+    expect(panel(ISSUES_PANEL_REF)).toMatchObject([
+      {
+        kind: "pull-request",
+        environmentId,
+        projectId: `project-${environmentId}`,
+        repository: "acme/repo",
+        number: 42,
+        url,
+      },
+    ]);
+    expect(panel(PULL_REQUESTS_PANEL_REF)).toEqual([]);
+    expect(panel(threadRef)).toEqual([]);
+    expect(state.navigate).not.toHaveBeenCalled();
+  },
+);
+
+it("still moves the pull requests page to a PR its own Markdown links to", async () => {
+  await show("standalone");
+  await act(async () => container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!.click());
+  expect(panel(PULL_REQUESTS_PANEL_REF)).toMatchObject([{ kind: "pull-request", number: 42 }]);
+  expect(state.navigate).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ to: "/pull-requests", replace: true }),
+  );
+  expect(state.navigate.mock.calls[0]![0].search({ state: "open" })).toMatchObject({
+    state: "open",
+    repository: "acme/repo",
+    number: 42,
+    selectedEnvironmentId: "env-b",
+  });
+});
+
+it.each([
+  ["meta", { metaKey: true }],
+  ["ctrl", { ctrlKey: true }],
+])("leaves a %s-click on a standalone issue PR link to the browser", async (_name, modifier) => {
+  await show("body", undefined, true);
+  const link = container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!;
+  const click = new MouseEvent("click", { bubbles: true, cancelable: true, ...modifier });
+  link.addEventListener("click", (event) => event.preventDefault());
+  await act(async () => link.dispatchEvent(click));
+  expect(panel(ISSUES_PANEL_REF)).toEqual([]);
+  expect(panel(PULL_REQUESTS_PANEL_REF)).toEqual([]);
+  expect(state.navigate).not.toHaveBeenCalled();
+});
+
+it("keeps the editor body and its standalone preview link target unchanged", async () => {
+  const onSave = vi.fn();
+  const environmentId = EnvironmentId.make("env-b");
+  const value = `Fixed by ${url}`;
+  await act(async () =>
+    root.render(
+      <PullRequestMarkdownEditor
+        value={value}
+        cwd="/repo"
+        environmentId={environmentId}
+        pullRequestPanelRef={ISSUES_PANEL_REF}
+        label="Description"
+        saving={false}
+        onSave={onSave}
+        onCancel={vi.fn()}
+      />,
+    ),
+  );
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((node) => node.textContent === "Preview")!
+      .click(),
+  );
+  await act(async () => container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!.click());
+  expect(panel(ISSUES_PANEL_REF)).toMatchObject([{ kind: "pull-request", environmentId }]);
+  expect(state.navigate).not.toHaveBeenCalled();
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((node) => node.textContent === "Save")!
+      .click(),
+  );
+  expect(onSave).toHaveBeenCalledExactlyOnceWith(value);
 });

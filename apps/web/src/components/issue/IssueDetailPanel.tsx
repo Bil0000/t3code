@@ -1138,6 +1138,7 @@ function IssueDetailContent({
                   host: reference.host ?? detail.host,
                   environmentId,
                 }}
+                pullRequestPanelRef={threadRef ?? ISSUES_PANEL_REF}
                 label="Description"
                 saving={saving}
                 allowEmpty
@@ -1157,6 +1158,7 @@ function IssueDetailContent({
                   host: reference.host ?? detail.host,
                   environmentId,
                 }}
+                pullRequestPanelRef={threadRef ?? ISSUES_PANEL_REF}
               />
             ) : (
               <p className="text-sm text-muted-foreground italic">No description.</p>

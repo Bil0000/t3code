@@ -28,6 +28,7 @@ export function PullRequestMarkdownEditor({
   environmentId,
   threadRef = null,
   issueLinkContext,
+  pullRequestPanelRef,
   placeholder,
   label,
   saving,
@@ -42,6 +43,7 @@ export function PullRequestMarkdownEditor({
   /** Thread the editor sits beside, so links in its preview follow the link target setting. */
   readonly threadRef?: ScopedThreadRef | null;
   readonly issueLinkContext?: IssueLinkContext | undefined;
+  readonly pullRequestPanelRef?: ScopedThreadRef | undefined;
   readonly placeholder?: string | undefined;
   readonly label: string;
   readonly saving: boolean;
@@ -116,6 +118,7 @@ export function PullRequestMarkdownEditor({
               environmentId={environmentId}
               threadRef={threadRef}
               issueLinkContext={issueLinkContext}
+              pullRequestPanelRef={pullRequestPanelRef}
             />
           )}
         </div>
