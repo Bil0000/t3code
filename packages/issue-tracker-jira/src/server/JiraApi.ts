@@ -6,7 +6,11 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import { IssueTrackerKind } from "@t3tools/contracts";
+import {
+  IssueTrackerKind,
+  type IssuePageInput,
+  type IssueTrackerScopePage,
+} from "@t3tools/contracts";
 import { IssueTrackerError } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
@@ -86,6 +90,7 @@ export class JiraApi extends Context.Service<
         readonly host: string;
         readonly scopes: ReadonlyArray<{ readonly key: string; readonly name: string }>;
         readonly scopesTruncated?: boolean;
+        readonly scopesCursor: string | null;
       },
       IssueTrackerError
     >;
@@ -93,6 +98,10 @@ export class JiraApi extends Context.Service<
       credential: string,
       scope: string,
     ) => Effect.Effect<{ readonly key: string; readonly name: string } | null, IssueTrackerError>;
+    readonly listScopes: (
+      credential: string,
+      input: IssuePageInput,
+    ) => Effect.Effect<IssueTrackerScopePage, IssueTrackerError>;
   }
 >()("@t3tools/issue-tracker-jira/server/JiraApi") {}
 
@@ -239,6 +248,52 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  const listScopes = (packed: string, input: IssuePageInput, operation = "listScopes") =>
+    Effect.gen(function* () {
+      const limit = input.limit ?? 100;
+      const cursor = input.cursor ?? "0";
+      const startAt = Number(cursor);
+      if (
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 100 ||
+        !/^(0|[1-9][0-9]*)$/.test(cursor) ||
+        cursor.length > 4096 ||
+        !Number.isSafeInteger(startAt)
+      )
+        return yield* failed(operation, "Invalid Jira scope page.");
+      const credential = yield* Effect.try({
+        try: () => parseJiraCredential(packed),
+        catch: () =>
+          failed(
+            operation,
+            "Enter a Jira Cloud site, account email and a standard site API token.",
+            "unauthenticated",
+          ),
+      });
+      const projects = yield* request({
+        host: credential.host,
+        credential: packed,
+        operation,
+        method: "GET",
+        path: "/project/search?startAt=" + startAt + "&maxResults=" + limit,
+        schema: Projects,
+      });
+      const next = projects.startAt + projects.values.length;
+      if (
+        projects.startAt !== startAt ||
+        projects.total < next ||
+        projects.values.length > limit ||
+        !Number.isSafeInteger(next) ||
+        (projects.values.length === 0 && next < projects.total)
+      )
+        return yield* failed(operation, "Jira returned an inconsistent project page.");
+      return {
+        items: projects.values.map((project) => ({ key: project.key, name: project.name })),
+        nextCursor: next < projects.total ? String(next) : null,
+      };
+    });
+
   const probeCredential = (packed: string) =>
     Effect.gen(function* () {
       const credential = yield* Effect.try({
@@ -258,22 +313,14 @@ export const make = Effect.gen(function* () {
         path: "/myself",
         schema: JiraUser,
       });
-      const projects = yield* request({
-        host: credential.host,
-        credential: packed,
-        operation: "probeCredential",
-        method: "GET",
-        path: "/project/search?startAt=0&maxResults=100",
-        schema: Projects,
-      });
-      if (projects.startAt !== 0 || projects.total < projects.values.length)
-        return yield* failed("probeCredential", "Jira returned an inconsistent project page.");
+      const projects = yield* listScopes(packed, {}, "probeCredential");
       return {
         account: viewer.displayName ?? viewer.accountId,
         accountId: viewer.accountId,
         host: credential.host,
-        scopes: projects.values.map((project) => ({ key: project.key, name: project.name })),
-        ...(projects.total > projects.values.length ? { scopesTruncated: true } : {}),
+        scopes: projects.items,
+        scopesCursor: projects.nextCursor,
+        ...(projects.nextCursor === null ? {} : { scopesTruncated: true }),
       };
     });
   const getScope = (packed: string, scope: string) =>
@@ -302,5 +349,5 @@ export const make = Effect.gen(function* () {
         () => Effect.succeed(null),
       ),
     );
-  return JiraApi.of({ request, probeCredential, getScope });
+  return JiraApi.of({ request, probeCredential, getScope, listScopes });
 });

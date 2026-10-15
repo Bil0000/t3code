@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Schema from "effect/Schema";
-import { IssueSummary, IssueTrackerKind } from "@t3tools/contracts";
+import { IssueSummary, IssueTrackerKind, IssueTrackerScopePage } from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { IssueTrackerHost } from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 
@@ -20,6 +20,7 @@ const packed = JSON.stringify({
 });
 const target = { cwd: "/tmp", host: "example.atlassian.net", scope: "ENG", key: "ENG-1" };
 const decodeIssueSummary = Schema.decodeEffect(IssueSummary);
+const decodeScopePage = Schema.decodeEffect(IssueTrackerScopePage);
 const user = { accountId: "native-account", displayName: "Ada" };
 const issue = {
   id: "1",
@@ -103,6 +104,146 @@ function body(request: HttpClientRequest.HttpClientRequest | undefined): unknown
   if (request?.body._tag !== "Uint8Array") throw new Error("Expected JSON request");
   return JSON.parse(new TextDecoder().decode(request.body.body));
 }
+
+it.effect("continues a selected Jira account project catalog with one request per page", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => {
+      if (request.url.endsWith("/myself")) return { body: user };
+      const url = new URL(request.url);
+      const startAt = Number(url.searchParams.get("startAt"));
+      const limit = Number(url.searchParams.get("maxResults"));
+      return {
+        body: {
+          startAt,
+          total: 202,
+          values: Array.from({ length: Math.min(limit, 202 - startAt) }, (_, index) => ({
+            id: String(startAt + index),
+            key: `PRJ${startAt + index}`,
+            name: `Project ${startAt + index}`,
+          })),
+        },
+      };
+    }, null);
+    const api = yield* f.api;
+    const initial = yield* api.probeCredential(packed);
+    expect(initial.scopesCursor).toBe("100");
+    expect(initial.scopes).toHaveLength(100);
+    f.store(
+      JSON.stringify({ site: target.host, email: "other@example.test", token: "other-token" }),
+    );
+    const page = yield* api.listScopes!(packed, { cursor: initial.scopesCursor! });
+    expect(page.items).toHaveLength(100);
+    expect(page.items[0]).toEqual({ key: "PRJ100", name: "Project 100" });
+    expect(page.nextCursor).toBe("200");
+    expect(
+      yield* decodeScopePage(
+        yield* api.listScopes!(packed, { cursor: page.nextCursor!, limit: 2 }),
+      ),
+    ).toEqual({
+      items: [
+        { key: "PRJ200", name: "Project 200" },
+        { key: "PRJ201", name: "Project 201" },
+      ],
+      nextCursor: null,
+    });
+    expect(f.calls.map(({ url }) => new URL(url).pathname)).toEqual([
+      "/rest/api/3/myself",
+      ...Array(3).fill("/rest/api/3/project/search"),
+    ]);
+    expect(f.calls.map(({ headers }) => headers.authorization)).toEqual(
+      Array(4).fill("Basic " + Buffer.from("ada@example.test:fake-token").toString("base64")),
+    );
+    expect(f.calls.slice(1).map(({ url }) => new URL(url).search)).toEqual([
+      "?startAt=0&maxResults=100",
+      "?startAt=100&maxResults=100",
+      "?startAt=200&maxResults=2",
+    ]);
+    expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+  }),
+);
+
+it.effect("advances a short Jira scope page by the returned project count", () =>
+  Effect.gen(function* () {
+    const f = fakeJira(() => ({
+      body: { startAt: 100, total: 102, values: [{ id: "100", key: "ENG", name: "Engineering" }] },
+    }));
+    const api = yield* f.api;
+    expect(yield* api.listScopes!(packed, { cursor: "100", limit: 100 })).toEqual({
+      items: [{ key: "ENG", name: "Engineering" }],
+      nextCursor: "101",
+    });
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.url).toContain("startAt=100&maxResults=100");
+  }),
+);
+
+it.effect.each([
+  { cursor: "" },
+  { cursor: "01" },
+  { cursor: "-1" },
+  { cursor: "1.5" },
+  { cursor: "https://foreign.test/page" },
+  { cursor: "9007199254740992" },
+  { limit: 0 },
+  { limit: 101 },
+  { limit: 1.5 },
+])("rejects invalid Jira scope paging before HTTP: %j", (input) =>
+  Effect.gen(function* () {
+    const f = fakeJira(() => ({ body: {} }));
+    const api = yield* f.api;
+    expect((yield* api.listScopes!(packed, input).pipe(Effect.flip)).reason).toBe("failed");
+    expect(f.calls).toHaveLength(0);
+  }),
+);
+
+it.effect.each([
+  { startAt: 0, total: 101, count: 1 },
+  { startAt: 100, total: -1, count: 0 },
+  { startAt: 100, total: 100, count: 1 },
+  { startAt: 100, total: 101, count: 0 },
+  { startAt: 100, total: 102, count: 2 },
+])("refuses inconsistent Jira scope pages: %j", ({ count, ...page }) =>
+  Effect.gen(function* () {
+    const f = fakeJira(() => ({
+      body: {
+        ...page,
+        values: Array.from({ length: count }, () => ({ id: "1", key: "ENG", name: "Engineering" })),
+      },
+    }));
+    const api = yield* f.api;
+    expect(
+      (yield* api.listScopes!(packed, { cursor: "100", limit: 1 }).pipe(Effect.flip)).reason,
+    ).toBe("failed");
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.url).toContain("/project/search?");
+  }),
+);
+
+it.effect("refuses an empty nonterminal Jira probe and accepts an empty terminal page", () =>
+  Effect.gen(function* () {
+    let total = 1;
+    const f = fakeJira((request) => ({
+      body: request.url.endsWith("/myself") ? user : { startAt: 0, total, values: [] },
+    }));
+    const api = yield* f.api;
+    expect((yield* api.probeCredential(packed).pipe(Effect.flip)).reason).toBe("failed");
+    expect(f.calls).toHaveLength(2);
+    total = 0;
+    expect(yield* api.listScopes!(packed, {})).toEqual({ items: [], nextCursor: null });
+    expect(f.calls).toHaveLength(3);
+  }),
+);
+
+it.effect.each([403, 429])("preserves native Jira scope error %s without viewer reads", (status) =>
+  Effect.gen(function* () {
+    const f = fakeJira(() => ({ status }));
+    const api = yield* f.api;
+    const error = yield* api.listScopes!(packed, { cursor: "100" }).pipe(Effect.flip);
+    expect(error.reason).toBe(status === 429 ? "rate-limited" : "failed");
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.url).toContain("/project/search?");
+  }),
+);
 
 it.effect.each([
   { fixVersions: undefined },

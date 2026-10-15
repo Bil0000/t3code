@@ -359,6 +359,7 @@ export const make = Effect.gen(function* () {
     standalone: DESCRIPTOR,
     capabilities: CAPABILITIES,
     probeCredential: jira.probeCredential,
+    listScopes: jira.listScopes,
     getScope: jira.getScope,
     getViewer: (input) => viewer(input.host),
     listIssues: (input) =>
