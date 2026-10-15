@@ -75,7 +75,9 @@ describe("header menus", () => {
       onPress: () => {},
       overflowOnly,
     });
-    const labels = (split: ReturnType<typeof splitAndroidHeaderActions>) => ({
+    const labels = (
+      split: ReturnType<typeof splitAndroidHeaderActions<ReturnType<typeof action>>>,
+    ) => ({
       visible: split.visibleActions.map((item) => item.accessibilityLabel),
       overflow: split.overflowActions.map((item) => item.accessibilityLabel),
     });

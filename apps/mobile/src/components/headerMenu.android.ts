@@ -1,5 +1,4 @@
 import type { MenuAction } from "@react-native-menu/menu";
-import type { AndroidHeaderAction } from "./AndroidScreenHeader";
 import type { ScreenHeaderMenuItem } from "./ScreenHeader.types";
 
 export function androidHeaderMenuActions(items: ReadonlyArray<ScreenHeaderMenuItem>): MenuAction[] {
@@ -43,8 +42,8 @@ export function findHeaderMenuAction(
   return undefined;
 }
 
-export function splitAndroidHeaderActions(
-  actions: ReadonlyArray<AndroidHeaderAction>,
+export function splitAndroidHeaderActions<Action extends { readonly overflowOnly?: boolean }>(
+  actions: ReadonlyArray<Action>,
   wide: boolean,
 ) {
   const inline = actions.filter((action) => !action.overflowOnly);
