@@ -312,6 +312,32 @@ it.each([
   },
 );
 
+it("labels both native mount scopes when their issue numbers match", async () => {
+  const upper = {
+    ...issue("42"),
+    tracker: IssueTrackerKind.make("forgejo"),
+    host: "forge.example",
+    scope: "Root/Mount/acme/web",
+  };
+  const lower = { ...upper, scope: "Root/mount/acme/web" };
+  const initial = answer([upper, lower]);
+  state.responses.set(
+    environmentA,
+    AsyncResult.success({
+      ...initial,
+      trackers: [{ ...initial.trackers[0]!, tracker: upper.tracker, host: upper.host }],
+    }),
+  );
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  await mount();
+  const rows = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) =>
+    button.textContent?.includes("Issue 42"),
+  );
+  expect(rows).toHaveLength(2);
+  expect(rows[0]!.textContent).toContain(upper.scope);
+  expect(rows[1]!.textContent).toContain(lower.scope);
+});
+
 it("refreshes each first page over the last refreshed list, not the continuation", async () => {
   const cursor = "github github.com org/repo";
   const first = (keys: ReadonlyArray<string>) =>

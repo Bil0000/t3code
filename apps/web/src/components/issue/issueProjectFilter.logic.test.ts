@@ -199,6 +199,69 @@ describe("issueListProjectScope", () => {
 });
 
 describe("issueFilterProjects", () => {
+  it("offers separate Forgejo mounts while combining owner and repo case aliases", () => {
+    const projects = [
+      { ...project("upper"), title: "Upper mount" },
+      { ...project("lower"), title: "Lower mount" },
+      { ...project("alias"), title: "Upper checkout" },
+    ];
+    const sources = new Map([
+      [
+        nucbox,
+        [
+          source("upper", "forgejo", "Root/Mount/acme/web"),
+          source("lower", "forgejo", "Root/mount/acme/web"),
+          source("alias", "forgejo", "Root/Mount/ACME/WEB"),
+        ],
+      ],
+    ]);
+    const choices = pullRequestFilterProjects(
+      issueFilterProjects(projects, sources, null),
+      new Map(),
+      undefined,
+      true,
+    );
+    expect(choices.map(({ id }) => id).toSorted()).toEqual(["lower", "upper"]);
+    expect(choices.map(({ title }) => title)).toEqual(["Lower mount", "Upper mount"]);
+    const selected = projects[2]!;
+    expect(
+      pullRequestFilterProjects(
+        issueFilterProjects(projects, sources, selected),
+        new Map(),
+        selected,
+        true,
+      )
+        .map(({ id }) => id)
+        .toSorted(),
+    ).toEqual(["alias", "lower"]);
+  });
+
+  it("refreshes the selected native mount through its own project", () => {
+    const sources = new Map([
+      [
+        nucbox,
+        [
+          source("upper", "forgejo", "Root/Mount/acme/web"),
+          source("lower", "forgejo", "Root/mount/acme/web"),
+          source("alias", "forgejo", "Root/Mount/ACME/WEB"),
+        ],
+      ],
+    ]);
+    const lower = sources.get(nucbox)![1]!;
+    expect(
+      issueListRefreshSource(nucbox, [nucbox], { state: "all" }, lower, {
+        entries: [],
+        sources: sources.get(nucbox)!,
+      }),
+    ).toEqual(lower);
+    expect(
+      issueListRefreshSource(nucbox, [nucbox], { state: "all" }, sources.get(nucbox)![2]!, {
+        entries: [],
+        sources: sources.get(nucbox)!,
+      }),
+    ).toEqual({ ...sources.get(nucbox)![2]!, projectId: ProjectId.make("upper") });
+  });
+
   it("offers one choice per distinct tracker scope set and hides projects without a tracker", () => {
     const projects = [
       project("main"),

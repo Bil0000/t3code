@@ -25,7 +25,7 @@ import type {
   ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { pullRequestHostOf } from "@t3tools/contracts";
+import { issueScopeKeyOf, pullRequestHostOf } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   AtSignIcon,
@@ -327,6 +327,7 @@ function IssuesRoute() {
       issueFilterProjects(capableProjects, knownSources, scopedProject),
       environmentLabels,
       scopedProject ?? undefined,
+      true,
     );
   }, [
     held,
@@ -829,7 +830,7 @@ function IssuesRoute() {
     <div className="flex flex-col gap-6">
       {groups.map((group) => {
         const presentation = issueTrackerPresentation(group.tracker.tracker);
-        const showScope = new Set(group.rows.map((row) => row.scope.toLowerCase())).size > 1;
+        const showScope = new Set(group.rows.map(issueScopeKeyOf)).size > 1;
         return (
           <section key={trackerKey(group.tracker)} className="flex flex-col gap-1">
             <h2 className="flex items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground">

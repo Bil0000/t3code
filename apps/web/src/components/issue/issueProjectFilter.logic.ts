@@ -5,6 +5,7 @@ import type {
   IssueScopeRef,
   ProjectId,
 } from "@t3tools/contracts";
+import { issueScopeKeyOf } from "@t3tools/contracts";
 
 import { findScopedProject } from "../pullRequest/pullRequestList.logic";
 
@@ -40,7 +41,7 @@ export function issueListRefreshSource(
   const matches = (candidate: IssueScopeRef) =>
     candidate.tracker === source.tracker &&
     candidate.host?.toLowerCase() === source.host?.toLowerCase() &&
-    candidate.scope.toLowerCase() === source.scope.toLowerCase();
+    issueScopeKeyOf(candidate) === issueScopeKeyOf(source);
   const representative = held?.entries.find(matches) ?? held?.sources?.find(matches);
   const canonical = representative ? { ...source, projectId: representative.projectId } : source;
   return (input.projectId === undefined || input.projectId === canonical.projectId) &&
@@ -74,7 +75,7 @@ export function issueFilterProjects<Project extends ScopedProject>(
     const scopes = sources
       .get(project.environmentId)
       ?.filter((source) => source.projectId === project.id)
-      .map((source) => `${source.tracker} ${source.host} ${source.scope}`.toLowerCase())
+      .map((source) => `${source.tracker} ${source.host.toLowerCase()} ${issueScopeKeyOf(source)}`)
       .toSorted();
     const isSelected =
       project.id === selected?.id && project.environmentId === selected.environmentId;

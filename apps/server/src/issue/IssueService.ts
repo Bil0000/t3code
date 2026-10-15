@@ -19,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import {
   issueListCursorKey,
+  issueScopeKeyOf,
   issueTrackerHostKey,
   IssueOperationError,
   IssueTrackerKind,
@@ -51,6 +52,7 @@ import {
 } from "@t3tools/contracts";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { azureDevOpsIssueScope, parseIssueUrl } from "@t3tools/shared/issueUrl";
+import { parseForgejoRemote } from "@t3tools/source-control-forgejo/server/ForgejoCli";
 import {
   IssueTrackerError,
   isStandaloneIssueTracker,
@@ -108,6 +110,15 @@ export function resolveGitHostBinding(
   const identity = project.repositoryIdentity;
   const kind = identity?.provider;
   if (!identity || kind === undefined || kind === "unknown") return null;
+  if (kind === "forgejo" && identity.webUrl !== undefined) {
+    const remote = parseForgejoRemote(identity.webUrl);
+    if (remote !== null)
+      return {
+        tracker: IssueTrackerKind.make(kind),
+        host: remote.host,
+        scope: issueScopeKeyOf({ tracker: kind, scope: remote.path }),
+      };
+  }
   let host = pullRequestHostOf(identity, SourceControlProviderKind.make(kind));
   if (kind === "gitlab") {
     const remote = URL.parse(identity.locator.remoteUrl);
@@ -317,7 +328,7 @@ export const make = Effect.gen(function* () {
           return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
         }
         const scope = ref.scope.trim();
-        const writable = scope.toLowerCase() === own.scope.toLowerCase();
+        const writable = issueScopeKeyOf({ tracker: own.tracker, scope }) === issueScopeKeyOf(own);
         if (
           own.tracker === "linear" &&
           own.scope.includes("/") &&
@@ -426,6 +437,20 @@ export const make = Effect.gen(function* () {
       }
       const viewers = new Map<string, string>();
       const viewerReads = new Map<string, Effect.Effect<string, IssueTrackerError>>();
+      const viewerKeyOf = (project: SupportedProject) =>
+        project.tracker === "forgejo"
+          ? issueListCursorKey({
+              ...project,
+              scope: issueScopeKeyOf(project).split("/").slice(0, -2).join("/"),
+            })
+          : issueTrackerHostKey(project);
+      const viewerInstances = new Map<string, Set<string>>();
+      for (const project of supported) {
+        const hostKey = issueTrackerHostKey(project);
+        const instances = viewerInstances.get(hostKey) ?? new Set<string>();
+        instances.add(viewerKeyOf(project));
+        viewerInstances.set(hostKey, instances);
+      }
       const trackers = new Map<string, IssueTrackerSummary>();
       const entries: IssueListEntry[] = [];
       const errors: IssueListProjectError[] = [];
@@ -433,20 +458,19 @@ export const make = Effect.gen(function* () {
 
       const viewerFor = (project: SupportedProject) =>
         Effect.gen(function* () {
-          let read = viewerReads.get(issueTrackerHostKey(project));
+          const key = viewerKeyOf(project);
+          let read = viewerReads.get(key);
           if (read === undefined) {
             read = yield* Effect.cached(
-              project.api
-                .getViewer({ cwd: project.project.workspaceRoot, host: project.host })
-                .pipe(
-                  Effect.tap((viewer) =>
-                    Effect.sync(() => viewers.set(issueTrackerHostKey(project), viewer)),
-                  ),
-                ),
+              project.api.getViewer({ cwd: project.project.workspaceRoot, host: project.host }),
             );
-            viewerReads.set(issueTrackerHostKey(project), read);
+            viewerReads.set(key, read);
           }
-          return yield* read;
+          const viewer = yield* read;
+          if (project.tracker === "forgejo") viewers.set(issueListCursorKey(project), viewer);
+          const hostKey = issueTrackerHostKey(project);
+          if (viewerInstances.get(hostKey)!.size === 1) viewers.set(hostKey, viewer);
+          return viewer;
         });
 
       // Every project counts, including worktrees of a scope read once below.
@@ -849,6 +873,13 @@ export const make = Effect.gen(function* () {
           detail: "This is not a recognised issue URL.",
         });
       }
+      const scope =
+        parsed.tracker === "forgejo"
+          ? parseForgejoRemote(target.href)!
+              .path.split("/")
+              .slice(0, parsed.scope.split("/").length)
+              .join("/")
+          : parsed.scope;
       const onTracker = supported.filter((project) => project.tracker === parsed.tracker);
       const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
         projects.find((project) => project.project.id === preferredProjectId) ?? projects[0];
@@ -857,7 +888,12 @@ export const make = Effect.gen(function* () {
           ? undefined
           : parsed.scope.slice(parsed.workspace.length + 1);
       const own =
-        preferFirst(onTracker.filter((project) => project.scope.toLowerCase() === parsed.scope)) ??
+        preferFirst(
+          onTracker.filter(
+            (project) =>
+              issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
+          ),
+        ) ??
         (legacyScope === undefined
           ? undefined
           : preferFirst(
@@ -914,7 +950,10 @@ export const make = Effect.gen(function* () {
         tracker: lender.tracker,
         host: lender.host,
         scope:
-          own?.scope ?? (parsed.tracker === "jira" ? parsed.scope.toUpperCase() : parsed.scope),
+          own?.scope ??
+          (parsed.tracker === "jira"
+            ? parsed.scope.toUpperCase()
+            : issueScopeKeyOf({ tracker: parsed.tracker, scope })),
         key: parsed.key,
         writable: own !== undefined,
       };

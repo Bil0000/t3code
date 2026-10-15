@@ -24,6 +24,7 @@ import {
   StandaloneIssueTrackerDescriptor,
   ThreadIssueLink,
   threadIssueKeyOf,
+  issueScopeKeyOf,
 } from "./issue.ts";
 
 const decodeDescriptor = Schema.decodeEffect(StandaloneIssueTrackerDescriptor);
@@ -50,6 +51,27 @@ it.each([
   expect(threadIssueKeyOf(identity)).not.toBe(
     threadIssueKeyOf({ ...identity, tracker: tracker.toUpperCase() }),
   );
+});
+
+it.each([
+  { tracker: "forgejo", scope: " Mount/Acme/Web ", expected: "Mount/acme/web" },
+  { tracker: "forgejo", scope: " mount/Acme/Web ", expected: "mount/acme/web" },
+  { tracker: "forgejo", scope: " Mount/Nested/Acme/Web ", expected: "Mount/Nested/acme/web" },
+  { tracker: "forgejo", scope: " Acme/Web ", expected: "acme/web" },
+  { tracker: "github", scope: " Mount/Acme/Web ", expected: "mount/acme/web" },
+  { tracker: "linear", scope: " Workspace/TEAM ", expected: "workspace/team" },
+  { tracker: "jira", scope: " Workspace/TEAM ", expected: "workspace/team" },
+  { tracker: "custom-tracker", scope: " Mount/Acme/Web ", expected: "mount/acme/web" },
+])("normalizes $tracker scope $scope", ({ tracker, scope, expected }) => {
+  expect(issueScopeKeyOf({ tracker, scope })).toBe(expected);
+});
+
+it("keeps Forgejo mount case distinct while matching repository case aliases", () => {
+  const issue = { tracker: "forgejo", host: "forgejo.test", scope: "Mount/Acme/Web", key: "42" };
+  expect(threadIssueKeyOf(issue)).toBe(
+    threadIssueKeyOf({ ...issue, host: " Forgejo.TEST ", scope: " Mount/acme/web " }),
+  );
+  expect(threadIssueKeyOf(issue)).not.toBe(threadIssueKeyOf({ ...issue, scope: "mount/Acme/Web" }));
 });
 
 it("carries template selection through the existing RPC and retains required inline bodies", () => {
