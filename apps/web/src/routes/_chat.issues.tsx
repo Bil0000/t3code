@@ -25,7 +25,8 @@ import type {
   ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { issueScopeKeyOf, pullRequestHostOf } from "@t3tools/contracts";
+import { IssueRef, issueScopeKeyOf, pullRequestHostOf } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   AtSignIcon,
@@ -169,6 +170,12 @@ function getShortcutContext() {
 
 const bounded = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim().slice(0, 200) : undefined;
+const decodeAccountSelector = Schema.decodeUnknownSync(IssueRef.fields.connectionId);
+function accountSelector(value: unknown): string | undefined {
+  const connectionId = decodeAccountSelector(value);
+  if (connectionId !== value) throw new Error("The issue account selector is invalid.");
+  return connectionId;
+}
 /** A search key that is either present as a string or absent, never present as undefined. */
 function present<K extends string, V extends string>(
   key: K,
@@ -189,7 +196,7 @@ export const Route = createFileRoute("/_chat/issues")({
       ? { issueOrder: raw.issueOrder }
       : {}),
     ...present("host", bounded(raw.host)),
-    ...present("connectionId", typeof raw.connectionId === "string" ? raw.connectionId : undefined),
+    ...present("connectionId", accountSelector(raw.connectionId)),
     ...present<"environmentId", EnvironmentId>("environmentId", bounded(raw.environmentId)),
     ...present<"projectId", ProjectId>("projectId", bounded(raw.projectId)),
     // Always an own key: the router lays this over the parent route's unvalidated search.
@@ -200,10 +207,7 @@ export const Route = createFileRoute("/_chat/issues")({
     ),
     ...present<"selectedProjectId", ProjectId>("selectedProjectId", bounded(raw.selectedProjectId)),
     ...present("selectedHost", bounded(raw.selectedHost)),
-    ...present(
-      "selectedConnectionId",
-      typeof raw.selectedConnectionId === "string" ? raw.selectedConnectionId : undefined,
-    ),
+    ...present("selectedConnectionId", accountSelector(raw.selectedConnectionId)),
     ...present("tracker", bounded(raw.tracker)),
     ...present("scope", bounded(raw.scope)),
     ...present("key", bounded(raw.key)),

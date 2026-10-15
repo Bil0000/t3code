@@ -300,6 +300,108 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+it.each(
+  (["connectionId", "selectedConnectionId"] as const).flatMap((key) =>
+    [
+      "",
+      " ",
+      " Account/B",
+      "Account/B ",
+      "B".repeat(129),
+      undefined,
+      "Account/B",
+      "B".repeat(128),
+    ].map((value, index) => ({ key, value, invalid: index < 5 })),
+  ),
+)(
+  "fails closed for account search $key=$value (invalid=$invalid)",
+  async ({ key, value, invalid }) => {
+    const { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } =
+      await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
+    const preferences = JSON.stringify({ who: "all", status: "open", connectionId: "Account/B" });
+    localStorage.setItem("t3.issues.preferences", preferences);
+    state.projects = [project("project")];
+    state.responses.set(environmentA, AsyncResult.success(answer([issue("42")])));
+    const raw = {
+      environmentId: environmentA,
+      projectId: "project",
+      host: "github.com",
+      selectedEnvironmentId: environmentA,
+      selectedProjectId: "project",
+      selectedHost: "github.com",
+      tracker: "github",
+      scope: "org/repo",
+      key: "42",
+      ...(value === undefined ? {} : { [key]: value }),
+    };
+    const query = new URLSearchParams(
+      Object.entries(raw).map(([key, value]) => [key, JSON.stringify(value)]),
+    );
+    const rootRoute = createRootRoute();
+    const mounted = vi.fn();
+    const route = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/issues",
+      validateSearch: Route.options.validateSearch,
+      beforeLoad: ({ search }) => {
+        state.search = search;
+      },
+      component: () => {
+        mounted();
+        return <Page />;
+      },
+      errorComponent: () => <p role="alert">Invalid issue account</p>,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([route]),
+      history: createMemoryHistory({ initialEntries: [`/issues?${query}`] }),
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await act(async () => {
+        await router.load();
+        root.render(
+          <RegistryContext.Provider value={appAtomRegistry}>
+            <RouterProvider router={router} />
+          </RegistryContext.Provider>,
+        );
+      });
+      if (invalid) {
+        expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+          "Invalid issue account",
+        );
+        expect(mounted).not.toHaveBeenCalled();
+        expect(state.read).not.toHaveBeenCalled();
+        expect(state.listPage).not.toHaveBeenCalled();
+        expect(useRightPanelStore.getState().byThreadKey).toEqual({});
+        expect(localStorage.getItem("t3.issues.preferences")).toBe(preferences);
+      } else {
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+        expect(mounted).toHaveBeenCalled();
+        expect(state.search[key]).toBe(value);
+        expect(state.read).toHaveBeenCalledOnce();
+        for (const [environmentId, input] of state.read.mock.calls) {
+          expect(environmentId).toBe(environmentA);
+          expect(input.connectionId).toBe(key === "connectionId" ? value : undefined);
+        }
+        const surfaces = selectThreadRightPanelState(
+          useRightPanelStore.getState().byThreadKey,
+          ISSUES_PANEL_REF,
+        ).surfaces;
+        const selected = surfaces.find((surface) => surface.kind === "issue");
+        expect(selected?.kind).toBe("issue");
+        if (selected?.kind === "issue")
+          expect(selected.connectionId).toBe(key === "selectedConnectionId" ? value : undefined);
+        expect(JSON.parse(localStorage.getItem("t3.issues.preferences")!).connectionId).toBe(
+          key === "connectionId" ? value : undefined,
+        );
+      }
+    } finally {
+      error.mockRestore();
+    }
+  },
+);
+
 it.each([false, true])(
   "shows a failed environment beside a successful answer (empty=%s) and retries",
   async (empty) => {
