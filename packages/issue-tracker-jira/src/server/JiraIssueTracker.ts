@@ -246,20 +246,22 @@ const formAttempt = <A>(operation: string, run: () => A) =>
 
 export const make = Effect.gen(function* () {
   const jira = yield* JiraApi.JiraApi;
+  const readIssue = (input: Pick<IssueTarget, "host" | "key">) =>
+    jira.request({
+      host: input.host,
+      operation: "getIssue",
+      method: "GET",
+      path:
+        "/issue/" +
+        encodeURIComponent(input.key) +
+        "?fields=" +
+        issueFields.join(",") +
+        "&expand=changelog",
+      schema: JiraIssue,
+    });
   const requireIssue = (input: IssueTarget) =>
     Effect.gen(function* () {
-      const issue = yield* jira.request({
-        host: input.host,
-        operation: "getIssue",
-        method: "GET",
-        path:
-          "/issue/" +
-          encodeURIComponent(input.key) +
-          "?fields=" +
-          issueFields.join(",") +
-          "&expand=changelog",
-        schema: JiraIssue,
-      });
+      const issue = yield* readIssue(input);
       if (
         !issue.fields.project ||
         (issue.fields.project.key !== input.scope && issue.fields.project.id !== input.scope)
@@ -697,7 +699,7 @@ export const make = Effect.gen(function* () {
         const parent =
           input.parentKey === undefined
             ? null
-            : yield* requireIssue({ ...input, key: input.parentKey });
+            : yield* readIssue({ ...input, key: input.parentKey });
         const types = yield* issueTypes(input);
         const availableTypes =
           parent === null ? types.filter((type) => type.subtask !== true) : types;
@@ -710,6 +712,17 @@ export const make = Effect.gen(function* () {
         if (!selected) return yield* JiraApi.failed("create", "Select a Jira issue type first.");
         if (selected.subtask === true && parent === null)
           return yield* JiraApi.failed("create", "Select a parent issue for this Jira subtask.");
+        if (
+          selected.subtask === true &&
+          parent !== null &&
+          parent.fields.project?.key !== input.scope &&
+          parent.fields.project?.id !== input.scope
+        )
+          return yield* JiraApi.failed(
+            "getIssue",
+            "This issue is outside the selected Jira project.",
+            "not-found",
+          );
         if (input.templateKey !== undefined)
           return yield* JiraApi.failed("create", "Jira issue templates are not supported.");
         const metadata = yield* createFields(input, selected.id, "create");
@@ -977,7 +990,7 @@ export const make = Effect.gen(function* () {
             );
         }
         const parent =
-          input.parentKey === null ? null : yield* requireIssue({ ...input, key: input.parentKey });
+          input.parentKey === null ? null : yield* readIssue({ ...input, key: input.parentKey });
         if (parent?.key === selected.key)
           return yield* JiraApi.failed("setParent", "An issue cannot be its own parent.");
         if (deployment === "data-center") {

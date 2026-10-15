@@ -1633,6 +1633,61 @@ it.effect("preserves changelog fields outside the old common event kinds", () =>
   }),
 );
 
+it.effect.each([true, false])(
+  "creates a cross-project base parent only when native metadata allows parent: %s",
+  (parentAllowed) =>
+    Effect.gen(function* () {
+      const f = fakeJira((request) => {
+        if (request.method === "POST") return { status: 201, body: { key: "ENG-2" } };
+        if (request.url.includes("/issuetypes/task?"))
+          return {
+            body: {
+              startAt: 0,
+              total: parentAllowed ? 2 : 1,
+              fields: [
+                { fieldId: "summary", required: true },
+                ...(parentAllowed ? [{ fieldId: "parent", required: false }] : []),
+              ],
+            },
+          };
+        if (request.url.includes("/issuetypes?"))
+          return {
+            body: {
+              startAt: 0,
+              total: 1,
+              issueTypes: [{ id: "task", name: "Task", subtask: false }],
+            },
+          };
+        return {
+          body: {
+            ...issue,
+            key: "OPS-8",
+            fields: { ...issue.fields, project: { id: "30", key: "OPS" } },
+          },
+        };
+      });
+      const result = yield* (yield* f.api).create!({
+        ...target,
+        title: "Child",
+        body: "",
+        labels: [],
+        assignees: [],
+        issueType: "task",
+        parentKey: "OPS-8",
+      }).pipe(Effect.result);
+      if (parentAllowed) {
+        expect(result._tag).toBe("Success");
+        expect(body(f.calls.at(-1))).toMatchObject({
+          fields: { project: { key: "ENG" }, parent: { key: "OPS-8" } },
+        });
+        expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "GET", "POST"]);
+      } else {
+        expect(result._tag).toBe("Failure");
+        expect(f.calls.map(({ method }) => method)).toEqual(["GET", "GET", "GET"]);
+      }
+    }),
+);
+
 it.effect("creates Jira subtasks with a checked parent and keeps their type available", () =>
   Effect.gen(function* () {
     const f = fakeJira((request) => {
@@ -1682,7 +1737,10 @@ it.effect("creates Jira subtasks with a checked parent and keeps their type avai
     expect(body(f.calls.find((request) => request.method === "POST"))).toMatchObject({
       fields: { parent: { key: "ENG-1" }, issuetype: { id: "subtask" }, summary: "Child" },
     });
-    yield* api.create!({ ...input, parentKey: "OPS-1" }).pipe(Effect.flip);
+    expect(yield* api.create!({ ...input, parentKey: "OPS-1" }).pipe(Effect.flip)).toMatchObject({
+      operation: "getIssue",
+      reason: "not-found",
+    });
     expect(f.calls.filter((request) => request.method === "POST")).toHaveLength(1);
   }),
 );

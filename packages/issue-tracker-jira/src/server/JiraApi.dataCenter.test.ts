@@ -188,6 +188,150 @@ function epicFixture(
   };
 }
 
+it.effect.each(["cloud", "data-center"] as const)(
+  "keeps source scope and selected credentials for same-instance parent changes on %s",
+  (deployment) =>
+    Effect.gen(function* () {
+      const cloud = deployment === "cloud";
+      const selectedHost = cloud ? "selected.atlassian.net" : host;
+      const selectedSite = "https://" + selectedHost;
+      let wrongSource = false;
+      let parentStatus = 200;
+      let writeStatus = 204;
+      const f = fakeJira(
+        (request) => {
+          const url = new URL(request.url);
+          const key = url.pathname.split("/").at(-1)!;
+          if (request.method !== "GET") return { status: writeStatus };
+          if (key === "OPS-8" && parentStatus !== 200) return { status: parentStatus };
+          if (url.pathname.includes("/agile/1.0/epic/"))
+            return key === "ENG-1" ? { status: 404 } : { body: { key } };
+          return {
+            body: {
+              ...issue,
+              key,
+              fields: {
+                ...issue.fields,
+                creator: cloud ? { accountId: user.key } : user,
+                assignee: cloud ? { accountId: user.key } : user,
+                project: {
+                  id: key.startsWith("OPS-") ? "30" : "20",
+                  key: wrongSource && key === "ENG-1" ? "OTHER" : key.split("-")[0],
+                },
+                issuetype: {
+                  id: key === "ENG-1" ? "base" : "epic",
+                  name: "Native",
+                  subtask: false,
+                },
+                epic: null,
+              },
+            },
+          };
+        },
+        {
+          default: packed,
+          selected: JSON.stringify({
+            deployment,
+            site: selectedSite,
+            email: "selected@example.test",
+            token: "fake-selected",
+          }),
+        },
+      );
+      const tracker = yield* f.api.pipe(
+        Effect.flatMap((api) =>
+          JiraIssueTracker.make.pipe(Effect.provideService(JiraApi.JiraApi, api)),
+        ),
+      );
+      const target = { cwd: "/tmp", host: selectedHost, scope: "ENG", key: "ENG-1" };
+      for (const parentKey of ["OPS-8", "ENG-8", null]) {
+        f.calls.length = 0;
+        yield* tracker.setParent!({ ...target, parentKey }).pipe(
+          Effect.provideService(ConnectionId, "selected"),
+        );
+        expect(f.calls.map(({ method }) => method)).toEqual([
+          ...Array.from(
+            { length: cloud ? (parentKey === null ? 1 : 2) : parentKey === null ? 3 : 5 },
+            () => "GET",
+          ),
+          cloud ? "PUT" : "POST",
+        ]);
+        expect(f.calls.every((r) => r.url.startsWith(selectedSite + "/rest/"))).toBe(true);
+        expect(
+          f.calls.every(
+            (r) =>
+              r.headers.authorization ===
+              (cloud
+                ? "Basic " + btoa("selected@example.test:fake-selected")
+                : "Bearer fake-selected"),
+          ),
+        ).toBe(true);
+        expect(body(f.calls.at(-1))).toEqual(
+          cloud
+            ? parentKey === null
+              ? { update: { parent: [{ set: { none: true } }] } }
+              : { fields: { parent: { key: parentKey } } }
+            : { issues: ["ENG-1"] },
+        );
+        if (!cloud)
+          expect(f.calls.at(-1)?.url).toBe(
+            `${selectedSite}/rest/agile/1.0/epic/${parentKey ?? "none"}/issue`,
+          );
+      }
+      wrongSource = true;
+      f.calls.length = 0;
+      const error = yield* tracker.setParent!({ ...target, parentKey: "OPS-8" }).pipe(
+        Effect.provideService(ConnectionId, "selected"),
+        Effect.flip,
+      );
+      expect(error.reason).toBe("not-found");
+      expect(f.calls.map(({ method }) => method)).toEqual(["GET"]);
+      f.calls.length = 0;
+      yield* tracker
+        .getIssue(target)
+        .pipe(Effect.provideService(ConnectionId, "selected"), Effect.flip);
+      expect(f.calls.map(({ method }) => method)).toEqual(["GET"]);
+      wrongSource = false;
+      f.calls.length = 0;
+      yield* tracker.setParent!({ ...target, parentKey: "OPS-8" }).pipe(
+        Effect.provideService(ConnectionId, "missing-account"),
+        Effect.flip,
+      );
+      yield* tracker.setParent!({
+        ...target,
+        host: cloud ? "foreign.atlassian.net" : host.replace("/Team/", "/team/"),
+        parentKey: "OPS-8",
+      }).pipe(Effect.provideService(ConnectionId, "selected"), Effect.flip);
+      expect(f.calls).toHaveLength(0);
+      for (const status of [403, 404]) {
+        parentStatus = status;
+        f.calls.length = 0;
+        const error = yield* tracker.setParent!({ ...target, parentKey: "OPS-8" }).pipe(
+          Effect.provideService(ConnectionId, "selected"),
+          Effect.flip,
+        );
+        expect(JiraApi.isHttpStatus(error, status)).toBe(true);
+        expect(f.calls.map(({ method }) => method)).toEqual(
+          Array.from({ length: cloud ? 2 : 4 }, () => "GET"),
+        );
+      }
+      parentStatus = 200;
+      for (const status of [400, 403, 429]) {
+        writeStatus = status;
+        f.calls.length = 0;
+        const error = yield* tracker.setParent!({ ...target, parentKey: "OPS-8" }).pipe(
+          Effect.provideService(ConnectionId, "selected"),
+          Effect.flip,
+        );
+        expect(JiraApi.isHttpStatus(error, status)).toBe(true);
+        expect(f.calls.map(({ method }) => method)).toEqual([
+          ...Array.from({ length: cloud ? 2 : 5 }, () => "GET"),
+          cloud ? "PUT" : "POST",
+        ]);
+      }
+    }),
+);
+
 it.effect("moves and removes a DC epic parent through native Agile routes with readback", () =>
   Effect.gen(function* () {
     const f = epicFixture();
@@ -428,7 +572,7 @@ it.effect.each(["comment", "update", "setState"] as const)(
 );
 
 it.effect.each(["ENG-1", "ENG-3", "OPS-1"])(
-  "refuses a self, non-epic or foreign DC parent %s without writing",
+  "refuses a self or non-epic DC parent %s without writing",
   (parentKey) =>
     Effect.gen(function* () {
       const f = epicFixture((request) =>
