@@ -79,7 +79,7 @@ function detail(ids: ReadonlyArray<string>, key = "ENG-1"): IssueDetail {
     body: "",
     url: `https://linear.app/workspace/issue/${key}`,
     author: null,
-    viewer: null,
+    viewer: "viewer",
     state: { category: "open", name: "Todo" },
     createdAt: "2026-10-14T00:00:00Z",
     updatedAt: "2026-10-14T00:00:00Z",
@@ -226,6 +226,7 @@ it.each(
         ["viewer-a", null],
         [null, "viewer-b"],
         ["viewer-a", "viewer-a"],
+        [null, null],
       ] as const
     ).map(([from, to]) => ({ kind, from, to })),
   ),
@@ -239,13 +240,18 @@ it.each(
   await act(async () => option("Other").click());
   expect(state.update.mock.calls[0]![0].input[kind]).toEqual(["W", "Other"]);
   expect(selected("Other")).toBe(true);
+  state.readError = "read failed";
+  await act(async () => render());
+  expect(selected("Other")).toBe(true);
+  state.readError = null;
   state.detail = { ...detail(["Z"]), viewer: to };
   await act(async () => render());
-  expect(selected("Other")).toBe(from === to);
-  expect(selected("Z")).toBe(from !== to);
+  const retained = from !== null && from === to;
+  expect(selected("Other")).toBe(retained);
+  expect(selected("Z")).toBe(!retained);
   await act(async () => option("T").click());
   expect(state.update.mock.calls[1]![0].input[kind]).toEqual(
-    from === to ? ["W", "Other", "T"] : ["Z", "T"],
+    retained ? ["W", "Other", "T"] : ["Z", "T"],
   );
 });
 

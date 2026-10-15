@@ -539,6 +539,8 @@ it.each(["viewer-a", null])(
         ["👍3", "true"],
         ["👍3", "true"],
       ]);
+      await render();
+      expect(pills().every((pill) => pill.getAttribute("aria-pressed") === "true")).toBe(true);
       state.detail = {
         ...state.detail,
         reactions: [...reactions],
@@ -548,7 +550,17 @@ it.each(["viewer-a", null])(
         })),
       };
       await render();
-      expect(pills().every((pill) => pill.getAttribute("aria-pressed") === "true")).toBe(true);
+      expect(pills().map((pill) => [pill.textContent, pill.getAttribute("aria-pressed")])).toEqual(
+        viewer === null
+          ? [
+              ["👍2", "false"],
+              ["👍2", "false"],
+            ]
+          : [
+              ["👍3", "true"],
+              ["👍3", "true"],
+            ],
+      );
       const native = [{ ...reactions[0]!, count: 3 }];
       state.detail = {
         ...state.detail,

@@ -209,6 +209,7 @@ const REACTION_PILL_CLASS =
 
 /** The pull-request reaction bar's shape, routed to the issue tracker instead of the host. */
 export function IssueReactionBar({
+  viewer,
   reactions,
   canReact,
   contents,
@@ -216,7 +217,8 @@ export function IssueReactionBar({
   environmentId,
   reference,
 }: {
-  reactions: ReadonlyArray<IssueReaction>;
+  viewer: string | null;
+  reactions: ReadonlyArray<IssueReaction> | undefined;
   canReact: boolean;
   contents: ReadonlyArray<IssueReactionContent> | undefined;
   subjectId?: string | undefined;
@@ -233,9 +235,11 @@ export function IssueReactionBar({
   const values =
     pending.native === reactions
       ? pending.values
-      : retainUnacknowledgedIssueReactions(reactions, pending.values);
+      : viewer === null && reactions !== undefined
+        ? new Map<IssueReactionContent, boolean>()
+        : retainUnacknowledgedIssueReactions(reactions ?? [], pending.values);
   if (pending.native !== reactions) setPending({ native: reactions, values });
-  const shown = applyPendingPullRequestReactions(reactions, values);
+  const shown = applyPendingPullRequestReactions(reactions ?? [], values);
   const offered = offeredIssueReactionContents(contents);
 
   const toggle = async (content: IssueReactionContent, reacted: boolean) => {
@@ -253,6 +257,8 @@ export function IssueReactionBar({
     });
     if (result._tag === "Failure") {
       setPending((current) => {
+        if (viewer === null && current.native !== undefined && current.native !== reactions)
+          return current;
         const next = new Map(current.values);
         const previous = values.get(content);
         if (previous === undefined) next.delete(content);
@@ -1081,6 +1087,7 @@ function IssueDetailContent({
             {detail.reactions !== undefined ? (
               <IssueReactionBar
                 key={JSON.stringify([issueEntryKey(detail), detail.viewer ?? null])}
+                viewer={detail.viewer}
                 reactions={detail.reactions}
                 canReact={canReact}
                 contents={detail.capabilities.reactionContents}
@@ -1224,7 +1231,8 @@ function IssueDetailContent({
                             item.comment.id,
                             detail.viewer ?? null,
                           ])}
-                          reactions={item.comment.reactions ?? []}
+                          viewer={detail.viewer}
+                          reactions={item.comment.reactions}
                           canReact={canReactToComment}
                           contents={detail.capabilities.reactionContents}
                           subjectId={item.comment.id}

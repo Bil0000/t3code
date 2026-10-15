@@ -369,13 +369,39 @@ describe("older issue comments across detail re-reads", () => {
     expect(issueCommentsView(changed, loaded).held).toBeNull();
     const edited = editRetainedIssueComment(loaded, loaded.issue, "c2", "edited");
     expect(issueCommentsView(detail(), edited).comments[0]?.body).toBe("edited");
-    const unknown = appendOlderIssueComments(detail({ viewer: null }), null, {
+    const unknownBase = detail({ viewer: null });
+    const unknown = appendOlderIssueComments(unknownBase, null, {
       comments: [comment("c2")],
       nextCursor: null,
     });
-    expect(issueCommentsView(detail({ viewer: null }), unknown).held).toBe(unknown);
+    expect(issueCommentsView({ ...unknownBase }, unknown).held).toBe(unknown);
     expect(issueCommentsView(changed, { ...loaded, viewer: undefined }).held).not.toBeNull();
   });
+
+  it.each(["viewer", null])(
+    "fences a fresh unknown-owner first page and restores its cursor: %s",
+    (viewer) => {
+      const before = detail({ viewer });
+      const retained = appendOlderIssueComments(before, null, {
+        comments: [comment("c2", [{ ...heart[0]!, viewerHasReacted: true }])],
+        nextCursor: null,
+      });
+      expect(issueCommentsView({ ...before }, retained).held).toBe(retained);
+      const after = { ...before, comments: [...before.comments] };
+      const fresh = issueCommentsView(after, retained);
+      expect(fresh.comments.map((entry) => entry.id)).toEqual(
+        viewer === null ? ["c3"] : ["c2", "c3"],
+      );
+      expect(fresh.cursor).toBe(viewer === null ? "page-2" : null);
+      if (viewer !== null) return;
+      const reloaded = appendOlderIssueComments(after, fresh.held, {
+        comments: [comment("c2", heart)],
+        nextCursor: null,
+      });
+      expect(issueCommentsView(after, reloaded).comments[0]?.reactions).toEqual(heart);
+      expect(issueCommentsView({ ...after }, reloaded).cursor).toBeNull();
+    },
+  );
 
   it("drops a retained comment window when only the account changes", () => {
     const original = detail({ connectionId: "A" });

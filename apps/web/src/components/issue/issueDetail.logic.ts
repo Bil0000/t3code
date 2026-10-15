@@ -70,6 +70,7 @@ export type IssueOlderComments = {
   readonly issue: string;
   readonly viewer?: string | null | undefined;
   readonly seed: string | null;
+  readonly firstPage?: ReadonlyArray<IssueComment> | undefined;
   readonly firstIds: ReadonlyArray<string>;
   readonly comments: ReadonlyArray<IssueComment>;
   readonly cursor: string | null;
@@ -79,6 +80,7 @@ export function issueCommentsView(detail: IssueDetail, older: IssueOlderComments
   const held =
     older?.issue === issueEntryKey(detail) &&
     (older.viewer === undefined || older.viewer === detail.viewer) &&
+    (detail.viewer !== null || older.firstPage === detail.comments) &&
     older.seed === detail.commentsCursor &&
     older.firstIds.length === detail.comments.length &&
     older.firstIds.every((id, index) => id === detail.comments[index]?.id)
@@ -116,6 +118,7 @@ export function appendOlderIssueComments(
     issue: issueEntryKey(detail),
     viewer: detail.viewer,
     seed: detail.commentsCursor,
+    firstPage: detail.comments,
     firstIds: detail.comments.map((comment) => comment.id),
     comments: prependIssueComments(
       issueCommentsView(detail, older).held?.comments ?? [],
@@ -183,6 +186,7 @@ export function heldIssuePicker(
     confirmed.environmentId !== environmentId ||
     confirmed.kind !== kind ||
     confirmed.base.viewer !== issue.viewer ||
+    (issue.viewer === null && confirmed.base !== issue) ||
     confirmed.base.tracker !== issue.tracker ||
     issueEntryKey(confirmed.base) !== issueEntryKey(issue)
   )
