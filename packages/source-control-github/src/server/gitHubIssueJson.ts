@@ -170,6 +170,7 @@ const RawCommentsSchema = Schema.Struct({
 });
 
 const RawViewerFieldsSchema = Schema.Struct({
+  locked: Schema.optional(Schema.Boolean),
   viewerCanUpdate: Schema.optional(Schema.Boolean),
 });
 
@@ -185,10 +186,12 @@ export const ISSUE_DETAIL_GRAPHQL_QUERY = `query($owner: String!, $name: String!
   viewer { login }
   repository(owner: $owner, name: $name) {
     viewerPermission
+    isArchived
     issue(number: $number) {
       ${ISSUE_ROW_BASE_FIELDS}
       body
       viewerCanUpdate
+      locked
       ${REACTION_GROUPS_FIELDS}
       comments(last: ${PAGE_SIZE}) {
         totalCount
@@ -224,6 +227,7 @@ const RawDetailSchema = Schema.Struct({
     viewer: Schema.optional(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
     repository: Schema.Struct({
       viewerPermission: Schema.optional(Schema.NullOr(Schema.String)),
+      isArchived: Schema.optional(Schema.Boolean),
       /** Null for a number that names no issue the viewer can see. */
       issue: Schema.NullOr(
         Schema.Struct({
@@ -277,7 +281,8 @@ const RawCommentPageSchema = Schema.Struct({
 export const ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     viewerPermission
-    issue(number: $number) { viewerCanUpdate }
+    isArchived
+    issue(number: $number) { viewerCanUpdate locked }
   }
 }`;
 
@@ -285,6 +290,7 @@ const RawViewerPermissionsSchema = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
       viewerPermission: Schema.optional(Schema.NullOr(Schema.String)),
+      isArchived: Schema.optional(Schema.Boolean),
       issue: Schema.NullOr(RawViewerFieldsSchema),
     }),
   }),
@@ -593,26 +599,23 @@ function previousCursorOf(pageInfo: typeof RawPageInfoSchema.Type | undefined): 
   return pageInfo?.hasPreviousPage === true ? trimmed(pageInfo.startCursor) : null;
 }
 
-/**
- * What the signed-in account may do. Closing and editing go by `viewerCanUpdate`, which GitHub
- * grants the author as well as anyone with write; labelling and assigning need the triage role
- * or better. Commenting is not gated: seeing the repository is enough to say something in it.
- * An install that reports nothing grants rather than withholds, so the host's own refusal says why.
- */
 function toViewerPermissions(raw: {
   readonly viewerPermission?: string | null | undefined;
+  readonly isArchived?: boolean | undefined;
   readonly issue: typeof RawViewerFieldsSchema.Type | null;
 }): IssueViewerPermissions {
-  const canUpdate = raw.issue?.viewerCanUpdate !== false;
-  const canTriage =
-    raw.viewerPermission == null ||
-    ["ADMIN", "MAINTAIN", "WRITE", "TRIAGE"].includes(raw.viewerPermission.trim().toUpperCase());
+  const writable = raw.isArchived !== true;
+  const role = raw.viewerPermission?.trim().toUpperCase();
+  const canUpdate = writable && raw.issue?.viewerCanUpdate !== false;
+  const canTriage = role == null || ["ADMIN", "MAINTAIN", "WRITE", "TRIAGE"].includes(role);
   return {
     setState: canUpdate,
-    comment: true,
+    comment:
+      writable &&
+      (raw.issue?.locked !== true || role == null || ["ADMIN", "MAINTAIN", "WRITE"].includes(role)),
     edit: canUpdate,
-    labels: canTriage,
-    assignees: canTriage,
+    labels: writable && canTriage,
+    assignees: writable && canTriage,
   };
 }
 
@@ -666,6 +669,7 @@ export function decodeIssueDetailJson(
     viewer,
     viewerPermissions: toViewerPermissions({
       viewerPermission: repository.viewerPermission,
+      isArchived: repository.isArchived,
       issue,
     }),
     reactions: toReactions(issue.reactionGroups, viewer),
