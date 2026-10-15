@@ -1,5 +1,6 @@
 import {
   issueAccountRequest,
+  issueListRequest,
   IssueCapabilities,
   IssuePageInput,
   IssueHistoryPage,
@@ -340,8 +341,11 @@ const LINK_EVERY_ISSUE =
 
 const ListIssuesTool = Tool.make("list_issues", {
   description:
-    "List issues across a project's configured issue sources, newest updated first. Omit projectId for this thread's project. Each issue includes its tracker; pass tracker with key to other issue tools. Pass the returned nextCursors back as cursors for the next slice. Actor authorDetails/assigneeDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs; labelsTruncated means the current label set is incomplete.",
+    "List issues across a project's configured issue sources, newest updated first. To read another repository on a configured git host, select tracker, host and scope inside the state object, with value for the issue state. Outside repositories are read-only. Omit projectId for this thread's project. Each issue includes its tracker; pass tracker with key to other issue tools. Pass the returned nextCursors back as cursors for the next slice. Actor authorDetails/assigneeDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs; labelsTruncated means the current label set is incomplete.",
   parameters: Schema.Struct({
+    tracker: IssueListInput.fields.tracker,
+    host: IssueListInput.fields.host,
+    scope: IssueListInput.fields.scope,
     projectId: Schema.optional(
       ProjectId.annotate({ description: "Project to list. Omit for this thread's project." }),
     ),
@@ -358,7 +362,7 @@ const ListIssuesTool = Tool.make("list_issues", {
     ),
     limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
     cursors: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-  }).pipe(issueAccountRequest),
+  }).pipe((schema) => issueListRequest(schema, false)),
   success: ListIssuesResult,
   failure: IssueToolError,
   dependencies,

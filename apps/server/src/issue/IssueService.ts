@@ -487,7 +487,49 @@ export const make = Effect.gen(function* () {
 
   const list: IssueService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
-      const { supported, unimplemented } = yield* listProjects(input);
+      const resolved = yield* listProjects(input);
+      let supported = resolved.supported.filter(
+        (project) => input.tracker === undefined || project.tracker === input.tracker,
+      );
+      const unimplemented = new Map(
+        [...resolved.unimplemented].filter(
+          ([, source]) => input.tracker === undefined || source.tracker === input.tracker,
+        ),
+      );
+      if (input.scope !== undefined) {
+        const scope = input.scope;
+        const own = supported.filter(
+          (project) =>
+            issueScopeKeyOf(project) === issueScopeKeyOf({ tracker: project.tracker, scope }),
+        );
+        const lenders =
+          own.length > 0
+            ? own
+            : supported.filter(
+                (project) =>
+                  !isStandaloneIssueTracker(project.api) &&
+                  (project.tracker !== "forgejo" ||
+                    issueScopeKeyOf(project).split("/").slice(0, -2).join("/") ===
+                      issueScopeKeyOf({ tracker: project.tracker, scope })
+                        .split("/")
+                        .slice(0, -2)
+                        .join("/")),
+              );
+        if (lenders.length === 0)
+          return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+        if (new Set(lenders.map(trackerKeyOf)).size > 1)
+          return yield* new IssueOperationError({
+            operation: "list",
+            detail: "Choose one tracker, host and saved account for this scope.",
+          });
+        supported =
+          own.length > 0
+            ? own
+            : lenders.map((project) => ({
+                ...project,
+                scope: issueScopeKeyOf({ tracker: project.tracker, scope }),
+              }));
+      }
       const limit = input.limit ?? DEFAULT_LIST_LIMIT;
       // Worktrees of one repository are separate projects; read each scope once.
       const scopes = new Map<string, SupportedProject>();

@@ -534,6 +534,43 @@ describe("issue toolkit handlers", () => {
       }),
   );
 
+  it("protects host-only MCP lists while preserving the flat service input", () => {
+    const input = { host: "github.com" };
+    const wire = encodeIssueTools.list_issues!(input);
+    expect(wire).toEqual({ state: { host: "github.com" } });
+    expect(
+      Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.parametersSchema)(wire),
+    ).toEqual(input);
+    expect(() =>
+      Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.parametersSchema)(input),
+    ).toThrow();
+  });
+
+  it.effect("forwards selected external list scope and keeps external writes denied", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const input = {
+        projectId: PROJECT_ID,
+        tracker: GITHUB,
+        host: "github.com",
+        scope: "acme/other",
+        state: "all" as const,
+      };
+      yield* harness.call("list_issues", input, ["issues"], true);
+      expect(yield* Ref.get(harness.calls)).toEqual([{ operation: "list", input }]);
+      const denied = yield* harness
+        .call(
+          "update_issue",
+          { tracker: GITHUB, host: input.host, scope: input.scope, key: "7", title: "Denied" },
+          ["issues"],
+          true,
+        )
+        .pipe(Effect.result);
+      expect(Result.isFailure(denied)).toBe(true);
+      expect((yield* Ref.get(harness.calls)).length).toBe(1);
+    }),
+  );
+
   it.effect("keeps mutation and saved-link selection on the exact account", () =>
     Effect.gen(function* () {
       const source = { ...standaloneSource, connectionId: "Account" };

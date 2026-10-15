@@ -42,11 +42,14 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as IssueService from "./IssueService.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { IssuesToolkit } from "../mcp/toolkits/issues/tools.ts";
 
 const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
 const JIRA = IssueTrackerKind.make("jira");
 const decodeUpdate = Schema.decodeEffect(IssueUpdateInput);
+const encodeListTool = Schema.encodeUnknownSync(IssuesToolkit.tools.list_issues.parametersSchema);
+const decodeListTool = Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.parametersSchema);
 const permissions = {
   setState: true,
   comment: true,
@@ -2933,3 +2936,128 @@ it.effect("keeps native Forgejo involvement viewers separate across case-distinc
     ),
   );
 });
+
+it.effect(
+  "lists and continues a same-host external repository through native GitHub while refusing writes",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<{ operation: string; scope: string; cursor: unknown }> = [];
+      let bindingReads = 0;
+      const driver = yield* GitHubIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(GitHubApi.GitHubApi)({
+            graphql: (request) =>
+              Effect.sync(() => {
+                const scope = `${request.variables?.owner}/${request.variables?.name}`;
+                calls.push({
+                  operation: request.operation,
+                  scope,
+                  cursor: request.variables?.cursor,
+                });
+                if (request.operation === "getViewer")
+                  return JSON.stringify({ data: { viewer: { login: "viewer" } } });
+                const next = request.variables?.cursor === undefined;
+                return JSON.stringify({
+                  data: {
+                    repository: {
+                      issues: {
+                        pageInfo: { hasNextPage: next, endCursor: next ? "native-next" : null },
+                        nodes: [
+                          {
+                            number: next ? 42 : 41,
+                            title: scope,
+                            url: `https://github.com/${scope}/issues/42`,
+                            state: "OPEN",
+                            stateReason: null,
+                            createdAt: "2026-10-14T00:00:00Z",
+                            updatedAt: "2026-10-14T00:00:00Z",
+                            closedAt: null,
+                            author: null,
+                            assignees: { nodes: [] },
+                            labels: { nodes: [], pageInfo: { hasNextPage: false } },
+                            milestone: null,
+                            comments: { totalCount: 0 },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                });
+              }),
+          }),
+        ),
+      );
+      const service = yield* makeService({
+        projects: [project({ id: "web", repository: "acme/web" })],
+        trackers: [driver],
+        onBindingsRead: () => {
+          bindingReads++;
+        },
+      });
+      const requested = decodeListTool(
+        encodeListTool({
+          projectId: "web",
+          tracker: GITHUB,
+          host: "github.com",
+          scope: "acme/other",
+          state: "all",
+        }),
+      );
+      const first = yield* service.list({ ...requested, state: requested.state ?? "open" });
+      expect(first.errors).toEqual([]);
+      expect(first.entries).toMatchObject([
+        { projectId: "web", scope: "acme/other", title: "acme/other" },
+      ]);
+      expect(Object.keys(first.nextCursors)).toEqual(["github github.com acme/other"]);
+      const next = yield* service.list({ ...requested, state: "all", cursors: first.nextCursors });
+      expect(next.nextCursors).toEqual({});
+      expect(calls).toHaveLength(4);
+      expect(bindingReads).toBe(2);
+      expect(
+        calls.filter((call) => call.operation === "listIssues").map((call) => call.scope),
+      ).toEqual(["acme/other", "acme/other"]);
+      const before = calls.length;
+      yield* service
+        .update({
+          projectId: first.entries[0]!.projectId,
+          tracker: GITHUB,
+          host: "github.com",
+          scope: "acme/other",
+          key: "7",
+          title: "Denied",
+        })
+        .pipe(Effect.flip);
+      yield* service.setState({ ...first.entries[0]!, state: "closed" }).pipe(Effect.flip);
+      expect(calls).toHaveLength(before);
+      yield* service.list({ ...requested, state: "all", host: "foreign.test" }).pipe(Effect.flip);
+      expect(calls).toHaveLength(before);
+      expect((yield* service.list({ state: "all" })).entries[0]?.scope).toBe("acme/web");
+    }),
+);
+
+it.effect("refuses ambiguous account scopes and foreign Forgejo mounts before viewer reads", () =>
+  Effect.gen(function* () {
+    const unavailable = () => Effect.die("Must not read an ambiguous or foreign source");
+    const service = yield* makeService({
+      projects: [project({ id: "a" }), project({ id: "b" })],
+      trackers: [fakeStandaloneTracker({ getViewer: unavailable, listIssues: unavailable })],
+      bindings: {
+        a: { tracker: LINEAR, scope: "acme/ENG", connectionId: "Account" },
+        b: { tracker: LINEAR, scope: "acme/ENG", connectionId: "account" },
+      },
+    });
+    yield* service.list({ state: "all", tracker: LINEAR, scope: "acme/ENG" }).pipe(Effect.flip);
+    const forgejo = IssueTrackerKind.make("forgejo");
+    const mounted = yield* makeService({
+      projects: [
+        project({ id: "a", provider: "forgejo", host: "forge.test", repository: "Mount/acme/web" }),
+      ],
+      trackers: [
+        { ...fakeTracker({ getViewer: unavailable, listIssues: unavailable }), kind: forgejo },
+      ],
+    });
+    yield* mounted
+      .list({ state: "all", tracker: forgejo, host: "forge.test", scope: "mount/acme/other" })
+      .pipe(Effect.flip);
+  }),
+);

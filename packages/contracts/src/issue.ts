@@ -438,6 +438,8 @@ export type IssueListCursors = typeof IssueListCursors.Type;
 
 export const IssueListInput = Schema.Struct({
   connectionId: Schema.optional(IssueTrackerConnectionId),
+  tracker: Schema.optional(IssueTrackerKind),
+  scope: Schema.optional(TrimmedNonEmptyString),
   stateCategories: Schema.optional(
     Schema.Array(IssueWorkflowCategory).check(Schema.isMaxLength(5)),
   ),
@@ -456,6 +458,69 @@ export const IssueListInput = Schema.Struct({
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
 });
 export type IssueListInput = typeof IssueListInput.Type;
+
+export function issueListRequest<
+  S extends Schema.Struct<{
+    readonly [key: string]: Schema.Constraint & {
+      readonly DecodingServices: never;
+      readonly EncodingServices: never;
+    };
+  }>,
+>(
+  schema: S,
+  legacyHost = true,
+): Schema.Codec<S["Type"], Readonly<Record<string, unknown>>> &
+  Pick<S, "~type.make.in" | "~type.make"> {
+  const selection = Schema.Struct({
+    value: schema.fields.state!,
+    host: IssueListInput.fields.host,
+    tracker: IssueListInput.fields.tracker,
+    scope: IssueListInput.fields.scope,
+  });
+  const wire = Schema.Struct({
+    ...schema.fields,
+    host: legacyHost ? schema.fields.host! : Schema.optional(Schema.Never),
+    tracker: Schema.optional(Schema.Never),
+    scope: Schema.optional(Schema.Never),
+    state: Schema.optional(Schema.Union([schema.fields.state!, selection])),
+  }).pipe(issueAccountRequest);
+  return wire.pipe(
+    Schema.decodeTo(schema, {
+      decode: SchemaGetter.transform((raw) => {
+        const input = raw as Readonly<Record<string, unknown>>;
+        const state = input.state;
+        if (state !== null && typeof state === "object") {
+          const { value, ...selection } = state as Readonly<Record<string, unknown>>;
+          const { state: _state, ...rest } = input;
+          return {
+            ...rest,
+            ...selection,
+            ...(value === undefined ? {} : { state: value }),
+          } as S["Encoded"];
+        }
+        return input as S["Encoded"];
+      }),
+      encode: SchemaGetter.transform((raw) => {
+        const input = raw as Readonly<Record<string, unknown>>;
+        const { tracker, scope, state, host, ...rest } = input;
+        return (
+          tracker === undefined && scope === undefined && (legacyHost || host === undefined)
+            ? input
+            : {
+                ...rest,
+                ...(legacyHost && host !== undefined ? { host } : {}),
+                state: {
+                  ...(state === undefined ? {} : { value: state }),
+                  ...(!legacyHost && host !== undefined ? { host } : {}),
+                  ...(tracker === undefined ? {} : { tracker }),
+                  ...(scope === undefined ? {} : { scope }),
+                },
+              }
+        ) as typeof wire.Type;
+      }),
+    }),
+  );
+}
 
 /** One tracker account the workspace has projects on, and whether it can be read right now. */
 export const IssueTrackerSummary = Schema.Struct({

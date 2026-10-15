@@ -368,6 +368,9 @@ const make = Effect.gen(function* () {
         const result = yield* issues.list({
           projectId: project.id,
           state: input.state ?? "open",
+          ...(input.tracker === undefined ? {} : { tracker: input.tracker }),
+          ...(input.host === undefined ? {} : { host: input.host }),
+          ...(input.scope === undefined ? {} : { scope: input.scope }),
           ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
           ...(input.stateCategories === undefined
             ? {}

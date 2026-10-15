@@ -184,6 +184,7 @@ import {
   IssueOperationError,
   IssueReactionInput,
   issueAccountRequest,
+  issueListRequest,
   IssueRef,
   IssueResolveUrlInput,
   IssueResolvedUrl,
@@ -1232,7 +1233,7 @@ const IssueRpcError = Schema.Union([
 ]);
 
 const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
-  payload: issueAccountRequest(IssueListInput),
+  payload: issueListRequest(IssueListInput),
   success: IssueListResult,
   error: IssueRpcError,
 });
