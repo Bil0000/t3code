@@ -38,7 +38,6 @@ import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIssueThreadHandoff } from "./useIssueThreadHandoff";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { cn } from "~/lib/utils";
 import { issueEnvironment, useIssueLinkedPullRequests } from "~/state/issues";
 import { IssueLoadMore } from "./IssueLoadMore";
 import { IssueHistory } from "./IssueHistory";
@@ -204,9 +203,6 @@ function IssueTruncatedNote({
   );
 }
 
-const REACTION_PILL_CLASS =
-  "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
-
 /** The pull-request reaction bar's shape, routed to the issue tracker instead of the host. */
 export function IssueReactionBar({
   viewer,
@@ -276,20 +272,14 @@ export function IssueReactionBar({
         <Tooltip key={reaction.content}>
           <TooltipTrigger
             render={
-              <button
-                type="button"
+              <Button
+                size="xs"
+                variant={reaction.viewerHasReacted ? "secondary" : "outline"}
                 aria-pressed={reaction.viewerHasReacted}
                 aria-label={`${pullRequestReactionName(reaction.content)}, ${reaction.count}`}
                 disabled={
                   !canReact || !offered.includes(reaction.content) || busy.has(reaction.content)
                 }
-                className={cn(
-                  REACTION_PILL_CLASS,
-                  reaction.viewerHasReacted
-                    ? "border-primary/60 bg-primary/10 text-foreground"
-                    : "border-border/70 bg-muted/40 text-muted-foreground",
-                  canReact ? "hover:border-primary/60" : "cursor-default",
-                )}
                 onClick={() => void toggle(reaction.content, !reaction.viewerHasReacted)}
               />
             }
@@ -303,16 +293,7 @@ export function IssueReactionBar({
       {canReact && offered.length > 0 ? (
         <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
           <PopoverTrigger
-            render={
-              <button
-                type="button"
-                aria-label="Add a reaction"
-                className={cn(
-                  REACTION_PILL_CLASS,
-                  "border-border/70 px-1.5 text-muted-foreground hover:border-primary/60 hover:text-foreground",
-                )}
-              />
-            }
+            render={<Button size="icon-xs" variant="outline" aria-label="Add a reaction" />}
           >
             <SmilePlusIcon aria-hidden className="size-3.5" />
           </PopoverTrigger>
@@ -322,23 +303,20 @@ export function IssueReactionBar({
                 const reacted =
                   shown.find((reaction) => reaction.content === content)?.viewerHasReacted ?? false;
                 return (
-                  <button
+                  <Button
                     key={content}
-                    type="button"
+                    size="icon-sm"
+                    variant={reacted ? "secondary" : "ghost"}
                     aria-pressed={reacted}
                     disabled={busy.has(content)}
                     aria-label={pullRequestReactionName(content)}
-                    className={cn(
-                      "flex size-7 items-center justify-center rounded-md text-base outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                      reacted && "bg-primary/10",
-                    )}
                     onClick={() => {
                       setPickerOpen(false);
                       void toggle(content, !reacted);
                     }}
                   >
                     <span aria-hidden>{pullRequestReactionEmoji(content)}</span>
-                  </button>
+                  </Button>
                 );
               })}
             </div>
