@@ -15,6 +15,7 @@ const harness = vi.hoisted(() => {
     answers: [] as Array<"fail" | "ok">,
     back: 0,
     opened: [] as string[],
+    connected: true,
     capture:
       (key: string) =>
       ({ children, ...props }: Props) => {
@@ -64,7 +65,7 @@ vi.mock("@t3tools/client-runtime/state/runtime", () => ({
 }));
 vi.mock("./useIssueAccess", async () => {
   const { issueAccess } = await import("./issueDetail");
-  const grants = { connected: true, comment: true, update: true, setState: true, react: true };
+  const grants = { comment: true, update: true, setState: true, react: true };
   return {
     issueTarget: ({ environmentId, ...input }: Record<string, string>) => ({
       environmentId,
@@ -72,8 +73,8 @@ vi.mock("./useIssueAccess", async () => {
     }),
     markIssueTargetWritten: () => {},
     useIssueAccess: (_params: unknown, detail: IssueDetail | null) => ({
-      connected: true,
-      ...issueAccess(detail, grants),
+      connected: harness.connected,
+      ...issueAccess(detail, { ...grants, connected: harness.connected }),
     }),
   };
 });
@@ -163,6 +164,7 @@ beforeEach(() => {
   harness.answers = [];
   harness.back = 0;
   harness.opened.length = 0;
+  harness.connected = true;
 });
 
 afterEach(() => act(async () => root.unmount()));
@@ -196,4 +198,17 @@ it.each([undefined, true])("edits a plain description when bodyEditable is %s", 
   await type("Description", "Plain body");
   await save();
   expect(sent()).toEqual([{ title: undefined, body: "Plain body" }]);
+});
+
+it("says the environment is offline instead of blaming access when it disconnects", async () => {
+  harness.issue = detail();
+  harness.connected = false;
+  const container = document.createElement("div");
+  root = createRoot(container);
+  await render();
+  expect(control("Save")!.disabled).toBe(true);
+  expect(container.textContent).toContain(
+    "This environment is offline. Reconnect to edit this issue.",
+  );
+  expect(container.textContent).not.toContain("with your access");
 });

@@ -119,7 +119,9 @@ export function IssueComposeSheet({
       ) : null}
       {issue && !allowed ? (
         <Text className="text-xs text-foreground-muted">
-          {editing ? "Editing" : "Commenting"} isn't available for this issue with your access.
+          {access.connected
+            ? `${editing ? "Editing" : "Commenting"} isn't available for this issue with your access.`
+            : `This environment is offline. Reconnect to ${editing ? "edit this issue" : "comment"}.`}
         </Text>
       ) : null}
       {error || result.error ? (

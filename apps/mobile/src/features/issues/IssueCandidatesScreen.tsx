@@ -278,7 +278,7 @@ export function IssueCandidatesScreen({
                       ? "No matches"
                       : `No ${title.toLowerCase()} available`
                 }
-                detail={detail.error ?? "The tracker offered none for this scope."}
+                detail={detail.error ?? result.error ?? "The tracker offered none for this scope."}
                 variant="plain"
               />
             </View>
