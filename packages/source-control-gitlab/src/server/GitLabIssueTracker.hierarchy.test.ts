@@ -13,10 +13,24 @@ import { decodeIssueListJson } from "./gitLabIssueJson.ts";
 const target = { cwd: "/checkout", host: "gitlab.acme.test:8443", scope: "acme/web", key: "42" };
 const decodeHierarchy = Schema.decodeEffect(IssueHierarchyPage);
 
-it.effect("does not grant native Task parent permission without a hierarchy widget", () =>
+it.effect.each([
+  {
+    name: "unsupported schema",
+    reply: { errors: [{ message: "Field 'workItem' doesn't exist on type 'Namespace'" }] },
+  },
+  { name: "missing namespace", reply: { data: { namespace: null } } },
+  { name: "missing work item", reply: { data: { namespace: { workItem: null } } } },
+  { name: "unreadable work item", reply: { data: { namespace: { workItem: { iid: "42" } } } } },
+  {
+    name: "missing hierarchy widget",
+    reply: { data: { namespace: { workItem: { ...item("42", "Task"), widgets: [] } } } },
+  },
+])("does not grant native Task parent permission with $name", ({ reply }) =>
   Effect.gen(function* () {
-    const api = yield* tracker((_args, body) =>
-      String(body.query).includes("updateIssue")
+    let calls = 0;
+    const api = yield* tracker((_args, body) => {
+      calls++;
+      return String(body.query).includes("updateIssue")
         ? {
             data: {
               project: {
@@ -34,9 +48,14 @@ it.effect("does not grant native Task parent permission without a hierarchy widg
               },
             },
           }
-        : { data: { namespace: { workItem: { ...item("42", "Task"), widgets: [] } } } },
-    );
-    yield* Effect.flip(api.getViewerPermissions(target));
+        : reply;
+    });
+    expect(yield* api.getViewerPermissions(target)).toMatchObject({
+      edit: true,
+      comment: true,
+      updateParent: false,
+    });
+    expect(calls).toBe(2);
   }),
 );
 
@@ -398,6 +417,93 @@ it.effect.each(["authentication", "rate-limited"] as const)(
     }),
 );
 
+it.effect.each(["authentication", "rate-limited"] as const)(
+  "keeps native %s errors from Task permissions and the optional parent lookup",
+  (failureKind) =>
+    Effect.gen(function* () {
+      for (const optional of [false, true]) {
+        const calls: string[] = [];
+        const api = yield* GitLabIssueTracker.make.pipe(
+          Effect.provide(
+            GitLabCli.layer.pipe(
+              Layer.provide(
+                TestSourceControlHost.layer({
+                  process: {
+                    run: (request) => {
+                      calls.push(request.args[1]!);
+                      const body = request.stdin === undefined ? {} : JSON.parse(request.stdin);
+                      if (
+                        request.args[1] === "graphql" &&
+                        String(body.query).includes("namespace(fullPath:") === optional
+                      )
+                        return Effect.fail(
+                          new VcsProcessExitError({
+                            operation: "execute",
+                            command: "glab",
+                            cwd: target.cwd,
+                            exitCode: 1,
+                            detail: "Native refusal",
+                            failureKind,
+                          }),
+                        );
+                      const reply =
+                        request.args[1] === "projects/acme%2Fweb/issues/42"
+                          ? {
+                              iid: 42,
+                              title: "Task 42",
+                              web_url: item("42", "Task").webUrl,
+                              issue_type: "task",
+                              created_at: "2026-07-01T00:00:00Z",
+                              updated_at: "2026-07-01T00:00:00Z",
+                            }
+                          : request.args[1] !== "graphql"
+                            ? []
+                            : {
+                                data: {
+                                  currentUser: { username: "guest" },
+                                  project: {
+                                    archived: false,
+                                    mergeRequest: {
+                                      type: "TASK",
+                                      state: "opened",
+                                      userPermissions: {
+                                        updateIssue: true,
+                                        reopenIssue: true,
+                                        createNote: true,
+                                        adminIssue: true,
+                                      },
+                                      notes: {
+                                        pageInfo: { hasPreviousPage: false, startCursor: null },
+                                        nodes: [],
+                                      },
+                                    },
+                                  },
+                                },
+                              };
+                      return Effect.succeed(
+                        TestSourceControlHost.processOutput(JSON.stringify(reply)),
+                      );
+                    },
+                  },
+                }),
+              ),
+            ),
+          ),
+        );
+        const detailError = yield* Effect.flip(api.getIssue(target));
+        expect(detailError.reason).toBe(
+          failureKind === "authentication" ? "unauthenticated" : "rate-limited",
+        );
+        expect(calls.length).toBeLessThanOrEqual(optional ? 7 : 6);
+        expect(calls.filter((path) => path === "graphql")).toHaveLength(optional ? 2 : 1);
+        calls.length = 0;
+        const permissionsError = yield* Effect.flip(api.getViewerPermissions(target));
+        expect(permissionsError.reason).toBe(detailError.reason);
+        expect(calls).toHaveLength(optional ? 2 : 1);
+      }
+    }),
+);
+
 it.effect.each([
   "missing data",
   "wrong parent",
@@ -477,11 +583,24 @@ it.effect("reports a silently changed created type without linking or creating a
 );
 
 it.effect.each([
-  { type: "task", allowed: true },
-  { type: "task", allowed: false },
-  { type: "issue", allowed: true },
-  { type: "incident", allowed: true },
-])("keeps native $type detail actions and fresh parent permission $allowed", ({ type, allowed }) =>
+  { type: "task", allowed: true, name: "allowed", reply: undefined },
+  { type: "task", allowed: false, name: "denied", reply: undefined },
+  { type: "issue", allowed: true, name: "Issue", reply: undefined },
+  { type: "incident", allowed: true, name: "incident", reply: undefined },
+  ...[
+    {
+      name: "unsupported schema",
+      reply: { errors: [{ message: "Field 'workItem' doesn't exist on type 'Namespace'" }] },
+    },
+    { name: "missing namespace", reply: { data: { namespace: null } } },
+    { name: "missing work item", reply: { data: { namespace: { workItem: null } } } },
+    { name: "unreadable work item", reply: { data: { namespace: { workItem: { iid: "42" } } } } },
+    {
+      name: "missing hierarchy widget",
+      reply: { data: { namespace: { workItem: { ...item("42", "Task"), widgets: [] } } } },
+    },
+  ].map((failure) => ({ type: "task", allowed: false, ...failure })),
+])("keeps native $type detail actions with $name parent permission", ({ type, allowed, reply }) =>
   Effect.gen(function* () {
     let calls = 0;
     const api = yield* tracker((args, body) => {
@@ -499,17 +618,19 @@ it.effect.each([
         };
       if (args[1] !== "graphql") return [];
       if (String(body.query).includes("namespace(fullPath:"))
-        return {
-          data: {
-            namespace: {
-              workItem: {
-                ...item("42", "Task"),
-                userPermissions: { adminParentLink: allowed },
-                widgets: hierarchy(item("9"), []),
+        return (
+          reply ?? {
+            data: {
+              namespace: {
+                workItem: {
+                  ...item("42", "Task"),
+                  userPermissions: { adminParentLink: allowed },
+                  widgets: hierarchy(item("9"), []),
+                },
               },
             },
-          },
-        };
+          }
+        );
       return {
         data: {
           currentUser: { username: "guest" },
@@ -542,7 +663,7 @@ it.effect.each([
       },
     });
     expect(calls).toBe(type === "task" ? 7 : 6);
-    if (type === "task") {
+    if (type === "task" && reply === undefined) {
       const page = yield* decodeHierarchy(yield* api.getHierarchy!(target));
       expect(page.parent).toMatchObject({ key: "9", itemType: "Issue" });
       expect(page.children).toEqual({ items: [], nextCursor: null });

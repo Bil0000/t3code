@@ -353,6 +353,10 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             ),
           ),
         ),
+        Effect.catchIf(
+          (error) => error.reason === "failed" || error.reason === "not-found",
+          () => Effect.succeed(false),
+        ),
       );
 
     const relation = (input: IssueScopeTarget, item: GitLabWorkItem, operation: string) => {
