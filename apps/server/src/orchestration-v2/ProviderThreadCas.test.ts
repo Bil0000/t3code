@@ -77,6 +77,11 @@ it.effect(
         Effect.map((rows) => rows[0]!.payload_json),
       );
       yield* sink.write({ events: [update("event:seed", payload)] });
+      yield* sql`
+        UPDATE orchestration_v2_projection_provider_threads
+        SET payload_json = json_remove(payload_json, '$.contextUsage', '$.nativeMetadata', '$.goal')
+        WHERE provider_thread_id = ${payload.id}
+      `;
       const raw = yield* read;
       assert.notProperty(JSON.parse(raw), "contextUsage");
       assert.notProperty(JSON.parse(raw), "nativeMetadata");

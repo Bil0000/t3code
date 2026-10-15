@@ -569,7 +569,7 @@ const makeEventStore = Effect.gen(function* () {
           return yield* decodeV2StoredEvent({
             sequence: rows[0]?.sequence,
             commandId: input.commandId ?? null,
-            event,
+            event: yield* decodeV2EventJson(encoded),
           });
         }),
       { concurrency: 1 },
