@@ -3023,6 +3023,7 @@ export default function ChatView(props: ChatViewProps) {
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const supportsIssues = serverConfig?.environment.capabilities.issues === true;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsQuestionAttachments =
@@ -5490,6 +5491,11 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef || !pullRequestsSurfaceAvailable) return;
     useRightPanelStore.getState().open(activeThreadRef, "pull-requests");
   }, [activeThreadRef, pullRequestsSurfaceAvailable]);
+  const issuesSurfaceAvailable = isServerThread && supportsIssues;
+  const addIssuesSurface = useCallback(() => {
+    if (!activeThreadRef || !issuesSurfaceAvailable) return;
+    useRightPanelStore.getState().open(activeThreadRef, "issues");
+  }, [activeThreadRef, issuesSurfaceAvailable]);
   const { state: deviceState, loaded: deviceStateLoaded } = useDeviceState(
     activeThreadRef?.environmentId ?? null,
   );
@@ -12173,6 +12179,7 @@ export default function ChatView(props: ChatViewProps) {
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddPullRequests={addPullRequestsSurface}
+          onAddIssues={addIssuesSurface}
           onAddDevice={addDeviceSurface}
           browserAvailable={canOperatePreview && browserAvailable}
           terminalAvailable={activeProject !== null && canOperateTerminal}
@@ -12180,6 +12187,7 @@ export default function ChatView(props: ChatViewProps) {
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
+          issuesAvailable={issuesSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
         >
           {rightPanelContent}
@@ -12232,6 +12240,7 @@ export default function ChatView(props: ChatViewProps) {
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddPullRequests={addPullRequestsSurface}
+            onAddIssues={addIssuesSurface}
             onAddDevice={addDeviceSurface}
             browserAvailable={canOperatePreview && browserAvailable}
             terminalAvailable={activeProject !== null && canOperateTerminal}
@@ -12239,6 +12248,7 @@ export default function ChatView(props: ChatViewProps) {
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
+            issuesAvailable={issuesSurfaceAvailable}
             deviceAvailable={activeThreadRef !== null}
           >
             {rightPanelContent}
