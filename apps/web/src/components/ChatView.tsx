@@ -11238,7 +11238,7 @@ export default function ChatView(props: ChatViewProps) {
         shortcutsEnabled={
           rightPanelOpen && activeRightPanelSurface?.id === renderedRightPanelSurface.id
         }
-        key={`${renderedRightPanelSurface.host ?? ""}:${renderedRightPanelSurface.repository}#${renderedRightPanelSurface.number}`}
+        key={renderedRightPanelSurface.id}
         environmentId={
           (renderedRightPanelSurface.environmentId as EnvironmentId | undefined) ??
           activeThread.environmentId
