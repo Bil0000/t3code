@@ -2,14 +2,32 @@ import { EnvironmentId, IssueTrackerKind, ProjectId } from "@t3tools/contracts";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
-const state = vi.hoisted(() => ({ create: vi.fn() }));
+const state = vi.hoisted(() => ({
+  create: vi.fn(),
+  reads: new Set<string>(),
+  reply: (_input: Record<string, unknown>): unknown => null,
+  refresh: vi.fn(),
+}));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("~/state/issues", () => ({
-  issueEnvironment: { create: { permissionAtom: () => null } },
+  issueEnvironment: {
+    create: { permissionAtom: () => null },
+    templates: (target: { input: Record<string, unknown> }) => target.input,
+  },
 }));
 vi.mock("~/state/query", () => ({
-  useEnvironmentQuery: () => ({ data: null, isPending: false, error: null }),
+  useEnvironmentQuery: (input: Record<string, unknown> | null) => {
+    if (input !== null) state.reads.add(JSON.stringify(input));
+    const reply = input === null ? null : state.reply(input);
+    return {
+      data: reply instanceof Error || reply === "pending" ? null : reply,
+      isPending: reply === "pending",
+      isSuccess: reply !== null && !(reply instanceof Error) && reply !== "pending",
+      error: reply instanceof Error ? reply.message : null,
+      refresh: state.refresh,
+    };
+  },
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.create }));
 vi.mock("../ui/dialog", () => ({
@@ -74,6 +92,8 @@ const submit = () => act(async () => createButton().props.onClick());
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.create.mockResolvedValue({ _tag: "Success", value: { displayKey: "#1" } });
+  state.reads.clear();
+  state.reply = () => null;
   renderer = undefined!;
 });
 afterEach(async () => {
@@ -113,4 +133,150 @@ it("holds the draft without a destination until a removed project is replaced by
   await submit();
   expect(state.create).toHaveBeenCalledOnce();
   expect(state.create.mock.calls[0]?.[0].input).toMatchObject({ projectId: "c", title: "Draft" });
+});
+
+const template = (key: string, body: string, contentDeferred?: true) => ({
+  key,
+  name: key,
+  about: "",
+  title: `${key} title`,
+  body,
+  labels: [`${key}-label`],
+  assignees: [],
+  ...(contentDeferred ? { contentDeferred } : {}),
+});
+const catalog = (...templates: ReadonlyArray<ReturnType<typeof template>>) => ({
+  templates,
+  blankIssuesEnabled: true,
+});
+const lazy = { ...a, templates: true };
+const lazyB = { ...b, templates: true };
+const field = (id: string) => renderer.root.findByProps({ id });
+const type = (id: string, value: string) =>
+  act(async () => field(id).props.onChange({ target: { value } }));
+const pick = (key: string) =>
+  act(async () => field("issue-create-template").parent!.props.onValueChange(key));
+const blockedText = () =>
+  renderer.root.findAllByType("p").map((node) => node.props.children as unknown);
+
+it("reads the catalog once, then only the chosen deferred body", async () => {
+  const hundred = Array.from({ length: 100 }, (_, index) => template(`t${index + 1}`, "", true));
+  state.reply = (input) =>
+    input.metadataOnly
+      ? catalog(...hundred)
+      : catalog(template(String(input.templateKey), "Steps for t100"));
+  await render([lazy]);
+  await pick("t100");
+  await submit();
+  expect([...state.reads].map((read) => JSON.parse(read))).toEqual([
+    { ...lazy.scope, metadataOnly: true },
+    { ...lazy.scope, templateKey: "t100" },
+  ]);
+  expect(state.create.mock.calls[0]?.[0].input).toMatchObject({
+    title: "t100 title",
+    body: "Steps for t100",
+    labels: ["t100-label"],
+  });
+});
+
+it("fills from an inline catalog without a second read", async () => {
+  state.reply = (input) => (input.metadataOnly ? catalog(template("Bug", "")) : "pending");
+  await render([lazy]);
+  await pick("Bug");
+  expect(state.reads.size).toBe(1);
+  expect(field("issue-create-title").props.value).toBe("Bug title");
+  expect(createButton().props.disabled).toBe(false);
+});
+
+it("blocks create while the chosen body loads or fails, and retries the body read", async () => {
+  let body: unknown = "pending";
+  state.reply = (input) => (input.metadataOnly ? catalog(template("Bug", "", true)) : body);
+  await render([lazy]);
+  await pick("Bug");
+  expect(createButton().props.disabled).toBe(true);
+  expect(blockedText()).toContain("Loading template…");
+  body = new Error("Not found");
+  await render([lazy]);
+  expect(createButton().props.disabled).toBe(true);
+  expect(blockedText()).toContain("The template could not be read: Not found");
+  await act(async () =>
+    renderer.root
+      .findAllByType("button")
+      .find((button) => button.props.children === "Retry")!
+      .props.onClick(),
+  );
+  expect(state.refresh).toHaveBeenCalledOnce();
+  body = catalog(template("Bug", "Steps"));
+  await render([lazy]);
+  expect(field("issue-create-body").props.value).toBe("Steps");
+  expect(createButton().props.disabled).toBe(false);
+});
+
+it("keeps what the writer typed or cleared while the body loads", async () => {
+  let body: unknown = "pending";
+  state.reply = (input) => (input.metadataOnly ? catalog(template("Bug", "", true)) : body);
+  await render([lazy]);
+  await pick("Bug");
+  await type("issue-create-title", "Mine");
+  await type("issue-create-title", "");
+  await type("issue-create-body", "My notes");
+  body = catalog(template("Bug", "Steps"));
+  await render([lazy]);
+  expect(field("issue-create-title").props.value).toBe("");
+  expect(field("issue-create-body").props.value).toBe("My notes");
+});
+
+it("ignores a body that arrives after the template or project changed", async () => {
+  const bodies: Record<string, unknown> = { A: "pending", B: "pending" };
+  state.reply = (input) =>
+    input.metadataOnly
+      ? catalog(template("A", "", true), template("B", "", true))
+      : input.projectId === "a"
+        ? bodies[String(input.templateKey)]
+        : "pending";
+  await render([lazy, lazyB]);
+  await pick("A");
+  await pick("B");
+  bodies.A = catalog(template("A", "A steps"));
+  await render([lazy, lazyB]);
+  expect(field("issue-create-body").props.value).toBe("");
+  await choose(lazyB);
+  bodies.B = catalog(template("B", "B steps"));
+  await render([lazy, lazyB]);
+  expect(field("issue-create-body").props.value).toBe("");
+});
+
+it.each([false, true])(
+  "swaps untouched template text from A to B (deferred: %s)",
+  async (lazyBody) => {
+    const deferred = lazyBody ? (true as const) : undefined;
+    state.reply = (input) =>
+      input.metadataOnly
+        ? catalog(
+            template("A", lazyBody ? "" : "A steps", deferred),
+            template("B", lazyBody ? "" : "B steps", deferred),
+          )
+        : catalog(template(String(input.templateKey), `${String(input.templateKey)} steps`));
+    await render([lazy]);
+    await pick("A");
+    expect(field("issue-create-body").props.value).toBe("A steps");
+    await pick("B");
+    expect(field("issue-create-title").props.value).toBe("B title");
+    expect(field("issue-create-body").props.value).toBe("B steps");
+    await type("issue-create-title", "Mine");
+    await type("issue-create-body", "");
+    await pick("A");
+    expect(field("issue-create-title").props.value).toBe("Mine");
+    expect(field("issue-create-body").props.value).toBe("");
+  },
+);
+
+it("keeps a typed draft when the project changes, then the next template", async () => {
+  state.reply = (input) => (input.metadataOnly ? catalog(template("A", "A steps")) : "pending");
+  await render([lazy, lazyB]);
+  await type("issue-create-title", "Mine");
+  await choose(lazyB);
+  await pick("A");
+  expect(field("issue-create-title").props.value).toBe("Mine");
+  expect(field("issue-create-body").props.value).toBe("A steps");
 });

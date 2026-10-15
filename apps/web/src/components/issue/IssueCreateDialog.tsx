@@ -67,6 +67,9 @@ export function IssueCreateDialog({
   const [templateKey, setTemplateKey] = useState<string>(BLANK);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [titleEdited, setTitleEdited] = useState(false);
+  const [bodyEdited, setBodyEdited] = useState(false);
+  const [draft, setDraft] = useState<{ title: boolean; body: boolean } | null>(null);
   const [extras, setExtras] = useState<{
     labels: ReadonlyArray<string>;
     assignees: ReadonlyArray<string>;
@@ -82,11 +85,46 @@ export function IssueCreateDialog({
   );
   const templatesQuery = useEnvironmentQuery(
     open && scope !== null && scope.templates
-      ? issueEnvironment.templates({ environmentId: scope.environmentId, input: scope.scope })
+      ? issueEnvironment.templates({
+          environmentId: scope.environmentId,
+          input: { ...scope.scope, metadataOnly: true },
+        })
       : null,
   );
   const templates = templatesQuery.data?.templates ?? [];
   const externalTemplates = templatesQuery.data?.externalTemplates ?? [];
+  const catalogTemplate = templates.find((template) => template.key === templateKey);
+  const deferred = catalogTemplate?.contentDeferred === true;
+  const selectedQuery = useEnvironmentQuery(
+    open && scope !== null && deferred
+      ? issueEnvironment.templates({
+          environmentId: scope.environmentId,
+          input: { ...scope.scope, templateKey },
+        })
+      : null,
+  );
+  const selectedTemplate = deferred
+    ? selectedQuery.data?.templates.find(
+        (template) => template.key === templateKey && template.contentDeferred !== true,
+      )
+    : catalogTemplate;
+  if (draft !== null && selectedTemplate !== undefined) {
+    if (draft.title) setTitle(selectedTemplate.title);
+    if (draft.body) setBody(selectedTemplate.body);
+    setExtras({ labels: selectedTemplate.labels, assignees: selectedTemplate.assignees });
+    setDraft(null);
+  }
+  const selectedRead = deferred && selectedTemplate === undefined ? selectedQuery : null;
+  const templateError =
+    templatesQuery.data === null && templatesQuery.error !== null
+      ? `Templates could not be read: ${templatesQuery.error}`
+      : templateKey !== BLANK && templatesQuery.data !== null && catalogTemplate === undefined
+        ? "The chosen template is no longer offered."
+        : selectedRead?.error
+          ? `The template could not be read: ${selectedRead.error}`
+          : selectedRead?.isSuccess && !selectedRead.isPending
+            ? "The template could not be read."
+            : null;
   const blankAllowed = templatesQuery.data?.blankIssuesEnabled ?? true;
   const candidatesQuery = useEnvironmentQuery(
     open && scope !== null && scope.createIssueTypes === true
@@ -98,8 +136,11 @@ export function IssueCreateDialog({
 
   const reset = () => {
     setTemplateKey(BLANK);
+    setDraft(null);
     setTitle("");
     setBody("");
+    setTitleEdited(false);
+    setBodyEdited(false);
     setExtras({ labels: [], assignees: [] });
     setIssueType(null);
   };
@@ -107,21 +148,19 @@ export function IssueCreateDialog({
   const chooseTemplate = (key: string | null) => {
     const next = key ?? BLANK;
     setTemplateKey(next);
-    const template = templates.find((entry) => entry.key === next);
-    if (!template) {
-      setExtras({ labels: [], assignees: [] });
-      return;
-    }
+    setExtras({ labels: [], assignees: [] });
     // A template is a starting point: it only overwrites what the writer has not typed yet.
-    if (title.trim().length === 0) setTitle(template.title);
-    if (body.trim().length === 0) setBody(template.body);
-    setExtras({ labels: template.labels, assignees: template.assignees });
+    setDraft(
+      templates.some((entry) => entry.key === next)
+        ? { title: !titleEdited, body: !bodyEdited }
+        : null,
+    );
   };
 
   const blocked =
     scope === null && scopes.length > 0
       ? "Choose a project."
-      : issueCreateBlocked({
+      : (issueCreateBlocked({
           hasScope: scope !== null,
           canWrite,
           templates: scope?.templates
@@ -137,7 +176,9 @@ export function IssueCreateDialog({
                   chosen: chosenIssueType,
                 }
               : null,
-        });
+        }) ??
+        templateError ??
+        (selectedRead ? "Loading template…" : null));
 
   const submit = async () => {
     if (scope === null || pending || blocked !== null) return;
@@ -197,6 +238,7 @@ export function IssueCreateDialog({
                     if (value === null) return;
                     setChosenScope(scopes[Number(value)] ?? null);
                     setTemplateKey(BLANK);
+                    setDraft(null);
                     setExtras({ labels: [], assignees: [] });
                     setIssueType(null);
                   }}
@@ -298,7 +340,11 @@ export function IssueCreateDialog({
               autoFocus
               value={title}
               disabled={pending}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => {
+                setTitleEdited(true);
+                setDraft((held) => (held ? { ...held, title: false } : null));
+                setTitle(event.target.value);
+              }}
               placeholder="A short summary"
             />
           </div>
@@ -309,7 +355,11 @@ export function IssueCreateDialog({
               size="lg"
               value={body}
               disabled={pending}
-              onChange={(event) => setBody(event.target.value)}
+              onChange={(event) => {
+                setBodyEdited(true);
+                setDraft((held) => (held ? { ...held, body: false } : null));
+                setBody(event.target.value);
+              }}
               placeholder="Markdown is supported"
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -327,6 +377,17 @@ export function IssueCreateDialog({
             </p>
           ) : null}
           {blocked ? <p className="text-xs text-muted-foreground">{blocked}</p> : null}
+          {templateError !== null ? (
+            <Button
+              size="xs"
+              variant="outline"
+              className="self-start"
+              disabled={(selectedRead ?? templatesQuery).isPending}
+              onClick={(selectedRead ?? templatesQuery).refresh}
+            >
+              Retry
+            </Button>
+          ) : null}
         </DialogPanel>
         <DialogFooter>
           <Button
