@@ -32,14 +32,7 @@ function qualifierValue(raw: string): string {
 
 /** A qualifier's value as the list it may be: split on commas, each name unquoted on its own. */
 function splitQualifierList(raw: string): string[] {
-  // Quoting names one whole label however many commas it holds: `label:"needs,triage"` asks for
-  // the label written that way, not for either half of it.
-  if (/^\s*"[^"]*"\s*$/.test(raw)) {
-    const whole = qualifierValue(raw);
-    return whole.length === 0 ? [] : [whole];
-  }
-  return raw
-    .split(",")
+  return (raw.match(/(?:[^,"]|"[^"]*")+/g) ?? [])
     .map((part) => qualifierValue(part))
     .filter((part) => part.length > 0);
 }
