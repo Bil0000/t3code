@@ -14,6 +14,7 @@ import {
   PullRequestLabelChip,
   PullRequestActorAvatar,
 } from "../pullRequest/pullRequestPresentation";
+import { issueAssigneeId, issueLabelId } from "./issueDetail.logic";
 import { IssueStateGlyph, issueTrackerPresentation } from "./issuePresentation";
 
 export interface EnvironmentIssueEntry extends IssueListEntry {
@@ -68,7 +69,7 @@ function IssueRowImpl({
                 <span className="flex items-center -space-x-1">
                   {entry.assignees.slice(0, 3).map((assignee) => (
                     <PullRequestActorAvatar
-                      key={assignee.login}
+                      key={issueAssigneeId(assignee)}
                       actor={assignee}
                       className="ring-1 ring-background"
                     />
@@ -97,7 +98,7 @@ function IssueRowImpl({
               {entry.labels.length > 0 ? (
                 <span className="hidden min-w-0 items-center gap-1 @xl/issue-row-meta:flex">
                   {entry.labels.slice(0, 3).map((label, index) => (
-                    <PullRequestLabelChip key={label.name} label={label}>
+                    <PullRequestLabelChip key={issueLabelId(label)} label={label}>
                       {index === 2 && entry.labels.length > 3 ? (
                         <span className="shrink-0">+{entry.labels.length - 3}</span>
                       ) : null}

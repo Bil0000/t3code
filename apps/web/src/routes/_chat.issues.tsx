@@ -502,7 +502,7 @@ function IssuesRoute() {
       {
         tracker: IssueTrackerSummary;
         rows: EnvironmentIssueEntry[];
-        errors: Array<{ projectTitle: string; message: string; environmentId: EnvironmentId }>;
+        errors: Array<IssueListResult["errors"][number] & { environmentId: EnvironmentId }>;
         more: EnvironmentId[];
       }
     >();
@@ -877,7 +877,7 @@ function IssuesRoute() {
             ) : null}
             {group.errors.map((error) => (
               <p
-                key={`${error.environmentId}:${error.projectTitle}`}
+                key={`${error.environmentId}:${error.projectId}:${error.tracker ?? ""}:${error.host ?? ""}`}
                 className="px-3 text-xs text-destructive"
               >
                 {error.projectTitle}: {error.message}

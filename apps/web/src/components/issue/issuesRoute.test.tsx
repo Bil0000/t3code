@@ -419,3 +419,33 @@ it("toggles the issue panel with its advertised shortcut and keeps the URL in st
   expect(press()).toBe(false);
   expect(state.navigate).not.toHaveBeenCalled();
 });
+
+it("keeps rows and errors whose names repeat apart by their native identity", async () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const failure = (projectId: string, message: string) => ({
+    projectId: ProjectId.make(projectId),
+    projectTitle: "Project",
+    tracker: IssueTrackerKind.make("github"),
+    host: "github.com",
+    message,
+  });
+  state.responses.set(
+    environmentA,
+    AsyncResult.success({
+      ...answer([
+        {
+          ...issue("1"),
+          labels: ["W", "T"].map((id) => ({ id, name: "Bug", color: null })),
+          assignees: ["a1", "a2"].map((id) => ({ id, login: "Sam", name: null, avatarUrl: null })),
+        },
+      ]),
+      errors: [failure("one", "First failed"), failure("two", "Second failed")],
+    }),
+  );
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  await mount();
+  expect(text()).toContain("Project: First failed");
+  expect(text()).toContain("Project: Second failed");
+  expect(error.mock.calls.flat().join(" ")).not.toContain("same key");
+  error.mockRestore();
+});
