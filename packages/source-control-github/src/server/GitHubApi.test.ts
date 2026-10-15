@@ -383,6 +383,202 @@ describe("GitHubApi", () => {
     },
   );
 
+  it.effect("shares the REST quota reserve between dependency reads and native writes", () => {
+    const { layer, requests } = harness((request) => {
+      if (request.url.endsWith("/graphql"))
+        return json({
+          data: {
+            repository: {
+              viewerPermission: "TRIAGE",
+              isArchived: false,
+              issue: { viewerCanUpdate: false },
+            },
+          },
+        });
+      const headers = {
+        "x-ratelimit-resource": "core",
+        "x-ratelimit-limit": "100",
+        "x-ratelimit-remaining": "5",
+        "x-ratelimit-reset": String((NOW + 60_000) / 1000),
+      };
+      if (request.url.includes("?per_page=")) return json([], { headers });
+      const source = request.url.endsWith("/issues/42");
+      return json(
+        {
+          id: source ? 1042 : 9021,
+          number: source ? 42 : 21,
+          title: "Issue",
+          state: "open",
+          html_url: source
+            ? "https://github.com/acme/web/issues/42"
+            : "https://github.com/other/repo/issues/21",
+        },
+        { headers },
+      );
+    });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const driver = yield* GitHubIssueTracker.make;
+      const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      yield* driver.getDependencies!({ ...input, direction: "blocks" });
+      expect(
+        yield* driver.getDependencies!({ ...input, direction: "blocks" }).pipe(Effect.flip),
+      ).toMatchObject({ reason: "rate-limited" });
+      expect(requests).toHaveLength(1);
+      yield* driver.setDependency!({
+        ...input,
+        direction: "blocked-by",
+        targetScope: "other/repo",
+        targetKey: "21",
+        linked: true,
+      });
+      expect(requests).toHaveLength(5);
+      expect(requests[4]!.method).toBe("POST");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect(
+    "uses both native dependency directions and stable IDs for inverse cross-repository writes",
+    () => {
+      const source = {
+        id: 1042,
+        number: 42,
+        title: "Source",
+        state: "open",
+        html_url: "https://git.acme.test/acme/web/issues/42",
+      };
+      const target = {
+        id: 9021,
+        number: 21,
+        title: "Target",
+        state: "closed",
+        state_reason: "not_planned",
+        html_url: "https://git.acme.test/other/repo/issues/21",
+      };
+      const { layer, requests } = harness((request) => {
+        expect(request.headers.authorization).toBe("Bearer selected-B");
+        expect(request.headers["x-github-api-version"]).toBe("2022-11-28");
+        if (request.url.endsWith("/api/graphql"))
+          return json({
+            data: {
+              repository: {
+                viewerPermission: "TRIAGE",
+                isArchived: false,
+                issue: { viewerCanUpdate: false, locked: false },
+              },
+            },
+          });
+        const url = new URL(request.url);
+        if (request.method === "GET" && url.pathname.endsWith("/dependencies/blocked_by"))
+          return json([target], {
+            headers: {
+              link: '<https://git.acme.test/api/v3/repositories/12345/issues/42/dependencies/blocked_by?page=2&per_page=1>; rel="next"',
+            },
+          });
+        if (request.method === "GET" && url.pathname.endsWith("/dependencies/blocking"))
+          return json([target]);
+        if (request.method === "GET")
+          return json(url.pathname.endsWith("/issues/42") ? source : target);
+        const body =
+          request.body._tag === "Uint8Array"
+            ? JSON.parse(new TextDecoder().decode(request.body.body))
+            : undefined;
+        const inverse = url.pathname.includes("/other/repo/");
+        const id = inverse ? source.id : target.id;
+        if (request.method === "POST") {
+          expect(body).toEqual({ issue_id: id });
+          expect(url.pathname).toBe(
+            `/api/v3/repos/${inverse ? "other/repo/issues/21" : "acme/web/issues/42"}/dependencies/blocked_by`,
+          );
+        } else {
+          expect(request.method).toBe("DELETE");
+          expect(url.pathname).toBe(
+            `/api/v3/repos/${inverse ? "other/repo/issues/21" : "acme/web/issues/42"}/dependencies/blocked_by/${id}`,
+          );
+        }
+        return json(target);
+      });
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        const input = { cwd: "/w", host: "git.acme.test", scope: "acme/web", key: "42" };
+        const blocked = yield* driver.getDependencies!({
+          ...input,
+          direction: "blocked-by",
+          limit: 1,
+        });
+        expect(blocked).toMatchObject({
+          items: [
+            {
+              kind: "issue",
+              scope: "other/repo",
+              key: "21",
+              state: { workflowCategory: "canceled" },
+            },
+          ],
+          nextCursor: "2",
+        });
+        expect(requests).toHaveLength(1);
+        const blocking = yield* driver.getDependencies!({
+          ...input,
+          direction: "blocks",
+          cursor: "2",
+          limit: 200,
+        });
+        expect(blocking.nextCursor).toBe(null);
+        expect(requests[1]!.url).toBe(
+          "https://git.acme.test/api/v3/repos/acme/web/issues/42/dependencies/blocking?per_page=100&page=2",
+        );
+        let count = 2;
+        for (const direction of ["blocked-by", "blocks"] as const) {
+          for (const linked of [true, false]) {
+            yield* driver.setDependency!({
+              ...input,
+              direction,
+              targetScope: "other/repo",
+              targetKey: linked ? "https://git.acme.test/other/repo/issues/21" : "other/repo#21",
+              linked,
+            });
+            count += direction === "blocks" ? 5 : 4;
+            expect(requests).toHaveLength(count);
+          }
+        }
+      }).pipe(
+        Effect.provideService(GitHubApi.PinnedGitHubCredential, {
+          host: "git.acme.test",
+          token: Redacted.make("selected-B"),
+          credentialFingerprint: "selected-B",
+        }),
+        Effect.provide(layer),
+      );
+    },
+  );
+
+  it.effect.each([403, 404, 410, 429])(
+    "keeps native dependency HTTP %i as a typed refusal",
+    (status) => {
+      const { layer, requests } = harness(() =>
+        json({ message: "Native endpoint refused" }, { status }),
+      );
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        expect(
+          yield* driver.getDependencies!({
+            cwd: "/w",
+            host: "git.acme.test",
+            scope: "acme/web",
+            key: "42",
+            direction: "blocks",
+          }).pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "IssueTrackerError",
+          operation: "getDependencies",
+          reason: status === 429 ? "rate-limited" : status === 404 ? "not-found" : "failed",
+        });
+        expect(requests).toHaveLength(1);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect(
     "uses the pinned native host and credential for the public account issue chooser",
     () => {
@@ -566,6 +762,7 @@ describe("GitHubApi", () => {
           comment: false,
           labels: false,
           assignees: false,
+          updateDependencies: false,
         });
       expect(requests).toHaveLength(1);
       const write = driver.comment!({ ...target, body: "Reply" });

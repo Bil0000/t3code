@@ -23,10 +23,11 @@ import * as GitHubIssueTracker from "@t3tools/source-control-github/server/GitHu
 import {
   IssueTrackerKind,
   IssueUpdateInput,
+  IssueSetDependencyInput,
+  IssueViewerPermissions,
   type IssueTrackerProjectBinding,
   type OrchestrationProjectShell,
   ProjectId,
-  type IssueViewerPermissions,
   type IssueReactionContent,
 } from "@t3tools/contracts";
 import {
@@ -48,6 +49,9 @@ const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
 const JIRA = IssueTrackerKind.make("jira");
 const decodeUpdate = Schema.decodeEffect(IssueUpdateInput);
+const decodeDependencyPermissions = Schema.decodeUnknownSync(IssueViewerPermissions);
+const encodeDependencyPermissions = Schema.encodeUnknownSync(IssueViewerPermissions);
+const decodeSetDependency = Schema.decodeUnknownSync(IssueSetDependencyInput);
 const encodeListTool = Schema.encodeUnknownSync(IssuesToolkit.tools.list_issues.parametersSchema);
 const decodeListTool = Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.parametersSchema);
 const permissions = {
@@ -3343,11 +3347,12 @@ it.effect.each([
 );
 
 it.effect(
-  "keeps dependency pages and writes on the exact account and checks fresh edit access",
+  "keeps dependency pages and writes on the exact account and checks fresh dependency access",
   () =>
     Effect.gen(function* () {
       const calls: Array<{ operation: string; account?: string; input: unknown }> = [];
       let edit = true;
+      let updateDependencies: boolean | undefined;
       const record = (operation: string, input: unknown) =>
         Effect.gen(function* () {
           const account = yield* IssueTrackerHost.ConnectionId;
@@ -3357,7 +3362,13 @@ it.effect(
       const api = fakeStandaloneTracker({
         capabilities: { ...base.capabilities, dependencies: true },
         getViewerPermissions: (input) =>
-          record("permissions", input).pipe(Effect.as({ ...permissions, edit })),
+          record("permissions", input).pipe(
+            Effect.as({
+              ...permissions,
+              edit,
+              ...(updateDependencies === undefined ? {} : { updateDependencies }),
+            }),
+          ),
         getDependencies: (input) =>
           record("read", input).pipe(
             Effect.as({ items: [], nextCursor: "native-next", truncated: true }),
@@ -3405,6 +3416,13 @@ it.effect(
       edit = false;
       yield* service.setDependency(input).pipe(Effect.flip);
       expect(calls.filter(({ operation }) => operation === "write")).toHaveLength(1);
+      updateDependencies = true;
+      yield* service.setDependency(input);
+      expect(calls.filter(({ operation }) => operation === "write")).toHaveLength(2);
+      edit = true;
+      updateDependencies = false;
+      yield* service.setDependency(input).pipe(Effect.flip);
+      expect(calls.filter(({ operation }) => operation === "write")).toHaveLength(2);
       const before = calls.length;
       yield* service.setDependency({ ...input, scope: "OTHER" }).pipe(Effect.flip);
       yield* service.setDependency({ ...input, connectionId: "exactb" }).pipe(Effect.flip);
@@ -3443,6 +3461,89 @@ it.effect(
         ))._tag,
       ).toBe("IssueOperationError");
     }),
+);
+
+it.effect.each([
+  { role: "TRIAGE", archived: false, allowed: true },
+  { role: "READ", archived: false, allowed: false },
+  { role: "TRIAGE", archived: true, allowed: false },
+])("keeps native GitHub dependency rights through the codec and service: $role/$archived", (test) =>
+  Effect.gen(function* () {
+    const writes: GitHubApi.GitHubRestInput[] = [];
+    const host = "github.example";
+    const driver = yield* GitHubIssueTracker.make.pipe(
+      Effect.provide(
+        Layer.mock(GitHubApi.GitHubApi)({
+          graphql: () =>
+            Effect.succeed(
+              JSON.stringify({
+                data: {
+                  repository: {
+                    viewerPermission: test.role,
+                    isArchived: test.archived,
+                    issue: { viewerCanUpdate: false },
+                  },
+                },
+              }),
+            ),
+          rest: (request) =>
+            Effect.sync(() => {
+              expect(request.host).toBe(host);
+              if (request.method === "POST") writes.push(request);
+              const target = request.path.includes("/api/");
+              return {
+                status: request.method === "POST" ? 201 : 200,
+                headers: {},
+                truncated: false,
+                invalidUtf8: false,
+                body: JSON.stringify({
+                  id: target ? 808 : 4242,
+                  number: target ? 8 : 42,
+                  title: "Native dependency",
+                  html_url: `https://${host}/acme/${target ? "api/issues/8" : "web/issues/42"}`,
+                  state: "open",
+                }),
+              };
+            }),
+        }),
+      ),
+    );
+    const native = yield* driver.getViewerPermissions({
+      cwd: "/w/web",
+      host,
+      scope: "acme/web",
+      key: "42",
+    });
+    const wire = decodeDependencyPermissions(encodeDependencyPermissions(native));
+    expect(wire.edit).toBe(false);
+    expect(wire.updateDependencies).toBe(test.allowed);
+    const service = yield* makeService({
+      projects: [project({ id: "web", repository: "acme/web", host })],
+      trackers: [driver],
+    });
+    const input = decodeSetDependency({
+      projectId: "web",
+      tracker: GITHUB,
+      host,
+      scope: "acme/web",
+      key: "42",
+      direction: "blocked-by",
+      targetScope: "acme/api",
+      targetKey: "8",
+      linked: true,
+    });
+    if (test.allowed) {
+      yield* service.setDependency(input);
+      expect(writes[0]).toMatchObject({
+        host,
+        method: "POST",
+        path: "repos/acme/web/issues/42/dependencies/blocked_by",
+        body: { issue_id: 808 },
+      });
+    } else
+      expect((yield* Effect.flip(service.setDependency(input)))._tag).toBe("IssueOperationError");
+    expect(writes).toHaveLength(test.allowed ? 1 : 0);
+  }),
 );
 
 it.effect(

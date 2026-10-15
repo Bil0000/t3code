@@ -885,7 +885,12 @@ export const make = Effect.gen(function* () {
       const project = yield* requireWritable(input, "setDependency");
       if (project.api.setDependency === undefined || !project.api.capabilities.dependencies)
         return yield* unsupported("setDependency", "dependencies");
-      yield* requirePermissions(project, input, "setDependency", (permissions) => permissions.edit);
+      yield* requirePermissions(
+        project,
+        input,
+        "setDependency",
+        (permissions) => permissions.updateDependencies ?? permissions.edit,
+      );
       yield* project.api
         .setDependency({
           cwd: project.project.workspaceRoot,

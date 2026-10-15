@@ -635,7 +635,7 @@ function toViewerPermissions(raw: {
   readonly viewerPermission?: string | null | undefined;
   readonly isArchived?: boolean | undefined;
   readonly issue: typeof RawViewerFieldsSchema.Type | null;
-}): IssueViewerPermissions {
+}) {
   const writable = raw.isArchived !== true;
   const role = raw.viewerPermission?.trim().toUpperCase();
   const canUpdate = writable && raw.issue?.viewerCanUpdate !== false;
@@ -646,6 +646,7 @@ function toViewerPermissions(raw: {
       writable &&
       (raw.issue?.locked !== true || role == null || ["ADMIN", "MAINTAIN", "WRITE"].includes(role)),
     edit: canUpdate,
+    updateDependencies: writable && role != null && canTriage,
     labels: writable && canTriage,
     assignees: writable && canTriage,
   };
@@ -737,7 +738,7 @@ export function decodeIssueCommentsJson(
 
 export function decodeIssueViewerPermissionsJson(
   raw: string,
-): Result.Result<IssueViewerPermissions, DecodeFailure> {
+): Result.Result<ReturnType<typeof toViewerPermissions>, DecodeFailure> {
   return Result.map(decodeViewerPermissions(raw), ({ data }) =>
     toViewerPermissions(data.repository),
   );

@@ -12,6 +12,7 @@ import {
   IssueCandidates,
   IssueFieldValues,
   IssueRichBody,
+  IssueViewerPermissions,
   IssueDependenciesPage,
   IssueCandidatesInput,
   IssueCommentsPageInput,
@@ -697,6 +698,15 @@ it("accepts empty rich-comment fallbacks and retains comment body bounds", () =>
   expect(() => decodeEdit({ ...input, body: "x".repeat(65_537) })).toThrow();
   expect(() => decodeComment({ ...ref, body: "" })).toThrow();
   expect(() => decodeComment({ ...ref, body: "x".repeat(65_537) })).toThrow();
+});
+
+it("decodes the optional native dependency permission", () => {
+  const decode = Schema.decodeUnknownSync(IssueViewerPermissions);
+  const base = { setState: true, comment: true, edit: false, labels: true, assignees: true };
+  expect(decode(base)).toEqual(base);
+  for (const updateDependencies of [true, false])
+    expect(decode({ ...base, updateDependencies })).toEqual({ ...base, updateDependencies });
+  expect(() => decode({ ...base, updateDependencies: "yes" })).toThrow();
 });
 
 it("bounds native field values and rich JSON before tracker calls", () => {

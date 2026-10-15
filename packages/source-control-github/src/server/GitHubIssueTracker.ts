@@ -143,6 +143,7 @@ const CAPABILITIES: IssueCapabilities = {
   subIssues: true,
   createSubIssue: true,
   updateParent: true,
+  dependencies: true,
   listSorts: ["created", "updated", "comments"],
   listOrders: ["asc", "desc"],
   labels: true,
@@ -474,9 +475,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
     const relatedIssue = (
       input: IssueScopeTarget,
       row: typeof RelatedIssue.Type,
+      operation = "getHierarchy",
     ): Effect.Effect<IssueRelation, IssueTrackerError> => {
-      if (!URL.canParse(row.html_url))
-        return Effect.fail(unreadable("getHierarchy", "invalid-url"));
+      if (!URL.canParse(row.html_url)) return Effect.fail(unreadable(operation, "invalid-url"));
       const url = new URL(row.html_url);
       const match = /^\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)\/?$/.exec(url.pathname);
       if (
@@ -484,9 +485,11 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
         !["http:", "https:"].includes(url.protocol) ||
         url.host.toLowerCase() !== input.host.toLowerCase() ||
         match[2] !== String(row.number) ||
-        row.pull_request !== undefined
+        row.pull_request !== undefined ||
+        ((operation === "getDependencies" || operation === "setDependency") &&
+          (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== ""))
       ) {
-        return Effect.fail(unreadable("getHierarchy", "invalid-related-issue"));
+        return Effect.fail(unreadable(operation, "invalid-related-issue"));
       }
       return Effect.succeed({
         scope: match[1]!,
@@ -511,7 +514,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
       restIssue(input, operation).pipe(
         Effect.flatMap(({ path }) => restRead(input, operation, path, RelatedIssue)),
         Effect.flatMap(({ value }) =>
-          relatedIssue(input, value).pipe(
+          relatedIssue(input, value, operation).pipe(
             Effect.filterOrFail(
               (ref) =>
                 ref.key === input.key && ref.scope.toLowerCase() === input.scope.toLowerCase(),
@@ -519,6 +522,39 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
             ),
             Effect.as(value),
           ),
+        ),
+      );
+
+    const dependencyScope = (scope: string) =>
+      SEARCH_REPOSITORY.test(scope) &&
+      scope.split("/").every((part) => part !== "." && part !== "..");
+
+    const readViewerPermissions = (input: IssueTarget, operation: string) =>
+      restIssue(input, operation).pipe(
+        Effect.flatMap(({ owner, name, number }) =>
+          graphqlRead({
+            host: input.host,
+            operation,
+            query: ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
+            variables: { owner, name, number },
+            decode: decodeIssueViewerPermissionsJson,
+          }),
+        ),
+      );
+
+    const dependencyPermissions = (input: IssueTarget) =>
+      readViewerPermissions(input, "setDependency").pipe(
+        Effect.filterOrFail(
+          (permissions) => permissions.updateDependencies,
+          () => unreadable("setDependency", "native-permission-refused"),
+        ),
+      );
+
+    const dependencyIssue = (input: IssueTarget) =>
+      readRelatedIssue(input, "setDependency").pipe(
+        Effect.filterOrFail(
+          (issue) => Number.isSafeInteger(issue.id) && issue.id > 0,
+          () => unreadable("setDependency", "invalid-native-issue-id"),
         ),
       );
 
@@ -718,16 +754,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
         ),
 
       getViewerPermissions: (input) =>
-        restIssue(input, "getViewerPermissions").pipe(
-          Effect.flatMap(({ owner, name, number }) =>
-            graphqlRead({
-              host: input.host,
-              operation: "getViewerPermissions",
-              query: ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
-              variables: { owner, name, number },
-              decode: decodeIssueViewerPermissionsJson,
-            }),
-          ),
+        readViewerPermissions(input, "getViewerPermissions").pipe(
           Effect.provideService(SourceControlRateLimit.Interactive, true),
         ),
 
@@ -744,6 +771,150 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
           ),
           Effect.provideService(SourceControlRateLimit.Interactive, true),
         ),
+
+      getDependencies: (input) =>
+        Effect.gen(function* () {
+          const operation = "getDependencies";
+          const number = parseNumber(input.key);
+          const page =
+            input.cursor === undefined
+              ? 1
+              : /^[1-9]\d{0,6}$/.test(input.cursor)
+                ? Number(input.cursor)
+                : null;
+          const requestedLimit = input.limit ?? 50;
+          const limit = Math.min(requestedLimit, 100);
+          if (
+            !dependencyScope(input.scope) ||
+            number === null ||
+            !Number.isSafeInteger(number) ||
+            page === null ||
+            !Number.isInteger(requestedLimit) ||
+            requestedLimit < 1 ||
+            requestedLimit > 200
+          )
+            return yield* unreadable(operation, "invalid-dependency-page");
+          const { path } = yield* restIssue(input, operation);
+          const endpoint = `${path}/dependencies/${input.direction === "blocks" ? "blocking" : "blocked_by"}`;
+          const { value, headers } = yield* restRead(
+            input,
+            operation,
+            `${endpoint}?per_page=${limit}&page=${page}`,
+            Schema.Array(RelatedIssue),
+          );
+          if (value.length > limit)
+            return yield* unreadable(operation, "oversized-dependency-page");
+          const nextLinks = [...(headers.link ?? "").matchAll(/<([^>]+)>;\s*rel="next"/g)];
+          if (
+            nextLinks.length > 1 ||
+            (/(?:^|[;\s])rel="next"/.test(headers.link ?? "") && nextLinks.length === 0)
+          )
+            return yield* unreadable(operation, "invalid-dependency-pagination");
+          if (nextLinks.length === 1) {
+            const apiRoot = new URL(GitHubApi.gitHubApiUrls(input.host).rest);
+            const expected = new URL(`${apiRoot.href.replace(/\/$/, "")}/${endpoint}`);
+            const next = nextLinks[0]![1]!;
+            if (!URL.canParse(next))
+              return yield* unreadable(operation, "invalid-dependency-pagination");
+            const url = new URL(next);
+            const prefix = apiRoot.pathname.replace(/\/$/, "");
+            const canonical = url.pathname.startsWith(prefix)
+              ? /^\/repositories\/[1-9]\d*(\/issues\/[1-9]\d*\/dependencies\/(?:blocked_by|blocking))$/.exec(
+                  url.pathname.slice(prefix.length),
+                )
+              : null;
+            if (
+              url.origin !== expected.origin ||
+              (url.pathname !== expected.pathname &&
+                canonical?.[1] !==
+                  `/issues/${number}/dependencies/${input.direction === "blocks" ? "blocking" : "blocked_by"}`) ||
+              url.username !== "" ||
+              url.password !== "" ||
+              url.hash !== "" ||
+              url.searchParams.size !== 2 ||
+              url.searchParams.get("page") !== String(page + 1) ||
+              url.searchParams.get("per_page") !== String(limit)
+            )
+              return yield* unreadable(operation, "invalid-dependency-pagination");
+          }
+          return {
+            items: yield* Effect.forEach(value, (row) =>
+              relatedIssue(input, row, operation).pipe(
+                Effect.filterOrFail(
+                  (ref) =>
+                    dependencyScope(ref.scope) &&
+                    Number.isSafeInteger(row.id) &&
+                    row.id > 0 &&
+                    Number.isSafeInteger(row.number),
+                  () => unreadable(operation, "invalid-dependency-issue"),
+                ),
+                Effect.map((ref) => ({ ...ref, kind: "issue" as const })),
+              ),
+            ),
+            nextCursor: nextLinks.length === 1 && page < 9_999_999 ? String(page + 1) : null,
+            ...(nextLinks.length === 1 && page === 9_999_999 ? { truncated: true } : {}),
+          };
+        }),
+
+      setDependency: (input) =>
+        Effect.gen(function* () {
+          const operation = "setDependency";
+          let targetKey = input.targetKey;
+          if (URL.canParse(targetKey)) {
+            const url = new URL(targetKey);
+            const match = /^\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)\/?$/.exec(url.pathname);
+            if (
+              !match ||
+              !["http:", "https:"].includes(url.protocol) ||
+              url.host.toLowerCase() !== input.host.toLowerCase() ||
+              url.username !== "" ||
+              url.password !== "" ||
+              url.search !== "" ||
+              url.hash !== "" ||
+              match[1]!.toLowerCase() !== input.targetScope.toLowerCase()
+            )
+              return yield* unreadable(operation, "invalid-dependency-url");
+            targetKey = match[2]!;
+          } else {
+            const match = /^([^#]+)#([1-9]\d*)$/.exec(targetKey);
+            if (match !== null) {
+              if (match[1]!.toLowerCase() !== input.targetScope.toLowerCase())
+                return yield* unreadable(operation, "conflicting-dependency-scope");
+              targetKey = match[2]!;
+            }
+          }
+          const sourceNumber = parseNumber(input.key);
+          const targetNumber = parseNumber(targetKey);
+          if (
+            !dependencyScope(input.scope) ||
+            !dependencyScope(input.targetScope) ||
+            sourceNumber === null ||
+            !Number.isSafeInteger(sourceNumber) ||
+            targetNumber === null ||
+            !Number.isSafeInteger(targetNumber) ||
+            (input.scope.toLowerCase() === input.targetScope.toLowerCase() &&
+              sourceNumber === targetNumber)
+          )
+            return yield* unreadable(operation, "invalid-dependency-target");
+          const target = { ...input, scope: input.targetScope, key: targetKey };
+          yield* dependencyPermissions(input);
+          const sourceIssue = yield* dependencyIssue(input);
+          const targetIssue = yield* dependencyIssue(target);
+          const inverse = input.direction === "blocks";
+          if (inverse) yield* dependencyPermissions(target);
+          const blocked = inverse ? target : input;
+          const blocker = inverse ? sourceIssue : targetIssue;
+          const { path } = yield* restIssue(blocked, operation);
+          yield* api
+            .rest({
+              host: input.host,
+              operation,
+              path: `${path}/dependencies/blocked_by${input.linked ? "" : `/${blocker.id}`}`,
+              method: input.linked ? "POST" : "DELETE",
+              ...(input.linked ? { body: { issue_id: blocker.id } } : {}),
+            })
+            .pipe(Effect.mapError(fail(operation)));
+        }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
 
       getHierarchy: (input) =>
         Effect.gen(function* () {

@@ -512,6 +512,7 @@ export type IssueCapabilities = typeof IssueCapabilities.Type;
  */
 export const IssueViewerPermissions = Schema.Struct({
   updateParent: Schema.optional(Schema.Boolean),
+  updateDependencies: Schema.optional(Schema.Boolean),
   setState: Schema.Boolean,
   comment: Schema.Boolean,
   edit: Schema.Boolean,

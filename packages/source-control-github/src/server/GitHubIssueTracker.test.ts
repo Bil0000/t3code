@@ -435,6 +435,357 @@ describe("GitHubIssueTracker", () => {
     }),
   );
 
+  it.effect("reads and changes GitHub dependencies by native stable issue IDs", () =>
+    Effect.gen(function* () {
+      const requests: GitHubApi.GitHubRestInput[] = [];
+      const source = {
+        id: 1042,
+        number: 42,
+        title: "Source",
+        state: "open",
+        html_url: "https://github.com/acme/web/issues/42",
+      };
+      const other = {
+        id: 9021,
+        number: 21,
+        title: "Target",
+        state: "closed",
+        html_url: "https://github.com/other/repo/issues/21",
+      };
+      const api = yield* tracker(
+        () => DETAIL_RESPONSE,
+        (input) => {
+          requests.push(input);
+          return {
+            status: 200,
+            headers: input.path.includes("?per_page")
+              ? {
+                  link: '<https://api.github.com/repos/acme/web/issues/42/dependencies/blocked_by?per_page=1&page=2>; rel="next"',
+                }
+              : {},
+            body: JSON.stringify(
+              input.path.includes("?per_page")
+                ? [other]
+                : input.path === "repos/acme/web/issues/42"
+                  ? source
+                  : other,
+            ),
+            truncated: false,
+            invalidUtf8: false,
+          };
+        },
+      );
+      const target = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      expect(api.capabilities.dependencies).toBe(true);
+      const page = yield* api.getDependencies!({ ...target, direction: "blocked-by", limit: 1 });
+      expect(page.items).toMatchObject([{ scope: "other/repo", key: "21", kind: "issue" }]);
+      expect(page.nextCursor).toBe("2");
+      yield* api.setDependency!({
+        ...target,
+        direction: "blocks",
+        targetScope: "other/repo",
+        targetKey: "21",
+        linked: true,
+      });
+      expect(requests.filter((request) => request.method === "POST")).toMatchObject([
+        { path: "repos/other/repo/issues/21/dependencies/blocked_by", body: { issue_id: 1042 } },
+      ]);
+    }),
+  );
+
+  it.effect.each([
+    {
+      role: "TRIAGE",
+      archived: false,
+      inverse: false,
+      targetRole: "READ",
+      targetArchived: false,
+      allowed: true,
+      writes: 1,
+    },
+    {
+      role: "READ",
+      archived: false,
+      inverse: false,
+      targetRole: "TRIAGE",
+      targetArchived: false,
+      allowed: false,
+      writes: 0,
+    },
+    {
+      role: "ADMIN",
+      archived: true,
+      inverse: false,
+      targetRole: "TRIAGE",
+      targetArchived: false,
+      allowed: false,
+      writes: 0,
+    },
+    {
+      role: "TRIAGE",
+      archived: false,
+      inverse: true,
+      targetRole: "READ",
+      targetArchived: false,
+      allowed: false,
+      writes: 0,
+    },
+    {
+      role: "TRIAGE",
+      archived: false,
+      inverse: true,
+      targetRole: "ADMIN",
+      targetArchived: true,
+      allowed: false,
+      writes: 0,
+    },
+    {
+      role: "TRIAGE",
+      archived: false,
+      inverse: true,
+      targetRole: "TRIAGE",
+      targetArchived: false,
+      allowed: true,
+      writes: 1,
+    },
+  ])(
+    "uses native dependency triage/archive permissions for $role/$archived/$inverse/$targetRole/$targetArchived",
+    (scenario) =>
+      Effect.gen(function* () {
+        const writes: GitHubApi.GitHubRestInput[] = [];
+        const api = yield* tracker(
+          (_query, variables) => {
+            const source = (variables as { number: number }).number === 42;
+            return JSON.stringify({
+              data: {
+                repository: {
+                  viewerPermission: source ? scenario.role : scenario.targetRole,
+                  isArchived: source ? scenario.archived : scenario.targetArchived,
+                  issue: { viewerCanUpdate: false, locked: false },
+                },
+              },
+            });
+          },
+          (input) => {
+            if (input.method) writes.push(input);
+            const source = input.path === "repos/acme/web/issues/42";
+            return {
+              status: 200,
+              headers: {},
+              body: JSON.stringify({
+                id: source ? 1042 : 9021,
+                number: source ? 42 : 21,
+                title: "Issue",
+                state: "open",
+                html_url: source
+                  ? "https://github.com/acme/web/issues/42"
+                  : "https://github.com/other/repo/issues/21",
+              }),
+              truncated: false,
+              invalidUtf8: false,
+            };
+          },
+        );
+        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        expect(yield* api.getViewerPermissions(input)).toMatchObject({
+          edit: false,
+          updateDependencies: !scenario.archived && scenario.role !== "READ",
+        });
+        const operation = api.setDependency!({
+          ...input,
+          direction: scenario.inverse ? "blocks" : "blocked-by",
+          targetScope: "other/repo",
+          targetKey: "21",
+          linked: true,
+        });
+        if (scenario.allowed) yield* operation;
+        else
+          expect(yield* operation.pipe(Effect.flip)).toMatchObject({
+            operation: "setDependency",
+            reason: "failed",
+          });
+        expect(writes).toHaveLength(scenario.writes);
+      }),
+  );
+
+  it.effect.each([
+    { targetScope: "acme/web", targetKey: "42" },
+    { targetScope: "../web", targetKey: "21" },
+    { targetScope: "acme/web/extra", targetKey: "21" },
+    { targetScope: "other/repo", targetKey: "9007199254740993" },
+    { targetScope: "other/repo", targetKey: "https://evil.test/other/repo/issues/21" },
+    { targetScope: "other/repo", targetKey: "https://user@github.com/other/repo/issues/21" },
+    { targetScope: "other/repo", targetKey: "https://github.com/other/repo/issues/21?x=1" },
+    { targetScope: "other/repo", targetKey: "https://github.com/other/repo/pull/21" },
+    { targetScope: "other/repo", targetKey: "https://github.com/wrong/repo/issues/21" },
+    { targetScope: "other/repo", targetKey: "wrong/repo#21" },
+  ])("refuses invalid dependency target $targetScope/$targetKey before native requests", (target) =>
+    Effect.gen(function* () {
+      let requests = 0;
+      const api = yield* tracker(
+        () => {
+          requests++;
+          return DETAIL_RESPONSE;
+        },
+        () => {
+          requests++;
+          throw new Error("Unexpected REST request");
+        },
+      );
+      expect(
+        yield* api.setDependency!({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          key: "42",
+          direction: "blocks",
+          linked: true,
+          ...target,
+        }).pipe(Effect.flip),
+      ).toMatchObject({ reason: "failed" });
+      expect(requests).toBe(0);
+    }),
+  );
+
+  it.effect.each([
+    "wrong-host",
+    "wrong-repository",
+    "wrong-number",
+    "pull-request",
+    "invalid-id",
+    "unsafe-id",
+    "malformed",
+  ] as const)("refuses %s native dependency IDs before a write", (kind) =>
+    Effect.gen(function* () {
+      let writes = 0;
+      const api = yield* tracker(
+        () => DETAIL_RESPONSE,
+        (input) => {
+          if (input.method) writes++;
+          const source = input.path === "repos/acme/web/issues/42";
+          const row = {
+            id: source
+              ? 1042
+              : kind === "invalid-id"
+                ? -1
+                : kind === "unsafe-id"
+                  ? 9007199254740992
+                  : 9021,
+            number: source ? 42 : kind === "wrong-number" ? 22 : 21,
+            title: "Issue",
+            state: "open",
+            html_url: source
+              ? "https://github.com/acme/web/issues/42"
+              : kind === "wrong-host"
+                ? "https://evil.test/other/repo/issues/21"
+                : kind === "wrong-repository"
+                  ? "https://github.com/wrong/repo/issues/21"
+                  : "https://github.com/other/repo/issues/21",
+            ...(!source && kind === "pull-request" ? { pull_request: {} } : {}),
+          };
+          return {
+            status: 200,
+            headers: {},
+            body: !source && kind === "malformed" ? "{" : JSON.stringify(row),
+            truncated: false,
+            invalidUtf8: false,
+          };
+        },
+      );
+      expect(
+        yield* api.setDependency!({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          key: "42",
+          targetScope: "other/repo",
+          targetKey: "21",
+          direction: "blocked-by",
+          linked: true,
+        }).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "IssueTrackerError" });
+      expect(writes).toBe(0);
+    }),
+  );
+
+  it.effect.each(["0", "-1", "10000000", "abc", "https://evil.test/", "1:1"])(
+    "rejects dependency cursor %s before requests",
+    (cursor) =>
+      Effect.gen(function* () {
+        let requests = 0;
+        const api = yield* tracker(
+          () => DETAIL_RESPONSE,
+          () => {
+            requests++;
+            throw new Error("Unexpected request");
+          },
+        );
+        expect(
+          yield* api.getDependencies!({
+            cwd: "/w",
+            host: "github.com",
+            scope: "acme/web",
+            key: "42",
+            direction: "blocks",
+            cursor,
+          }).pipe(Effect.flip),
+        ).toMatchObject({ reason: "failed" });
+        expect(requests).toBe(0);
+      }),
+  );
+
+  it.effect.each([
+    "foreign-host",
+    "foreign-issue",
+    "same-page",
+    "extra-query",
+    "duplicate-next",
+    "malformed-body",
+    "truncated",
+    "foreign-row",
+  ] as const)("refuses %s dependency pages without following foreign data", (kind) =>
+    Effect.gen(function* () {
+      let requests = 0;
+      const api = yield* tracker(
+        () => DETAIL_RESPONSE,
+        () => {
+          requests++;
+          const base = `https://${kind === "foreign-host" ? "evil.test" : "api.github.com"}/repos/acme/web/issues/${kind === "foreign-issue" ? 99 : 42}/dependencies/blocked_by?per_page=1&page=${kind === "same-page" ? 1 : 2}${kind === "extra-query" ? "&x=1" : ""}`;
+          const link = `<${base}>; rel="next"`;
+          return {
+            status: 200,
+            headers: { link: kind === "duplicate-next" ? `${link}, ${link}` : link },
+            body:
+              kind === "malformed-body"
+                ? "{"
+                : JSON.stringify([
+                    {
+                      id: 9021,
+                      number: 21,
+                      title: "Issue",
+                      state: "open",
+                      html_url: `https://${kind === "foreign-row" ? "evil.test" : "github.com"}/other/repo/issues/21`,
+                    },
+                  ]),
+            truncated: kind === "truncated",
+            invalidUtf8: false,
+          };
+        },
+      );
+      expect(
+        yield* api.getDependencies!({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+          key: "42",
+          direction: "blocked-by",
+          limit: 1,
+        }).pipe(Effect.flip),
+      ).toMatchObject({ reason: "failed" });
+      expect(requests).toBe(1);
+    }),
+  );
+
   it.effect.each([
     { role: "READ", locked: true, archived: false, comment: false, metadata: false },
     { role: "READ", locked: false, archived: false, comment: true, metadata: false },
@@ -482,6 +833,7 @@ describe("GitHubIssueTracker", () => {
       const permission = yield* api.getViewerPermissions(target);
       expect(permission).toEqual({
         edit: !input.archived,
+        updateDependencies: input.metadata && input.role !== null,
         setState: !input.archived,
         comment: input.comment,
         labels: input.metadata,

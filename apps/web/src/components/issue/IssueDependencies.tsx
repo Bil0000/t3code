@@ -69,7 +69,7 @@ function DependencySection({
   const permission = useAtomValue(issueEnvironment.setDependency.permissionAtom(environmentId));
   const allowed =
     detail.writable &&
-    detail.viewerPermissions.edit &&
+    (detail.viewerPermissions.updateDependencies ?? detail.viewerPermissions.edit) &&
     detail.capabilities.dependencies === true &&
     permission;
   const [editing, setEditing] = useState(false);
