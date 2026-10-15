@@ -1615,6 +1615,105 @@ it.effect.each([
   }),
 );
 
+it.effect("passes Azure custom states to the native writer without reading detail", () =>
+  Effect.gen(function* () {
+    const azure = IssueTrackerKind.make("azure-devops");
+    const shell = project({
+      id: "web",
+      provider: azure,
+      host: "dev.azure.com",
+      repository: "acme/Web App/_git/web",
+    });
+    let permissionReads = 0;
+    let refreshes = 0;
+    const writes: unknown[] = [];
+    const service = yield* makeService({
+      projects: [shell],
+      resolveRepository: (_cwd, options) =>
+        Effect.sync(() => {
+          expect(options?.refresh).toBe(true);
+          refreshes++;
+          return shell.repositoryIdentity ?? null;
+        }),
+      trackers: [
+        fakeTracker({
+          kind: azure,
+          getIssue: () => Effect.die("State writes must not read detail"),
+          getViewer: () => Effect.die("State writes must not read the viewer"),
+          getViewerPermissions: () =>
+            Effect.sync(() => {
+              permissionReads++;
+              return permissions;
+            }),
+          setState: (input) =>
+            Effect.sync(() => {
+              writes.push(input);
+            }),
+        }),
+      ],
+    });
+    const ref = {
+      projectId: "web" as ProjectId,
+      tracker: azure,
+      host: "dev.azure.com",
+      scope: "acme/Web App",
+      key: "7",
+    };
+    yield* service.setState({ ...ref, state: "Shipped" });
+    expect(writes).toEqual([
+      {
+        cwd: "/w/web",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        state: "Shipped",
+        closeReason: undefined,
+      },
+    ]);
+    expect(permissionReads).toBe(1);
+    expect(refreshes).toBe(1);
+    const refused = yield* Effect.flip(
+      service.setState({ ...ref, state: "Shipped", closeReason: "completed" }),
+    );
+    expect(refused).toMatchObject({
+      _tag: "IssueOperationError",
+      detail: expect.stringContaining('the close reason "completed"'),
+    });
+    expect(writes).toHaveLength(1);
+    expect(permissionReads).toBe(1);
+    expect(refreshes).toBe(1);
+  }),
+);
+
+it.effect("keeps non-Azure unknown states blocked before provider reads", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "web", repository: "acme/web" })],
+      trackers: [
+        fakeTracker({
+          getViewerPermissions: () => Effect.die("Unknown states must not read permissions"),
+          getIssue: () => Effect.die("Unknown states must not read detail"),
+          setState: () => Effect.die("Unknown states must not write"),
+        }),
+      ],
+    });
+    const refused = yield* Effect.flip(
+      service.setState({
+        projectId: "web" as ProjectId,
+        tracker: GITHUB,
+        scope: "acme/web",
+        key: "7",
+        state: "Shipped",
+      }),
+    );
+    expect(refused).toMatchObject({
+      _tag: "IssueOperationError",
+      operation: "setState",
+      detail: expect.stringContaining('the state "Shipped"'),
+    });
+  }),
+);
+
 it.effect.each(["create", "react"] as const)(
   "refreshes cached repository ownership before %s",
   (operation) =>

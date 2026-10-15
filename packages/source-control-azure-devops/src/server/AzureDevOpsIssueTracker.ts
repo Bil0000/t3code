@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 import {
   IssueTrackerKind,
   type IssueCapabilities,
+  type IssueState,
   type IssueInvolvement,
   type IssueLinkedPullRequest,
   type IssueViewerPermissions,
@@ -545,6 +546,68 @@ export const make: Effect.Effect<
     return fields.length === 0 ? [] : ["--fields", ...fields];
   };
 
+  const workflows = (
+    input: { readonly cwd: string; readonly organization: string; readonly project: string },
+    type: string,
+  ) =>
+    read({
+      cwd: input.cwd,
+      operation: "getStates",
+      args: invokeArgs({
+        ...input,
+        resource: "workitemtypestates",
+        route: [`type=${type}`],
+        apiVersion: "7.1-preview",
+        query: ["api-version=7.1-preview.1"],
+      }),
+      decode: decodeAs(
+        Schema.decodeUnknownResult(
+          Schema.Struct({
+            value: Schema.Array(
+              Schema.Struct({
+                name: Schema.String,
+                category: Schema.Literals([
+                  "Proposed",
+                  "InProgress",
+                  "Resolved",
+                  "Completed",
+                  "Removed",
+                ]),
+              }),
+            ),
+          }),
+        ),
+      ),
+    }).pipe(
+      Effect.map((page) =>
+        page.value.map((state): IssueState => ({
+          name: state.name,
+          category:
+            state.category === "Completed" || state.category === "Removed" ? "closed" : "open",
+        })),
+      ),
+    );
+
+  const itemWorkflow = (
+    input: { readonly cwd: string; readonly organization: string; readonly project: string },
+    item: AzureDevOpsWorkItem,
+  ): Effect.Effect<
+    { readonly item: AzureDevOpsWorkItem; readonly states: ReadonlyArray<IssueState> },
+    IssueTrackerError
+  > =>
+    item.workItemType === null
+      ? Effect.succeed({ item, states: CAPABILITIES.states })
+      : workflows(input, item.workItemType).pipe(
+          Effect.flatMap((states) => {
+            const state = states.find((state) => state.name === item.state.name);
+            return state === undefined
+              ? Effect.fail(
+                  refused("getStates", "The work item state is absent from its workflow."),
+                )
+              : Effect.succeed({ item: { ...item, state }, states });
+          }),
+        );
+
   return {
     kind: KIND,
     capabilities: CAPABILITIES,
@@ -677,6 +740,7 @@ export const make: Effect.Effect<
                 }),
                 decode: decodeUpdatesJson,
               }),
+              itemWorkflow({ ...scope, cwd: input.cwd }, scope.item),
               linkedPullRequests({
                 cwd: input.cwd,
                 organization: scope.organization,
@@ -685,8 +749,9 @@ export const make: Effect.Effect<
             ],
             { concurrency: 3 },
           ).pipe(
-            Effect.map(([conversation, updates, links]) => ({
-              ...scope.item,
+            Effect.map(([conversation, updates, workflow, links]) => ({
+              ...workflow.item,
+              states: workflow.states,
               // Nothing cheap names the viewer here; the service already read it per host.
               viewer: null,
               viewerPermissions: VIEWER_PERMISSIONS,

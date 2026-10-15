@@ -792,11 +792,14 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((project) => {
         const { capabilities } = project.api;
         const target = capabilities.states.find((state) => state.name === input.state);
-        if (project.api.setState === undefined || target === undefined)
+        if (
+          project.api.setState === undefined ||
+          (target === undefined && project.tracker !== "azure-devops")
+        )
           return Effect.fail(unsupported("setState", `the state "${input.state}"`));
         if (
           input.closeReason !== undefined &&
-          (target.category !== "closed" || !capabilities.closeReasons.includes(input.closeReason))
+          (target?.category !== "closed" || !capabilities.closeReasons.includes(input.closeReason))
         )
           return Effect.fail(unsupported("setState", `the close reason "${input.closeReason}"`));
         return requirePermissions(

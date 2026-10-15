@@ -46,6 +46,7 @@ const Fields = Schema.Struct({
   "System.CommentCount": Schema.optional(Schema.NullOr(Schema.Int)),
   "System.Title": Schema.optional(Schema.NullOr(Schema.String)),
   "System.State": Schema.optional(Schema.NullOr(Schema.String)),
+  "System.WorkItemType": Schema.optional(Schema.NullOr(Schema.String)),
   "System.CreatedDate": Schema.optional(Schema.NullOr(Schema.String)),
   "System.ChangedDate": Schema.optional(Schema.NullOr(Schema.String)),
   "Microsoft.VSTS.Common.ClosedDate": Schema.optional(Schema.NullOr(Schema.String)),
@@ -128,6 +129,7 @@ function toLabels(tags: string | null | undefined): ReadonlyArray<IssueLabel> {
 
 export interface AzureDevOpsWorkItem extends TrackerIssueSummary {
   readonly body: string;
+  readonly workItemType: string | null;
   readonly project: string | null;
   readonly relations: ReadonlyArray<typeof Relation.Type>;
 }
@@ -158,6 +160,7 @@ function toWorkItem(raw: typeof WorkItem.Type): AzureDevOpsWorkItem | null {
     labels: toLabels(fields["System.Tags"]),
     commentCount: Math.max(0, fields["System.CommentCount"] ?? 0),
     body: fields["System.Description"] ?? "",
+    workItemType: trimmed(fields["System.WorkItemType"]),
     project,
     relations: raw.relations ?? [],
   };

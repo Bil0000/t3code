@@ -117,6 +117,144 @@ function tracker(onExecute: (args: ReadonlyArray<string>) => string) {
 }
 
 describe("AzureDevOpsIssueTracker", () => {
+  it.effect.each([
+    {
+      type: "Issue",
+      current: "Doing",
+      states: [
+        { name: "To Do", category: "Proposed" },
+        { name: "Doing", category: "InProgress" },
+        { name: "Done", category: "Completed" },
+      ],
+      expected: [
+        { name: "To Do", category: "open" },
+        { name: "Doing", category: "open" },
+        { name: "Done", category: "closed" },
+      ],
+    },
+    {
+      type: "Bug",
+      current: "Shipped",
+      states: [
+        { name: "Review", category: "InProgress" },
+        { name: "Shipped", category: "Completed" },
+      ],
+      expected: [
+        { name: "Review", category: "open" },
+        { name: "Shipped", category: "closed" },
+      ],
+    },
+  ])(
+    "reads only the native $type workflow in one detail lookup",
+    ({ type, current, states, expected }) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args) => {
+          const resource = args[args.indexOf("--resource") + 1];
+          paths.push(args[0] === "boards" ? "show" : resource!);
+          if (args[0] === "boards")
+            return encode({
+              ...WORK_ITEM,
+              relations: [],
+              fields: { ...WORK_ITEM.fields, "System.WorkItemType": type, "System.State": current },
+            });
+          if (resource === "workitemtypestates") {
+            expect(args).toEqual(
+              expect.arrayContaining([
+                `type=${type}`,
+                "project=Web App",
+                "7.1-preview",
+                "api-version=7.1-preview.1",
+              ]),
+            );
+            return encode({ value: states });
+          }
+          return answer(args);
+        });
+        const detail = yield* api.getIssue({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+        });
+        expect(detail.states).toEqual(expected);
+        expect(detail.state).toEqual(expected.find((state) => state.name === current));
+        expect(paths).toHaveLength(4);
+        expect(paths.filter((path) => path === "workitemtypestates")).toHaveLength(1);
+        expect(detail.viewer).toBeNull();
+      }),
+  );
+
+  it.effect("keeps legacy capabilities without a workflow lookup when the item has no type", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        paths.push(args[0] === "boards" ? "show" : args[args.indexOf("--resource") + 1]!);
+        return args[0] === "boards" ? encode({ ...WORK_ITEM, relations: [] }) : answer(args);
+      });
+      const detail = yield* api.getIssue({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+      });
+      expect(detail.states).toEqual(api.capabilities.states);
+      expect(paths).toHaveLength(3);
+      expect(paths).not.toContain("workitemtypestates");
+    }),
+  );
+
+  it.effect.each([
+    { states: [{ name: "Shipped", category: "Completed" }] },
+    { states: [{ name: "Review", category: "Unknown" }] },
+  ])(
+    "refuses an incomplete native workflow without falling back to stock states: $states",
+    ({ states }) =>
+      Effect.gen(function* () {
+        const api = yield* tracker((args) => {
+          if (args[0] === "boards")
+            return encode({
+              ...WORK_ITEM,
+              relations: [],
+              fields: {
+                ...WORK_ITEM.fields,
+                "System.WorkItemType": "Bug",
+                "System.State": "Review",
+              },
+            });
+          if (args.includes("workitemtypestates")) return encode({ value: states });
+          return answer(args);
+        });
+        const error = yield* Effect.flip(
+          api.getIssue({ cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" }),
+        );
+        expect(error).toMatchObject({ operation: "getStates", reason: "failed" });
+      }),
+  );
+
+  it.effect("writes a custom state with the existing item preflight and no workflow reread", () =>
+    Effect.gen(function* () {
+      const seen: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        seen.push(args);
+        return encode({
+          ...WORK_ITEM,
+          fields: { ...WORK_ITEM.fields, "System.WorkItemType": "Bug", "System.State": "Review" },
+        });
+      });
+      yield* api.setState!({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        state: "Shipped",
+      });
+      expect(seen).toHaveLength(2);
+      expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
+      expect(seen[1]).toEqual(expect.arrayContaining(["update", "--state", "Shipped"]));
+    }),
+  );
+
   it.each([
     [
       "https://dev.azure.com/acme/_apis/wit/workItems/7",
