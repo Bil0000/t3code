@@ -1294,6 +1294,60 @@ it.effect("shares the viewer probe per host within each list call", () =>
   }),
 );
 
+it.effect.each(["forgejo", "github", "plugin"])(
+  "deduplicates %s viewers for same-instance repositories and worktrees",
+  (kind) =>
+    Effect.gen(function* () {
+      const tracker = IssueTrackerKind.make(kind);
+      const host = "same.example";
+      let viewerReads = 0;
+      let issueReads = 0;
+      const api = fakeTracker({
+        kind: tracker,
+        getViewer: () =>
+          Effect.sync(() => {
+            viewerReads++;
+            return "alice";
+          }),
+        listIssues: (input) =>
+          Effect.sync(() => {
+            issueReads++;
+            expect(input.viewer).toBe("alice");
+            return { items: [], nextCursor: null };
+          }),
+      });
+      const projects = [
+        { id: "web", repository: "Acme/Web" },
+        { id: "api", repository: "acme/Api" },
+        { id: "worktree", repository: kind === "forgejo" ? "ACME/WEB" : "Acme/Web" },
+      ].map((input) => {
+        const shell = project({ ...input, host, provider: kind });
+        return kind === "forgejo"
+          ? {
+              ...shell,
+              repositoryIdentity: {
+                ...shell.repositoryIdentity!,
+                webUrl: `https://${host}/Mount/${input.repository}`,
+              },
+            }
+          : shell;
+      });
+      const service = yield* makeService({ projects, trackers: [api] });
+      const result = yield* service.list({ state: "open", involvement: "assigned" });
+      expect(result.errors).toEqual([]);
+      expect({ viewerReads, issueReads }).toEqual({ viewerReads: 1, issueReads: 2 });
+      expect(result.viewers).toEqual(
+        kind === "forgejo"
+          ? {
+              "forgejo same.example": "alice",
+              "forgejo same.example Mount/acme/web": "alice",
+              "forgejo same.example Mount/acme/api": "alice",
+            }
+          : { [`${kind} ${host}`]: "alice" },
+      );
+    }),
+);
+
 it.effect("returns project sources without reading a tracker API", () =>
   Effect.gen(function* () {
     const unused = () => Effect.die("Sources must not probe providers");
@@ -2660,3 +2714,219 @@ it.effect(
       expect(operations).toEqual(["T3Comments", "T3Comments"]);
     }),
 );
+
+it.effect("keeps native Forgejo involvement viewers separate across case-distinct mounts", () => {
+  const host = "forgejo.test";
+  const installs = [
+    { id: "upper", mount: "Mount", account: "alice" },
+    { id: "lower", mount: "mount", account: "bob" },
+  ];
+  const native: { phase: string; path: string }[] = [];
+  let phase = "resolve";
+  const remoteFor = (cwd: string) => {
+    const install = installs.find((item) => cwd === `/w/${item.id}`)!;
+    return `https://${host}/${install.mount}/Acme/Web.git`;
+  };
+  return Effect.gen(function* () {
+    const cli = yield* ForgejoCli.make;
+    const tracker = yield* ForgejoIssueTracker.make.pipe(
+      Effect.provideService(ForgejoCli.ForgejoCli, cli),
+    );
+    const provider = yield* ForgejoSourceControlProvider.make.pipe(
+      Effect.provideService(ForgejoCli.ForgejoCli, cli),
+    );
+    const discovery = yield* ForgejoSourceControlProvider.makeDiscovery.pipe(
+      Effect.provideService(ForgejoCli.ForgejoCli, cli),
+    );
+    const { process } = yield* SourceControlHost.SourceControlHost;
+    const identities = yield* RepositoryIdentityResolver.make({
+      refine: (identity) =>
+        provider.refineRepositoryIdentity!({
+          identity,
+          resolveContext: (input) =>
+            refineUnknownRemoteProvider({
+              specs: [discovery],
+              process,
+              cwd: input.cwd,
+              context: input.context,
+            }),
+        }),
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ProcessRunner.ProcessRunner)({
+          run: (input) => {
+            const cwd = input.args[input.args.indexOf("-C") + 1]!;
+            return Effect.succeed({
+              stdout: input.args.includes("--show-toplevel")
+                ? cwd
+                : `origin\t${remoteFor(cwd)} (fetch)\n`,
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            });
+          },
+        }),
+      ),
+    );
+    const projects = yield* Effect.forEach(installs, (install) =>
+      Effect.gen(function* () {
+        const identity = yield* identities.resolve(`/w/${install.id}`);
+        expect(identity?.webUrl).toBe(`https://${host}/${install.mount}/Acme/Web`);
+        return { ...project({ id: install.id }), repositoryIdentity: identity };
+      }),
+    );
+    const service = yield* makeService({
+      projects,
+      trackers: [tracker],
+      resolveRepository: identities.resolve,
+    });
+    for (const install of installs) {
+      phase = `direct-viewer-${install.id}`;
+      expect(yield* tracker.getViewer({ cwd: `/w/${install.id}`, host })).toBe(install.account);
+      expect(yield* service.sources(ProjectId.make(install.id))).toEqual([
+        { tracker: "forgejo", host, scope: `${install.mount}/acme/web` },
+      ]);
+    }
+    const outcomes: {
+      involvement: string;
+      actualScopes: string[];
+      expectedScopes: string[];
+      viewers: unknown;
+    }[] = [];
+    for (const involvement of ["assigned", "authored", "mentioned"] as const) {
+      for (const install of installs) {
+        phase = `single-${involvement}-${install.id}`;
+        const answer = yield* service.list({
+          projectId: ProjectId.make(install.id),
+          state: "open",
+          involvement,
+        });
+        expect(answer.errors).toEqual([]);
+        expect(answer.entries.map((entry) => entry.scope)).toEqual([`${install.mount}/acme/web`]);
+        expect(answer.viewers).toMatchObject({ [`forgejo ${host}`]: install.account });
+      }
+      phase = `combined-${involvement}`;
+      const answer = yield* service.list({ state: "open", involvement });
+      expect(answer.errors).toEqual([]);
+      outcomes.push({
+        involvement,
+        actualScopes: answer.entries.map((entry) => entry.scope).sort(),
+        expectedScopes: ["Mount/acme/web", "mount/acme/web"],
+        viewers: answer.viewers,
+      });
+    }
+    const counts = [...new Set(native.map((call) => call.phase))].map((name) => ({
+      phase: name,
+      native: native.filter((call) => call.phase === name).length,
+      user: native.filter((call) => call.phase === name && call.path.endsWith("/user")).length,
+      issueList: native.filter((call) => call.phase === name && call.path.endsWith("/issues"))
+        .length,
+    }));
+    for (const outcome of outcomes) {
+      expect(outcome.actualScopes).toEqual(outcome.expectedScopes);
+      expect(outcome.viewers).toEqual({
+        [`forgejo ${host} Mount/acme/web`]: "alice",
+        [`forgejo ${host} mount/acme/web`]: "bob",
+      });
+      const phaseCounts = counts.find(
+        (count) => count.phase === `combined-${outcome.involvement}`,
+      )!;
+      expect({
+        native: phaseCounts.native,
+        user: phaseCounts.user,
+        issueList: phaseCounts.issueList,
+      }).toEqual({ native: 4, user: 2, issueList: 2 });
+    }
+    for (const count of counts.filter((item) => item.phase.startsWith("single-"))) {
+      expect({ native: count.native, user: count.user, issueList: count.issueList }).toEqual({
+        native: 2,
+        user: 1,
+        issueList: 1,
+      });
+    }
+  }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(HostProcess.HomeDirectory, "/fake-home"),
+    Effect.provideService(
+      FileSystem.FileSystem,
+      FileSystem.makeNoop({ exists: () => Effect.succeed(false) }),
+    ),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.die("Unexpected HTTP")),
+    ),
+    Effect.provide(
+      TestSourceControlHost.layer({
+        process: {
+          run: (input) => {
+            if (input.command === "git")
+              return Effect.succeed(
+                TestSourceControlHost.processOutput(`origin\t${remoteFor(input.cwd)} (fetch)\n`),
+              );
+            if (input.command !== "tea")
+              return Effect.die(`Unexpected native process ${input.command}`);
+            if (input.args[0] === "login")
+              return Effect.succeed(
+                TestSourceControlHost.processOutput(
+                  JSON.stringify(
+                    installs.map((item) => ({
+                      name: item.id,
+                      url: `https://${host}/${item.mount}`,
+                      ssh_host: host,
+                      user: item.account,
+                      default: "false",
+                    })),
+                  ),
+                ),
+              );
+            if (input.args[0] !== "api") return Effect.die("Unexpected tea command");
+            const endpoint = new URL(input.args.at(-1)!);
+            const install = installs.find((item) =>
+              endpoint.pathname.startsWith(`/${item.mount}/api/v1/`),
+            );
+            if (!install) return Effect.die(`Unexpected native path ${endpoint.pathname}`);
+            const login = input.args[input.args.indexOf("--login") + 1]!;
+            expect(login).toBe(install.id);
+            const method = input.args[input.args.indexOf("--method") + 1]!;
+            expect(method).toBe("GET");
+            let value: unknown;
+            if (endpoint.pathname.endsWith("/user")) value = { login: install.account };
+            else if (endpoint.pathname.toLowerCase().endsWith("/repos/acme/web/issues")) {
+              const filter =
+                endpoint.searchParams.get("assigned_by") ??
+                endpoint.searchParams.get("created_by") ??
+                endpoint.searchParams.get("mentioned_by");
+              value =
+                filter !== null && filter !== install.account
+                  ? []
+                  : [
+                      {
+                        number: 42,
+                        title: `${install.account} issue`,
+                        html_url: `https://${host}/${install.mount}/Acme/Web/issues/42`,
+                        user: { login: install.account },
+                        state: "open",
+                        body: "",
+                        created_at: "2026-10-01T00:00:00Z",
+                        updated_at: "2026-10-01T00:00:00Z",
+                        assignees: [{ login: install.account }],
+                        comments: 0,
+                      },
+                    ];
+            } else return Effect.die(`Unexpected native API ${endpoint.pathname}`);
+            native.push({ phase, path: endpoint.pathname });
+            return Effect.succeed(
+              TestSourceControlHost.processOutput(JSON.stringify(value), {
+                stderr: 'HTTP/1.1 200\nLink: <https://fixture.invalid>; rel="last"\n',
+              }),
+            );
+          },
+        },
+      }),
+    ),
+  );
+});

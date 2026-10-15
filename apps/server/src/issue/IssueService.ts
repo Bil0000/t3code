@@ -494,6 +494,20 @@ export const make = Effect.gen(function* () {
       }
       const viewers = new Map<string, string>();
       const viewerReads = new Map<string, Effect.Effect<string, IssueTrackerError>>();
+      const viewerKeyOf = (project: SupportedProject) =>
+        project.tracker === "forgejo"
+          ? issueListCursorKey({
+              ...project,
+              scope: issueScopeKeyOf(project).split("/").slice(0, -2).join("/"),
+            })
+          : issueTrackerHostKey(project);
+      const viewerInstances = new Map<string, Set<string>>();
+      for (const project of supported) {
+        const hostKey = issueTrackerHostKey(project);
+        const instances = viewerInstances.get(hostKey) ?? new Set<string>();
+        instances.add(viewerKeyOf(project));
+        viewerInstances.set(hostKey, instances);
+      }
       const trackers = new Map<string, IssueTrackerSummary>();
       const entries: IssueListEntry[] = [];
       const errors: IssueListProjectError[] = [];
@@ -501,20 +515,19 @@ export const make = Effect.gen(function* () {
 
       const viewerFor = (project: SupportedProject) =>
         Effect.gen(function* () {
-          let read = viewerReads.get(issueTrackerHostKey(project));
+          const key = viewerKeyOf(project);
+          let read = viewerReads.get(key);
           if (read === undefined) {
             read = yield* Effect.cached(
-              project.api
-                .getViewer({ cwd: project.project.workspaceRoot, host: project.host })
-                .pipe(
-                  Effect.tap((viewer) =>
-                    Effect.sync(() => viewers.set(issueTrackerHostKey(project), viewer)),
-                  ),
-                ),
+              project.api.getViewer({ cwd: project.project.workspaceRoot, host: project.host }),
             );
-            viewerReads.set(issueTrackerHostKey(project), read);
+            viewerReads.set(key, read);
           }
-          return yield* read;
+          const viewer = yield* read;
+          if (project.tracker === "forgejo") viewers.set(issueListCursorKey(project), viewer);
+          const hostKey = issueTrackerHostKey(project);
+          if (viewerInstances.get(hostKey)!.size === 1) viewers.set(hostKey, viewer);
+          return viewer;
         });
 
       // Every project counts, including worktrees of a scope read once below.
