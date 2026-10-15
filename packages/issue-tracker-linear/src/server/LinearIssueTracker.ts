@@ -593,6 +593,17 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
               name: team.name,
             })),
             scopesTruncated: data.scopesTruncated,
+            scopesCursor: data.scopesCursor,
+          })),
+        ),
+      listScopes: (token, input) =>
+        linear.listScopes(token, input).pipe(
+          Effect.map((page) => ({
+            items: page.teams.map((team) => ({
+              key: `${page.organization.urlKey}/${team.key}`,
+              name: team.name,
+            })),
+            nextCursor: page.nextCursor,
           })),
         ),
       getScope: (token, scope) =>

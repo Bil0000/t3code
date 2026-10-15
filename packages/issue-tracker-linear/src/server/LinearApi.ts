@@ -20,7 +20,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
-import { IssueTrackerKind } from "@t3tools/contracts";
+import { IssueTrackerKind, type IssuePageInput } from "@t3tools/contracts";
 import { IssueTrackerError } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -214,6 +214,10 @@ const PROBE_QUERY = `query T3ProbeCredential {
   organization { id urlKey }
   teams(first: 250) { nodes { id key name } pageInfo { hasNextPage endCursor } }
 }`;
+const SCOPES_QUERY = `query T3Scopes($first: Int!, $after: String) {
+  organization { id urlKey }
+  teams(first: $first, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } }
+}`;
 const LIST_QUERY = `query T3Issues($first: Int, $last: Int, $after: String, $before: String, $orderBy: PaginationOrderBy!, $filter: IssueFilter!) {
   organization { id urlKey }
   viewer { id }
@@ -331,6 +335,10 @@ const decodeViewerId = Schema.decodeUnknownOption(
 );
 const ProbeData = Schema.Struct({
   viewer: LinearUser,
+  organization: LinearOrganization,
+  teams: Connection(LinearTeam),
+});
+const ScopesData = Schema.Struct({
   organization: LinearOrganization,
   teams: Connection(LinearTeam),
 });
@@ -476,6 +484,18 @@ export class LinearApi extends Context.Service<
         readonly organization: LinearOrganization;
         readonly teams: ReadonlyArray<LinearTeam>;
         readonly scopesTruncated: boolean;
+        readonly scopesCursor: string | null;
+      },
+      IssueTrackerError
+    >;
+    readonly listScopes: (
+      token: string,
+      input: IssuePageInput,
+    ) => Effect.Effect<
+      {
+        readonly organization: LinearOrganization;
+        readonly teams: ReadonlyArray<LinearTeam>;
+        readonly nextCursor: string | null;
       },
       IssueTrackerError
     >;
@@ -845,13 +865,58 @@ export const make = Effect.gen(function* () {
     execute("viewer", VIEWER_QUERY, {}, ViewerData, token);
   const probeCredential: LinearApi["Service"]["probeCredential"] = (token) =>
     execute("probeCredential", PROBE_QUERY, {}, ProbeData, token).pipe(
-      Effect.map((data) => ({
-        viewer: data.viewer,
-        organization: data.organization,
-        teams: data.teams.nodes,
-        scopesTruncated: data.teams.pageInfo.hasNextPage,
-      })),
+      Effect.flatMap((data) => {
+        const cursor = data.teams.pageInfo.hasNextPage ? data.teams.pageInfo.endCursor : null;
+        if (
+          data.teams.nodes.length > 250 ||
+          (data.teams.pageInfo.hasNextPage &&
+            (cursor === null ||
+              !cursor.trim() ||
+              cursor.length > 4096 ||
+              data.teams.nodes.length === 0))
+        )
+          return Effect.fail(
+            fail("probeCredential", "failed", "Linear returned an inconsistent team page."),
+          );
+        return Effect.succeed({
+          viewer: data.viewer,
+          organization: data.organization,
+          teams: data.teams.nodes,
+          scopesTruncated: data.teams.pageInfo.hasNextPage,
+          scopesCursor: cursor,
+        });
+      }),
     );
+  const listScopes: LinearApi["Service"]["listScopes"] = (token, input) =>
+    Effect.gen(function* () {
+      const limit = input.limit ?? 100;
+      if (
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 100 ||
+        (input.cursor !== undefined && (!input.cursor.trim() || input.cursor.length > 4096))
+      )
+        return yield* fail("listScopes", "failed", "Invalid Linear scope page.");
+      const data = yield* execute(
+        "listScopes",
+        SCOPES_QUERY,
+        { first: limit, after: input.cursor ?? null },
+        ScopesData,
+        token,
+      );
+      const cursor = data.teams.pageInfo.hasNextPage ? data.teams.pageInfo.endCursor : null;
+      if (
+        data.teams.nodes.length > limit ||
+        (data.teams.pageInfo.hasNextPage &&
+          (cursor === null ||
+            !cursor.trim() ||
+            cursor.length > 4096 ||
+            cursor === input.cursor ||
+            data.teams.nodes.length === 0))
+      )
+        return yield* fail("listScopes", "failed", "Linear returned an inconsistent team page.");
+      return { organization: data.organization, teams: data.teams.nodes, nextCursor: cursor };
+    });
   const getScope: LinearApi["Service"]["getScope"] = (key, token) =>
     execute("getScope", SCOPE_QUERY, { key }, ScopeData, token).pipe(
       Effect.map((data) =>
@@ -1108,6 +1173,7 @@ export const make = Effect.gen(function* () {
     updateComment,
     viewer,
     probeCredential,
+    listScopes,
     getScope,
     listIssues,
     getIssue,

@@ -8,7 +8,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Schema from "effect/Schema";
 import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import { HttpClient, HttpClientResponse } from "effect/http";
-import { IssueSummary, IssueTrackerKind } from "@t3tools/contracts";
+import { IssueSummary, IssueTrackerKind, IssueTrackerScopePage } from "@t3tools/contracts";
 import type { StandaloneIssueTrackerApi } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 
@@ -150,6 +150,153 @@ function fakeLinear(
 
 const target = { cwd: "/w/web", host: "linear.app", scope: "ENG" };
 const decodeIssueSummary = Schema.decodeEffect(IssueSummary);
+const decodeScopePage = Schema.decodeEffect(IssueTrackerScopePage);
+
+it.effect("continues the selected account team catalog with one native request per page", () =>
+  Effect.gen(function* () {
+    const teams = (start: number, length: number) =>
+      Array.from({ length }, (_, index) => ({
+        id: `team-${start + index}`,
+        key: `T${start + index}`,
+        name: `Team ${start + index}`,
+      }));
+    const test = fakeLinear(
+      {
+        T3ProbeCredential: () => ({
+          viewer: JULIUS,
+          organization: ORGANIZATION,
+          teams: {
+            nodes: teams(0, 250),
+            pageInfo: { hasNextPage: true, endCursor: "team-249" },
+          },
+        }),
+        T3Scopes: (variables) => ({
+          organization: ORGANIZATION,
+          teams: {
+            nodes: variables.after === "team-249" ? teams(250, 100) : teams(350, 1),
+            pageInfo:
+              variables.after === "team-249"
+                ? { hasNextPage: true, endCursor: "team-349" }
+                : { hasNextPage: false, endCursor: "team-350" },
+          },
+        }),
+      },
+      null,
+    );
+    const api = yield* test.tracker;
+    const initial = yield* api.probeCredential("lin_selected");
+    expect(initial.scopesCursor).toBe("team-249");
+    expect(initial.scopes).toHaveLength(250);
+    test.setToken("lin_other_account");
+    const page = yield* api.listScopes("lin_selected", { cursor: initial.scopesCursor! });
+    expect(page.items).toHaveLength(100);
+    expect(page.items[0]).toEqual({ key: "acme/T250", name: "Team 250" });
+    expect(page.nextCursor).toBe("team-349");
+    const last = yield* api.listScopes("lin_selected", { cursor: page.nextCursor!, limit: 1 });
+    expect(yield* decodeScopePage(last)).toEqual({
+      items: [{ key: "acme/T350", name: "Team 350" }],
+      nextCursor: null,
+    });
+    expect(test.requests.map(({ operation }) => operation)).toEqual([
+      "T3ProbeCredential",
+      "T3Scopes",
+      "T3Scopes",
+    ]);
+    expect(test.requests.map(({ authorization }) => authorization)).toEqual(
+      Array(3).fill("lin_selected"),
+    );
+    expect(test.requests[1]?.variables).toEqual({ first: 100, after: "team-249" });
+    expect(test.requests[2]?.variables).toEqual({ first: 1, after: "team-349" });
+    for (const request of test.requests.slice(1)) expect(request.query).not.toContain("viewer");
+  }),
+);
+
+it.effect.each([
+  { cursor: "" },
+  { cursor: " " },
+  { cursor: "x".repeat(4097) },
+  { limit: 0 },
+  { limit: 101 },
+  { limit: 1.5 },
+])("rejects invalid Linear scope page input without a native request: %j", (input) =>
+  Effect.gen(function* () {
+    const test = fakeLinear({});
+    const api = yield* test.tracker;
+    expect((yield* api.listScopes("lin_selected", input).pipe(Effect.flip)).reason).toBe("failed");
+    expect(test.requests).toHaveLength(0);
+  }),
+);
+
+it.effect.each([
+  { hasNextPage: true, endCursor: null, count: 1 },
+  { hasNextPage: true, endCursor: "same", count: 1 },
+  { hasNextPage: true, endCursor: "next", count: 0 },
+  { hasNextPage: true, endCursor: " ", count: 1 },
+  { hasNextPage: false, endCursor: null, count: 2 },
+])("refuses inconsistent Linear scope pages: %j", ({ count, ...pageInfo }) =>
+  Effect.gen(function* () {
+    const test = fakeLinear({
+      T3Scopes: () => ({
+        organization: ORGANIZATION,
+        teams: {
+          nodes: Array.from({ length: count }, () => ({
+            id: "team",
+            key: "ENG",
+            name: "Engineering",
+          })),
+          pageInfo,
+        },
+      }),
+    });
+    const api = yield* test.tracker;
+    expect(
+      (yield* api.listScopes("lin_selected", { cursor: "same", limit: 1 }).pipe(Effect.flip))
+        .reason,
+    ).toBe("failed");
+    expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Scopes"]);
+  }),
+);
+
+it.effect(
+  "rejects a partial Linear probe with no continuation and accepts empty terminal scopes",
+  () =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        T3ProbeCredential: () => ({
+          viewer: JULIUS,
+          organization: ORGANIZATION,
+          teams: {
+            nodes: [],
+            pageInfo: { hasNextPage: true, endCursor: null },
+          },
+        }),
+        T3Scopes: () => ({
+          organization: ORGANIZATION,
+          teams: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      expect((yield* api.probeCredential("lin_selected").pipe(Effect.flip)).reason).toBe("failed");
+      expect(yield* api.listScopes("lin_selected", {})).toEqual({ items: [], nextCursor: null });
+      expect(test.requests).toHaveLength(2);
+    }),
+);
+
+it.effect.each([401, 429])(
+  "preserves native Linear scope-page errors %s without preflight",
+  (status) =>
+    Effect.gen(function* () {
+      const test = fakeLinear({ T3Scopes: () => new Response("{}", { status }) });
+      const api = yield* test.tracker;
+      expect(
+        (yield* api.listScopes("lin_selected", { cursor: "next" }).pipe(Effect.flip)).reason,
+      ).toBe(status === 401 ? "unauthenticated" : "rate-limited");
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Scopes"]);
+    }),
+);
 
 it.effect.each([
   { template: true, assignee: null },
