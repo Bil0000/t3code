@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -252,6 +253,151 @@ describe("AzureDevOpsIssueTracker", () => {
       expect(seen).toHaveLength(2);
       expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
       expect(seen[1]).toEqual(expect.arrayContaining(["update", "--state", "Shipped"]));
+    }),
+  );
+
+  it.effect.each([
+    {
+      input: { body: "**bold**\n\n- one\n- two" },
+      fields: [
+        { op: "add", path: "/fields/System.Description", value: "**bold**\n\n- one\n- two" },
+      ],
+    },
+    {
+      input: {
+        title: "Changed title",
+        body: "**bold**",
+        labels: ["bug", "updated"],
+        assignees: ["theo@acme.test"],
+      },
+      fields: [
+        { op: "add", path: "/fields/System.Title", value: "Changed title" },
+        { op: "add", path: "/fields/System.Description", value: "**bold**" },
+        { op: "add", path: "/fields/System.Tags", value: "bug; updated" },
+        { op: "add", path: "/fields/System.AssignedTo", value: "theo@acme.test" },
+      ],
+    },
+    {
+      input: { body: "", labels: [], assignees: [] },
+      fields: [
+        { op: "add", path: "/fields/System.Description", value: "" },
+        { op: "add", path: "/fields/System.Tags", value: "" },
+        { op: "add", path: "/fields/System.AssignedTo", value: "" },
+      ],
+    },
+    {
+      input: {
+        body: '<p>Fix <strong>typo</strong></p><ul><li>Keep this list</li></ul><p><a href="https://example.test/help">Help</a></p>',
+      },
+      fields: [
+        {
+          op: "add",
+          path: "/fields/System.Description",
+          value:
+            '<p>Fix <strong>typo</strong></p><ul><li>Keep this list</li></ul><p><a href="https://example.test/help">Help</a></p>',
+        },
+      ],
+    },
+  ] as const)(
+    "writes the description and its native Markdown format in one patch: $input",
+    ({ input, fields }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const seen: ReadonlyArray<string>[] = [];
+        const patches: unknown[] = [];
+        const api = yield* AzureDevOpsIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeFileSystem.layer,
+              Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+                execute: ({ args }) =>
+                  Effect.gen(function* () {
+                    seen.push(args);
+                    if (args.includes("--in-file")) {
+                      expect(args).toEqual(
+                        expect.arrayContaining([
+                          "--organization",
+                          "https://dev.azure.com/acme",
+                          "workitems",
+                          "project=Web App",
+                          "id=7",
+                          "PATCH",
+                          "application/json-patch+json",
+                        ]),
+                      );
+                      patches.push(
+                        JSON.parse(
+                          yield* fs
+                            .readFileString(args[args.indexOf("--in-file") + 1]!)
+                            .pipe(Effect.orDie),
+                        ),
+                      );
+                    }
+                    return TestSourceControlHost.processOutput(
+                      encode({
+                        ...WORK_ITEM,
+                        multilineFieldsFormat: { "System.Description": "HTML" },
+                      }),
+                    );
+                  }),
+              }),
+            ),
+          ),
+        );
+        yield* api.update!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          ...input,
+        });
+        expect(patches).toEqual([
+          [
+            ...fields,
+            { op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" },
+          ],
+        ]);
+        expect(seen).toHaveLength(2);
+        expect(seen[0]?.slice(0, 3)).toEqual(["boards", "work-item", "show"]);
+      }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("preserves native rate-limit errors from description patches", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const native = new AzureDevOpsCli.AzureDevOpsCliRateLimitError({
+        operation: "execute",
+        command: "az",
+        cwd: "/w",
+        argumentCount: 10,
+        cause: new Error("rate limited"),
+      });
+      const api = yield* AzureDevOpsIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeFileSystem.layer,
+            Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+              execute: () =>
+                Effect.suspend(() =>
+                  ++calls === 1
+                    ? Effect.succeed(TestSourceControlHost.processOutput(encode(WORK_ITEM)))
+                    : Effect.fail(native),
+                ),
+            }),
+          ),
+        ),
+      );
+      const error = yield* Effect.flip(
+        api.update!({
+          cwd: "/w",
+          host: "dev.azure.com",
+          scope: "acme/Web App",
+          key: "7",
+          body: "**bold**",
+        }),
+      );
+      expect(error).toMatchObject({ reason: "rate-limited", cause: native });
+      expect(calls).toBe(2);
     }),
   );
 
