@@ -1574,6 +1574,18 @@ function ChatMarkdownVideo(props: {
   );
 }
 
+export function linearMediaUrl(source: string): string | null {
+  const url = URL.parse(source);
+  return url !== null &&
+    url.protocol === "https:" &&
+    url.hostname === "uploads.linear.app" &&
+    url.port === "" &&
+    url.username === "" &&
+    url.password === ""
+    ? source
+    : null;
+}
+
 /** Environment-hosted media loads through an exact-file signed asset URL. */
 export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props: {
   readonly environmentId: EnvironmentId;
@@ -1585,6 +1597,7 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
         | "workspace-file"
         | "media-file"
         | "github-media"
+        | "linear-media"
         | "tool-output-image";
     }
   >;
@@ -2752,6 +2765,7 @@ function useChatMarkdownState({
       expandMedia,
       fileLinkChip,
       githubMedia,
+      issueLinkContext,
       renderContextReference,
       headingLevelOffset,
       imageBaseDir,
@@ -2787,6 +2801,7 @@ function useChatMarkdownState({
       expandMedia,
       fileLinkChip,
       githubMedia,
+      issueLinkContext,
       renderContextReference,
       headingLevelOffset,
       imageBaseDir,
@@ -3256,6 +3271,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       environmentId,
       githubMedia,
       imageBaseDir,
+      issueLinkContext,
       threadRef,
       renderContextReference,
     } = use(ChatMarkdownRendererContext);
@@ -3285,6 +3301,36 @@ const CHAT_MARKDOWN_COMPONENTS = {
     const imageSource = classifyMarkdownImageSource(classifiedSrc, imageBaseDir ?? cwd);
     const kind = mediaKindFromPath(classifiedSrc) ?? "image";
     const directUri = imageSource._tag === "Direct" ? imageSource.uri : null;
+    const linearUrl = directUri === null ? null : linearMediaUrl(directUri);
+    if (
+      linearUrl !== null &&
+      issueLinkContext?.tracker === "linear" &&
+      issueLinkContext.scope !== undefined &&
+      issueLinkContext.key !== undefined
+    ) {
+      const { environmentId: issueEnvironmentId, ...issue } = issueLinkContext;
+      return (
+        <ChatMarkdownAssetImage
+          environmentId={issueEnvironmentId}
+          resource={{
+            _tag: "linear-media",
+            issue: { ...issue, scope: issueLinkContext.scope, key: issueLinkContext.key },
+            url: linearUrl,
+          }}
+          alt={altText}
+          kind={kind}
+          copyMarkdown={copyMarkdown}
+          standalone={standalone}
+          className={className}
+          style={authoredSizeStyle}
+          imageProps={imageProps}
+          srcFragment={markdownImageSourceFragment(classifiedSrc)}
+          originalUrl={linearUrl}
+          framed={false}
+          onImageExpand={imageExpand}
+        />
+      );
+    }
     const githubMediaUrl =
       directUri === null ? null : githubMediaFetchUrl(resolveProtocolRelativeMediaUrl(directUri));
     if (

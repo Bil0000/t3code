@@ -25,10 +25,11 @@ async function openUnresolvedLink(url: string): Promise<void> {
   opened.location.href = url;
 }
 
-export type IssueLinkContext = Pick<IssueRef, "projectId" | "connectionId" | "tracker"> & {
-  readonly environmentId: EnvironmentId;
-  readonly host: string;
-};
+export type IssueLinkContext = Pick<IssueRef, "projectId" | "connectionId" | "tracker"> &
+  Partial<Pick<IssueRef, "scope" | "key">> & {
+    readonly environmentId: EnvironmentId;
+    readonly host: string;
+  };
 
 export function useOpenIssueLink(
   threadRef?: ScopedThreadRef,

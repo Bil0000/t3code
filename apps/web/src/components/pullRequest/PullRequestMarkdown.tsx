@@ -1,5 +1,6 @@
 import { ExternalLinkIcon, PaperclipIcon } from "lucide-react";
 import { markdownImageSourceFragment } from "@t3tools/client-runtime/markdown-images";
+import { mediaKindFromPath } from "@t3tools/shared/filePreview";
 import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
 import type { AssetResource, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { createContext, useContext, useMemo } from "react";
@@ -10,7 +11,7 @@ import { cn } from "~/lib/utils";
 import type { IssueLinkContext } from "~/lib/openIssueLink";
 import { PULL_REQUESTS_PANEL_REF } from "~/rightPanelStore";
 
-import ChatMarkdown from "../ChatMarkdown";
+import ChatMarkdown, { linearMediaUrl } from "../ChatMarkdown";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { remarkPullRequestAutolinks, splitPullRequestBody } from "./pullRequestMarkdown.logic";
 
@@ -93,7 +94,13 @@ export function PullRequestMarkdown({
       data-image-gallery
     >
       {segments.map((segment) => {
-        if (segment.kind === "markdown" || segment.media === "image") {
+        if (
+          segment.kind === "markdown" ||
+          segment.media === "image" ||
+          (issueLinkContext?.tracker === "linear" &&
+            linearMediaUrl(segment.url) !== null &&
+            mediaKindFromPath(segment.url) === "video")
+        ) {
           return (
             <ChatMarkdown
               key={segment.id}
