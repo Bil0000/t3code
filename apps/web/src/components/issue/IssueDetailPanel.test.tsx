@@ -22,6 +22,7 @@ import { AsyncResult, type Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { useEscapeToGoBack } from "~/hooks/useNavigateBack";
 
 const decodeCandidatesInput = Schema.decodeUnknownSync(IssueCandidatesInput);
 
@@ -82,6 +83,7 @@ const state = vi.hoisted(() => ({
     },
   },
   write: vi.fn(),
+  navigate: vi.fn(),
   detailRefresh: vi.fn(),
   projects: [] as EnvironmentProject[],
   allowed: true,
@@ -115,6 +117,11 @@ vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
     }),
   };
 });
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useCanGoBack: () => true,
+  useNavigate: () => state.navigate,
+}));
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),
   useEnvironmentScope: () => state.allowed,
@@ -1591,6 +1598,36 @@ describe("native issue body editability", () => {
       });
     },
   );
+  it("cancels a title edit with Escape without leaving the issues page", async () => {
+    function IssuesPage() {
+      useEscapeToGoBack();
+      return <IssueDetailPanel environmentId={environmentId} reference={reference} />;
+    }
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+    state.navigate.mockClear();
+    try {
+      await act(async () => root.render(<IssuesPage />));
+      await act(async () => button("Edit title")!.click());
+      const title = container.querySelector<HTMLInputElement>('input[aria-label="Issue title"]')!;
+      await act(async () =>
+        title.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+        ),
+      );
+      expect(container.querySelector('input[aria-label="Issue title"]')).toBeNull();
+      expect(back).not.toHaveBeenCalled();
+      expect(state.navigate).not.toHaveBeenCalled();
+      expect(state.write).not.toHaveBeenCalled();
+      await act(async () =>
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+        ),
+      );
+      expect(back).toHaveBeenCalledOnce();
+    } finally {
+      back.mockRestore();
+    }
+  });
   it("keeps rich descriptions native while saving only the title", async () => {
     state.detail.bodyEditable = false;
     await act(async () => render());
