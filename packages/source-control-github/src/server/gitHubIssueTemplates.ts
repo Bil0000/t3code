@@ -1,13 +1,18 @@
-import type { IssueTemplate, IssueTemplateField } from "@t3tools/contracts";
+import {
+  TrimmedNonEmptyString,
+  type IssueTemplate,
+  type IssueTemplateField,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 
+const NonBlank = Schema.String.check(Schema.isPattern(/\S/));
 const Field = Schema.Struct({
-  type: Schema.Literals(["markdown", "input", "textarea", "dropdown", "checkboxes"]),
-  id: Schema.optional(Schema.String),
+  type: Schema.Literals(["markdown", "input", "textarea", "dropdown", "checkboxes", "upload"]),
+  id: Schema.optional(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]+$/))),
   attributes: Schema.Struct({
-    label: Schema.optional(Schema.String),
+    label: Schema.optional(NonBlank),
     description: Schema.optional(Schema.String),
     placeholder: Schema.optional(Schema.String),
     value: Schema.optional(Schema.String),
@@ -17,22 +22,45 @@ const Field = Schema.Struct({
     options: Schema.optional(
       Schema.Array(
         Schema.Union([
-          Schema.String,
-          Schema.Struct({ label: Schema.String, required: Schema.optional(Schema.Boolean) }),
+          NonBlank,
+          Schema.Struct({
+            label: NonBlank,
+            required: Schema.optional(Schema.Boolean),
+          }),
         ]),
-      ),
+      ).check(Schema.isMinLength(1)),
     ),
   }),
   validations: Schema.optional(Schema.Struct({ required: Schema.optional(Schema.Boolean) })),
-});
+}).check(
+  Schema.makeFilter((field) => {
+    if (field.type === "markdown") return (field.attributes.value?.trim().length ?? 0) > 0;
+    if (field.attributes.label === undefined) return false;
+    if (field.type === "dropdown")
+      return field.attributes.options?.every((option) => typeof option === "string") === true;
+    if (field.type === "checkboxes")
+      return field.attributes.options?.every((option) => typeof option !== "string") === true;
+    return true;
+  }),
+);
 const Form = Schema.Struct({
-  name: Schema.String,
-  description: Schema.optional(Schema.String),
-  about: Schema.optional(Schema.String),
+  name: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
   title: Schema.optional(Schema.String),
-  body: Schema.Array(Field),
+  body: Schema.Array(Field).check(
+    Schema.isMinLength(1),
+    Schema.makeFilter((body) => body.some((field) => field.type !== "markdown")),
+    Schema.makeFilter((body) => {
+      const ids = body.flatMap((field) => (field.id === undefined ? [] : [field.id]));
+      return new Set(ids).size === ids.length;
+    }),
+  ),
   labels: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
   assignees: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+});
+const Markdown = Schema.Struct({
+  name: NonBlank,
+  about: NonBlank,
 });
 const Config = Schema.Struct({
   blank_issues_enabled: Schema.optional(Schema.Boolean),
@@ -62,6 +90,9 @@ export function readGitHubIssueTemplateFiles(
   }>,
 ) {
   const templates: IssueTemplate[] = [];
+  const externalTemplates: Array<Pick<IssueTemplate, "key" | "name" | "about">> = [];
+  let hasConfig = false;
+  const markdownNames: string[] = [];
   let config = {
     blankIssuesEnabled: true,
     contactLinks: [] as ReadonlyArray<{
@@ -71,18 +102,31 @@ export function readGitHubIssueTemplateFiles(
     }>,
   };
   for (const entry of entries) {
-    if (entry.object?.text == null || !/\.ya?ml$/i.test(entry.name)) continue;
+    if (entry.object?.text == null) continue;
+    if (/\.md$/i.test(entry.name)) {
+      const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(entry.object.text);
+      if (frontmatter !== null && readYaml(frontmatter[1]!, Markdown) !== undefined)
+        markdownNames.push(entry.name);
+      continue;
+    }
+    if (!/\.ya?ml$/i.test(entry.name)) continue;
     if (/^config\.ya?ml$/i.test(entry.name)) {
       const parsed = readYaml(entry.object.text, Config);
-      if (parsed !== undefined)
+      if (parsed !== undefined) {
+        hasConfig = true;
         config = {
           blankIssuesEnabled: parsed.blank_issues_enabled ?? true,
           contactLinks: parsed.contact_links ?? [],
         };
+      }
       continue;
     }
     const parsed = readYaml(entry.object.text, Form);
     if (parsed === undefined) continue;
+    if (parsed.body.some((field) => field.type === "upload")) {
+      externalTemplates.push({ key: entry.name, name: parsed.name, about: parsed.description });
+      continue;
+    }
     const fields = parsed.body.map((field, index): IssueTemplateField => {
       const attributes = field.attributes;
       if (field.type === "markdown") return { kind: "markdown", value: attributes.value ?? "" };
@@ -138,7 +182,7 @@ export function readGitHubIssueTemplateFiles(
     templates.push({
       key: entry.name,
       name: parsed.name,
-      about: parsed.description ?? parsed.about ?? "",
+      about: parsed.description,
       title: parsed.title ?? "",
       body: "",
       fields,
@@ -146,5 +190,12 @@ export function readGitHubIssueTemplateFiles(
       assignees: names(parsed.assignees),
     });
   }
-  return { templates, ...config };
+  return {
+    templates,
+    externalTemplates,
+    hasForms: templates.length > 0 || externalTemplates.length > 0,
+    markdownNames,
+    hasConfig,
+    ...config,
+  };
 }

@@ -361,11 +361,14 @@ const RawCandidatesSchema = Schema.Struct({
  * The templates a repository offers, from the host rather than the checkout: a working tree sits
  * on whatever branch its reader left it on, and the templates are the default branch's.
  */
-export const ISSUE_TEMPLATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!) {
+export const ISSUE_TEMPLATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $includeBody: Boolean! = true) {
   repository(owner: $owner, name: $name) {
-    forms: object(expression: "HEAD:.github/ISSUE_TEMPLATE") { ... on Tree { entries { name object { ... on Blob { text } } } } }
+    nameWithOwner isPrivate
+    forms: object(expression: "HEAD:.github/ISSUE_TEMPLATE") { ... on Tree { oid entries { name object { ... on Blob { text } } } } }
+    rootForms: object(expression: "HEAD:ISSUE_TEMPLATE") { ... on Tree { entries { name object { ... on Blob { text } } } } }
+    docsForms: object(expression: "HEAD:docs/ISSUE_TEMPLATE") { ... on Tree { entries { name object { ... on Blob { text } } } } }
     issueTemplates {
-      filename name about title body
+      filename name about title body @include(if: $includeBody)
       assignees(first: 25) { nodes { login } }
       labels(first: 50) { nodes { name } }
     }
@@ -382,24 +385,24 @@ const RawTemplateSchema = Schema.Struct({
   labels: nodes(Schema.Struct({ name: Schema.optional(Schema.NullOr(Schema.String)) })),
 });
 
+const RawTemplateTreeSchema = Schema.Struct({
+  oid: Schema.optional(Schema.String),
+  entries: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      object: Schema.NullOr(Schema.Struct({ text: Schema.optional(Schema.NullOr(Schema.String)) })),
+    }),
+  ),
+});
 const RawTemplatesSchema = Schema.Struct({
   data: Schema.Struct({
     repository: Schema.Struct({
+      nameWithOwner: Schema.optional(Schema.String),
+      isPrivate: Schema.optional(Schema.Boolean),
       issueTemplates: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
-      forms: Schema.optional(
-        Schema.NullOr(
-          Schema.Struct({
-            entries: Schema.Array(
-              Schema.Struct({
-                name: Schema.String,
-                object: Schema.NullOr(
-                  Schema.Struct({ text: Schema.optional(Schema.NullOr(Schema.String)) }),
-                ),
-              }),
-            ),
-          }),
-        ),
-      ),
+      forms: Schema.optional(Schema.NullOr(RawTemplateTreeSchema)),
+      rootForms: Schema.optional(Schema.NullOr(RawTemplateTreeSchema)),
+      docsForms: Schema.optional(Schema.NullOr(RawTemplateTreeSchema)),
     }),
   }),
 });
@@ -821,7 +824,16 @@ export function decodeCreatedIssueJson(
 }
 
 export function decodeIssueTemplateFilesJson(raw: string) {
-  return Result.map(decodeTemplates(raw), ({ data }) => data.repository.forms?.entries ?? []);
+  return Result.map(decodeTemplates(raw), ({ data }) => ({
+    entries: data.repository.forms?.entries ?? [],
+    legacyEntries: [
+      ...(data.repository.rootForms?.entries ?? []),
+      ...(data.repository.docsForms?.entries ?? []),
+    ],
+    oid: data.repository.forms?.oid,
+    repository: data.repository.nameWithOwner,
+    isPrivate: data.repository.isPrivate,
+  }));
 }
 
 export function decodeIssueEditableCommentScopeJson(raw: string) {

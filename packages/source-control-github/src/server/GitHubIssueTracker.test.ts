@@ -128,6 +128,313 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect("inherits one public account template folder with its chooser config", () =>
+    Effect.gen(function* () {
+      const reads: unknown[] = [];
+      const api = yield* tracker((_query, variables) => {
+        reads.push(variables);
+        const inherited = (variables as { name: string }).name === ".github";
+        return JSON.stringify({
+          data: {
+            repository: {
+              nameWithOwner: inherited ? "acme/.github" : "acme/web",
+              isPrivate: false,
+              forms: inherited
+                ? {
+                    oid: "a".repeat(40),
+                    entries: [
+                      {
+                        name: "bug.yml",
+                        object: {
+                          text: "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                        },
+                      },
+                      {
+                        name: "config.yml",
+                        object: {
+                          text: "blank_issues_enabled: false\ncontact_links: [{name: Help, about: Ask us, url: 'https://example.com/help'}]\n",
+                        },
+                      },
+                    ],
+                  }
+                : null,
+              issueTemplates: [],
+            },
+          },
+        });
+      });
+      const result = yield* api.listTemplates!({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+      });
+      expect(result.templates).toMatchObject([
+        { name: "Bug", fields: [{ kind: "textarea", label: "Details" }] },
+      ]);
+      expect(result.blankIssuesEnabled).toBe(false);
+      expect(result.contactLinks).toEqual([
+        { name: "Help", about: "Ask us", url: "https://example.com/help" },
+      ]);
+      expect(reads).toEqual([
+        { owner: "acme", name: "web" },
+        { owner: "acme", name: ".github" },
+      ]);
+    }),
+  );
+
+  it.effect.each(["inherited", "invalid-local", "root", "docs"] as const)(
+    "keeps %s native Markdown ownership separate from account defaults",
+    (kind) =>
+      Effect.gen(function* () {
+        const reads: unknown[] = [];
+        const markdown = { filename: "bug.md", name: "Native Markdown", body: "Native body" };
+        const valid = {
+          name: "bug.md",
+          object: { text: "---\nname: Native Markdown\nabout: Report a bug\n---\nNative body" },
+        };
+        const api = yield* tracker((_query, variables) => {
+          reads.push(variables);
+          const defaults = (variables as { name: string }).name === ".github";
+          return JSON.stringify({
+            data: {
+              repository: {
+                nameWithOwner: defaults ? "acme/.github" : "acme/web",
+                isPrivate: false,
+                issueTemplates: [markdown],
+                rootForms: !defaults && kind === "root" ? { entries: [valid] } : null,
+                docsForms: !defaults && kind === "docs" ? { entries: [valid] } : null,
+                forms: defaults
+                  ? {
+                      oid: "a".repeat(40),
+                      entries: [
+                        valid,
+                        {
+                          name: "form.yml",
+                          object: {
+                            text: "name: Default form\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                          },
+                        },
+                        { name: "config.yml", object: { text: "blank_issues_enabled: false" } },
+                      ],
+                    }
+                  : kind === "invalid-local"
+                    ? {
+                        entries: [
+                          { name: "bug.md", object: { text: "Missing native front matter" } },
+                        ],
+                      }
+                    : null,
+              },
+            },
+          });
+        });
+        const result = yield* api.listTemplates!({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+        });
+        const local = kind === "root" || kind === "docs";
+        expect(reads).toHaveLength(local ? 1 : 2);
+        expect(result.blankIssuesEnabled).toBe(local);
+        expect(result.templates.map((template) => template.name)).toEqual(
+          local ? ["Native Markdown"] : ["Native Markdown", "Default form"],
+        );
+        expect(result.templates[0]?.body).toBe("Native body");
+      }),
+  );
+
+  it.effect.each(["form", "markdown", "config"] as const)(
+    "local %s suppresses the whole default folder",
+    (kind) =>
+      Effect.gen(function* () {
+        let reads = 0;
+        const api = yield* tracker(() => {
+          reads++;
+          return JSON.stringify({
+            data: {
+              repository: {
+                issueTemplates:
+                  kind === "markdown"
+                    ? [{ filename: "bug.md", name: "Local bug", body: "Local body" }]
+                    : [],
+                forms: {
+                  entries: [
+                    {
+                      name:
+                        kind === "form" ? "bug.yml" : kind === "markdown" ? "bug.md" : "config.yml",
+                      object: {
+                        text:
+                          kind === "form"
+                            ? "name: Local bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n"
+                            : kind === "config"
+                              ? "blank_issues_enabled: false"
+                              : "---\nname: Local bug\nabout: Local bug\n---\nLocal body",
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          });
+        });
+        const result = yield* api.listTemplates!({
+          cwd: "/w",
+          host: "github.com",
+          scope: "acme/web",
+        });
+        expect(reads).toBe(1);
+        expect(result.blankIssuesEnabled).toBe(kind !== "config");
+        expect(result.templates).toHaveLength(kind === "config" ? 0 : 1);
+        expect(result.templates[0]?.name).toBe(kind === "config" ? undefined : "Local bug");
+      }),
+  );
+
+  it.effect.each([
+    "private",
+    "wrong-owner",
+    "malformed",
+    "missing",
+    "forbidden",
+    "rate-limited",
+  ] as const)("handles %s defaults without changing native ownership", (kind) =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const api = yield* GitHubIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(GitHubApi.GitHubApi)({
+            graphql: ({ variables }) => {
+              reads++;
+              if (variables?.name === "web")
+                return Effect.succeed(
+                  JSON.stringify({ data: { repository: { issueTemplates: [], forms: null } } }),
+                );
+              if (kind === "missing")
+                return Effect.fail(
+                  new GitHubApi.GitHubApiNotFoundError({
+                    host: "github.com",
+                    operation: "listTemplates",
+                  }),
+                );
+              if (kind === "forbidden")
+                return Effect.fail(
+                  new GitHubApi.GitHubApiResponseError({
+                    host: "github.com",
+                    operation: "listTemplates",
+                    status: 403,
+                  }),
+                );
+              if (kind === "rate-limited")
+                return Effect.fail(
+                  new GitHubApi.GitHubApiRateLimitError({
+                    host: "github.com",
+                    operation: "listTemplates",
+                    retryAt: 1234,
+                  }),
+                );
+              return Effect.succeed(
+                kind === "malformed"
+                  ? "{"
+                  : JSON.stringify({
+                      data: {
+                        repository: {
+                          nameWithOwner: kind === "wrong-owner" ? "other/.github" : "acme/.github",
+                          isPrivate: kind === "private",
+                          forms: {
+                            oid: "a".repeat(40),
+                            entries: [
+                              {
+                                name: "config.yml",
+                                object: { text: "blank_issues_enabled: false" },
+                              },
+                            ],
+                          },
+                          issueTemplates: [],
+                        },
+                      },
+                    }),
+              );
+            },
+          }),
+        ),
+      );
+      const input = { cwd: "/w", host: "github.com", scope: "acme/web" };
+      if (kind === "rate-limited")
+        expect(yield* api.listTemplates!(input).pipe(Effect.flip)).toMatchObject({
+          reason: "rate-limited",
+          retryAt: 1234,
+        });
+      else
+        expect(yield* api.listTemplates!(input)).toEqual({
+          templates: [],
+          blankIssuesEnabled: true,
+        });
+      expect(reads).toBe(2);
+    }),
+  );
+
+  it.effect("binds deferred default Markdown bodies to the public source tree", () =>
+    Effect.gen(function* () {
+      const reads: unknown[] = [];
+      let oid = "a".repeat(40);
+      const api = yield* tracker((_query, variables) => {
+        reads.push(variables);
+        const defaults = (variables as { name: string }).name === ".github";
+        return JSON.stringify({
+          data: {
+            repository: {
+              nameWithOwner: defaults ? "acme/.github" : "acme/web",
+              isPrivate: false,
+              forms: defaults
+                ? { oid, entries: [{ name: "bug.md", object: { text: "Markdown" } }] }
+                : null,
+              issueTemplates: defaults
+                ? [
+                    {
+                      filename: "bug.md",
+                      name: "Bug",
+                      body: "Native Markdown",
+                      labels: { nodes: [{ name: "bug" }] },
+                      assignees: { nodes: [{ login: "alice" }] },
+                    },
+                  ]
+                : [],
+            },
+          },
+        });
+      });
+      const input = { cwd: "/w", host: "github.com", scope: "acme/web" };
+      const metadata = yield* api.listTemplates!({ ...input, metadataOnly: true });
+      const key = metadata.templates[0]!.key;
+      expect(key).toBe(`github-default:acme/.github:${oid}:bug.md`);
+      expect(metadata.templates[0]).toMatchObject({
+        body: "",
+        contentDeferred: true,
+        labels: ["bug"],
+        assignees: ["alice"],
+      });
+      expect(reads).toHaveLength(2);
+      expect(reads).toEqual([
+        { owner: "acme", name: "web", includeBody: false },
+        { owner: "acme", name: ".github", includeBody: false },
+      ]);
+      expect(
+        (yield* api.listTemplates!({ ...input, templateKey: key })).templates[0],
+      ).toMatchObject({ key, body: "Native Markdown" });
+      oid = "b".repeat(40);
+      expect(
+        yield* api.listTemplates!({ ...input, templateKey: key }).pipe(Effect.flip),
+      ).toMatchObject({ reason: "failed" });
+      const count = reads.length;
+      expect(
+        yield* api.listTemplates!({
+          ...input,
+          templateKey: `github-default:evil/.github:${oid}:bug.md`,
+        }).pipe(Effect.flip),
+      ).toMatchObject({ reason: "failed" });
+      expect(reads).toHaveLength(count);
+    }),
+  );
+
   it.effect.each([
     { role: "READ", locked: true, archived: false, comment: false, metadata: false },
     { role: "READ", locked: false, archived: false, comment: true, metadata: false },
@@ -1013,19 +1320,15 @@ describe("GitHubIssueTracker", () => {
     ["enables blank issues when the config is invalid", "blank_issues_enabled: [\n", true],
   ] as const)("%s", ([, config, blankIssuesEnabled]) =>
     Effect.gen(function* () {
-      const api = yield* tracker(
-        () => JSON.stringify({ data: { repository: { issueTemplates: [] } } }),
-        (input) => {
-          expect(input.path).toBe("repos/acme/web/contents/.github/ISSUE_TEMPLATE/config.yml");
-          expect(input.accept).toBe("application/vnd.github.raw");
-          return {
-            status: 200,
-            headers: {},
-            body: config,
-            truncated: false,
-            invalidUtf8: false,
-          };
-        },
+      const api = yield* tracker(() =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issueTemplates: [],
+              forms: { entries: [{ name: "config.yml", object: { text: config } }] },
+            },
+          },
+        }),
       );
       expect(
         yield* api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),

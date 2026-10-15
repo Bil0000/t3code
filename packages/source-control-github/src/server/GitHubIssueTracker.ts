@@ -30,7 +30,6 @@ import {
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { readGitHubIssueTemplateFiles } from "./gitHubIssueTemplates.ts";
-import { fromYaml } from "@t3tools/shared/schemaYaml";
 
 import * as GitHubApi from "./GitHubApi.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -162,9 +161,6 @@ const CAPABILITIES: IssueCapabilities = {
   closeReasons: ["completed", "not-planned"],
 };
 
-/** Where a repository configures the rest of its issue chooser, as GitHub spells the path. */
-const TEMPLATE_CONFIG_PATH = ".github/ISSUE_TEMPLATE/config.yml";
-
 function skippedMetadata(
   requested: {
     readonly labels?: ReadonlyArray<string> | undefined;
@@ -191,19 +187,6 @@ function skippedMetadata(
       : [name];
   });
 }
-
-const decodeTemplateConfig = Schema.decodeUnknownResult(
-  fromYaml(
-    Schema.Struct({
-      blank_issues_enabled: Schema.optionalKey(Schema.Boolean),
-      contact_links: Schema.optionalKey(
-        Schema.Array(
-          Schema.Struct({ name: Schema.String, about: Schema.String, url: Schema.String }),
-        ),
-      ),
-    }),
-  ),
-);
 
 /** What a repository selector may hold before it goes into a search query as itself. */
 const SEARCH_REPOSITORY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
@@ -1053,59 +1036,113 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitHubApi.GitHubApi> = 
           Effect.provideService(SourceControlRateLimit.Interactive, true),
         ),
 
-      listTemplates: (input) => {
-        const { owner, name } = parseRepository(input.scope);
-        return Effect.all(
-          [
+      listTemplates: (input) =>
+        Effect.gen(function* () {
+          if (
+            !SEARCH_REPOSITORY.test(input.scope) ||
+            (input.metadataOnly && input.templateKey !== undefined)
+          )
+            return yield* unreadable("listTemplates", "invalid-template-selection");
+          const { owner, name } = parseRepository(input.scope);
+          const prefix = `github-default:${owner.toLowerCase()}/.github:`;
+          if (
+            input.templateKey?.startsWith("github-default:") &&
+            (!input.templateKey.startsWith(prefix) ||
+              !/^[0-9a-f]{40}:[^/\\\p{Cc}]+$/u.test(input.templateKey.slice(prefix.length)))
+          )
+            return yield* unreadable("listTemplates", "invalid-default-template");
+          const read = (repository: string) =>
             graphqlRead({
               host: input.host,
               operation: "listTemplates",
               query: ISSUE_TEMPLATES_GRAPHQL_QUERY,
-              variables: { owner, name },
+              variables: {
+                owner,
+                name: repository,
+                ...(input.metadataOnly ? { includeBody: false } : {}),
+              },
               decode: (raw) =>
                 Result.flatMap(decodeIssueTemplatesJson(raw), (templates) =>
-                  Result.map(decodeIssueTemplateFilesJson(raw), (entries) => ({
-                    templates: templates.filter((template) => !/\.ya?ml$/i.test(template.key)),
-                    forms: readGitHubIssueTemplateFiles(entries).templates,
-                  })),
+                  Result.map(decodeIssueTemplateFilesJson(raw), (files) => {
+                    const parsed = readGitHubIssueTemplateFiles(files.entries);
+                    return {
+                      ...files,
+                      markdown: templates.filter((template) => !/\.ya?ml$/i.test(template.key)),
+                      parsed,
+                      markdownNames: [
+                        ...parsed.markdownNames,
+                        ...readGitHubIssueTemplateFiles(files.legacyEntries).markdownNames,
+                      ],
+                    };
+                  }),
                 ),
-            }),
-            // Only an explicit `blank_issues_enabled: false` takes the blank issue away; a missing
-            // config, or one this account may not read, leaves it where GitHub puts it.
-            api
-              .rest({
-                host: input.host,
-                operation: "listTemplateConfig",
-                accept: "application/vnd.github.raw",
-                path: `repos/${owner}/${name}/contents/${TEMPLATE_CONFIG_PATH}`,
-              })
-              .pipe(
-                Effect.map((response) => {
-                  const config = decodeTemplateConfig(response.body);
-                  return Result.isSuccess(config)
-                    ? {
-                        blankIssuesEnabled: config.success.blank_issues_enabled !== false,
-                        contactLinks: config.success.contact_links ?? [],
-                      }
-                    : { blankIssuesEnabled: true, contactLinks: [] };
-                }),
-                Effect.catch((error) =>
-                  error._tag === "GitHubApiRateLimitError" ||
-                  error._tag === "SourceControlRateLimitPausedError"
-                    ? Effect.fail(fail("listTemplateConfig")(error))
-                    : Effect.succeed({ blankIssuesEnabled: true, contactLinks: [] }),
-                ),
+            });
+          const local = yield* read(name);
+          if (
+            local.repository !== undefined &&
+            local.repository.toLowerCase() !== input.scope.toLowerCase()
+          )
+            return yield* unreadable("listTemplates", "different-repository");
+          const localMarkdown = local.markdown.some((template) =>
+            local.markdownNames.includes(template.key.split("/").at(-1) ?? ""),
+          );
+          let effective = local;
+          let inherited = false;
+          if (
+            !local.parsed.hasConfig &&
+            !local.parsed.hasForms &&
+            !localMarkdown &&
+            name !== ".github"
+          ) {
+            const defaults = yield* read(".github").pipe(
+              Effect.catchIf(
+                (error) => error.reason !== "rate-limited",
+                () => Effect.succeed(null),
               ),
-          ],
-          { concurrency: 2 },
-        ).pipe(
-          Effect.map(([templates, config]) => ({
-            templates: [...templates.templates, ...templates.forms],
-            blankIssuesEnabled: config.blankIssuesEnabled,
-            ...(config.contactLinks.length === 0 ? {} : { contactLinks: config.contactLinks }),
-          })),
-        );
-      },
+            );
+            if (
+              defaults !== null &&
+              defaults.isPrivate === false &&
+              defaults.repository?.toLowerCase() === `${owner}/.github`.toLowerCase() &&
+              defaults.oid !== undefined &&
+              /^[0-9a-f]{40}$/.test(defaults.oid)
+            ) {
+              effective = defaults;
+              inherited = true;
+            }
+          }
+          const templates = [...effective.markdown, ...effective.parsed.templates].map(
+            (template) => ({
+              ...template,
+              ...(inherited
+                ? { key: `${prefix}${effective.oid}:${template.key.split("/").at(-1)}` }
+                : {}),
+              ...(input.metadataOnly ? { body: "", contentDeferred: true } : {}),
+            }),
+          );
+          const selected =
+            input.templateKey === undefined
+              ? templates
+              : templates.filter((template) => template.key === input.templateKey);
+          if (input.templateKey !== undefined && selected.length === 0)
+            return yield* unreadable("listTemplates", "template-changed-or-missing");
+          return {
+            templates: selected,
+            blankIssuesEnabled: effective.parsed.blankIssuesEnabled,
+            ...(effective.parsed.externalTemplates.length === 0
+              ? {}
+              : {
+                  externalTemplates: effective.parsed.externalTemplates.map((template) => ({
+                    name: template.name,
+                    about: template.about,
+                    url: `https://${input.host}/${input.scope}/issues/new?${new URLSearchParams({ template: template.key })}`,
+                  })),
+                }),
+            ...(effective.parsed.contactLinks.length === 0
+              ? {}
+              : { contactLinks: effective.parsed.contactLinks }),
+          };
+        }),
 
       listCandidates: (input) => {
         const { owner, name } = parseRepository(input.scope);

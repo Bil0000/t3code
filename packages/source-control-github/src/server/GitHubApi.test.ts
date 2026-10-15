@@ -107,6 +107,374 @@ describe("environmentToken", () => {
 });
 
 describe("GitHubApi", () => {
+  it.effect.each([
+    "local",
+    "config-only",
+    "default",
+    "invalid-local",
+    "missing",
+    "private",
+    "forbidden",
+    "malformed",
+  ] as const)("reads the native %s chooser with a bounded effective source", (kind) => {
+    const { layer, requests } = harness((request) => {
+      expect(request.url).toBe("https://api.github.com/graphql");
+      const body = JSON.parse(
+        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+      );
+      expect(body.variables.owner).toBe("acme");
+      const defaults = body.variables.name === ".github";
+      if (defaults && kind === "missing") return json({ message: "Not found" }, { status: 404 });
+      if (defaults && kind === "forbidden") return json({ message: "Forbidden" }, { status: 403 });
+      if (defaults && kind === "malformed")
+        return new Response("{", { headers: { "content-type": "application/json" } });
+      return json({
+        data: {
+          repository: {
+            nameWithOwner: defaults ? "acme/.github" : "acme/web",
+            isPrivate: defaults && kind === "private",
+            issueTemplates: [],
+            forms: {
+              oid: "a".repeat(40),
+              entries: defaults
+                ? [
+                    {
+                      name: "default.yml",
+                      object: {
+                        text: "name: Default\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                      },
+                    },
+                    { name: "config.yml", object: { text: "blank_issues_enabled: false" } },
+                  ]
+                : kind === "local"
+                  ? [
+                      {
+                        name: "local.yml",
+                        object: {
+                          text: "name: Local\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                        },
+                      },
+                    ]
+                  : kind === "config-only"
+                    ? [{ name: "config.yml", object: { text: "blank_issues_enabled: false" } }]
+                    : kind === "invalid-local"
+                      ? [{ name: "local.yml", object: { text: "name: [" } }]
+                      : [],
+            },
+          },
+        },
+      });
+    });
+    return Effect.gen(function* () {
+      const driver = yield* GitHubIssueTracker.make;
+      const result = yield* driver.listTemplates!({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+      });
+      const inherited = kind === "default" || kind === "invalid-local";
+      expect(result.blankIssuesEnabled).toBe(!inherited && kind !== "config-only");
+      expect(result.templates.map((template) => template.name)).toEqual(
+        kind === "local" ? ["Local"] : inherited ? ["Default"] : [],
+      );
+      expect(requests).toHaveLength(kind === "local" || kind === "config-only" ? 1 : 2);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each([
+    ["missing-description", "name: Local\nbody:\n- type: textarea\n  attributes: {label: Details}"],
+    [
+      "blank-description",
+      "name: Local\ndescription: '   '\nbody:\n- type: textarea\n  attributes: {label: Details}",
+    ],
+    [
+      "blank-name",
+      "name: ' '\ndescription: Report a bug\nbody:\n- type: textarea\n  attributes: {label: Details}",
+    ],
+    ["empty-body", "name: Local\ndescription: Report a bug\nbody: []"],
+    [
+      "duplicate-ids",
+      "name: Local\ndescription: Report a bug\nbody:\n- type: textarea\n  id: details\n  attributes: {label: Details}\n- type: input\n  id: details\n  attributes: {label: Other}",
+    ],
+    [
+      "upload-duplicate-ids",
+      "name: Local\ndescription: Report a bug\nbody:\n- type: upload\n  id: details\n  attributes: {label: Screenshot}\n- type: input\n  id: details\n  attributes: {label: Other}",
+    ],
+    [
+      "invalid-field",
+      "name: Local\ndescription: Report a bug\nbody:\n- type: nonexistent\n  attributes: {label: Details}",
+    ],
+    [
+      "missing-label",
+      "name: Local\ndescription: Report a bug\nbody:\n- type: textarea\n  attributes: {}",
+    ],
+    [
+      "markdown-only",
+      "name: Local\ndescription: Report a bug\nbody:\n- type: markdown\n  attributes: {value: Hello}",
+    ],
+    [
+      "empty-options",
+      "name: Local\ndescription: Report a bug\nbody:\n- type: dropdown\n  attributes: {label: Details, options: []}",
+    ],
+    [
+      "upload-missing-description",
+      "name: Local\nbody:\n- type: upload\n  attributes: {label: Screenshot}",
+    ],
+    [
+      "upload-missing-label",
+      "name: Local\ndescription: Report a bug\nbody:\n- type: upload\n  attributes: {}",
+    ],
+    [
+      "upload-blank-label",
+      "name: Local\ndescription: Report a bug\nbody:\n- type: upload\n  attributes: {label: ' '}",
+    ],
+    ["invalid-config", "blank_issues_enabled: [false]"],
+  ])("invalid local %s does not suppress native public account defaults", ([kind, text]) => {
+    const { layer, requests } = harness((request) => {
+      const body = JSON.parse(
+        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+      );
+      const defaults = body.variables.name === ".github";
+      return json({
+        data: {
+          repository: {
+            nameWithOwner: defaults ? "acme/.github" : "acme/web",
+            isPrivate: false,
+            issueTemplates: [],
+            forms: {
+              oid: "a".repeat(40),
+              entries: defaults
+                ? [
+                    {
+                      name: "default.yml",
+                      object: {
+                        text: "name: Default\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes: {label: Details}",
+                      },
+                    },
+                    { name: "config.yml", object: { text: "blank_issues_enabled: false" } },
+                  ]
+                : [
+                    {
+                      name: kind === "invalid-config" ? "config.yml" : "local.yml",
+                      object: { text },
+                    },
+                  ],
+            },
+          },
+        },
+      });
+    });
+    return Effect.gen(function* () {
+      const driver = yield* GitHubIssueTracker.make;
+      const result = yield* driver.listTemplates!({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        metadataOnly: true,
+      });
+      expect(result).toMatchObject({
+        blankIssuesEnabled: false,
+        templates: [{ name: "Default", about: "Report an issue" }],
+      });
+      expect(requests).toHaveLength(2);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each(["missing", "rate-limited"] as const)(
+    "invalid local forms retain %s default-source behavior",
+    (kind) => {
+      const { layer, requests } = harness((request) => {
+        const body = JSON.parse(
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+        );
+        if (body.variables.name === ".github")
+          return json(
+            { message: "Default source unavailable" },
+            { status: kind === "missing" ? 404 : 429 },
+          );
+        return json({
+          data: {
+            repository: {
+              nameWithOwner: "acme/web",
+              isPrivate: false,
+              issueTemplates: [],
+              forms: {
+                entries: [
+                  {
+                    name: "invalid.yml",
+                    object: {
+                      text: "name: Invalid\nbody:\n- type: textarea\n  attributes: {label: Details}",
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        });
+      });
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        const read = driver.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" });
+        if (kind === "missing")
+          expect(yield* read).toEqual({ templates: [], blankIssuesEnabled: true });
+        else expect(yield* read.pipe(Effect.flip)).toMatchObject({ reason: "rate-limited" });
+        expect(requests).toHaveLength(2);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect.each(["local", "mixed", "inherited"] as const)(
+    "keeps valid %s upload forms in the native chooser",
+    (kind) => {
+      const { layer, requests } = harness((request) => {
+        const body = JSON.parse(
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+        );
+        const defaults = body.variables.name === ".github";
+        return json({
+          data: {
+            repository: {
+              nameWithOwner: defaults ? "acme/.github" : "acme/web",
+              isPrivate: false,
+              issueTemplates: [],
+              forms:
+                kind !== "inherited" || defaults
+                  ? {
+                      oid: "a".repeat(40),
+                      entries: [
+                        {
+                          name: "upload.yml",
+                          object: {
+                            text: `name: Upload report\ndescription: Add a file\nbody:\n- type: upload\n  attributes: {label: Screenshot}${kind === "mixed" ? "\n- type: textarea\n  attributes: {label: Details}" : ""}`,
+                          },
+                        },
+                        ...(defaults
+                          ? [
+                              {
+                                name: "config.yml",
+                                object: { text: "blank_issues_enabled: false" },
+                              },
+                            ]
+                          : []),
+                      ],
+                    }
+                  : null,
+            },
+          },
+        });
+      });
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        expect(
+          yield* driver.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
+        ).toEqual({
+          templates: [],
+          blankIssuesEnabled: kind !== "inherited",
+          externalTemplates: [
+            {
+              name: "Upload report",
+              about: "Add a file",
+              url: "https://github.com/acme/web/issues/new?template=upload.yml",
+            },
+          ],
+        });
+        expect(requests).toHaveLength(kind === "inherited" ? 2 : 1);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "uses the pinned native host and credential for the public account issue chooser",
+    () => {
+      const { layer, requests, credentialReads } = harness((request) => {
+        expect(request.url).toBe("https://git.acme.test/api/graphql");
+        expect(request.headers.authorization).toBe("Bearer selected-B");
+        expect(request.headers["x-github-api-version"]).toBe("2022-11-28");
+        const body = JSON.parse(
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+        );
+        const defaults = body.variables.name === ".github";
+        expect(body.variables.owner).toBe("acme");
+        return json({
+          data: {
+            repository: {
+              isPrivate: false,
+              nameWithOwner: defaults ? "acme/.github" : "acme/web",
+              issueTemplates: [],
+              forms: defaults
+                ? {
+                    oid: "a".repeat(40),
+                    entries: [
+                      {
+                        name: "bug.yml",
+                        object: {
+                          text: "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
+                        },
+                      },
+                      {
+                        name: "config.yml",
+                        object: {
+                          text: "blank_issues_enabled: false\ncontact_links: [{name: Support, about: Ask, url: 'https://example.com'}]",
+                        },
+                      },
+                    ],
+                  }
+                : null,
+            },
+          },
+        });
+      });
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        const result = yield* driver.listTemplates!({
+          cwd: "/w",
+          host: "git.acme.test",
+          scope: "acme/web",
+        });
+        expect(result).toMatchObject({
+          blankIssuesEnabled: false,
+          templates: [{ name: "Bug" }],
+          contactLinks: [{ name: "Support" }],
+        });
+        expect(requests).toHaveLength(2);
+        expect(credentialReads()).toBe(0);
+      }).pipe(
+        Effect.provideService(GitHubApi.PinnedGitHubCredential, {
+          host: "git.acme.test",
+          token: Redacted.make("selected-B"),
+          credentialFingerprint: "selected-B",
+        }),
+        Effect.provide(layer),
+      );
+    },
+  );
+
+  it.effect("propagates native default-template rate limits and shares the host pause", () => {
+    const { layer, requests } = harness((request) => {
+      const body = JSON.parse(
+        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+      );
+      return body.variables.name === ".github"
+        ? json(
+            { message: "API rate limit exceeded" },
+            { status: 429, headers: { "retry-after": "60" } },
+          )
+        : json({ data: { repository: { issueTemplates: [], forms: null } } });
+    });
+    return Effect.gen(function* () {
+      const driver = yield* GitHubIssueTracker.make;
+      const input = { cwd: "/w", host: "github.com", scope: "acme/web" };
+      expect(yield* driver.listTemplates!(input).pipe(Effect.flip)).toMatchObject({
+        reason: "rate-limited",
+      });
+      expect(requests).toHaveLength(2);
+      expect(yield* driver.listTemplates!(input).pipe(Effect.flip)).toMatchObject({
+        reason: "rate-limited",
+      });
+      expect(requests).toHaveLength(2);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("pages all 1050 ordinary issues through the native repository connection", () => {
     const { layer, requests, credentialReads } = harness((request) => {
       expect(request.url).toBe("https://git.acme.test/api/graphql");
