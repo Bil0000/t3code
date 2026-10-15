@@ -40,6 +40,8 @@ const state = vi.hoisted(() => ({
   resolveError: null as Error | null,
   resolvedProject: "",
   resolvedConnectionId: undefined as string | undefined,
+  resolvedWritable: true,
+  resolvedScope: "acme/web",
   resolveWait: null as Promise<void> | null,
   resolveStarted: () => {},
   calls: [] as Array<{ environmentId: string; method: string; input: Record<string, unknown> }>,
@@ -105,14 +107,14 @@ vi.mock("~/connection/runtime", async () => {
       if (state.resolveError) return yield* Effect.fail(state.resolveError);
       return yield* decodeResolved({
         projectId: state.resolvedProject || input.projectId,
-        ...(input.connectionId === undefined
+        ...((state.resolvedConnectionId ?? input.connectionId) === undefined
           ? {}
           : { connectionId: state.resolvedConnectionId ?? input.connectionId }),
         tracker: "github",
         host: "github.com",
-        scope: "acme/web",
+        scope: state.resolvedScope,
         key: "7",
-        writable: true,
+        writable: state.resolvedWritable,
       });
     });
   return {
@@ -223,6 +225,8 @@ beforeEach(async () => {
   state.toast.mockReset();
   state.deniedEnvironment = state.resolvedProject = "";
   state.resolvedConnectionId = undefined;
+  state.resolvedWritable = true;
+  state.resolvedScope = "acme/web";
   state.launchError = state.linkError = state.resolveError = null;
   state.launchWait = null;
   state.launchStarted = () => {};
@@ -247,9 +251,13 @@ afterEach(async () => {
   await act(async () => root.unmount());
 });
 
-async function solve(environmentId = environmentA, selection: "auto" | "manual" = "auto") {
+async function solve(
+  environmentId = environmentA,
+  selection: "auto" | "manual" = "auto",
+  issue = detail,
+) {
   await act(async () => {
-    await handoff.start(detail);
+    await handoff.start(issue);
   });
   const projectId = environmentId === environmentA ? projectA : projectB;
   useComposerDraftStore.getState().setDraftThreadContext(draftId, {
@@ -342,6 +350,69 @@ it.each([
   ).toBeUndefined();
   expect(state.toast).not.toHaveBeenCalled();
 });
+
+it.each([
+  [environmentA, undefined],
+  [environmentA, "Account/B"],
+  [environmentB, "Account/B"],
+] as const)(
+  "links a readable external issue without tracker-write access in %s (account=%s)",
+  async (environmentId, connectionId) => {
+    state.resolvedWritable = false;
+    state.resolvedScope = "acme/external";
+    if (environmentId === environmentB) state.resolvedConnectionId = "Destination/C";
+    const external = {
+      ...detail,
+      writable: false,
+      url: "https://github.com/acme/external/issues/7",
+    };
+    await act(async () =>
+      root.render(<Harness {...(connectionId === undefined ? {} : { connectionId })} />),
+    );
+    const target = await solve(environmentId, "auto", external);
+    expect(state.newThread).toHaveBeenCalledExactlyOnceWith(
+      scopeProjectRef(environmentA, projectA),
+    );
+    expect(state.calls).toEqual([]);
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)).toMatchObject({
+      prompt: "Work on issue #7: Fix it\nhttps://github.com/acme/external/issues/7",
+      pendingIssueUrl: external.url,
+      pendingIssueEnvironmentId: environmentA,
+      ...(connectionId === undefined ? {} : { pendingIssueConnectionId: connectionId }),
+    });
+    expect((await send(target))._tag).toBe("Success");
+    expect(state.calls.map(({ method }) => method)).toEqual([
+      ORCHESTRATION_V2_WS_METHODS.launchThread,
+      "issues.resolveUrl",
+      ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+    ]);
+    const selected = environmentId === environmentA ? connectionId : undefined;
+    expect(state.calls[1]).toEqual({
+      environmentId,
+      method: "issues.resolveUrl",
+      input: {
+        projectId: target.projectId,
+        url: external.url,
+        ...(selected === undefined ? {} : { connectionId: selected }),
+      },
+    });
+    expect(state.calls[2]?.input).toMatchObject({
+      type: "thread.issue.link",
+      projectId: target.projectId,
+      host: "github.com",
+      scope: "acme/external",
+      key: "7",
+      url: external.url,
+    });
+    expect(state.calls[2]?.input.connectionId).toBe(
+      environmentId === environmentA ? selected : "Destination/C",
+    );
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(draftId)?.pendingIssueUrl,
+    ).toBeUndefined();
+    expect(state.toast).not.toHaveBeenCalled();
+  },
+);
 
 it("keeps the issue after failed creation and links on retry with a replacement thread", async () => {
   const target = await solve(environmentB);

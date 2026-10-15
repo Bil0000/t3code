@@ -467,9 +467,10 @@ function IssueDetailContent({
   const detail = detailQuery.data;
   const canWrite = useAtomValue(issueEnvironment.comment.permissionAtom(environmentId));
   const projects = useProjects();
-  const cwd =
-    projects.find((p) => p.environmentId === environmentId && p.id === reference.projectId)
-      ?.workspaceRoot ?? "";
+  const project = projects.find(
+    (p) => p.environmentId === environmentId && p.id === reference.projectId,
+  );
+  const cwd = project?.workspaceRoot ?? "";
 
   const [tab, setTab] = useState<"summary" | "history">("summary");
   const [createSubIssue, setCreateSubIssue] = useState(false);
@@ -852,7 +853,7 @@ function IssueDetailContent({
               <tracker.Icon aria-hidden className="mr-1 inline size-3 align-[-2px]" />
               {issueDisplayLabel(detail.scope, detail.displayKey)}
             </span>
-            {detail.writable && canOperate ? (
+            {project && canOperate ? (
               <Button
                 size="xs"
                 variant="outline"

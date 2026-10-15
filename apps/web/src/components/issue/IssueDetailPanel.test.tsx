@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import {
   EnvironmentId,
   IssueTrackerKind,
+  IssueDetail,
   ProjectId,
   IssueCandidatesInput,
   IssueCommentsPageInput,
@@ -72,6 +73,7 @@ const state = vi.hoisted(() => ({
       assignees: false,
       reactions: false,
       templates: false,
+      search: true,
       linkedPullRequests: false,
       events: true,
       subIssues: false,
@@ -87,6 +89,8 @@ const state = vi.hoisted(() => ({
   detailRefresh: vi.fn(),
   projects: [] as EnvironmentProject[],
   allowed: true,
+  writeAllowed: undefined as boolean | undefined,
+  solve: vi.fn(),
   toast: vi.fn(),
   candidatesRead: vi.fn(),
   candidates: {
@@ -130,7 +134,7 @@ vi.mock("~/state/session", async (importOriginal) => ({
 vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("~/hooks/useIssueViewRefresh", () => ({ useIssueViewRefresh: () => {} }));
 vi.mock("./useIssueThreadHandoff", () => ({
-  useIssueThreadHandoff: () => ({ pending: false, start: vi.fn() }),
+  useIssueThreadHandoff: () => ({ pending: false, start: state.solve }),
 }));
 vi.mock("./IssueHistory", () => ({ IssueHistory: () => null }));
 vi.mock("../pullRequest/PullRequestCommentBody", () => ({
@@ -154,7 +158,7 @@ vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.write }
 vi.mock("~/state/issues", async (importOriginal) => {
   const original = await importOriginal<typeof import("~/state/issues")>();
   const { Atom } = await import("effect/reactivity");
-  const command = { permissionAtom: () => Atom.make(state.allowed) };
+  const command = { permissionAtom: () => Atom.make(state.writeAllowed ?? state.allowed) };
   const historyRevisions = Atom.family((_key: string) => Atom.make(0).pipe(Atom.keepAlive));
   return {
     issueEnvironment: {
@@ -188,6 +192,118 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 const encodeCommentPageInput = Schema.encodeSync(IssueCommentsPageInput);
 const decodeCommentPageInput = Schema.decodeUnknownSync(IssueCommentsPageInput);
+const decodeDetail = Schema.decodeUnknownSync(IssueDetail);
+
+it.each([
+  ["external", undefined],
+  ["external", "Account/B"],
+  ["no-operate", "Account/B"],
+  ["missing-project", "Account/B"],
+  ["other-environment", "Account/B"],
+  ["other-project", "Account/B"],
+] as const)(
+  "solves a readable external issue with a local project (%s, account=%s)",
+  async (guard, connectionId) => {
+    const previous = { detail: state.detail, projects: state.projects, allowed: state.allowed };
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const environmentId = EnvironmentId.make("source-environment");
+    const projectId = ProjectId.make("lending-project");
+    state.allowed = guard !== "no-operate";
+    state.writeAllowed = false;
+    state.solve.mockClear();
+    state.write.mockClear();
+    state.candidatesRead.mockClear();
+    state.projects =
+      guard === "missing-project"
+        ? []
+        : [
+            {
+              id: guard === "other-project" ? ProjectId.make("other-project") : projectId,
+              environmentId:
+                guard === "other-environment"
+                  ? EnvironmentId.make("other-environment")
+                  : environmentId,
+              title: "Lending project",
+              workspaceRoot: "/repo",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: "2026-10-14T00:00:00Z",
+              updatedAt: "2026-10-14T00:00:00Z",
+            },
+          ];
+    state.detail = {
+      ...state.detail,
+      projectId,
+      connectionId,
+      scope: "org/external",
+      url: "https://github.com/org/external/issues/1",
+      writable: false,
+      viewerPermissions: {
+        comment: true,
+        edit: true,
+        labels: true,
+        assignees: true,
+        setState: true,
+      },
+      capabilities: {
+        ...state.detail.capabilities,
+        edit: true,
+        states: [
+          { category: "open", name: "open" },
+          { category: "closed", name: "closed" },
+        ],
+      },
+    };
+    const detail = decodeDetail(state.detail);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          <IssueDetailPanel
+            environmentId={environmentId}
+            reference={{
+              projectId,
+              tracker: IssueTrackerKind.make("github"),
+              host: "github.com",
+              scope: detail.scope,
+              key: detail.key,
+              ...(connectionId === undefined ? {} : { connectionId }),
+            }}
+          />,
+        ),
+      );
+      const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (node) => node.textContent?.trim() === "Solve",
+      );
+      expect(button !== undefined).toBe(guard === "external");
+      expect(container.textContent).toContain("Read-only");
+      expect(container.querySelector('[aria-label="Edit title"]')).toBeNull();
+      expect(container.querySelector('[aria-label="Edit description"]')).toBeNull();
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+      expect(
+        [...container.querySelectorAll<HTMLButtonElement>("button")].some(
+          (node) => node.textContent?.trim() === "Close",
+        ),
+      ).toBe(false);
+      if (button) {
+        await act(async () => button.click());
+        expect(state.solve).toHaveBeenCalledExactlyOnceWith(detail);
+      } else expect(state.solve).not.toHaveBeenCalled();
+      expect(state.write).not.toHaveBeenCalled();
+      expect(state.candidatesRead).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.detail = previous.detail;
+      state.projects = previous.projects;
+      state.allowed = previous.allowed;
+      state.writeAllowed = undefined;
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it("refreshes the issue and its scoped history from the header", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
