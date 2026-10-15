@@ -128,6 +128,66 @@ function tracker(
 }
 
 describe("GitHubIssueTracker", () => {
+  it.effect.each([
+    { role: "READ", locked: true, archived: false, comment: false, metadata: false },
+    { role: "READ", locked: false, archived: false, comment: true, metadata: false },
+    { role: "TRIAGE", locked: false, archived: false, comment: true, metadata: true },
+    { role: "TRIAGE", locked: true, archived: false, comment: false, metadata: true },
+    { role: "WRITE", locked: true, archived: false, comment: true, metadata: true },
+    { role: "ADMIN", locked: false, archived: true, comment: false, metadata: false },
+    { role: null, locked: false, archived: true, comment: false, metadata: false },
+    { role: null, locked: true, archived: false, comment: true, metadata: true },
+  ])("R9 uses native archive and lock fields for $role/$locked/$archived", (input) =>
+    Effect.gen(function* () {
+      const queries: string[] = [];
+      let labelReads = 0;
+      const api = yield* tracker(
+        (query) => {
+          queries.push(query);
+          return JSON.stringify({
+            data: {
+              ...DETAIL_FIXTURE.data,
+              repository: {
+                ...DETAIL_FIXTURE.data.repository,
+                viewerPermission: input.role,
+                ...(query.includes("isArchived") ? { isArchived: input.archived } : {}),
+                issue: {
+                  ...DETAIL_FIXTURE.data.repository.issue,
+                  viewerCanUpdate: true,
+                  ...(query.includes("locked") ? { locked: input.locked } : {}),
+                },
+              },
+            },
+          });
+        },
+        () => {
+          labelReads++;
+          return {
+            status: 200,
+            headers: {},
+            body: '{"labels":[]}',
+            truncated: false,
+            invalidUtf8: false,
+          };
+        },
+      );
+      const target = { cwd: "/w", host: "git.acme.test", scope: "acme/web", key: "42" };
+      const permission = yield* api.getViewerPermissions(target);
+      expect(permission).toEqual({
+        edit: !input.archived,
+        setState: !input.archived,
+        comment: input.comment,
+        labels: input.metadata,
+        assignees: input.metadata,
+      });
+      expect(queries).toHaveLength(1);
+      expect(labelReads).toBe(0);
+      expect((yield* api.getIssue(target)).viewerPermissions).toEqual(permission);
+      expect(queries).toHaveLength(2);
+      expect(labelReads).toBe(1);
+    }),
+  );
+
   it.effect.each(["create", "update"] as const)(
     "enforces 10 assignees before %s native work",
     (operation) =>

@@ -159,6 +159,61 @@ describe("GitHubApi", () => {
   });
 
   it.effect.each([
+    { role: "READ", archived: false, locked: true, status: 403, comment: false },
+    { role: "TRIAGE", archived: false, locked: true, status: 403, comment: false },
+    { role: "WRITE", archived: false, locked: true, status: 200, comment: true },
+    { role: "ADMIN", archived: true, locked: false, status: 403, comment: false },
+  ])("R9 keeps native lock/archive permission and write refusal for $role/$archived", (input) => {
+    const { layer, requests, credentialReads } = harness((request) => {
+      if (request.url.endsWith("/graphql")) {
+        const body = request.body;
+        const query =
+          body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(body.body)).query : "";
+        return json({
+          data: {
+            repository: {
+              viewerPermission: input.role,
+              ...(query.includes("isArchived") ? { isArchived: input.archived } : {}),
+              issue: {
+                viewerCanUpdate: true,
+                ...(query.includes("locked") ? { locked: input.locked } : {}),
+              },
+            },
+          },
+        });
+      }
+      return json(input.status === 200 ? { id: 1 } : { message: "Conversation is read-only" }, {
+        status: input.status,
+      });
+    });
+    return Effect.gen(function* () {
+      const driver = yield* GitHubIssueTracker.make;
+      const target = { cwd: "/w", host: "git.acme.test", scope: "acme/web", key: "42" };
+      const permission = yield* driver.getViewerPermissions(target);
+      expect(permission.comment).toBe(input.comment);
+      if (input.archived)
+        expect(permission).toEqual({
+          edit: false,
+          setState: false,
+          comment: false,
+          labels: false,
+          assignees: false,
+        });
+      expect(requests).toHaveLength(1);
+      const write = driver.comment!({ ...target, body: "Reply" });
+      if (input.status === 200) yield* write;
+      else
+        expect(yield* Effect.flip(write)).toMatchObject({ operation: "comment", reason: "failed" });
+      expect(requests).toHaveLength(2);
+      expect(credentialReads()).toBe(2);
+      expect(requests[1]).toMatchObject({
+        method: "POST",
+        url: "https://git.acme.test/api/v3/repos/acme/web/issues/42/comments",
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each([
     { role: null, status: 200 },
     { role: undefined, status: 200 },
     { role: null, status: 403 },
