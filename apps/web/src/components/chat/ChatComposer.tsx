@@ -3879,6 +3879,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     options?: {
       expectedText?: string;
       expandedCursorAfterReplace?: number;
+      expandedSelectionEndAfterReplace?: number;
       focusEditorAfterReplace?: boolean;
       citationComment?: {
         start: number;
@@ -3947,7 +3948,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         // Skip the deferred caret placement when the draft has moved on,
         // or it drags the caret back behind what was typed since.
         if (promptRef.current !== next.text) return;
-        composerEditorRef.current?.focusAt(nextCursor);
+        composerEditorRef.current?.focusAt(
+          nextCursor,
+          collapseExpandedComposerCursor(
+            next.text,
+            options?.expandedSelectionEndAfterReplace ?? nextExpandedCursor,
+            isLiteralPendingAnswer,
+          ),
+        );
       });
     }
     return true;
@@ -6424,7 +6432,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             },
           );
         }
-        if (change.prompt !== promptRef.current) setPromptFromTraitsStable(change.prompt);
+        if (change.prompt !== promptRef.current) {
+          const snapshot = readComposerSnapshotStable();
+          const selection = composerEditorRef.current?.readSelectionRange() ?? {
+            start: snapshot.expandedCursor,
+            end: snapshot.expandedCursor,
+          };
+          const offset = change.prompt.length - snapshot.value.length;
+          applyPromptReplacementStable(0, promptRef.current.length, change.prompt, {
+            expandedCursorAfterReplace: Math.max(0, selection.start + offset),
+            expandedSelectionEndAfterReplace: Math.max(0, selection.end + offset),
+          });
+        }
       },
       toggleModelPicker: () => {
         if (isComposerModelPickerOpen) {
@@ -6596,7 +6615,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedModel,
       selectedInstanceId,
       reportedModelSelection,
-      setPromptFromTraitsStable,
       settings.planModeEnabled,
       selectedModelOptionsForDispatch,
       selectedModelSelection,

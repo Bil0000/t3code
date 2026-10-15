@@ -123,7 +123,7 @@ import type { ComposerDraftContextRecords } from "./composerContextPresentation"
 
 export interface ComposerPromptEditorHandle {
   focus: () => void;
-  focusAt: (cursor: number) => void;
+  focusAt: (cursor: number, endCursor?: number) => void;
   focusAtEnd: () => void;
   readSelectionRange: () => { start: number; end: number };
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
@@ -1684,7 +1684,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
   ]);
 
   const focusAt = useCallback(
-    (nextCursor: number) => {
+    (nextCursor: number, endCursor = nextCursor) => {
       if (!editor) return;
       // view.focus() writes the state selection to the DOM as it focuses. A
       // bare DOM focus leaves the native caret at the start until
@@ -1696,9 +1696,13 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
       // overwrite that prompt; the pending rewrite places the caret instead.
       if (snapshotRef.current.value !== latestValueRef.current) return;
       const boundedCursor = clampEditorCursor(snapshotRef.current.value, nextCursor);
+      const boundedEndCursor = clampEditorCursor(snapshotRef.current.value, endCursor);
       const map = serializeEditorDoc(editor.state.doc);
       const flat = collapsedToFlat(map, boundedCursor);
-      editor.commands.setTextSelection(flatToPm(map, flat));
+      editor.commands.setTextSelection({
+        from: flatToPm(map, flat),
+        to: flatToPm(map, collapsedToFlat(map, boundedEndCursor)),
+      });
       scrollTiptapCaretIntoView(editor);
       if (boundedCursor === snapshotRef.current.cursor) return;
       snapshotRef.current = {
@@ -1709,7 +1713,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
       };
       selectionRangeRef.current = {
         start: snapshotRef.current.expandedCursor,
-        end: snapshotRef.current.expandedCursor,
+        end: expandEditorCursor(snapshotRef.current.value, boundedEndCursor),
       };
       onChangeRef.current(
         snapshotRef.current.value,

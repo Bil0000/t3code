@@ -7,6 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 import { serializeEditorDoc } from "~/composer-rich-text-doc";
+import { collapseExpandedComposerCursor } from "~/composer-logic";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 
 const draft =
@@ -28,11 +29,15 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mountEditor(value: string, richTextEnabled = true) {
+async function mountEditor(
+  value: string,
+  richTextEnabled = true,
+  editorRef = createRef<ComposerPromptEditorHandle>(),
+) {
   await act(async () =>
     root.render(
       <ComposerPromptEditor
-        editorRef={createRef<ComposerPromptEditorHandle>()}
+        editorRef={editorRef}
         value={value}
         cursor={0}
         richTextEnabled={richTextEnabled}
@@ -56,6 +61,32 @@ function press(editor: Editor, key: string, options: KeyboardEventInit = {}) {
   expect(event.defaultPrevented).toBe(Boolean(handled));
   return handled;
 }
+
+it.each([
+  {
+    value: "Ultrathink:\nAlpha beta gamma",
+    expected: "Ultrathink:\nAlpha X gamma",
+  },
+  { value: "Alpha beta gamma", expected: "Alpha X gamma" },
+])(
+  "restores the editing range after an effort prefix change to $value",
+  async ({ value, expected }) => {
+    const start = value.indexOf("beta");
+    const end = start + "beta".length;
+    const editorRef = createRef<ComposerPromptEditorHandle>();
+    const editor = await mountEditor(value, true, editorRef);
+    editor.view.setProps({ handleScrollToSelection: () => true });
+    await act(async () => {
+      editorRef.current?.focusAt(
+        collapseExpandedComposerCursor(value, start),
+        collapseExpandedComposerCursor(value, end),
+      );
+      expect(editorRef.current?.readSelectionRange()).toEqual({ start, end });
+      editor.commands.insertContent("X");
+    });
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(expected);
+  },
+);
 
 it("keeps Up before the opening bold marker in a quote, including while typing", async () => {
   const editor = await mountEditor(draft);
