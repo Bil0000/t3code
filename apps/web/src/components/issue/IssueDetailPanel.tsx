@@ -880,6 +880,11 @@ function IssueDetailContent({
                   issueEnvironment.historyRefresh({ environmentId, input: reference }),
                   (revision) => revision + 1,
                 );
+                linkedPages.refresh();
+                if (activeTab === "summary" && detail.capabilities.subIssues)
+                  appAtomRegistry.refresh(
+                    issueEnvironment.hierarchy({ environmentId, input: reference }),
+                  );
               }}
             >
               <RefreshIcon size="sm" refreshing={detailQuery.isPending} />
