@@ -11,9 +11,19 @@ import {
   type IssueDetail,
   type IssueState,
 } from "@t3tools/contracts";
+import { useEscapeToGoBack } from "~/hooks/useNavigateBack";
 import { IssueDetailPanel } from "./IssueDetailPanel";
 
-const state = vi.hoisted(() => ({ setState: vi.fn(), detail: null as IssueDetail | null }));
+const state = vi.hoisted(() => ({
+  setState: vi.fn(),
+  navigate: vi.fn(),
+  detail: null as IssueDetail | null,
+}));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original()),
+  useCanGoBack: () => true,
+  useNavigate: () => state.navigate,
+}));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.setState }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({ data: state.detail, isPending: false, error: null }),
@@ -265,4 +275,26 @@ it("keeps the description draft after a refused save so it can be retried", asyn
   await act(async () => button("Save")!.click());
   expect(state.setState.mock.calls.map((call) => call[0].input.body)).toEqual(["New", "New"]);
   expect(description()).toBeNull();
+});
+
+function IssuesPage() {
+  useEscapeToGoBack();
+  return <IssueDetailPanel environmentId={environmentId} reference={reference} />;
+}
+
+it("cancels a title edit with Escape without leaving the issues page", async () => {
+  const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+  await render(open, [], generic);
+  await act(async () => root.render(<IssuesPage />));
+  await act(async () => button("Edit title")!.click());
+  const title = container.querySelector<HTMLInputElement>('input[aria-label="Issue title"]')!;
+  await act(async () => {
+    title.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+  });
+  expect(container.querySelector('input[aria-label="Issue title"]')).toBeNull();
+  expect(back).not.toHaveBeenCalled();
+  expect(state.navigate).not.toHaveBeenCalled();
+  back.mockRestore();
 });
