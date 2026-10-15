@@ -587,7 +587,11 @@ export type ThreadIssueLink = typeof ThreadIssueLink.Type;
 export function threadIssueKeyOf(
   key: Pick<ThreadIssueKey, "host" | "scope" | "key"> & { readonly tracker: string },
 ): string {
-  return `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${key.scope.trim().toLowerCase()}\u0000${key.key.trim()}`;
+  const nativeKey =
+    key.tracker === "linear" || key.tracker === "jira"
+      ? key.key.trim().toUpperCase()
+      : key.key.trim();
+  return `${key.tracker}\u0000${key.host.trim().toLowerCase()}\u0000${key.scope.trim().toLowerCase()}\u0000${nativeKey}`;
 }
 
 export function threadIssueKeysEqual(left: ThreadIssueKey, right: ThreadIssueKey): boolean {

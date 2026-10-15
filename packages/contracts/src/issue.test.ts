@@ -12,6 +12,7 @@ import {
   WsIssuesRpcGroup,
   ProjectId,
   IssueTrackerKind,
+  threadIssueKeyOf,
 } from "./index.ts";
 
 const decodeActor = Schema.decodeSync(IssueActor);
@@ -100,4 +101,19 @@ it("accepts inline and deferred templates while keeping bodies required", () => 
     expect(decode({ ...template, contentDeferred })).toEqual({ ...template, contentDeferred });
   }
   expect(() => decode({ ...template, body: undefined, contentDeferred: true })).toThrow();
+});
+
+it.each([
+  { tracker: "linear", key: "eng-7", canonical: "ENG-7", equal: true },
+  { tracker: "jira", key: "ops-7", canonical: "OPS-7", equal: true },
+  { tracker: "custom-tracker", key: "eng-7", canonical: "ENG-7", equal: false },
+  { tracker: "github", key: "7", canonical: "7", equal: true },
+  { tracker: "gitlab", key: "7", canonical: "07", equal: false },
+])("matches $tracker keys with their native case rules", ({ tracker, key, canonical, equal }) => {
+  const identity = { tracker, host: "example.com", scope: "workspace/team", key: canonical };
+  const saved = { tracker, host: " Example.COM ", scope: " Workspace/TEAM ", key: ` ${key} ` };
+  expect(threadIssueKeyOf(saved) === threadIssueKeyOf(identity)).toBe(equal);
+  expect(threadIssueKeyOf(identity)).not.toBe(
+    threadIssueKeyOf({ ...identity, tracker: tracker.toUpperCase() }),
+  );
 });
