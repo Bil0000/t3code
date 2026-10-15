@@ -20,7 +20,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { Atom, AsyncResult } from "effect/reactivity";
-import { act, type ReactNode } from "react";
+import { act, type ReactNode, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -28,13 +28,19 @@ const state = vi.hoisted(() => ({
   responses: new Map<string, AsyncResult.AsyncResult<IssueListResult, unknown>>(),
   read: vi.fn(),
   listPage: vi.fn(),
+  detailRead: vi.fn(),
+  write: vi.fn(),
+  prRead: vi.fn(),
+  projectsKnown: true,
   search: { who: "all", status: "open" } as IssuesSearch,
   projects: [] as ReadonlyArray<ReturnType<typeof project>>,
   navigate: vi.fn(),
   environments: ["environment-a", "environment-b"].map((environmentId) => ({
     environmentId,
     label: environmentId,
-    serverConfig: { environment: { capabilities: { issues: true } } },
+    serverConfig: { environment: { capabilities: { issues: true, pullRequests: true } } } as {
+      environment: { capabilities: { issues: boolean; pullRequests?: boolean } };
+    } | null,
   })),
 }));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -65,7 +71,7 @@ vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
 });
 vi.mock("~/state/entities", () => ({
   useProjects: () => state.projects,
-  useAllEnvironmentShellsBootstrapped: () => true,
+  useAllEnvironmentShellsBootstrapped: () => state.projectsKnown,
 }));
 vi.mock("~/state/environments", () => ({
   useEnvironments: () => ({ environments: state.environments }),
@@ -93,13 +99,62 @@ vi.mock("~/components/WorkspacePageHeader", () => ({
 }));
 vi.mock("~/components/chat/PanelLayoutControls", () => ({ PanelLayoutControls: () => null }));
 vi.mock("~/components/RightPanelTabs", () => ({
-  RightPanelTabs: ({ children }: { children: ReactNode }) => (
-    <aside aria-label="Issue details">{children}</aside>
+  RightPanelTabs: ({
+    children,
+    surfaces,
+    onActivate,
+  }: ComponentProps<typeof import("~/components/RightPanelTabs").RightPanelTabs>) => (
+    <aside aria-label="Issue details">
+      {surfaces.map((surface) => (
+        <button
+          key={surface.id}
+          aria-label={`Tab ${surface.id}`}
+          onClick={() => onActivate(surface)}
+        >
+          Select tab
+        </button>
+      ))}
+      {children}
+    </aside>
   ),
 }));
-vi.mock("~/components/issue/IssueDetailPanel", () => ({ IssueDetailPanel: () => null }));
+vi.mock("~/components/issue/IssueDetailPanel", () => ({
+  IssueDetailPanel: ({
+    environmentId,
+    reference,
+    onSelectPullRequest,
+  }: ComponentProps<typeof import("./IssueDetailPanel").IssueDetailPanel>) => {
+    state.detailRead(environmentId, reference);
+    return (
+      <>
+        <button onClick={() => state.write(environmentId, reference)}>Save issue</button>
+        <button
+          onClick={() =>
+            onSelectPullRequest?.({
+              projectId: reference.projectId,
+              host: "github.com",
+              repository: "org/repo",
+              number: 42,
+              url: "https://github.com/org/repo/pull/42",
+            })
+          }
+        >
+          Linked PR
+        </button>
+      </>
+    );
+  },
+}));
 vi.mock("~/components/pullRequest/PullRequestDetailPanel", () => ({
-  PullRequestDetailPanel: () => null,
+  PullRequestDetailPanel: ({
+    environmentId,
+    reference,
+  }: ComponentProps<
+    typeof import("../pullRequest/PullRequestDetailPanel").PullRequestDetailPanel
+  >) => {
+    state.prRead(environmentId, reference);
+    return <p>PR on {environmentId}</p>;
+  },
 }));
 vi.mock("~/components/issue/IssueCreateDialog", () => ({ IssueCreateDialog: () => null }));
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
@@ -284,6 +339,10 @@ beforeEach(() => {
   state.responses.clear();
   state.read.mockClear();
   state.listPage.mockReset();
+  state.detailRead.mockClear();
+  state.write.mockClear();
+  state.prRead.mockClear();
+  state.projectsKnown = true;
   state.projects = [];
   state.search = { who: "all", status: "open" };
   state.navigate.mockReset().mockImplementation(({ search }) => {
@@ -292,6 +351,287 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+});
+
+const linkedSelection = {
+  selectedProjectId: ProjectId.make("project"),
+  selectedHost: "github.com",
+  selectedConnectionId: "Account/B",
+  tracker: "github",
+  scope: "org/repo",
+  key: "42",
+};
+
+it.each([true, false, null])(
+  "refuses an ambiguous issue owner despite capability and order changes (B=%s)",
+  async (supported) => {
+    const original = state.environments;
+    state.projects = [project("project"), { ...project("project"), environmentId: environmentB }];
+    state.search = { ...state.search, ...linkedSelection };
+    useRightPanelStore.getState().openIssue(ISSUES_PANEL_REF, {
+      environmentId: environmentA,
+      projectId: "project",
+      tracker: "github",
+      host: "github.com",
+      connectionId: "Account/B",
+      scope: "org/repo",
+      key: "42",
+    });
+    state.environments = original.map((environment, index) =>
+      index === 0
+        ? environment
+        : {
+            ...environment,
+            serverConfig:
+              supported === null ? null : { environment: { capabilities: { issues: supported } } },
+          },
+    );
+    try {
+      await mount();
+      expect(state.detailRead).not.toHaveBeenCalled();
+      state.environments = state.environments.toReversed();
+      await mount();
+      state.environments = original.map((environment, index) => ({
+        ...environment,
+        serverConfig: { environment: { capabilities: { issues: index === 1 } } },
+      }));
+      await mount();
+      expect(state.detailRead).not.toHaveBeenCalled();
+      expect(state.write).not.toHaveBeenCalled();
+      expect(
+        [...container.querySelectorAll("button")].some(
+          (button) => button.textContent === "Save issue",
+        ),
+      ).toBe(false);
+    } finally {
+      state.environments = original;
+    }
+  },
+);
+
+it("pins a uniquely owned legacy link before other projects or capabilities change", async () => {
+  const original = state.environments;
+  const owner = { ...project("project"), environmentId: environmentB };
+  state.projects = [owner];
+  state.search = { ...state.search, ...linkedSelection };
+  try {
+    await mount();
+    expect(state.search.selectedEnvironmentId).toBe(environmentB);
+    expect(state.navigate).toHaveBeenCalledOnce();
+    expect(
+      state.detailRead.mock.calls.every(([environmentId]) => environmentId === environmentB),
+    ).toBe(true);
+    const surface = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      ISSUES_PANEL_REF,
+    ).surfaces[0];
+    expect(surface).toMatchObject({
+      kind: "issue",
+      environmentId: environmentB,
+      connectionId: "Account/B",
+    });
+    await act(async () =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Save issue")!
+        .click(),
+    );
+    expect(state.write).toHaveBeenCalledExactlyOnceWith(
+      environmentB,
+      expect.objectContaining({ connectionId: "Account/B" }),
+    );
+    state.detailRead.mockClear();
+    state.projects = [project("project"), owner];
+    state.environments = original
+      .toReversed()
+      .map((environment) =>
+        environment.environmentId === environmentB
+          ? { ...environment, serverConfig: { environment: { capabilities: { issues: false } } } }
+          : environment,
+      );
+    await mount();
+    state.projects = [project("project")];
+    state.environments = original.filter(
+      (environment) => environment.environmentId !== environmentB,
+    );
+    await mount();
+    expect(state.detailRead).not.toHaveBeenCalled();
+    expect(state.write).toHaveBeenCalledTimes(1);
+    expect(state.search.selectedEnvironmentId).toBe(environmentB);
+    expect(state.navigate).toHaveBeenCalledTimes(1);
+  } finally {
+    state.environments = original;
+  }
+});
+
+it.each(["removed", "loading", "unsupported", "missing-project", "projects-loading"])(
+  "never substitutes A for explicit B (%s)",
+  async (reason) => {
+    const original = state.environments;
+    state.projects = [project("project"), { ...project("project"), environmentId: environmentB }];
+    state.search = { ...state.search, ...linkedSelection, selectedEnvironmentId: environmentB };
+    try {
+      await mount();
+      expect(state.detailRead).toHaveBeenCalledWith(
+        environmentB,
+        expect.objectContaining({ projectId: "project" }),
+      );
+      state.detailRead.mockClear();
+      if (reason === "missing-project") state.projects = [project("project")];
+      else if (reason === "projects-loading") {
+        state.projectsKnown = false;
+        state.projects = [project("project")];
+      } else
+        state.environments = original.flatMap((environment) =>
+          environment.environmentId !== environmentB
+            ? [environment]
+            : reason === "removed"
+              ? []
+              : [
+                  {
+                    ...environment,
+                    serverConfig:
+                      reason === "loading"
+                        ? null
+                        : { environment: { capabilities: { issues: false } } },
+                  },
+                ],
+        );
+      await mount();
+      expect(state.detailRead).not.toHaveBeenCalled();
+      expect(state.write).not.toHaveBeenCalled();
+      expect(
+        [...container.querySelectorAll("button")].some(
+          (button) => button.textContent === "Save issue",
+        ),
+      ).toBe(false);
+    } finally {
+      state.environments = original;
+    }
+  },
+);
+
+it.each([false, true])(
+  "does not infer a missing or still-loading legacy project (loaded=%s)",
+  async (loaded) => {
+    state.projectsKnown = loaded;
+    state.projects = loaded ? [] : [project("project")];
+    state.search = { ...state.search, ...linkedSelection };
+    await mount();
+    expect(state.detailRead).not.toHaveBeenCalled();
+    state.projects = [project("project"), { ...project("project"), environmentId: environmentB }];
+    state.projectsKnown = true;
+    await mount();
+    expect(state.detailRead).not.toHaveBeenCalled();
+    expect(state.write).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["issue", "pull-request"] as const)(
+  "does not lend an owner to an unqualified saved %s tab",
+  async (kind) => {
+    state.projects = [{ ...project("project"), environmentId: environmentB }];
+    if (kind === "issue")
+      useRightPanelStore.getState().openIssue(ISSUES_PANEL_REF, {
+        projectId: "project",
+        tracker: "github",
+        host: "github.com",
+        scope: "org/repo",
+        key: "42",
+      });
+    else
+      useRightPanelStore.getState().openPullRequest(ISSUES_PANEL_REF, {
+        projectId: "project",
+        host: "github.com",
+        repository: "org/repo",
+        number: 42,
+      });
+    await mount();
+    expect(state.detailRead).not.toHaveBeenCalled();
+    expect(state.prRead).not.toHaveBeenCalled();
+    expect(state.write).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps a qualified row, linked PR and reselected tab on B", async () => {
+  state.projectsKnown = false;
+  state.projects = [project("project"), { ...project("project"), environmentId: environmentB }];
+  state.responses.set(
+    environmentA,
+    AsyncResult.success(answer([{ ...issue("42"), title: "From A" }])),
+  );
+  state.responses.set(
+    environmentB,
+    AsyncResult.success(answer([{ ...issue("42"), title: "From B" }])),
+  );
+  await mount();
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("From B"))!
+      .click(),
+  );
+  expect(state.search.selectedEnvironmentId).toBe(environmentB);
+  expect(state.detailRead).toHaveBeenCalledWith(environmentB, expect.anything());
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Linked PR")!
+      .click(),
+  );
+  expect(state.prRead).toHaveBeenCalledWith(
+    environmentB,
+    expect.objectContaining({ repository: "org/repo", number: 42 }),
+  );
+  const selected = selectThreadRightPanelState(
+    useRightPanelStore.getState().byThreadKey,
+    ISSUES_PANEL_REF,
+  ).surfaces.find((surface) => surface.kind === "issue")!;
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.getAttribute("aria-label") === `Tab ${selected.id}`)!
+      .click(),
+  );
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Save issue")!
+      .click(),
+  );
+  expect(state.write).toHaveBeenCalledExactlyOnceWith(
+    environmentB,
+    expect.objectContaining({ key: "42" }),
+  );
+  expect(
+    state.detailRead.mock.calls.every(([environmentId]) => environmentId === environmentB),
+  ).toBe(true);
+});
+
+it("keeps a qualified PR tab on its PR-capable server without issue support", async () => {
+  const original = state.environments;
+  state.projects = [{ ...project("project"), environmentId: environmentB }];
+  state.environments = original.map((environment) =>
+    environment.environmentId === environmentB
+      ? {
+          ...environment,
+          serverConfig: { environment: { capabilities: { issues: false, pullRequests: true } } },
+        }
+      : environment,
+  );
+  useRightPanelStore.getState().openPullRequest(ISSUES_PANEL_REF, {
+    environmentId: environmentB,
+    projectId: "project",
+    host: "github.com",
+    repository: "org/repo",
+    number: 42,
+  });
+  try {
+    await mount();
+    expect(state.prRead).toHaveBeenCalledWith(
+      environmentB,
+      expect.objectContaining({ repository: "org/repo", number: 42 }),
+    );
+    expect(state.detailRead).not.toHaveBeenCalled();
+    expect(state.write).not.toHaveBeenCalled();
+  } finally {
+    state.environments = original;
+  }
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -652,6 +992,7 @@ it.each(["Linux", "MacIntel"])(
 );
 
 it("toggles the selected issue panel with the existing keyboard shortcut", async () => {
+  state.projects = [project("project")];
   state.responses.set(environmentA, AsyncResult.success(answer([issue("A")])));
   state.responses.set(environmentB, AsyncResult.success(answer([])));
   await mount();

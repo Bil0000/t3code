@@ -78,6 +78,7 @@ import {
 } from "~/components/issue/issueProjectFilter.logic";
 import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDetailPanel";
 import { readableFailure } from "~/components/pullRequest/pullRequestDetail.logic";
+import { findScopedProject } from "~/components/pullRequest/pullRequestList.logic";
 import { PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
 import {
   PullRequestFilterOptionIcon,
@@ -798,10 +799,30 @@ function IssuesRoute() {
     durationMs,
   );
   const renderedSurface = presence.value?.activeSurface ?? null;
+  const hasIssueSelection = Boolean(
+    search.selectedProjectId && search.tracker && search.scope && search.key,
+  );
+  const selectedIssueEnvironmentId =
+    search.selectedEnvironmentId ??
+    (projectsKnown
+      ? findScopedProject(projects, undefined, search.selectedProjectId)?.environmentId
+      : undefined);
+  const panelProject =
+    renderedSurface?.environmentId !== undefined
+      ? findScopedProject(projects, renderedSurface.environmentId, renderedSurface.projectId)
+      : undefined;
   const panelEnvironmentId =
-    (renderedSurface?.environmentId as EnvironmentId | undefined) ??
-    capableEnvironments[0]?.environmentId ??
-    null;
+    panelProject !== undefined &&
+    environments.some(
+      (environment) =>
+        environment.environmentId === panelProject.environmentId &&
+        (renderedSurface?.kind === "issue"
+          ? environment.serverConfig?.environment.capabilities.issues
+          : environment.serverConfig?.environment.capabilities.pullRequests) === true,
+    ) &&
+    (!hasIssueSelection || selectedIssueEnvironmentId === panelProject.environmentId)
+      ? panelProject.environmentId
+      : null;
 
   const selectSurfaceInUrl = (surface: RightPanelSurface | null) =>
     updateSearch(
@@ -842,13 +863,12 @@ function IssuesRoute() {
       !search.tracker ||
       !search.scope ||
       !search.key ||
-      !search.selectedProjectId
+      !search.selectedProjectId ||
+      selectedIssueEnvironmentId === undefined
     )
       return;
     useRightPanelStore.getState().openIssue(rightPanelRef, {
-      ...(search.selectedEnvironmentId === undefined
-        ? {}
-        : { environmentId: search.selectedEnvironmentId }),
+      environmentId: selectedIssueEnvironmentId,
       projectId: search.selectedProjectId,
       tracker: search.tracker,
       ...(search.selectedHost === undefined ? {} : { host: search.selectedHost }),
@@ -858,6 +878,8 @@ function IssuesRoute() {
       scope: search.scope,
       key: search.key,
     });
+    if (search.selectedEnvironmentId === undefined)
+      updateSearch({ selectedEnvironmentId: selectedIssueEnvironmentId });
   }, [
     rightPanelRef,
     search.selectedHost,
@@ -867,6 +889,8 @@ function IssuesRoute() {
     search.key,
     search.selectedProjectId,
     search.selectedEnvironmentId,
+    selectedIssueEnvironmentId,
+    updateSearch,
   ]);
 
   const closeSurface = (surface: RightPanelSurface) => {
