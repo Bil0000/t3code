@@ -12,6 +12,7 @@
  */
 import * as AzureDevOpsIssueTrackerDriver from "@t3tools/source-control-azure-devops/server/issueTrackerDriver";
 import * as ForgejoIssueTrackerDriver from "@t3tools/source-control-forgejo/server/issueTrackerDriver";
+import * as GitCafeIssueTrackerDriver from "@t3tools/source-control-gitcafe/server/issueTrackerDriver";
 import * as GitHubIssueTrackerDriver from "@t3tools/source-control-github/server/issueTrackerDriver";
 import * as GitLabIssueTrackerDriver from "@t3tools/source-control-gitlab/server/issueTrackerDriver";
 import type { IssueTrackerDriver } from "@t3tools/issue-tracker-core/server/driver";
@@ -23,6 +24,7 @@ const drivers = [
   GitLabIssueTrackerDriver.driver,
   AzureDevOpsIssueTrackerDriver.driver,
   ForgejoIssueTrackerDriver.driver,
+  GitCafeIssueTrackerDriver.driver,
   LinearIssueTrackerDriver.driver,
   JiraIssueTrackerDriver.driver,
 ];
