@@ -45,6 +45,7 @@ function IssueRowImpl({
   onSelect: (entry: IssueRowTarget) => void;
 }) {
   const tracker = issueTrackerPresentation(entry.tracker);
+  const [firstLabel, secondLabel] = entry.labels;
   return (
     <div
       className={cn(
@@ -56,7 +57,7 @@ function IssueRowImpl({
         type="button"
         aria-current={selected ? "true" : undefined}
         onClick={() => onSelect(entry)}
-        className={cn(PULL_REQUEST_ROW_CLASS, "@container/issue-row-meta px-3 py-2.5")}
+        className={cn(PULL_REQUEST_ROW_CLASS, "px-3 py-2.5")}
       >
         <IssueStateGlyph state={entry.state} />
         <PullRequestRowLines
@@ -83,6 +84,7 @@ function IssueRowImpl({
               ) : null}
             </>
           }
+          metaClassName="@container/pr-row-meta"
           meta={
             <>
               <PullRequestRowAuthor actor={entry.author} />
@@ -94,15 +96,25 @@ function IssueRowImpl({
               ) : null}
               {showScope ? <span className="truncate">{entry.scope}</span> : null}
               {environmentLabel ? <span className="truncate">{environmentLabel}</span> : null}
-              {entry.labels.length > 0 ? (
-                <span className="hidden min-w-0 items-center gap-1 @xl/issue-row-meta:flex">
-                  {entry.labels.slice(0, 3).map((label, index) => (
-                    <PullRequestLabelChip key={label.name} label={label}>
-                      {index === 2 && entry.labels.length > 3 ? (
-                        <span className="shrink-0">+{entry.labels.length - 3}</span>
+              {firstLabel ? (
+                <span className="flex min-w-0 items-center gap-1">
+                  <PullRequestLabelChip label={firstLabel}>
+                    {entry.labels.length > 1 ? (
+                      <span className="shrink-0 @xl/pr-row-meta:hidden">
+                        +{entry.labels.length - 1}
+                      </span>
+                    ) : null}
+                  </PullRequestLabelChip>
+                  {secondLabel ? (
+                    <PullRequestLabelChip
+                      label={secondLabel}
+                      className="hidden @xl/pr-row-meta:inline-flex"
+                    >
+                      {entry.labels.length > 2 ? (
+                        <span className="shrink-0">+{entry.labels.length - 2}</span>
                       ) : null}
                     </PullRequestLabelChip>
-                  ))}
+                  ) : null}
                 </span>
               ) : null}
             </>
