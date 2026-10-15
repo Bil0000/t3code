@@ -1023,6 +1023,24 @@ describe("rightPanelStore", () => {
     ).toEqual([state.surfaces[1]]);
   });
 
+  it("keeps Jira mount tabs separate and host case aliases in one tab", () => {
+    const target = {
+      projectId: "project-a",
+      tracker: "jira",
+      host: "jira.example/Jira",
+      scope: "ENG",
+      key: "ENG-42",
+    };
+    const store = useRightPanelStore.getState();
+    store.openIssue(refA, target);
+    store.openIssue(refA, { ...target, host: "jira.example/jira" });
+    store.openIssue(refA, { ...target, host: "JIRA.EXAMPLE/Jira" });
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(
+      state.surfaces.map((surface) => (surface.kind === "issue" ? surface.host : null)),
+    ).toEqual(["jira.example/Jira", "jira.example/jira"]);
+  });
+
   it("tracks one surface per pull request", () => {
     const first = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
     const second = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4910 };

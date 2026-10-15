@@ -18,6 +18,8 @@ import type {
   IssueReactionContent,
   IssueRef,
   IssueState,
+  IssueFieldValues,
+  IssueRichBody,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -41,8 +43,12 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { issueEnvironment, useIssueLinkedPullRequests } from "~/state/issues";
 import { IssueLoadMore } from "./IssueLoadMore";
 import { IssueHistory } from "./IssueHistory";
+import { IssueDependencies } from "./IssueDependencies";
 import { IssueHierarchySection } from "./IssueRelations";
 import { IssueCommentContent } from "./IssueConversation";
+import { IssueRichBodyEditor, IssueRichBodyView } from "./IssueRichBodyEditor";
+import { isEditableIssueRichBody, safeIssueExternalUrl } from "./issueAdf";
+import { IssueStateFieldsDialog } from "./IssueStateFieldsDialog";
 import { IssueCreateDialog } from "./IssueCreateDialog";
 import { ISSUES_PANEL_REF, useRightPanelStore } from "~/rightPanelStore";
 import { useProjects, useThreadShell } from "~/state/entities";
@@ -374,7 +380,7 @@ function LinkedPullRequestRow({
           className="size-4 shrink-0 text-muted-foreground"
         />
       ) : (
-        <PullRequestStateGlyph state={link.state} isDraft={link.isDraft} />
+        <PullRequestStateGlyph state={link.state} isDraft={link.isDraft === true} />
       )}
       <span className="min-w-0 flex-1 truncate text-sm">{link.title}</span>
       <span className="shrink-0 font-mono text-xs text-muted-foreground">
@@ -462,6 +468,14 @@ function IssueDetailContent({
   const comment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const setState = useAtomCommand(issueEnvironment.setState, { reportFailure: false });
+  const stateAllowed = useAtomValue(issueEnvironment.setState.permissionAtom(environmentId));
+  const updateAllowed = useAtomValue(issueEnvironment.update.permissionAtom(environmentId));
+  const [stateAction, setStateAction] = useState<{
+    state: IssueState;
+    closeReason?: string;
+    withComment: boolean;
+    commentPosted: boolean;
+  } | null>(null);
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState<"comment" | "close" | null>(null);
   const [editing, setEditing] = useState<"title" | "body" | null>(null);
@@ -477,7 +491,9 @@ function IssueDetailContent({
   >(null);
   const [stateMenuOpen, setStateMenuOpen] = useState(false);
   const [closeCommentMenuOpen, setCloseCommentMenuOpen] = useState(false);
-  const needsStateCandidates = detail?.tracker === "jira" && (detail.states?.length ?? 0) <= 1;
+  const needsStateCandidates =
+    (detail?.tracker === "jira" || detail?.capabilities.stateFields === true) &&
+    (detail.states?.length ?? 0) <= 1;
   const stateCandidates = useEnvironmentQuery(
     (stateMenuOpen || closeCommentMenuOpen) &&
       needsStateCandidates &&
@@ -518,7 +534,7 @@ function IssueDetailContent({
   );
   const actorObjects = new Map(
     [...(confirmedAssignees?.items ?? []), ...detail.assignees].map((actor) => [
-      issueAssigneeId(actor).toLowerCase(),
+      issueAssigneeId(actor),
       actor,
     ]),
   );
@@ -526,7 +542,7 @@ function IssueDetailContent({
     labelObjects.get(id)!,
   );
   const assignees = issuePickerIds(detail, "assignees", heldAssignees, environmentId).map((id) =>
-    actorObjects.get(id.toLowerCase())!,
+    actorObjects.get(id)!,
   );
   const { comments, cursor: nextCursor, held: heldComments } = issueCommentsView(detail, older);
   const timeline: ReadonlyArray<TimelineItem> = [
@@ -538,20 +554,32 @@ function IssueDetailContent({
   const may = (capability: boolean, permission: boolean) =>
     blocked === null && capability && permission;
   const canComment = may(detail.capabilities.comment, detail.viewerPermissions.comment);
-  const canEdit = may(detail.capabilities.edit, detail.viewerPermissions.edit);
-  const canEditBody = canEdit && detail.bodyEditable !== false;
-  const canLabel = may(detail.capabilities.labels, detail.viewerPermissions.labels);
-  const canAssign = may(detail.capabilities.assignees, detail.viewerPermissions.assignees);
+  const canEdit = may(detail.capabilities.edit, detail.viewerPermissions.edit) && updateAllowed;
+  const nativeRichBody =
+    detail.capabilities.richText === true && isEditableIssueRichBody(detail.richBody)
+      ? detail.richBody
+      : undefined;
+  const canEditBody =
+    canEdit &&
+    (nativeRichBody !== undefined ||
+      (detail.richBody === undefined && detail.bodyEditable !== false));
+  const canLabel =
+    may(detail.capabilities.labels, detail.viewerPermissions.labels) && updateAllowed;
+  const canAssign =
+    may(detail.capabilities.assignees, detail.viewerPermissions.assignees) && updateAllowed;
   const canReact = blocked === null && detail.capabilities.reactions;
   const canReactToComment = blocked === null && issueSupportsReactions(detail.capabilities, true);
-  const canSetState = may(detail.capabilities.states.length > 0, detail.viewerPermissions.setState);
+  const canSetState =
+    may(detail.capabilities.states.length > 0, detail.viewerPermissions.setState) && stateAllowed;
   const tracker = issueTrackerPresentation(detail.tracker);
   const states = needsStateCandidates
     ? stateCandidates.error === null
       ? (stateCandidates.data?.states ?? [])
       : []
     : (detail.states ?? detail.capabilities.states);
-  const otherStates = states.filter((state) => !sameIssueState(state, detail.state));
+  const otherStates = states.filter(
+    (state) => state.transitionId !== undefined || !sameIssueState(state, detail.state),
+  );
   const closingStates = otherStates.filter((state) => state.category === "closed");
   const openingStates = otherStates.filter((state) => state.category === "open");
 
@@ -570,27 +598,38 @@ function IssueDetailContent({
     setOlder(appendOlderIssueComments(detail, heldComments, result.value));
   };
 
-  const submitComment = async (closeTo?: IssueState) => {
+  const submitComment = async (
+    closeTo?: IssueState,
+    fieldValues?: IssueFieldValues,
+    commentPosted = false,
+  ) => {
     const body = draft.trim();
     if (
-      !canComment ||
-      body.length === 0 ||
+      (!commentPosted && !canComment) ||
+      (!commentPosted && body.length === 0) ||
       submitting !== null ||
       (closeTo !== undefined && (!canSetState || changingState))
     )
       return;
-    setSubmitting(closeTo === undefined ? "comment" : "close");
-    const result = await comment({ environmentId, input: { ...reference, body: draft } });
-    if (result._tag === "Failure") {
-      setSubmitting(null);
-      toastManager.add({
-        type: "error",
-        title: "The comment could not be posted",
-        description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
-      });
+    if (closeTo && fieldValues === undefined && (closeTo.fields?.length ?? 0) > 0) {
+      setStateAction({ state: closeTo, withComment: true, commentPosted: false });
       return;
     }
-    setDraft("");
+    setSubmitting(closeTo === undefined ? "comment" : "close");
+    if (!commentPosted) {
+      const result = await comment({ environmentId, input: { ...reference, body: draft } });
+      if (result._tag === "Failure") {
+        setSubmitting(null);
+        toastManager.add({
+          type: "error",
+          title: "The comment could not be posted",
+          description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
+        });
+        return;
+      }
+      setDraft("");
+      setStateAction((held) => (held ? { ...held, commentPosted: true } : null));
+    }
     if (closeTo !== undefined) {
       const closeReason =
         detail.tracker === "github" && closeTo.id === undefined && closeTo.name === "closed"
@@ -602,16 +641,20 @@ function IssueDetailContent({
         input: {
           ...reference,
           state: closeTo.id ?? closeTo.name,
+          ...(closeTo.transitionId === undefined ? {} : { transitionId: closeTo.transitionId }),
+          ...(fieldValues === undefined ? {} : { fieldValues }),
           ...(closeReason === undefined ? {} : { closeReason }),
         },
       });
-      reportIssueResult(closed, "The comment was posted, but the issue could not be closed");
+      if (reportIssueResult(closed, "The comment was posted, but the issue could not be closed"))
+        setStateAction(null);
     }
     setSubmitting(null);
     onUpdated?.();
   };
 
-  const save = async (patch: { title?: string; body?: string }) => {
+  const save = async (patch: { title?: string; body?: string; richBody?: IssueRichBody }) => {
+    if (!canEdit || (patch.richBody !== undefined && !nativeRichBody)) return;
     setSaving(true);
     const result = await update({ environmentId, input: { ...reference, ...patch } });
     setSaving(false);
@@ -627,12 +670,32 @@ function IssueDetailContent({
     onUpdated?.();
   };
 
-  const moveTo = async (state: string, closeReason?: string) => {
+  const moveTo = async (
+    state: IssueState,
+    closeReason?: string,
+    fieldValues?: IssueFieldValues,
+  ) => {
+    if (!canSetState) return;
+    if (fieldValues === undefined && (state.fields?.length ?? 0) > 0) {
+      setStateAction({
+        state,
+        ...(closeReason === undefined ? {} : { closeReason }),
+        withComment: false,
+        commentPosted: false,
+      });
+      return;
+    }
     if (changingState || submitting === "close") return;
     setChangingState(true);
     const result = await setState({
       environmentId,
-      input: { ...reference, state, ...(closeReason === undefined ? {} : { closeReason }) },
+      input: {
+        ...reference,
+        state: state.id ?? state.name,
+        ...(state.transitionId === undefined ? {} : { transitionId: state.transitionId }),
+        ...(fieldValues === undefined ? {} : { fieldValues }),
+        ...(closeReason === undefined ? {} : { closeReason }),
+      },
     });
     setChangingState(false);
     if (result._tag === "Failure") {
@@ -643,6 +706,7 @@ function IssueDetailContent({
       });
       return;
     }
+    setStateAction(null);
     onUpdated?.();
   };
 
@@ -650,7 +714,13 @@ function IssueDetailContent({
     patch: { labels?: ReadonlyArray<IssueLabel>; assignees?: ReadonlyArray<IssueActor> },
     title: string,
   ) => {
-    if (updatingMetadata) return;
+    if (
+      updatingMetadata ||
+      !updateAllowed ||
+      (patch.labels !== undefined && !canLabel) ||
+      (patch.assignees !== undefined && !canAssign)
+    )
+      return;
     setUpdatingMetadata(true);
     const result = await update({
       environmentId,
@@ -690,7 +760,7 @@ function IssueDetailContent({
           size="xs"
           variant="outline"
           disabled={changingState || submitting === "close"}
-          onClick={() => void moveTo(openingStates[0]!.id ?? openingStates[0]!.name)}
+          onClick={() => void moveTo(openingStates[0]!)}
         >
           {issueStateActionLabel(openingStates[0]!)}
         </Button>
@@ -703,7 +773,7 @@ function IssueDetailContent({
           size="xs"
           variant="outline"
           disabled={changingState || submitting === "close"}
-          onClick={() => void moveTo(closingStates[0]!.id ?? closingStates[0]!.name)}
+          onClick={() => void moveTo(closingStates[0]!)}
         >
           {issueStateActionLabel(closingStates[0]!)}
         </Button>
@@ -747,8 +817,8 @@ function IssueDetailContent({
               detail.capabilities.closeReasons.length > 0
                 ? detail.capabilities.closeReasons.map((reason) => (
                     <MenuItem
-                      key={`${state.id ?? state.name}:${reason}`}
-                      onClick={() => void moveTo(state.id ?? state.name, reason)}
+                      key={`${state.transitionId ?? state.id ?? state.name}:${reason}`}
+                      onClick={() => void moveTo(state, reason)}
                     >
                       {state.name === "closed" ? "Close" : state.name} as{" "}
                       {issueCloseReasonLabel(reason).toLowerCase()}
@@ -756,8 +826,8 @@ function IssueDetailContent({
                   ))
                 : [
                     <MenuItem
-                      key={state.id ?? state.name}
-                      onClick={() => void moveTo(state.id ?? state.name)}
+                      key={state.transitionId ?? state.id ?? state.name}
+                      onClick={() => void moveTo(state)}
                     >
                       {issueStateActionLabel(state)}
                     </MenuItem>,
@@ -804,7 +874,10 @@ function IssueDetailContent({
               <MenuItem disabled>No closing states are available.</MenuItem>
             ) : null}
             {closingStates.map((state) => (
-              <MenuItem key={state.id ?? state.name} onClick={() => void submitComment(state)}>
+              <MenuItem
+                key={state.transitionId ?? state.id ?? state.name}
+                onClick={() => void submitComment(state)}
+              >
                 {state.name}
               </MenuItem>
             ))}
@@ -1039,7 +1112,15 @@ function IssueDetailContent({
                 />
               ) : null}
             </div>
-            {editing === "body" && canEditBody ? (
+            {editing === "body" && canEditBody && nativeRichBody ? (
+              <IssueRichBodyEditor
+                value={nativeRichBody}
+                label="Description"
+                saving={saving}
+                onSave={(richBody) => void save({ richBody })}
+                onCancel={() => setEditing(null)}
+              />
+            ) : editing === "body" && canEditBody ? (
               <PullRequestMarkdownEditor
                 value={detail.body}
                 cwd={cwd}
@@ -1056,6 +1137,8 @@ function IssueDetailContent({
                 onSave={(next) => void save({ body: next })}
                 onCancel={() => setEditing(null)}
               />
+            ) : nativeRichBody ? (
+              <IssueRichBodyView value={nativeRichBody} />
             ) : detail.body.trim().length > 0 ? (
               <PullRequestCommentBody
                 text={detail.body}
@@ -1125,6 +1208,39 @@ function IssueDetailContent({
                       : null
                   }
                 />
+              ) : null}
+              {detail.capabilities.dependencies === true ? (
+                <IssueDependencies
+                  key={issueEntryKey(detail)}
+                  environmentId={environmentId}
+                  reference={reference}
+                  detail={detail}
+                  onSelectIssue={(ref, _displayKey, url) =>
+                    useRightPanelStore.getState().openIssue(threadRef ?? ISSUES_PANEL_REF, {
+                      ...ref,
+                      host: ref.host ?? detail.host,
+                      environmentId,
+                      ...(url ? { url } : {}),
+                    })
+                  }
+                />
+              ) : null}
+              {detail.externalLinks?.some((link) => safeIssueExternalUrl(link.url) !== null) ? (
+                <section className="flex flex-col gap-1" aria-label="Links">
+                  <h3 className="text-xs text-muted-foreground">Links</h3>
+                  {detail.externalLinks?.map((link) => {
+                    const url = safeIssueExternalUrl(link.url);
+                    return url ? (
+                      <InlineButton
+                        key={url}
+                        render={<a href={url} target="_blank" rel="noopener noreferrer" />}
+                      >
+                        {link.title}
+                        <ExternalLinkIcon aria-hidden className="size-3" />
+                      </InlineButton>
+                    ) : null;
+                  })}
+                </section>
               ) : null}
               {detail.capabilities.linkedPullRequests &&
               (linkedPages.items.length > 0 ||
@@ -1197,6 +1313,7 @@ function IssueDetailContent({
                         comment={item.comment}
                         cwd={cwd}
                         threadRef={threadRef}
+                        richText={detail.capabilities.richText === true}
                         canEdit={blocked === null && detail.capabilities.editComment === true}
                         onChanged={(body) => {
                           setOlder((held) =>
@@ -1251,10 +1368,31 @@ function IssueDetailContent({
           )}
         </div>
       </div>
+      {stateAction ? (
+        <IssueStateFieldsDialog
+          key={stateAction.state.transitionId ?? stateAction.state.id ?? stateAction.state.name}
+          state={stateAction.state}
+          pending={changingState || submitting !== null}
+          allowed={
+            canSetState && (!stateAction.withComment || stateAction.commentPosted || canComment)
+          }
+          commentPosted={stateAction.commentPosted}
+          onCancel={() => setStateAction(null)}
+          onSubmit={(values) => {
+            if (stateAction.withComment)
+              void submitComment(stateAction.state, values, stateAction.commentPosted);
+            else void moveTo(stateAction.state, stateAction.closeReason, values);
+          }}
+        />
+      ) : null}
       <IssueCreateDialog
         open={createSubIssue}
         onOpenChange={setCreateSubIssue}
-        parent={{ key: detail.key, displayKey: detail.displayKey }}
+        parent={{
+          key: detail.key,
+          displayKey: detail.displayKey,
+          noun: detail.capabilities.subIssueNoun,
+        }}
         scopes={[
           {
             environmentId,
@@ -1262,6 +1400,7 @@ function IssueDetailContent({
             scope: reference,
             templates: detail.capabilities.templates,
             createIssueTypes: detail.capabilities.createIssueTypes,
+            createFields: detail.capabilities.createFields,
             labels: detail.capabilities.labels,
             assignees: detail.capabilities.assignees,
             maxAssignees: detail.capabilities.maxAssignees,

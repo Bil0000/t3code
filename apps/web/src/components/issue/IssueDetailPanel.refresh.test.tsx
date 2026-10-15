@@ -10,6 +10,8 @@ import {
   IssueHierarchyPage,
   IssueHistoryPage,
   IssueLinkedPullRequestsPage,
+  IssueDependenciesPage,
+  type IssueDependencyDirection,
   type AuthSessionState,
   type IssueRef,
 } from "@t3tools/contracts";
@@ -23,18 +25,27 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
-  read: vi.fn<(tag: string, input: IssueRef & { cursor?: string }) => unknown>(),
+  read: vi.fn<
+    (
+      tag: string,
+      input: IssueRef & { cursor?: string; direction?: IssueDependencyDirection },
+    ) => unknown
+  >(),
   writes: vi.fn(),
   newer: false,
   failedDetail: false,
   failedRelated: false,
+  failedDependencies: false,
 }));
 vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async (importOriginal) => {
   const Effect = await import("effect/Effect");
   const { IssueOperationError, WS_METHODS } = await import("@t3tools/contracts");
   return {
     ...(await importOriginal<typeof import("@t3tools/client-runtime/rpc")>()),
-    request: (tag: string, input: IssueRef & { cursor?: string }) =>
+    request: (
+      tag: string,
+      input: IssueRef & { cursor?: string; direction?: IssueDependencyDirection },
+    ) =>
       Effect.gen(function* () {
         const value = yield* Effect.sync(() => state.read(tag, input));
         if (tag === WS_METHODS.issuesDetail && state.failedDetail)
@@ -49,6 +60,11 @@ vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async (impor
           return yield* new IssueOperationError({
             operation: tag,
             detail: "Native related data unavailable",
+          });
+        if (tag === WS_METHODS.issuesDependencies && state.failedDependencies)
+          return yield* new IssueOperationError({
+            operation: "dependencies",
+            detail: "Native dependency read failed",
           });
         return value;
       }),
@@ -200,6 +216,7 @@ beforeEach(() => {
   state.newer = false;
   state.failedDetail = false;
   state.failedRelated = false;
+  state.failedDependencies = false;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -330,6 +347,7 @@ it.each(["supported", "unmounted", "unsupported", "failed-detail", "failed-relat
     const before = state.read.mock.calls.length;
     state.newer = true;
     state.failedRelated = false;
+    state.failedDependencies = false;
     await act(async () =>
       container.querySelector<HTMLButtonElement>('[aria-label="Refresh issue"]')!.click(),
     );
@@ -356,5 +374,315 @@ it.each(["supported", "unmounted", "unsupported", "failed-detail", "failed-relat
     expect(calls.map(([tag]) => tag).toSorted()).toEqual(expected.toSorted());
     for (const [, input] of calls) expect(input).toEqual(reference);
     expect(state.writes).not.toHaveBeenCalled();
+  },
+);
+
+it("reads one dependency page per direction, replaces pages and retries a failed read", async () => {
+  const nativeRef = { ...reference, connectionId: "Account-B" };
+  const decodeDependencies = Schema.decodeUnknownSync(IssueDependenciesPage);
+  state.read.mockImplementation((tag, input) => {
+    if (tag === WS_METHODS.issuesDetail)
+      return decodeDetail({
+        ...issue,
+        ...nativeRef,
+        capabilities: {
+          ...capabilities,
+          linkedPullRequests: false,
+          subIssues: false,
+          dependencies: true,
+        },
+      });
+    if (tag === WS_METHODS.issuesDependencies)
+      return decodeDependencies({
+        items: [
+          {
+            scope: "native/repo",
+            key: input.cursor ? "3" : "2",
+            displayKey: input.cursor ? "!3" : "!2",
+            title: input.cursor ? "Next native PR" : "First native PR",
+            kind: "pull-request",
+            url: "https://native.example/pulls/2",
+            state: { category: "open", name: "open" },
+          },
+        ],
+        nextCursor: input.cursor ? null : "native-tail",
+      });
+    throw new Error("Unexpected RPC " + tag);
+  });
+  await act(async () =>
+    root.render(
+      <RegistryContext.Provider value={appAtomRegistry}>
+        <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
+      </RegistryContext.Provider>,
+    ),
+  );
+  await act(async () => {
+    await executeAtomQuery(
+      appAtomRegistry,
+      issueEnvironment.detail({ environmentId, input: nativeRef }),
+    );
+  });
+  await act(async () => {
+    await Promise.all(
+      (["blocks", "blocked-by"] as const).map((direction) =>
+        executeAtomQuery(
+          appAtomRegistry,
+          issueEnvironment.dependencies({
+            environmentId,
+            input: { ...nativeRef, direction, limit: 100 },
+          }),
+        ),
+      ),
+    );
+  });
+  const reads = state.read.mock.calls.filter(([tag]) => tag === WS_METHODS.issuesDependencies);
+  expect(reads.map(([, input]) => input)).toEqual(
+    expect.arrayContaining([
+      { ...nativeRef, direction: "blocks", limit: 100 },
+      { ...nativeRef, direction: "blocked-by", limit: 100 },
+    ]),
+  );
+  expect(reads).toHaveLength(2);
+  const blocks = container.querySelector('[aria-label="Blocks"]')!;
+  const blockedBy = container.querySelector('[aria-label="Blocked by"]')!;
+  expect(blocks.querySelector<HTMLAnchorElement>("a")?.href).toBe("https://native.example/pulls/2");
+  expect(blocks.textContent).toContain("First native PR");
+  await act(async () =>
+    [...blocks.querySelectorAll<HTMLButtonElement>("button")]
+      .find((node) => node.textContent === "Load more dependencies")!
+      .click(),
+  );
+  await act(async () => {
+    await executeAtomQuery(
+      appAtomRegistry,
+      issueEnvironment.dependencies({
+        environmentId,
+        input: { ...nativeRef, direction: "blocks", limit: 100, cursor: "native-tail" },
+      }),
+    );
+  });
+  expect(blocks.textContent).toContain("Next native PR");
+  expect(blocks.textContent).not.toContain("First native PR");
+  expect(blockedBy.textContent).toContain("First native PR");
+  state.failedDependencies = true;
+  await act(async () => {
+    appAtomRegistry.refresh(
+      issueEnvironment.dependencies({
+        environmentId,
+        input: { ...nativeRef, direction: "blocked-by", limit: 100 },
+      }),
+    );
+  });
+  expect(blockedBy.textContent).toContain("Native dependency read failed");
+  state.failedDependencies = false;
+  await act(async () =>
+    [...blockedBy.querySelectorAll<HTMLButtonElement>("button")]
+      .find((node) => node.textContent === "Retry dependencies")!
+      .click(),
+  );
+  expect(blockedBy.textContent).not.toContain("Native dependency read failed");
+  expect(state.writes).not.toHaveBeenCalled();
+});
+
+it.each([true, false])(
+  "uses updateParent permission instead of edit and keeps native external task links (%s)",
+  async (updateParent) => {
+    state.read.mockImplementation((tag) => {
+      if (tag === WS_METHODS.issuesDetail)
+        return decodeDetail({
+          ...issue,
+          capabilities: {
+            ...capabilities,
+            linkedPullRequests: false,
+            subIssueNoun: "Tasks",
+            updateParent: true,
+          },
+          viewerPermissions: { ...issue.viewerPermissions, edit: !updateParent, updateParent },
+        });
+      if (tag === WS_METHODS.issuesHierarchy)
+        return decodeHierarchy({
+          parent: null,
+          children: {
+            items: [
+              {
+                scope: "native/repo",
+                key: "9",
+                displayKey: "#9",
+                title: "Native task",
+                itemType: "task",
+                externalOnly: true,
+                url: "https://gitlab.example/native/repo/-/work_items/9",
+                state: { category: "open", name: "open" },
+              },
+            ],
+            nextCursor: null,
+          },
+        });
+      throw new Error("Unexpected RPC " + tag);
+    });
+    await act(async () =>
+      root.render(
+        <RegistryContext.Provider value={appAtomRegistry}>
+          <IssueDetailPanel environmentId={environmentId} reference={reference} />
+        </RegistryContext.Provider>,
+      ),
+    );
+    await act(async () => {
+      await executeAtomQuery(
+        appAtomRegistry,
+        issueEnvironment.detail({ environmentId, input: reference }),
+      );
+      await executeAtomQuery(
+        appAtomRegistry,
+        issueEnvironment.hierarchy({ environmentId, input: reference }),
+      );
+    });
+    expect(button("Set parent") !== undefined).toBe(updateParent);
+    const hierarchy = container.querySelector('[aria-label="Hierarchy"]')!;
+    expect(hierarchy.textContent).toContain("Tasks");
+    expect(hierarchy.querySelector<HTMLAnchorElement>("a")?.href).toBe(
+      "https://gitlab.example/native/repo/-/work_items/9",
+    );
+    expect(
+      [...hierarchy.querySelectorAll("button")].some((node) =>
+        node.textContent?.includes("Native task"),
+      ),
+    ).toBe(false);
+    if (updateParent) {
+      await act(async () => button("Set parent").click());
+      const input = container.querySelector<HTMLInputElement>('[aria-label="Parent issue key"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "7");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      updateParent = false;
+      await act(async () => {
+        appAtomRegistry.refresh(issueEnvironment.detail({ environmentId, input: reference }));
+      });
+      expect(button("Save").disabled).toBe(true);
+      await act(async () => button("Save").click());
+    }
+    expect(state.writes).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["success", "permission"])(
+  "writes dependency add/remove with the selected account and current permissions (%s)",
+  async (kind) => {
+    const nativeRef = { ...reference, connectionId: "Account-B" };
+    let writable = true;
+    const decodeDependencies = Schema.decodeUnknownSync(IssueDependenciesPage);
+    state.read.mockImplementation((tag) => {
+      if (tag === WS_METHODS.issuesDetail)
+        return decodeDetail({
+          ...issue,
+          ...nativeRef,
+          capabilities: {
+            ...capabilities,
+            linkedPullRequests: false,
+            subIssues: false,
+            dependencies: true,
+          },
+          viewerPermissions: { ...issue.viewerPermissions, edit: writable },
+        });
+      if (tag === WS_METHODS.issuesDependencies)
+        return decodeDependencies({
+          items: [
+            {
+              scope: "native/repo",
+              key: "2",
+              displayKey: "#2",
+              title: "Native dependency",
+              kind: "issue",
+              url: "https://native.example/issues/2",
+              state: { category: "open", name: "open" },
+            },
+          ],
+          nextCursor: null,
+        });
+      throw new Error("Unexpected RPC " + tag);
+    });
+    await act(async () =>
+      root.render(
+        <RegistryContext.Provider value={appAtomRegistry}>
+          <IssueDetailPanel environmentId={environmentId} reference={nativeRef} />
+        </RegistryContext.Provider>,
+      ),
+    );
+    await act(async () => {
+      await executeAtomQuery(
+        appAtomRegistry,
+        issueEnvironment.detail({ environmentId, input: nativeRef }),
+      );
+      await Promise.all(
+        (["blocks", "blocked-by"] as const).map((direction) =>
+          executeAtomQuery(
+            appAtomRegistry,
+            issueEnvironment.dependencies({
+              environmentId,
+              input: { ...nativeRef, direction, limit: 100 },
+            }),
+          ),
+        ),
+      );
+    });
+    const blocks = container.querySelector('[aria-label="Blocks"]')!;
+    await act(async () =>
+      [...blocks.querySelectorAll<HTMLButtonElement>("button")]
+        .find((node) => node.textContent === "Add dependency")!
+        .click(),
+    );
+    const scope = document.querySelector<HTMLInputElement>("#dependency-scope-blocks")!;
+    const key = document.querySelector<HTMLInputElement>("#dependency-key-blocks")!;
+    await act(async () => {
+      for (const [field, value] of [
+        [scope, "target/repo"],
+        [key, "7"],
+      ] as const) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          field,
+          value,
+        );
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    const add = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
+        (node) => node.textContent === "Add dependency",
+      )!;
+    if (kind === "permission") {
+      writable = false;
+      await act(async () => {
+        appAtomRegistry.refresh(issueEnvironment.detail({ environmentId, input: nativeRef }));
+      });
+      expect(add().disabled).toBe(true);
+      await act(async () => add().click());
+      expect(state.writes).not.toHaveBeenCalled();
+      return;
+    }
+    await act(async () => add().click());
+    expect(state.writes.mock.calls[0]).toEqual([
+      WS_METHODS.issuesSetDependency,
+      {
+        ...nativeRef,
+        direction: "blocks",
+        targetScope: "target/repo",
+        targetKey: "7",
+        linked: true,
+      },
+    ]);
+    await act(async () =>
+      blocks.querySelector<HTMLButtonElement>('[aria-label="Remove dependency #2"]')!.click(),
+    );
+    expect(state.writes.mock.calls[1]).toEqual([
+      WS_METHODS.issuesSetDependency,
+      {
+        ...nativeRef,
+        direction: "blocks",
+        targetScope: "native/repo",
+        targetKey: "2",
+        linked: false,
+      },
+    ]);
   },
 );

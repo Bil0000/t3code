@@ -25,7 +25,7 @@ import type {
   ProjectId,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { IssueRef, issueScopeKeyOf, pullRequestHostOf } from "@t3tools/contracts";
+import { IssueRef, issueHostKey, issueScopeKeyOf, pullRequestHostOf } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
@@ -233,7 +233,7 @@ function trackerKey(tracker: {
   readonly host: string;
   readonly connectionId?: string | undefined;
 }): string {
-  const key = `${tracker.tracker} ${tracker.host.toLowerCase()}`;
+  const key = `${tracker.tracker} ${issueHostKey(tracker.host)}`;
   return tracker.connectionId === undefined
     ? key
     : `@${encodeURIComponent(tracker.connectionId)} ${key}`;
@@ -580,7 +580,7 @@ function IssuesRoute() {
             (error) =>
               error.projectId === scope.projectId &&
               (error.tracker === undefined || error.tracker === scope.tracker) &&
-              (error.host === undefined || error.host.toLowerCase() === scope.host.toLowerCase()) &&
+              (error.host === undefined || issueHostKey(error.host) === issueHostKey(scope.host)) &&
               error.connectionId === scope.connectionId,
           )
         )
@@ -964,6 +964,9 @@ function IssuesRoute() {
             labels: source.capabilities.labels,
             assignees: source.capabilities.assignees,
             maxAssignees: source.capabilities.maxAssignees,
+            ...(source.capabilities.createFields === undefined
+              ? {}
+              : { createFields: source.capabilities.createFields }),
             ...(source.capabilities.createIssueTypes === undefined
               ? {}
               : { createIssueTypes: source.capabilities.createIssueTypes }),
@@ -989,7 +992,7 @@ function IssuesRoute() {
         const tracker = page.answer.trackers.find(
           (t) =>
             String(t.tracker) === kind &&
-            t.host.toLowerCase() === host.toLowerCase() &&
+            issueHostKey(t.host) === issueHostKey(host) &&
             t.connectionId === undefined,
         );
         if (!tracker?.configured || tracker.capabilities?.create !== true) continue;
@@ -1001,6 +1004,9 @@ function IssuesRoute() {
           labels: tracker.capabilities.labels,
           assignees: tracker.capabilities.assignees,
           maxAssignees: tracker.capabilities.maxAssignees,
+          ...(tracker.capabilities.createFields === undefined
+            ? {}
+            : { createFields: tracker.capabilities.createFields }),
           ...(tracker.capabilities.createIssueTypes === undefined
             ? {}
             : { createIssueTypes: tracker.capabilities.createIssueTypes }),

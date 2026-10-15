@@ -1,4 +1,4 @@
-import { pullRequestHostOf, SourceControlProviderKind } from "@t3tools/contracts";
+import { issueHostKey, pullRequestHostOf, SourceControlProviderKind } from "@t3tools/contracts";
 import type { EnvironmentId, IssueRef, ScopedThreadRef } from "@t3tools/contracts";
 import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { useNavigate } from "@tanstack/react-router";
@@ -55,8 +55,11 @@ export function useOpenIssueLink(
         targetEnvironmentId ?? issueLinkContext?.environmentId ?? threadRef?.environmentId;
       if (resolvedPanelRef === undefined || environmentId === undefined) return false;
       if (serverConfigs.get(environmentId)?.environment.capabilities.issues !== true) return false;
+      const source =
+        issueLinkContext?.environmentId === environmentId ? issueLinkContext : undefined;
       const candidate =
         parseIssueUrl(targetUrl) !== null ||
+        (source !== undefined && parseIssueUrl(targetUrl, source) !== null) ||
         projects.some((project) => {
           const identity = project.repositoryIdentity;
           const tracker = identity?.provider;
@@ -79,13 +82,11 @@ export function useOpenIssueLink(
       if (!candidate) return false;
       event.preventDefault();
       event.stopPropagation();
-      const source =
-        issueLinkContext?.environmentId === environmentId ? issueLinkContext : undefined;
       const target = source === undefined ? null : parseIssueUrl(targetUrl, source);
       const connectionId =
         source !== undefined &&
         target?.tracker === source.tracker &&
-        target.host === source.host.trim().toLowerCase()
+        issueHostKey(target.host) === issueHostKey(source.host)
           ? source.connectionId
           : undefined;
       const projectId =

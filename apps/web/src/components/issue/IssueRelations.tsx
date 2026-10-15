@@ -29,7 +29,7 @@ function Muted({ children }: { children: ReactNode }) {
   return <p className="px-2 text-xs text-muted-foreground">{children}</p>;
 }
 
-function RelationRow({
+export function RelationRow({
   relation,
   target,
   onSelectIssue,
@@ -40,7 +40,7 @@ function RelationRow({
   onSelectIssue: ((reference: IssueRef, displayKey: string, url?: string) => void) | undefined;
   trailing?: ReactNode;
 }) {
-  const inApp = target !== null && onSelectIssue !== undefined;
+  const inApp = relation.externalOnly !== true && target !== null && onSelectIssue !== undefined;
   const body = (
     <>
       <IssueStateGlyph state={relation.state} className="size-3.5" />
@@ -90,14 +90,16 @@ export function IssueHierarchySection({
   const canSetParent =
     detail.writable &&
     detail.capabilities.updateParent === true &&
-    detail.viewerPermissions.edit &&
+    (detail.viewerPermissions.updateParent ?? detail.viewerPermissions.edit) &&
     parentAllowed;
   const [parentDraft, setParentDraft] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const noun = detail.capabilities.subIssueNoun ?? "Sub-issues";
   const parent = hierarchy.extra;
   const loading = hierarchy.isPending && hierarchy.items.length === 0 && parent === null;
 
   const changeParent = async (parentKey: string | null) => {
+    if (!canSetParent || pending) return;
     setPending(true);
     const result = await setParent({ environmentId, input: { ...reference, parentKey } });
     setPending(false);
@@ -158,10 +160,14 @@ export function IssueHierarchySection({
             value={parentDraft}
             placeholder="Parent issue key"
             aria-label="Parent issue key"
-            disabled={pending}
+            disabled={pending || !canSetParent}
             onChange={(event) => setParentDraft(event.target.value)}
           />
-          <Button size="xs" type="submit" disabled={pending || !parentDraft.trim()}>
+          <Button
+            size="xs"
+            type="submit"
+            disabled={pending || !canSetParent || !parentDraft.trim()}
+          >
             Save
           </Button>
           <Button size="xs" variant="ghost" type="button" onClick={() => setParentDraft(null)}>
@@ -172,12 +178,14 @@ export function IssueHierarchySection({
         <Muted>{loading ? "Loading" : "None"}</Muted>
       )}
       <SectionTitle
-        title="Sub-issues"
+        title={noun}
         actions={
           onCreateSubIssue ? (
             <Button size="xs" variant="ghost-muted" onClick={onCreateSubIssue}>
               <PlusIcon className="size-3" />
-              New sub-issue
+              {detail.capabilities.subIssueNoun
+                ? `New ${detail.capabilities.subIssueNoun.toLowerCase().replace(/s$/, "")}`
+                : "New sub-issue"}
             </Button>
           ) : null
         }
@@ -196,7 +204,7 @@ export function IssueHierarchySection({
           />
         ))
       )}
-      <IssueLoadMore page={hierarchy} label="Load more sub-issues" />
+      <IssueLoadMore page={hierarchy} label={`Load more ${noun.toLowerCase()}`} />
     </section>
   );
 }

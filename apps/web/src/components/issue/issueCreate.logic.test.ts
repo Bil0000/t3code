@@ -1,4 +1,5 @@
 import type { IssueTemplateField } from "@t3tools/contracts";
+import { nativeFieldError, nativeFieldValues } from "./IssueNativeFields";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -134,4 +135,96 @@ it("requires a selection for a required checkbox group even when its choices are
   expect(missingRequiredTemplateFields(fields, {})).toEqual(["Checks"]);
   expect(missingRequiredTemplateFields(fields, { checks: [] })).toEqual(["Checks"]);
   expect(missingRequiredTemplateFields(fields, { checks: ["First"] })).toEqual([]);
+});
+
+describe("native field values", () => {
+  it("rejects missing and invalid fields and excludes stale values", () => {
+    const fields = [
+      { id: "native", label: "Native field", kind: "json" as const, required: true },
+      {
+        id: "choice",
+        label: "Choice",
+        kind: "multiselect" as const,
+        required: false,
+        options: [{ value: "native-id", label: "Native label" }],
+      },
+    ];
+    expect(nativeFieldError(fields, {})).toBe("Fill in Native field.");
+    expect(nativeFieldError(fields, { native: "invalid" })).toBe(
+      "Enter valid JSON for Native field.",
+    );
+    expect(nativeFieldError(fields, { native: "{}", choice: ["wrong"] })).toBe(
+      "Choose values for Choice.",
+    );
+    const values = { native: "{}", choice: ["native-id"], stale: "old issue type value" };
+    expect(nativeFieldError(fields, values)).toBeNull();
+    expect(nativeFieldValues(fields, values)).toEqual({ native: "{}", choice: ["native-id"] });
+    expect(
+      nativeFieldError([{ id: "when", label: "When", kind: "datetime", required: true }], {
+        when: "invalid",
+      }),
+    ).toBe("Enter a date and time for When.");
+  });
+});
+
+it("omits cleared optional typed fields while keeping text clears and explicit values", () => {
+  const fields = [
+    { id: "number", label: "Number", kind: "number" as const, required: false },
+    { id: "date", label: "Date", kind: "date" as const, required: false },
+    { id: "datetime", label: "Date and time", kind: "datetime" as const, required: false },
+    {
+      id: "select",
+      label: "Choice",
+      kind: "select" as const,
+      required: false,
+      options: [{ value: "native-id", label: "Native choice" }],
+    },
+    { id: "json", label: "JSON", kind: "json" as const, required: false },
+    { id: "text", label: "Text", kind: "text" as const, required: false },
+    { id: "textarea", label: "Long text", kind: "textarea" as const, required: false },
+    {
+      id: "multi",
+      label: "Choices",
+      kind: "multiselect" as const,
+      required: false,
+      options: [{ value: "native-id", label: "Native choice" }],
+    },
+  ];
+  const cleared = {
+    number: "",
+    date: "",
+    datetime: "",
+    select: "",
+    json: " ",
+    text: "",
+    textarea: "",
+    multi: [],
+  };
+  expect(nativeFieldError(fields, cleared)).toBeNull();
+  expect(nativeFieldValues(fields, cleared)).toEqual({ text: "", textarea: "", multi: [] });
+  const explicit = {
+    number: "0",
+    date: "2026-06-01",
+    datetime: "2026-06-01T09:30",
+    select: "native-id",
+    json: "null",
+    text: "",
+    textarea: "",
+    multi: ["native-id"],
+  };
+  expect(nativeFieldError(fields, explicit)).toBeNull();
+  expect(nativeFieldValues(fields, explicit)).toEqual({
+    ...explicit,
+    datetime: new Date(2026, 5, 1, 9, 30).toISOString(),
+  });
+  const blankChoice = [
+    {
+      id: "select",
+      label: "Choice",
+      kind: "select" as const,
+      required: false,
+      options: [{ value: "", label: "Native blank choice" }],
+    },
+  ];
+  expect(nativeFieldValues(blankChoice, { select: "" })).toEqual({ select: "" });
 });

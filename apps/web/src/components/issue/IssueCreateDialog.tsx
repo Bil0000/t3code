@@ -5,6 +5,7 @@ import type {
   EnvironmentId,
   IssueCreateResult,
   IssueLabel,
+  IssueFieldValues,
   IssueScopeRef,
 } from "@t3tools/contracts";
 import { ExternalLinkIcon } from "lucide-react";
@@ -39,6 +40,7 @@ import {
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
 import { issueAssigneeId } from "./issueDetail.logic";
+import { IssueNativeFields, nativeFieldError, nativeFieldValues } from "./IssueNativeFields";
 import { IssueTemplateForm } from "./IssueTemplateForm";
 import { issueCreateBlocked, resolveIssueType } from "./IssueCreateDialog.logic";
 
@@ -51,6 +53,7 @@ export interface IssueCreateScope {
   readonly assignees?: boolean | undefined;
   readonly maxAssignees?: number | undefined;
   readonly createIssueTypes?: boolean | undefined;
+  readonly createFields?: boolean | undefined;
 }
 
 const BLANK = "__blank__";
@@ -72,7 +75,7 @@ export function IssueCreateDialog({
   parent,
 }: {
   open: boolean;
-  parent?: { key: string; displayKey: string } | null;
+  parent?: { key: string; displayKey: string; noun?: string | undefined } | null;
   /** Every writable scope the page knows about; the first is preselected. */
   scopes: ReadonlyArray<IssueCreateScope>;
   onOpenChange: (open: boolean) => void;
@@ -103,6 +106,7 @@ export function IssueCreateDialog({
     labels: [],
     assignees: [],
   });
+  const [nativeValues, setNativeValues] = useState<IssueFieldValues>({});
   const [issueType, setIssueType] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const create = useAtomCommand(issueEnvironment.create, { reportFailure: false });
@@ -174,14 +178,22 @@ export function IssueCreateDialog({
   }
   const blankAllowed = templatesQuery.data?.blankIssuesEnabled ?? true;
   const candidatesQuery = useEnvironmentQuery(
-    open && scope !== null && scope.createIssueTypes === true
-      ? issueEnvironment.candidates({ environmentId: scope.environmentId, input: scope.scope })
+    open && scope !== null && (scope.createIssueTypes === true || scope.createFields === true)
+      ? issueEnvironment.candidates({
+          environmentId: scope.environmentId,
+          input: { ...scope.scope, ...(issueType === null ? {} : { issueType }) },
+        })
       : null,
   );
   const issueTypes = candidatesQuery.data?.issueTypes ?? [];
   const chosenIssueType = resolveIssueType(issueTypes, issueType);
 
+  const nativeFields = candidatesQuery.data?.fields ?? [];
+  const nativeForm = scope?.createFields === true || nativeFields.length > 0;
+  if (nativeForm && issueType === null && chosenIssueType !== null) setIssueType(chosenIssueType);
+
   const reset = () => {
+    setNativeValues({});
     setTemplateKey(BLANK);
     setTemplateDraft(null);
     setTitle("");
@@ -237,6 +249,12 @@ export function IssueCreateDialog({
             }
           : null,
     }) ??
+    (nativeForm
+      ? (candidatesQuery.error ??
+        (candidatesQuery.isPending || candidatesQuery.data === null
+          ? "Loading fields…"
+          : nativeFieldError(nativeFields, nativeValues)))
+      : null) ??
     templateError ??
     (scope?.templates && (templateLoading || templateDraft !== null)
       ? "Loading template…"
@@ -259,6 +277,7 @@ export function IssueCreateDialog({
         labels: extras.labels.map((label) => label.id ?? label.name),
         assignees: extras.assignees,
         ...(chosenIssueType === null ? {} : { issueType: chosenIssueType }),
+        ...(nativeForm ? { fieldValues: nativeFieldValues(nativeFields, nativeValues) } : {}),
       },
     });
     setPending(false);
@@ -290,7 +309,9 @@ export function IssueCreateDialog({
       <DialogPopup className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            {parent ? `New sub-issue of ${parent.displayKey}` : "New issue"}
+            {parent
+              ? `New ${parent.noun?.toLowerCase().replace(/s$/, "") ?? "sub-issue"} of ${parent.displayKey}`
+              : "New issue"}
           </DialogTitle>
           <DialogDescription>File an issue on the project's tracker.</DialogDescription>
         </DialogHeader>
@@ -316,6 +337,7 @@ export function IssueCreateDialog({
                     setTemplateDraft(null);
                     setExtras({ labels: [], assignees: [] });
                     setIssueType(null);
+                    setNativeValues({});
                   }}
                 >
                   <SelectTrigger id="issue-create-scope" size="sm" aria-label="Project">
@@ -376,7 +398,10 @@ export function IssueCreateDialog({
                 <Label htmlFor="issue-create-type">Issue type</Label>
                 <Select
                   value={chosenIssueType ?? ""}
-                  onValueChange={(value) => setIssueType(value || null)}
+                  onValueChange={(value) => {
+                    setIssueType(value || null);
+                    setNativeValues({});
+                  }}
                 >
                   <SelectTrigger id="issue-create-type" size="sm" aria-label="Issue type">
                     <SelectValue>
@@ -478,6 +503,19 @@ export function IssueCreateDialog({
               />
             </div>
           )}
+          {nativeForm ? (
+            <IssueNativeFields
+              fields={nativeFields}
+              values={nativeValues}
+              onChange={setNativeValues}
+              disabled={pending}
+            />
+          ) : null}
+          {scope?.createFields === true && candidatesQuery.error !== null ? (
+            <Button size="xs" variant="outline" onClick={candidatesQuery.refresh}>
+              Retry fields
+            </Button>
+          ) : null}
           {scope ? (
             <div className="flex flex-wrap items-center gap-2">
               {scope.labels ? (
@@ -552,7 +590,11 @@ export function IssueCreateDialog({
             disabled={pending || blocked !== null || title.trim().length === 0}
             onClick={() => void submit()}
           >
-            {pending ? "Creating…" : "Create issue"}
+            {pending
+              ? "Creating…"
+              : parent?.noun
+                ? `Create ${parent.noun.toLowerCase().replace(/s$/, "")}`
+                : "Create issue"}
           </Button>
         </DialogFooter>
       </DialogPopup>

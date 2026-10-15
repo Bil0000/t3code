@@ -29,6 +29,7 @@ import {
   sameIssueState,
   linkedPullRequestTarget,
   nextIssueAssignees,
+  isIssueAssignee,
 } from "./issueDetail.logic";
 import { applyPendingPullRequestReactions } from "../pullRequest/pullRequestReactions.logic";
 
@@ -107,6 +108,22 @@ describe("nextIssueAssignees", () => {
 
   it("replaces the assignee on a single-assignee tracker", () => {
     expect(nextIssueAssignees([actor("Ada", "acc-1")], actor("Bo", "acc-2"), 1)).toEqual(["acc-2"]);
+  });
+
+  it("keeps opaque actor IDs exact and folds only actors without a native ID", () => {
+    const current = [actor("Ada", "JIRAUSER123")];
+    const other = actor("Bo", "jirauser123");
+    expect(isIssueAssignee(current, other.id)).toBe(false);
+    expect(nextIssueAssignees(current, other, 1)).toEqual([other.id]);
+    expect(nextIssueAssignees(current, other, 2)).toEqual(["JIRAUSER123", other.id]);
+    expect(issueAssigneeOptions(current, [other], "").map((item) => item.id)).toEqual([
+      "jirauser123",
+      "JIRAUSER123",
+    ]);
+    const legacy = [{ login: "Octocat", name: null, avatarUrl: null }];
+    expect(isIssueAssignee(legacy, "octocat")).toBe(true);
+    expect(nextIssueAssignees(legacy, actor("octocat", "octocat"))).toEqual([]);
+    expect(issueAssigneeOptions(legacy, [actor("octocat", "octocat")], "")).toHaveLength(1);
   });
 });
 
@@ -286,10 +303,10 @@ describe("issueAssigneeOptions", () => {
   it("offers current assignees beyond the catalog so they can be removed", () => {
     const options = issueAssigneeOptions(
       [actor("Ada", "acc-1"), { login: "octocat", name: null, avatarUrl: null }],
-      [actor("ada-renamed", "ACC-1"), actor("Bo", "acc-2")],
+      [actor("ada-renamed", "acc-1"), actor("Bo", "acc-2")],
       "",
     );
-    expect(options.map((option) => option.id)).toEqual(["ACC-1", "acc-2", "octocat"]);
+    expect(options.map((option) => option.id)).toEqual(["acc-1", "acc-2", "octocat"]);
     expect(nextIssueAssignees([actor("Ada", "acc-1")], options[0]!)).toEqual([]);
   });
 
@@ -539,10 +556,33 @@ it.each(["labels", "assignees"] as const)(
     const acknowledged = {
       ...partial,
       labels: [{ id: "T", name: "Bug", color: null }, ...partial.labels],
-      assignees: [actor("team", "t"), ...partial.assignees],
+      assignees: [actor("team", "T"), ...partial.assignees],
     };
     expect(heldIssuePicker(acknowledged, kind, confirmed, "environment")).toBeNull();
     expect(heldIssuePicker(base, kind, confirmed, "other-environment")).toBeNull();
     expect(heldIssuePicker({ ...base, key: "2" }, kind, confirmed, "environment")).toBeNull();
   },
 );
+
+it("retains a case-sensitive assignee selection until the exact native ID acknowledges it", () => {
+  const base = detail({ assignees: [actor("Ada", "JIRAUSER123")] });
+  const confirmed: IssuePickerConfirmed = {
+    base,
+    environmentId: "environment",
+    kind: "assignees",
+    ids: ["jirauser123"],
+  };
+  expect(heldIssuePicker({ ...base }, "assignees", confirmed, "environment")).toBe(confirmed);
+  expect(
+    heldIssuePicker(
+      { ...base, assignees: [actor("Bo", "jirauser123")] },
+      "assignees",
+      confirmed,
+      "environment",
+    ),
+  ).toBeNull();
+  const legacy = { ...base, assignees: [{ login: "Octocat", name: null, avatarUrl: null }] };
+  expect(
+    heldIssuePicker(legacy, "assignees", { ...confirmed, ids: ["octocat"] }, "environment"),
+  ).toBeNull();
+});

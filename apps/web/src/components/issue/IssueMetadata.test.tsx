@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   readError: null as string | null,
   readPending: false,
   update: vi.fn(),
+  assigneeIds: ["W", "Other", "T", "Z"],
 }));
 vi.mock("~/state/entities", () => ({ useProjects: () => [] }));
 vi.mock("~/state/session", async (importOriginal) => ({
@@ -54,7 +55,7 @@ vi.mock("~/state/issues", async () => {
     }),
     useIssueAssigneeCandidates: () => ({
       ...page,
-      items: ["W", "Other", "T", "Z"].map((id) => ({
+      items: state.assigneeIds.map((id) => ({
         id,
         login: id === "Other" ? "Other-person" : id,
         name: id === "Other" ? "Extra person" : id,
@@ -149,6 +150,7 @@ beforeEach(() => {
     removeEventListener() {},
   }));
   state.detail = detail(["W"]);
+  state.assigneeIds = ["W", "Other", "T", "Z"];
   state.readError = null;
   state.readPending = false;
   container = document.createElement("div");
@@ -183,6 +185,45 @@ const option = (id: string) =>
     element.textContent?.includes(id),
   )!;
 const selected = (id: string) => option(id).querySelector('[aria-label="Selected"]') !== null;
+
+it.each([
+  ["JIRAUSER123", "jirauser123"],
+  ["AbCd:123", "abcd:123"],
+])("selects and retains case-distinct Jira assignees %s and %s", async (first, second) => {
+  state.assigneeIds = [first, second];
+  const initial = detail([first]);
+  state.detail = {
+    ...initial,
+    tracker: IssueTrackerKind.make("jira"),
+    capabilities: { ...initial.capabilities, maxAssignees: 1 },
+  };
+  state.update.mockResolvedValue({ _tag: "Success" });
+  await act(async () => render());
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="Change assignees"]')!.click(),
+  );
+  expect(selected(first)).toBe(true);
+  expect(selected(second)).toBe(false);
+  await act(async () => option(second).click());
+  expect(state.update.mock.calls[0]![0].input.assignees).toEqual([second]);
+  expect(selected(second)).toBe(true);
+  expect(selected(first)).toBe(false);
+  expect(container.textContent).toContain(second);
+  expect(container.textContent).not.toContain(first);
+  state.detail = { ...state.detail };
+  await act(async () => render());
+  expect(selected(second)).toBe(true);
+  expect(container.textContent).toContain(second);
+  expect(container.textContent).not.toContain(first);
+  state.detail = { ...state.detail, assignees: detail([second]).assignees };
+  await act(async () => render());
+  state.detail = { ...state.detail, assignees: initial.assignees };
+  await act(async () => render());
+  expect(selected(first)).toBe(true);
+  expect(selected(second)).toBe(false);
+  await act(async () => option(first).click());
+  expect(state.update.mock.calls[1]![0].input.assignees).toEqual([]);
+});
 
 function delayedWrite() {
   let resolve!: (value: { _tag: "Success" }) => void;

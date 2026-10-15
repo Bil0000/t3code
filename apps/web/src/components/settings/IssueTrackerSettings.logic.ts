@@ -13,8 +13,11 @@ export function packCredential(
   values: Readonly<Record<string, string>>,
 ): string | null {
   if (fields === undefined) return values[""]?.trim() || null;
-  const entries = fields.map((field) => [field.key, values[field.key]?.trim() ?? ""] as const);
-  if (entries.some(([, value]) => value.length === 0)) return null;
+  if (fields.some((field) => field.optional !== true && !values[field.key]?.trim())) return null;
+  const entries = fields.flatMap((field) => {
+    const value = values[field.key]?.trim() ?? "";
+    return field.optional === true && value.length === 0 ? [] : [[field.key, value]];
+  });
   return JSON.stringify(Object.fromEntries(entries));
 }
 

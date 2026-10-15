@@ -317,3 +317,34 @@ it("keeps account source sets, refresh representatives and create permissions se
   }));
   expect(issueCreateSources({ trackers }, writable)).toEqual([writable[1]]);
 });
+
+it("keeps Jira Data Center context path case separate in create and refresh sources", () => {
+  const upper = {
+    ...source("upper", "jira", "ENG"),
+    host: "TRACKER.EXAMPLE/Jira",
+    capabilities: { create: true } as IssueCapabilities,
+  };
+  const lower = { ...upper, host: "tracker.example/jira", projectId: ProjectId.make("lower") };
+  const trackers = [upper, lower].map((entry) => ({
+    tracker: entry.tracker,
+    host: entry.host,
+    configured: entry === lower,
+    projectCount: 1,
+    capabilities: entry.capabilities,
+    detail: null,
+  }));
+  expect(issueCreateSources({ trackers }, [upper, lower])).toEqual([lower]);
+  const alias = { ...upper, projectId: ProjectId.make("alias"), host: "tracker.example/Jira" };
+  expect(
+    issueListRefreshSource(nucbox, [nucbox], { state: "all" }, alias, {
+      entries: [],
+      sources: [lower, upper],
+    }),
+  ).toEqual({ ...alias, projectId: upper.projectId });
+  expect(
+    issueListRefreshSource(nucbox, [nucbox], { state: "all", host: lower.host }, upper, {
+      entries: [],
+      sources: [upper, lower],
+    }),
+  ).toBeNull();
+});

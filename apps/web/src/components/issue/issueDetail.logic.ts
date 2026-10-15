@@ -138,10 +138,11 @@ export type IssueLinkedPullRequestTarget = Pick<
 
 export const issueAssigneeId = (actor: IssueActor) => actor.id ?? actor.login;
 
-const sameId = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
+const sameAssignee = (actor: IssueActor, id: string) =>
+  actor.id === undefined ? actor.login.toLowerCase() === id.toLowerCase() : actor.id === id;
 
 export function isIssueAssignee(current: ReadonlyArray<IssueActor>, id: string): boolean {
-  return current.some((actor) => sameId(issueAssigneeId(actor), id));
+  return current.some((actor) => sameAssignee(actor, id));
 }
 
 export function nextIssueAssignees(
@@ -150,8 +151,8 @@ export function nextIssueAssignees(
   maxAssignees?: number,
 ): string[] {
   const ids = current.map(issueAssigneeId);
-  if (ids.some((id) => sameId(id, candidate.id))) {
-    return ids.filter((id) => !sameId(id, candidate.id));
+  if (isIssueAssignee(current, candidate.id)) {
+    return current.filter((actor) => !sameAssignee(actor, candidate.id)).map(issueAssigneeId);
   }
   return maxAssignees === 1 ? [candidate.id] : [...ids, candidate.id];
 }
@@ -193,9 +194,11 @@ export function heldIssuePicker(
     return null;
   if (confirmed.base === issue) return confirmed;
   const native = nativeIssuePickerIds(issue, kind);
-  const wanted = new Set(confirmed.ids.map((id) => (kind === "assignees" ? id.toLowerCase() : id)));
+  const wanted = new Set(confirmed.ids);
   return native.length === confirmed.ids.length &&
-    native.every((id) => wanted.has(kind === "assignees" ? id.toLowerCase() : id))
+    (kind === "assignees"
+      ? issue.assignees.every((actor) => confirmed.ids.some((id) => sameAssignee(actor, id)))
+      : native.every((id) => wanted.has(id)))
     ? null
     : confirmed;
 }
@@ -231,8 +234,8 @@ export function issueAssigneeOptions(
   query: string,
 ): IssueAssigneeCandidate[] {
   const missing = current
-    .map((actor) => ({ ...actor, id: issueAssigneeId(actor) }))
-    .filter((actor) => !fetched.some((candidate) => sameId(candidate.id, actor.id)));
+    .filter((actor) => !fetched.some((candidate) => sameAssignee(actor, candidate.id)))
+    .map((actor) => ({ ...actor, id: issueAssigneeId(actor) }));
   const needle = query.toLowerCase();
   return [...fetched, ...missing].filter((candidate) =>
     matches(needle, candidate.login, candidate.name, candidate.id),

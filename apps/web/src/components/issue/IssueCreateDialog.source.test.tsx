@@ -24,7 +24,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   toast: vi.fn(),
   nativeCreate: vi.fn(),
-  metadata: null as (IssueTemplateList & Pick<IssueCandidates, "issueTypes">) | null,
+  metadata: null as (IssueTemplateList & Pick<IssueCandidates, "issueTypes" | "fields">) | null,
 }));
 vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async (importOriginal) => {
   const Effect = await import("effect/Effect");
@@ -72,6 +72,7 @@ vi.mock("~/state/issues", async () => {
   return { issueEnvironment };
 });
 
+import { issueEnvironment } from "~/state/issues";
 import { IssueCreateDialog, type IssueCreateScope } from "./IssueCreateDialog";
 
 const sessionState: AuthSessionState = {
@@ -318,5 +319,175 @@ it("keeps native template, parent and issue-type metadata through source reorder
     issueType: "native-bug-type",
     labels: ["bug"],
     assignees: ["native-user"],
+  });
+});
+
+it("validates native fields, retains a failed draft, and drops stale type fields", async () => {
+  const required = { id: "custom", label: "Native value", required: true, kind: "text" as const };
+  state.metadata = {
+    blankIssuesEnabled: true,
+    templates: [],
+    fields: [required],
+    issueTypes: [
+      { id: "bug", name: "Bug" },
+      { id: "task", name: "Task" },
+    ],
+  };
+  const source = { ...sourceA, createIssueTypes: true, createFields: true };
+  await render([source]);
+  await draft();
+  expect(createButton().disabled).toBe(true);
+  const field = document.querySelector<HTMLInputElement>("#issue-native-field-custom")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      field,
+      "Keep native draft",
+    );
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  nativeCreate.mockImplementationOnce(() => {
+    throw new Error("Native validation failed");
+  });
+  await act(async () => createButton().click());
+  expect(document.querySelector<HTMLInputElement>("#issue-create-title")!.value).toBe(
+    "Draft meant for A",
+  );
+  expect(field.value).toBe("Keep native draft");
+  expect(closed).not.toHaveBeenCalled();
+  state.metadata = { ...state.metadata, fields: [] };
+  await choose("Issue type", "Task");
+  await act(async () => createButton().click());
+  expect(nativeCreate.mock.calls.at(-1)![0]).toMatchObject({
+    ...source.scope,
+    issueType: "task",
+    fieldValues: {},
+    title: "Draft meant for A",
+  });
+});
+
+it("sends datetime in the browser timezone as ISO and keeps date-only calendar values", async () => {
+  state.metadata = {
+    blankIssuesEnabled: true,
+    templates: [],
+    fields: [
+      { id: "starts", label: "Starts at", required: true, kind: "datetime" },
+      { id: "due", label: "Due date", required: true, kind: "date" },
+    ],
+  };
+  const source = { ...sourceA, createFields: true };
+  await render([source]);
+  await draft();
+  const time = document.querySelector<HTMLInputElement>("#issue-native-field-starts")!;
+  const date = document.querySelector<HTMLInputElement>("#issue-native-field-due")!;
+  expect(time.type).toBe("datetime-local");
+  expect(date.type).toBe("date");
+  const set = (field: HTMLInputElement, value: string) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  await act(async () => {
+    set(time, "2026-06-01T09:30");
+    set(date, "2026-06-02");
+  });
+  await act(async () => createButton().click());
+  expect(nativeCreate.mock.calls[0]![0].fieldValues).toEqual({
+    starts: new Date(2026, 5, 1, 9, 30).toISOString(),
+    due: "2026-06-02",
+  });
+  expect(nativeCreate.mock.calls[0]![0].fieldValues.starts).toMatch(/Z$/);
+});
+
+it("omits cleared optional number, date, JSON and choice controls before the native create RPC", async () => {
+  state.metadata = {
+    blankIssuesEnabled: true,
+    templates: [],
+    fields: [
+      { id: "number", label: "Number", required: false, kind: "number" },
+      { id: "date", label: "Date", required: false, kind: "date" },
+      { id: "json", label: "JSON", required: false, kind: "json" },
+      { id: "text", label: "Text", required: false, kind: "text" },
+      {
+        id: "choice",
+        label: "Choice",
+        required: false,
+        kind: "select",
+        options: [{ value: "native-id", label: "Native choice" }],
+      },
+    ],
+  };
+  await render([{ ...sourceA, createFields: true }]);
+  await draft();
+  const set = async (id: string, value: string) =>
+    act(async () => {
+      const field = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        "#issue-native-field-" + id,
+      )!;
+      Object.getOwnPropertyDescriptor(
+        field instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(field, value);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  for (const [id, value] of [
+    ["number", "4"],
+    ["date", "2026-06-01"],
+    ["json", "{}"],
+    ["text", "Clear this text"],
+  ]) {
+    await set(id!, value!);
+    await set(id!, "");
+  }
+  await choose("Choice", "Native choice");
+  await choose("Choice", "None");
+  await act(async () => createButton().click());
+  expect(nativeCreate.mock.calls[0]![0].fieldValues).toEqual({ text: "" });
+});
+
+it("selects one native type and loads its required fields without a manual type choice", async () => {
+  state.metadata = {
+    blankIssuesEnabled: true,
+    templates: [],
+    issueTypes: [{ id: "only-native-type", name: "Task" }],
+    fields: [
+      { id: "required-native", label: "Required native input", kind: "text", required: true },
+    ],
+  };
+  const metadata = state.metadata;
+  const readCandidates = issueEnvironment.candidates;
+  const candidates = vi.spyOn(issueEnvironment, "candidates").mockImplementation((target) => {
+    state.metadata =
+      target.input.issueType === "only-native-type" ? metadata : { ...metadata, fields: [] };
+    return readCandidates(target);
+  });
+  const source = { ...sourceA, createFields: true, createIssueTypes: true };
+  await render([source]);
+  await draft();
+  expect(document.querySelector('[aria-label="Issue type"]')).toBeNull();
+  expect(candidates).toHaveBeenCalledWith({
+    environmentId: source.environmentId,
+    input: { ...source.scope, issueType: "only-native-type" },
+  });
+  expect(createButton().disabled).toBe(true);
+  await act(async () => createButton().click());
+  expect(nativeCreate).not.toHaveBeenCalled();
+  const field = document.querySelector<HTMLInputElement>("#issue-native-field-required-native")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      field,
+      "Native value",
+    );
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => createButton().click());
+  expect(nativeCreate).toHaveBeenCalledExactlyOnceWith({
+    ...source.scope,
+    title: "Draft meant for A",
+    body: "",
+    labels: [],
+    assignees: [],
+    issueType: "only-native-type",
+    fieldValues: { "required-native": "Native value" },
   });
 });

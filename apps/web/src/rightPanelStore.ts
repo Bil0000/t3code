@@ -12,7 +12,13 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { EnvironmentId, ThreadId, issueScopeKeyOf, type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  issueHostKey,
+  issueScopeKeyOf,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -325,7 +331,7 @@ export interface IssueSurfaceTarget {
 function issueSurfaceId(target: Omit<IssueSurfaceTarget, "url">): IssueSurface["id"] {
   const environment =
     target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
-  const host = target.host === undefined ? "" : `${encodeURIComponent(target.host.toLowerCase())}:`;
+  const host = target.host === undefined ? "" : `${encodeURIComponent(issueHostKey(target.host))}:`;
   const account =
     target.connectionId === undefined ? "" : `@${encodeURIComponent(target.connectionId)}:`;
   return `issue:${account}${environment}${encodeURIComponent(target.projectId)}:${target.tracker}:${host}${encodeURIComponent(issueScopeKeyOf(target))}:${encodeURIComponent(target.key)}`;
@@ -338,7 +344,7 @@ function issueSurface(target: IssueSurfaceTarget): IssueSurface {
     ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
     projectId: target.projectId,
     tracker: target.tracker,
-    ...(typeof target.host === "string" ? { host: target.host.toLowerCase() } : {}),
+    ...(typeof target.host === "string" ? { host: issueHostKey(target.host) } : {}),
     ...(target.connectionId === undefined ? {} : { connectionId: target.connectionId }),
     scope: target.scope,
     key: target.key,

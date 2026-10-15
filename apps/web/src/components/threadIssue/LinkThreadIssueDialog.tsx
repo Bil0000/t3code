@@ -3,6 +3,7 @@ import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useEnvironmentScope } from "~/state/session";
 import {
   threadIssueKeysEqual,
+  issueHostKey,
   type IssueRef,
   type IssueListResult,
   type ScopedThreadRef,
@@ -259,7 +260,7 @@ function LinkThreadIssueDialog({
     const connectionId =
       source !== null &&
       target?.tracker === source.tracker &&
-      target.host === source.host.trim().toLowerCase()
+      issueHostKey(target.host) === issueHostKey(source.host)
         ? source.connectionId
         : undefined;
     const resolved = await resolveUrl({

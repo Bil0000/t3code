@@ -368,7 +368,7 @@ function TrackerRow({
                 const props = {
                   id,
                   size: "sm" as const,
-                  required: true,
+                  required: field.optional !== true,
                   value: draft[field.key] ?? "",
                   onChange: (event: ChangeEvent<HTMLInputElement>) =>
                     setDraft({ ...draft, [field.key]: event.target.value }),

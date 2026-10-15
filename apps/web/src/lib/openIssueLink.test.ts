@@ -426,6 +426,26 @@ describe("native chat issue links", () => {
     },
   );
 
+  it("keeps the account of a configured Jira mount and rejects a different mount", async () => {
+    linkContext = {
+      environmentId: threadRef.environmentId,
+      projectId: ProjectId.make("source-project"),
+      tracker: IssueTrackerKind.make("jira"),
+      host: "jira.example.test:8443/Jira",
+      connectionId: "Account/B",
+    };
+    await act(async () => renderer.update(createElement(Hook)));
+    const url = "https://jira.example.test:8443/Jira/browse/ENG-42";
+    await act(async () => expect(open(event(), url)).toBe(true));
+    expect(state.resolve).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "env-a",
+      input: { url, projectId: "source-project", connectionId: "Account/B" },
+    });
+    state.resolve.mockClear();
+    expect(open(event(), "https://jira.example.test:8443/jira/browse/ENG-42")).toBe(false);
+    expect(state.resolve).not.toHaveBeenCalled();
+  });
+
   it("does not lend the issue's local project or account to another environment", async () => {
     linkContext = {
       environmentId: threadRef.environmentId,

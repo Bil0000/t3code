@@ -907,3 +907,40 @@ describe("issue tracker accounts", () => {
     expect(state.bind).toHaveBeenCalledOnce();
   });
 });
+
+it("connects a Data Center account without optional deployment or email", async () => {
+  const fields = [
+    { key: "site", label: "Site", secret: false },
+    { key: "deployment", label: "Deployment", secret: false, optional: true },
+    { key: "email", label: "Email", secret: false, optional: true },
+    { key: "token", label: "Token", secret: true },
+  ];
+  state.data = {
+    trackers: [
+      account(undefined, {
+        tracker: jira,
+        displayName: "Jira",
+        credential: { label: "Credentials", helpUrl: null, fields },
+        connected: false,
+        account: null,
+        scopes: [],
+      }),
+    ],
+    accounts: [],
+    projectBindings: {},
+    bindings: {},
+  };
+  await render();
+  expect(input("Site").required).toBe(true);
+  expect(input("Token").required).toBe(true);
+  expect(input("Deployment").required).toBe(false);
+  expect(input("Email").required).toBe(false);
+  await type(input("Site"), "https://tracker.example/Jira");
+  await type(input("Token"), "fake-token");
+  expect(button("Connect").disabled).toBe(false);
+  await click(button("Connect"));
+  expect(JSON.parse(state.connect.mock.calls[0]![0].input.token.value)).toEqual({
+    site: "https://tracker.example/Jira",
+    token: "fake-token",
+  });
+});

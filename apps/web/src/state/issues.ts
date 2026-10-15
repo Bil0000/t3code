@@ -3,6 +3,7 @@ import { issueScopeKeyOf } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   IssueListInput,
+  IssueDependenciesInput,
   IssueListResult,
   IssuePageRef,
   IssueLinkedPullRequest,
@@ -21,7 +22,7 @@ import { useIssueViewRefresh } from "../hooks/useIssueViewRefresh";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import type { EnvironmentQueryTarget } from "./pullRequests";
-import { formatEnvironmentQueryError } from "./query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "./query";
 
 export const issueEnvironment = createIssueEnvironmentAtoms(connectionAtomRuntime);
 
@@ -281,3 +282,36 @@ export const useIssueAssigneeCandidates = createIssuePagedQuery(
   issueEnvironment.assigneeCandidates,
   pageOf,
 );
+
+export function useIssueDependencies(environmentId: EnvironmentId, input: IssueDependenciesInput) {
+  const identity = JSON.stringify([environmentId, input]);
+  const [page, setPage] = useState<{ identity: string; cursor?: string }>({ identity });
+  const cursor = page.identity === identity ? page.cursor : undefined;
+  const query = useEnvironmentQuery(
+    issueEnvironment.dependencies({
+      environmentId,
+      input: { ...input, ...(cursor === undefined ? {} : { cursor }) },
+    }),
+  );
+  return {
+    items: query.data?.items ?? [],
+    truncated: query.data?.truncated === true,
+    hasMore:
+      query.error === null && query.data?.nextCursor != null && query.data.nextCursor !== cursor,
+    isPending: query.isPending,
+    error: query.error,
+    loadMore: () => {
+      if (
+        !query.isPending &&
+        query.error === null &&
+        query.data?.nextCursor &&
+        query.data.nextCursor !== cursor
+      )
+        setPage({ identity, cursor: query.data.nextCursor });
+    },
+    refresh: () => {
+      setPage({ identity });
+      appAtomRegistry.refresh(issueEnvironment.dependencies({ environmentId, input }));
+    },
+  };
+}

@@ -3,6 +3,47 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseIssueUrl } from "./issueUrl.ts";
 
 describe("parseIssueUrl", () => {
+  it.each(["git.cafe", "staging.git.cafe"])("reads native GitCafe issues on %s", (host) => {
+    expect(parseIssueUrl(`https://${host}/Team/Repo/issues/42`)).toEqual({
+      tracker: "gitcafe",
+      host,
+      scope: "team/repo",
+      key: "42",
+    });
+    expect(parseIssueUrl(`https://${host}:8443/Team/Repo/issues/42`)).toBeNull();
+    expect(parseIssueUrl(`https://${host}.example.test/Team/Repo/issues/42`)).toBeNull();
+    expect(parseIssueUrl(`https://${host}/Team/Repo/pulls/42`)).toBeNull();
+  });
+
+  it("reads a GitLab work item through the issue tracker", () => {
+    expect(parseIssueUrl("https://git.internal/group/project/-/work_items/42")).toEqual({
+      tracker: "gitlab",
+      host: "git.internal",
+      scope: "group/project",
+      key: "42",
+    });
+  });
+
+  it("reads a configured Jira instance without folding its mount path", () => {
+    const configured = { tracker: "jira", host: "jira.example.test:8443/Jira" };
+    expect(parseIssueUrl("https://jira.example.test:8443/Jira/browse/ENG-42", configured)).toEqual({
+      tracker: "jira",
+      host: configured.host,
+      scope: "eng",
+      key: "ENG-42",
+    });
+    for (const url of [
+      "https://jira.example.test:8443/jira/browse/ENG-42",
+      "https://jira.example.test:8444/Jira/browse/ENG-42",
+      "https://jira.example.test:8443/JiraElse/browse/ENG-42",
+      "https://jira.example.test:8443/Jira/browse/ENG-42/extra",
+      "https://user@jira.example.test:8443/Jira/browse/ENG-42",
+      "http://jira.example.test:8443/Jira/browse/ENG-42",
+    ])
+      expect(parseIssueUrl(url, configured)).toBeNull();
+    expect(parseIssueUrl("https://jira.example.test:8443/Jira/browse/ENG-42")).toBeNull();
+  });
+
   it("uses the configured tracker before a hostname that resembles another provider", () => {
     const url = "https://github.company.net/team/repo/issues/7";
     expect(parseIssueUrl(url)?.tracker).toBe("github");

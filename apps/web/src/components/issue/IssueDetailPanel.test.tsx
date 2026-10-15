@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import type {
   IssueState,
+  IssueRichBody,
   IssueComment,
   IssueReaction,
   IssueLinkedPullRequestsPage,
@@ -39,6 +40,7 @@ const state = vi.hoisted(() => ({
     title: "Issue",
     body: "",
     bodyEditable: undefined as boolean | undefined,
+    richBody: undefined as IssueRichBody | undefined,
     connectionId: undefined as string | undefined,
     url: "https://github.com/org/repo/issues/1",
     author: null,
@@ -1901,4 +1903,481 @@ describe("native issue body editability", () => {
       });
     },
   );
+});
+
+it.each(["retry", "cancel", "permission", "state-only"])(
+  "collects native state fields before a comment and preserves the result (%s)",
+  async (kind) => {
+    const previous = state.detail;
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    state.write.mockReset().mockResolvedValue({ _tag: "Success" });
+    state.allowed = true;
+    const environmentId = EnvironmentId.make("native-state");
+    const reference = {
+      projectId: ProjectId.make("project"),
+      tracker: IssueTrackerKind.make("jira"),
+      host: "tracker.example/Jira",
+      scope: "ENG",
+      key: "ENG-1",
+      connectionId: "Account-B",
+    };
+    const open: IssueState = { id: "open-status", name: "Todo", category: "open" };
+    const closed: IssueState = {
+      id: "done-status",
+      transitionId: "native-transition",
+      name: "Done",
+      category: "closed",
+      fields: [{ id: "resolution", label: "Resolution", kind: "text", required: true }],
+    };
+    state.detail = {
+      ...state.detail,
+      ...reference,
+      state: open,
+      states: [open, closed],
+      writable: true,
+      viewerPermissions: { ...state.detail.viewerPermissions, comment: true, setState: true },
+      capabilities: {
+        ...state.detail.capabilities,
+        states: [open, closed],
+        closeReasons: [],
+        comment: true,
+        events: false,
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const render = () =>
+      act(async () =>
+        root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+      );
+    const button = (text: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (node) => node.textContent === text,
+      )!;
+    try {
+      await render();
+      const commentInput = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Add a comment"]',
+      )!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+          commentInput,
+          "Only post once",
+        );
+        commentInput.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button(kind === "state-only" ? "Done" : "Close with comment").click());
+      expect(state.write).not.toHaveBeenCalled();
+      expect(button("Change state").disabled).toBe(true);
+      if (kind === "cancel") {
+        await act(async () => button("Cancel").click());
+        expect(commentInput.value).toBe("Only post once");
+        expect(state.write).not.toHaveBeenCalled();
+        return;
+      }
+      const field = document.querySelector<HTMLInputElement>("#issue-native-field-resolution")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          field,
+          "Fixed",
+        );
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      if (kind === "permission") {
+        state.detail = {
+          ...state.detail,
+          viewerPermissions: { ...state.detail.viewerPermissions, setState: false },
+        };
+        await render();
+        expect(button("Change state").disabled).toBe(true);
+        await act(async () => button("Change state").click());
+        expect(state.write).not.toHaveBeenCalled();
+        return;
+      }
+      if (kind === "state-only") {
+        state.write.mockResolvedValueOnce({
+          _tag: "Failure",
+          cause: Cause.fail(new Error("Native field rejected")),
+        });
+        await act(async () => button("Change state").click());
+        expect(field.value).toBe("Fixed");
+        expect(commentInput.value).toBe("Only post once");
+        await act(async () => button("Change state").click());
+        expect(state.write.mock.calls.map(([request]) => request.input)).toEqual([
+          {
+            ...reference,
+            state: "done-status",
+            transitionId: "native-transition",
+            fieldValues: { resolution: "Fixed" },
+          },
+          {
+            ...reference,
+            state: "done-status",
+            transitionId: "native-transition",
+            fieldValues: { resolution: "Fixed" },
+          },
+        ]);
+        return;
+      }
+      state.write.mockResolvedValueOnce({ _tag: "Success" }).mockResolvedValueOnce({
+        _tag: "Failure",
+        cause: Cause.fail(new Error("Native field rejected")),
+      });
+      await act(async () => button("Change state").click());
+      expect(state.write.mock.calls.map(([request]) => request.input)).toEqual([
+        { ...reference, body: "Only post once" },
+        {
+          ...reference,
+          state: "done-status",
+          transitionId: "native-transition",
+          fieldValues: { resolution: "Fixed" },
+        },
+      ]);
+      expect(commentInput.value).toBe("");
+      expect(field.value).toBe("Fixed");
+      expect(document.body.textContent).toContain(
+        "The comment was posted. Retry to change the state.",
+      );
+      await act(async () => button("Change state").click());
+      expect(state.write).toHaveBeenCalledTimes(3);
+      expect(state.write.mock.calls[2]![0].input).toEqual({
+        ...reference,
+        state: "done-status",
+        transitionId: "native-transition",
+        fieldValues: { resolution: "Fixed" },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      state.detail = previous;
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+it("edits native ADF when the markdown body is read-only and clears edits for another account", async () => {
+  const previous = state.detail;
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.write.mockReset().mockResolvedValue({ _tag: "Success" });
+  state.allowed = true;
+  const environmentId = EnvironmentId.make("native-editor");
+  const reference = {
+    projectId: ProjectId.make("project"),
+    tracker: IssueTrackerKind.make("jira"),
+    host: "tracker.example/Jira",
+    scope: "ENG",
+    key: "ENG-1",
+    connectionId: "Account-A",
+  };
+  const native = {
+    type: "doc",
+    version: 1,
+    content: [
+      { type: "paragraph", content: [{ type: "text", text: "Account A native text" }] },
+      {
+        type: "mediaSingle",
+        attrs: { layout: "center" },
+        content: [
+          { type: "media", attrs: { id: "opaque-media-id", type: "file", collection: "keep" } },
+        ],
+      },
+    ],
+  };
+  const richBody = { format: "adf" as const, document: JSON.stringify(native) };
+  const nativeDetail = {
+    ...state.detail,
+    ...reference,
+    body: "Markdown fallback",
+    richBody,
+    bodyEditable: false,
+    capabilities: { ...state.detail.capabilities, richText: true, edit: true },
+    viewerPermissions: { ...state.detail.viewerPermissions, edit: true },
+  };
+  state.detail = nativeDetail;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (node) => node.textContent === text,
+    )!;
+  try {
+    await act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+    );
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
+    );
+    expect(container.querySelector('[role="textbox"][aria-label="Description"]')).not.toBeNull();
+    await act(async () => button("Heading 2").click());
+    await act(async () => button("Cancel").click());
+    expect(state.write).not.toHaveBeenCalled();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
+    );
+    expect(container.querySelector('[role="textbox"] h2')).toBeNull();
+    await act(async () => button("Heading 3").click());
+    await act(async () => button("Save").click());
+    expect(state.write).toHaveBeenCalledOnce();
+    const request = state.write.mock.calls[0]![0];
+    expect(request.input).toMatchObject({ ...reference, richBody: { format: "adf" } });
+    expect(request.input.body).toBeUndefined();
+    const saved = JSON.parse(request.input.richBody.document);
+    expect(saved.content[0].type).toBe("heading");
+    expect(saved.content[1]).toEqual(native.content[1]);
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
+    );
+    await act(async () => button("Heading 2").click());
+    const nextRef = { ...reference, connectionId: "Account-B" };
+    state.detail = {
+      ...nativeDetail,
+      ...nextRef,
+      richBody: {
+        ...richBody,
+        document: JSON.stringify({
+          type: "doc",
+          version: 1,
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "Account B native text" }] },
+          ],
+        }),
+      },
+    };
+    await act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={nextRef} />),
+    );
+    expect(container.querySelector('[role="textbox"][aria-label="Description"]')).toBeNull();
+    expect(container.textContent).toContain("Account B native text");
+    expect(container.textContent).not.toContain("Account A native text");
+    expect(state.write).toHaveBeenCalledOnce();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    state.detail = previous;
+    vi.unstubAllGlobals();
+  }
+});
+
+it("saves native comment edits, retains failed edits, and blocks a revoked permission", async () => {
+  const previous = state.detail;
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.allowed = true;
+  state.write.mockReset().mockResolvedValue({ _tag: "Success" });
+  const environmentId = EnvironmentId.make("native-comment");
+  const reference = {
+    projectId: ProjectId.make("project"),
+    tracker: IssueTrackerKind.make("jira"),
+    host: "tracker.example/Jira",
+    scope: "ENG",
+    key: "ENG-1",
+    connectionId: "Account-B",
+  };
+  const native = {
+    type: "doc",
+    version: 1,
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "text",
+            text: "Native comment",
+            marks: [{ type: "textColor", attrs: { color: "#123456" } }],
+          },
+          { type: "mention", attrs: { id: "opaque-account", text: "Somebody" } },
+        ],
+      },
+    ],
+  };
+  const richBody = { format: "adf" as const, document: JSON.stringify(native) };
+  const nativeDetail = {
+    ...state.detail,
+    ...reference,
+    comments: [
+      {
+        id: "native-comment-id",
+        author: null,
+        body: "Plain fallback",
+        richBody,
+        createdAt: "2026-10-14T00:00:00Z",
+        url: null,
+        canEdit: true,
+      },
+    ],
+    capabilities: { ...state.detail.capabilities, richText: true, editComment: true },
+  };
+  state.detail = nativeDetail;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (node) => node.textContent === text,
+    )!;
+  const render = () =>
+    act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+    );
+  try {
+    await render();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')!.click(),
+    );
+    await act(async () => button("Heading 3").click());
+    state.write.mockResolvedValueOnce({
+      _tag: "Failure",
+      cause: Cause.fail(new Error("Native edit refused")),
+    });
+    await act(async () => button("Save").click());
+    expect(container.querySelector('[role="textbox"] h3')?.textContent).toContain("Native comment");
+    await act(async () => button("Save").click());
+    const request = state.write.mock.calls[1]![0];
+    expect(request.input).toMatchObject({
+      ...reference,
+      commentId: "native-comment-id",
+      body: "Plain fallback",
+    });
+    const next = JSON.parse(request.input.richBody.document);
+    expect(next.content[0].type).toBe("heading");
+    expect(next.content[0].content).toEqual(native.content[0]!.content);
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')!.click(),
+    );
+    state.detail = {
+      ...nativeDetail,
+      comments: [{ ...nativeDetail.comments[0]!, canEdit: false }],
+    };
+    await render();
+    expect(button("Save").disabled).toBe(true);
+    await act(async () => button("Save").click());
+    expect(state.write).toHaveBeenCalledTimes(2);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    state.detail = previous;
+    vi.unstubAllGlobals();
+  }
+});
+
+it("edits DC wiki descriptions and comments as exact source and resets drafts for another account", async () => {
+  const previous = state.detail;
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.allowed = true;
+  state.write.mockReset().mockResolvedValue({ _tag: "Success" });
+  const environmentId = EnvironmentId.make("wiki-edit");
+  const reference = {
+    projectId: ProjectId.make("project"),
+    tracker: IssueTrackerKind.make("jira"),
+    host: "tracker.example/Jira",
+    scope: "ENG",
+    key: "ENG-1",
+    connectionId: "Account-A",
+  };
+  const source = "  h2. Native description\n!media-id! [Link|https://example.test]  \n";
+  const commentSource = " *native wiki comment*\n!comment-media! \n";
+  const wikiDetail = {
+    ...state.detail,
+    ...reference,
+    body: "Converted fallback must not render",
+    bodyEditable: false,
+    richBody: { format: "jira-wiki" as const, document: source },
+    comments: [
+      {
+        id: "wiki-comment",
+        author: null,
+        body: "Comment fallback",
+        richBody: { format: "jira-wiki" as const, document: commentSource },
+        createdAt: "2026-10-14T00:00:00Z",
+        url: null,
+        canEdit: true,
+      },
+    ],
+    capabilities: { ...state.detail.capabilities, richText: true, edit: true, editComment: true },
+    viewerPermissions: { ...state.detail.viewerPermissions, edit: true },
+  };
+  state.detail = wikiDetail;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (node) => node.textContent === text,
+    )!;
+  const type = async (label: string, value: string) =>
+    act(async () => {
+      const textarea = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="' + label + ' · Jira wiki markup"]',
+      )!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+        textarea,
+        value,
+      );
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  try {
+    await act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
+    );
+    expect(container.textContent).toContain(source);
+    expect(container.textContent).toContain(commentSource);
+    expect(container.textContent).not.toContain("Converted fallback must not render");
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
+    );
+    await type("Description", "  Cancel this wiki draft  \n");
+    await act(async () => button("Cancel").click());
+    expect(state.write).not.toHaveBeenCalled();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!.click(),
+    );
+    expect(
+      container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Description · Jira wiki markup"]',
+      )?.value,
+    ).toBe(source);
+    const changed = "  h2. Changed wiki\n!media-id|width=40!  \n";
+    await type("Description", changed);
+    await act(async () => button("Save").click());
+    expect(state.write.mock.calls[0]![0].input).toEqual({
+      ...reference,
+      richBody: { format: "jira-wiki", document: changed },
+    });
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')!.click(),
+    );
+    const changedComment = "  *Changed comment*\n!comment-media!  \n";
+    await type("Edit comment", changedComment);
+    await act(async () => button("Save").click());
+    expect(state.write.mock.calls[1]![0].input).toEqual({
+      ...reference,
+      commentId: "wiki-comment",
+      body: "Comment fallback",
+      richBody: { format: "jira-wiki", document: changedComment },
+    });
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Edit comment"]')!.click(),
+    );
+    await type("Edit comment", "Account A unsaved draft");
+    const nextRef = { ...reference, connectionId: "Account-B" };
+    state.detail = {
+      ...wikiDetail,
+      ...nextRef,
+      richBody: { format: "jira-wiki", document: " Account B source \n" },
+      comments: [],
+    };
+    await act(async () =>
+      root.render(<IssueDetailPanel environmentId={environmentId} reference={nextRef} />),
+    );
+    expect(container.textContent).toContain(" Account B source \n");
+    expect(container.textContent).not.toContain("Account A unsaved draft");
+    expect(container.querySelector('textarea[aria-label$="Jira wiki markup"]')).toBeNull();
+    expect(state.write).toHaveBeenCalledTimes(2);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    state.detail = previous;
+    vi.unstubAllGlobals();
+  }
 });

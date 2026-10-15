@@ -57,6 +57,38 @@ export function parseIssueUrl(
   const configuredTracker =
     configuredHost?.host.trim().toLowerCase() === host ? configuredHost.tracker : undefined;
 
+  if (configuredHost?.tracker === "jira") {
+    try {
+      const instance = new URL(`https://${configuredHost.host.trim()}`);
+      const prefix = instance.pathname.replace(/\/$/u, "");
+      const path = url.pathname.startsWith(`${prefix}/browse/`)
+        ? url.pathname.slice(prefix.length)
+        : "";
+      const match = /^\/browse\/(([A-Za-z][A-Za-z0-9_]*)-[1-9]\d*)\/?$/u.exec(path);
+      if (
+        url.protocol === "https:" &&
+        url.origin === instance.origin &&
+        !url.username &&
+        !url.password &&
+        !instance.username &&
+        !instance.password &&
+        !instance.search &&
+        !instance.hash &&
+        match?.[1] &&
+        match[2]
+      ) {
+        return {
+          tracker: "jira",
+          host: instance.host.toLowerCase() + prefix,
+          scope: match[2].toLowerCase(),
+          key: match[1].toUpperCase(),
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+
   if (hostname === "linear.app") {
     if (url.protocol !== "https:" || url.port !== "") return null;
     const match = /^\/([^/]+)\/issue\/(([A-Za-z][A-Za-z0-9]*)-[1-9]\d*)(?:\/[^/]+)?\/?$/u.exec(
@@ -86,7 +118,9 @@ export function parseIssueUrl(
   }
 
   // GitLab, self-hosted included: /{group}/[{subgroup}/...]{repo}/-/issues/{n}
-  const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
+  const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/(?:issues|work_items)\/(\d+)(?:\/|$)/u.exec(
+    url.pathname,
+  );
   if (gitlab) return claim("gitlab", host, gitlab);
   // Azure DevOps work items: /{org}/{project}/_workitems/edit/{n}. The scope is the repository
   // path the project binding writes, which a work item URL does not carry, so the organisation
@@ -105,6 +139,11 @@ export function parseIssueUrl(
   }
   // GitHub, and any Enterprise install: /{owner}/{repo}/issues/{n}
   const twoSegments = /^\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/|$)/u.exec(url.pathname);
+  if (hostname === "git.cafe" || hostname === "staging.git.cafe") {
+    return url.protocol === "https:" && !url.port && !url.username && !url.password
+      ? claim("gitcafe", host, twoSegments)
+      : null;
+  }
   if (
     twoSegments &&
     (configuredTracker === "github" ||

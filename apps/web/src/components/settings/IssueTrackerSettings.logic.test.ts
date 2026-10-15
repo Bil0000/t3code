@@ -172,3 +172,20 @@ describe("connectFailureMessage", () => {
     expect(connectionFailureDetail(error("rejected"))).toBe("Jira could not be reached.");
   });
 });
+
+it("allows optional deployment and email fields while requiring site and token", () => {
+  const nativeFields = [
+    { key: "site", label: "Site", secret: false },
+    { key: "deployment", label: "Deployment", secret: false, optional: true },
+    { key: "email", label: "Email", secret: false, optional: true },
+    { key: "token", label: "Token", secret: true },
+  ];
+  expect(
+    JSON.parse(
+      packCredential(nativeFields, { site: " https://tracker.example/Jira ", token: " token " })!,
+    ),
+  ).toEqual({ site: "https://tracker.example/Jira", token: "token" });
+  expect(packCredential(nativeFields, { token: "token" })).toBeNull();
+  expect(packCredential(nativeFields, { site: "https://tracker.example/Jira" })).toBeNull();
+  expect(packCredential(fields, { site: "https://cloud.example", token: "token" })).toBeNull();
+});

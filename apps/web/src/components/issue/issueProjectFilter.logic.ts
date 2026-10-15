@@ -6,7 +6,7 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 
-import { issueListCursorKey, issueScopeKeyOf } from "@t3tools/contracts";
+import { issueHostKey, issueListCursorKey, issueScopeKeyOf } from "@t3tools/contracts";
 
 import { issueSourceMatchesList } from "@t3tools/client-runtime/state/issues";
 
@@ -30,7 +30,7 @@ export function issueCreateSources(
         (tracker) =>
           tracker.connectionId === source.connectionId &&
           tracker.tracker === source.tracker &&
-          tracker.host.toLowerCase() === source.host.toLowerCase(),
+          issueHostKey(tracker.host) === issueHostKey(source.host),
       )?.configured !== false,
   );
 }
@@ -46,7 +46,8 @@ export function issueListRefreshSource(
   const matches = (candidate: IssueScopeRef) =>
     candidate.connectionId === source.connectionId &&
     candidate.tracker === source.tracker &&
-    candidate.host?.toLowerCase() === source.host?.toLowerCase() &&
+    (candidate.host === undefined ? undefined : issueHostKey(candidate.host)) ===
+      (source.host === undefined ? undefined : issueHostKey(source.host)) &&
     issueScopeKeyOf(candidate) === issueScopeKeyOf(source);
   const representative = held?.entries.find(matches) ?? held?.sources?.find(matches);
   const canonical = representative ? { ...source, projectId: representative.projectId } : source;
