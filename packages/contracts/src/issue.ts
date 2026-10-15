@@ -908,6 +908,7 @@ export const IssueTrackerConnectInput = Schema.Struct({
 export type IssueTrackerConnectInput = typeof IssueTrackerConnectInput.Type;
 
 export const IssueTrackerBindProjectInput = Schema.Struct({
+  connectionId: Schema.optional(IssueTrackerConnectionId),
   tracker: Schema.optional(IssueTrackerKind),
   projectId: ProjectId,
   /** Null unbinds. */

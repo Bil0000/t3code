@@ -504,6 +504,9 @@ it("keeps legacy tracker inputs and preserves explicit account selectors", () =>
     binding: null,
     tracker: "linear",
   });
+  expect(
+    bind({ projectId: "project", tracker: "linear", connectionId: "account-a", binding: null }),
+  ).toEqual({ projectId: "project", tracker: "linear", connectionId: "account-a", binding: null });
   expect(bind({ projectId: "project", binding: null })).toEqual({
     projectId: "project",
     binding: null,
