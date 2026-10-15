@@ -7,6 +7,7 @@ import type {
   IssueTrackerConnection,
   IssueTrackerConnectionList,
   IssueTrackerProjectBinding,
+  IssueTrackerScopePage,
   ProjectId,
 } from "@t3tools/contracts";
 
@@ -14,6 +15,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { issueTrackerEnvironment } from "../../state/issueTrackers";
 import { useProjects } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { LinearIcon } from "../Icons";
 import { Badge } from "../ui/badge";
 import { Button, InlineButton } from "../ui/button";
@@ -39,6 +41,13 @@ const TRACKER_ICONS: Partial<Record<string, TrackerIcon>> = {
 
 const UNBOUND = "";
 const NEW_ACCOUNT = "new";
+
+type ScopePages = Record<
+  string,
+  IssueTrackerScopePage & {
+    readonly failure: string | null;
+  }
+>;
 
 function accountKey(account: Pick<IssueTrackerConnection, "connectionId">) {
   return JSON.stringify(account.connectionId ?? null);
@@ -135,6 +144,81 @@ function TrackerRow({
   const inputId = `issue-tracker-${tracker.tracker}-${environmentId}`;
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [scopeState, setScopeState] = useState<{
+    catalog: IssueTrackerConnectionList;
+    pages: ScopePages;
+    pending: ReadonlySet<string>;
+  }>({ catalog: connections, pages: {}, pending: new Set() });
+  if (scopeState.catalog !== connections)
+    setScopeState({ ...scopeState, catalog: connections, pages: {} });
+  const scopePages = scopeState.catalog === connections ? scopeState.pages : {};
+  const readScopes = useAtomQueryRunner(issueTrackerEnvironment.scopes, {
+    reportFailure: false,
+    refresh: true,
+  });
+
+  const loadMore = async (account: IssueTrackerConnection) => {
+    const key = accountKey(account);
+    const page = scopePages[key];
+    const cursor = page === undefined ? account.scopesCursor : page.nextCursor;
+    if (
+      !multipleAccounts ||
+      busy ||
+      scopeState.pending.has(key) ||
+      cursor == null ||
+      !account.connected ||
+      account.account === null
+    )
+      return;
+    const pending = {
+      items: page?.items ?? account.scopes,
+      nextCursor: cursor,
+      failure: null,
+    };
+    setScopeState((current) => ({
+      catalog: connections,
+      pages: { ...(current.catalog === connections ? current.pages : {}), [key]: pending },
+      pending: new Set([...current.pending, key]),
+    }));
+    const result = await readScopes({
+      environmentId,
+      input: {
+        tracker: tracker.tracker,
+        ...(account.connectionId === undefined ? {} : { connectionId: account.connectionId }),
+        cursor,
+        limit: 100,
+      },
+    });
+    setScopeState((current) => {
+      const active = new Set(current.pending);
+      active.delete(key);
+      return current.catalog !== connections || current.pages[key] !== pending
+        ? { ...current, pending: active }
+        : {
+            ...current,
+            pending: active,
+            pages: {
+              ...current.pages,
+              [key]: {
+                ...pending,
+                ...(result._tag === "Success"
+                  ? {
+                      items: [
+                        ...new Map(
+                          [...pending.items, ...result.value.items].map((scope) => [
+                            scope.key,
+                            scope,
+                          ]),
+                        ).values(),
+                      ],
+                      nextCursor: result.value.nextCursor,
+                    }
+                  : { failure: connectionFailureDetail(squashAtomCommandFailure(result)) }),
+              },
+            },
+          };
+    });
+  };
 
   const submit = async (token: string | null) => {
     if (!canEdit || busy || unavailable) return;
@@ -154,6 +238,7 @@ function TrackerRow({
         },
       });
       if (result._tag === "Success") {
+        setScopeState((current) => ({ ...current, pages: {} }));
         setDraft({});
         setAdding(false);
         return;
@@ -347,6 +432,9 @@ function TrackerRow({
           accounts={accounts.filter((account) => account.connected && account.account !== null)}
           connections={connections}
           multipleAccounts={multipleAccounts}
+          scopePages={scopePages}
+          pendingScopes={scopeState.pending}
+          onLoadMore={loadMore}
           disabled={busy}
         />
       </div>
@@ -360,6 +448,9 @@ function ProjectBindings({
   accounts,
   connections,
   multipleAccounts,
+  scopePages,
+  pendingScopes,
+  onLoadMore,
   disabled,
 }: {
   readonly environmentId: EnvironmentId;
@@ -367,6 +458,9 @@ function ProjectBindings({
   readonly accounts: ReadonlyArray<IssueTrackerConnection>;
   readonly connections: IssueTrackerConnectionList;
   readonly multipleAccounts: boolean;
+  readonly scopePages: ScopePages;
+  readonly pendingScopes: ReadonlySet<string>;
+  readonly onLoadMore: (account: IssueTrackerConnection) => Promise<void>;
   readonly disabled: boolean;
 }) {
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
@@ -398,6 +492,9 @@ function ProjectBindings({
             tracker={tracker}
             accounts={accounts}
             multipleAccounts={multipleAccounts}
+            scopePages={scopePages}
+            pendingScopes={pendingScopes}
+            onLoadMore={onLoadMore}
             projectId={project.id}
             projectTitle={project.title}
             binding={bindingFor(project.id)}
@@ -414,6 +511,9 @@ function ProjectBindingRow({
   tracker,
   accounts,
   multipleAccounts,
+  scopePages,
+  pendingScopes,
+  onLoadMore,
   projectId,
   projectTitle,
   binding,
@@ -423,6 +523,9 @@ function ProjectBindingRow({
   readonly tracker: IssueTrackerConnection;
   readonly accounts: ReadonlyArray<IssueTrackerConnection>;
   readonly multipleAccounts: boolean;
+  readonly scopePages: ScopePages;
+  readonly pendingScopes: ReadonlySet<string>;
+  readonly onLoadMore: (account: IssueTrackerConnection) => Promise<void>;
   readonly projectId: ProjectId;
   readonly projectTitle: string;
   readonly binding: IssueTrackerProjectBinding | undefined;
@@ -438,6 +541,9 @@ function ProjectBindingRow({
     selectedKey ??
     (binding ? accountKey(binding) : accounts[0] ? accountKey(accounts[0]) : UNBOUND);
   const account = accounts.find((account) => accountKey(account) === selected);
+  const scopePage = scopePages[selected];
+  const scopes = scopePage?.items ?? account?.scopes ?? [];
+  const scopesCursor = scopePage === undefined ? account?.scopesCursor : scopePage.nextCursor;
   const value = binding && accountKey(binding) === selected ? binding.scope : UNBOUND;
   const [keys, setKeys] = useState<Record<string, string>>({});
   const key = keys[selected] ?? "";
@@ -536,24 +642,40 @@ function ProjectBindingRow({
             <SelectValue>
               {value === UNBOUND
                 ? "Not bound"
-                : (account?.scopes.find((scope) => scope.key === value)?.name ?? value)}
+                : (scopes.find((scope) => scope.key === value)?.name ?? value)}
             </SelectValue>
           </SelectTrigger>
           <SelectPopup>
             <SelectItem value={UNBOUND}>Not bound</SelectItem>
-            {value !== UNBOUND && !account?.scopes.some((scope) => scope.key === value) ? (
+            {value !== UNBOUND && !scopes.some((scope) => scope.key === value) ? (
               <SelectItem value={value} disabled>
                 {value}
               </SelectItem>
             ) : null}
-            {account?.scopes.map((scope) => (
+            {scopes.map((scope) => (
               <SelectItem key={scope.key} value={scope.key}>
                 {scope.name} ({scope.key})
               </SelectItem>
             ))}
           </SelectPopup>
         </Select>
+        {multipleAccounts && account && scopesCursor != null ? (
+          <Button
+            size="xs"
+            variant="ghost-muted"
+            aria-label={`Load more ${tracker.displayName} ${tracker.scopeNoun}s for ${projectTitle}`}
+            disabled={disabled || pendingScopes.has(selected)}
+            onClick={() => void onLoadMore(account)}
+          >
+            {pendingScopes.has(selected) ? "Loading" : `Load more ${tracker.scopeNoun}s`}
+          </Button>
+        ) : null}
       </div>
+      {scopePage?.failure ? (
+        <p role="alert" className="basis-full text-right text-xs text-destructive">
+          {scopePage.failure}
+        </p>
+      ) : null}
       {account?.scopesTruncated ? (
         <form
           className="grid basis-full gap-1"
@@ -563,8 +685,7 @@ function ProjectBindingRow({
           }}
         >
           <p className="text-xs text-muted-foreground">
-            Only the first {account.scopes.length} are listed; enter a {tracker.scopeNoun} key to
-            bind another.
+            Enter a {tracker.scopeNoun} key to bind one that is not listed.
           </p>
           <fieldset disabled={locked} className="flex justify-end gap-2">
             <Input

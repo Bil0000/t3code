@@ -6,6 +6,7 @@ import {
   ProjectId,
   type IssueTrackerConnection,
   type IssueTrackerConnectionList,
+  type IssueTrackerScopePage,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { act } from "react";
@@ -19,6 +20,7 @@ const state = vi.hoisted(() => ({
   permissionListeners: new Set<() => void>(),
   connect: vi.fn(),
   bind: vi.fn(),
+  scopes: vi.fn(),
 }));
 
 vi.mock("@effect/atom-react", async () => {
@@ -41,6 +43,7 @@ vi.mock("../../state/issueTrackers", () => ({
     connections: () => null,
     connect: { permissionAtom: () => "connect" },
     bindProject: { permissionAtom: () => "bind" },
+    scopes: () => null,
   },
 }));
 vi.mock("../../state/query", () => ({
@@ -50,6 +53,7 @@ vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: { permissionAtom: () => string }) =>
     command.permissionAtom() === "connect" ? state.connect : state.bind,
 }));
+vi.mock("../../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => state.scopes }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => [
     { id: "project", title: "Project", environmentId: "local" },
@@ -110,6 +114,9 @@ beforeEach(() => {
   state.canBind = true;
   state.connect.mockReset().mockResolvedValue(success);
   state.bind.mockReset().mockResolvedValue(success);
+  state.scopes
+    .mockReset()
+    .mockResolvedValue({ _tag: "Success", value: { items: [], nextCursor: null } });
   state.data = {
     trackers: [account(undefined, { connected: false, account: null, scopes: [] })],
     accounts: [],
@@ -183,6 +190,234 @@ function connected(...accounts: IssueTrackerConnection[]) {
     bindings: {},
   };
 }
+
+function loadMore(label = "Linear teams", projectTitle = "Project") {
+  const found = container.querySelector<HTMLButtonElement>(
+    `button[aria-label="Load more ${label} for ${projectTitle}"]`,
+  );
+  expect(found).not.toBeNull();
+  return found!;
+}
+
+async function options(label: string) {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    `[role="combobox"][aria-label="${label}"]`,
+  )!;
+  await click(trigger);
+  const values = [...document.querySelectorAll<HTMLElement>('[role="option"]')].map(
+    (item) => item.textContent,
+  );
+  await act(async () => {
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  return values;
+}
+
+describe("issue tracker scope pages", () => {
+  it.each(["linear", "jira"] as const)(
+    "loads bounded %s pages for one account and shares scopes across project pickers",
+    async (kind) => {
+      const tracker = IssueTrackerKind.make(kind);
+      const displayName = kind === "linear" ? "Linear" : "Jira";
+      const noun = kind === "linear" ? "team" : "project";
+      connected(
+        account("B", {
+          tracker,
+          displayName,
+          scopeNoun: noun,
+          scopesCursor: "page-2",
+          scopesTruncated: true,
+        }),
+      );
+      state.data = { ...state.data!, trackers: [state.data!.accounts![0]!] };
+      state.scopes.mockResolvedValueOnce({
+        _tag: "Success",
+        value: {
+          items: [
+            { key: "ENG", name: "Engineering" },
+            { key: "OPS", name: "Operations" },
+          ],
+          nextCursor: "page-3",
+        },
+      });
+      state.scopes.mockResolvedValueOnce({
+        _tag: "Success",
+        value: { items: [{ key: "FIN", name: "Finance" }], nextCursor: null },
+      });
+      await render();
+      await click(loadMore(`${displayName} ${noun}s`));
+      expect(state.scopes).toHaveBeenLastCalledWith({
+        environmentId: local,
+        input: { tracker, connectionId: "B", cursor: "page-2", limit: 100 },
+      });
+      expect(await options(`${displayName} ${noun} for Second project`)).toEqual([
+        "Not bound",
+        "Engineering (ENG)",
+        "Operations (OPS)",
+      ]);
+      await click(loadMore(`${displayName} ${noun}s`, "Second project"));
+      expect(state.scopes).toHaveBeenLastCalledWith({
+        environmentId: local,
+        input: { tracker, connectionId: "B", cursor: "page-3", limit: 100 },
+      });
+      expect(state.scopes).toHaveBeenCalledTimes(2);
+      expect(
+        container.querySelector(
+          `button[aria-label="Load more ${displayName} ${noun}s for Project"]`,
+        ),
+      ).toBeNull();
+      await choose(`${displayName} ${noun} for Project`, "Finance");
+      expect(state.bind).toHaveBeenLastCalledWith({
+        environmentId: local,
+        input: {
+          projectId: project,
+          binding: { value: { tracker, connectionId: "B", scope: "FIN" } },
+        },
+      });
+    },
+  );
+
+  it("keeps loaded scopes, the next cursor, and manual keys after a failed page and retries that page", async () => {
+    connected(account("B", { scopesCursor: "page-2", scopesTruncated: true }));
+    state.scopes.mockResolvedValueOnce({
+      _tag: "Success",
+      value: { items: [{ key: "OPS", name: "Operations" }], nextCursor: "page-3" },
+    });
+    state.scopes.mockResolvedValueOnce(failure("Page could not be loaded"));
+    await render();
+    await type(input("Linear team key for Project"), "MANUAL");
+    await click(loadMore());
+    await click(loadMore());
+    expect(container.textContent).toContain("Page could not be loaded");
+    expect(input("Linear team key for Project").value).toBe("MANUAL");
+    expect(await options("Linear team for Project")).toContain("Operations (OPS)");
+    await click(loadMore());
+    expect(state.scopes).toHaveBeenLastCalledWith({
+      environmentId: local,
+      input: { tracker: linear, connectionId: "B", cursor: "page-3", limit: 100 },
+    });
+    expect(state.scopes).toHaveBeenCalledTimes(3);
+    expect(input("Linear team key for Project").value).toBe("MANUAL");
+    expect(await options("Linear team for Project")).toContain("Operations (OPS)");
+  });
+
+  it("keeps pending pages and scopes on their account when the picker switches", async () => {
+    connected(account("A", { scopesCursor: "A-2" }), account("B", { scopesCursor: "B-2" }));
+    let resolve!: (page: { _tag: "Success"; value: IssueTrackerScopePage }) => void;
+    state.scopes.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    await render();
+    await click(loadMore());
+    expect(loadMore().disabled).toBe(true);
+    await click(loadMore());
+    expect(state.scopes).toHaveBeenCalledOnce();
+    await choose("Linear account for Project", "linear.app · B");
+    await click(loadMore());
+    expect(state.scopes).toHaveBeenLastCalledWith({
+      environmentId: local,
+      input: { tracker: linear, connectionId: "B", cursor: "B-2", limit: 100 },
+    });
+    await act(async () => {
+      resolve({
+        _tag: "Success",
+        value: { items: [{ key: "A-ONLY", name: "A only" }], nextCursor: null },
+      });
+    });
+    expect(await options("Linear team for Project")).not.toContain("A only (A-ONLY)");
+    await choose("Linear account for Project", "linear.app · A");
+    expect(await options("Linear team for Project")).toContain("A only (A-ONLY)");
+  });
+
+  it.each(["refresh", "remove", "environment", "replace"] as const)(
+    "ignores a late scope result after %s without moving account B's draft",
+    async (change) => {
+      const a = account("A", { scopesCursor: "A-2", scopesTruncated: true });
+      const b = account("B", { scopesCursor: "B-2", scopesTruncated: true });
+      connected(a, b);
+      let resolve!: (page: { _tag: "Success"; value: IssueTrackerScopePage }) => void;
+      state.scopes.mockReturnValueOnce(
+        new Promise((done) => {
+          resolve = done;
+        }),
+      );
+      await render();
+      await choose("Linear account", "linear.app · B");
+      await choose("Linear account for Project", "linear.app · B");
+      await type(input("Linear team key for Project"), "B-MANUAL");
+      await click(loadMore());
+      if (change === "replace") {
+        await type(input("API key"), "fake-new-B-token");
+        await click(button("Replace"));
+      } else if (change === "environment") await render(EnvironmentId.make("remote"));
+      else {
+        connected(...(change === "remove" ? [a] : [a, b]));
+        await render();
+      }
+      if (change === "refresh" || change === "replace") {
+        expect(loadMore().disabled).toBe(true);
+        await click(loadMore());
+        expect(state.scopes).toHaveBeenCalledOnce();
+      }
+      await act(async () => {
+        resolve({
+          _tag: "Success",
+          value: { items: [{ key: "STALE", name: "Stale scope" }], nextCursor: null },
+        });
+      });
+      if (change === "remove") {
+        expect(container.querySelector('[aria-label="Linear account"]')?.textContent).toContain(
+          "Account unavailable",
+        );
+        connected(a, b);
+        await render();
+      }
+      expect(await options("Linear team for Project")).not.toContain("Stale scope (STALE)");
+      expect(input("Linear team key for Project").value).toBe(
+        change === "environment" ? "" : "B-MANUAL",
+      );
+      expect(state.scopes).toHaveBeenCalledOnce();
+      expect(state.bind).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, null])(
+    "keeps manual keys without paging when the initial cursor is %s",
+    async (scopesCursor) => {
+      connected(account("B", { scopesTruncated: true, scopesCursor }));
+      await render();
+      expect(container.textContent).not.toContain("Load more");
+      await type(input("Linear team key for Project"), "MANUAL");
+      await click(button("Bind"));
+      expect(state.scopes).not.toHaveBeenCalled();
+      expect(state.bind).toHaveBeenLastCalledWith({
+        environmentId: local,
+        input: {
+          projectId: project,
+          binding: { value: { tracker: linear, connectionId: "B", scope: "MANUAL" } },
+        },
+      });
+    },
+  );
+
+  it("keeps the default account selector absent on the read request and reports read denial without any write", async () => {
+    connected(account(undefined, { scopesTruncated: true, scopesCursor: "default-2" }));
+    state.canConnect = false;
+    state.canBind = false;
+    state.scopes.mockResolvedValueOnce(failure("This connection requires orchestration:read."));
+    await render();
+    await click(loadMore());
+    expect(state.scopes).toHaveBeenLastCalledWith({
+      environmentId: local,
+      input: { tracker: linear, cursor: "default-2", limit: 100 },
+    });
+    expect(container.textContent).toContain("requires orchestration:read");
+    expect(state.bind).not.toHaveBeenCalled();
+    expect(state.connect).not.toHaveBeenCalled();
+  });
+});
 
 describe("issue tracker accounts", () => {
   it.each([true, false])(
