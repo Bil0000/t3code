@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import { AuthOrchestrationReadScope } from "./auth.ts";
 import { clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
 import { WS_METHODS, WsIssuesRpcGroup } from "./rpc.ts";
-import { ProjectId } from "./baseSchemas.ts";
+import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   IssueActor,
   IssueCandidatesInput,
@@ -598,4 +598,57 @@ it("keeps account-specific native list errors distinct from legacy errors", () =
     ...error,
     connectionId: "Account-A",
   });
+});
+
+it("uses account action values that an old tracker schema rejects before dispatch", () => {
+  const oldConnect = Schema.decodeUnknownSync(
+    Schema.Struct({
+      tracker: IssueTrackerKind,
+      token: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+    }),
+  );
+  const oldBind = Schema.decodeUnknownSync(
+    Schema.Struct({
+      projectId: ProjectId,
+      binding: Schema.NullOr(
+        Schema.Struct({
+          tracker: IssueTrackerKind,
+          scope: TrimmedNonEmptyString,
+          host: Schema.optional(TrimmedNonEmptyString),
+        }),
+      ),
+    }),
+  );
+  const decodeConnect = Schema.decodeUnknownSync(IssueTrackerConnectInput);
+  const decodeBind = Schema.decodeUnknownSync(IssueTrackerBindProjectInput);
+  expect(
+    oldConnect({
+      tracker: "linear",
+      token: "account-b-token",
+      addAccount: true,
+      connectionId: "account-b",
+    }),
+  ).toEqual({ tracker: "linear", token: "account-b-token" });
+  const nativeWrites: unknown[] = [];
+  const dispatch = (decode: (input: unknown) => unknown, input: unknown) =>
+    nativeWrites.push(decode(input));
+  for (const request of [
+    { tracker: "linear", token: { value: "new-token" }, addAccount: true },
+    { tracker: "linear", token: { value: "rotated-token" }, connectionId: "account-a" },
+    { tracker: "linear", token: { value: null }, connectionId: "account-a" },
+  ]) {
+    expect(decodeConnect(request)).toEqual(request);
+    expect(() => dispatch(oldConnect, request)).toThrow();
+  }
+  for (const binding of [null, { tracker: "linear", scope: "ENG", connectionId: "account-a" }]) {
+    const request = {
+      projectId: "project",
+      tracker: "linear",
+      connectionId: "account-a",
+      binding: { value: binding },
+    };
+    expect(decodeBind(request)).toEqual(request);
+    expect(() => dispatch(oldBind, request)).toThrow();
+  }
+  expect(nativeWrites).toEqual([]);
 });

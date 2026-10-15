@@ -903,7 +903,10 @@ export const IssueTrackerConnectInput = Schema.Struct({
   connectionId: Schema.optional(IssueTrackerConnectionId),
   addAccount: Schema.optional(Schema.Boolean),
   tracker: IssueTrackerKind,
-  token: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  token: Schema.Union([
+    Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+    Schema.Struct({ value: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))) }),
+  ]),
 });
 export type IssueTrackerConnectInput = typeof IssueTrackerConnectInput.Type;
 
@@ -912,7 +915,10 @@ export const IssueTrackerBindProjectInput = Schema.Struct({
   tracker: Schema.optional(IssueTrackerKind),
   projectId: ProjectId,
   /** Null unbinds. */
-  binding: Schema.NullOr(IssueTrackerProjectBinding),
+  binding: Schema.Union([
+    Schema.NullOr(IssueTrackerProjectBinding),
+    Schema.Struct({ value: Schema.NullOr(IssueTrackerProjectBinding) }),
+  ]),
 });
 export type IssueTrackerBindProjectInput = typeof IssueTrackerBindProjectInput.Type;
 
