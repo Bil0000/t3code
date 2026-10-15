@@ -94,6 +94,7 @@ export interface TrackerIssuePage {
 export interface TrackerIssueDetail extends TrackerIssueSummary {
   readonly states?: ReadonlyArray<IssueState>;
   readonly body: string;
+  readonly bodyEditable?: boolean | undefined;
   readonly viewer: string | null;
   readonly viewerPermissions: IssueViewerPermissions;
   readonly comments: ReadonlyArray<IssueComment>;

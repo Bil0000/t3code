@@ -22,6 +22,7 @@ import {
   IssueCapabilities,
   IssueCreateInput,
   IssueCreateResult,
+  IssueDetail,
   IssueLinkedPullRequest,
   IssueResolveUrlInput,
   IssueResolvedUrl,
@@ -467,3 +468,14 @@ it.each(["forgejo", "github", "gitlab", "azure-devops", "linear", "jira", "plugi
     }
   },
 );
+
+it("preserves optional issue body edit safety on the wire", () => {
+  const decode = Schema.decodeUnknownSync(
+    Schema.Struct({ bodyEditable: IssueDetail.fields.bodyEditable }),
+  );
+  expect(decode({})).toEqual({});
+  for (const bodyEditable of [true, false]) {
+    expect(decode({ bodyEditable })).toEqual({ bodyEditable });
+  }
+  expect(() => decode({ bodyEditable: "false" })).toThrow();
+});

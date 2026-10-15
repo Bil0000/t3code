@@ -320,6 +320,7 @@ export const IssueDetail = Schema.Struct({
   /** The signed-in account, so a comment edit is offered only on the viewer's own remarks. */
   viewer: Schema.NullOr(TrimmedNonEmptyString),
   body: Schema.String,
+  bodyEditable: Schema.optional(Schema.Boolean),
   reactions: Schema.optional(Schema.Array(IssueReaction)),
   reactionsTruncated: Schema.optional(Schema.Boolean),
   comments: Schema.Array(IssueComment),
