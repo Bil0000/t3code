@@ -91,13 +91,13 @@ export function adfToText(value: unknown): string {
     if (characters > 65_536) throw new Error("Jira document exceeds the text limit.");
     return result;
   };
-  const render = (value: unknown, depth: number): string => {
+  const render = (value: unknown, depth: number, parent?: unknown): string => {
     if (++nodes > 10_000 || depth > 32)
       throw new Error("Jira document exceeds the structure limit.");
     const node = record(value);
     const children = () => {
       if (!Array.isArray(node.content)) throw new Error("Invalid Jira document content.");
-      return node.content.map((child) => render(child, depth + 1));
+      return node.content.map((child) => render(child, depth + 1, node.type));
     };
     const attrs = () => record(node.attrs);
     switch (node.type) {
@@ -135,6 +135,41 @@ export function adfToText(value: unknown): string {
       case "tableCell":
       case "tableHeader":
         return children().join("\n\n");
+      case "taskList": {
+        string(attrs().localId);
+        if (
+          !Array.isArray(node.content) ||
+          node.content.length === 0 ||
+          record(node.content[0]).type !== "taskItem" ||
+          node.content.some(
+            (child) => !["taskItem", "taskList"].includes(string(record(child).type)),
+          )
+        )
+          throw new Error("Invalid Jira task list.");
+        return children().join("\n");
+      }
+      case "taskItem": {
+        if (parent !== "taskList") throw new Error("Invalid Jira task parent.");
+        const attributes = attrs();
+        string(attributes.localId);
+        if (attributes.state !== "TODO" && attributes.state !== "DONE")
+          throw new Error("Invalid Jira task state.");
+        if (
+          node.content !== undefined &&
+          (!Array.isArray(node.content) ||
+            node.content.some(
+              (child) =>
+                !["text", "hardBreak", "mention", "emoji", "inlineCard", "date", "status"].includes(
+                  string(record(child).type),
+                ),
+            ))
+        )
+          throw new Error("Invalid Jira task content.");
+        return (
+          (attributes.state === "DONE" ? "- [x] " : "- [ ] ") +
+          (node.content === undefined ? "" : children().join(""))
+        );
+      }
       case "bulletList":
         return children()
           .map((child) => "- " + child)
@@ -169,6 +204,32 @@ export function adfToText(value: unknown): string {
   const result = root.content.map((node) => render(node, 0)).join("\n\n");
   if (result.length > 65_536) throw new Error("Jira document exceeds the text limit.");
   return result;
+}
+
+export function isEditableAdf(value: unknown): boolean {
+  adfToText(value);
+  if (value === null) return true;
+  if (value === undefined) return false;
+  const root = record(value);
+  return (
+    Object.keys(root).every((key) => ["type", "version", "content"].includes(key)) &&
+    Array.isArray(root.content) &&
+    root.content.every((value) => {
+      const paragraph = record(value);
+      return (
+        paragraph.type === "paragraph" &&
+        Object.keys(paragraph).every((key) => ["type", "content"].includes(key)) &&
+        (paragraph.content === undefined ||
+          (Array.isArray(paragraph.content) &&
+            paragraph.content.every((value) => {
+              const node = record(value);
+              return node.type === "text"
+                ? Object.keys(node).every((key) => ["type", "text"].includes(key))
+                : node.type === "hardBreak" && Object.keys(node).every((key) => key === "type");
+            })))
+      );
+    })
+  );
 }
 
 export function textToAdf(value: string) {

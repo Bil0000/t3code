@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { adfToText, buildJql, normalizeJiraIssue, textToAdf } from "./jiraJson.ts";
+import { adfToText, isEditableAdf, buildJql, normalizeJiraIssue, textToAdf } from "./jiraJson.ts";
 
 describe("Jira document conversion", () => {
   it("keeps paragraphs, line breaks, mentions, links and list text", () => {
@@ -144,4 +144,77 @@ describe("Jira normalization", () => {
     );
     expect(() => buildJql({ scope: "ENG", state: "all", involvement: "mentioned" })).toThrow();
   });
+});
+
+it("allows only plain Jira descriptions that text edits can preserve", () => {
+  for (const value of [null, textToAdf(""), textToAdf("One\nline\n\nNext")]) {
+    expect(isEditableAdf(value)).toBe(true);
+  }
+  expect(isEditableAdf(undefined)).toBe(false);
+  const text = { type: "text", text: "body" };
+  const paragraph = { type: "paragraph", content: [text] };
+  const doc = (content: unknown[]) => ({ type: "doc", version: 1, content });
+  for (const node of [
+    { ...paragraph, attrs: { localId: "paragraph-id" } },
+    { ...paragraph, content: [{ ...text, marks: [{ type: "strong" }] }] },
+    { ...paragraph, content: [{ ...text, attrs: { native: "metadata" } }] },
+    { type: "heading", attrs: { level: 2 }, content: [text] },
+    { type: "codeBlock", attrs: { language: "javascript" }, content: [text] },
+    { ...paragraph, content: [{ type: "mention", attrs: { id: "native-account", text: "@Ada" } }] },
+    {
+      type: "mediaSingle",
+      content: [{ type: "media", attrs: { type: "file", id: "native-media" } }],
+    },
+    {
+      type: "table",
+      content: [{ type: "tableRow", content: [{ type: "tableCell", content: [paragraph] }] }],
+    },
+  ]) {
+    expect(isEditableAdf(doc([node]))).toBe(false);
+  }
+  expect(isEditableAdf({ ...doc([paragraph]), attrs: { native: "metadata" } })).toBe(false);
+});
+
+it("renders native tasks without accepting unknown or malformed task nodes", () => {
+  const item = {
+    type: "taskItem",
+    attrs: { localId: "task-id", state: "TODO" },
+    content: [{ type: "text", text: "Do this" }],
+  };
+  const list = {
+    type: "taskList",
+    attrs: { localId: "list-id" },
+    content: [item, { ...item, attrs: { ...item.attrs, state: "DONE" } }],
+  };
+  const doc = (node: unknown) => ({ type: "doc", version: 1, content: [node] });
+  expect(adfToText(doc(list))).toBe("- [ ] Do this\n- [x] Do this");
+  expect(isEditableAdf(doc(list))).toBe(false);
+  for (const node of [
+    item,
+    { ...list, attrs: {} },
+    { ...list, content: [] },
+    { ...list, content: [{ type: "paragraph", content: [] }] },
+    { ...list, content: [{ ...item, attrs: { localId: "task-id", state: "unknown" } }] },
+    { ...list, content: [{ ...item, attrs: { state: "TODO" } }] },
+    { ...list, content: [{ ...item, content: [{ type: "unknownNode" }] }] },
+    { ...list, content: [{ ...item, content: "not an array" }] },
+  ]) {
+    expect(() => adfToText(doc(node))).toThrow();
+  }
+  const nested = { ...list, content: [item, list] };
+  expect(adfToText(doc(nested))).toContain("Do this");
+  let deep: unknown = list;
+  for (let i = 0; i < 33; i++) deep = { ...list, content: [item, deep] };
+  expect(() => adfToText(doc(deep))).toThrow();
+  expect(() =>
+    adfToText(doc({ ...list, content: Array.from({ length: 10_001 }, () => item) })),
+  ).toThrow();
+  expect(() =>
+    adfToText(
+      doc({
+        ...list,
+        content: [{ ...item, content: [{ type: "text", text: "x".repeat(65_537) }] }],
+      }),
+    ),
+  ).toThrow();
 });
