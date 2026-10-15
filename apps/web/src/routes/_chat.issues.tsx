@@ -356,7 +356,7 @@ function IssuesRoute() {
     const refreshed = (previous: HeldPage, answer: IssueListResult) => {
       const cached = refreshedPages.get(previous);
       if (cached?.answer === answer) return cached;
-      const page = { ...refreshIssueListPage(previous, answer), answer };
+      const page = { ...refreshIssueListPage(cached ?? previous, answer), answer };
       refreshedPages.set(previous, page);
       return page;
     };

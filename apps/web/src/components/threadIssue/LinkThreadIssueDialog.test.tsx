@@ -275,6 +275,118 @@ function issueRuntime() {
   );
 }
 
+it("refreshes the dialog twice over its last first-page result", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const atoms = createIssueEnvironmentAtoms(issueRuntime());
+  const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
+  state.load
+    .mockReset()
+    .mockImplementation((target) => atoms.listPage.run(appAtomRegistry, target));
+  const capabilities = {
+    create: false,
+    edit: false,
+    comment: false,
+    labels: false,
+    assignees: false,
+    reactions: false,
+    templates: false,
+    linkedPullRequests: false,
+    events: false,
+    search: true,
+    states: [],
+    closeReasons: [],
+  };
+  const cursor = "github github.com org/repo";
+  const first = (keys: ReadonlyArray<string>) => ({
+    entries: keys.map((key) => ({
+      ...state.linked,
+      key,
+      title: `Issue ${key}`,
+      author: null,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+      closedAt: null,
+      labels: [],
+      assignees: [],
+      commentCount: 0,
+    })),
+    sources: [{ ...state.source, capabilities }],
+    viewers: { "github github.com": "A" },
+    trackers: [],
+    nextCursors: { [cursor]: "2" },
+    errors: [
+      {
+        projectId: "project",
+        projectTitle: "Project",
+        tracker: "gitlab",
+        host: "gitlab.com",
+        message: "Other tracker unavailable",
+      },
+    ],
+  });
+  const replies = [
+    first(["2", "3"]),
+    { ...first(["4"]), nextCursors: {}, errors: [] },
+    first(["4", "2"]),
+    first(["2", "3"]),
+  ];
+  const reads: Array<{ tag: string; input: unknown }> = [];
+  const respond = ((tag: string, input: unknown) =>
+    Effect.sync(() => {
+      reads.push({ tag, input });
+      return decodeIssueList(replies.shift());
+    })) as unknown as typeof RpcClient.request;
+  const request = vi.spyOn(RpcClient, "request").mockImplementation(respond);
+  const guarded = vi.spyOn(RpcClient, "requestGuarded");
+  guarded.mockImplementation(
+    respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
+  );
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent === label,
+    )!;
+  const text = () => document.body.textContent ?? "";
+  const render = () =>
+    root.render(
+      createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+    );
+  try {
+    openLinkThreadIssueDialog({
+      environmentId: EnvironmentId.make("chain-environment"),
+      threadId: ThreadId.make("chain-thread"),
+    });
+    await act(async () => render());
+    await act(async () => button("Load more").click());
+    expect(text()).toContain("Issue 4");
+    await act(async () => button("Retry").click());
+    expect(text()).toContain("Issue 4");
+    expect(text()).not.toContain("Issue 3");
+    await act(async () => button("Retry").click());
+    expect(text()).toContain("Issue 2");
+    expect(text()).toContain("Issue 3");
+    expect(text()).not.toContain("Issue 4");
+    expect(text()).toContain("Other tracker unavailable");
+    expect(reads.map(({ tag }) => tag)).toEqual(Array(4).fill(WS_METHODS.issuesList));
+    expect(reads[1]!.input).toMatchObject({ cursors: { [cursor]: "2" } });
+    for (const { input } of [reads[0]!, ...reads.slice(2)])
+      expect(input).not.toHaveProperty("cursors");
+    await act(async () => render());
+    expect(reads).toHaveLength(4);
+    expect(replies).toEqual([]);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    appAtomRegistry.reset();
+    list.mockRestore();
+    request.mockRestore();
+    guarded.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("ignores a changed viewer page after the dialog's query changed", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const cursor = "github github.com org/repo";

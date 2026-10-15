@@ -92,15 +92,10 @@ function LinkThreadIssueDialog({
     seed: IssueListResult;
     page: ReturnType<typeof continueIssueListPage>;
   } | null>(null);
-  const held = useMemo(
-    () =>
-      pages?.key === filterKey && list.data !== null
-        ? pages.seed === list.data
-          ? pages.page
-          : refreshIssueListPage(pages.page, list.data)
-        : null,
-    [pages, filterKey, list.data],
-  );
+  if (pages?.key === filterKey && list.data !== null && pages.seed !== list.data) {
+    setPages({ ...pages, seed: list.data, page: refreshIssueListPage(pages.page, list.data) });
+  }
+  const held = pages?.key === filterKey && list.data !== null ? pages.page : null;
   const sources = held?.sources ?? list.data?.sources ?? [];
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const source =
