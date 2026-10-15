@@ -4,7 +4,7 @@ import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { IssueDetail, IssueSummary } from "@t3tools/contracts";
+import { IssueCreateResult, IssueDetail, IssueSummary } from "@t3tools/contracts";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as GitLabCli from "./GitLabCli.ts";
@@ -12,6 +12,7 @@ import * as GitLabIssueTracker from "./GitLabIssueTracker.ts";
 
 const decodeDetailWire = Schema.decodeEffect(IssueDetail);
 const decodeSummaryWire = Schema.decodeEffect(IssueSummary);
+const decodeCreateWire = Schema.decodeEffect(IssueCreateResult);
 
 const encode = (value: unknown) => JSON.stringify(value);
 
@@ -143,6 +144,99 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each([
+    { labels: ["bug"], savedLabels: [], assignees: [], savedAssignees: [], missing: ["labels"] },
+    {
+      labels: ["bug", "urgent"],
+      savedLabels: ["bug"],
+      assignees: [],
+      savedAssignees: [],
+      missing: ["labels"],
+    },
+    {
+      labels: ["bug", "urgent"],
+      savedLabels: ["urgent", "bug"],
+      assignees: ["2", "3"],
+      savedAssignees: [3, 2],
+      missing: [],
+    },
+    {
+      labels: ["bug"],
+      savedLabels: [],
+      assignees: ["2", "3"],
+      savedAssignees: [2],
+      missing: ["labels", "assignees"],
+    },
+    { labels: [], savedLabels: ["default"], assignees: [], savedAssignees: [2], missing: [] },
+  ])("warns for metadata omitted from a successful native create: $missing", (input) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const api = yield* GitLabIssueTracker.make.pipe(
+        Effect.provide(
+          GitLabCli.layer.pipe(
+            Layer.provide(
+              TestSourceControlHost.layer({
+                process: {
+                  run: (request) => {
+                    calls++;
+                    expect(request.command).toBe("glab");
+                    expect(request.args).toEqual([
+                      "api",
+                      "projects/acme%2Fweb/issues",
+                      "--hostname",
+                      "gitlab.acme.test",
+                      "--method",
+                      "POST",
+                      "--input",
+                      "-",
+                      "--header",
+                      "Content-Type: application/json",
+                    ]);
+                    expect(JSON.parse(request.stdin!)).toEqual({
+                      title: "Track release",
+                      description: "Release checks",
+                      labels: input.labels.join(","),
+                      assignee_ids: input.assignees.map(Number),
+                    });
+                    return Effect.succeed(
+                      TestSourceControlHost.processOutput(
+                        encode({
+                          ...ISSUE,
+                          labels: input.savedLabels,
+                          assignees: input.savedAssignees.map((id) => ({
+                            id,
+                            username: "member" + id,
+                          })),
+                        }),
+                      ),
+                    );
+                  },
+                },
+              }),
+            ),
+          ),
+        ),
+      );
+      const created = yield* api.create!({
+        cwd: "/w",
+        host: "gitlab.acme.test",
+        scope: "acme/web",
+        title: "Track release",
+        body: "Release checks",
+        labels: input.labels,
+        assignees: input.assignees,
+      });
+      const wire = yield* decodeCreateWire(created);
+      expect(wire).toMatchObject({ key: "42", displayKey: "#42", url: ISSUE.web_url });
+      expect(wire.warnings ?? []).toEqual(
+        input.missing.map(
+          (field) => "The issue was created, but GitLab did not save the requested " + field + ".",
+        ),
+      );
+      expect(calls).toBe(1);
+    }),
+  );
+
   it.effect.each([
     { selected: ["2", "3"], saved: [2], warning: true },
     { selected: ["2", "3"], saved: [3, 2], warning: false },
