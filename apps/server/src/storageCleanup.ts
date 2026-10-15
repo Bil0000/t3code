@@ -56,6 +56,9 @@ const decodeCleanupSession = Schema.decodeUnknownEffect(
 );
 
 const DAY_MS = 86_400_000;
+// The project's settle script starts in the worktree right after a thread
+// settles; its open terminal protects the worktree from then on.
+const SETTLE_SCRIPT_GRACE_MS = 60_000;
 
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const REPORT_ENTRY_LIMIT = 200;
@@ -489,14 +492,16 @@ const make = Effect.gen(function* () {
           !deleted &&
           settings.worktreeAfterDays !== null &&
           storageCleanupActivityAt(thread) < now - settings.worktreeAfterDays * DAY_MS;
-        const settledDays =
+        const settledFor =
           deleted || thread.settledAt === null
             ? null
-            : Math.floor((now - DateTime.toEpochMillis(thread.settledAt)) / DAY_MS);
+            : now - DateTime.toEpochMillis(thread.settledAt);
+        const settledDays = settledFor === null ? null : Math.floor(settledFor / DAY_MS);
         const settled =
-          settledDays !== null &&
+          settledFor !== null &&
           settings.worktreeSettledAfterDays !== null &&
-          settledDays >= settings.worktreeSettledAfterDays;
+          settledFor >=
+            Math.max(settings.worktreeSettledAfterDays * DAY_MS, SETTLE_SCRIPT_GRACE_MS);
         let eligible = deleted || old || settled;
         let removalReason = deleted
           ? "thread was deleted"
@@ -551,9 +556,11 @@ const make = Effect.gen(function* () {
             !deleted && settings.worktreeAfterDays !== null
               ? `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} of ${settings.worktreeAfterDays} days`
               : settings.worktreeSettledAfterDays !== null
-                ? settledDays === null
+                ? settledFor === null
                   ? "not settled"
-                  : `settled for ${settledDays} of ${settings.worktreeSettledAfterDays} days`
+                  : settledFor < SETTLE_SCRIPT_GRACE_MS
+                    ? "settled moments ago"
+                    : `settled for ${settledDays} of ${settings.worktreeSettledAfterDays} days`
                 : settings.worktreeOnMerge
                   ? "not merged"
                   : "has commits beyond the default branch",

@@ -2889,6 +2889,13 @@ it.effect(
 
         assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
         assert.deepStrictEqual(yield* rosters, [[], ["dev-server"]]);
+        // Storage cleanup waits for the stored session to stop.
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const { providerSessions } = yield* projectionStore.getThreadProjection(threadId);
+        assert.deepStrictEqual(
+          providerSessions.map((session) => session.status),
+          ["stopped"],
+        );
       });
 
       yield* effect.pipe(

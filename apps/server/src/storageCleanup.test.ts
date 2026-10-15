@@ -882,6 +882,7 @@ describe("storage cleanup reports and local file policies", () => {
 describe("settled worktree retention", () => {
   it.effect.each([
     "immediate",
+    "settle-script",
     "expired",
     "boundary",
     "wait",
@@ -928,7 +929,9 @@ describe("settled worktree retention", () => {
                     ? -8 * DAY_MS
                     : scenario === "wait"
                       ? -8 * DAY_MS + 1
-                      : 0,
+                      : scenario === "settle-script"
+                        ? 0
+                        : -60_000,
               ),
         updatedAt: at(scenario === "recent-update" ? 0 : -10 * DAY_MS),
       });
@@ -951,9 +954,11 @@ describe("settled worktree retention", () => {
             ? "Not settled"
             : scenario === "wait"
               ? "Settled for 7 of 8 days"
-              : scenario === "dirty"
-                ? "Has uncommitted changes (1 file)"
-                : `Settled for ${scenario === "expired" || scenario === "recent-update" ? 20 : scenario === "boundary" ? 8 : 0} days`;
+              : scenario === "settle-script"
+                ? "Settled moments ago"
+                : scenario === "dirty"
+                  ? "Has uncommitted changes (1 file)"
+                  : `Settled for ${scenario === "expired" || scenario === "recent-update" ? 20 : scenario === "boundary" ? 8 : 0} days`;
         expect(report.entries[0]).toMatchObject({ outcome: removed ? "removed" : "kept", reason });
       }
       expect(thread.branch).toBe("feature");
