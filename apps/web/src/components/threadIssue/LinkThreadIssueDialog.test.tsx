@@ -3,7 +3,22 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ThreadId, type IssueListCursors } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IssueListResult,
+  ThreadId,
+  WS_METHODS,
+  type IssueListCursors,
+} from "@t3tools/contracts";
+import { EnvironmentRegistry, EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
+import { createIssueEnvironmentAtoms } from "@t3tools/client-runtime/state/issues";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import { Atom } from "effect/reactivity";
 
 const state = vi.hoisted(() => {
   const source = {
@@ -72,8 +87,153 @@ vi.mock("~/state/query", async (importOriginal) => ({
   formatEnvironmentQueryError: () => "failed",
 }));
 
-import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
+import { AppAtomRegistryProvider, appAtomRegistry } from "~/rpc/atomRegistry";
+import { issueEnvironment } from "~/state/issues";
 import { LinkThreadIssueDialogHost, openLinkThreadIssueDialog } from "./LinkThreadIssueDialog";
+
+const decodeIssueList = Schema.decodeUnknownSync(IssueListResult);
+const RpcClient = await vi.importActual<typeof import("@t3tools/client-runtime/rpc")>(
+  "../../../../../packages/client-runtime/src/rpc/client.ts",
+);
+
+it.each([false, true])(
+  "shows native first-page errors and refreshes only on Retry, with rows: %s",
+  async (withRows) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const runtime = Atom.runtime(
+      Layer.effect(
+        EnvironmentRegistry.EnvironmentRegistry,
+        Effect.gen(function* () {
+          const connection = yield* SubscriptionRef.make({ phase: "connected" } as const);
+          const session = yield* SubscriptionRef.make(Option.some({}));
+          const supervisor = {
+            state: connection,
+            session,
+          } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+          return EnvironmentRegistry.EnvironmentRegistry.of({
+            run: (_id, effect) =>
+              Effect.provideService(
+                effect,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+            followStream: (_id, stream) =>
+              Stream.provideService(
+                stream,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+          } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+        }),
+      ),
+    );
+    const atoms = createIssueEnvironmentAtoms(runtime);
+    const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
+    const capabilities = {
+      create: false,
+      edit: false,
+      comment: false,
+      labels: false,
+      assignees: false,
+      reactions: false,
+      templates: false,
+      linkedPullRequests: false,
+      events: false,
+      search: true,
+      states: [],
+      closeReasons: [],
+    };
+    const candidate = {
+      ...state.linked,
+      key: "2",
+      displayKey: "#2",
+      title: "Recovered native issue",
+      author: null,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+      closedAt: null,
+      labels: [],
+      assignees: [],
+      commentCount: 0,
+    };
+    const failure = {
+      entries: withRows ? [candidate] : [],
+      sources: [{ ...state.source, capabilities }],
+      trackers: [],
+      viewers: { "github github.com": "A" },
+      nextCursors: withRows ? { "github github.com org/repo": "2" } : {},
+      errors: [
+        {
+          projectId: "project",
+          projectTitle: "Project",
+          tracker: "github",
+          host: "github.com",
+          message: "Native API rate limit reached",
+        },
+      ],
+    };
+    const replies = [failure, { ...failure, entries: [candidate], errors: [] }];
+    const request = vi.spyOn(RpcClient, "request");
+    request.mockImplementation(((tag: string) =>
+      Effect.sync(() => {
+        expect(tag).toBe(WS_METHODS.issuesList);
+        return decodeIssueList(replies.shift());
+      })) as unknown as Parameters<typeof request.mockImplementation>[0]);
+    const guarded = vi.spyOn(RpcClient, "requestGuarded");
+    const { executeAtomQuery } = await vi.importActual<
+      typeof import("@t3tools/client-runtime/state/runtime")
+    >("@t3tools/client-runtime/state/runtime");
+    const target = {
+      environmentId: EnvironmentId.make("error-environment"),
+      input: {
+        state: "all" as const,
+        projectId: state.source.projectId as IssueListResult["entries"][number]["projectId"],
+        limit: 50,
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      openLinkThreadIssueDialog({
+        environmentId: target.environmentId,
+        threadId: ThreadId.make("error-thread"),
+      });
+      await act(async () => {
+        root.render(
+          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+        );
+        await executeAtomQuery(appAtomRegistry, atoms.list(target));
+      });
+      expect(document.body.textContent).toContain("Native API rate limit reached");
+      expect(document.body.textContent).not.toContain("No issues to link.");
+      expect(document.body.textContent?.split("Native API rate limit reached")).toHaveLength(2);
+      expect(request).toHaveBeenCalledTimes(1);
+      const retry = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Retry",
+      );
+      expect(retry).toBeDefined();
+      if (withRows) expect(document.body.textContent).toContain(candidate.title);
+      await act(async () => {
+        retry!.click();
+        await executeAtomQuery(appAtomRegistry, atoms.list(target));
+      });
+      expect(document.body.textContent).toContain(candidate.title);
+      expect(document.body.textContent).not.toContain("Native API rate limit reached");
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(guarded).not.toHaveBeenCalled();
+      expect(replies).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      appAtomRegistry.reset();
+      list.mockRestore();
+      request.mockRestore();
+      guarded.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it("can load later issues when every issue on the first page is already linked", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

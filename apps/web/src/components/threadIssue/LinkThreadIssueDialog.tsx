@@ -115,6 +115,15 @@ function LinkThreadIssueDialog({
   const canLink = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const sourceErrors = held?.errors ?? list.data?.errors ?? [];
+  const listFailed = list.error !== null || sourceErrors.length > 0;
+  const errors = [
+    ...new Set(
+      [list.error, ...sourceErrors.map(({ message }) => message), error].filter(
+        (message) => message !== null,
+      ),
+    ),
+  ];
   const resolveUrl = useAtomCommand(issueEnvironment.resolveUrl, { reportFailure: false });
   const [nativeUrl, setNativeUrl] = useState("");
   const [directScope, setDirectScope] = useState("");
@@ -147,7 +156,7 @@ function LinkThreadIssueDialog({
     };
     const continued = continueIssueListPage(page, nextCursors, result.value, page.firstCursors);
     setPages({ seed, page: continued });
-    setError(continued.errors.map(({ message }) => message).join(" · ") || null);
+    setError(null);
   };
 
   const linkRef = async (ref: IssueRef & { host: string }, nativeUrl?: string) => {
@@ -227,12 +236,13 @@ function LinkThreadIssueDialog({
   const emptyMessage =
     list.data === null && list.isPending
       ? "Loading issues…"
-      : (list.error ??
-        (sources.length === 0
+      : errors.length > 0
+        ? null
+        : sources.length === 0
           ? "This project has no issue tracker. Connect one in Settings › Source control."
           : candidates.length === 0
             ? "No issues to link."
-            : null));
+            : null;
 
   return (
     <Dialog open onOpenChange={(open) => (open || pendingKey !== null ? undefined : onClose())}>
@@ -380,10 +390,20 @@ function LinkThreadIssueDialog({
                 This connection can't change thread links.
               </p>
             )}
-            {error ? (
+            {errors.length > 0 ? (
               <p role="alert" className="text-xs text-destructive">
-                {error}
+                {errors.join(" · ")}
               </p>
+            ) : null}
+            {listFailed ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={list.isPending || listPending || pendingKey !== null}
+                onClick={list.refresh}
+              >
+                Retry
+              </Button>
             ) : null}
           </div>
         </DialogPanel>
