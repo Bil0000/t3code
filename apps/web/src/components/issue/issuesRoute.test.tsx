@@ -155,6 +155,49 @@ const answer = (entries: ReadonlyArray<IssueListEntry>): IssueListResult => ({
   nextCursors: {},
   errors: [],
 });
+
+it.each([undefined, "Account/B"])(
+  "keeps equal display names separate by native identity (account=%s)",
+  async (connectionId) => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const account = connectionId === undefined ? {} : { connectionId };
+    const base = answer([
+      {
+        ...issue("1"),
+        ...account,
+        labels: ["W", "T"].map((id) => ({ id, name: "Bug", color: null })),
+        assignees: ["a1", "a2"].map((id) => ({ id, login: "Sam", name: null, avatarUrl: null })),
+      },
+    ]);
+    try {
+      state.responses.set(
+        environmentA,
+        AsyncResult.success(
+          decodeIssueList({
+            ...base,
+            trackers: base.trackers.map((tracker) => ({ ...tracker, ...account })),
+            errors: ["one", "two"].map((projectId) => ({
+              ...account,
+              projectId,
+              projectTitle: "Project",
+              tracker: "github",
+              host: "github.com",
+              message: `${projectId} failed`,
+            })),
+          }),
+        ),
+      );
+      state.responses.set(environmentB, AsyncResult.success(answer([])));
+      await mount();
+      expect(text()).toContain("Project: one failed");
+      expect(text()).toContain("Project: two failed");
+      expect(error.mock.calls.flat().join(" ")).not.toContain("same key");
+    } finally {
+      error.mockRestore();
+    }
+  },
+);
+
 let root: Root;
 let container: HTMLDivElement;
 const text = () => container.textContent;

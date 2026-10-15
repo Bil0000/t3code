@@ -69,7 +69,7 @@ function IssueRowImpl({
                 <span className="flex items-center -space-x-1">
                   {entry.assignees.slice(0, 3).map((assignee) => (
                     <PullRequestActorAvatar
-                      key={assignee.login}
+                      key={assignee.id ?? assignee.login}
                       actor={assignee}
                       className="ring-1 ring-background"
                     />
