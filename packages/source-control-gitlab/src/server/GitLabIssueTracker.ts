@@ -23,6 +23,7 @@ import {
   IssueTrackerError,
   type IssueTrackerApi,
   type IssueScopeTarget,
+  type IssueTarget,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -50,6 +51,16 @@ import {
   type GitLabTemplateEntry,
 } from "./gitLabIssueJson.ts";
 import { decodeViewerJson, gitLabAwardName, toReactions } from "./gitLabMergeRequestJson.ts";
+import {
+  decodeWorkItemEnvelope,
+  decodeWorkItemJson,
+  decodeWorkItemMutationJson,
+  WORK_ITEM_HIERARCHY_QUERY,
+  WORK_ITEM_PARENT_MUTATION,
+  WORK_ITEM_QUERY,
+  type GitLabWorkItem,
+  type GitLabWorkItemWithHierarchy,
+} from "./gitLabIssueHierarchy.ts";
 
 const EditCommentPermissions = Schema.Struct({
   data: Schema.Struct({
@@ -83,6 +94,10 @@ const CAPABILITIES: IssueCapabilities = {
   edit: true,
   comment: true,
   editComment: true,
+  subIssues: true,
+  createSubIssue: true,
+  updateParent: true,
+  subIssueNoun: "Tasks",
   listSorts: ["created", "updated"],
   listOrders: ["asc", "desc"],
   labels: true,
@@ -215,7 +230,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         .pipe(
           Effect.mapError(fail(input.operation)),
           Effect.flatMap((result) =>
-            (input.operation === "listTemplates" || input.operation === "update") &&
+            (input.operation === "listTemplates" ||
+              input.operation === "update" ||
+              input.path === "graphql") &&
             result.stdoutTruncated
               ? Effect.fail(unreadable(input.operation, "truncated-response"))
               : Effect.succeed(result.stdout.trim()),
@@ -248,6 +265,201 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       readonly method: string;
       readonly body?: unknown;
     }) => api(input).pipe(Effect.asVoid);
+
+    const nativeGraphql = (
+      input: IssueScopeTarget,
+      operation: string,
+      query: string,
+      variables: unknown,
+    ) =>
+      api({
+        ...input,
+        operation,
+        path: "graphql",
+        method: "POST",
+        body: { query, variables },
+      }).pipe(
+        Effect.flatMap((raw) => {
+          const envelope = decodeWorkItemEnvelope(raw);
+          if (Result.isFailure(envelope))
+            return Effect.fail(unreadable(operation, envelope.failure));
+          return envelope.success.errors?.length
+            ? Effect.fail(
+                refused(
+                  operation,
+                  envelope.success.errors.map((error) => error.message).join("; "),
+                ),
+              )
+            : Effect.succeed(raw);
+        }),
+      );
+
+    const hierarchyWidget = (item: GitLabWorkItemWithHierarchy, operation: string) => {
+      const widgets = item.widgets.filter(
+        (widget) => widget.__typename === "WorkItemWidgetHierarchy",
+      );
+      const widget = widgets[0];
+      return widgets.length === 1 && widget?.parent !== undefined
+        ? Effect.succeed({ ...widget, parent: widget.parent })
+        : Effect.fail(
+            refused(
+              operation,
+              "GitLab does not expose a readable hierarchy widget for this work item.",
+            ),
+          );
+    };
+
+    const projectWorkItem = (input: IssueTarget, item: GitLabWorkItem, operation: string) =>
+      item.iid === input.key &&
+      item.project?.fullPath.toLowerCase() === input.scope.trim().toLowerCase() &&
+      item.namespace.fullPath.toLowerCase() === input.scope.trim().toLowerCase()
+        ? Effect.succeed(item)
+        : Effect.fail(refused(operation, "The work item does not belong to this project."));
+
+    const workItem = (
+      input: IssueTarget,
+      operation: string,
+      page?: { first: number; after?: string },
+    ) =>
+      Effect.gen(function* () {
+        const iid = parseNumber(input.key);
+        if (iid === null || !Number.isSafeInteger(iid)) return yield* notFound(operation);
+        const raw = yield* nativeGraphql(
+          input,
+          operation,
+          page === undefined ? WORK_ITEM_QUERY : WORK_ITEM_HIERARCHY_QUERY,
+          {
+            fullPath: input.scope.trim(),
+            iid: input.key,
+            ...page,
+          },
+        );
+        const decoded = decodeWorkItemJson(raw);
+        if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
+        const selected = decoded.success.data.namespace?.workItem;
+        if (selected === undefined || selected === null) return yield* notFound(operation);
+        yield* projectWorkItem(input, selected, operation);
+        return selected;
+      });
+
+    const parentPermission = (input: IssueTarget, operation: string) =>
+      workItem(input, operation).pipe(
+        Effect.flatMap((item) =>
+          hierarchyWidget(item, operation).pipe(
+            Effect.as(
+              item.workItemType.name === "Task" &&
+                !item.archived &&
+                item.userPermissions.adminParentLink,
+            ),
+          ),
+        ),
+      );
+
+    const relation = (input: IssueScopeTarget, item: GitLabWorkItem, operation: string) => {
+      const url = URL.parse(item.webUrl);
+      const prefix = `${item.project === null ? "/groups" : ""}/${item.namespace.fullPath}/-/`;
+      const paths = [
+        `${prefix}work_items/${item.iid}`,
+        `${prefix}${item.project === null ? "epics" : "issues"}/${item.iid}`,
+      ];
+      if (
+        url === null ||
+        !["https:", "http:"].includes(url.protocol) ||
+        url.host.toLowerCase() !== input.host.toLowerCase() ||
+        url.username ||
+        url.password ||
+        !paths.includes(url.pathname.replace(/\/$/, ""))
+      )
+        return Effect.fail(
+          refused(operation, "GitLab returned a work item URL outside this host."),
+        );
+      return Effect.succeed({
+        scope: item.namespace.fullPath,
+        key: item.iid,
+        displayKey: `${item.project === null ? "&" : "#"}${item.iid}`,
+        title: item.title,
+        url: item.webUrl,
+        itemType: item.workItemType.name,
+        ...(item.project === null ? { externalOnly: true } : {}),
+        state:
+          item.state === "CLOSED"
+            ? {
+                category: "closed" as const,
+                name: "closed",
+                workflowCategory: "completed" as const,
+              }
+            : { category: "open" as const, name: "open", workflowCategory: "unstarted" as const },
+      });
+    };
+
+    const projectParent = (child: GitLabWorkItem, parent: GitLabWorkItem) =>
+      child.workItemType.name === "Task" &&
+      parent.workItemType.name === "Issue" &&
+      parent.project !== null &&
+      parent.project.fullPath === child.project?.fullPath &&
+      parent.namespace.fullPath === child.namespace.fullPath;
+
+    const writableParent = (parent: GitLabWorkItem, operation: string) =>
+      parent.workItemType.name === "Issue" &&
+      !parent.archived &&
+      parent.userPermissions.adminParentLink
+        ? Effect.void
+        : Effect.fail(
+            refused(
+              operation,
+              "The parent must be an Issue that you can link in an active project.",
+            ),
+          );
+
+    const linkParent = (
+      input: IssueTarget,
+      child: GitLabWorkItemWithHierarchy,
+      parent: GitLabWorkItem | null,
+      operation: string,
+    ) =>
+      Effect.gen(function* () {
+        const widget = yield* hierarchyWidget(child, operation);
+        if (
+          child.workItemType.name !== "Task" ||
+          child.archived ||
+          !child.userPermissions.adminParentLink
+        )
+          return yield* refused(
+            operation,
+            "Only a Task with parent-link permission in an active project can change parent.",
+          );
+        if (widget.parent !== null && !projectParent(child, widget.parent))
+          return yield* refused(operation, "The existing parent is not an Issue in this project.");
+        if (parent !== null) {
+          yield* writableParent(parent, operation);
+          if (parent.id === child.id || (parent.confidential && !child.confidential))
+            return yield* refused(
+              operation,
+              "The parent and Task have incompatible hierarchy or confidentiality.",
+            );
+        } else if (
+          widget.parent !== null &&
+          (!widget.parent.userPermissions.adminParentLink || widget.parent.archived)
+        ) {
+          return yield* refused(operation, "You cannot remove this parent link.");
+        }
+        if (parent === null && widget.parent === null) return;
+        const raw = yield* nativeGraphql(input, operation, WORK_ITEM_PARENT_MUTATION, {
+          input: { id: child.id, hierarchyWidget: { parentId: parent?.id ?? null } },
+        });
+        const decoded = decodeWorkItemMutationJson(raw);
+        if (Result.isFailure(decoded)) return yield* unreadable(operation, decoded.failure);
+        const result = decoded.success.data.workItemUpdate;
+        if (result.errors.length > 0) return yield* refused(operation, result.errors.join("; "));
+        if (result.workItem === null) return yield* unreadable(operation, "missing-work-item");
+        yield* projectWorkItem(input, result.workItem, operation);
+        const updated = yield* hierarchyWidget(result.workItem, operation);
+        if (
+          result.workItem.id !== child.id ||
+          (updated.parent?.id ?? null) !== (parent?.id ?? null)
+        )
+          return yield* refused(operation, "GitLab did not save the requested parent link.");
+      });
 
     /** The signed-in account; an answer naming nobody is a failure, since every comparison needs a login. */
     const viewer = (input: {
@@ -378,6 +590,74 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       kind: KIND,
       capabilities: CAPABILITIES,
 
+      getHierarchy: (input) =>
+        Effect.gen(function* () {
+          const first = Math.min(input.limit ?? 50, PAGE_SIZE);
+          if (
+            !Number.isSafeInteger(first) ||
+            first < 1 ||
+            (input.cursor !== undefined &&
+              (input.cursor.length === 0 || input.cursor.length > 4096))
+          )
+            return yield* refused("getHierarchy", "The hierarchy page is invalid.");
+          const selected = yield* workItem(input, "getHierarchy", {
+            first,
+            ...(input.cursor === undefined ? {} : { after: input.cursor }),
+          });
+          const widget = yield* hierarchyWidget(selected, "getHierarchy");
+          const children = widget.children;
+          if (
+            children === undefined ||
+            children.nodes.length > first ||
+            (children.pageInfo.hasNextPage &&
+              (!children.pageInfo.endCursor ||
+                children.pageInfo.endCursor.length > 4096 ||
+                children.pageInfo.endCursor === input.cursor))
+          )
+            return yield* refused(
+              "getHierarchy",
+              "GitLab returned an inconsistent hierarchy page.",
+            );
+          if (
+            children.nodes.some((child) => !projectParent(child, selected)) ||
+            new Set(children.nodes.map((child) => child.id)).size !== children.nodes.length ||
+            new Set(children.nodes.map((child) => child.iid)).size !== children.nodes.length ||
+            (widget.parent !== null &&
+              !projectParent(selected, widget.parent) &&
+              !(
+                selected.workItemType.name === "Issue" &&
+                widget.parent.workItemType.name === "Epic" &&
+                widget.parent.project === null
+              ))
+          )
+            return yield* refused(
+              "getHierarchy",
+              "GitLab returned an unsupported project hierarchy.",
+            );
+          return {
+            parent:
+              widget.parent === null ? null : yield* relation(input, widget.parent, "getHierarchy"),
+            children: {
+              items: yield* Effect.forEach(children.nodes, (child) =>
+                relation(input, child, "getHierarchy"),
+              ),
+              nextCursor: children.pageInfo.hasNextPage ? children.pageInfo.endCursor : null,
+            },
+          };
+        }),
+
+      setParent: (input) =>
+        Effect.gen(function* () {
+          if (input.parentKey === input.key)
+            return yield* refused("setParent", "An issue cannot be its own parent.");
+          const child = yield* workItem(input, "setParent");
+          const parent =
+            input.parentKey === null
+              ? null
+              : yield* workItem({ ...input, key: input.parentKey }, "setParent");
+          yield* linkParent(input, child, parent, "setParent");
+        }),
+
       getViewer: (input) => viewer({ cwd: input.cwd, host: input.host, operation: "getViewer" }),
 
       listIssues: (input) => {
@@ -474,6 +754,11 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
             const closingKeys = new Set(closing.map((link) => `${link.repository}!${link.number}`));
             return {
               ...issue,
+              capabilities: {
+                ...CAPABILITIES,
+                createSubIssue: issue.itemType?.toLowerCase() === "issue",
+                updateParent: issue.itemType?.toLowerCase() === "task",
+              },
               viewer: awardPage.viewer,
               viewerPermissions: awardPage.viewerPermissions,
               reactions: toReactions({ nodes: issueAwards }, awardPage.viewer),
@@ -491,6 +776,16 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
               ],
             };
           }),
+          Effect.filterOrElse(
+            (detail) => detail.itemType?.toLowerCase() !== "task",
+            (detail) =>
+              parentPermission(input, "getIssue").pipe(
+                Effect.map((updateParent) => ({
+                  ...detail,
+                  viewerPermissions: { ...detail.viewerPermissions, updateParent },
+                })),
+              ),
+          ),
         ),
 
       getComments: (input) =>
@@ -525,7 +820,15 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                 variables: { fullPath: input.scope.trim(), iid: String(number) },
               },
               decode: decodeIssueViewerPermissionsJson,
-            }),
+            }).pipe(
+              Effect.flatMap(({ itemType, ...permissions }) =>
+                itemType?.toLowerCase() === "task"
+                  ? parentPermission(input, "getViewerPermissions").pipe(
+                      Effect.map((updateParent) => ({ ...permissions, updateParent })),
+                    )
+                  : Effect.succeed(permissions),
+              ),
+            ),
           ),
         ),
 
@@ -701,24 +1004,32 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
         candidatePage(input, "listAssigneeCandidates", "users", decodeProjectMembersJson),
 
       create: (input) =>
-        assigneeIds("create", input.assignees).pipe(
-          Effect.flatMap((assignee_ids) =>
-            read({
-              cwd: input.cwd,
-              host: input.host,
-              operation: "create",
-              path: `projects/${projectPath(input.scope)}/issues`,
-              method: "POST",
-              body: {
-                title: input.title,
-                description: input.body,
-                labels: input.labels.join(","),
-                assignee_ids,
-              },
-              decode: decodeCreatedIssueJson,
-            }),
-          ),
-          Effect.map((issue) => ({
+        Effect.gen(function* () {
+          const assignee_ids = yield* assigneeIds("create", input.assignees);
+          const parent =
+            input.parentKey === undefined
+              ? null
+              : yield* workItem({ ...input, key: input.parentKey }, "create");
+          if (parent !== null) {
+            yield* hierarchyWidget(parent, "create");
+            yield* writableParent(parent, "create");
+          }
+          const issue = yield* read({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "create",
+            path: `projects/${projectPath(input.scope)}/issues`,
+            method: "POST",
+            body: {
+              title: input.title,
+              description: input.body,
+              labels: input.labels.join(","),
+              assignee_ids,
+              ...(parent === null ? {} : { issue_type: "task", confidential: parent.confidential }),
+            },
+            decode: decodeCreatedIssueJson,
+          });
+          const created = {
             key: String(issue.number),
             displayKey: `#${issue.number}`,
             url: issue.url,
@@ -732,8 +1043,26 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                 ? [`The issue was created, but GitLab did not save the requested ${field}.`]
                 : [],
             ),
-          })),
-        ),
+          };
+          if (parent === null) return created;
+          const linked = yield* Effect.gen(function* () {
+            if (issue.itemType !== "task")
+              return yield* refused("create", "GitLab did not create a native Task.");
+            const childInput = { ...input, key: created.key };
+            const child = yield* workItem(childInput, "create");
+            yield* linkParent(childInput, child, parent, "create");
+          }).pipe(Effect.result);
+          return {
+            ...created,
+            parentLinked: Result.isSuccess(linked),
+            warnings: Result.isSuccess(linked)
+              ? created.warnings
+              : [
+                  ...created.warnings,
+                  `The item was created, but its parent link could not be confirmed. ${linked.failure.detail}`,
+                ],
+          };
+        }),
 
       comment: (input) =>
         issuePath(input, "comment").pipe(

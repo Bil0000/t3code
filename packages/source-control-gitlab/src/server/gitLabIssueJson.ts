@@ -59,6 +59,7 @@ const RawIssueSchema = Schema.Struct({
   ),
   milestone: Schema.optional(Schema.NullOr(Schema.Struct({ title: Schema.String }))),
   user_notes_count: Schema.optional(Schema.NullOr(Schema.Int)),
+  issue_type: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawLabelEventSchema = Schema.Struct({
@@ -136,6 +137,7 @@ function toSummary(raw: typeof RawIssueSchema.Type): TrackerIssueSummary {
     key: String(raw.iid),
     displayKey: `#${raw.iid}`,
     title: raw.title,
+    ...(raw.issue_type == null ? {} : { itemType: raw.issue_type }),
     url: raw.web_url,
     author: toActor(raw.author),
     // GitLab has exactly the two states, calls the open one `opened`, and records no reason.
@@ -188,12 +190,14 @@ export function decodeCreatedIssueJson(raw: string): Result.Result<
     readonly url: string;
     readonly assigneeIds: ReadonlyArray<string>;
     readonly labels: ReadonlyArray<string>;
+    readonly itemType?: string;
   },
   DecodeFailure
 > {
   return Result.map(decodeIssue(raw), (issue) => ({
     number: issue.iid,
     url: issue.web_url,
+    ...(issue.issue_type == null ? {} : { itemType: issue.issue_type }),
     labels: toLabels(issue.labels).map((label) => label.name),
     assigneeIds: (issue.assignees ?? []).flatMap((actor) =>
       actor.id === undefined ? [] : [String(actor.id)],
@@ -429,7 +433,7 @@ export function decodeTemplateJson(
 }
 
 const ISSUE_PERMISSION_FIELDS =
-  "state userPermissions { updateIssue reopenIssue createNote adminIssue }";
+  "state userPermissions { updateIssue reopenIssue createNote adminIssue } type";
 
 export const ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: String!) {
   project(fullPath: $fullPath) {
@@ -439,6 +443,7 @@ export const ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($fullPath: ID!, $ii
 }`;
 
 const RawIssuePermissionsSchema = Schema.Struct({
+  type: Schema.optional(Schema.NullOr(Schema.String)),
   state: Schema.String,
   userPermissions: Schema.Struct({
     updateIssue: Schema.Boolean,
@@ -470,7 +475,10 @@ function toViewerPermissions(project: typeof RawIssueAccessSchema.Type): IssueVi
 }
 
 export function decodeIssueViewerPermissionsJson(raw: string) {
-  return Result.map(decodeIssueAccess(raw), ({ data }) => toViewerPermissions(data.project));
+  return Result.map(decodeIssueAccess(raw), ({ data }) => ({
+    ...toViewerPermissions(data.project),
+    itemType: data.project.mergeRequest.type ?? null,
+  }));
 }
 
 export const decodeIssueUpdatedMetadataJson = decodeJsonResult(
