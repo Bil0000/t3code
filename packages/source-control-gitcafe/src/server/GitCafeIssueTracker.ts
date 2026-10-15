@@ -16,6 +16,7 @@ import * as GitCafeApi from "./GitCafeApi.ts";
 import * as Hosts from "./gitCafeHosts.ts";
 import * as Json from "./gitCafeIssueJson.ts";
 import * as PullJson from "./gitCafePullRequestJson.ts";
+import { makeListTemplates, parseTemplateKey } from "./gitCafeIssueTemplates.ts";
 
 const KIND = IssueTrackerKind.make("gitcafe");
 const isCursor = Schema.is(Json.Cursor);
@@ -31,7 +32,7 @@ const CAPABILITIES: IssueCapabilities = {
   maxAssignees: 20,
   reactions: true,
   commentReactions: true,
-  templates: false,
+  templates: true,
   linkedPullRequests: true,
   events: false,
   search: true,
@@ -367,6 +368,11 @@ export const make = Effect.gen(function* () {
         })),
       ),
     getLinkedPullRequests: linkedPullRequests,
+    listTemplates: makeListTemplates((input, path) =>
+      repositoryPath("listTemplates", input).pipe(
+        Effect.andThen(send("listTemplates", input, { path })),
+      ),
+    ),
     create: (input) =>
       Effect.gen(function* () {
         const path = yield* repositoryPath("create", input);
@@ -374,7 +380,7 @@ export const make = Effect.gen(function* () {
         if (
           input.parentKey !== undefined ||
           input.issueType !== undefined ||
-          input.templateKey !== undefined
+          (input.templateKey !== undefined && parseTemplateKey(input.templateKey) === null)
         )
           return yield* fail("create", "GitCafe does not support this creation option.");
         const value = yield* read(

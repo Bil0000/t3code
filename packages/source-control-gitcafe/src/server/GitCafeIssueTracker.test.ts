@@ -120,6 +120,440 @@ function harness(routes: Record<string, unknown> = {}) {
   return { layer, sent, invalidated };
 }
 
+const templateCommit = "a".repeat(40);
+const templateBlob = "b".repeat(40);
+const templatePath = ".gitcafe/ISSUE_TEMPLATE/Bug.md";
+const templateKey = `${templateCommit}:${templatePath}`;
+const treeEntry = (path: string, kind = "blob") => ({
+  name: path.split("/").at(-1),
+  path,
+  oid: templateBlob,
+  kind,
+});
+const tree = (items: ReturnType<typeof treeEntry>[], next: string | null = null) => ({
+  oid: "c".repeat(40),
+  items,
+  next,
+});
+const templateRoutes = (entries = [treeEntry(templatePath)], body = "## Describe the bug\n") => ({
+  "GET /repos/owner/repo/commits": { items: [{ oid: templateCommit }], next: null },
+  "GET /repos/owner/repo/tree": ({ query }: Sent) => {
+    assert.strictEqual(query.get("oid"), templateCommit);
+    switch (query.get("path")) {
+      case ".gitcafe":
+        return tree([treeEntry(".gitcafe/ISSUE_TEMPLATE", "tree")]);
+      case ".gitcafe/ISSUE_TEMPLATE":
+        return tree(entries);
+      default:
+        return new Response("missing", { status: 404 });
+    }
+  },
+  "GET /repos/owner/repo/blob": ({ query }: Sent) => ({
+    commit: templateCommit,
+    oid: templateBlob,
+    path: query.get("path"),
+    size: new TextEncoder().encode(body).length,
+    binary: false,
+    content: body,
+  }),
+});
+
+describe("GitCafe issue templates", () => {
+  it.effect(
+    "lists native templates without bodies and loads only the selected immutable body",
+    () => {
+      const body = "---\nunknown: preserve this\n---\n## Report\n";
+      const fake = harness(templateRoutes([treeEntry(templatePath)], body));
+      return Effect.gen(function* () {
+        const api = yield* GitCafeIssueTracker.make;
+        assert.strictEqual(api.capabilities.templates, true);
+        const list = yield* api.listTemplates!({ ...target, metadataOnly: true });
+        assert.deepStrictEqual(list, {
+          templates: [
+            {
+              key: templateKey,
+              name: "Bug.md",
+              about: "",
+              title: "",
+              body: "",
+              labels: [],
+              assignees: [],
+              contentDeferred: true,
+            },
+          ],
+          blankIssuesEnabled: true,
+        });
+        assert.strictEqual(fake.sent.length, 3);
+        assert.strictEqual(
+          fake.sent.some((request) => request.path.endsWith("/blob")),
+          false,
+        );
+        const selected = yield* api.listTemplates!({ ...target, templateKey });
+        assert.strictEqual(selected.templates[0]?.body, body);
+        assert.strictEqual(selected.templates[0]?.contentDeferred, undefined);
+        assert.strictEqual(fake.sent.length, 6);
+        assert.strictEqual(fake.sent.at(-1)?.query.get("oid"), templateCommit);
+        assert.strictEqual(fake.sent.at(-1)?.query.get("path"), templatePath);
+        assert.isTrue(fake.sent.every((request) => request.method === "GET"));
+      }).pipe(Effect.provide(fake.layer));
+    },
+  );
+
+  it.effect("creates an issue from an edited template body without extra reads", () => {
+    const fake = harness({ "POST /repos/owner/repo/issues/": issue });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      yield* api.create!({
+        ...target,
+        templateKey,
+        title: "A bug",
+        body: "Edited template body",
+        labels: [],
+        assignees: [],
+      });
+      assert.strictEqual(fake.sent.length, 1);
+      assert.deepStrictEqual(fake.sent[0]?.body, {
+        title: "A bug",
+        description: "Edited template body",
+        labelIds: [],
+        assigneeIds: [],
+      });
+      yield* api.create!({
+        ...target,
+        templateKey: "../foreign",
+        title: "A bug",
+        body: "Body",
+        labels: [],
+        assignees: [],
+      }).pipe(Effect.flip);
+      assert.strictEqual(fake.sent.length, 1);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("loads the complete catalog when no lazy selection is requested", () => {
+    const fake = harness(templateRoutes());
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const list = yield* api.listTemplates!(target);
+      assert.strictEqual(list.templates[0]?.body, "## Describe the bug\n");
+      assert.strictEqual(fake.sent.length, 4);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect.each([
+    { commit: "d".repeat(40) },
+    { oid: "d".repeat(40) },
+    { path: "README.md" },
+    { binary: true },
+    { content: null },
+    { size: 2 },
+    { size: 1048577 },
+    { content: "x".repeat(1048577) },
+  ])("rejects a malformed, foreign or oversized template blob %#", (value) => {
+    const fake = harness({
+      ...templateRoutes(),
+      "GET /repos/owner/repo/blob": {
+        commit: templateCommit,
+        oid: templateBlob,
+        path: templatePath,
+        size: 1,
+        binary: false,
+        content: "x",
+        ...value,
+      },
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      yield* api.listTemplates!({ ...target, templateKey }).pipe(Effect.flip);
+      assert.strictEqual(fake.sent.length, 3);
+      assert.isTrue(fake.sent.every((request) => request.method === "GET"));
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("bounds total template bytes and counts UTF-8 bytes", () => {
+    const entries = [treeEntry(templatePath), treeEntry(".gitcafe/ISSUE_TEMPLATE/Task.md")];
+    const fake = harness(templateRoutes(entries, "é".repeat(300_000)));
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const error = yield* api.listTemplates!(target).pipe(Effect.flip);
+      assert.include(error.detail, "1 MiB");
+      assert.strictEqual(fake.sent.length, 5);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect.each([
+    { items: [], next: null },
+    tree([treeEntry("other/repo/Bug.md")]),
+    tree([treeEntry(templatePath), treeEntry(templatePath)]),
+    tree([treeEntry(templatePath)], "bad.cursor"),
+    tree(Array.from({ length: 201 }, (_, i) => treeEntry(`.gitcafe/ISSUE_TEMPLATE/${i}.md`))),
+  ])("fails on malformed or foreign template tree pages %#", (response) => {
+    const routes = templateRoutes();
+    const fake = harness({
+      ...routes,
+      "GET /repos/owner/repo/tree": (input: Sent) =>
+        input.query.get("path") === ".gitcafe/ISSUE_TEMPLATE"
+          ? response
+          : routes["GET /repos/owner/repo/tree"](input),
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      yield* api.listTemplates!({ ...target, metadataOnly: true }).pipe(Effect.flip);
+      assert.strictEqual(fake.sent.length, 3);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("follows native tree cursors on one commit and rejects a cycle", () => {
+    const routes = templateRoutes();
+    const fake = harness({
+      ...routes,
+      "GET /repos/owner/repo/tree": (input: Sent) => {
+        if (input.query.get("path") !== ".gitcafe/ISSUE_TEMPLATE")
+          return routes["GET /repos/owner/repo/tree"](input);
+        return input.query.get("after") === null
+          ? tree([treeEntry(templatePath)], "next_page")
+          : tree([treeEntry(".gitcafe/ISSUE_TEMPLATE/Task.txt")]);
+      },
+    });
+    const cycle = harness({
+      ...routes,
+      "GET /repos/owner/repo/tree": (input: Sent) =>
+        input.query.get("path") === ".gitcafe/ISSUE_TEMPLATE"
+          ? tree([], "same")
+          : routes["GET /repos/owner/repo/tree"](input),
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const list = yield* api.listTemplates!({ ...target, metadataOnly: true });
+      assert.strictEqual(list.templates.length, 2);
+      assert.strictEqual(fake.sent.length, 4);
+      assert.strictEqual(fake.sent.at(-1)?.query.get("after"), "next_page");
+    }).pipe(
+      Effect.provide(fake.layer),
+      Effect.andThen(
+        Effect.gen(function* () {
+          const api = yield* GitCafeIssueTracker.make;
+          yield* api.listTemplates!({ ...target, metadataOnly: true }).pipe(Effect.flip);
+          assert.strictEqual(cycle.sent.length, 4);
+        }).pipe(Effect.provide(cycle.layer)),
+      ),
+    );
+  });
+
+  it.effect("bounds tree pages and does not treat a missing known directory as empty", () => {
+    const routes = templateRoutes();
+    const bounded = harness({
+      ...routes,
+      "GET /repos/owner/repo/tree": (input: Sent) =>
+        input.query.get("path") === ".gitcafe/ISSUE_TEMPLATE"
+          ? tree([], `page_${input.query.get("after") ?? "0"}`)
+          : routes["GET /repos/owner/repo/tree"](input),
+    });
+    const missing = harness({
+      ...routes,
+      "GET /repos/owner/repo/tree": (input: Sent) =>
+        input.query.get("path") === ".gitcafe/ISSUE_TEMPLATE"
+          ? new Response("missing", { status: 404 })
+          : routes["GET /repos/owner/repo/tree"](input),
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const error = yield* api.listTemplates!({ ...target, metadataOnly: true }).pipe(Effect.flip);
+      assert.include(error.detail, "page limit");
+      assert.strictEqual(bounded.sent.length, 12);
+    }).pipe(
+      Effect.provide(bounded.layer),
+      Effect.andThen(
+        Effect.gen(function* () {
+          const api = yield* GitCafeIssueTracker.make;
+          const error = yield* api.listTemplates!({ ...target, metadataOnly: true }).pipe(
+            Effect.flip,
+          );
+          assert.strictEqual(error.reason, "not-found");
+        }).pipe(Effect.provide(missing.layer)),
+      ),
+    );
+  });
+
+  it.effect(
+    "uses GitHub templates when GitCafe metadata is absent and never follows symlinks",
+    () => {
+      const fake = harness({
+        ...templateRoutes(),
+        "GET /repos/owner/repo/tree": ({ query }: Sent) => {
+          const path = query.get("path");
+          if (path === ".gitcafe") return new Response("missing", { status: 404 });
+          if (path === ".github") return tree([treeEntry(".github/ISSUE_TEMPLATE", "tree")]);
+          return tree([
+            treeEntry(".github/ISSUE_TEMPLATE/Task.txt"),
+            treeEntry(".github/ISSUE_TEMPLATE/Link.md", "symlink"),
+          ]);
+        },
+      });
+      return Effect.gen(function* () {
+        const api = yield* GitCafeIssueTracker.make;
+        const list = yield* api.listTemplates!({ ...target, metadataOnly: true });
+        assert.deepStrictEqual(
+          list.templates.map((item) => item.name),
+          ["Task.txt"],
+        );
+        assert.strictEqual(fake.sent.length, 4);
+      }).pipe(Effect.provide(fake.layer));
+    },
+  );
+
+  it.effect("does not read from a foreign host or repository scope", () => {
+    const fake = harness(templateRoutes());
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      for (const input of [
+        { ...target, host: "other.example" },
+        { ...target, scope: "owner/repo/foreign" },
+      ])
+        yield* api.listTemplates!({ ...input, metadataOnly: true }).pipe(Effect.flip);
+      yield* api.listTemplates!({ ...target, metadataOnly: true, templateKey }).pipe(Effect.flip);
+      assert.strictEqual(fake.sent.length, 0);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("reads all supported extensions and prefers the GitCafe directory", () => {
+    const paths = ["Bug.md", "Task.markdown", "Help.txt", "form.yml", "nested"].map((name) =>
+      treeEntry(`.gitcafe/ISSUE_TEMPLATE/${name}`, name === "nested" ? "tree" : "blob"),
+    );
+    const fake = harness(templateRoutes(paths));
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const list = yield* api.listTemplates!({ ...target, metadataOnly: true });
+      assert.deepStrictEqual(
+        list.templates.map((item) => item.name),
+        ["Bug.md", "Task.markdown", "Help.txt"],
+      );
+      assert.strictEqual(
+        fake.sent.some((request) => request.query.get("path")?.startsWith(".github")),
+        false,
+      );
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect.each(
+    [".gitcafe", ".github"].flatMap((prefix) =>
+      ["ISSUE_TEMPLATE.md", "ISSUE_TEMPLATE", "issue_template.md"].map((filename) => ({
+        prefix,
+        filename,
+      })),
+    ),
+  )("uses the $prefix/$filename fallback", ({ prefix, filename }) => {
+    const path = `${prefix}/${filename}`;
+    const fake = harness({
+      ...templateRoutes(),
+      "GET /repos/owner/repo/tree": ({ query }: Sent) =>
+        tree(query.get("path") === prefix ? [treeEntry(path)] : []),
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const result = yield* api.listTemplates!({ ...target, metadataOnly: true });
+      assert.strictEqual(result.templates[0]?.key, `${templateCommit}:${path}`);
+      assert.strictEqual(fake.sent.length, 3);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("prefers a GitHub template directory over a single-file fallback", () => {
+    const fake = harness({
+      ...templateRoutes(),
+      "GET /repos/owner/repo/tree": ({ query }: Sent) => {
+        const path = query.get("path");
+        return tree(
+          path === ".gitcafe"
+            ? [treeEntry(".gitcafe/ISSUE_TEMPLATE.md")]
+            : path === ".github"
+              ? [treeEntry(".github/ISSUE_TEMPLATE", "tree")]
+              : [treeEntry(".github/ISSUE_TEMPLATE/Task.txt")],
+        );
+      },
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const list = yield* api.listTemplates!({ ...target, metadataOnly: true });
+      assert.strictEqual(list.templates[0]?.name, "Task.txt");
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("returns an empty catalog for a repository without templates", () => {
+    const fake = harness({ ...templateRoutes(), "GET /repos/owner/repo/tree": tree([]) });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      assert.deepStrictEqual(yield* api.listTemplates!({ ...target, metadataOnly: true }), {
+        templates: [],
+        blankIssuesEnabled: true,
+      });
+      assert.strictEqual(fake.sent.length, 3);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("keeps an empty template body usable", () => {
+    const fake = harness(templateRoutes([treeEntry(templatePath)], ""));
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const list = yield* api.listTemplates!({ ...target, templateKey });
+      assert.strictEqual(list.templates[0]?.body, "");
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("stops at 20 templates without fetching bodies for metadata", () => {
+    const entries = Array.from({ length: 21 }, (_, i) =>
+      treeEntry(`.gitcafe/ISSUE_TEMPLATE/${i}.md`),
+    );
+    const fake = harness(templateRoutes(entries));
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const list = yield* api.listTemplates!({ ...target, metadataOnly: true });
+      assert.strictEqual(list.templates.length, 20);
+      assert.strictEqual(fake.sent.length, 3);
+      const error = yield* api.listTemplates!({
+        ...target,
+        templateKey: `${templateCommit}:${entries[20]!.path}`,
+      }).pipe(Effect.flip);
+      assert.include(error.detail, "template");
+      assert.isTrue(
+        fake.sent.every((request) => request.method === "GET" && !request.path.endsWith("/blob")),
+      );
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect.each([
+    "../secret",
+    `${templateCommit}:README.md`,
+    `${templateCommit}:.gitcafe/ISSUE_TEMPLATE/../secret.md`,
+    `${templateCommit}:.gitcafe/ISSUE_TEMPLATE/%2e%2e/secret.md`,
+  ])("rejects a foreign or unsafe template key %s", (key) => {
+    const fake = harness(templateRoutes());
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      yield* api.listTemplates!({ ...target, templateKey: key }).pipe(Effect.flip);
+      assert.strictEqual(fake.sent.length, 0);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect.each([401, 429])("preserves native HTTP %s on selected template reads", (status) => {
+    const fake = harness({
+      ...templateRoutes(),
+      "GET /repos/owner/repo/blob": new Response("private", {
+        status,
+        headers: { "retry-after": "17" },
+      }),
+    });
+    return Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const api = yield* GitCafeIssueTracker.make;
+      const error = yield* api.listTemplates!({ ...target, templateKey }).pipe(Effect.flip);
+      assert.strictEqual(error.reason, status === 401 ? "unauthenticated" : "rate-limited");
+      if (status === 429) assert.strictEqual(error.retryAt, now + 17_000);
+      assert.deepStrictEqual(fake.invalidated, status === 401 ? ["git.cafe"] : []);
+      assert.strictEqual(fake.sent.length, 3);
+    }).pipe(Effect.provide(fake.layer));
+  });
+});
+
 describe("GitCafeIssueTracker", () => {
   it.effect("preserves full native cursors without cutting them", () => {
     const cursor = "a".repeat(8192);
@@ -678,7 +1112,7 @@ describe("GitCafeIssueTracker", () => {
         assert.strictEqual(detail.comments[0]?.canEdit, true);
         assert.strictEqual(detail.commentsCursor, null);
         assert.deepStrictEqual(detail.events, []);
-        assert.strictEqual(api.capabilities.templates, false);
+        assert.strictEqual(api.capabilities.templates, true);
         assert.strictEqual(api.capabilities.events, false);
         assert.deepStrictEqual(api.capabilities.involvements, ["all", "assigned", "authored"]);
         assert.deepStrictEqual(api.capabilities.listSorts, ["created", "updated"]);
