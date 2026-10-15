@@ -188,6 +188,12 @@ export class IssueService extends Context.Service<
     readonly sources: (
       projectId: ProjectId,
     ) => Effect.Effect<ReadonlyArray<ProjectTrackerBinding>, IssueError>;
+    readonly listSources: (input: {
+      readonly projectId?: ProjectId | undefined;
+      readonly tracker?: IssueTrackerKind | undefined;
+      readonly host?: string | undefined;
+      readonly scope?: string | undefined;
+    }) => Effect.Effect<NonNullable<IssueListResult["sources"]>, IssueError>;
     readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
     readonly comments: (
@@ -422,6 +428,28 @@ export const make = Effect.gen(function* () {
     listProjects({ projectId }).pipe(
       Effect.map(({ supported }) =>
         supported.map(({ tracker, host, scope }) => ({ tracker, host, scope })),
+      ),
+    );
+
+  const listSources: IssueService["Service"]["listSources"] = (input) =>
+    listProjects(input).pipe(
+      Effect.map(({ supported }) =>
+        supported
+          .filter(
+            (project) =>
+              (input.tracker === undefined || project.tracker === input.tracker) &&
+              (input.scope === undefined ||
+                issueScopeKeyOf(project) ===
+                  issueScopeKeyOf({ tracker: project.tracker, scope: input.scope })),
+          )
+          .map(({ project, api, tracker, host, scope }) => ({
+            projectId: project.id,
+            projectTitle: project.title,
+            tracker,
+            host,
+            scope,
+            capabilities: api.capabilities,
+          })),
       ),
     );
 
@@ -1150,6 +1178,7 @@ export const make = Effect.gen(function* () {
 
   return IssueService.of({
     sources,
+    listSources,
     list,
     detail,
     comments,

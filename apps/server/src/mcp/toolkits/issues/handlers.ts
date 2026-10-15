@@ -201,9 +201,16 @@ const make = Effect.gen(function* () {
   return {
     list_issue_sources: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { project } = yield* requireProject(input.projectId);
-        const sources = yield* issues.sources(project.id);
-        return { sources: sources.map((source) => ({ projectId: project.id, ...source })) };
+        const scope = yield* McpInvocationContext.requireMcpCapability("issues");
+        const projectId = input.projectId ?? (yield* callerThread())?.projectId;
+        if (projectId !== undefined) yield* requireProject(projectId);
+        else if (scope.thread !== undefined) return yield* new IssueProjectRequiredError();
+        return {
+          sources: yield* issues.listSources({
+            ...input,
+            ...(projectId === undefined ? {} : { projectId }),
+          }),
+        };
       }),
     ),
     read_issue_history: McpToolAccess.reads((input) =>

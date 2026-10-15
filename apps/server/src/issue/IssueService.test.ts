@@ -482,6 +482,82 @@ describe("resolveGitHostBinding", () => {
 });
 
 describe("IssueService", () => {
+  it.effect(
+    "discovers project source metadata with native scope filters and no provider reads",
+    () =>
+      Effect.gen(function* () {
+        const unused = () => Effect.die("Source discovery must not read a provider");
+        const github = fakeTracker({ getViewer: unused, getIssue: unused, listIssues: unused });
+        const linear = fakeStandaloneTracker({
+          getViewer: unused,
+          getIssue: unused,
+          listIssues: unused,
+        });
+        const forgejo = IssueTrackerKind.make("forgejo");
+        const api = project({
+          id: "api",
+          provider: "forgejo",
+          host: "forgejo.test",
+          repository: "Acme/Api",
+        });
+        const service = yield* makeService({
+          projects: [
+            project({ id: "web", repository: "acme/web" }),
+            {
+              ...api,
+              repositoryIdentity: {
+                ...api.repositoryIdentity!,
+                webUrl: "https://forgejo.test/Mount/Acme/Api",
+              },
+            },
+          ],
+          bindings: { web: { tracker: LINEAR, scope: "ENG" } },
+          trackers: [github, linear, { ...github, kind: forgejo }],
+        });
+        const global = yield* service.listSources({});
+        expect(global).toEqual([
+          {
+            projectId: "web",
+            projectTitle: "web",
+            tracker: GITHUB,
+            host: "github.com",
+            scope: "acme/web",
+            capabilities: github.capabilities,
+          },
+          {
+            projectId: "web",
+            projectTitle: "web",
+            tracker: LINEAR,
+            host: "linear.app",
+            scope: "ENG",
+            capabilities: linear.capabilities,
+          },
+          {
+            projectId: "api",
+            projectTitle: "api",
+            tracker: forgejo,
+            host: "forgejo.test",
+            scope: "Mount/acme/api",
+            capabilities: github.capabilities,
+          },
+        ]);
+        expect(
+          yield* service.listSources({ projectId: ProjectId.make("web"), tracker: LINEAR }),
+        ).toEqual([global[1]]);
+        expect(
+          yield* service.listSources({ host: "FORGEJO.TEST", scope: "Mount/ACME/API" }),
+        ).toEqual([global[2]]);
+        expect(
+          yield* service.listSources({ host: "forgejo.test", scope: "mount/acme/api" }),
+        ).toEqual([]);
+        expect(yield* service.listSources({ projectId: ProjectId.make("missing") })).toEqual([]);
+        expect(yield* service.sources(ProjectId.make("web"))).toEqual([
+          { tracker: GITHUB, host: "github.com", scope: "acme/web" },
+          { tracker: LINEAR, host: "linear.app", scope: "ENG" },
+        ]);
+      }),
+  );
+
   it.effect("forwards only supplied candidate keys without issue or permission preflights", () =>
     Effect.gen(function* () {
       const calls: Parameters<NonNullable<IssueTrackerApi["listCandidates"]>>[0][] = [];

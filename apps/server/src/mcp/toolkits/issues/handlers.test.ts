@@ -7,6 +7,7 @@ import {
   ThreadId,
   type IssueDetail,
   type IssueCandidates,
+  type IssueListResult,
   type OrchestrationProjectShell,
   type ThreadIssueLink,
 } from "@t3tools/contracts";
@@ -63,15 +64,20 @@ const candidates: IssueCandidates = { labels: [], assignees: [], truncated: fals
 
 const invocation = (
   capabilities: ReadonlyArray<McpInvocationContext.McpCapability>,
+  external = false,
 ): McpInvocationContext.McpInvocationScope => ({
   environmentId: EnvironmentId.make("environment-1"),
   requestNamespace: "provider-session-1",
-  thread: {
-    threadId: THREAD_ID,
-    providerSessionId: "provider-session-1",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-  },
-  client: undefined,
+  thread: external
+    ? undefined
+    : {
+        threadId: THREAD_ID,
+        providerSessionId: "provider-session-1",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+  client: external
+    ? { sessionId: "external-read-session", label: "Read client", access: "read-only" }
+    : undefined,
   capabilities: new Set(capabilities),
   issuedAt: 1,
 });
@@ -186,6 +192,8 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   options: {
     readonly project?: OrchestrationProjectShell;
     readonly sources?: ReadonlyArray<IssueService.ProjectTrackerBinding>;
+    readonly discoverySources?: NonNullable<IssueListResult["sources"]>;
+    readonly missingThread?: boolean;
     readonly detail?: IssueDetail;
     readonly candidates?: IssueCandidates;
     readonly update?: IssueService.IssueService["Service"]["update"];
@@ -208,9 +216,26 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       listShells: () => Effect.succeed([currentProject]),
     }),
     Layer.mock(Orchestrator.OrchestratorV2)({
-      getThreadShell: (id) => Effect.succeed(id === THREAD_ID ? makeThread(issues) : null),
+      getThreadShell: (id) =>
+        Effect.succeed(id === THREAD_ID && !options.missingThread ? makeThread(issues) : null),
     }),
     Layer.mock(IssueService.IssueService)({
+      listSources: (input) =>
+        record(
+          "listSources",
+          input,
+          (
+            options.discoverySources ??
+            (options.sources ?? [gitHostSource]).map((source) => ({
+              projectId: currentProject.id,
+              projectTitle: currentProject.title,
+              ...source,
+              capabilities: currentDetail.capabilities,
+            }))
+          ).filter(
+            (source) => input.projectId === undefined || source.projectId === input.projectId,
+          ),
+        ),
       sources: () =>
         Ref.update(resolutions, (recorded) => [...recorded, "sources"]).pipe(
           Effect.as(options.sources ?? [gitHostSource]),
@@ -304,6 +329,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     name: Name,
     params: Parameters<typeof toolkit.handle<Name>>[1],
     capabilities: ReadonlyArray<McpInvocationContext.McpCapability> = ["issues"],
+    external = false,
   ) =>
     toolkit.handle(name, params).pipe(
       Stream.unwrap,
@@ -311,13 +337,97 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       Effect.map(
         (chunk) => chunk.at(-1)!.result as Tool.Success<(typeof IssuesToolkit.tools)[Name]>,
       ),
-      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
+      Effect.provideService(
+        McpInvocationContext.McpInvocationContext,
+        invocation(capabilities, external),
+      ),
       Effect.provide(layerDependencies),
     );
   return { links, unlinks, resolutions, call, calls };
 });
 
 describe("issue toolkit handlers", () => {
+  const decodeSourcesResult = Schema.decodeUnknownSync(
+    IssuesToolkit.tools.list_issue_sources.successSchema,
+  );
+  it.effect.each([
+    { external: true, input: {}, projectId: undefined },
+    { external: false, input: {}, projectId: PROJECT_ID },
+    { external: true, input: { projectId: PROJECT_ID }, projectId: PROJECT_ID },
+  ])("discovers source metadata for external=$external and project=$projectId", (mode) =>
+    Effect.gen(function* () {
+      const sources = [
+        {
+          projectId: PROJECT_ID,
+          projectTitle: "Project",
+          ...gitHostSource,
+          capabilities: detail.capabilities,
+        },
+        {
+          projectId: ProjectId.make("other"),
+          projectTitle: "Other",
+          ...standaloneSource,
+          capabilities: detail.capabilities,
+        },
+      ];
+      const harness = yield* makeHarness([], { discoverySources: sources });
+      const result = yield* harness.call(
+        "list_issue_sources",
+        mode.input,
+        ["issues"],
+        mode.external,
+      );
+      const expected = sources.filter(
+        (source) => mode.projectId === undefined || source.projectId === mode.projectId,
+      );
+      expect(decodeSourcesResult(result)).toEqual({ sources: expected });
+      expect(yield* Ref.get(harness.calls)).toEqual([
+        {
+          operation: "listSources",
+          input: mode.projectId === undefined ? {} : { projectId: mode.projectId },
+        },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "denies source discovery before reads for missing grants, projects or thread context",
+    () =>
+      Effect.gen(function* () {
+        for (const mode of [
+          {
+            input: {},
+            capabilities: [] as const,
+            external: true,
+            missingThread: false,
+            error: "McpCapabilityUnavailableError",
+          },
+          {
+            input: { projectId: ProjectId.make("missing") },
+            capabilities: ["issues"] as const,
+            external: true,
+            missingThread: false,
+            error: "IssueProjectNotFoundError",
+          },
+          {
+            input: {},
+            capabilities: ["issues"] as const,
+            external: false,
+            missingThread: true,
+            error: "IssueProjectRequiredError",
+          },
+        ]) {
+          const harness = yield* makeHarness([], { missingThread: mode.missingThread });
+          const result = yield* harness
+            .call("list_issue_sources", mode.input, mode.capabilities, mode.external)
+            .pipe(Effect.flip);
+          expect(result._tag).toBe(mode.error);
+          expect(yield* Ref.get(harness.calls)).toEqual([]);
+          expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+        }
+      }),
+  );
+
   it.effect.each(["Release 1", null, undefined])(
     "keeps native milestone %s in registered reads without extra calls",
     (milestone) =>
@@ -1522,6 +1632,7 @@ it.effect("pages native candidates and keeps scope templates on the selected sou
       "labelCandidates",
       "assigneeCandidates",
       "templates",
+      "listSources",
     ]);
   }),
 );

@@ -501,18 +501,27 @@ const ListThreadIssuesTool = Tool.make("list_thread_issues", {
   .annotate(Tool.OpenWorld, false);
 
 const ListIssueSources = Tool.make("list_issue_sources", {
-  description: "List the configured issue sources of this project.",
+  description:
+    "List configured issue sources with project titles and native capabilities. Omit projectId for this thread's project, or all projects for an external client. Tracker, host and scope filter the sources. Caller permissions still apply.",
   parameters: Schema.Struct({
     projectId: IssueTargetInput.fields.projectId,
     tracker: IssueTargetInput.fields.tracker,
     host: IssueTargetInput.fields.host,
     scope: IssueTargetInput.fields.scope,
   }),
-  success: Schema.Struct({ sources: Schema.Array(IssueScopeRef) }),
+  success: Schema.Struct({
+    sources: Schema.Array(
+      Schema.Struct({
+        ...IssueScopeRef.fields,
+        projectTitle: IssueDetail.fields.projectTitle,
+        capabilities: IssueCapabilities,
+      }),
+    ),
+  }),
   failure: IssueToolError,
   dependencies,
 })
-  .annotate(Tool.Title, "List the configured issue sources of this project")
+  .annotate(Tool.Title, "List configured issue sources")
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
