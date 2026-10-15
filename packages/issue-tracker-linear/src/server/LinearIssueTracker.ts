@@ -684,6 +684,8 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           const issues = yield* Effect.forEach(page.nodes, (issue) =>
             requireIssueReference("listIssues", input.scope, issue),
           );
+          if (page.nextCursor !== null && page.nextCursor === input.cursor)
+            return yield* failed("listIssues", "Linear returned an inconsistent page.");
           return {
             items: issues.map((issue) => toSummary(issue, null, page.viewerId)),
             nextCursor: page.nextCursor,
@@ -731,6 +733,8 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
           });
           const viewer = input.viewer ?? null;
           yield* requireIssueReference("getComments", input.scope, page.issue);
+          if (page.nextCursor !== null && page.nextCursor === input.cursor)
+            return yield* failed("getComments", "Linear returned an inconsistent page.");
           return {
             comments: page.nodes.map((comment) => toComment(comment, viewer)),
             nextCursor: page.nextCursor,

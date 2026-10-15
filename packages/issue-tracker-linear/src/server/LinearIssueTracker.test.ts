@@ -2377,6 +2377,50 @@ it.effect("keeps all states and the native cursor when category filtering is omi
   }),
 );
 
+it.effect.each(["asc", "desc"] as const)(
+  "rejects unchanged Linear issue cursors in %s order without extra requests",
+  (order) =>
+    Effect.gen(function* () {
+      for (const nextCursor of ["same", "next", null]) {
+        const test = fakeLinear({
+          T3Issues: () => ({
+            organization: ORGANIZATION,
+            issues: {
+              nodes: [issue("ENG-7")],
+              pageInfo: {
+                hasNextPage: nextCursor !== null,
+                endCursor: nextCursor ?? "same",
+                hasPreviousPage: nextCursor !== null,
+                startCursor: nextCursor ?? "same",
+              },
+            },
+          }),
+        });
+        const api = yield* test.tracker;
+        const result = api.listIssues({
+          ...target,
+          state: "all",
+          involvement: "all",
+          viewer: JULIUS.id,
+          limit: 1,
+          cursor: "same",
+          order,
+        });
+        if (nextCursor === "same")
+          expect(yield* result.pipe(Effect.flip)).toMatchObject({
+            reason: "failed",
+            operation: "listIssues",
+            detail: "Linear returned an inconsistent page.",
+          });
+        else expect(yield* result).toMatchObject({ items: [{ key: "ENG-7" }], nextCursor });
+        expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Issues"]);
+        expect(test.requests[0]?.variables).toMatchObject(
+          order === "asc" ? { before: "same", after: null } : { before: null, after: "same" },
+        );
+      }
+    }),
+);
+
 it.effect("pages native workflow filters and ascending order without a viewer read", () =>
   Effect.gen(function* () {
     const test = fakeLinear({
@@ -2732,6 +2776,44 @@ it.effect("creates an issue with a checked parent and a plain native template", 
     expect(test.requests.filter((request) => request.operation === "T3IssueCreate")).toHaveLength(
       1,
     );
+  }),
+);
+
+it.effect("rejects unchanged Linear comment cursors without extra requests", () =>
+  Effect.gen(function* () {
+    for (const nextCursor of ["same", "next", null]) {
+      const test = fakeLinear({
+        T3Comments: () => ({
+          issue: {
+            ...issue("ENG-7"),
+            comments: {
+              nodes: [
+                {
+                  id: "comment-1",
+                  body: "Saved comment",
+                  createdAt: "2026-07-01T00:00:00Z",
+                  url: null,
+                  user: JULIUS,
+                  reactions: [],
+                },
+              ],
+              pageInfo: { hasNextPage: nextCursor !== null, endCursor: nextCursor ?? "same" },
+            },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      const result = api.getComments({ ...target, key: "ENG-7", cursor: "same" });
+      if (nextCursor === "same")
+        expect(yield* result.pipe(Effect.flip)).toMatchObject({
+          reason: "failed",
+          operation: "getComments",
+          detail: "Linear returned an inconsistent page.",
+        });
+      else expect(yield* result).toMatchObject({ comments: [{ id: "comment-1" }], nextCursor });
+      expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Comments"]);
+      expect(test.requests[0]?.variables.after).toBe("same");
+    }
   }),
 );
 
