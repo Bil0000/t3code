@@ -994,7 +994,7 @@ export const IssueEditCommentInput = Schema.Struct({
   richBody: Schema.optional(IssueRichBody),
   ...IssueRef.fields,
   commentId: TrimmedNonEmptyString,
-  body: CommentBody,
+  body: IssueBody,
 });
 export type IssueEditCommentInput = typeof IssueEditCommentInput.Type;
 export const IssueSetParentInput = Schema.Struct({

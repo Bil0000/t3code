@@ -26,6 +26,8 @@ import {
   IssueScopeRef,
   IssueCapabilities,
   IssueCreateInput,
+  IssueCommentInput,
+  IssueEditCommentInput,
   IssueCreateResult,
   IssueDetail,
   IssueLinkedPullRequest,
@@ -663,6 +665,38 @@ it("uses account action values that an old tracker schema rejects before dispatc
     expect(() => dispatch(oldBind, request)).toThrow();
   }
   expect(nativeWrites).toEqual([]);
+});
+
+it("accepts empty rich-comment fallbacks and retains comment body bounds", () => {
+  const decodeEdit = Schema.decodeUnknownSync(IssueEditCommentInput);
+  const decodeComment = Schema.decodeUnknownSync(IssueCommentInput);
+  const ref = {
+    projectId: "project",
+    tracker: "jira",
+    host: "jira.example.com",
+    scope: "OPS",
+    key: "OPS-7",
+  };
+  const input = { ...ref, commentId: "comment", body: "" };
+  for (const richBody of [
+    {
+      format: "adf",
+      document:
+        '{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Added text"}]}]}',
+    },
+    { format: "jira-wiki", document: "*Added text*" },
+  ]) {
+    const richEdit = { ...input, richBody };
+    expect(decodeEdit(richEdit)).toEqual(richEdit);
+    expect(() => decodeEdit({ ...richEdit, body: "x".repeat(65_537) })).toThrow();
+  }
+  for (const body of ["  edited text", "x".repeat(65_536)]) {
+    expect(decodeEdit({ ...input, body }).body).toBe(body);
+    expect(decodeComment({ ...ref, body }).body).toBe(body);
+  }
+  expect(() => decodeEdit({ ...input, body: "x".repeat(65_537) })).toThrow();
+  expect(() => decodeComment({ ...ref, body: "" })).toThrow();
+  expect(() => decodeComment({ ...ref, body: "x".repeat(65_537) })).toThrow();
 });
 
 it("bounds native field values and rich JSON before tracker calls", () => {

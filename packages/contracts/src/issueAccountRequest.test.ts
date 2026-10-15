@@ -218,6 +218,7 @@ it.each([
   [WS_METHODS.issuesUpdate, { ...ref, richBody }, "title"],
   [WS_METHODS.issuesUpdate, { ...ref, title: "New", body: "fallback", richBody }, "title"],
   [WS_METHODS.issuesEditComment, { ...ref, commentId: "c", body: "fallback", richBody }, "body"],
+  [WS_METHODS.issuesEditComment, { ...ref, commentId: "c", body: "", richBody }, "body"],
 ] as const)(
   "makes old servers refuse advanced %s writes before stripping fields",
   (tag, input, field) => {

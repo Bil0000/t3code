@@ -2681,9 +2681,11 @@ it.effect(
       ]) {
         expect((yield* Effect.flip(mutation)).reason).toBe("read-only");
       }
-      expect(
-        (yield* Effect.flip(service.editComment({ ...ref, commentId: "x", body: "  " })))._tag,
-      ).toBe("IssueOperationError");
+      for (const body of ["", " \t\n"]) {
+        expect(
+          (yield* Effect.flip(service.editComment({ ...ref, commentId: "x", body })))._tag,
+        ).toBe("IssueOperationError");
+      }
       expect((yield* Effect.flip(service.setParent({ ...ref, parentKey: "1" })))._tag).toBe(
         "IssueOperationError",
       );
@@ -3266,13 +3268,13 @@ it.effect(
       });
       yield* service.setState({ ...ref, state: "closed", transitionId: "31", fieldValues });
       yield* service.update({ ...ref, richBody });
-      yield* service.editComment({ ...ref, commentId: "c", body: "fallback", richBody });
+      yield* service.editComment({ ...ref, commentId: "c", body: "", richBody });
       expect(calls).toMatchObject([
         { operation: "candidates", input: { issueType: "Bug" } },
         { operation: "create", input: { fieldValues } },
         { operation: "state", input: { state: "closed", transitionId: "31", fieldValues } },
         { operation: "update", input: { richBody } },
-        { operation: "comment", input: { richBody } },
+        { operation: "comment", input: { body: "", richBody } },
       ]);
       allowed = false;
       yield* service.update({ ...ref, richBody }).pipe(Effect.flip);
