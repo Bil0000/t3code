@@ -19,6 +19,7 @@ import type {
   IssueReactionContent,
   IssueLinkedPullRequest,
   IssueTemplate,
+  IssueViewerPermissions,
   PullRequestState,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -402,10 +403,64 @@ export function decodeTemplateJson(
   }));
 }
 
+const ISSUE_PERMISSION_FIELDS =
+  "state userPermissions { updateIssue reopenIssue createNote adminIssue }";
+
+export const ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: String!) {
+  project(fullPath: $fullPath) {
+    archived
+    mergeRequest: issue(iid: $iid) { ${ISSUE_PERMISSION_FIELDS} }
+  }
+}`;
+
+const RawIssuePermissionsSchema = Schema.Struct({
+  state: Schema.String,
+  userPermissions: Schema.Struct({
+    updateIssue: Schema.Boolean,
+    reopenIssue: Schema.Boolean,
+    createNote: Schema.Boolean,
+    adminIssue: Schema.Boolean,
+  }),
+});
+const RawIssueAccessSchema = Schema.Struct({
+  archived: Schema.Boolean,
+  mergeRequest: RawIssuePermissionsSchema,
+});
+const decodeIssueAccess = decodeJsonResult(
+  Schema.Struct({ data: Schema.Struct({ project: RawIssueAccessSchema }) }),
+);
+
+function toViewerPermissions(project: typeof RawIssueAccessSchema.Type): IssueViewerPermissions {
+  const writable = !project.archived;
+  const permission = project.mergeRequest.userPermissions;
+  return {
+    edit: writable && permission.updateIssue,
+    setState:
+      writable &&
+      (project.mergeRequest.state === "closed" ? permission.reopenIssue : permission.updateIssue),
+    comment: writable && permission.createNote,
+    labels: writable && permission.adminIssue,
+    assignees: writable && permission.adminIssue,
+  };
+}
+
+export function decodeIssueViewerPermissionsJson(raw: string) {
+  return Result.map(decodeIssueAccess(raw), ({ data }) => toViewerPermissions(data.project));
+}
+
+export const decodeIssueUpdatedMetadataJson = decodeJsonResult(
+  Schema.Struct({
+    labels: Schema.optional(Schema.Array(Schema.String)),
+    assignees: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.Int }))),
+  }),
+);
+
 export const ISSUE_AWARD_EMOJI_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: String!, $cursor: String) {
   currentUser { username }
   project(fullPath: $fullPath) {
+    archived
     mergeRequest: issue(iid: $iid) {
+      ${ISSUE_PERMISSION_FIELDS}
       notes(last: ${PAGE_SIZE}, before: $cursor) {
         pageInfo { hasPreviousPage startCursor }
         nodes {
@@ -447,7 +502,9 @@ const decodeIssueAwardPage = decodeJsonResult(
     data: Schema.Struct({
       currentUser: Schema.Struct({ username: Schema.String.check(Schema.isPattern(/\S/)) }),
       project: Schema.Struct({
+        archived: Schema.Boolean,
         mergeRequest: Schema.Struct({
+          ...RawIssuePermissionsSchema.fields,
           notes: Schema.Struct({
             pageInfo: Schema.Struct({
               hasPreviousPage: Schema.Boolean,
@@ -488,6 +545,7 @@ export function decodeIssueAwardPageJson(raw: string) {
       return {
         ...awards,
         viewer: data.currentUser.username.trim(),
+        viewerPermissions: toViewerPermissions(data.project),
         nextCursor:
           issue.notes.pageInfo.hasPreviousPage === true
             ? trimmed(issue.notes.pageInfo.startCursor)

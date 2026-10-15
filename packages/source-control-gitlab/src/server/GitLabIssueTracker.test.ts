@@ -2,12 +2,20 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
 
 import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabIssueTracker from "./GitLabIssueTracker.ts";
 
 const encode = (value: unknown) => JSON.stringify(value);
+
+const ISSUE_PERMISSIONS = {
+  updateIssue: true,
+  reopenIssue: true,
+  createNote: true,
+  adminIssue: true,
+};
 
 const ISSUE = {
   iid: 42,
@@ -77,7 +85,10 @@ function answer(path: string): string {
       data: {
         currentUser: { username: "julius" },
         project: {
+          archived: false,
           mergeRequest: {
+            state: "closed",
+            userPermissions: ISSUE_PERMISSIONS,
             notes: {
               pageInfo: { hasPreviousPage: false, startCursor: "native-note-7" },
               nodes: [
@@ -129,6 +140,215 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
 }
 
 describe("GitLabIssueTracker", () => {
+  it.effect.each([false, true])(
+    "keeps native author title writes and token refusal: $value",
+    (denied) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const native = new GitLabCli.GitLabCliCommandError({
+          command: "glab",
+          operation: "execute",
+          cwd: "/w",
+          cause: new Error("HTTP 403 Forbidden"),
+        });
+        const api = yield* GitLabIssueTracker.make.pipe(
+          Effect.provide(
+            Layer.mock(GitLabCli.GitLabCli)({
+              execute: ({ args, stdin }) => {
+                paths.push(args[1]!);
+                if (args.includes("PUT")) {
+                  expect(JSON.parse(stdin!)).toEqual({ title: "Updated" });
+                  return denied
+                    ? Effect.fail(native)
+                    : Effect.succeed(
+                        TestSourceControlHost.processOutput(encode({ ...ISSUE, title: "Updated" })),
+                      );
+                }
+                const response = JSON.parse(answer("graphql"));
+                response.data.project.mergeRequest.userPermissions.adminIssue = false;
+                return Effect.succeed(TestSourceControlHost.processOutput(encode(response)));
+              },
+            }),
+          ),
+        );
+        const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web", key: "42" };
+        const permission = yield* api.getViewerPermissions(target);
+        expect(permission.edit).toBe(true);
+        expect(permission.labels).toBe(false);
+        const result = yield* Effect.result(api.update!({ ...target, title: "Updated" }));
+        expect(Result.isFailure(result)).toBe(denied);
+        if (Result.isFailure(result))
+          expect(result.failure).toMatchObject({
+            operation: "update",
+            reason: "failed",
+            cause: native,
+          });
+        expect(paths).toEqual(["graphql", "projects/acme%2Fweb/issues/42"]);
+      }),
+  );
+
+  it.effect.each([
+    {
+      archived: false,
+      admin: false,
+      update: true,
+      reopen: true,
+      note: true,
+      state: "opened",
+      expected: { edit: true, setState: true, comment: true, labels: false, assignees: false },
+    },
+    {
+      archived: false,
+      admin: true,
+      update: true,
+      reopen: true,
+      note: true,
+      state: "closed",
+      expected: { edit: true, setState: true, comment: true, labels: true, assignees: true },
+    },
+    {
+      archived: true,
+      admin: true,
+      update: true,
+      reopen: true,
+      note: true,
+      state: "opened",
+      expected: { edit: false, setState: false, comment: false, labels: false, assignees: false },
+    },
+    {
+      archived: false,
+      admin: false,
+      update: false,
+      reopen: false,
+      note: false,
+      state: "closed",
+      expected: { edit: false, setState: false, comment: false, labels: false, assignees: false },
+    },
+    {
+      archived: false,
+      admin: false,
+      update: true,
+      reopen: false,
+      note: true,
+      state: "closed",
+      expected: { edit: true, setState: false, comment: true, labels: false, assignees: false },
+    },
+  ])("uses native issue permissions: $archived/$admin/$state/$reopen", (input) =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args, stdin) => {
+        paths.push(args[1]!);
+        if (args[1] !== "graphql") return answer(args[1]!);
+        const request = JSON.parse(stdin!);
+        expect(request.query).toContain("archived");
+        if (!request.query.includes("notes(")) {
+          expect(request.query).not.toContain("currentUser");
+          expect(request.variables).toEqual({ fullPath: "acme/web", iid: "42" });
+        }
+        expect(request.query).toContain(
+          "userPermissions { updateIssue reopenIssue createNote adminIssue }",
+        );
+        const response = JSON.parse(answer("graphql"));
+        response.data.project.archived = input.archived;
+        response.data.project.mergeRequest.state = input.state;
+        response.data.project.mergeRequest.userPermissions = {
+          updateIssue: input.update,
+          reopenIssue: input.reopen,
+          createNote: input.note,
+          adminIssue: input.admin,
+        };
+        return encode(response);
+      });
+      const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web", key: "42" };
+      expect(yield* api.getViewerPermissions(target)).toEqual(input.expected);
+      expect(paths).toEqual(["graphql"]);
+      expect((yield* api.getIssue(target)).viewerPermissions).toEqual(input.expected);
+      expect(paths).toHaveLength(7);
+      expect(paths).not.toContain("user");
+    }),
+  );
+
+  it.effect.each(["labels", "assignees"] as const)(
+    "refuses silently dropped %s after one native PUT",
+    (field) =>
+      Effect.gen(function* () {
+        const requests: ReadonlyArray<string>[] = [];
+        const api = yield* tracker((args) => {
+          requests.push(args);
+          return encode({ labels: ["old"], assignees: [{ id: 2 }] });
+        });
+        const error = yield* Effect.flip(
+          api.update!({
+            cwd: "/w",
+            host: "gitlab.acme.test",
+            scope: "acme/web",
+            key: "42",
+            ...(field === "labels" ? { labels: ["new"] } : { assignees: ["6"] }),
+          }),
+        );
+        expect(error).toMatchObject({ operation: "update", reason: "failed" });
+        expect(error.detail).toContain(field);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toContain("PUT");
+      }),
+  );
+
+  it.effect.each([
+    { name: "missing fields", raw: "{}", truncated: false },
+    { name: "invalid JSON", raw: "{", truncated: false },
+    {
+      name: "truncated fields",
+      raw: '{"labels":["bug"],"assignees":[{"id":2}]}',
+      truncated: true,
+    },
+  ])("refuses unreadable metadata acknowledgements: $name", (input) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const api = yield* GitLabIssueTracker.make.pipe(
+        Effect.provide(
+          Layer.mock(GitLabCli.GitLabCli)({
+            execute: ({ args }) => {
+              calls++;
+              expect(args).toContain("PUT");
+              return Effect.succeed({
+                ...TestSourceControlHost.processOutput(input.raw),
+                stdoutTruncated: input.truncated,
+              });
+            },
+          }),
+        ),
+      );
+      const error = yield* Effect.flip(
+        api.update!({
+          cwd: "/w",
+          host: "gitlab.acme.test",
+          scope: "acme/web",
+          key: "42",
+          labels: ["bug"],
+          assignees: ["2"],
+        }),
+      );
+      expect(error).toMatchObject({ operation: "update", reason: "failed" });
+      expect(calls).toBe(1);
+    }),
+  );
+
+  it.effect("verifies metadata using the existing native update response", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args, stdin) => {
+        paths.push(args[1]!);
+        if (args[1] === "graphql") return answer("graphql");
+        expect(JSON.parse(stdin!)).toEqual({ labels: "bug,urgent", assignee_ids: [2, 6] });
+        return encode({ labels: ["urgent", "bug"], assignees: [{ id: 6 }, { id: 2 }] });
+      });
+      const target = { cwd: "/w", host: "gitlab.acme.test", scope: "acme/web", key: "42" };
+      expect((yield* api.getViewerPermissions(target)).labels).toBe(true);
+      yield* api.update!({ ...target, labels: ["bug", "urgent"], assignees: ["2", "6"] });
+      expect(paths).toEqual(["graphql", "projects/acme%2Fweb/issues/42"]);
+    }),
+  );
+
   it.effect("shows a new reply beyond 100 notes and pages back into older notes", () =>
     Effect.gen(function* () {
       const paths: string[] = [];
@@ -163,7 +383,10 @@ describe("GitLabIssueTracker", () => {
           data: {
             currentUser: { username: "julius" },
             project: {
+              archived: false,
               mergeRequest: {
+                state: "closed",
+                userPermissions: ISSUE_PERMISSIONS,
                 notes: {
                   pageInfo: backward
                     ? { hasPreviousPage: start > 0, startCursor: `native-note-${start + 1}` }
@@ -562,7 +785,10 @@ describe("GitLabIssueTracker", () => {
         paths.push(args[1]!);
         if (args.includes("PUT")) {
           sentBody = stdin;
-          return encode(ISSUE);
+          return encode({
+            ...ISSUE,
+            assignees: JSON.parse(stdin!).assignee_ids.map((id: number) => ({ id })),
+          });
         }
         if (args[1]?.startsWith("projects/acme%2Fweb/members")) {
           return encode([{ id: 6, username: "alice" }]);
@@ -662,7 +888,10 @@ describe("GitLabIssueTracker", () => {
           data: {
             currentUser: { username: "julius" },
             project: {
+              archived: false,
               mergeRequest: {
+                state: "closed",
+                userPermissions: ISSUE_PERMISSIONS,
                 notes: {
                   pageInfo: { hasPreviousPage: true, startCursor: "native-next" },
                   nodes: [
@@ -723,7 +952,10 @@ describe("GitLabIssueTracker", () => {
           data: {
             currentUser: { username: "julius" },
             project: {
+              archived: false,
               mergeRequest: {
+                state: "closed",
+                userPermissions: ISSUE_PERMISSIONS,
                 notes: {
                   pageInfo: { hasPreviousPage: true, startCursor: "native-next" },
                   nodes: [
