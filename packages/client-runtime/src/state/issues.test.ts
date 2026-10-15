@@ -10,7 +10,12 @@ import type {
   IssueTrackerKind,
   ProjectId,
 } from "@t3tools/contracts";
-import { AuthOrchestrationReadScope, WS_METHODS, WsIssuesRpcGroup } from "@t3tools/contracts";
+import {
+  AuthOrchestrationReadScope,
+  issueListCursorKey,
+  WS_METHODS,
+  WsIssuesRpcGroup,
+} from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -783,7 +788,7 @@ describe("refreshIssueListPage", () => {
   });
 
   it.each(["github.com acme/app", "github github.com acme/app"])(
-    "restores an exhausted scope's cursor after an unchanged first-page refresh: %s",
+    "restores an exhausted cursor when its first-page token changes: %s",
     (scope) => {
       const first = {
         entries: rows(1, 2),
@@ -806,11 +811,11 @@ describe("refreshIssueListPage", () => {
       expect(completed.nextCursors).toEqual({});
       const fresh = refreshIssueListPage(completed, {
         entries: rows(1, 2),
-        nextCursors: { [scope]: "2" },
+        nextCursors: { [scope]: "fresh-2" },
         errors: [],
       });
       expect(fresh.entries).toEqual(rows(1, 4));
-      expect(fresh.nextCursors).toEqual({ [scope]: "2" });
+      expect(fresh.nextCursors).toEqual({ [scope]: "fresh-2" });
       expect(fresh.firstKeys).toEqual(first.firstKeys);
       const failed = refreshIssueListPage(fresh, {
         entries: [],
@@ -821,7 +826,7 @@ describe("refreshIssueListPage", () => {
       expect(failed.nextCursors).toEqual(fresh.nextCursors);
       const next = continueIssueListPage(
         failed,
-        { [scope]: "2" },
+        { [scope]: "fresh-2" },
         {
           entries: rows(3, 5),
           nextCursors: {},
@@ -1591,6 +1596,174 @@ describe("held issue list viewers", () => {
       request.mockRestore();
     }
   });
+
+  it.each(["gitlab gitlab.example group/app", "gitlab.example group/app"])(
+    "keeps a completed 75-row scope terminal after an unchanged first refresh: %s",
+    async (cursor) => {
+      const { atoms, registry, dispose } = issueReadHarness();
+      const nativeRows = (from: number, to: number) =>
+        Array.from({ length: to - from + 1 }, (_, index) =>
+          entry({
+            key: String(from + index),
+            tracker: "gitlab" as IssueTrackerKind,
+            host: "gitlab.example",
+            scope: "group/app",
+            updatedAt: `2026-10-01T00:00:00.${String(999 - from - index).padStart(3, "0")}Z`,
+          }),
+        );
+      const initial: IssueListResult = {
+        entries: nativeRows(1, 50),
+        nextCursors: { [cursor]: "2" },
+        viewers: { "gitlab gitlab.example": "A" },
+        trackers: [],
+        errors: [],
+      };
+      const last = { ...initial, entries: nativeRows(51, 75), nextCursors: {} };
+      const replies = [initial, last, initial];
+      const request = vi.spyOn(RpcClient, "requestGuarded");
+      request.mockImplementation((() => Effect.succeed(replies.shift()!)) as unknown as Parameters<
+        typeof request.mockImplementation
+      >[0]);
+      const read = async (input: IssueListInput) => {
+        const result = await atoms.listPage.run(registry, {
+          environmentId: "environment" as EnvironmentId,
+          input,
+        });
+        if (result._tag !== "Success") throw new Error("list read failed");
+        return result.value;
+      };
+      try {
+        const input = { state: "all" as const, involvement: "assigned" as const, limit: 50 };
+        const answer = await read(input);
+        const first = {
+          answer,
+          entries: answer.entries,
+          nextCursors: answer.nextCursors,
+          firstCursors: answer.nextCursors,
+          firstKeys: new Set(answer.entries.map(issueEntryKey)),
+          errors: answer.errors,
+        };
+        const completed = continueIssueListPage(
+          first,
+          first.nextCursors,
+          await read({ ...input, cursors: first.nextCursors }),
+          first.firstCursors,
+        );
+        expect(completed.entries).toHaveLength(75);
+        expect(completed.nextCursors).toEqual({});
+        const refreshed = refreshIssueListPage(completed, await read(input));
+        expect(refreshed.entries).toEqual(nativeRows(1, 75));
+        expect(refreshed.nextCursors).toEqual({});
+        expect(refreshed.firstCursors).toEqual(first.firstCursors);
+        expect(refreshed.firstKeys).toEqual(first.firstKeys);
+        expect(refreshIssueListPage(refreshed, initial).nextCursors).toEqual({});
+        expect(request.mock.calls.map(([, payload]) => payload)).toEqual([
+          input,
+          { ...input, cursors: first.nextCursors },
+          input,
+        ]);
+        expect(replies).toEqual([]);
+      } finally {
+        dispose();
+        request.mockRestore();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps completed scopes separate through a scoped case-alias refresh, legacy: %s",
+    (legacy) => {
+      const upper = entry({
+        key: "42",
+        tracker: "gitlab" as IssueTrackerKind,
+        host: "gitlab.example",
+        scope: "Group/App",
+      });
+      const lower = entry({
+        ...upper,
+        scope: "group/other",
+        projectId: "lower" as ProjectId,
+      });
+      const current = { ...upper, scope: "group/app" };
+      const cursorFor = (row: IssueListEntry) =>
+        legacy ? `${row.host} ${row.scope}` : issueListCursorKey(row);
+      const upperCursor = cursorFor(upper),
+        lowerCursor = cursorFor(lower),
+        freshCursor = cursorFor(current);
+      const initial = {
+        entries: [upper, lower],
+        sources: [source(upper), source(lower)],
+        nextCursors: { [upperCursor]: "2", [lowerCursor]: "other-2" },
+        viewers: { "gitlab gitlab.example": "A" },
+        errors: [],
+      };
+      const first = {
+        ...initial,
+        firstCursors: initial.nextCursors,
+        firstKeys: new Set(initial.entries.map(issueEntryKey)),
+      };
+      const tail = entry({ ...upper, key: "tail" });
+      const completed = continueIssueListPage(
+        first,
+        { [upperCursor]: "2" },
+        { ...initial, entries: [tail], nextCursors: {} },
+        first.firstCursors,
+      );
+      const fresh = {
+        ...initial,
+        entries: [current],
+        sources: [source(current)],
+        nextCursors: { [freshCursor]: "2" },
+      };
+      const refreshed = refreshIssueListPage(completed, fresh, { source: current });
+      expect(refreshed.entries).toEqual([lower, tail, current]);
+      expect(refreshed.nextCursors).toEqual({ [lowerCursor]: "other-2" });
+      expect(refreshed.firstCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
+      expect(refreshed.firstKeys).toEqual(new Set([issueEntryKey(lower), issueEntryKey(current)]));
+      const failed = refreshIssueListPage(
+        refreshed,
+        {
+          ...fresh,
+          entries: [],
+          nextCursors: {},
+          errors: [
+            {
+              projectId: upper.projectId,
+              projectTitle: upper.projectTitle,
+              tracker: upper.tracker,
+              host: upper.host,
+              message: "down",
+            },
+          ],
+        },
+        { source: current },
+      );
+      expect(failed.entries).toEqual(refreshed.entries);
+      expect(failed.nextCursors).toEqual(refreshed.nextCursors);
+      const switched = refreshIssueListPage(
+        refreshed,
+        { ...fresh, viewers: { "gitlab gitlab.example": "B" } },
+        { source: current },
+      );
+      expect(switched.entries).toEqual([lower, current]);
+      expect(switched.nextCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
+      const rebound = { ...current, projectId: "replacement" as ProjectId };
+      const replaced = refreshIssueListPage(
+        refreshed,
+        { ...fresh, entries: [rebound], sources: [source(rebound)] },
+        { source: rebound },
+      );
+      expect(replaced.entries).toEqual([lower, rebound]);
+      expect(replaced.nextCursors).toEqual({ [lowerCursor]: "other-2", [freshCursor]: "2" });
+      const terminal = refreshIssueListPage(
+        refreshed,
+        { ...fresh, nextCursors: {} },
+        { source: current },
+      );
+      expect(terminal.entries).toEqual([lower, current]);
+      expect(terminal.nextCursors).toEqual({ [lowerCursor]: "other-2" });
+    },
+  );
 
   it.each(["assigned", "all"] as const)(
     "resets %s rows using only the requested list reads",

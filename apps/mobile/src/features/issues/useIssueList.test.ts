@@ -454,3 +454,110 @@ effectIt.effect.each(["connecting", "failed-connected"])(
       }
     }),
 );
+
+effectIt.effect("keeps an exhausted native list terminal after a first-page refresh", () =>
+  Effect.gen(function* () {
+    const runtime = Atom.runtime(
+      Layer.effect(
+        EnvironmentRegistry.EnvironmentRegistry,
+        Effect.gen(function* () {
+          const supervisor = {
+            state: yield* SubscriptionRef.make({
+              ...AVAILABLE_CONNECTION_STATE,
+              phase: "connected" as const,
+            }),
+            session: yield* SubscriptionRef.make(Option.some({} as RpcSession)),
+          } as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+          return EnvironmentRegistry.EnvironmentRegistry.of({
+            run: (_id, effect) =>
+              Effect.provideService(
+                effect,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+            followStream: (_id, stream) =>
+              Stream.provideService(
+                stream,
+                EnvironmentSupervisor.EnvironmentSupervisor,
+                supervisor,
+              ),
+          } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+        }),
+      ),
+    );
+    Object.assign(issueEnvironment, createIssueEnvironmentAtoms(runtime));
+    const rows = Array.from({ length: 75 }, (_, index) =>
+      row(String(index + 1), {
+        updatedAt: `2026-10-01T00:00:00.${String(999 - index).padStart(3, "0")}Z`,
+      }),
+    );
+    const first: IssueListResult = {
+      entries: rows.slice(0, 50),
+      sources: [source(rows[0]!)],
+      nextCursors: { [cursor]: "2" },
+      viewers: { "gitlab gitlab.example": "A" },
+      trackers: [],
+      errors: [],
+    };
+    const last = { ...first, entries: rows.slice(50), nextCursors: {} };
+    const request = vi.spyOn(RpcClient, "request");
+    request.mockImplementation((() => Effect.succeed(first)) as unknown as Parameters<
+      typeof request.mockImplementation
+    >[0]);
+    const page = vi.spyOn(RpcClient, "requestGuarded");
+    page.mockImplementation((() => Effect.succeed(last)) as unknown as Parameters<
+      typeof page.mockImplementation
+    >[0]);
+    const targets: IssueListTarget[] = [
+      {
+        environmentId: EnvironmentId.make("terminal-list"),
+        input: { state: "all", involvement: "assigned", limit: 50 },
+      },
+    ];
+    const registry = AtomRegistry.make();
+    const query = issueEnvironment.list(targets[0]!);
+    const release = registry.mount(query);
+    const root = createRoot(document.createElement("div"));
+    let result: ReturnType<typeof useIssueList>;
+    function Probe() {
+      const current = useIssueList(targets);
+      useLayoutEffect(() => {
+        result = current;
+      });
+      return null;
+    }
+    try {
+      yield* AtomRegistry.getResult(registry, query);
+      yield* Effect.promise(() =>
+        act(async () =>
+          root.render(
+            createElement(RegistryContext.Provider, { value: registry }, createElement(Probe)),
+          ),
+        ),
+      );
+      expect(result!.hasMore).toBe(true);
+      yield* Effect.promise(() => act(async () => result!.loadMore()));
+      expect(result!.lists[0]!.held.entries).toEqual(rows);
+      expect(result!.hasMore).toBe(false);
+      yield* Effect.promise(() => act(async () => result!.onRefresh()));
+      expect(result!.lists[0]!.held.entries).toEqual(rows);
+      expect(result!.lists[0]!.held.nextCursors).toEqual({});
+      expect(result!.hasMore).toBe(false);
+      yield* Effect.promise(() => act(async () => result!.loadMore()));
+      expect(request.mock.calls.map(([, input]) => input)).toEqual([
+        targets[0]!.input,
+        targets[0]!.input,
+      ]);
+      expect(page).toHaveBeenCalledExactlyOnceWith("issues.list", {
+        ...targets[0]!.input,
+        cursors: first.nextCursors,
+      });
+    } finally {
+      yield* Effect.promise(() => act(async () => root.unmount()));
+      release();
+      registry.dispose();
+      request.mockRestore();
+      page.mockRestore();
+    }
+  }),
+);

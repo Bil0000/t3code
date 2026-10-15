@@ -343,11 +343,23 @@ export function refreshIssueListPage<T extends HeldIssueList>(
       .map((row) => scopeOf(row, cursors)),
   );
   const continuing = new Set(Object.keys(fresh.nextCursors).map((key) => key.toLowerCase()));
+  const firstCursors = new Map(
+    Object.entries(held.firstCursors).map(([key, cursor]) => [key.toLowerCase(), cursor]),
+  );
+  const pending = new Set(Object.keys(held.nextCursors).map((key) => key.toLowerCase()));
+  const exhausted = new Set(
+    Object.entries(fresh.nextCursors)
+      .filter(
+        ([key, cursor]) =>
+          !pending.has(key.toLowerCase()) && firstCursors.get(key.toLowerCase()) === cursor,
+      )
+      .map(([key]) => key.toLowerCase()),
+  );
   const keep = (key: string) =>
     isBound(key) &&
     (!covered(key) ||
       (continuing.has(key.toLowerCase()) &&
-        tails.has(key.toLowerCase()) &&
+        (tails.has(key.toLowerCase()) || exhausted.has(key.toLowerCase())) &&
         !shifted.has(key.toLowerCase()) &&
         !changedOwners.has(key.toLowerCase()) &&
         !changed.has(key.toLowerCase())));
