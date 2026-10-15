@@ -199,13 +199,19 @@ export const IssueEntry = Schema.Struct({
   title: Schema.String,
   state: IssueState,
   author: Schema.NullOr(Schema.String),
+  authorDetails: Schema.optional(IssueSummary.fields.author),
   assignees: Schema.Array(Schema.String),
+  assigneeDetails: Schema.optional(IssueSummary.fields.assignees),
   labels: Schema.Array(Schema.String),
   labelDetails: Schema.optional(IssueSummary.fields.labels),
   labelsTruncated: IssueSummary.fields.labelsTruncated,
   milestone: IssueSummary.fields.milestone,
+  createdAt: Schema.optional(IssueSummary.fields.createdAt),
   updatedAt: Schema.String,
+  closedAt: Schema.optional(IssueSummary.fields.closedAt),
   commentCount: IssueSummary.fields.commentCount,
+  reactions: IssueSummary.fields.reactions,
+  reactionsTruncated: IssueSummary.fields.reactionsTruncated,
 });
 export type IssueEntry = typeof IssueEntry.Type;
 
@@ -229,7 +235,9 @@ export const ReadIssueResult = Schema.Struct({
   viewer: Schema.optional(IssueDetail.fields.viewer),
   viewerPermissions: Schema.optional(IssueDetail.fields.viewerPermissions),
   author: Schema.NullOr(Schema.String),
+  authorDetails: Schema.optional(IssueSummary.fields.author),
   assignees: Schema.Array(Schema.String),
+  assigneeDetails: Schema.optional(IssueSummary.fields.assignees),
   labels: Schema.Array(Schema.String),
   labelDetails: Schema.optional(IssueDetail.fields.labels),
   labelsTruncated: IssueDetail.fields.labelsTruncated,
@@ -238,6 +246,7 @@ export const ReadIssueResult = Schema.Struct({
   updatedAt: Schema.String,
   closedAt: Schema.NullOr(Schema.String),
   body: Schema.String,
+  commentCount: Schema.optional(IssueDetail.fields.commentCount),
   reactions: IssueDetail.fields.reactions,
   reactionsTruncated: IssueDetail.fields.reactionsTruncated,
   events: Schema.optional(IssueDetail.fields.events),
@@ -246,6 +255,7 @@ export const ReadIssueResult = Schema.Struct({
     Schema.Struct({
       id: Schema.String,
       author: Schema.NullOr(Schema.String),
+      authorDetails: Schema.optional(IssueComment.fields.author),
       body: Schema.String,
       createdAt: Schema.String,
       editedAt: IssueComment.fields.editedAt,
@@ -314,7 +324,7 @@ const LINK_EVERY_ISSUE =
 
 const ListIssuesTool = Tool.make("list_issues", {
   description:
-    "List issues across a project's configured issue sources, newest updated first. Omit projectId for this thread's project. Each issue includes its tracker; pass tracker with key to other issue tools. Pass the returned nextCursors back as cursors for the next slice. Current labelDetails preserves native IDs; labelsTruncated means the current label set is incomplete.",
+    "List issues across a project's configured issue sources, newest updated first. Omit projectId for this thread's project. Each issue includes its tracker; pass tracker with key to other issue tools. Pass the returned nextCursors back as cursors for the next slice. Actor authorDetails/assigneeDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs; labelsTruncated means the current label set is incomplete.",
   parameters: Schema.Struct({
     projectId: Schema.optional(
       ProjectId.annotate({ description: "Project to list. Omit for this thread's project." }),
@@ -344,7 +354,7 @@ const ListIssuesTool = Tool.make("list_issues", {
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. Current labelDetails preserves native IDs, including archived labels; labelsTruncated means the current label set is incomplete. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
+    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. Actor authorDetails/assigneeDetails and comment authorDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs, including archived labels; labelsTruncated means the current label set is incomplete. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
   parameters: IssueTargetInput,
   success: ReadIssueResult,
   failure: IssueToolError,

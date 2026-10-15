@@ -428,6 +428,128 @@ describe("issue toolkit handlers", () => {
       }),
   );
 
+  const decodeReadIssue = Schema.decodeUnknownSync(IssuesToolkit.tools.read_issue.successSchema);
+  const decodeListIssues = Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.successSchema);
+
+  it.effect.each([true, false])(
+    "retains native actors, dates and counts with IDs=%s through registered reads",
+    (withIds) =>
+      Effect.gen(function* () {
+        const author = {
+          login: "Same name",
+          name: null,
+          avatarUrl: null,
+          ...(withIds ? { id: "author-id" } : {}),
+        };
+        const assignee = { ...author, ...(withIds ? { id: "assignee-id" } : {}) };
+        const commentAuthor = { ...author, ...(withIds ? { id: "comment-author-id" } : {}) };
+        const comment = {
+          id: "native-comment",
+          author: commentAuthor,
+          body: "Native comment",
+          createdAt: detail.createdAt,
+          url: null,
+        };
+        const nativeDetail = {
+          ...detail,
+          author,
+          assignees: [assignee],
+          comments: [comment],
+          closedAt: "2026-08-03T00:00:00.000Z",
+          commentCount: 37,
+        };
+        const harness = yield* makeHarness([], {
+          detail: nativeDetail,
+          comments: () => Effect.succeed({ comments: [comment], nextCursor: null }),
+        });
+        const read = decodeReadIssue(yield* harness.call("read_issue", { key: "7" }));
+        const listed = decodeListIssues(yield* harness.call("list_issues", {})).issues[0]!;
+        for (const output of [read, listed]) {
+          expect(output).toMatchObject({
+            author: "Same name",
+            assignees: ["Same name"],
+            authorDetails: author,
+            assigneeDetails: [assignee],
+            createdAt: nativeDetail.createdAt,
+            closedAt: nativeDetail.closedAt,
+            commentCount: 37,
+          });
+        }
+        expect(read.comments[0]).toMatchObject({
+          author: "Same name",
+          authorDetails: commentAuthor,
+        });
+        const page = yield* harness.call("read_issue_comments", { key: "7", cursor: "older" });
+        expect(page.comments[0]?.author).toEqual(commentAuthor);
+        expect((yield* Ref.get(harness.calls)).map((call) => call.operation)).toEqual([
+          "detail",
+          "list",
+          "comments",
+        ]);
+      }),
+  );
+
+  it.effect("retains null actors and unknown native comment totals in registered reads", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([], {
+        detail: {
+          ...detail,
+          commentCount: null,
+          comments: [
+            {
+              id: "unknown-author",
+              author: null,
+              body: "Body",
+              createdAt: detail.createdAt,
+              url: null,
+            },
+          ],
+        },
+      });
+      const read = decodeReadIssue(yield* harness.call("read_issue", { key: "7" }));
+      const listed = decodeListIssues(yield* harness.call("list_issues", {})).issues[0]!;
+      for (const output of [read, listed])
+        expect(output).toMatchObject({
+          author: null,
+          authorDetails: null,
+          assignees: [],
+          assigneeDetails: [],
+          closedAt: null,
+          commentCount: null,
+        });
+      expect(read.comments[0]).toMatchObject({ author: null, authorDetails: null });
+    }),
+  );
+
+  it.effect.each([
+    undefined,
+    [],
+    [
+      {
+        content: "thumbs-up" as const,
+        count: 27,
+        viewerHasReacted: true,
+        actors: ["actor"],
+      },
+    ],
+  ])("retains native list reactions %s through the registered output schema", (reactions) =>
+    Effect.gen(function* () {
+      const nativeDetail =
+        reactions === undefined
+          ? detail
+          : { ...detail, reactions, reactionsTruncated: reactions.length > 0 };
+      const harness = yield* makeHarness([], { detail: nativeDetail });
+      const output = decodeListIssues(yield* harness.call("list_issues", {})).issues[0]!;
+      if (reactions === undefined) {
+        expect(output).not.toHaveProperty("reactions");
+        expect(output).not.toHaveProperty("reactionsTruncated");
+      } else {
+        expect(output).toMatchObject({ reactions, reactionsTruncated: reactions.length > 0 });
+      }
+      expect((yield* Ref.get(harness.calls)).map((call) => call.operation)).toEqual(["list"]);
+    }),
+  );
+
   it.effect.each(["Release 1", null, undefined])(
     "keeps native milestone %s in registered reads without extra calls",
     (milestone) =>

@@ -367,6 +367,8 @@ const make = Effect.gen(function* () {
             title: entry.title,
             state: entry.state,
             author: entry.author?.login ?? null,
+            authorDetails: entry.author,
+            assigneeDetails: entry.assignees,
             assignees: entry.assignees.map((actor) => actor.login),
             labels: entry.labels.map((label) => label.name),
             labelDetails: entry.labels,
@@ -374,8 +376,14 @@ const make = Effect.gen(function* () {
               ? {}
               : { labelsTruncated: entry.labelsTruncated }),
             ...(entry.milestone === undefined ? {} : { milestone: entry.milestone }),
+            createdAt: entry.createdAt,
             updatedAt: entry.updatedAt,
+            closedAt: entry.closedAt,
             commentCount: entry.commentCount,
+            ...(entry.reactions === undefined ? {} : { reactions: entry.reactions }),
+            ...(entry.reactionsTruncated === undefined
+              ? {}
+              : { reactionsTruncated: entry.reactionsTruncated }),
           })),
           nextCursors: result.nextCursors,
           errors: result.errors.map((error) => ({
@@ -400,6 +408,8 @@ const make = Effect.gen(function* () {
           viewer: detail.viewer,
           viewerPermissions: detail.viewerPermissions,
           author: detail.author?.login ?? null,
+          authorDetails: detail.author,
+          assigneeDetails: detail.assignees,
           assignees: detail.assignees.map((actor) => actor.login),
           labels: detail.labels.map((label) => label.name),
           labelDetails: detail.labels,
@@ -411,6 +421,7 @@ const make = Effect.gen(function* () {
           updatedAt: detail.updatedAt,
           closedAt: detail.closedAt,
           body: detail.body,
+          commentCount: detail.commentCount,
           ...(detail.reactions === undefined ? {} : { reactions: detail.reactions }),
           ...(detail.reactionsTruncated === undefined
             ? {}
@@ -422,6 +433,7 @@ const make = Effect.gen(function* () {
           comments: detail.comments.map((comment) => ({
             id: comment.id,
             author: comment.author?.login ?? null,
+            authorDetails: comment.author,
             body: comment.body,
             createdAt: comment.createdAt,
             ...(comment.editedAt === undefined ? {} : { editedAt: comment.editedAt }),
