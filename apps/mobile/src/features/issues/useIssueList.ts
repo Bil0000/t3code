@@ -1,5 +1,9 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { continueIssueListPage, refreshIssueListPage } from "@t3tools/client-runtime/state/issues";
+import {
+  continueIssueListPage,
+  issueScopeKey,
+  refreshIssueListPage,
+} from "@t3tools/client-runtime/state/issues";
 import {
   executeAtomQuery,
   runAtomCommand,
@@ -217,7 +221,7 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
   const readSource = useCallback(
     async function readWrittenSource(
       sourceKey: string,
-      write: IssueSourceWrite,
+      write: IssueSourceWrite | Pick<IssueSourceWrite, "environmentId" | "source">,
       retry = false,
     ): Promise<void> {
       const { environmentId, source } = write;
@@ -226,11 +230,18 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
         issueListTargetIncludesSource(target, environmentId, source, currentHeld(target)),
       );
       if (!selected.length) return;
-      requests.current.page?.abort();
-      delete requests.current.page;
+      if ("revision" in write) {
+        requests.current.page?.abort();
+        delete requests.current.page;
+      }
       const controller = new AbortController();
       requests.current.sources.add(controller);
-      setLoading({ key: scopeKey, page: false, refresh: true, error: retry ? null : state.error });
+      setLoading({
+        key: scopeKey,
+        page: !!requests.current.page,
+        refresh: true,
+        error: retry ? null : state.error,
+      });
       const responses = await Promise.allSettled(
         selected.map(async (target) => {
           const query = issueEnvironment.list(target);
@@ -242,16 +253,22 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
           if (controller.signal.aborted || activeScope.current !== scopeKey) return;
           const started = currentHeld(target);
           const canonical = issueListCanonicalSource(started, source);
-          const currentWrite = {
-            ...write,
-            removedKeys: new Map([
-              ...(started?.pendingWrites.get(sourceKey)?.removedKeys ?? []),
-              ...write.removedKeys,
-            ]),
-          };
-          if (started) {
+          const currentWrite =
+            "revision" in write
+              ? {
+                  ...write,
+                  removedKeys: new Map([
+                    ...(started?.pendingWrites.get(sourceKey)?.removedKeys ?? []),
+                    ...write.removedKeys,
+                  ]),
+                }
+              : null;
+          const writes = currentWrite
+            ? new Map([[sourceKey, currentWrite]])
+            : new Map<string, IssueSourceWrite>();
+          if (started && currentWrite) {
             const pending = new Map(started.pendingWrites);
-            if ((pending.get(sourceKey)?.revision ?? 0) < write.revision)
+            if ((pending.get(sourceKey)?.revision ?? 0) < currentWrite.revision)
               pending.set(sourceKey, currentWrite);
             registry.set(pagesFamily(JSON.stringify(target)), {
               ...started,
@@ -266,11 +283,7 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
             });
             if (controller.signal.aborted || activeScope.current !== scopeKey) return;
             if (response._tag === "Failure") throw squashAtomCommandFailure(response);
-            const refreshed = refreshWrittenIssueList(
-              currentHeld(target),
-              response.value,
-              new Map([[sourceKey, currentWrite]]),
-            );
+            const refreshed = refreshWrittenIssueList(currentHeld(target), response.value, writes);
             registry.set(pagesFamily(JSON.stringify(target)), refreshed.held);
             registry.update(
               handledWritesFamily(JSON.stringify(target)),
@@ -308,18 +321,13 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
             void queueSourceRefresh(sourceKey, () =>
               readWrittenSource(
                 sourceKey,
-                registry.get(issueWrites)?.sources.get(sourceKey) ?? currentWrite,
+                registry.get(issueWrites)?.sources.get(sourceKey) ?? write,
                 retry,
               ),
             );
             return;
           }
-          const refreshed = refreshWrittenIssueList(
-            latest,
-            response.value,
-            new Map([[sourceKey, currentWrite]]),
-            scope,
-          );
+          const refreshed = refreshWrittenIssueList(latest, response.value, writes, scope);
           registry.set(pagesFamily(JSON.stringify(target)), refreshed.held);
           registry.update(
             handledWritesFamily(JSON.stringify(target)),
@@ -332,7 +340,7 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
       requests.current.sources.delete(controller);
       if (!controller.signal.aborted && activeScope.current === scopeKey) {
         for (const [index, response] of responses.entries()) {
-          if (response.status !== "rejected") continue;
+          if (response.status !== "rejected" || !("revision" in write)) continue;
           const target = selected[index]!;
           registry.update(pagesFamily(JSON.stringify(target)), (latest) =>
             retainFailedIssueWrites(latest, new Map([[sourceKey, write]])),
@@ -340,7 +348,7 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
         }
         setLoading((previous) => ({
           key: scopeKey,
-          page: false,
+          page: !!requests.current.page,
           refresh: !!requests.current.refresh || requests.current.sources.size > 0,
           error: requestErrors(responses) ?? (previous.key === scopeKey ? previous.error : null),
         }));
@@ -365,7 +373,6 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
         requests.current.page ||
         requests.current.refresh ||
         requests.current.sources.size ||
-        targets.some((target) => registry.get(issueEnvironment.list(target)).waiting) ||
         (!retry && retryError)
       )
         return;
@@ -381,6 +388,8 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
         }
       }
       const continuations = targets.flatMap((target) => {
+        const result = registry.get(issueEnvironment.list(target));
+        if (result._tag !== "Success" || result.waiting) return [];
         const held = currentHeld(target);
         return held && Object.keys(held.nextCursors).length ? [{ target, held }] : [];
       });
@@ -414,6 +423,25 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
             held.firstCursors,
           );
           registry.set(pagesFamily(JSON.stringify(target)), next);
+          if (next !== latest) {
+            await Promise.all(
+              (next.restartSources ?? []).map((source) => {
+                const sourceKey = issueScopeKey(target.environmentId, {
+                  ...source,
+                  host: source.host ?? "",
+                });
+                return queueSourceRefresh(sourceKey, () =>
+                  readSource(
+                    sourceKey,
+                    registry.get(issueWrites)?.sources.get(sourceKey) ?? {
+                      environmentId: target.environmentId,
+                      source,
+                    },
+                  ),
+                );
+              }),
+            );
+          }
           if (next !== latest && response.value.errors.length)
             throw new Error(response.value.errors.map((error) => error.message).join("\n"));
         }),
@@ -496,6 +524,12 @@ export function useIssueList(targets: ReadonlyArray<IssueListTarget>) {
     loadMore,
     loadingMore: state.page,
     loadMoreError: retryError,
-    hasMore: lists.some(({ held }) => Object.keys(held.nextCursors).length > 0),
+    hasMore: sources.some(
+      ({ result, held }) =>
+        result._tag === "Success" &&
+        !result.waiting &&
+        held !== null &&
+        Object.keys(held.nextCursors).length > 0,
+    ),
   };
 }
