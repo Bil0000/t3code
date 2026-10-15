@@ -817,6 +817,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/source-control",
     scope: "environment-defaults",
     searchTerms: ["linear jira issues tracker team api key connect bind project"],
+    environmentOnly: true,
   },
   {
     id: "source-control",
