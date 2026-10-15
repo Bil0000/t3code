@@ -201,6 +201,7 @@ export function IssueReactionBar({
   canReact,
   contents,
   subjectId,
+  viewer,
   environmentId,
   reference,
 }: {
@@ -208,6 +209,7 @@ export function IssueReactionBar({
   canReact: boolean;
   contents: ReadonlyArray<IssueReactionContent> | undefined;
   subjectId?: string | undefined;
+  viewer: string | null;
   environmentId: EnvironmentId;
   reference: IssueRef;
 }) {
@@ -221,7 +223,7 @@ export function IssueReactionBar({
   const values =
     pending.native === reactions
       ? pending.values
-      : retainUnacknowledgedIssueReactions(reactions, pending.values);
+      : retainUnacknowledgedIssueReactions(reactions, viewer === null ? new Map() : pending.values);
   if (pending.native !== reactions) setPending({ native: reactions, values });
   const shown = applyPendingPullRequestReactions(reactions, values);
   const offered = offeredIssueReactionContents(contents);
@@ -241,6 +243,7 @@ export function IssueReactionBar({
     });
     if (result._tag === "Failure") {
       setPending((current) => {
+        if (viewer === null && current.native !== reactions) return current;
         const next = new Map(current.values);
         const previous = values.get(content);
         if (previous === undefined) next.delete(content);
@@ -993,6 +996,7 @@ export function IssueDetailPanel({
                 reactions={detail.reactions}
                 canReact={canReact}
                 contents={detail.capabilities.reactionContents}
+                viewer={detail.viewer}
                 environmentId={environmentId}
                 reference={reference}
               />
@@ -1093,6 +1097,7 @@ export function IssueDetailPanel({
                       canReact={canReactToComment}
                       contents={detail.capabilities.reactionContents}
                       subjectId={item.comment.id}
+                      viewer={detail.viewer}
                       environmentId={environmentId}
                       reference={reference}
                     />

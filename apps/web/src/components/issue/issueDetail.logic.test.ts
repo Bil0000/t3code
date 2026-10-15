@@ -391,6 +391,17 @@ describe("older issue comments across detail re-reads", () => {
     });
     expect(issueCommentsView({ ...unknown }, loadedUnknown).held).toBe(loadedUnknown);
     expect(issueCommentsView(detail({ viewer: "b" }), loadedUnknown).held).toBeNull();
+    const reread = detail({ viewer: null });
+    const fresh = issueCommentsView(reread, loadedUnknown);
+    expect(fresh.held).toBeNull();
+    expect(fresh.comments.map((each) => each.id)).toEqual(["c3"]);
+    expect(fresh.cursor).toBe("page-2");
+    const reloaded = appendOlderIssueComments(reread, fresh.held, {
+      comments: [comment("c_old", heart)],
+      nextCursor: null,
+    });
+    expect(issueCommentsView(reread, reloaded).comments[0]?.reactions).toEqual(heart);
+    expect(issueCommentsView(reread, reloaded).cursor).toBeNull();
   });
 });
 
@@ -550,7 +561,9 @@ describe("whole issue picker sets before native acknowledgement", () => {
       kind: "labels",
       ids: ["W", "Other"],
     };
-    expect(heldIssuePicker({ ...base }, "labels", completed, environmentId)).toBe(completed);
+    expect(
+      heldIssuePicker(before === null ? base : { ...base }, "labels", completed, environmentId),
+    ).toBe(completed);
     expect(
       heldIssuePicker({ ...base, viewer: after }, "labels", completed, environmentId),
     ).toBeNull();

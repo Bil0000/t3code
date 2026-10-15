@@ -26,7 +26,7 @@ vi.mock("~/state/query", () => ({
 }));
 
 const environmentId = EnvironmentId.make("environment");
-function detail(ids: string[], viewer = "viewer"): IssueDetail {
+function detail(ids: string[], viewer: string | null = "viewer"): IssueDetail {
   return {
     projectId: ProjectId.make("project"),
     projectTitle: "Project",
@@ -161,6 +161,53 @@ it.each(["labels", "assignees"] as const)(
       ["W", "Other", "T"],
       ["W", "T"],
       ["Other", "T"],
+    ]);
+  },
+);
+
+it.each(["labels", "assignees"] as const)(
+  "keeps an unknown account's %s only until a new read names the native set",
+  async (kind) => {
+    let issue = detail(["W"], null);
+    state.update.mockResolvedValue({ _tag: "Success" });
+    const Picker = kind === "labels" ? IssueLabelPicker : IssueAssigneePicker;
+    const render = async () =>
+      act(async () =>
+        root.render(
+          <Picker
+            detail={issue}
+            reference={{
+              projectId: issue.projectId,
+              tracker: issue.tracker,
+              host: issue.host,
+              scope: issue.scope,
+              key: issue.key,
+            }}
+            environmentId={environmentId}
+            allowed
+            disabledReason=""
+            onUpdated={undefined}
+          />,
+        ),
+      );
+    await render();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`button[aria-label="Change ${kind}"]`)!.click(),
+    );
+    const option = (id: string) =>
+      [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((element) =>
+        element.textContent?.includes(id),
+      )!;
+    await act(async () => option("Other").click());
+    await render();
+    await act(async () => option("T").click());
+    issue = detail(["Z"], null);
+    await render();
+    await act(async () => option("T").click());
+    expect(state.update.mock.calls.map(([target]) => target.input[kind])).toEqual([
+      ["W", "Other"],
+      ["W", "Other", "T"],
+      ["Z", "T"],
     ]);
   },
 );

@@ -57,6 +57,7 @@ it.each([undefined, "latest-comment", "held-older-comment"])(
           reactions={reactions}
           canReact
           contents={undefined}
+          viewer="viewer"
           environmentId={environmentId}
           reference={reference}
           subjectId={subjectId}
@@ -103,6 +104,7 @@ it.each([
         reactions={reactions}
         canReact={canReact}
         contents={contents}
+        viewer="viewer"
         environmentId={environmentId}
         reference={reference}
       />,
@@ -209,6 +211,40 @@ it("ignores a write that settles after the account changed", async () => {
   await act(async () => settle({ _tag: "Success" }));
   expect(pressed()).toEqual(["false", "false"]);
   expect(panelPills()[0]!.disabled).toBe(false);
+});
+
+it("trusts a new read over an unknown account's presses but keeps them on a cached one", async () => {
+  state.react.mockResolvedValue({ _tag: "Success" });
+  const asA = issueDetail(null, false, 2);
+  await renderPanel(asA);
+  for (const pill of panelPills()) await act(async () => pill.click());
+  await renderPanel({ ...asA });
+  expect(pressed()).toEqual(["true", "true"]);
+
+  await renderPanel(issueDetail(null, false, 3));
+  expect(pressed()).toEqual(["false", "false"]);
+  expect(panelPills().map((pill) => pill.textContent)).toEqual(["👍3", "👍3"]);
+  for (const pill of panelPills()) await act(async () => pill.click());
+  expect(state.react.mock.calls.map(([target]) => target.input.reacted)).toEqual([
+    true,
+    true,
+    true,
+    true,
+  ]);
+});
+
+it("does not restore an unknown account's press when its reversal fails after a new read", async () => {
+  let settle: (result: { _tag: string }) => void = () => {};
+  state.react
+    .mockResolvedValueOnce({ _tag: "Success" })
+    .mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+  await renderPanel(issueDetail(null, false, 2));
+  await act(async () => panelPills()[0]!.click());
+  await act(async () => panelPills()[0]!.click());
+
+  await renderPanel(issueDetail(null, false, 3));
+  await act(async () => settle({ _tag: "Failure" }));
+  expect(pressed()).toEqual(["false", "false"]);
 });
 
 it("keeps the same account's press through a stale read until the tracker agrees", async () => {
