@@ -227,7 +227,7 @@ export interface IssueTrackerApi {
 
   /** Only called when `capabilities.labels` or `capabilities.assignees` is true. */
   readonly listCandidates?: (
-    input: IssueScopeTarget,
+    input: IssueScopeTarget & { readonly key?: string | undefined },
   ) => Effect.Effect<IssueCandidates, IssueTrackerError>;
 }
 

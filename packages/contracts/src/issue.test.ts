@@ -8,6 +8,7 @@ import { WS_METHODS, WsIssuesRpcGroup } from "./rpc.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   IssueActor,
+  IssueCandidatesInput,
   IssueCommentsPageInput,
   ThreadIssueLink,
   IssueLabelCandidatesPage,
@@ -53,6 +54,27 @@ const decodeTemplateRpc = Schema.decodeUnknownSync(
   WsIssuesRpcGroup.requests.get(WS_METHODS.issuesTemplates)!.payloadSchema,
 );
 const decodeScope = Schema.decodeUnknownSync(IssueScopeRef);
+
+it("carries an optional native key through the existing candidates RPC", () => {
+  const decodeInput = Schema.decodeSync(IssueCandidatesInput);
+  const decode = Schema.decodeUnknownSync(
+    WsIssuesRpcGroup.requests.get(WS_METHODS.issuesCandidates)!.payloadSchema,
+  );
+  const scope = {
+    projectId: ProjectId.make("project-1"),
+    tracker: IssueTrackerKind.make("jira"),
+    host: "jira.example.com",
+    scope: "OPS",
+  };
+  for (const selection of [{}, { key: "OPS-7" }]) {
+    const input = { ...scope, ...selection };
+    expect(decodeInput(input)).toEqual(input);
+    expect(decode(input)).toEqual(input);
+  }
+  for (const key of ["", "  ", null, 7]) {
+    expect(() => decode({ ...scope, key })).toThrow();
+  }
+});
 
 it("accepts older reaction capabilities and preserves native comment limits", () => {
   const decode = Schema.decodeUnknownSync(IssueCapabilities);

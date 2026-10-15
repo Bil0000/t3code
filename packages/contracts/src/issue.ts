@@ -144,6 +144,12 @@ export const IssueScopeRef = Schema.Struct({
 });
 export type IssueScopeRef = typeof IssueScopeRef.Type;
 
+export const IssueCandidatesInput = Schema.Struct({
+  ...IssueScopeRef.fields,
+  key: Schema.optional(TrimmedNonEmptyString),
+});
+export type IssueCandidatesInput = typeof IssueCandidatesInput.Type;
+
 export const IssueTemplatesInput = Schema.Struct({
   ...IssueScopeRef.fields,
   metadataOnly: Schema.optional(Schema.Boolean),
