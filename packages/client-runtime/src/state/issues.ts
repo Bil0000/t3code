@@ -13,6 +13,7 @@ import {
   type IssueListResult,
   type IssueRef,
   type IssueHierarchyPage,
+  type IssueScopeRef,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -226,7 +227,7 @@ export function continueIssueListPage<T extends HeldIssueList>(
   sent: IssueListCursors,
   page: IssueListPage,
   sentFirstCursors: IssueListCursors,
-): T {
+): T & { readonly restartSources?: ReadonlyArray<IssueScopeRef> } {
   if (
     held.firstCursors !== sentFirstCursors ||
     Object.entries(sent).some(([key, cursor]) => held.nextCursors[key] !== cursor)
@@ -285,6 +286,11 @@ export function continueIssueListPage<T extends HeldIssueList>(
   return {
     ...held,
     entries: mergeIssueListPage(rebound, page.entries),
+    restartSources: [
+      ...new Map(
+        changedSources.map((source) => [issueListCursorKey(source).toLowerCase(), rebind(source)]),
+      ).values(),
+    ],
     scopeViewers,
     firstKeys,
     firstCursors:
@@ -403,6 +409,7 @@ export function refreshIssueListPage<T extends HeldIssueList>(
   return {
     ...held,
     entries: mergeIssueListPage(kept, taken),
+    restartSources: [],
     scopeViewers,
     firstKeys: new Set([
       ...kept.map(issueEntryKey).filter((key) => held.firstKeys.has(key)),

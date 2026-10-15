@@ -9,7 +9,7 @@ import {
   type ThreadIssueSnapshot,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useThreadShell } from "~/state/entities";
@@ -19,6 +19,7 @@ import {
   continueIssueListPage,
   issueEntryKey,
   issueListCursorsOn,
+  refreshIssueListPage,
 } from "@t3tools/client-runtime/state/issues";
 import { threadEnvironment } from "~/state/threads";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
@@ -84,15 +85,32 @@ function LinkThreadIssueDialog({
   const list = useEnvironmentQuery(
     thread ? issueEnvironment.list({ environmentId, input: baseInput }) : null,
   );
-  const sources = list.data?.sources ?? [];
-  const [selectedSource, setSelectedSource] = useState<string | null>(null);
-  const source =
-    sources.find((candidate) => sourceValue(candidate) === selectedSource) ?? sources[0] ?? null;
+  const filterKey = JSON.stringify([environmentId, baseInput]);
   const [pages, setPages] = useState<{
+    key: string;
+    requestKey: string;
     seed: IssueListResult;
     page: ReturnType<typeof continueIssueListPage>;
   } | null>(null);
-  const held = pages?.seed === list.data ? pages.page : null;
+  const held = useMemo(
+    () =>
+      pages?.key === filterKey && list.data !== null
+        ? pages.seed === list.data
+          ? pages.page
+          : refreshIssueListPage(pages.page, list.data)
+        : null,
+    [pages, filterKey, list.data],
+  );
+  const sources = held?.sources ?? list.data?.sources ?? [];
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
+  const source =
+    sources.find((candidate) => sourceValue(candidate) === selectedSource) ?? sources[0] ?? null;
+  const requestKey = JSON.stringify([filterKey, source === null ? null : sourceValue(source)]);
+  const requestContext = useMemo(() => ({ key: requestKey }), [requestKey]);
+  const latest = useRef({ requestContext, data: list.data, held });
+  useEffect(() => {
+    latest.current = { requestContext, data: list.data, held };
+  });
   const candidates = (held?.entries ?? list.data?.entries ?? []).filter(
     (entry) =>
       source !== null &&
@@ -110,7 +128,20 @@ function LinkThreadIssueDialog({
     : {};
   const hasMore = Object.keys(nextCursors).length > 0;
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
-  const [listPending, setListPending] = useState(false);
+  const [pendingPage, setPendingPage] = useState<object | null>(null);
+  const listPending = pendingPage === requestContext;
+  const [restarted] = useState(() => new WeakSet<ReturnType<typeof continueIssueListPage>>());
+  useEffect(() => {
+    if (
+      pages?.key !== filterKey ||
+      pages.requestKey !== requestKey ||
+      pages.seed !== list.data ||
+      restarted.has(pages.page)
+    )
+      return;
+    restarted.add(pages.page);
+    if ((pages.page.restartSources?.length ?? 0) > 0) list.refresh();
+  });
   const link = useAtomCommand(threadEnvironment.linkIssue, { reportFailure: false });
   const canLink = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
@@ -142,20 +173,23 @@ function LinkThreadIssueDialog({
   const loadMore = async () => {
     if (!list.data || !hasMore || listPending) return;
     const seed = list.data;
-    setListPending(true);
+    const sentFirstCursors = held?.firstCursors ?? seed.nextCursors;
+    setPendingPage(requestContext);
     const result = await loadPage({ environmentId, input: { ...baseInput, cursors: nextCursors } });
-    setListPending(false);
+    if (latest.current.requestContext !== requestContext || latest.current.data !== seed) return;
+    setPendingPage(null);
     if (result._tag === "Failure") {
       setError(formatEnvironmentQueryError(result.cause));
       return;
     }
-    const page = held ?? {
+    const page = latest.current.held ?? {
       ...seed,
       firstCursors: seed.nextCursors,
       firstKeys: new Set(seed.entries.map(issueEntryKey)),
     };
-    const continued = continueIssueListPage(page, nextCursors, result.value, page.firstCursors);
-    setPages({ seed, page: continued });
+    const continued = continueIssueListPage(page, nextCursors, result.value, sentFirstCursors);
+    if (continued === page) return;
+    setPages({ key: filterKey, requestKey, seed, page: continued });
     setError(null);
   };
 

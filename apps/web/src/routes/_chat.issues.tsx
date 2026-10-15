@@ -214,6 +214,7 @@ interface HeldPage {
   readonly firstKeys: ReadonlySet<string>;
   readonly errors: IssueListResult["errors"];
   readonly sources?: IssueListResult["sources"];
+  readonly restartSources?: ReadonlyArray<IssueScopeRef>;
 }
 
 function trackerKey(tracker: Pick<IssueTrackerSummary, "tracker" | "host">): string {
@@ -543,6 +544,14 @@ function IssuesRoute() {
       });
     });
   };
+  const [restarted] = useState(() => new WeakSet<HeldPage>());
+  useEffect(() => {
+    for (const [environmentId, page] of current?.pages ?? []) {
+      if (restarted.has(page)) continue;
+      restarted.add(page);
+      for (const source of page.restartSources ?? []) void refreshSource(environmentId, source);
+    }
+  });
 
   // Rows grouped per tracker account, so a tracker that cannot be read says so where its rows
   // would be, and each tracker's rows carry on from their own cursors.

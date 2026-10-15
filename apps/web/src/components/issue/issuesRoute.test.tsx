@@ -4,13 +4,20 @@ import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
   IssueTrackerKind,
+  IssueListResult,
+  WS_METHODS,
   ProjectId,
   type IssueListEntry,
-  type IssueListResult,
 } from "@t3tools/contracts";
+import { EnvironmentRegistry, EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import { AsyncResult } from "effect/reactivity";
+import { Atom, AsyncResult } from "effect/reactivity";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -18,6 +25,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   responses: new Map<string, AsyncResult.AsyncResult<IssueListResult, unknown>>(),
   read: vi.fn(),
+  listPage: vi.fn(),
   search: { who: "all", status: "open" } as IssuesSearch,
   projects: [] as ReadonlyArray<ReturnType<typeof project>>,
   navigate: vi.fn(),
@@ -70,7 +78,7 @@ vi.mock("~/state/server", async () => {
   };
 });
 vi.mock("~/state/queries", () => ({ useDebouncedValue: (value: string) => value }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => state.listPage }));
 vi.mock("~/hooks/useIssueViewRefresh", () => ({ useIssueViewRefresh: () => {} }));
 vi.mock("~/hooks/useNavigateBack", () => ({ useEscapeToGoBack: () => {} }));
 vi.mock("~/panelAnimations", () => ({
@@ -96,6 +104,7 @@ vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useRightPanelStore } from "~/rightPanelStore";
+import { issueEnvironment } from "~/state/issues";
 import { Route, type IssuesSearch } from "../../routes/_chat.issues";
 
 const environmentA = EnvironmentId.make("environment-a");
@@ -174,6 +183,7 @@ beforeEach(() => {
   useRightPanelStore.setState(useRightPanelStore.getInitialState(), true);
   state.responses.clear();
   state.read.mockClear();
+  state.listPage.mockReset();
   state.projects = [];
   state.search = { who: "all", status: "open" };
   state.navigate.mockReset().mockImplementation(({ search }) => {
@@ -381,4 +391,119 @@ it("toggles the selected issue panel with the existing keyboard shortcut", async
   container.append(palette);
   expect((await toggle()).defaultPrevented).toBe(false);
   expect(panel()).not.toBeNull();
+});
+
+const decodeIssueList = Schema.decodeUnknownSync(IssueListResult);
+const RpcClient = await vi.importActual<typeof import("@t3tools/client-runtime/rpc")>(
+  "../../../../../packages/client-runtime/src/rpc/client.ts",
+);
+it.each([
+  { viewer: "B", empty: false },
+  { viewer: "B", empty: true },
+  { viewer: "A", empty: false },
+])("restarts an accepted native viewer change once: %j", async ({ viewer, empty }) => {
+  const { createIssueEnvironmentAtoms } = await vi.importActual<
+    typeof import("@t3tools/client-runtime/state/issues")
+  >("@t3tools/client-runtime/state/issues");
+  const runtime = Atom.runtime(
+    Layer.effect(
+      EnvironmentRegistry.EnvironmentRegistry,
+      Effect.gen(function* () {
+        const connection = yield* SubscriptionRef.make({ phase: "connected" } as const);
+        const session = yield* SubscriptionRef.make(Option.some({}));
+        const supervisor = {
+          state: connection,
+          session,
+        } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+        return EnvironmentRegistry.EnvironmentRegistry.of({
+          run: (_id, effect) =>
+            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          followStream: (_id, stream) =>
+            Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      }),
+    ),
+  );
+  const atoms = createIssueEnvironmentAtoms(runtime);
+  const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
+  state.listPage.mockImplementation((target) => atoms.listPage.run(appAtomRegistry, target));
+  const environments = state.environments;
+  state.environments = environments.slice(0, 1);
+  const cursor = "github github.com org/repo";
+  const failedCursor = "github github.com org/failed";
+  const otherCursor = "gitlab gitlab.com org/repo";
+  const other = { ...issue("G1"), tracker: IssueTrackerKind.make("gitlab"), host: "gitlab.com" };
+  const failed = { ...issue("F1"), projectId: ProjectId.make("failed"), scope: "org/failed" };
+  const initial = {
+    ...answer([issue("A1"), failed, other]),
+    viewers: { "github github.com": "A", "gitlab gitlab.com": "G" },
+    nextCursors: { [cursor]: "2", [failedCursor]: "f2", [otherCursor]: "g2" },
+  };
+  initial.trackers = [
+    ...initial.trackers,
+    { ...initial.trackers[0]!, tracker: other.tracker, host: other.host },
+  ];
+  const pageTwo = {
+    ...initial,
+    entries: [],
+    viewers: { ...initial.viewers, "github github.com": viewer },
+    nextCursors: {},
+    errors: [
+      {
+        projectId: failed.projectId,
+        projectTitle: failed.projectTitle,
+        tracker: failed.tracker,
+        host: failed.host,
+        message: "Failed native sibling",
+      },
+    ],
+  };
+  const firstForB = { ...pageTwo, entries: empty ? [] : [issue("B1")], errors: [] };
+  const replies = [initial, pageTwo, ...(viewer === "B" ? [firstForB] : [])];
+  const reads: Array<{ tag: string; input: unknown }> = [];
+  const respond = ((tag: string, input: unknown) =>
+    Effect.sync(() => {
+      reads.push({ tag, input });
+      return decodeIssueList(replies.shift());
+    })) as unknown as typeof RpcClient.request;
+  const request = vi.spyOn(RpcClient, "request").mockImplementation(respond);
+  const guarded = vi.spyOn(RpcClient, "requestGuarded");
+  guarded.mockImplementation(
+    respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
+  );
+  try {
+    await mount();
+    expect(text()).toContain("Issue A1");
+    await act(async () =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Load more")!
+        .click(),
+    );
+    expect(reads.map(({ tag }) => tag)).toEqual(
+      Array(viewer === "B" ? 3 : 2).fill(WS_METHODS.issuesList),
+    );
+    expect(reads[1]!.input).toMatchObject({ cursors: { [cursor]: "2", [failedCursor]: "f2" } });
+    if (viewer === "B") {
+      expect(reads[2]!.input).toMatchObject({ projectId: "project", host: "github.com" });
+      expect(reads[2]!.input).not.toHaveProperty("cursors");
+      expect(text()).not.toContain("Issue A1");
+      if (!empty) expect(text()).toContain("Issue B1");
+    } else expect(text()).toContain("Issue A1");
+    expect(text()).toContain("Issue G1");
+    expect(text()).toContain("Issue F1");
+    expect(text()).toContain("Failed native sibling");
+    expect(
+      [...container.querySelectorAll("button")].filter(
+        (button) => button.textContent === "Load more",
+      ),
+    ).toHaveLength(2);
+    await mount();
+    expect(reads).toHaveLength(viewer === "B" ? 3 : 2);
+    expect(replies).toEqual([]);
+  } finally {
+    state.environments = environments;
+    list.mockRestore();
+    request.mockRestore();
+    guarded.mockRestore();
+  }
 });

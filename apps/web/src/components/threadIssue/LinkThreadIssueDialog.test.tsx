@@ -96,38 +96,261 @@ const RpcClient = await vi.importActual<typeof import("@t3tools/client-runtime/r
   "../../../../../packages/client-runtime/src/rpc/client.ts",
 );
 
+it.each([
+  { viewer: "B", empty: false, legacy: false, failFirst: false },
+  { viewer: "B", empty: true, legacy: false, failFirst: false },
+  { viewer: "A", empty: false, legacy: false, failFirst: false },
+  { viewer: "B", empty: false, legacy: true, failFirst: false },
+  { viewer: "B", empty: false, legacy: false, failFirst: true },
+])(
+  "restarts the native account's first query once without restoring seeds: %j",
+  async ({ viewer, empty, legacy, failFirst }) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const atoms = createIssueEnvironmentAtoms(issueRuntime());
+    const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
+    state.load
+      .mockReset()
+      .mockImplementation((target) => atoms.listPage.run(appAtomRegistry, target));
+    const capabilities = {
+      create: false,
+      edit: false,
+      comment: false,
+      labels: false,
+      assignees: false,
+      reactions: false,
+      templates: false,
+      linkedPullRequests: false,
+      events: false,
+      search: true,
+      states: [],
+      closeReasons: [],
+    };
+    const row = (key: string) => ({
+      ...state.linked,
+      key,
+      title: `Issue ${key}`,
+      author: null,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+      closedAt: null,
+      labels: [],
+      assignees: [],
+      commentCount: 0,
+    });
+    const cursor = legacy ? "github.com org/repo" : "github github.com org/repo";
+    const initial = {
+      entries: [row("A-first")],
+      sources: [{ ...state.source, capabilities }],
+      trackers: [],
+      viewers: { "github github.com": "A" },
+      nextCursors: { [cursor]: "2" },
+      errors: [],
+    };
+    const tail = { ...initial, entries: [row("A-tail")], nextCursors: { [cursor]: "3" } };
+    const pageTwo = {
+      ...initial,
+      entries: [],
+      viewers: { "github github.com": viewer },
+      nextCursors: {},
+    };
+    const firstForB = { ...pageTwo, entries: empty ? [] : [row("B-only")] };
+    const failure = {
+      ...firstForB,
+      entries: [],
+      errors: [
+        {
+          projectId: "project",
+          projectTitle: "Project",
+          tracker: "github",
+          host: "github.com",
+          message: "First page unavailable",
+        },
+      ],
+    };
+    const replies = [
+      initial,
+      tail,
+      pageTwo,
+      ...(viewer === "B" ? [...(failFirst ? [failure] : []), firstForB] : []),
+    ];
+    const reads: Array<{ tag: string; input: unknown }> = [];
+    const respond = ((tag: string, input: unknown) =>
+      Effect.sync(() => {
+        reads.push({ tag, input });
+        return decodeIssueList(replies.shift());
+      })) as unknown as typeof RpcClient.request;
+    const request = vi.spyOn(RpcClient, "request").mockImplementation(respond);
+    const guarded = vi.spyOn(RpcClient, "requestGuarded");
+    guarded.mockImplementation(
+      respond as unknown as Parameters<typeof guarded.mockImplementation>[0],
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const button = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (candidate) => candidate.textContent === label,
+      );
+    try {
+      openLinkThreadIssueDialog({
+        environmentId: EnvironmentId.make("restart-environment"),
+        threadId: ThreadId.make("restart-thread"),
+      });
+      const render = () =>
+        root.render(
+          createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+        );
+      await act(async () => render());
+      expect(document.body.textContent).toContain("Issue A-first");
+      const draft = document.querySelector<HTMLInputElement>('[aria-label="Issue URL"]')!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          draft,
+          "https://github.com/org/repo/issues/99",
+        );
+        draft.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await act(async () => button("Load more")!.click());
+      expect(document.body.textContent).toContain("Issue A-tail");
+      await act(async () => button("Load more")!.click());
+      if (viewer === "B") {
+        expect(document.body.textContent).not.toContain("Issue A-first");
+        expect(document.body.textContent).not.toContain("Issue A-tail");
+        if (failFirst) {
+          expect(document.body.textContent).toContain("First page unavailable");
+          expect(reads).toHaveLength(4);
+          await act(async () => button("Retry")!.click());
+          expect(document.body.textContent).not.toContain("First page unavailable");
+        }
+        if (empty) expect(document.body.textContent).toContain("No issues to link.");
+        else expect(document.body.textContent).toContain("Issue B-only");
+      } else {
+        expect(document.body.textContent).toContain("Issue A-first");
+        expect(document.body.textContent).toContain("Issue A-tail");
+      }
+      expect(draft.value).toBe("https://github.com/org/repo/issues/99");
+      expect(reads.map(({ tag }) => tag)).toEqual(
+        Array(viewer === "B" ? (failFirst ? 5 : 4) : 3).fill(WS_METHODS.issuesList),
+      );
+      expect(reads[1]!.input).toMatchObject({ cursors: { [cursor]: "2" } });
+      expect(reads[2]!.input).toMatchObject({ cursors: { [cursor]: "3" } });
+      for (const { input } of reads.slice(3)) {
+        expect(input).toMatchObject({ projectId: "project", limit: 50 });
+        expect(input).not.toHaveProperty("cursors");
+      }
+      await act(async () => render());
+      expect(reads).toHaveLength(viewer === "B" ? (failFirst ? 5 : 4) : 3);
+      expect(replies).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      appAtomRegistry.reset();
+      list.mockRestore();
+      request.mockRestore();
+      guarded.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+function issueRuntime() {
+  return Atom.runtime(
+    Layer.effect(
+      EnvironmentRegistry.EnvironmentRegistry,
+      Effect.gen(function* () {
+        const connection = yield* SubscriptionRef.make({ phase: "connected" } as const);
+        const session = yield* SubscriptionRef.make(Option.some({}));
+        const supervisor = {
+          state: connection,
+          session,
+        } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+        return EnvironmentRegistry.EnvironmentRegistry.of({
+          run: (_id, effect) =>
+            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          followStream: (_id, stream) =>
+            Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      }),
+    ),
+  );
+}
+
+it("ignores a changed viewer page after the dialog's query changed", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const cursor = "github github.com org/repo";
+  const seed = state.list;
+  state.list = {
+    ...seed,
+    entries: [{ ...state.linked, key: "A", title: "Old query issue" }],
+    nextCursors: { [cursor]: "2" },
+    viewers: { "github github.com": "A" },
+  };
+  let finish!: (value: unknown) => void;
+  state.load.mockReset().mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    openLinkThreadIssueDialog({
+      environmentId: EnvironmentId.make("stale-environment"),
+      threadId: ThreadId.make("stale-thread"),
+    });
+    await act(async () =>
+      root.render(
+        createElement(AppAtomRegistryProvider, null, createElement(LinkThreadIssueDialogHost)),
+      ),
+    );
+    await act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Load more")!
+        .click(),
+    );
+    state.list = {
+      ...seed,
+      entries: [{ ...state.linked, key: "Q", title: "Current query issue" }],
+      nextCursors: {},
+    };
+    const query = document.querySelector<HTMLInputElement>('[aria-label="Search issues"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+        query,
+        "current",
+      );
+      query.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.body.textContent).toContain("Current query issue");
+    await act(async () =>
+      finish({
+        _tag: "Success",
+        value: {
+          ...seed,
+          entries: [{ ...state.linked, key: "B", title: "Stale account issue" }],
+          viewers: { "github github.com": "B" },
+          nextCursors: {},
+        },
+      }),
+    );
+    expect(document.body.textContent).toContain("Current query issue");
+    expect(document.body.textContent).not.toContain("Stale account issue");
+    expect(state.load).toHaveBeenCalledOnce();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    state.list = seed;
+    appAtomRegistry.reset();
+    vi.unstubAllGlobals();
+  }
+});
+
 it.each([false, true])(
   "shows native first-page errors and refreshes only on Retry, with rows: %s",
   async (withRows) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    const runtime = Atom.runtime(
-      Layer.effect(
-        EnvironmentRegistry.EnvironmentRegistry,
-        Effect.gen(function* () {
-          const connection = yield* SubscriptionRef.make({ phase: "connected" } as const);
-          const session = yield* SubscriptionRef.make(Option.some({}));
-          const supervisor = {
-            state: connection,
-            session,
-          } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
-          return EnvironmentRegistry.EnvironmentRegistry.of({
-            run: (_id, effect) =>
-              Effect.provideService(
-                effect,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-            followStream: (_id, stream) =>
-              Stream.provideService(
-                stream,
-                EnvironmentSupervisor.EnvironmentSupervisor,
-                supervisor,
-              ),
-          } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
-        }),
-      ),
-    );
-    const atoms = createIssueEnvironmentAtoms(runtime);
+    const atoms = createIssueEnvironmentAtoms(issueRuntime());
     const list = vi.spyOn(issueEnvironment, "list").mockImplementation(atoms.list);
     const capabilities = {
       create: false,
