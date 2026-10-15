@@ -10,7 +10,12 @@ import {
 } from "@t3tools/contracts";
 import { useRef, useState } from "react";
 
-import { useComposerDraftStore, type ComposerThreadTarget } from "~/composerDraftStore";
+import {
+  useComposerDraftStore,
+  pendingIssueMatches,
+  type PendingIssueContext,
+  type ComposerThreadTarget,
+} from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { issueEnvironment } from "~/state/issues";
@@ -30,10 +35,11 @@ export async function withIssueThreadHandoff<A, E>(
   threadRef: ScopedThreadRef,
   projectId: ProjectId,
   url: string | undefined,
+  context: PendingIssueContext = {},
 ): Promise<AtomCommandResult<A, E>> {
   const result = await start;
   if (result._tag === "Success" && url) {
-    await completeIssueThreadHandoff(draftTarget, threadRef, projectId, url);
+    await completeIssueThreadHandoff(draftTarget, threadRef, projectId, url, context);
   }
   return result;
 }
@@ -43,10 +49,11 @@ async function completeIssueThreadHandoff(
   threadRef: ScopedThreadRef,
   projectId: ProjectId,
   url: string,
+  context: PendingIssueContext,
 ): Promise<void> {
   const store = useComposerDraftStore.getState();
   if (store.getComposerDraft(threadRef)?.pendingIssueUrl === undefined) {
-    store.setPendingIssueUrl(threadRef, url);
+    store.setPendingIssueUrl(threadRef, url, context);
   }
   try {
     if (!readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope)) {
@@ -55,13 +62,28 @@ async function completeIssueThreadHandoff(
     const resolved = await runAtomCommand(
       appAtomRegistry,
       issueEnvironment.resolveUrl,
-      { environmentId: threadRef.environmentId, input: { projectId, url } },
+      {
+        environmentId: threadRef.environmentId,
+        input: {
+          projectId,
+          url,
+          ...(context.pendingIssueEnvironmentId === threadRef.environmentId &&
+          context.pendingIssueConnectionId !== undefined
+            ? { connectionId: context.pendingIssueConnectionId }
+            : {}),
+        },
+      },
       { reportFailure: false },
     );
     if (resolved._tag === "Failure") {
       throw new Error(formatEnvironmentQueryError(resolved.cause));
     }
-    if (resolved.value.projectId !== projectId) {
+    if (
+      resolved.value.projectId !== projectId ||
+      (context.pendingIssueEnvironmentId === threadRef.environmentId &&
+        context.pendingIssueConnectionId !== undefined &&
+        resolved.value.connectionId !== context.pendingIssueConnectionId)
+    ) {
       throw new Error(
         "Configure this issue tracker in the thread's destination project, then retry.",
       );
@@ -92,7 +114,7 @@ async function completeIssueThreadHandoff(
           session.projectId !== projectId)
       )
         continue;
-      if (store.getComposerDraft(target)?.pendingIssueUrl === url) {
+      if (pendingIssueMatches(store.getComposerDraft(target), url, context)) {
         store.setPendingIssueUrl(target, undefined);
       }
     }
@@ -107,11 +129,15 @@ async function completeIssueThreadHandoff(
         onClick: async () => {
           toastManager.close(toastId);
           if (
-            useComposerDraftStore.getState().getComposerDraft(threadRef)?.pendingIssueUrl !== url
+            !pendingIssueMatches(
+              useComposerDraftStore.getState().getComposerDraft(threadRef),
+              url,
+              context,
+            )
           ) {
             return;
           }
-          await completeIssueThreadHandoff(draftTarget, threadRef, projectId, url);
+          await completeIssueThreadHandoff(draftTarget, threadRef, projectId, url, context);
         },
       },
     });
@@ -140,7 +166,12 @@ export function useIssueThreadHandoff(environmentId: EnvironmentId, reference: I
     if ((store.getComposerDraft(opened.draftId)?.prompt ?? "").trim().length === 0) {
       store.setPrompt(opened.draftId, issueHandoffPrompt(detail));
     }
-    store.setPendingIssueUrl(opened.draftId, detail.url);
+    store.setPendingIssueUrl(opened.draftId, detail.url, {
+      pendingIssueEnvironmentId: environmentId,
+      ...(reference.connectionId === undefined
+        ? {}
+        : { pendingIssueConnectionId: reference.connectionId }),
+    });
   };
 
   return { pending, start };

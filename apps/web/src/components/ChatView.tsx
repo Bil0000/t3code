@@ -378,6 +378,7 @@ import {
   markPromotedDraftThreadByRef,
   restoreFailedBackgroundDraftThread,
   composerDraftHasUserContent,
+  pendingIssueMatches,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -9324,9 +9325,14 @@ export default function ChatView(props: ChatViewProps) {
       );
       return;
     }
-    const pendingIssueUrl = useComposerDraftStore
+    const pendingIssueDraft = useComposerDraftStore
       .getState()
-      .getComposerDraft(composerDraftTarget)?.pendingIssueUrl;
+      .getComposerDraft(composerDraftTarget);
+    const pendingIssueUrl = pendingIssueDraft?.pendingIssueUrl;
+    const pendingIssueContext = {
+      pendingIssueEnvironmentId: pendingIssueDraft?.pendingIssueEnvironmentId,
+      pendingIssueConnectionId: pendingIssueDraft?.pendingIssueConnectionId,
+    };
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !sendQueuesBehindSetup && (!isServerThread || activeMessageCount === 0);
     const baseBranchForWorktree =
@@ -9362,6 +9368,7 @@ export default function ChatView(props: ChatViewProps) {
     const submittedDraft = {
       prompt: messageTextForSend,
       pendingIssueUrl,
+      ...pendingIssueContext,
       images: composerImagesSnapshot,
       files: composerFilesSnapshot,
       terminalContexts: composerTerminalContextsSnapshot,
@@ -9707,6 +9714,7 @@ export default function ChatView(props: ChatViewProps) {
                 scopeThreadRef(environmentId, targetThreadId),
                 activeProject.id,
                 pendingIssueUrl,
+                pendingIssueContext,
               );
               startedCount += 1;
             } catch (error) {
@@ -9785,8 +9793,11 @@ export default function ChatView(props: ChatViewProps) {
         if (
           failedSelections.length === 0 &&
           pendingIssueUrl &&
-          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
-            ?.pendingIssueUrl === pendingIssueUrl
+          pendingIssueMatches(
+            useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+            pendingIssueUrl,
+            pendingIssueContext,
+          )
         ) {
           useComposerDraftStore.getState().setPendingIssueUrl(composerDraftTarget, undefined);
         }
@@ -9842,6 +9853,7 @@ export default function ChatView(props: ChatViewProps) {
                       composerDraftHasUserContent(
                         useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
                         pendingIssueUrl,
+                        pendingIssueContext,
                       ) ||
                       !restoreFailedDraft()
                     ) {
@@ -10128,6 +10140,7 @@ export default function ChatView(props: ChatViewProps) {
         scopeThreadRef(environmentId, threadIdForSend),
         activeProject.id,
         pendingIssueUrl,
+        pendingIssueContext,
       );
       if (startResult._tag === "Failure") {
         failure = startResult;
@@ -10191,6 +10204,7 @@ export default function ChatView(props: ChatViewProps) {
         !composerDraftHasUserContent(
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
           pendingIssueUrl,
+          pendingIssueContext,
         ) &&
         (backgroundDraftOpened ||
           (promptRef.current.length === 0 &&

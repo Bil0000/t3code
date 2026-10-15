@@ -6,6 +6,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   EnvironmentId,
+  IssueRef,
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
@@ -235,6 +236,8 @@ type PersistedTerminalContextDraft = typeof PersistedTerminalContextDraft.Type;
 const PersistedComposerThreadDraftState = Schema.Struct({
   prompt: Schema.String,
   pendingIssueUrl: Schema.optionalKey(Schema.String),
+  pendingIssueEnvironmentId: Schema.optionalKey(EnvironmentId),
+  pendingIssueConnectionId: IssueRef.fields.connectionId,
   attachments: Schema.Array(PersistedComposerImageAttachment),
   files: Schema.optionalKey(Schema.Array(PersistedComposerDraftFileAttachment)),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
@@ -389,6 +392,8 @@ const contextInsertionHandlers = new Map<string, ComposerContextInsertionHandler
 export interface ComposerThreadDraftState {
   prompt: string;
   pendingIssueUrl?: string | undefined;
+  pendingIssueEnvironmentId?: EnvironmentId | undefined;
+  pendingIssueConnectionId?: string | undefined;
   images: ComposerImageAttachment[];
   files: ComposerFileAttachment[];
   nonPersistedImageIds: string[];
@@ -418,6 +423,23 @@ export interface ComposerThreadDraftState {
   interactionMode: ProviderInteractionMode | null;
 }
 
+export type PendingIssueContext = Pick<
+  ComposerThreadDraftState,
+  "pendingIssueEnvironmentId" | "pendingIssueConnectionId"
+>;
+
+export function pendingIssueMatches(
+  draft: ComposerThreadDraftState | null | undefined,
+  url: string | undefined,
+  context: PendingIssueContext = {},
+): boolean {
+  return (
+    draft?.pendingIssueUrl === url &&
+    draft?.pendingIssueEnvironmentId === context.pendingIssueEnvironmentId &&
+    draft?.pendingIssueConnectionId === context.pendingIssueConnectionId
+  );
+}
+
 /**
  * True when the user has invested real content in the draft: typed text or
  * any attachment/context. Model selection and mode choices alone do not
@@ -429,12 +451,14 @@ export interface ComposerThreadDraftState {
 export function composerDraftHasUserContent(
   draft: ComposerThreadDraftState | null | undefined,
   submittedPendingIssueUrl?: string,
+  submittedPendingIssueContext: PendingIssueContext = {},
 ): boolean {
   if (!draft) {
     return false;
   }
   return (
-    (draft.pendingIssueUrl !== undefined && draft.pendingIssueUrl !== submittedPendingIssueUrl) ||
+    (draft.pendingIssueUrl !== undefined &&
+      !pendingIssueMatches(draft, submittedPendingIssueUrl, submittedPendingIssueContext)) ||
     draft.prompt.trim().length > 0 ||
     draft.images.length > 0 ||
     draft.files.length > 0 ||
@@ -595,7 +619,11 @@ interface ComposerDraftStoreState {
   clearDraftThread: (threadRef: ComposerThreadTarget) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
   setPrompt: (threadRef: ComposerThreadTarget, prompt: string) => void;
-  setPendingIssueUrl: (threadRef: ComposerThreadTarget, url: string | undefined) => void;
+  setPendingIssueUrl: (
+    threadRef: ComposerThreadTarget,
+    url: string | undefined,
+    context?: PendingIssueContext,
+  ) => void;
   setTerminalContexts: (threadRef: ComposerThreadTarget, contexts: TerminalContextDraft[]) => void;
   setModelSelection: (
     threadRef: ComposerThreadTarget,
@@ -732,6 +760,8 @@ interface ComposerDraftStoreState {
       | "reviewComments"
       | "threadContexts"
       | "pendingIssueUrl"
+      | "pendingIssueEnvironmentId"
+      | "pendingIssueConnectionId"
     >,
   ) => boolean;
   /**
@@ -1969,6 +1999,14 @@ function normalizePersistedDraftsByThreadId(
       typeof draftCandidate.pendingIssueUrl === "string"
         ? draftCandidate.pendingIssueUrl
         : undefined;
+    const pendingIssueEnvironmentId =
+      pendingIssueUrl !== undefined && typeof draftCandidate.pendingIssueEnvironmentId === "string"
+        ? draftCandidate.pendingIssueEnvironmentId
+        : undefined;
+    const pendingIssueConnectionId =
+      pendingIssueUrl !== undefined && typeof draftCandidate.pendingIssueConnectionId === "string"
+        ? draftCandidate.pendingIssueConnectionId
+        : undefined;
     const promptCandidate = typeof draftCandidate.prompt === "string" ? draftCandidate.prompt : "";
     const attachments = Array.isArray(draftCandidate.attachments)
       ? draftCandidate.attachments.flatMap((entry) => {
@@ -2135,6 +2173,8 @@ function normalizePersistedDraftsByThreadId(
     nextDraftsByThreadKey[normalizedThreadKey] = {
       prompt,
       ...(pendingIssueUrl !== undefined ? { pendingIssueUrl } : {}),
+      ...(pendingIssueEnvironmentId === undefined ? {} : { pendingIssueEnvironmentId }),
+      ...(pendingIssueConnectionId === undefined ? {} : { pendingIssueConnectionId }),
       attachments,
       ...(files.length > 0 ? { files } : {}),
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
@@ -2262,6 +2302,12 @@ export function partializeComposerDraftStoreState(
     const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
       prompt: draft.prompt,
       ...(draft.pendingIssueUrl !== undefined ? { pendingIssueUrl: draft.pendingIssueUrl } : {}),
+      ...(draft.pendingIssueEnvironmentId === undefined
+        ? {}
+        : { pendingIssueEnvironmentId: draft.pendingIssueEnvironmentId }),
+      ...(draft.pendingIssueConnectionId === undefined
+        ? {}
+        : { pendingIssueConnectionId: draft.pendingIssueConnectionId }),
       attachments: draft.persistedAttachments,
       ...(draft.files.length > 0
         ? {
@@ -2584,6 +2630,12 @@ function toHydratedThreadDraft(
     ...(persistedDraft.pendingIssueUrl !== undefined
       ? { pendingIssueUrl: persistedDraft.pendingIssueUrl }
       : {}),
+    ...(persistedDraft.pendingIssueEnvironmentId === undefined
+      ? {}
+      : { pendingIssueEnvironmentId: persistedDraft.pendingIssueEnvironmentId }),
+    ...(persistedDraft.pendingIssueConnectionId === undefined
+      ? {}
+      : { pendingIssueConnectionId: persistedDraft.pendingIssueConnectionId }),
     files,
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
@@ -3121,13 +3173,20 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        setPendingIssueUrl: (threadRef, url) => {
+        setPendingIssueUrl: (threadRef, url, context = {}) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey) return;
           set((state) => {
             const current = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
-            if (current.pendingIssueUrl === url) return state;
-            const nextDraft = { ...current, pendingIssueUrl: url };
+            if (pendingIssueMatches(current, url, context)) return state;
+            const nextDraft = {
+              ...current,
+              pendingIssueUrl: url,
+              pendingIssueEnvironmentId:
+                url === undefined ? undefined : context.pendingIssueEnvironmentId,
+              pendingIssueConnectionId:
+                url === undefined ? undefined : context.pendingIssueConnectionId,
+            };
             const draftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
               delete draftsByThreadKey[threadKey];
@@ -4237,6 +4296,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             composerDraftHasUserContent(
               store.getComposerDraft(threadRef),
               submitted.pendingIssueUrl,
+              submitted,
             )
           )
             return false;

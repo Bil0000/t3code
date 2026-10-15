@@ -39,6 +39,7 @@ const state = vi.hoisted(() => ({
   linkError: null as Error | null,
   resolveError: null as Error | null,
   resolvedProject: "",
+  resolvedConnectionId: undefined as string | undefined,
   resolveWait: null as Promise<void> | null,
   resolveStarted: () => {},
   calls: [] as Array<{ environmentId: string; method: string; input: Record<string, unknown> }>,
@@ -104,6 +105,9 @@ vi.mock("~/connection/runtime", async () => {
       if (state.resolveError) return yield* Effect.fail(state.resolveError);
       return yield* decodeResolved({
         projectId: state.resolvedProject || input.projectId,
+        ...(input.connectionId === undefined
+          ? {}
+          : { connectionId: state.resolvedConnectionId ?? input.connectionId }),
         tracker: "github",
         host: "github.com",
         scope: "acme/web",
@@ -201,8 +205,11 @@ function deferred() {
   return { promise, resolve };
 }
 
-function Harness() {
-  const current = useIssueThreadHandoff(environmentA, reference);
+function Harness({ connectionId }: { connectionId?: string } = {}) {
+  const current = useIssueThreadHandoff(environmentA, {
+    ...reference,
+    ...(connectionId === undefined ? {} : { connectionId }),
+  });
   useEffect(() => {
     handoff = current;
   });
@@ -215,6 +222,7 @@ beforeEach(async () => {
   state.calls = [];
   state.toast.mockReset();
   state.deniedEnvironment = state.resolvedProject = "";
+  state.resolvedConnectionId = undefined;
   state.launchError = state.linkError = state.resolveError = null;
   state.launchWait = null;
   state.launchStarted = () => {};
@@ -254,7 +262,8 @@ async function solve(environmentId = environmentA, selection: "auto" | "manual" 
 
 function send(target: Awaited<ReturnType<typeof solve>>, targetThreadId = threadId) {
   const store = useComposerDraftStore.getState();
-  const url = store.getComposerDraft(draftId)?.pendingIssueUrl;
+  const pending = store.getComposerDraft(draftId);
+  const url = pending?.pendingIssueUrl;
   const text = store.getComposerDraft(draftId)?.prompt || "Retry solving the issue";
   const attachments = (store.getComposerDraft(draftId)?.files ?? []).map((file) => ({
     type: "file" as const,
@@ -295,6 +304,7 @@ function send(target: Awaited<ReturnType<typeof solve>>, targetThreadId = thread
     scopeThreadRef(target.environmentId, targetThreadId),
     target.projectId,
     url,
+    pending ?? {},
   );
 }
 
@@ -547,3 +557,102 @@ it("does not consume a reused draft after its destination changes during linking
     detail.url,
   );
 });
+
+it.each([
+  [environmentA, false],
+  [environmentB, false],
+  [environmentB, true],
+] as const)(
+  "keeps the source account only within its environment %s (foreign destination %s)",
+  async (environmentId, foreign) => {
+    await act(async () => root.render(<Harness connectionId="Account/B" />));
+    const target = await solve(environmentId);
+    state.resolvedProject = foreign ? projectA : "";
+    await send(target);
+    const resolve = state.calls.find((call) => call.method === "issues.resolveUrl")!;
+    expect(resolve.input).toEqual({
+      projectId: target.projectId,
+      url: detail.url,
+      ...(environmentId === environmentA ? { connectionId: "Account/B" } : {}),
+    });
+    const linked = state.calls.find(
+      (call) => call.method === ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+    );
+    if (foreign) {
+      expect(linked).toBeUndefined();
+      expect(
+        useComposerDraftStore.getState().getComposerDraft(target.threadRef)
+          ?.pendingIssueConnectionId,
+      ).toBe("Account/B");
+      return;
+    }
+    expect(linked!.input.connectionId).toBe(
+      environmentId === environmentA ? "Account/B" : undefined,
+    );
+  },
+);
+
+it("does not clear or retry a newer selector at the same issue URL", async () => {
+  const target = await solve(environmentA);
+  const store = useComposerDraftStore.getState();
+  const context = { pendingIssueEnvironmentId: environmentA, pendingIssueConnectionId: "A" };
+  store.setPendingIssueUrl(draftId, detail.url, context);
+  state.linkError = new Error("retry");
+  await send(target);
+  store.setPendingIssueUrl(target.threadRef, detail.url, {
+    ...context,
+    pendingIssueConnectionId: "B",
+  });
+  const count = state.calls.length;
+  await state.toast.mock.calls.at(-1)![0].actionProps.onClick();
+  expect(state.calls).toHaveLength(count);
+});
+
+it("keeps a newer account at the same URL after older linking completes", async () => {
+  const target = await solve(environmentA);
+  const store = useComposerDraftStore.getState();
+  const context = { pendingIssueEnvironmentId: environmentA, pendingIssueConnectionId: "A" };
+  store.setPendingIssueUrl(draftId, detail.url, context);
+  const started = deferred();
+  const release = deferred();
+  state.resolveStarted = started.resolve;
+  state.resolveWait = release.promise;
+  const sending = send(target);
+  await started.promise;
+  finalizePromotedDraftThreadByRef(target.threadRef);
+  store.setPendingIssueUrl(target.threadRef, detail.url, {
+    ...context,
+    pendingIssueConnectionId: "B",
+  });
+  release.resolve();
+  await sending;
+  expect(store.getComposerDraft(target.threadRef)?.pendingIssueConnectionId).toBe("B");
+});
+
+it.each(["missing", "fallback"])(
+  "retains an unavailable selected account for retry without a default-account write (%s)",
+  async (kind) => {
+    const target = await solve(environmentA);
+    const store = useComposerDraftStore.getState();
+    store.setPendingIssueUrl(draftId, detail.url, {
+      pendingIssueEnvironmentId: environmentA,
+      pendingIssueConnectionId: "B",
+    });
+    state.resolveError = kind === "missing" ? new Error("Account B missing") : null;
+    state.resolvedConnectionId = kind === "fallback" ? "A" : undefined;
+    await send(target);
+    expect(
+      state.calls.filter((call) => call.method === ORCHESTRATION_V2_WS_METHODS.dispatchCommand),
+    ).toEqual([]);
+    expect(store.getComposerDraft(target.threadRef)?.pendingIssueConnectionId).toBe("B");
+    state.resolveError = null;
+    state.resolvedConnectionId = undefined;
+    await state.toast.mock.calls.at(-1)![0].actionProps.onClick();
+    expect(
+      state.calls
+        .filter((call) => call.method === "issues.resolveUrl")
+        .map((call) => call.input.connectionId),
+    ).toEqual(["B", "B"]);
+    expect(store.getComposerDraft(target.threadRef)?.pendingIssueUrl).toBeUndefined();
+  },
+);
