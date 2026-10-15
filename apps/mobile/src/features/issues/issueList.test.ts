@@ -546,6 +546,77 @@ describe("mobile issue list", () => {
     ]);
   });
 
+  it.each([
+    ["linear", "linear.app", "ENG"],
+    ["jira", "acme.atlassian.net", "WEB"],
+  ])("uses listed %s scopes on older servers without a repository", (kind, host, scope) => {
+    const standalone = { ...project(), repositoryIdentity: null };
+    const nativeTracker = IssueTrackerKind.make(kind);
+    const listed = entry("1", { tracker: nativeTracker, host, scope });
+    const nativeAnswer = answer({
+      entries: [listed, { ...listed, key: "2" }],
+      trackers: [
+        {
+          ...answer().trackers[0]!,
+          tracker: nativeTracker,
+          host: host.toUpperCase(),
+          capabilities: { ...capabilities, templates: false, createIssueTypes: true },
+        },
+      ],
+    });
+    const lists = [source(nativeAnswer)];
+    const selected = { environmentId, projectId: standalone.id };
+    const otherEnvironment = EnvironmentId.make("env-two");
+    const expected = [
+      {
+        environmentId,
+        projectTitle: standalone.title,
+        templates: false,
+        createIssueTypes: true,
+        scope: { projectId: standalone.id, tracker: nativeTracker, host, scope },
+      },
+    ];
+    expect(issueCreateScopes(lists, [standalone])).toEqual(expected);
+    expect(issueCreateScopes(lists, [standalone], selected)).toEqual(expected);
+    expect(issueCreateScopes([source({ ...nativeAnswer, sources: [] })], [standalone])).toEqual([]);
+    expect(issueCreateScopes([source({ ...nativeAnswer, entries: [] })], [project()])).toEqual([]);
+    expect(issueCreateScopes(lists, [standalone], { ...selected, projectId: "other" })).toEqual([]);
+    expect(issueCreateScopes(lists, [{ ...standalone, environmentId: otherEnvironment }])).toEqual(
+      [],
+    );
+    expect(
+      issueCreateScopes(lists, [standalone], {
+        ...selected,
+        environmentId: otherEnvironment,
+      }),
+    ).toEqual([]);
+    expect(issueCreateScopes(lists, [{ ...standalone, id: ProjectId.make("foreign") }])).toEqual(
+      [],
+    );
+  });
+
+  it.each([
+    { configured: false },
+    { capabilities: { ...capabilities, create: false } },
+    { capabilities: null },
+    { tracker: IssueTrackerKind.make("jira") },
+    { host: "foreign.example" },
+  ])("rejects old-server native scopes without matching create access: %j", (patch) => {
+    const listed = entry("ENG-1", {
+      tracker: IssueTrackerKind.make("linear"),
+      host: "linear.app",
+      scope: "ENG",
+    });
+    const summary = {
+      ...answer().trackers[0]!,
+      tracker: listed.tracker,
+      host: listed.host,
+      ...patch,
+    };
+    const lists = [source(answer({ entries: [listed], trackers: [summary] }))];
+    expect(issueCreateScopes(lists, [{ ...project(), repositoryIdentity: null }])).toEqual([]);
+  });
+
   it("falls back to same-environment repository identities and requires a configured create capability", () => {
     const projects = [
       project(),

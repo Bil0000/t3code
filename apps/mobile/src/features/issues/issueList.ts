@@ -434,6 +434,32 @@ export function issueCreateScopes(
         scope: { projectId: candidate.id, tracker: tracker.tracker, host, scope },
       });
     }
+    for (const entry of held.entries) {
+      if (project && entry.projectId !== project.projectId) continue;
+      const candidate = projects.find(
+        (candidate) =>
+          candidate.environmentId === environmentId && candidate.id === entry.projectId,
+      );
+      if (!candidate) continue;
+      const tracker = held.answer.trackers.find(
+        (tracker) => trackerKey(tracker) === trackerKey(entry),
+      );
+      if (!tracker?.configured || tracker.capabilities?.create !== true) continue;
+      addScope({
+        environmentId,
+        projectTitle: candidate.title,
+        templates: tracker.capabilities.templates,
+        ...(tracker.capabilities.createIssueTypes === undefined
+          ? {}
+          : { createIssueTypes: tracker.capabilities.createIssueTypes }),
+        scope: {
+          projectId: candidate.id,
+          tracker: entry.tracker,
+          host: entry.host,
+          scope: entry.scope,
+        },
+      });
+    }
   }
   return scopes;
 }
