@@ -18,6 +18,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import type { Tool } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
@@ -1014,7 +1015,11 @@ describe("issue toolkit handlers", () => {
         .pipe(Effect.flip);
       expect(unbound).toMatchObject({ _tag: "IssueSourceSelectionError", tracker: LINEAR });
       const denied = yield* harness
-        .call("read_issue_candidates", { projectId: PROJECT_ID, tracker: jiraSource.tracker }, [])
+        .call(
+          "read_issue_candidates",
+          { projectId: PROJECT_ID, tracker: jiraSource.tracker, key: "OPS-7" },
+          [],
+        )
         .pipe(Effect.flip);
       expect(denied).toMatchObject({ _tag: "McpCapabilityUnavailableError", capability: "issues" });
       expect(yield* Ref.get(harness.calls)).toEqual([]);
@@ -1024,6 +1029,36 @@ describe("issue toolkit handlers", () => {
       expect(yield* Ref.get(harness.calls)).toEqual([
         { operation: "candidates", input: { projectId: PROJECT_ID, ...jiraSource } },
       ]);
+    }),
+  );
+
+  const decodeCandidateInput = Schema.decodeUnknownSync(
+    IssuesToolkit.tools.read_issue_candidates.parametersSchema,
+  );
+  it.effect("keeps optional candidate keys through the registered MCP tool", () =>
+    Effect.gen(function* () {
+      const choices: IssueCandidates = {
+        ...candidates,
+        states: [{ id: "3", name: "In Progress", category: "open" }],
+      };
+      const harness = yield* makeHarness([], { sources: [jiraSource], candidates: choices });
+      for (const selection of [{}, { key: "OPS-7" }]) {
+        const input = { tracker: jiraSource.tracker, ...selection };
+        expect(decodeCandidateInput(input)).toEqual(input);
+        expect(yield* harness.call("read_issue_candidates", decodeCandidateInput(input))).toEqual(
+          choices,
+        );
+      }
+      expect(yield* Ref.get(harness.calls)).toEqual([
+        { operation: "candidates", input: { projectId: PROJECT_ID, ...jiraSource } },
+        {
+          operation: "candidates",
+          input: { projectId: PROJECT_ID, ...jiraSource, key: "OPS-7" },
+        },
+      ]);
+      for (const key of ["", "  ", null, 7]) {
+        expect(() => decodeCandidateInput({ tracker: jiraSource.tracker, key })).toThrow();
+      }
     }),
   );
 

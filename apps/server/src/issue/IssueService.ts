@@ -27,6 +27,7 @@ import {
   pullRequestHostOf,
   SourceControlProviderKind,
   type IssueCandidates,
+  type IssueCandidatesInput,
   type IssueAssigneeCandidatesPage,
   type IssueEditCommentInput,
   type IssueHierarchyPage,
@@ -208,7 +209,9 @@ export class IssueService extends Context.Service<
     readonly templates: (
       input: IssueTemplatesInput,
     ) => Effect.Effect<IssueTemplateList, IssueError>;
-    readonly candidates: (input: IssueScopeRef) => Effect.Effect<IssueCandidates, IssueError>;
+    readonly candidates: (
+      input: IssueCandidatesInput,
+    ) => Effect.Effect<IssueCandidates, IssueError>;
     readonly create: (input: IssueCreateInput) => Effect.Effect<IssueCreateResult, IssueError>;
     readonly comment: (input: IssueCommentInput) => Effect.Effect<void, IssueError>;
     readonly update: (input: IssueUpdateInput) => Effect.Effect<void, IssueError>;
@@ -799,6 +802,7 @@ export const make = Effect.gen(function* () {
                 cwd: project.project.workspaceRoot,
                 host: project.host,
                 scope: project.scope,
+                ...(input.key === undefined ? {} : { key: input.key }),
               })
               .pipe(Effect.mapError(toIssueError("candidates"))),
       ),

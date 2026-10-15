@@ -482,6 +482,46 @@ describe("resolveGitHostBinding", () => {
 });
 
 describe("IssueService", () => {
+  it.effect("forwards only supplied candidate keys without issue or permission preflights", () =>
+    Effect.gen(function* () {
+      const calls: Parameters<NonNullable<IssueTrackerApi["listCandidates"]>>[0][] = [];
+      const available = { id: "3", name: "In Progress", category: "open" as const };
+      const projectState = { id: "5", name: "Verified", category: "closed" as const };
+      const base = fakeStandaloneTracker({
+        getViewer: () => Effect.die("Unexpected viewer read"),
+        getIssue: () => Effect.die("Unexpected detail read"),
+        getViewerPermissions: () => Effect.die("Unexpected permissions read"),
+        listCandidates: (input) =>
+          Effect.sync(() => {
+            calls.push(input);
+            return {
+              labels: [],
+              assignees: [],
+              states: [input.key === undefined ? projectState : available],
+              truncated: false,
+            };
+          }),
+      });
+      const tracker: StandaloneIssueTrackerApi = {
+        ...base,
+        kind: JIRA,
+        standalone: { ...base.standalone, tracker: JIRA, host: "jira.example.com" },
+      };
+      const service = yield* makeService({
+        projects: [project({ id: "p" })],
+        trackers: [tracker],
+        bindings: { p: { tracker: JIRA, scope: "OPS" } },
+      });
+      const ref = { projectId: ProjectId.make("p"), tracker: JIRA, scope: "OPS" };
+      expect((yield* service.candidates(ref)).states).toEqual([projectState]);
+      expect((yield* service.candidates({ ...ref, key: "OPS-7" })).states).toEqual([available]);
+      expect(calls).toEqual([
+        { cwd: "/w/p", host: "jira.example.com", scope: "OPS" },
+        { cwd: "/w/p", host: "jira.example.com", scope: "OPS", key: "OPS-7" },
+      ]);
+    }),
+  );
+
   it.effect("forwards template catalog and selected-body flags without other native reads", () =>
     Effect.gen(function* () {
       const calls: Parameters<NonNullable<IssueTrackerApi["listTemplates"]>>[0][] = [];

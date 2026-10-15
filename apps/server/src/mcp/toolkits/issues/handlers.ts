@@ -481,7 +481,11 @@ const make = Effect.gen(function* () {
     read_issue_candidates: McpToolAccess.reads((input) =>
       Effect.gen(function* () {
         const { project, binding } = yield* requireSource(input.projectId, input.tracker);
-        return yield* issues.candidates({ projectId: project.id, ...binding });
+        return yield* issues.candidates({
+          projectId: project.id,
+          ...binding,
+          ...(input.key === undefined ? {} : { key: input.key }),
+        });
       }),
     ),
     comment_on_issue: McpToolAccess.writesWithCapability((input) =>
