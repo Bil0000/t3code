@@ -927,6 +927,60 @@ describe("ForgejoIssueTracker", () => {
       }),
   );
 
+  it.effect.each([
+    { path: "/Acme/Web/issues/42", allowed: true },
+    { path: "/api/v1/repos/Acme/Web/issues/42", allowed: true },
+    { path: "/Mount/Acme/Web/issues/42", mount: "Mount/", allowed: true },
+    { path: "/Mount/api/v1/repos/Acme/Web/issues/42", mount: "Mount/", allowed: true },
+    { path: "/Acme/Web/issues/42", host: "other.test:3000", allowed: false },
+    { path: "/Acme/Web/issues/42", host: "forgejo.test:3001", allowed: false },
+    { path: "/Acme/Other/issues/42", allowed: false },
+    { path: "/Other/Web/issues/42", allowed: false },
+    { path: "/Acme/Web/issues/41", allowed: false },
+    { path: "/Acme/Web/issues/42", id: 8, allowed: false },
+    { path: "/other/Acme/Web/issues/42", mount: "Mount/", allowed: false },
+    { path: "/mount/Acme/Web/issues/42", mount: "Mount/", allowed: false },
+    { path: "/Mount/api/v1/Repos/Acme/Web/issues/42", mount: "Mount/", allowed: false },
+    { path: "/Acme/Web/Issues/42", allowed: false },
+  ])(
+    "checks canonical comment membership for $path",
+    ({ path, host = "forgejo.test:3000", mount = "", id = 7, allowed }) =>
+      Effect.gen(function* () {
+        for (const operation of ["edit", "react", "unreact"] as const) {
+          const requests: ForgejoCli.ForgejoApiInput[] = [];
+          const api = yield* tracker((input) => {
+            requests.push(input);
+            return { stdout: encode({ id, issue_url: `https://${host}${path}` }) };
+          });
+          const target = {
+            cwd: "/w",
+            host: "forgejo.test:3000",
+            scope: `${mount}acme/web`,
+            key: "42",
+          };
+          const result = yield* Effect.result(
+            operation === "edit"
+              ? api.editComment!({ ...target, commentId: "7", body: "Updated" })
+              : api.setReaction!({
+                  ...target,
+                  subjectId: "7",
+                  content: "thumbs-up",
+                  reacted: operation === "react",
+                }),
+          );
+          expect(Result.isSuccess(result)).toBe(allowed);
+          expect(requests).toHaveLength(allowed ? 2 : 1);
+          expect(requests[0]).toMatchObject({ path: `repos/${target.scope}/issues/comments/7` });
+          expect(requests[0]?.method).toBeUndefined();
+          if (allowed)
+            expect(requests[1]?.method).toBe(
+              operation === "edit" ? "PATCH" : operation === "react" ? "POST" : "DELETE",
+            );
+          else expect(requests.every((request) => request.method === undefined)).toBe(true);
+        }
+      }),
+  );
+
   it.effect.each(["42", "99"])("edits a comment only when its native issue URL names %s", (key) =>
     Effect.gen(function* () {
       const writes: ForgejoCli.ForgejoApiInput[] = [];
