@@ -13,7 +13,6 @@ import {
   TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Data from "effect/Data";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -42,7 +41,6 @@ import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 
@@ -423,71 +421,6 @@ it.layer(
   Layer.merge(NodeServices.layer, ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
   { excludeTestServices: true },
 )("TerminalManager", (it) => {
-  it.effect.each(
-    symlinksSupported
-      ? ([
-          ["open", false],
-          ["open", true],
-          ["restart", false],
-          ["restart", true],
-        ] as const)
-      : [],
-  )(
-    "blocks alias terminal %s on the canonical workspace lease with worktree path %s",
-    ([operation, hasWorktreePath]) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-terminal-alias-" });
-        const workspace = path.join(baseDir, "workspace");
-        const alias = path.join(baseDir, "alias");
-        yield* fs.makeDirectory(workspace);
-        yield* fs.symlink(workspace, alias);
-        const canonical = yield* fs.realPath(alias);
-        let cwdChecked = false;
-        const { manager, ptyAdapter, getEvents } = yield* createManager().pipe(
-          Effect.provideService(FileSystem.FileSystem, {
-            ...fs,
-            realPath: (cwd) => (cwd === alias ? Effect.succeed(canonical) : fs.realPath(cwd)),
-            stat: (cwd) => {
-              if (cwd === alias) cwdChecked = true;
-              return fs.stat(cwd);
-            },
-          }),
-        );
-        if (operation === "restart") yield* manager.open(openInput({ cwd: workspace }));
-        const acquired = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const lease = yield* withWorkspaceLease(
-          canonical,
-          Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
-        ).pipe(Effect.forkScoped);
-        yield* Deferred.await(acquired);
-        const input = {
-          ...openInput({
-            cwd: alias,
-            ...(hasWorktreePath ? { worktreePath: alias } : {}),
-          }),
-          cols: 80,
-          rows: 24,
-        };
-        const terminal = yield* manager[operation](input).pipe(Effect.forkScoped);
-        yield* Effect.yieldNow;
-        yield* Effect.sync(() => {
-          expect(cwdChecked).toBe(false);
-          expect(ptyAdapter.spawnInputs).toHaveLength(operation === "restart" ? 1 : 0);
-        }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
-        yield* Fiber.join(lease);
-        const snapshot = yield* Fiber.join(terminal);
-        expect(snapshot.cwd).toBe(alias);
-        expect(snapshot.status).toBe("running");
-        expect(ptyAdapter.spawnInputs.at(-1)?.cwd).toBe(alias);
-        expect((yield* getEvents).at(-1)?.type).toBe(
-          operation === "restart" ? "restarted" : "started",
-        );
-      }),
-  );
-
   it.effect("spawns lazily and reuses running terminal per thread", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
@@ -638,6 +571,9 @@ it.layer(
       fs.makeDirectory(filePath, { recursive: true }),
     );
 
+  const chmod = (filePath: string, mode: number) =>
+    Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) => fs.chmod(filePath, mode));
+
   const pathExists = (filePath: string) =>
     Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) => fs.exists(filePath));
 
@@ -684,29 +620,26 @@ it.layer(
 
   it.effect("preserves non-notFound cwd stat failures", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const blockedCwd = yield* fs.makeTempDirectoryScoped();
-      const { manager } = yield* createManager().pipe(
-        Effect.provideService(FileSystem.FileSystem, {
-          ...fs,
-          stat: (target) =>
-            target === blockedCwd
-              ? Effect.fail(
-                  PlatformError.systemError({
-                    _tag: "PermissionDenied",
-                    module: "FileSystem",
-                    method: "stat",
-                    pathOrDescriptor: target,
-                  }),
-                )
-              : fs.stat(target),
-        }),
+      if ((yield* HostProcess.Platform) === "win32") return;
+
+      const path = yield* Path.Path;
+
+      const { manager, baseDir } = yield* createManager();
+      const blockedRoot = path.join(baseDir, "blocked-root");
+      const blockedCwd = path.join(blockedRoot, "cwd");
+      yield* makeDirectory(blockedCwd);
+      yield* chmod(blockedRoot, 0o000);
+
+      const error = yield* Effect.flip(manager.open(openInput({ cwd: blockedCwd }))).pipe(
+        Effect.ensuring(chmod(blockedRoot, 0o755).pipe(Effect.ignore)),
       );
-      const error = yield* Effect.flip(manager.open(openInput({ cwd: blockedCwd })));
+
       expect(error).toMatchObject({
         _tag: "TerminalCwdStatError",
         cwd: blockedCwd,
-        cause: { _tag: "PlatformError" },
+        cause: {
+          _tag: "PlatformError",
+        },
       });
     }),
   );

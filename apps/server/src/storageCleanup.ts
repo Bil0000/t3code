@@ -44,7 +44,7 @@ import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import { resolveWorkspacePath, withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
@@ -196,22 +196,19 @@ const make = Effect.gen(function* () {
       !path.isAbsolute(relative)
     );
   };
-  const hasTerminal = Effect.fn("StorageCleanup.hasTerminal")(function* (worktreePath: string) {
-    for (const terminal of [...liveTerminals.values()].flatMap((entries) => [
-      ...entries.values(),
-    ])) {
-      if (terminal.status !== "starting" && terminal.status !== "running") continue;
-      const cwd = yield* resolveWorkspacePath(terminal.cwd);
-      if (
-        (terminal.worktreePath !== null &&
-          (yield* resolveWorkspacePath(terminal.worktreePath)) === worktreePath) ||
-        cwd === worktreePath ||
-        inside(worktreePath, cwd)
-      )
-        return true;
-    }
-    return false;
-  });
+  const hasTerminal = (worktreePath: string) =>
+    [...liveTerminals.values()]
+      .flatMap((entries) => [...entries.values()])
+      .some((terminal) => {
+        if (terminal.status !== "starting" && terminal.status !== "running") return false;
+        const cwd = path.resolve(terminal.cwd);
+        return (
+          (terminal.worktreePath !== null &&
+            path.resolve(terminal.worktreePath) === worktreePath) ||
+          cwd === worktreePath ||
+          inside(worktreePath, cwd)
+        );
+      });
 
   const measureWorktree = (worktreePath: string) =>
     Effect.gen(function* () {
@@ -259,17 +256,10 @@ const make = Effect.gen(function* () {
   // The snapshot takes seconds on large databases, so it runs on the reader
   // worker instead of the event loop.
   const readThreads = Effect.fn("StorageCleanup.readThreads")(function* () {
-    const snapshot = yield* projections
+    const { threads } = yield* projections
       .getShellSnapshot({ location: "active" })
       .pipe(NodeSqliteClient.readOnly);
     const projects = yield* projectStore.listShells();
-    const threads = yield* Effect.forEach(snapshot.threads, (thread) =>
-      thread.worktreePath === null
-        ? Effect.succeed(thread)
-        : resolveWorkspacePath(thread.worktreePath).pipe(
-            Effect.map((worktreePath) => ({ ...thread, worktreePath })),
-          ),
-    );
     return { projects, threads };
   });
 
@@ -281,7 +271,9 @@ const make = Effect.gen(function* () {
     for (const project of projects) {
       const projectPath = path.resolve(project.workspaceRoot);
       if (projectPath === worktreePath || inside(worktreePath, projectPath)) return true;
-      const realPath = yield* resolveWorkspacePath(projectPath);
+      const realPath = yield* fs
+        .realPath(projectPath)
+        .pipe(Effect.orElseSucceed(() => projectPath));
       if (realPath === worktreePath || inside(worktreePath, realPath)) return true;
     }
     return false;
@@ -433,15 +425,9 @@ const make = Effect.gen(function* () {
           WHERE t.deleted_at IS NOT NULL
         `;
     const deletedThreads = (yield* Effect.forEach(deletedRows, (row) =>
-      Effect.gen(function* () {
-        const thread = yield* decodeCleanupThread(row.payload_json);
-        return {
-          ...thread,
-          worktreePath:
-            thread.worktreePath === null ? null : yield* resolveWorkspacePath(thread.worktreePath),
-          workspaceRoot: row.workspaceRoot,
-        };
-      }),
+      decodeCleanupThread(row.payload_json).pipe(
+        Effect.map((thread) => ({ ...thread, workspaceRoot: row.workspaceRoot })),
+      ),
     )).filter((thread) => thread.worktreePath !== null && thread.branch !== null);
     const snapshot = yield* readThreads();
     const refreshedDefaultRefs = new Map<string, Set<string>>();
@@ -480,7 +466,7 @@ const make = Effect.gen(function* () {
         if (project === undefined) return keep("project is unavailable");
         if (!deleted && !storageCleanupThreadIdle(thread, now))
           return keep("thread is running or has pending work");
-        if (yield* hasTerminal(worktreePath)) return keep("open terminal");
+        if (hasTerminal(worktreePath)) return keep("open terminal");
         // Roots are canonical, so compare canonical paths. A symlinked parent
         // (a linked drive) is fine; a symlinked worktree directory is not.
         const realPath = yield* fs.realPath(worktreePath);
@@ -503,22 +489,20 @@ const make = Effect.gen(function* () {
           !deleted &&
           settings.worktreeAfterDays !== null &&
           storageCleanupActivityAt(thread) < now - settings.worktreeAfterDays * DAY_MS;
+        const settledDays =
+          deleted || thread.settledAt === null
+            ? null
+            : Math.floor((now - DateTime.toEpochMillis(thread.settledAt)) / DAY_MS);
         const settled =
-          !deleted &&
+          settledDays !== null &&
           settings.worktreeSettledAfterDays !== null &&
-          thread.settledOverride !== "active" &&
-          thread.settledAt !== null &&
-          Math.max(
-            DateTime.toEpochMillis(thread.settledAt),
-            DateTime.toEpochMillis(thread.updatedAt),
-          ) <=
-            now - settings.worktreeSettledAfterDays * DAY_MS;
+          settledDays >= settings.worktreeSettledAfterDays;
         let eligible = deleted || old || settled;
         let removalReason = deleted
           ? "thread was deleted"
-          : settled
-            ? `settled for ${settings.worktreeSettledAfterDays} days`
-            : `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} days`;
+          : old
+            ? `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} days`
+            : `settled for ${settledDays} days`;
         if (!eligible && (settings.worktreeUnchanged || settings.worktreeOnMerge)) {
           const repositoryCwd = path.resolve(project.workspaceRoot);
           const remote = yield* git.resolvePrimaryRemoteName(repositoryCwd);
@@ -566,9 +550,13 @@ const make = Effect.gen(function* () {
           return keep(
             !deleted && settings.worktreeAfterDays !== null
               ? `inactive for ${Math.floor((now - storageCleanupActivityAt(thread)) / DAY_MS)} of ${settings.worktreeAfterDays} days`
-              : settings.worktreeOnMerge
-                ? "not merged"
-                : "has commits beyond the default branch",
+              : settings.worktreeSettledAfterDays !== null
+                ? settledDays === null
+                  ? "not settled"
+                  : `settled for ${settledDays} of ${settings.worktreeSettledAfterDays} days`
+                : settings.worktreeOnMerge
+                  ? "not merged"
+                  : "has commits beyond the default branch",
           );
         // Threads, queued deletion work and provider sessions as they are now, so a
         // queued turn, resumed session or new thread sharing this path cancels
@@ -578,14 +566,10 @@ const make = Effect.gen(function* () {
           const latestProjects = yield* projectStore.listShells();
           if (yield* containsProjectRoot(worktreePath, [project, ...latestProjects]))
             return "contains a project checkout";
-          const latest = (yield* Effect.forEach(
-            yield* projections.getThreadWorktreePaths(),
-            (entry) =>
-              resolveWorkspacePath(entry.worktreePath).pipe(
-                Effect.map((worktreePath) => ({ ...entry, worktreePath })),
-              ),
-          )).filter((entry) => entry.worktreePath === worktreePath);
-          if (yield* hasTerminal(worktreePath)) return "open terminal";
+          const latest = (yield* projections.getThreadWorktreePaths()).filter(
+            (entry) => path.resolve(entry.worktreePath) === worktreePath,
+          );
+          if (hasTerminal(worktreePath)) return "open terminal";
           if (deleted) {
             if (
               latest.length > 0 ||
@@ -609,9 +593,7 @@ const make = Effect.gen(function* () {
               latestShell === null ||
               !storageCleanupThreadIdle(latestShell, now) ||
               storageCleanupActivityAt(latestShell) !== storageCleanupActivityAt(thread) ||
-              latestShell.settledOverride !== thread.settledOverride ||
-              !Equal.equals(latestShell.settledAt, thread.settledAt) ||
-              !Equal.equals(latestShell.updatedAt, thread.updatedAt)
+              !Equal.equals(latestShell.settledAt, thread.settledAt)
             )
               return "thread activity or shared worktree changed since check";
           }
@@ -620,12 +602,15 @@ const make = Effect.gen(function* () {
             SELECT payload_json FROM orchestration_v2_projection_provider_sessions
             WHERE status != 'stopped'
           `;
-          const sessionPaths = yield* Effect.forEach(sessionRows, (row) =>
-            decodeCleanupSession(row.payload_json).pipe(
-              Effect.flatMap((session) => resolveWorkspacePath(session.cwd)),
-            ),
+          const sessions = yield* Effect.forEach(sessionRows, (row) =>
+            decodeCleanupSession(row.payload_json),
           );
-          if (sessionPaths.some((cwd) => cwd === worktreePath || inside(worktreePath, cwd)))
+          if (
+            sessions.some((session) => {
+              const cwd = path.resolve(session.cwd);
+              return cwd === worktreePath || inside(worktreePath, cwd);
+            })
+          )
             return "provider session is still open";
           return null;
         });
@@ -887,6 +872,9 @@ const make = Effect.gen(function* () {
       }),
     );
     yield* forkParked(
+      // Deleted threads and immediately removable settled threads wait for
+      // their sessions to end. Moving between live statuses, such as running
+      // to ready, cannot free one.
       Stream.runForEach(events, (event) => {
         const sessionEnded =
           event.type === "provider-session.updated" &&

@@ -23,7 +23,7 @@ import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
-import { resolveWorkspacePath, withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
@@ -219,17 +219,13 @@ export const layer: Layer.Layer<
       };
     };
 
-    const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (
-      input: {
-        readonly threadId: ThreadId;
-        readonly runId: RunId;
-        readonly willRetry?: boolean;
-      },
-      projection: Effect.Success<
-        ReturnType<ProjectionStore.ProjectionStoreV2Shape["getTurnStartContext"]>
-      >,
-    ) {
+    const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
+      readonly threadId: ThreadId;
+      readonly runId: RunId;
+      readonly willRetry?: boolean;
+    }) {
       const { runId } = input;
+      const projection = yield* projectionStore.getTurnStartContext(input.threadId, runId);
       const run = projection.runs.find((candidate) => candidate.id === runId);
       if (run === undefined) {
         return yield* new ProviderTurnStartError({ runId, cause: `Run ${runId} was not found.` });
@@ -1288,43 +1284,13 @@ export const layer: Layer.Layer<
     return ProviderTurnStartServiceV2.of({
       start: (input) =>
         Effect.gen(function* () {
-          const resolvePath = (worktreePath: string | null) =>
-            worktreePath == null
-              ? Effect.succeed(null)
-              : resolveWorkspacePath(worktreePath).pipe(
-                  Effect.provideService(FileSystem.FileSystem, fileSystem),
-                  Effect.provideService(Path.Path, path),
-                );
-          const initial = yield* projectionStore.getThreadRecords(input.threadId, []);
-          let worktreePath = yield* resolvePath(initial.thread.worktreePath);
-          while (true) {
-            const effect = Effect.gen(function* () {
-              const storedProjection = yield* projectionStore.getTurnStartContext(
-                input.threadId,
-                input.runId,
-              );
-              const freshPath = yield* resolvePath(storedProjection.thread.worktreePath);
-              if (freshPath !== worktreePath)
-                return { retry: true as const, worktreePath: freshPath };
-              const projection =
-                freshPath === null
-                  ? storedProjection
-                  : {
-                      ...storedProjection,
-                      thread: { ...storedProjection.thread, worktreePath: freshPath },
-                    };
-              return { retry: false as const, providerTurn: yield* start(input, projection) };
-            });
-            const result = yield* worktreePath === null
-              ? effect
-              : withWorkspaceLease(worktreePath, effect);
-            if (result.retry) {
-              worktreePath = result.worktreePath;
-              continue;
-            }
-            if (result.providerTurn !== undefined) yield* result.providerTurn;
-            return;
-          }
+          // Storage cleanup removes worktrees under the same lease. Only startup
+          // holds it; the provider turn runs after it is released.
+          const { thread } = yield* projectionStore.getThreadRecords(input.threadId, []);
+          const providerTurn = yield* thread.worktreePath === null
+            ? start(input)
+            : withWorkspaceLease(path.resolve(thread.worktreePath), start(input));
+          if (providerTurn !== undefined) yield* providerTurn;
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnStartError(cause)

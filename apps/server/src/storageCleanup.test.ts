@@ -5,7 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
+import type * as Path from "effect/Path";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
@@ -17,8 +17,6 @@ import {
   StorageCleanupReport,
   type WorktreeKeepWhen,
   type StorageCleanupSettings,
-  type TerminalMetadataStreamEvent,
-  type TerminalSummary,
 } from "@t3tools/contracts";
 import * as ServerConfig from "./config.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
@@ -268,9 +266,6 @@ const cleanupFixture = (
     let threads = [shell({ branch: "feature", worktreePath: worktree })];
     let editBeforeRemoval = false;
     let openSessionCwd: string | null = null;
-    let projectRoot = repo;
-    let terminalMetadataListener = (_event: TerminalMetadataStreamEvent): Effect.Effect<void> =>
-      Effect.void;
     let fullStatusCalls = 0;
     let snapshotReads = 0;
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
@@ -295,7 +290,7 @@ const cleanupFixture = (
       } as unknown as Settings.ServerSettingsService["Service"]),
       Effect.provideService(ProjectStore.ProjectStoreV2, {
         listShells: () =>
-          Effect.succeed([{ id: ProjectId.make("project-1"), workspaceRoot: projectRoot }]),
+          Effect.succeed([{ id: ProjectId.make("project-1"), workspaceRoot: repo }]),
       } as unknown as ProjectStore.ProjectStoreV2["Service"]),
       Effect.provideService(ProjectionStore.ProjectionStoreV2, {
         getShellSnapshot: (input?: { location?: string }) =>
@@ -342,13 +337,7 @@ const cleanupFixture = (
         invalidateStatus: () => Effect.void,
       } as unknown as GitManager.GitManager["Service"]),
       Effect.provideService(TerminalManager.TerminalManager, {
-        subscribeMetadata: (
-          listener: (event: TerminalMetadataStreamEvent) => Effect.Effect<void>,
-        ) =>
-          Effect.sync(() => {
-            terminalMetadataListener = listener;
-            return () => {};
-          }),
+        subscribeMetadata: () => Effect.succeed(() => {}),
       } as unknown as TerminalManager.TerminalManager["Service"]),
       Effect.provideService(ServerActivation, Deferred.await(activated)),
     );
@@ -394,11 +383,6 @@ const cleanupFixture = (
       setThreads: (next: typeof threads) => {
         threads = next;
       },
-      setProjectRoot: (cwd: string) => {
-        projectRoot = cwd;
-      },
-      setTerminals: (terminals: TerminalSummary[]) =>
-        terminalMetadataListener({ type: "snapshot", terminals }),
       setOpenSessionCwd: (cwd: string | null) => {
         openSessionCwd = cwd;
       },
@@ -899,35 +883,18 @@ describe("settled worktree retention", () => {
   it.effect.each([
     "immediate",
     "expired",
+    "boundary",
     "wait",
     "recent-update",
     "active",
-    "pinned-active",
     "dirty",
-    "session-alias",
-    "session-alias-descendant",
-    "session-alias-cycle",
-    "shared-alias",
-    "shared-alias-cycle",
-    "worktree-alias",
     "project-off",
     "project-custom",
-    "project-alias",
-    "project-alias-descendant",
-    "terminal-alias",
-    "terminal-alias-descendant",
-    "terminal-alias-cycle",
-    "terminal-worktree-alias",
   ] as const)("applies retention and safety checks (%s)", (scenario) =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW_MS);
       const fixture = yield* cleanupFixture();
-      const path = yield* Path.Path;
-      const alias = path.join(fixture.config.baseDir, "feature-alias");
-      yield* fixture.fs.symlink(fixture.worktree, alias);
-      const cycle = path.join(fixture.config.baseDir, "cycle");
-      if (scenario.endsWith("-cycle")) yield* fixture.fs.symlink(cycle, cycle);
-      const days = ["wait", "expired", "recent-update"].includes(scenario) ? 8 : 0;
+      const days = ["wait", "boundary", "expired", "recent-update"].includes(scenario) ? 8 : 0;
       const rules = {
         ...DEFAULT_SERVER_SETTINGS.storageCleanup,
         worktreeSettledAfterDays: scenario === "project-custom" ? null : days,
@@ -950,69 +917,45 @@ describe("settled worktree retention", () => {
       });
       const thread = shell({
         branch: "feature",
-        worktreePath: scenario === "worktree-alias" ? alias : fixture.worktree,
+        worktreePath: fixture.worktree,
         settledAt:
           scenario === "active"
             ? null
-            : at(scenario === "expired" || scenario === "recent-update" ? -20 * DAY_MS : 0),
-        settledOverride: scenario === "pinned-active" ? "active" : null,
+            : at(
+                scenario === "expired" || scenario === "recent-update"
+                  ? -20 * DAY_MS
+                  : scenario === "boundary"
+                    ? -8 * DAY_MS
+                    : scenario === "wait"
+                      ? -8 * DAY_MS + 1
+                      : 0,
+              ),
         updatedAt: at(scenario === "recent-update" ? 0 : -10 * DAY_MS),
       });
-      fixture.setThreads([
-        thread,
-        ...(["shared-alias", "shared-alias-cycle"].includes(scenario)
-          ? [
-              {
-                ...thread,
-                id: ThreadId.make("shared"),
-                worktreePath: scenario.endsWith("-cycle") ? cycle : alias,
-              },
-            ]
-          : []),
-      ]);
-      if (scenario.startsWith("session-alias"))
-        fixture.setOpenSessionCwd(
-          scenario.endsWith("-cycle")
-            ? cycle
-            : scenario.endsWith("-descendant")
-              ? path.join(alias, "missing-child")
-              : alias,
-        );
-      if (scenario.startsWith("project-alias"))
-        fixture.setProjectRoot(
-          scenario.endsWith("-descendant") ? path.join(alias, "missing-child") : alias,
-        );
-      if (scenario.startsWith("terminal-"))
-        yield* fixture.setTerminals([
-          {
-            threadId: thread.id,
-            terminalId: "terminal-1",
-            cwd:
-              scenario === "terminal-worktree-alias"
-                ? fixture.repo
-                : scenario.endsWith("-cycle")
-                  ? cycle
-                  : scenario.endsWith("-descendant")
-                    ? path.join(alias, "missing-child")
-                    : alias,
-            worktreePath: scenario === "terminal-worktree-alias" ? alias : null,
-            status: "running",
-            pid: null,
-            exitCode: null,
-            exitSignal: null,
-            hasRunningSubprocess: false,
-            label: "Shell",
-            updatedAt: DateTime.formatIso(at(0)),
-          },
-        ]);
+      fixture.setThreads([thread]);
       if (scenario === "dirty")
         yield* fixture.fs.writeFileString(`${fixture.worktree}/tracked.txt`, "edit\n");
       const report = yield* fixture.service.runNow;
-      const removed = ["immediate", "expired", "worktree-alias", "project-custom"].includes(
-        scenario,
-      );
+      const removed = [
+        "immediate",
+        "expired",
+        "boundary",
+        "recent-update",
+        "project-custom",
+      ].includes(scenario);
       expect(yield* fixture.fs.exists(fixture.worktree)).toBe(!removed);
       expect(report.counts.removed).toBe(removed ? 1 : 0);
+      if (scenario !== "project-off") {
+        const reason =
+          scenario === "active"
+            ? "Not settled"
+            : scenario === "wait"
+              ? "Settled for 7 of 8 days"
+              : scenario === "dirty"
+                ? "Has uncommitted changes (1 file)"
+                : `Settled for ${scenario === "expired" || scenario === "recent-update" ? 20 : scenario === "boundary" ? 8 : 0} days`;
+        expect(report.entries[0]).toMatchObject({ outcome: removed ? "removed" : "kept", reason });
+      }
       expect(thread.branch).toBe("feature");
       expect(
         (yield* fixture.command(fixture.repo, ["rev-parse", "--verify", "refs/heads/feature"]))
@@ -1023,37 +966,35 @@ describe("settled worktree retention", () => {
 });
 
 describe("settled worktree rechecks", () => {
-  it.live.each([
-    { settledOverride: "active" as const },
-    { settledAt: at(DAY_MS) },
-    { updatedAt: at(DAY_MS) },
-  ])("keeps a checkout changed during measurement (%j)", (change) =>
-    runCleanupTest(
-      Effect.gen(function* () {
-        const fixture = yield* pausedMeasurementFixture();
-        const thread = shell({
-          branch: "feature",
-          worktreePath: fixture.worktree,
-          settledAt: at(0),
-        });
-        fixture.setSettings({
-          storageCleanup: {
-            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
-            worktreeSettledAfterDays: 0,
-          },
-        });
-        fixture.setThreads([thread]);
-        const run = yield* fixture.service.runNow.pipe(Effect.forkChild);
-        yield* Deferred.await(fixture.measuring);
-        fixture.setThreads([{ ...thread, ...change }]);
-        yield* Deferred.succeed(fixture.resume, undefined);
-        const report = yield* Fiber.join(run);
-        expect(report.entries[0]?.reason).toBe(
-          "Thread activity or shared worktree changed since check",
-        );
-        expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
-      }),
-    ),
+  it.live.each([{ settledAt: null }, { settledAt: at(DAY_MS) }])(
+    "keeps a checkout changed during measurement (%j)",
+    (change) =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const fixture = yield* pausedMeasurementFixture();
+          const thread = shell({
+            branch: "feature",
+            worktreePath: fixture.worktree,
+            settledAt: at(0),
+          });
+          fixture.setSettings({
+            storageCleanup: {
+              ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+              worktreeSettledAfterDays: 0,
+            },
+          });
+          fixture.setThreads([thread]);
+          const run = yield* fixture.service.runNow.pipe(Effect.forkChild);
+          yield* Deferred.await(fixture.measuring);
+          fixture.setThreads([{ ...thread, ...change }]);
+          yield* Deferred.succeed(fixture.resume, undefined);
+          const report = yield* Fiber.join(run);
+          expect(report.entries[0]?.reason).toBe(
+            "Thread activity or shared worktree changed since check",
+          );
+          expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+        }),
+      ),
   );
 });
 

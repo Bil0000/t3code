@@ -179,6 +179,7 @@ it.effect("rejects a rollback when another provider thread became active", () =>
   const resolveRuntimePolicy = vi.fn(() => Effect.die("runtime policy resolution must not run"));
   const projection = {
     thread: {
+      worktreePath: null,
       activeProviderThreadId,
       modelSelection: { instanceId: providerInstanceId, model: "test-model" },
     },
@@ -390,41 +391,18 @@ it.effect("rejects an unavailable rollback target before opening a session", () 
   }).pipe(Effect.provide(layerTest));
 });
 
-it.effect.each(
-  [
-    { order: "normal", restoreFiles: true, mutation: "none", alias: "none" },
-    { order: "cleanup-first", restoreFiles: true, mutation: "none", alias: "none" },
-    { order: "cleanup-first", restoreFiles: false, mutation: "none", alias: "none" },
-    { order: "rollback-first", restoreFiles: true, mutation: "none", alias: "none" },
-    { order: "cleanup-first", restoreFiles: true, mutation: "none", alias: "direct" },
-    { order: "cleanup-first", restoreFiles: false, mutation: "none", alias: "parent" },
-    { order: "cleanup-first", restoreFiles: true, mutation: "none", alias: "missing-parent" },
-    { order: "cleanup-first", restoreFiles: false, mutation: "none", alias: "dangling" },
-    { order: "rollback-first", restoreFiles: true, mutation: "none", alias: "direct" },
-    { order: "rollback-first", restoreFiles: false, mutation: "none", alias: "parent" },
-    { order: "rollback-first", restoreFiles: true, mutation: "none", alias: "missing-parent" },
-    { order: "rollback-first", restoreFiles: false, mutation: "none", alias: "dangling" },
-    { order: "cleanup-first", restoreFiles: true, mutation: "worktree", alias: "none" },
-    { order: "cleanup-first", restoreFiles: true, mutation: "root", alias: "none" },
-  ].filter(({ alias }) => alias === "none" || symlinksSupported),
-)("locks rollback with %s", ({ order, restoreFiles, alias, mutation }) =>
+it.effect.each([
+  { order: "normal", restoreFiles: true },
+  { order: "cleanup-first", restoreFiles: true },
+  { order: "cleanup-first", restoreFiles: false },
+  { order: "rollback-first", restoreFiles: true },
+])("locks rollback with %s", ({ order, restoreFiles }) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-rollback-" });
-    let worktreePath = path.join(workspaceRoot, "worktree");
-    const initialWorktreePath = worktreePath;
+    const worktreePath = path.join(workspaceRoot, "worktree");
     yield* fileSystem.makeDirectory(worktreePath);
-    const aliasPath = path.join(workspaceRoot, "alias");
-    const parentAlias = alias === "parent" || alias === "missing-parent";
-    if (alias !== "none") {
-      yield* fileSystem.symlink(parentAlias ? workspaceRoot : worktreePath, aliasPath);
-    }
-    const threadPath =
-      alias === "none" ? worktreePath : parentAlias ? path.join(aliasPath, "worktree") : aliasPath;
-    if (alias === "missing-parent" || alias === "dangling") {
-      yield* fileSystem.remove(worktreePath, { recursive: true });
-    }
     const threadId = ThreadId.make("rollback-worktree");
     const projectId = ProjectId.make("rollback-worktree-project");
     const providerThreadId = ProviderThreadId.make("rollback-worktree-provider-thread");
@@ -434,19 +412,15 @@ it.effect.each(
     const scopeId = CheckpointScopeId.make("rollback-worktree-scope");
     const branch = "feature/rollback";
     const release = Deferred.makeUnsafe<void>();
-    const releaseNew = Deferred.makeUnsafe<void>();
-    const readEntered = Deferred.makeUnsafe<void>();
-    let readCount = 0;
-    let newLeaseReleased = false;
     const openEntered = Deferred.makeUnsafe<void>();
     const calls: string[] = [];
     let cleanupEntered = false;
     const providerThread = { id: providerThreadId, providerSessionId, providerInstanceId };
-    let projection = {
+    const projection = {
       thread: {
         id: threadId,
         projectId,
-        worktreePath: mutation === "root" ? null : threadPath,
+        worktreePath,
         branch,
         activeProviderThreadId: providerThreadId,
         modelSelection: { instanceId: providerInstanceId, model: "test-model" },
@@ -505,16 +479,7 @@ it.effect.each(
           }),
           IdAllocator.layer,
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
-            getThreadRecords: () => {
-              const current = projection;
-              readCount++;
-              return readCount === 1 && mutation !== "none"
-                ? Deferred.succeed(readEntered, undefined).pipe(
-                    Effect.andThen(Deferred.await(release)),
-                    Effect.as(current),
-                  )
-                : Effect.succeed(current);
-            },
+            getThreadRecords: () => Effect.succeed(projection),
             getShellSnapshot: () =>
               Effect.succeed({
                 schemaVersion: 1,
@@ -526,7 +491,6 @@ it.effect.each(
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             open: (input) =>
               Effect.gen(function* () {
-                if (mutation !== "none") assert.isTrue(newLeaseReleased);
                 assert.equal(input.runtimePolicy.cwd, worktreePath);
                 if (!(yield* fileSystem.exists(worktreePath).pipe(Effect.orDie))) {
                   return yield* new ProviderWorkspaceMissingError({ threadId, cwd: worktreePath });
@@ -549,11 +513,11 @@ it.effect.each(
     yield* Effect.gen(function* () {
       const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
       const cleanupEffect = withWorkspaceLease(
-        initialWorktreePath,
+        worktreePath,
         Effect.gen(function* () {
           cleanupEntered = true;
           if (order === "cleanup-first") yield* Deferred.await(release);
-          yield* fileSystem.remove(initialWorktreePath, { recursive: true, force: true });
+          yield* fileSystem.remove(worktreePath, { recursive: true, force: true });
           calls.push("cleanup");
         }),
       );
@@ -564,32 +528,6 @@ it.effect.each(
       const rollback = yield* service
         .execute({ threadId, providerThreadId, checkpointId, scopeId, restoreFiles })
         .pipe(Effect.forkChild({ startImmediately: true }));
-      if (mutation !== "none") yield* Deferred.await(readEntered);
-      const newPath = path.join(workspaceRoot, "new-worktree");
-      const newHolder =
-        mutation !== "none"
-          ? yield* withWorkspaceLease(
-              newPath,
-              Deferred.await(releaseNew).pipe(
-                Effect.andThen(
-                  Effect.sync(() => {
-                    newLeaseReleased = true;
-                  }),
-                ),
-              ),
-            ).pipe(Effect.forkChild({ startImmediately: true }))
-          : undefined;
-      if (mutation !== "none") {
-        worktreePath = newPath;
-        projection = {
-          ...projection,
-          thread: { ...projection.thread, worktreePath },
-          checkpointScopes: projection.checkpointScopes.map((scope) => ({
-            ...scope,
-            cwd: worktreePath,
-          })),
-        };
-      }
       if (order === "cleanup-first") assert.deepEqual(calls, []);
       if (order === "rollback-first") yield* Deferred.await(openEntered);
       const laterCleanup =
@@ -599,11 +537,6 @@ it.effect.each(
       if (order === "rollback-first") assert.isFalse(cleanupEntered);
       yield* Deferred.succeed(release, undefined);
       if (cleanup !== undefined) yield* Fiber.join(cleanup);
-      if (newHolder !== undefined) {
-        assert.deepEqual(calls, ["cleanup"]);
-        yield* Deferred.succeed(releaseNew, undefined);
-        yield* Fiber.join(newHolder);
-      }
       yield* Fiber.join(rollback);
       if (laterCleanup !== undefined) yield* Fiber.join(laterCleanup);
       const rollbackCalls = restoreFiles
@@ -614,11 +547,7 @@ it.effect.each(
         order === "cleanup-first"
           ? ["cleanup", "prune", "create", ...rollbackCalls]
           : order === "rollback-first"
-            ? [
-                ...(alias === "missing-parent" || alias === "dangling" ? ["prune", "create"] : []),
-                ...rollbackCalls,
-                "cleanup",
-              ]
+            ? [...rollbackCalls, "cleanup"]
             : rollbackCalls,
       );
     }).pipe(Effect.provide(testLayer));
