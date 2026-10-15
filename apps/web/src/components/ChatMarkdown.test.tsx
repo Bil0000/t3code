@@ -8,6 +8,7 @@ import {
   ThreadId,
   type AuthEnvironmentScope,
   type AuthSessionState,
+  type ServerConfig,
 } from "@t3tools/contracts";
 import type {
   EnvironmentRegistry,
@@ -33,10 +34,23 @@ import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
-import { ISSUES_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
+import { ISSUES_PANEL_REF, useRightPanelStore, type RightPanelSurface } from "../rightPanelStore";
 import { PullRequestMarkdown } from "./pullRequest/PullRequestMarkdown";
 import { PullRequestCommentBody } from "./pullRequest/PullRequestCommentBody";
 import { PullRequestMarkdownEditor } from "./pullRequest/PullRequestMarkdownEditor";
+import { ChatViewIssuePanel } from "./ChatViewIssuePanel";
+
+vi.mock("./issue/IssueDetailPanel", () => ({
+  IssueDetailPanel: ({ environmentId }: { environmentId: EnvironmentId }) => (
+    <h2>Issue on {environmentId}</h2>
+  ),
+}));
+vi.mock("./pullRequest/PullRequestsUnavailableState", () => ({
+  PullRequestsUnavailableState: ({ title }: { title: string }) => <h2>{title}</h2>,
+}));
+vi.mock("./pullRequest/PullRequestGhosts", () => ({
+  PullRequestDetailGhost: () => <h2>Loading issue</h2>,
+}));
 
 const issueLinks = vi.hoisted(() => ({
   resolve: vi.fn(),
@@ -199,6 +213,28 @@ describe("pull request Markdown issue destinations", () => {
   const text = `[Issue](${url})`;
   let element: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
+  async function showPanel(
+    surface: RightPanelSurface,
+    sourceIssues: boolean | null,
+    destinationIssues: boolean | null = true,
+  ) {
+    const config = (issues: boolean | null) =>
+      issues === null ? null : ({ environment: { capabilities: { issues } } } as ServerConfig);
+    await act(async () =>
+      root.render(
+        <ChatViewIssuePanel
+          surface={surface as Extract<RightPanelSurface, { kind: "issue" }>}
+          threadRef={threadRef}
+          environmentById={
+            new Map([
+              [threadRef.environmentId, { serverConfig: config(sourceIssues) }],
+              [EnvironmentId.make("env-b"), { serverConfig: config(destinationIssues) }],
+            ])
+          }
+        />,
+      ),
+    );
+  }
 
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -225,9 +261,15 @@ describe("pull request Markdown issue destinations", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["body", "comment", "editor preview", "same environment", "standalone"])(
+  it.each([
+    ["body", false],
+    ["comment", null],
+    ["editor preview", true],
+    ["same environment", true],
+    ["standalone", true],
+  ] as const)(
     "opens an issue from the %s in its source environment and existing panel",
-    async (surface) => {
+    async (surface, sourceIssues) => {
       const environmentId =
         surface === "same environment" ? threadRef.environmentId : EnvironmentId.make("env-b");
       const props = {
@@ -294,6 +336,17 @@ describe("pull request Markdown issue destinations", () => {
           url,
         }),
       ]);
+      if (surface !== "standalone") {
+        const issue = panels[scopedThreadKey(panelRef)]!.surfaces[0]!;
+        await showPanel(issue, sourceIssues);
+        expect(element.querySelector("h2")?.textContent).toBe(`Issue on ${environmentId}`);
+        if (surface === "body") {
+          await showPanel(issue, true, false);
+          expect(element.querySelector("h2")?.textContent).toBe("Issues unavailable");
+          await showPanel(issue, true, null);
+          expect(element.querySelector("h2")?.textContent).toBe("Loading issue");
+        }
+      }
     },
   );
 });
