@@ -17,10 +17,26 @@ import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStr
 import { retryAtFromHeader } from "@t3tools/source-control-core/server/SourceControlRateLimit";
 
 import { JiraUser } from "./jiraJson.ts";
+import {
+  dataCenterAssignee,
+  dataCenterRequest,
+  dataCenterResponse,
+  normalizeJiraInstanceHost,
+} from "./jiraDataCenter.ts";
+
+export { jiraIssueUrl, normalizeJiraInstanceHost } from "./jiraDataCenter.ts";
 
 export const KIND = IssueTrackerKind.make("jira");
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(16_384));
-const Credential = Schema.Struct({ site: Text, email: Text, token: Text });
+const Credential = Schema.Union([
+  Schema.Struct({
+    deployment: Schema.optional(Schema.Literal("cloud")),
+    site: Text,
+    email: Text,
+    token: Text,
+  }),
+  Schema.Struct({ deployment: Schema.Literal("data-center"), site: Text, token: Text }),
+]);
 const decodeCredential = Schema.decodeSync(Schema.fromJsonString(Credential));
 const Projects = Schema.Struct({
   startAt: Schema.Int,
@@ -49,10 +65,23 @@ export function normalizeJiraHost(value: string): string {
 
 function parseJiraCredential(value: string) {
   const credential = decodeCredential(value);
-  const email = credential.email.trim();
   const token = credential.token.trim();
+  if (credential.deployment === "data-center") {
+    if (!token) throw new Error("Enter a Jira Data Center personal access token.");
+    return {
+      deployment: credential.deployment,
+      host: normalizeJiraInstanceHost(credential.site.trim()),
+      token,
+    };
+  }
+  const email = credential.email.trim();
   if (!email || !token) throw new Error("Enter a Jira account email and a site API token.");
-  return { host: normalizeJiraHost(credential.site.trim()), email, token };
+  return {
+    deployment: "cloud" as const,
+    host: normalizeJiraHost(credential.site.trim()),
+    email,
+    token,
+  };
 }
 
 export const failed = (
@@ -80,6 +109,9 @@ interface Request<S extends Schema.Top> {
 export class JiraApi extends Context.Service<
   JiraApi,
   {
+    readonly deploymentFor: (
+      host: string,
+    ) => Effect.Effect<"cloud" | "data-center", IssueTrackerError>;
     readonly request: <S extends Schema.Top & { readonly DecodingServices: never }>(
       input: Request<S>,
     ) => Effect.Effect<S["Type"], IssueTrackerError>;
@@ -113,7 +145,7 @@ export const make = Effect.gen(function* () {
 
   const request = <S extends Schema.Top & { readonly DecodingServices: never }>(
     input: Request<S>,
-  ) => {
+  ): Effect.Effect<S["Type"], IssueTrackerError> => {
     const decodeEmpty = Schema.decodeEffect(input.schema);
     const decodeJson = Schema.decodeEffect(Schema.fromJsonString(input.schema));
     return Effect.gen(function* () {
@@ -143,7 +175,10 @@ export const make = Effect.gen(function* () {
           ),
       });
       const requestedHost = yield* Effect.try({
-        try: () => normalizeJiraHost(input.host),
+        try: () =>
+          credential.deployment === "cloud"
+            ? normalizeJiraHost(input.host)
+            : normalizeJiraInstanceHost(input.host),
         catch: () => failed(input.operation, "This is not a Jira Cloud tenant host."),
       });
       if (requestedHost !== credential.host)
@@ -152,6 +187,34 @@ export const make = Effect.gen(function* () {
           "This Jira credential belongs to another site.",
           "unauthenticated",
         );
+      if (credential.deployment === "data-center" && input.operation === "setParent")
+        return yield* failed(
+          input.operation,
+          "Changing a parent is not supported by the Jira Data Center public API.",
+        );
+      let native =
+        credential.deployment === "data-center"
+          ? yield* attempt(input.operation, () => dataCenterRequest(input))
+          : undefined;
+      const selected =
+        native !== undefined && input.method !== "GET"
+          ? yield* attempt(input.operation, () => dataCenterAssignee(input.path, input.body))
+          : null;
+      if (selected !== null) {
+        const user = yield* request({
+          host: input.host,
+          credential: stored,
+          operation: input.operation,
+          method: "GET",
+          path: "/user?key=" + encodeURIComponent(selected),
+          schema: Schema.Struct({ accountId: Text, name: Text }),
+        });
+        if (user.accountId !== selected)
+          return yield* failed(input.operation, "Jira returned another user for this account key.");
+        native = yield* attempt(input.operation, () =>
+          dataCenterRequest({ ...input, assigneeName: user.name }),
+        );
+      }
       const fingerprint = yield* crypto
         .digest("SHA-256", new TextEncoder().encode(credential.token))
         .pipe(
@@ -174,18 +237,19 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
-        const base = HttpClientRequest.make(input.method)(
-          "https://" + credential.host + "/rest/api/3" + input.path,
-        ).pipe(
-          HttpClientRequest.acceptJson,
-          HttpClientRequest.basicAuth(credential.email, credential.token),
-        );
+        const unsigned = HttpClientRequest.make(input.method)(
+          "https://" +
+            credential.host +
+            (credential.deployment === "cloud" ? "/rest/api/3" : "/rest/api/2") +
+            (native?.path ?? input.path),
+        ).pipe(HttpClientRequest.acceptJson);
+        const base =
+          credential.deployment === "cloud"
+            ? unsigned.pipe(HttpClientRequest.basicAuth(credential.email, credential.token))
+            : unsigned.pipe(HttpClientRequest.bearerToken(credential.token));
+        const body = native === undefined ? input.body : native.body;
         const response = yield* http
-          .execute(
-            input.body === undefined
-              ? base
-              : base.pipe(HttpClientRequest.bodyJsonUnsafe(input.body)),
-          )
+          .execute(body === undefined ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(body)))
           .pipe(Effect.mapError(() => failed(input.operation, "Jira could not be reached.")));
         const now = yield* Clock.currentTimeMillis;
         const retryAt =
@@ -234,9 +298,13 @@ export const make = Effect.gen(function* () {
         if (nativeError) return yield* nativeError;
         if (collected.truncated || collected.invalidUtf8)
           return yield* failed(input.operation, "Jira returned an oversized or invalid response.");
-        const result = yield* decodeJson(collected.text).pipe(
-          Effect.mapError(() => failed(input.operation, "Jira returned unexpected data.")),
-        );
+        const result = yield* (
+          credential.deployment === "cloud"
+            ? decodeJson(collected.text)
+            : attempt(input.operation, () =>
+                dataCenterResponse(input.path, input.body, JSON.parse(collected.text)),
+              ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(input.schema)))
+        ).pipe(Effect.mapError(() => failed(input.operation, "Jira returned unexpected data.")));
         yield* limits.recordSuccess({ ...key, lease });
         return result;
       }).pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, fingerprint));
@@ -247,6 +315,42 @@ export const make = Effect.gen(function* () {
       }),
     );
   };
+
+  const deploymentFor = (requestedHost: string) =>
+    Effect.gen(function* () {
+      const packed = yield* host.credentials
+        .get(KIND)
+        .pipe(
+          Effect.flatMap(
+            Effect.fromOption(() =>
+              failed("deploymentFor", "Jira is not connected on this server.", "unauthenticated"),
+            ),
+          ),
+        );
+      const credential = yield* Effect.try({
+        try: () => parseJiraCredential(packed),
+        catch: () => failed("deploymentFor", "The Jira credential is invalid.", "unauthenticated"),
+      });
+      const normalized = yield* Effect.try({
+        try: () =>
+          credential.deployment === "cloud"
+            ? normalizeJiraHost(requestedHost)
+            : normalizeJiraInstanceHost(requestedHost),
+        catch: () =>
+          failed(
+            "deploymentFor",
+            "This Jira credential belongs to another site.",
+            "unauthenticated",
+          ),
+      });
+      if (normalized !== credential.host)
+        return yield* failed(
+          "deploymentFor",
+          "This Jira credential belongs to another site.",
+          "unauthenticated",
+        );
+      return credential.deployment;
+    });
 
   const listScopes = (packed: string, input: IssuePageInput, operation = "listScopes") =>
     Effect.gen(function* () {
@@ -349,5 +453,5 @@ export const make = Effect.gen(function* () {
         () => Effect.succeed(null),
       ),
     );
-  return JiraApi.of({ request, probeCredential, getScope, listScopes });
+  return JiraApi.of({ request, probeCredential, getScope, listScopes, deploymentFor });
 });

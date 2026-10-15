@@ -62,7 +62,7 @@ function fakeJira(
   });
   const http = HttpClient.make((request) => {
     calls.push(request);
-    const response = reply(request);
+    const response = request.url.endsWith("/remotelink") ? { body: [] } : reply(request);
     if (response.pending) return Effect.never;
     return Effect.succeed(
       HttpClientResponse.fromWeb(
@@ -284,12 +284,12 @@ it.effect.each([
       });
       expect(wire.milestone).toBe(milestone);
     }
-    expect(f.calls).toHaveLength(4);
+    expect(f.calls).toHaveLength(5);
     expect(body(f.calls[0])).toMatchObject({ fields: expect.arrayContaining(["fixVersions"]) });
     expect(new URL(f.calls[1]!.url).searchParams.get("fields")?.split(",")).toContain(
       "fixVersions",
     );
-    expect(f.calls.map(({ method }) => method)).toEqual(["POST", "GET", "GET", "GET"]);
+    expect(f.calls.map(({ method }) => method)).toEqual(["POST", "GET", "GET", "GET", "GET"]);
   }),
 );
 
@@ -583,7 +583,7 @@ it.effect.each([
       key,
     });
     expect(candidates.states?.map(({ id }) => id)).toEqual(
-      key === undefined ? ["2", "3", "9"] : ["3"],
+      key === undefined ? ["2", "3", "9"] : ["3", "5", "6", "6"],
     );
     expect(candidates.labels.map(({ name }) => name)).toEqual(["triaged"]);
     expect(candidates.assignees).toMatchObject([{ id: user.accountId }]);
@@ -818,7 +818,7 @@ it.effect("bounds response bodies and request time", () =>
   }),
 );
 
-it.effect("loads embedded conversation and history with only three detail requests", () =>
+it.effect("loads embedded conversation, history and remote links with four detail requests", () =>
   Effect.gen(function* () {
     const f = fakeJira((request) => {
       const url = new URL(request.url);
@@ -865,7 +865,7 @@ it.effect("loads embedded conversation and history with only three detail reques
     });
     const api = yield* f.api;
     const result = yield* api.getIssue(target);
-    expect(f.calls).toHaveLength(3);
+    expect(f.calls).toHaveLength(4);
     expect(f.calls[0]?.url).toContain("expand=changelog");
     expect(result.commentsCursor).toBe("1");
     expect(result.events[0]).toMatchObject({ kind: "renamed", detail: "Task" });
@@ -922,7 +922,7 @@ it.effect("loads older comments after Jira's latest embedded page without gaps o
       });
       const api = yield* f.api;
       const result = yield* api.getIssue(target);
-      expect(f.calls).toHaveLength(3);
+      expect(f.calls).toHaveLength(4);
       expect(result.commentsCursor).toBe(String(embeddedCount));
       const loaded = [...result.comments];
       let cursor = result.commentsCursor;
@@ -974,7 +974,7 @@ it.effect("keeps complete and empty embedded comment sets without another reques
       const result = yield* api.getIssue(target);
       expect(result.comments).toHaveLength(comment.total);
       expect(result.commentsCursor).toBeNull();
-      expect(f.calls).toHaveLength(3);
+      expect(f.calls).toHaveLength(4);
     }
   }),
 );
@@ -1189,7 +1189,7 @@ it.effect("marks bounded native history pages as partial without fetching more",
       const result = yield* api.getIssue(target);
       expect(result.events).toHaveLength(2);
       expect(result.historyTruncated ?? false).toBe(test.truncated);
-      expect(f.calls).toHaveLength(test.embedded ? 3 : 4);
+      expect(f.calls).toHaveLength(test.embedded ? 4 : 5);
     }
   }),
 );
@@ -1371,39 +1371,46 @@ it.effect("refuses a foreign project before reading or editing its comment", () 
   }),
 );
 
-it.effect("marks rich old comments read-only without extra viewer or comment reads", () =>
-  Effect.gen(function* () {
-    const f = fakeJira((request) => {
-      if (request.url.includes("/mypermissions?"))
-        return { body: { permissions: { EDIT_ALL_COMMENTS: { havePermission: true } } } };
-      if (new URL(request.url).pathname.endsWith("/comment"))
-        return {
-          body: {
-            startAt: 50,
-            total: 52,
-            comments: [issue.fields.description, richCommentBody].map((body, index) => ({
-              id: String(9000 + index),
-              body,
-              author: user,
-              created: issue.fields.created,
-              updated: issue.fields.updated,
-            })),
-          },
-        };
-      return { body: issue };
-    });
-    const api = yield* f.api;
-    const page = yield* api.getComments({ ...target, cursor: "50", viewer: user.accountId });
-    expect(page.comments).toEqual([
-      expect.objectContaining({ id: "9001", body: "rich", canEdit: false }),
-      expect.objectContaining({ id: "9000", body: "body", canEdit: true }),
-    ]);
-    expect(f.calls).toHaveLength(3);
-    expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
-    expect(f.calls.some(({ url }) => url.includes("/myself") || url.includes("/comment/"))).toBe(
-      false,
-    );
-  }),
+it.effect(
+  "exposes native rich editing for old comments without extra viewer or comment reads",
+  () =>
+    Effect.gen(function* () {
+      const f = fakeJira((request) => {
+        if (request.url.includes("/mypermissions?"))
+          return { body: { permissions: { EDIT_ALL_COMMENTS: { havePermission: true } } } };
+        if (new URL(request.url).pathname.endsWith("/comment"))
+          return {
+            body: {
+              startAt: 50,
+              total: 52,
+              comments: [issue.fields.description, richCommentBody].map((body, index) => ({
+                id: String(9000 + index),
+                body,
+                author: user,
+                created: issue.fields.created,
+                updated: issue.fields.updated,
+              })),
+            },
+          };
+        return { body: issue };
+      });
+      const api = yield* f.api;
+      const page = yield* api.getComments({ ...target, cursor: "50", viewer: user.accountId });
+      expect(page.comments).toEqual([
+        expect.objectContaining({
+          id: "9001",
+          body: "rich",
+          canEdit: true,
+          richBody: expect.objectContaining({ format: "adf" }),
+        }),
+        expect.objectContaining({ id: "9000", body: "body", canEdit: true }),
+      ]);
+      expect(f.calls).toHaveLength(3);
+      expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+      expect(f.calls.some(({ url }) => url.includes("/myself") || url.includes("/comment/"))).toBe(
+        false,
+      );
+    }),
 );
 
 it.effect("adds edit flags to old comments without a viewer request", () =>

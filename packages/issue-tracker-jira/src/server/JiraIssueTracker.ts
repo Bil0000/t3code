@@ -20,8 +20,8 @@ import {
   JiraStatus,
   JiraComment,
   JiraHistoryEntry,
-  adfToText,
-  isEditableAdf,
+  jiraBodyText,
+  jiraBodyEditable,
   textToAdf,
   normalizeJiraIssue,
   buildJql,
@@ -31,6 +31,14 @@ import {
   jiraEvents,
   quoteJiraJql,
 } from "./jiraJson.ts";
+import { jiraRichBody, parseJiraRichBody } from "./jiraAdf.ts";
+import {
+  JiraField,
+  createReserved,
+  transitionReserved,
+  jiraInputFields,
+  jiraFieldValues,
+} from "./jiraForms.ts";
 
 const DESCRIPTOR: StandaloneIssueTrackerDescriptor = {
   tracker: JiraApi.KIND,
@@ -41,8 +49,14 @@ const DESCRIPTOR: StandaloneIssueTrackerDescriptor = {
     label: "API token",
     helpUrl: "https://id.atlassian.com/manage-profile/security/api-tokens",
     fields: [
-      { key: "site", label: "Jira Cloud site", secret: false },
-      { key: "email", label: "Account email", secret: false },
+      { key: "site", label: "Jira site", secret: false },
+      {
+        key: "deployment",
+        label: "Deployment (cloud or data-center)",
+        secret: false,
+        optional: true,
+      },
+      { key: "email", label: "Account email (Cloud)", secret: false, optional: true },
       { key: "token", label: "API token", secret: true },
     ],
   },
@@ -51,6 +65,9 @@ const DESCRIPTOR: StandaloneIssueTrackerDescriptor = {
 const CAPABILITIES: IssueCapabilities = {
   create: true,
   createIssueTypes: true,
+  createFields: true,
+  stateFields: true,
+  richText: true,
   edit: true,
   comment: true,
   editComment: true,
@@ -91,31 +108,26 @@ const Transitions = Schema.Struct({
   transitions: bounded(
     Schema.Struct({
       id: Text,
+      name: Schema.optional(Text),
       to: JiraStatus,
       isAvailable: Schema.optional(Schema.Boolean),
-      fields: Schema.optional(
-        Schema.Record(Schema.String, Schema.Struct({ required: Schema.optional(Schema.Boolean) })),
-      ),
+      fields: Schema.optional(Schema.Record(Schema.String, JiraField)),
     }),
   ),
 });
 const Types = Schema.Struct({
   startAt: Count,
-  total: Count,
+  total: Schema.optional(Count),
+  isLast: Schema.optional(Schema.Boolean),
   issueTypes: bounded(
     Schema.Struct({ id: Text, name: Text, subtask: Schema.optional(Schema.Boolean) }),
   ),
 });
 const Fields = Schema.Struct({
   startAt: Count,
-  total: Count,
-  fields: bounded(
-    Schema.Struct({
-      fieldId: Text,
-      required: Schema.Boolean,
-      hasDefaultValue: Schema.optional(Schema.Boolean),
-    }),
-  ),
+  total: Schema.optional(Count),
+  isLast: Schema.optional(Schema.Boolean),
+  fields: bounded(JiraField),
 });
 const CommentPage = Schema.Struct({
   startAt: Count,
@@ -162,8 +174,63 @@ const matchesState = (
   transition: (typeof Transitions.Type)["transitions"][number],
   state: string,
 ) => (transition.to.statusCategory.key === "done") === (state === "closed");
-const usable = (transition: (typeof Transitions.Type)["transitions"][number]) =>
-  !Object.values(transition.fields ?? {}).some((field) => field.required);
+const transitionFields = (transition: (typeof Transitions.Type)["transitions"][number]) => {
+  const fields = transition.fields ?? {};
+  if (Object.keys(fields).length > 100) throw new Error("Too many Jira transition fields.");
+  return fields;
+};
+const RemoteLinks = bounded(
+  Schema.Struct({
+    object: Schema.Struct({
+      title: Text.check(Schema.isMaxLength(4096)),
+      url: Text.check(Schema.isMaxLength(8192)),
+    }),
+  }),
+);
+const safeRemoteLink = (link: (typeof RemoteLinks.Type)[number]) => {
+  try {
+    const url = new URL(link.object.url);
+    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password
+      ? [{ title: link.object.title, url: link.object.url }]
+      : [];
+  } catch {
+    return [];
+  }
+};
+const metadataProgress = (
+  page: {
+    readonly startAt: number;
+    readonly total?: number | undefined;
+    readonly isLast?: boolean | undefined;
+  },
+  startAt: number,
+  count: number,
+  total: number | undefined,
+) => {
+  const next = startAt + count;
+  if (
+    page.startAt !== startAt ||
+    next > 100 ||
+    (page.total === undefined && page.isLast === undefined) ||
+    (page.total !== undefined && (page.total > 100 || page.total < next)) ||
+    (total !== undefined && page.total !== total) ||
+    (page.isLast === true && page.total !== undefined && page.total !== next) ||
+    (page.isLast === false && page.total !== undefined && page.total === next)
+  )
+    throw new Error("Inconsistent Jira metadata page.");
+  const more = page.isLast === false || (page.isLast !== true && next < (page.total ?? next));
+  if (more && (count === 0 || next >= 100)) throw new Error("Incomplete Jira metadata.");
+  return { total: page.total, more };
+};
+const formAttempt = <A>(operation: string, run: () => A) =>
+  Effect.try({
+    try: run,
+    catch: () =>
+      JiraApi.failed(
+        operation,
+        "Check extra required fields and allowed values in this Jira form.",
+      ),
+  });
 
 export const make = Effect.gen(function* () {
   const jira = yield* JiraApi.JiraApi;
@@ -260,39 +327,47 @@ export const make = Effect.gen(function* () {
       readonly comments: ReadonlyArray<typeof JiraComment.Type>;
     },
     granted?: typeof Permissions.Type,
+    deployment: "cloud" | "data-center" = "cloud",
   ) =>
     JiraApi.attempt("getComments", () => {
       if (page.comments.length === 0 && page.startAt < page.total)
         throw new Error("Incomplete Jira comment page.");
       return {
-        comments: page.comments.map((comment) => ({
-          id: comment.id,
-          author: comment.author ? jiraActor(comment.author) : null,
-          body: adfToText(comment.body),
-          createdAt: jiraDate(comment.created),
-          editedAt: comment.created === comment.updated ? null : jiraDate(comment.updated),
-          canEdit:
-            granted !== undefined &&
-            (allowed(granted, "EDIT_ALL_COMMENTS") ||
-              (input.viewer !== undefined &&
-                input.viewer === comment.author?.accountId &&
-                allowed(granted, "EDIT_OWN_COMMENTS"))) &&
-            isEditableAdf(comment.body),
-          url:
-            "https://" +
-            JiraApi.normalizeJiraHost(input.host) +
-            "/browse/" +
-            encodeURIComponent(input.key) +
-            "?focusedCommentId=" +
-            encodeURIComponent(comment.id),
-        })),
+        comments: page.comments.map((comment) => {
+          const richBody = jiraRichBody(comment.body, deployment);
+          return {
+            id: comment.id,
+            author: comment.author ? jiraActor(comment.author) : null,
+            body: jiraBodyText(comment.body),
+            ...(richBody === undefined ? {} : { richBody }),
+            createdAt: jiraDate(comment.created),
+            editedAt: comment.created === comment.updated ? null : jiraDate(comment.updated),
+            canEdit:
+              granted !== undefined &&
+              (allowed(granted, "EDIT_ALL_COMMENTS") ||
+                (input.viewer !== undefined &&
+                  input.viewer === comment.author?.accountId &&
+                  allowed(granted, "EDIT_OWN_COMMENTS"))) &&
+              ((deployment === "cloud" && jiraBodyEditable(comment.body)) ||
+                richBody !== undefined),
+            url:
+              JiraApi.jiraIssueUrl(input.host, input.key) +
+              "?focusedCommentId=" +
+              encodeURIComponent(comment.id),
+          };
+        }),
         nextCursor:
           page.startAt + page.comments.length < page.total
             ? String(page.startAt + page.comments.length)
             : null,
       };
     });
-  const comments = (input: IssueTarget, startAt: number, granted?: typeof Permissions.Type) =>
+  const comments = (
+    input: IssueTarget,
+    startAt: number,
+    granted?: typeof Permissions.Type,
+    deployment: "cloud" | "data-center" = "cloud",
+  ) =>
     Effect.gen(function* () {
       const page = yield* jira.request({
         host: input.host,
@@ -312,26 +387,80 @@ export const make = Effect.gen(function* () {
         input,
         { ...page, comments: page.comments.toReversed() },
         granted,
+        deployment,
       );
     });
   const issueTypes = (input: IssueScopeTarget) =>
     Effect.gen(function* () {
-      const page = yield* jira.request({
-        host: input.host,
-        operation: "issueTypes",
-        method: "GET",
-        path:
-          "/issue/createmeta/" +
-          encodeURIComponent(input.scope) +
-          "/issuetypes?startAt=0&maxResults=100",
-        schema: Types,
-      });
-      if (page.startAt !== 0 || page.total > page.issueTypes.length)
-        return yield* JiraApi.failed(
-          "issueTypes",
-          "This project has more Jira issue types than can be loaded in one page.",
+      const types: Array<(typeof Types.Type)["issueTypes"][number]> = [];
+      let total: number | undefined;
+      let more: boolean;
+      do {
+        const startAt = types.length;
+        const page = yield* jira.request({
+          host: input.host,
+          operation: "issueTypes",
+          method: "GET",
+          path:
+            "/issue/createmeta/" +
+            encodeURIComponent(input.scope) +
+            "/issuetypes?startAt=" +
+            startAt +
+            "&maxResults=100",
+          schema: Types,
+        });
+        const progress = yield* JiraApi.attempt("issueTypes", () =>
+          metadataProgress(page, startAt, page.issueTypes.length, total),
         );
-      return page.issueTypes;
+        total = progress.total;
+        more = progress.more;
+        types.push(...page.issueTypes);
+      } while (more);
+      if (new Set(types.map((type) => type.id)).size !== types.length)
+        return yield* JiraApi.failed("issueTypes", "Jira returned duplicate issue types.");
+      return types;
+    });
+  const createFields = (input: IssueScopeTarget, issueType: string, operation: string) =>
+    Effect.gen(function* () {
+      const fields: Array<typeof JiraField.Type> = [];
+      let total: number | undefined;
+      let more: boolean;
+      do {
+        const startAt = fields.length;
+        const page = yield* jira.request({
+          host: input.host,
+          operation,
+          method: "GET",
+          path:
+            "/issue/createmeta/" +
+            encodeURIComponent(input.scope) +
+            "/issuetypes/" +
+            encodeURIComponent(issueType) +
+            "?startAt=" +
+            startAt +
+            "&maxResults=100",
+          schema: Fields,
+        });
+        const progress = yield* JiraApi.attempt(operation, () =>
+          metadataProgress(page, startAt, page.fields.length, total),
+        );
+        total = progress.total;
+        more = progress.more;
+        fields.push(...page.fields);
+      } while (more);
+      return yield* JiraApi.attempt(operation, () => {
+        const result: Record<string, typeof JiraField.Type> = {};
+        for (const field of fields) {
+          if (
+            !field.fieldId ||
+            ["__proto__", "constructor", "prototype"].includes(field.fieldId) ||
+            Object.hasOwn(result, field.fieldId)
+          )
+            throw new Error("Invalid Jira form field.");
+          result[field.fieldId] = field;
+        }
+        return result;
+      });
     });
   const pageLimit = (operation: string, input: IssuePageInput) => {
     const limit = input.limit ?? 100;
@@ -350,10 +479,18 @@ export const make = Effect.gen(function* () {
     key: issue.key,
     displayKey: issue.key,
     title: issue.fields.summary,
-    url: "https://" + JiraApi.normalizeJiraHost(host) + "/browse/" + encodeURIComponent(issue.key),
+    url: JiraApi.jiraIssueUrl(host, issue.key),
     state: jiraState(issue.fields.status),
   });
 
+  const richDocument = (
+    cloud: boolean,
+    operation: string,
+    richBody: Parameters<typeof parseJiraRichBody>[0],
+  ) =>
+    JiraApi.attempt(operation, () =>
+      parseJiraRichBody(richBody, cloud ? "cloud" : "data-center", operation === "editComment"),
+    );
   const api: StandaloneIssueTrackerApi = {
     kind: JiraApi.KIND,
     standalone: DESCRIPTOR,
@@ -404,9 +541,7 @@ export const make = Effect.gen(function* () {
           return yield* JiraApi.failed("listIssues", "Jira returned an inconsistent issue page.");
         return {
           items: yield* JiraApi.attempt("listIssues", () =>
-            page.issues.map((issue) =>
-              normalizeJiraIssue(issue, JiraApi.normalizeJiraHost(input.host)),
-            ),
+            page.issues.map((issue) => normalizeJiraIssue(issue, input.host)),
           ),
           nextCursor: page.isLast === true ? null : (page.nextPageToken ?? null),
         };
@@ -414,14 +549,26 @@ export const make = Effect.gen(function* () {
     getIssue: (input) =>
       Effect.gen(function* () {
         const issue = yield* requireIssue(input);
-        const [who, rawPermissions] = yield* Effect.all(
-          [viewer(input.host), permissions(input, "getIssue")],
-          { concurrency: 2 },
+        const remoteLinksRequest = jira.request({
+          host: input.host,
+          operation: "getIssue",
+          method: "GET",
+          path: "/issue/" + encodeURIComponent(input.key) + "/remotelink",
+          schema: RemoteLinks,
+        });
+        const [who, rawPermissions, remoteLinks, deployment] = yield* Effect.all(
+          [
+            viewer(input.host),
+            permissions(input, "getIssue"),
+            remoteLinksRequest,
+            jira.deploymentFor(input.host),
+          ],
+          { concurrency: 4 },
         );
         const embedded = issue.fields.comment;
         const page =
           embedded?.comments === undefined && embedded?.total !== 0
-            ? yield* comments({ ...input, viewer: who }, 0, rawPermissions)
+            ? yield* comments({ ...input, viewer: who }, 0, rawPermissions, deployment)
             : yield* commentResult(
                 { ...input, viewer: who },
                 {
@@ -430,6 +577,7 @@ export const make = Effect.gen(function* () {
                   comments: embedded?.comments ?? [],
                 },
                 rawPermissions,
+                deployment,
               );
         const history = issue.changelog
           ? { ...issue.changelog, values: issue.changelog.histories, isLast: undefined }
@@ -441,17 +589,25 @@ export const make = Effect.gen(function* () {
                 "/issue/" + encodeURIComponent(input.key) + "/changelog?startAt=0&maxResults=50",
               schema: History,
             });
+        const richBody = jiraRichBody(issue.fields.description, deployment);
         return {
-          ...(yield* JiraApi.attempt("getIssue", () =>
-            normalizeJiraIssue(issue, JiraApi.normalizeJiraHost(input.host)),
-          )),
-          body: yield* JiraApi.attempt("getIssue", () => adfToText(issue.fields.description)),
-          bodyEditable: yield* JiraApi.attempt("getIssue", () =>
-            isEditableAdf(issue.fields.description),
+          ...(yield* JiraApi.attempt("getIssue", () => normalizeJiraIssue(issue, input.host))),
+          body: yield* JiraApi.attempt("getIssue", () => jiraBodyText(issue.fields.description)),
+          bodyEditable: yield* JiraApi.attempt(
+            "getIssue",
+            () => deployment === "cloud" && jiraBodyEditable(issue.fields.description),
           ),
+          ...(richBody === undefined ? {} : { richBody }),
+          ...(deployment === "cloud"
+            ? {}
+            : { capabilities: { ...CAPABILITIES, updateParent: false } }),
+          externalLinks: remoteLinks.flatMap(safeRemoteLink),
           states: [jiraState(issue.fields.status)],
           viewer: who,
-          viewerPermissions: toPermissions(rawPermissions),
+          viewerPermissions: {
+            ...toPermissions(rawPermissions),
+            ...(deployment === "cloud" ? {} : { updateParent: false }),
+          },
           comments: page.comments,
           commentsCursor: page.nextCursor,
           events: yield* JiraApi.attempt("getIssue", () => jiraEvents(history.values)),
@@ -470,10 +626,17 @@ export const make = Effect.gen(function* () {
           input,
           startAt,
           input.viewer === undefined ? undefined : yield* permissions(input, "getComments"),
+          yield* jira.deploymentFor(input.host),
         );
       }),
     getViewerPermissions: (input) =>
-      permissions(input, "getViewerPermissions").pipe(Effect.map(toPermissions)),
+      Effect.gen(function* () {
+        const raw = yield* permissions(input, "getViewerPermissions");
+        return {
+          ...toPermissions(raw),
+          ...((yield* jira.deploymentFor(input.host)) === "cloud" ? {} : { updateParent: false }),
+        };
+      }),
     create: (input) =>
       Effect.gen(function* () {
         if (input.assignees.length > 1)
@@ -496,39 +659,30 @@ export const make = Effect.gen(function* () {
           return yield* JiraApi.failed("create", "Select a parent issue for this Jira subtask.");
         if (input.templateKey !== undefined)
           return yield* JiraApi.failed("create", "Jira issue templates are not supported.");
-        const page = yield* jira.request({
-          host: input.host,
-          operation: "create",
-          method: "GET",
-          path:
-            "/issue/createmeta/" +
-            encodeURIComponent(input.scope) +
-            "/issuetypes/" +
-            encodeURIComponent(selected.id) +
-            "?startAt=0&maxResults=100",
-          schema: Fields,
+        const metadata = yield* createFields(input, selected.id, "create");
+        const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
+        const nativeFields = yield* formAttempt("create", () =>
+          jiraFieldValues(metadata, input.fieldValues, createReserved, cloud),
+        );
+        const primaryValues = {
+          summary: input.title,
+          description: input.body,
+          labels: input.labels,
+          assignee: input.assignees,
+          parent: parent?.key,
+        };
+        yield* formAttempt("create", () => {
+          for (const [id, value] of Object.entries(primaryValues)) {
+            const field = metadata[id];
+            const empty =
+              value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+            if (field?.required && !field.hasDefaultValue && empty)
+              throw new Error("Missing required Jira field.");
+            if (field?.operations !== undefined && !field.operations.includes("set") && !empty)
+              throw new Error("This Jira field cannot be set.");
+          }
         });
-        const supported = new Set([
-          "project",
-          "issuetype",
-          "summary",
-          "description",
-          "labels",
-          "assignee",
-        ]);
-        if (parent !== null) supported.add("parent");
-        if (
-          page.startAt !== 0 ||
-          page.total > page.fields.length ||
-          page.fields.some(
-            (field) => field.required && !field.hasDefaultValue && !supported.has(field.fieldId),
-          )
-        )
-          return yield* JiraApi.failed(
-            "create",
-            "This Jira issue type needs extra required fields. Create it in Jira.",
-          );
-        const fields = new Set(page.fields.map((field) => field.fieldId));
+        const fields = new Set(Object.keys(metadata));
         if (
           (parent !== null && selected.subtask !== true && !fields.has("parent")) ||
           (input.body !== "" && !fields.has("description")) ||
@@ -539,7 +693,9 @@ export const make = Effect.gen(function* () {
             "create",
             "This Jira issue type does not allow the selected description, labels or assignee on creation.",
           );
-        const body = yield* JiraApi.attempt("create", () => textToAdf(input.body));
+        const body = yield* JiraApi.attempt("create", () =>
+          cloud ? textToAdf(input.body) : input.body,
+        );
         const created = yield* jira.request({
           host: input.host,
           operation: "create",
@@ -548,12 +704,19 @@ export const make = Effect.gen(function* () {
           schema: Schema.Struct({ key: Text }),
           body: {
             fields: {
+              ...nativeFields,
               project: /^[0-9]+$/.test(input.scope) ? { id: input.scope } : { key: input.scope },
               issuetype: { id: selected.id },
               summary: input.title,
               ...(parent === null ? {} : { parent: { key: parent.key } }),
-              ...(fields.has("description") ? { description: body } : {}),
-              ...(fields.has("labels") ? { labels: input.labels } : {}),
+              ...(fields.has("description") &&
+              !(metadata.description?.hasDefaultValue && input.body === "")
+                ? { description: body }
+                : {}),
+              ...(fields.has("labels") &&
+              !(metadata.labels?.hasDefaultValue && input.labels.length === 0)
+                ? { labels: input.labels }
+                : {}),
               ...(input.assignees[0] === undefined
                 ? {}
                 : { assignee: { accountId: input.assignees[0] } }),
@@ -564,17 +727,16 @@ export const make = Effect.gen(function* () {
           ...(parent === null ? {} : { parentLinked: true }),
           key: created.key,
           displayKey: created.key,
-          url:
-            "https://" +
-            JiraApi.normalizeJiraHost(input.host) +
-            "/browse/" +
-            encodeURIComponent(created.key),
+          url: JiraApi.jiraIssueUrl(input.host, created.key),
         };
       }),
     comment: (input) =>
       Effect.gen(function* () {
         yield* requireScopeIssue(input, "comment");
-        const body = yield* JiraApi.attempt("comment", () => textToAdf(input.body));
+        const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
+        const body = yield* JiraApi.attempt("comment", () =>
+          cloud ? textToAdf(input.body) : input.body,
+        );
         yield* jira.request({
           host: input.host,
           operation: "comment",
@@ -599,12 +761,21 @@ export const make = Effect.gen(function* () {
           path,
           schema: JiraComment,
         });
-        if (!(yield* JiraApi.attempt("editComment", () => isEditableAdf(comment.body))))
+        const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
+        if (
+          input.richBody === undefined &&
+          (!cloud || !(yield* JiraApi.attempt("editComment", () => jiraBodyEditable(comment.body))))
+        )
           return yield* JiraApi.failed(
             "editComment",
             "This comment has rich content. Edit it in Jira to preserve its formatting and attachments.",
           );
-        const body = yield* JiraApi.attempt("editComment", () => textToAdf(input.body));
+        const body =
+          input.richBody === undefined
+            ? yield* JiraApi.attempt("editComment", () =>
+                cloud ? textToAdf(input.body) : input.body,
+              )
+            : yield* richDocument(cloud, "editComment", input.richBody);
         yield* jira.request({
           host: input.host,
           operation: "editComment",
@@ -669,6 +840,11 @@ export const make = Effect.gen(function* () {
       }),
     setParent: (input) =>
       Effect.gen(function* () {
+        if ((yield* jira.deploymentFor(input.host)) === "data-center")
+          return yield* JiraApi.failed(
+            "setParent",
+            "Change this issue's parent in Jira Data Center.",
+          );
         const selected = yield* requireIssue(input);
         if (input.parentKey === null && selected.fields.issuetype?.subtask === true)
           return yield* JiraApi.failed(
@@ -768,12 +944,18 @@ export const make = Effect.gen(function* () {
         const startAt = yield* JiraApi.attempt("listAssigneeCandidates", () =>
           commentOffset(input.cursor ?? "0"),
         );
+        const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
+        if (!cloud && startAt !== 0)
+          return yield* JiraApi.failed(
+            "listAssigneeCandidates",
+            "Jira Data Center assignee search has no next page.",
+          );
         if (startAt >= 1000)
           return yield* JiraApi.failed(
             "listAssigneeCandidates",
             "Jira assignee search is limited to the first 1000 users.",
           );
-        const window = Math.min(limit, 1000 - startAt);
+        const window = Math.min(limit, cloud ? 1000 - startAt : 100);
         const users = yield* jira.request({
           host: input.host,
           operation: "listAssigneeCandidates",
@@ -794,18 +976,31 @@ export const make = Effect.gen(function* () {
           );
         return {
           items: users.map(jiraActor),
-          nextCursor: startAt + window < 1000 ? String(startAt + window) : null,
-          ...(startAt + window >= 1000 ? { truncated: true } : {}),
+          nextCursor: cloud && startAt + window < 1000 ? String(startAt + window) : null,
+          ...(cloud
+            ? startAt + window >= 1000
+              ? { truncated: true }
+              : {}
+            : users.length === window
+              ? { truncated: true }
+              : {}),
         };
       }),
     update: (input) =>
       Effect.gen(function* () {
         if (input.assignees !== undefined && input.assignees.length > 1)
           return yield* JiraApi.failed("update", "A Jira issue can have only one assignee.");
-        const issue = yield* requireScopeIssue(input, "update", input.body !== undefined);
+        const issue = yield* requireScopeIssue(
+          input,
+          "update",
+          input.body !== undefined || input.richBody !== undefined,
+        );
+        const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
         if (
           input.body !== undefined &&
-          !(yield* JiraApi.attempt("update", () => isEditableAdf(issue.fields.description)))
+          input.richBody === undefined &&
+          (!cloud ||
+            !(yield* JiraApi.attempt("update", () => jiraBodyEditable(issue.fields.description))))
         )
           return yield* JiraApi.failed(
             "update",
@@ -813,7 +1008,11 @@ export const make = Effect.gen(function* () {
           );
         const text = input.body;
         const body =
-          text === undefined ? undefined : yield* JiraApi.attempt("update", () => textToAdf(text));
+          input.richBody !== undefined
+            ? yield* richDocument(cloud, "update", input.richBody)
+            : text === undefined
+              ? undefined
+              : yield* JiraApi.attempt("update", () => (cloud ? textToAdf(text) : text));
         const fields = {
           ...(input.title === undefined ? {} : { summary: input.title }),
           ...(body === undefined ? {} : { description: body }),
@@ -845,33 +1044,49 @@ export const make = Effect.gen(function* () {
           );
         const issue = yield* requireScopeIssue(input, "setState");
         if (
-          issue.fields.status.id === input.state ||
-          issue.fields.status.name === input.state ||
-          ((input.state === "open" || input.state === "closed") &&
-            (issue.fields.status.statusCategory.key === "done") === (input.state === "closed"))
+          input.transitionId === undefined &&
+          Object.keys(input.fieldValues ?? {}).length === 0 &&
+          (issue.fields.status.id === input.state ||
+            issue.fields.status.name === input.state ||
+            ((input.state === "open" || input.state === "closed") &&
+              (issue.fields.status.statusCategory.key === "done") === (input.state === "closed")))
         )
           return;
         const available = yield* transitions(input);
         const candidates = available.transitions.filter(
           (transition) =>
-            transition.to.id === input.state ||
-            transition.to.name === input.state ||
-            ((input.state === "open" || input.state === "closed") &&
-              matchesState(transition, input.state)),
+            transition.isAvailable !== false &&
+            (input.transitionId === undefined || transition.id === input.transitionId) &&
+            (transition.to.id === input.state ||
+              transition.to.name === input.state ||
+              ((input.state === "open" || input.state === "closed") &&
+                matchesState(transition, input.state))),
         );
         const transition = candidates.length === 1 ? candidates[0] : undefined;
-        if (!transition || !usable(transition))
+        if (!transition)
           return yield* JiraApi.failed(
             "setState",
-            "This workflow has no single matching transition without extra required fields. Complete it in Jira.",
+            "Choose one available Jira workflow transition.",
           );
+        const cloud = (yield* jira.deploymentFor(input.host)) === "cloud";
+        const fields = yield* formAttempt("setState", () =>
+          jiraFieldValues(
+            transitionFields(transition),
+            input.fieldValues,
+            transitionReserved,
+            cloud,
+          ),
+        );
         yield* jira.request({
           host: input.host,
           operation: "setState",
           method: "POST",
           path: "/issue/" + encodeURIComponent(input.key) + "/transitions",
           schema: Schema.Undefined,
-          body: { transition: { id: transition.id } },
+          body: {
+            transition: { id: transition.id },
+            ...(Object.keys(fields).length === 0 ? {} : { fields }),
+          },
         });
       }),
     listCandidates: (input) =>
@@ -924,6 +1139,18 @@ export const make = Effect.gen(function* () {
             })
           : [];
         const types = allowed(raw, "CREATE_ISSUES") ? yield* issueTypes(input) : [];
+        if (input.issueType !== undefined && !types.some((type) => type.id === input.issueType))
+          return yield* JiraApi.failed("listCandidates", "Select an available Jira issue type.");
+        const fields =
+          input.issueType === undefined
+            ? undefined
+            : yield* createFields(input, input.issueType, "listCandidates").pipe(
+                Effect.flatMap((metadata) =>
+                  JiraApi.attempt("listCandidates", () =>
+                    jiraInputFields(metadata, createReserved),
+                  ),
+                ),
+              );
         const statuses =
           available === null
             ? (yield* jira.request({
@@ -933,18 +1160,7 @@ export const make = Effect.gen(function* () {
                 path: "/project/" + encodeURIComponent(input.scope) + "/statuses",
                 schema: bounded(Schema.Struct({ statuses: bounded(JiraStatus) })),
               })).flatMap((type) => type.statuses)
-            : available.transitions
-                .filter(
-                  (transition) =>
-                    transition.isAvailable !== false &&
-                    usable(transition) &&
-                    available.transitions.filter(
-                      (candidate) =>
-                        candidate.to.id === transition.to.id ||
-                        candidate.to.name === transition.to.id,
-                    ).length === 1,
-                )
-                .map((transition) => transition.to);
+            : [];
         const nativeStates = [...new Map(statuses.map((status) => [status.id, status])).values()];
         if (nativeStates.length > 100)
           return yield* JiraApi.failed(
@@ -952,7 +1168,20 @@ export const make = Effect.gen(function* () {
             "This Jira project has too many states to load here.",
           );
         return {
-          states: nativeStates.map(jiraState),
+          states:
+            available === null
+              ? nativeStates.map(jiraState)
+              : yield* JiraApi.attempt("listCandidates", () =>
+                  available.transitions
+                    .filter((transition) => transition.isAvailable !== false)
+                    .map((transition) => ({
+                      ...jiraState(transition.to),
+                      name: transition.name ?? transition.to.name,
+                      transitionId: transition.id,
+                      fields: jiraInputFields(transitionFields(transition), transitionReserved),
+                    })),
+                ),
+          ...(fields === undefined ? {} : { fields }),
           labels: [...new Set(sample.issues.flatMap((issue) => issue.fields.labels))]
             .slice(0, 100)
             .map((name) => ({ name, color: null, description: null })),

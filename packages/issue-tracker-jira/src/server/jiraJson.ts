@@ -11,6 +11,8 @@ import type {
 import type { TrackerIssueSummary } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
+import { jiraRichBody } from "./jiraAdf.ts";
+import { jiraIssueUrl } from "./jiraDataCenter.ts";
 
 const NonEmpty = Schema.String.check(Schema.isMinLength(1));
 const BoundedText = Schema.String.check(Schema.isMaxLength(65_536));
@@ -216,6 +218,31 @@ export function adfToText(value: unknown): string {
   return result;
 }
 
+export function jiraBodyText(value: unknown): string {
+  if (typeof value === "string") return decodeBoundedText(value);
+  try {
+    return adfToText(value);
+  } catch (error) {
+    if (jiraRichBody(value) !== undefined) return "[Rich Jira content]";
+    throw error;
+  }
+}
+
+export function jiraBodyEditable(value: unknown): boolean {
+  if (typeof value === "string") {
+    decodeBoundedText(value);
+    return false;
+  }
+  if (jiraRichBody(value) !== undefined) {
+    try {
+      return isEditableAdf(value);
+    } catch {
+      return false;
+    }
+  }
+  return isEditableAdf(value);
+}
+
 export function isEditableAdf(value: unknown): boolean {
   adfToText(value);
   if (value === null) return true;
@@ -298,7 +325,7 @@ export function normalizeJiraIssue(value: unknown, host: string): TrackerIssueSu
     key: raw.key,
     displayKey: raw.key,
     title: fields.summary,
-    url: "https://" + host + "/browse/" + encodeURIComponent(raw.key),
+    url: jiraIssueUrl(host, raw.key),
     state: jiraState(fields.status),
     author: fields.creator ? jiraActor(fields.creator) : null,
     createdAt: jiraDate(fields.created),
