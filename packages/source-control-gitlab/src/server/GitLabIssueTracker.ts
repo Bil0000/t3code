@@ -46,6 +46,7 @@ import {
   ISSUE_AWARD_EMOJI_GRAPHQL_QUERY,
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   PAGE_SIZE,
+  toSystemEvent,
   type GitLabTemplateEntry,
 } from "./gitLabIssueJson.ts";
 import { decodeViewerJson, gitLabAwardName, toReactions } from "./gitLabMergeRequestJson.ts";
@@ -611,6 +612,15 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
           return {
             items: rows.flatMap((row): IssueEvent[] => {
               if (phase === "notes" && !row.system) return [];
+              const body = row.body?.trim() ?? "";
+              const systemEvent = phase === "notes" ? toSystemEvent(body) : null;
+              if (
+                phase === "notes" &&
+                (systemEvent?.kind === "closed" ||
+                  systemEvent?.kind === "reopened" ||
+                  /^(?:added|removed) (?:\S*~\d+|\d+ deleted).* labels?$/.test(body))
+              )
+                return [];
               const user = row.author ?? row.user;
               const actor: IssueActor | null =
                 user === undefined || user === null
@@ -630,14 +640,15 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
                     ? row.state === "closed"
                       ? "closed"
                       : "reopened"
-                    : "updated";
+                    : (systemEvent?.kind ?? "updated");
               return [
                 {
                   id: `${phase}:${row.id}`,
                   kind,
                   actor,
                   createdAt: row.created_at,
-                  detail: (row.label?.name ?? row.body?.trim()) || null,
+                  detail:
+                    systemEvent === null ? (row.label?.name ?? body) || null : systemEvent.detail,
                 },
               ];
             }),

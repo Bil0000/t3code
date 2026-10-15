@@ -8,6 +8,7 @@ import {
   IssueCommentsPage,
   IssueCreateResult,
   IssueDetail,
+  IssueHistoryPage,
   IssueSummary,
 } from "@t3tools/contracts";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -19,6 +20,7 @@ const decodeDetailWire = Schema.decodeEffect(IssueDetail);
 const decodeSummaryWire = Schema.decodeEffect(IssueSummary);
 const decodeCreateWire = Schema.decodeEffect(IssueCreateResult);
 const decodeCommentsWire = Schema.decodeEffect(IssueCommentsPage);
+const decodeHistoryWire = Schema.decodeEffect(IssueHistoryPage);
 
 const encode = (value: unknown) => JSON.stringify(value);
 
@@ -1212,6 +1214,161 @@ describe("GitLabIssueTracker", () => {
         expect(Result.isSuccess(result)).toBe(canEdit);
         expect(writes).toEqual(canEdit ? [encode({ body: "Updated" })] : []);
       }),
+  );
+
+  it.effect("pages native history without repeating label and state system notes", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const createdAt = "2026-07-01T00:00:00Z";
+      const author = {
+        id: 7,
+        username: "julius",
+        name: "Julius",
+        avatar_url: "https://avatars/julius",
+      };
+      const covered = [
+        "added ~7 label",
+        "removed ~7 ~8 labels",
+        "added ~7 label and removed ~8 label",
+        "added ~7 ~8 + 1 deleted label",
+        "removed 3 deleted labels",
+        "added acme/web~7 label",
+        "closed",
+        "reopened",
+        "closed with !50",
+        "reopened with abc123",
+        "closed via abc123",
+        "resolved the corresponding error and closed the issue",
+        "automatically closed this incident because the alert resolved",
+      ];
+      const remaining = [
+        ["assigned to @theo", "assigned", "theo"],
+        ["unassigned @theo", "unassigned", "theo"],
+        ["mentioned in !50", "referenced", "!50"],
+        ["changed title from old to {+New title+}", "renamed", "New title"],
+        ["changed the description", "updated", "changed the description"],
+        ["added #43 as child Task", "updated", "added #43 as child Task"],
+        ["removed all assignees", "updated", "removed all assignees"],
+      ] as const;
+      const api = yield* GitLabIssueTracker.make.pipe(
+        Effect.provide(
+          GitLabCli.layer.pipe(
+            Layer.provide(
+              TestSourceControlHost.layer({
+                process: {
+                  run: (request) => {
+                    const path = request.args[1]!;
+                    paths.push(path);
+                    expect(request.args[request.args.indexOf("--hostname") + 1]).toBe(
+                      "gitlab.acme.test:8443",
+                    );
+                    const url = new URL(path, "https://gitlab.acme.test:8443");
+                    expect(url.searchParams.get("per_page")).toBe("15");
+                    let rows;
+                    if (url.pathname.endsWith("/notes")) {
+                      expect(url.searchParams.get("sort")).toBe("asc");
+                      expect(url.searchParams.get("order_by")).toBe("created_at");
+                      rows =
+                        url.searchParams.get("page") === "1"
+                          ? [
+                              ...covered.map((body, index) => ({
+                                id: index + 1,
+                                body,
+                                system: true,
+                                created_at: createdAt,
+                                author,
+                              })),
+                              ...[14, 15].map((id) => ({
+                                id,
+                                body: "Comment",
+                                system: false,
+                                created_at: createdAt,
+                                author,
+                              })),
+                            ]
+                          : remaining.map(([body], index) => ({
+                              id: index + 101,
+                              body,
+                              system: true,
+                              created_at: createdAt,
+                              author,
+                            }));
+                    } else if (url.pathname.endsWith("/resource_label_events")) {
+                      rows = ["add", "remove"].map((action, index) => ({
+                        id: index + 201,
+                        action,
+                        label: { name: "bug" },
+                        created_at: createdAt,
+                        user: author,
+                      }));
+                    } else {
+                      expect(url.pathname).toBe(
+                        "/projects/acme%2Fweb/issues/42/resource_state_events",
+                      );
+                      rows = ["closed", "reopened"].map((state, index) => ({
+                        id: index + 301,
+                        state,
+                        created_at: createdAt,
+                        user: author,
+                      }));
+                    }
+                    return Effect.succeed(TestSourceControlHost.processOutput(encode(rows)));
+                  },
+                },
+              }),
+            ),
+          ),
+        ),
+      );
+      const target = {
+        cwd: "/w",
+        host: "gitlab.acme.test:8443",
+        scope: "acme/web",
+        key: "42",
+        limit: 15,
+      };
+      const first = yield* decodeHistoryWire(yield* api.getHistory!(target));
+      expect(first).toEqual({ items: [], nextCursor: "notes:2" });
+      expect(paths).toHaveLength(1);
+      const notes = yield* decodeHistoryWire(
+        yield* api.getHistory!({ ...target, cursor: first.nextCursor! }),
+      );
+      expect(notes.nextCursor).toBe("labels:1");
+      expect(notes.items.map(({ kind, detail }) => [kind, detail])).toEqual(
+        remaining.map(([, kind, detail]) => [kind, detail]),
+      );
+      const labels = yield* decodeHistoryWire(
+        yield* api.getHistory!({ ...target, cursor: notes.nextCursor! }),
+      );
+      expect(labels.nextCursor).toBe("states:1");
+      const states = yield* decodeHistoryWire(
+        yield* api.getHistory!({ ...target, cursor: labels.nextCursor! }),
+      );
+      expect(states.nextCursor).toBeNull();
+      expect(
+        [...labels.items, ...states.items].map(({ id, kind, detail }) => [id, kind, detail]),
+      ).toEqual([
+        ["labels:201", "labeled", "bug"],
+        ["labels:202", "unlabeled", "bug"],
+        ["states:301", "closed", null],
+        ["states:302", "reopened", null],
+      ]);
+      for (const item of [...notes.items, ...labels.items, ...states.items]) {
+        expect(item.actor).toEqual({
+          id: "7",
+          login: "julius",
+          name: "Julius",
+          avatarUrl: author.avatar_url,
+        });
+        expect(item.createdAt).toBe(createdAt);
+      }
+      expect(paths).toEqual([
+        "projects/acme%2Fweb/issues/42/notes?per_page=15&page=1&sort=asc&order_by=created_at",
+        "projects/acme%2Fweb/issues/42/notes?per_page=15&page=2&sort=asc&order_by=created_at",
+        "projects/acme%2Fweb/issues/42/resource_label_events?per_page=15&page=1",
+        "projects/acme%2Fweb/issues/42/resource_state_events?per_page=15&page=1",
+      ]);
+    }),
   );
 
   it.effect("keeps native history phases when a notes page contains no history", () =>

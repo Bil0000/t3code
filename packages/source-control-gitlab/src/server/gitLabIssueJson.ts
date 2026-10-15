@@ -205,12 +205,17 @@ export function decodeCreatedIssueJson(raw: string): Result.Result<
  * The events GitLab records as notes of its own. A label note names its labels by id ("added ~7
  * label"), which is why labellings come from `/resource_label_events` instead and are dropped here.
  */
-function toSystemEvent(
+export function toSystemEvent(
   body: string,
 ): { readonly kind: IssueEventKind; readonly detail: string | null } | null {
   const text = body.trim();
-  if (text === "closed") return { kind: "closed", detail: null };
-  if (text === "reopened") return { kind: "reopened", detail: null };
+  if (
+    /^closed(?: (?:with|via) .+)?$/.test(text) ||
+    text === "resolved the corresponding error and closed the issue" ||
+    text === "automatically closed this incident because the alert resolved"
+  )
+    return { kind: "closed", detail: null };
+  if (/^reopened(?: (?:with|via) .+)?$/.test(text)) return { kind: "reopened", detail: null };
   if (text.startsWith("assigned to ")) {
     return {
       kind: "assigned",
