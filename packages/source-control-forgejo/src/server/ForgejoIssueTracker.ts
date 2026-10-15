@@ -413,7 +413,7 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       path: string,
       cursor: string | undefined,
       viewer: string,
-      canWrite = false,
+      canWrite?: boolean,
       active = true,
     ) {
       const offsetMatch = /^offset:(?:([1-9]\d{0,6}):)?([1-9]\d{0,8})$/.exec(cursor ?? "");
@@ -464,7 +464,9 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                 comment.updated_at && comment.updated_at !== comment.created_at
                   ? comment.updated_at
                   : null,
-              canEdit: active && (canWrite || comment.user?.login === viewer),
+              ...(!active || canWrite !== undefined || comment.user?.login === viewer
+                ? { canEdit: active && (canWrite === true || comment.user?.login === viewer) }
+                : {}),
               reactions: forgejoReactions(reactions, viewer),
             })),
           ),

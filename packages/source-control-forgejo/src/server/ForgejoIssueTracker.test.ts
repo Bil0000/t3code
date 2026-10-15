@@ -1143,7 +1143,8 @@ describe("ForgejoIssueTracker", () => {
           cursor: "1",
           ...(viewer === undefined ? {} : { viewer }),
         });
-        expect(page.comments[0]?.canEdit).toBe(viewer === "julius");
+        if (viewer === "julius") expect(page.comments[0]?.canEdit).toBe(true);
+        else expect(page.comments[0]).not.toHaveProperty("canEdit");
         expect(paths).not.toContain("user");
         expect(paths).not.toContain("repos/acme/web");
       }),
