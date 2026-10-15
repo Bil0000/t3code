@@ -264,7 +264,12 @@ describe("resolveGitHostBinding", () => {
                 process,
                 cwd: input.cwd,
                 context: input.context,
-              });
+              }).pipe(
+                Effect.map((refined) => ({
+                  ...input.context,
+                  provider: refined?.provider ?? input.context.provider,
+                })),
+              );
             },
           }),
       }).pipe(
@@ -2755,7 +2760,12 @@ it.effect("keeps native Forgejo involvement viewers separate across case-distinc
               process,
               cwd: input.cwd,
               context: input.context,
-            }),
+            }).pipe(
+              Effect.map((refined) => ({
+                ...input.context,
+                provider: refined?.provider ?? input.context.provider,
+              })),
+            ),
         }),
     }).pipe(
       Effect.provide(
