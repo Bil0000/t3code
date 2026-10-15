@@ -77,6 +77,7 @@ const nativeIssue = (account: string) => ({
 const fixture = Effect.gen(function* () {
   yield* runMigrations();
   const stored = new Map<string, Uint8Array>();
+  const credentialWrites: Array<"set" | "create" | "remove"> = [];
   const requests: Array<{ token: string; operation: string; variables: Record<string, unknown> }> =
     [];
   const writes: Array<{ token: string; issueId: unknown }> = [];
@@ -90,6 +91,7 @@ const fixture = Effect.gen(function* () {
     get: (name) => Effect.sync(() => Option.fromNullishOr(stored.get(name))),
     set: (name, bytes) =>
       Effect.gen(function* () {
+        credentialWrites.push("set");
         const token = new TextDecoder().decode(bytes);
         if (!(failRollback && token === "token-A")) stored.set(name, bytes);
         if (token === failToken || (failRollback && token === "token-A"))
@@ -100,11 +102,13 @@ const fixture = Effect.gen(function* () {
       }),
     create: (name, bytes) =>
       Effect.sync(() => {
+        credentialWrites.push("create");
         assert.isFalse(stored.has(name));
         stored.set(name, bytes);
       }),
     remove: (name) =>
       Effect.sync(() => {
+        credentialWrites.push("remove");
         stored.delete(name);
       }),
   });
@@ -237,6 +241,9 @@ const fixture = Effect.gen(function* () {
   const bindings = yield* IssueTrackerBindings.IssueTrackerBindingsRepository.pipe(
     Effect.provide(IssueTrackerBindings.layer),
   );
+  const accounts = yield* IssueTrackerAccounts.IssueTrackerAccountsRepository.pipe(
+    Effect.provide(IssueTrackerAccounts.layer),
+  );
   const add = (token: string) =>
     connections.connect({ tracker: LINEAR, addAccount: true, token: { value: token } });
   const bind = (projectId: string, connectionId?: string) =>
@@ -263,7 +270,9 @@ const fixture = Effect.gen(function* () {
     connections,
     service,
     bindings,
+    accounts,
     stored,
+    credentialWrites,
     requests,
     writes,
     add,
@@ -280,6 +289,80 @@ const fixture = Effect.gen(function* () {
     },
   };
 });
+
+it.effect(
+  "rejects repeated native account additions before writes while retaining rotation and the default",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.connections.connect({ tracker: LINEAR, token: "token-default" });
+      yield* f.bind("default");
+      const added = yield* f.add("token-A");
+      yield* f.bind("A", added.connectionId);
+      const accounts = yield* f.accounts.list;
+      const bindings = yield* f.bindings.list;
+      const stored = new Map(f.stored);
+      f.requests.length = 0;
+      f.credentialWrites.length = 0;
+      const repeated = yield* Effect.all(
+        ["token-A", "token-A-rotated"].map((token) => f.add(token).pipe(Effect.result)),
+        { concurrency: 2 },
+      );
+      for (const result of repeated) {
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") assert.equal(result.failure.reason, "rejected");
+      }
+      assert.deepEqual(
+        f.requests.map((request) => request.operation),
+        ["T3ProbeCredential", "T3ProbeCredential"],
+      );
+      assert.deepEqual(f.credentialWrites, []);
+      assert.deepEqual(f.stored, stored);
+      assert.deepEqual(yield* f.accounts.list, accounts);
+      assert.deepEqual(yield* f.bindings.list, bindings);
+      f.requests.length = 0;
+      const rotated = yield* f.connections.connect({
+        tracker: LINEAR,
+        connectionId: added.connectionId,
+        token: { value: "token-A-rotated" },
+      });
+      assert.equal(rotated.connectionId, added.connectionId);
+      assert.deepEqual(f.credentialWrites, ["set"]);
+      assert.equal(f.requests.length, 1);
+      assert.deepEqual(yield* f.accounts.list, accounts);
+      assert.deepEqual(yield* f.bindings.list, bindings);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("keeps distinct and case-exact native accounts separate on the same host", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const added = yield* Effect.forEach(["token-A", "token-a", "token-B"], f.add);
+    assert.equal(new Set(added.map((account) => account.connectionId)).size, 3);
+    assert.deepEqual(
+      (yield* f.accounts.list).map((account) => account.accountId).sort(),
+      ["org-A/A", "org-a/a", "org-B/B"].sort(),
+    );
+    assert.equal(f.requests.length, 3);
+    assert.deepEqual(f.credentialWrites, ["create", "create", "create"]);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect.each([
+  { tracker: LINEAR, host: "other.linear.test" },
+  { tracker: JIRA, host: "linear.app" },
+])("does not merge native identity across tracker/host %j", (previous) =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* f.accounts.set({ ...previous, connectionId: "existing", accountId: "org-A/A" });
+    const added = yield* f.add("token-A");
+    assert.isDefined(added.connectionId);
+    assert.notEqual(added.connectionId, "existing");
+    assert.lengthOf(yield* f.accounts.list, 2);
+    assert.equal(f.requests.length, 1);
+    assert.deepEqual(f.credentialWrites, ["create"]);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
 
 it.effect(
   "routes same-host same-team same-key native reads and interleaved preflight/writes by selected account",

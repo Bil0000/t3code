@@ -341,6 +341,23 @@ const make = Effect.gen(function* () {
           api.kind,
           "This credential belongs to a different account. Use Add account instead.",
         );
+      if (saved === undefined) {
+        const existing = yield* accounts.list.pipe(
+          Effect.mapError(secretFailure(api.kind, "The saved accounts could not be read.")),
+        );
+        if (
+          existing.some(
+            (account) =>
+              account.tracker === api.kind &&
+              account.host === host &&
+              account.accountId === probe.accountId,
+          )
+        )
+          return yield* rejected(
+            api.kind,
+            "This account is already connected. Replace its token instead.",
+          );
+      }
       const connectionId =
         saved?.connectionId ??
         (yield* crypto
