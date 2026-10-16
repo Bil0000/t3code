@@ -85,10 +85,13 @@ export function IssueCreateDialog({
   const scopeKey = selectedScope === null ? null : createScopeKey(selectedScope);
   const scope = scopes.find((entry) => createScopeKey(entry) === scopeKey) ?? null;
   const [templateKey, setTemplateKey] = useState<string>(BLANK);
+  const [templateChosen, setTemplateChosen] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [titleEdited, setTitleEdited] = useState(false);
   const [bodyEdited, setBodyEdited] = useState(false);
+  const [labelsEdited, setLabelsEdited] = useState(false);
+  const [assigneesEdited, setAssigneesEdited] = useState(false);
   const [templateDraft, setTemplateDraft] = useState<{
     scopeKey: string;
     key: string;
@@ -194,35 +197,55 @@ export function IssueCreateDialog({
   const reset = () => {
     setNativeValues({});
     setTemplateKey(BLANK);
+    setTemplateChosen(false);
     setTemplateDraft(null);
     setTitle("");
     setBody("");
     setTitleEdited(false);
     setBodyEdited(false);
+    setLabelsEdited(false);
+    setAssigneesEdited(false);
     setExtras({ labels: [], assignees: [] });
     setIssueType(null);
     setValues({});
   };
 
-  const chooseTemplate = (key: string | null) => {
-    const next = key ?? BLANK;
-    setTemplateKey(next);
-    const template = templates.find((entry) => entry.key === next);
+  const chooseTemplate = (key: string | null, automatic = false) => {
+    if (key === null) return;
+    setTemplateKey(key);
+    setTemplateChosen(true);
+    const template = templates.find((entry) => entry.key === key);
     setValues({});
-    setExtras({ labels: [], assignees: [] });
+    const recoveringBlank = key === BLANK && templateKey !== BLANK && !catalogTemplate;
+    if (!automatic && !recoveringBlank) {
+      setExtras({ labels: [], assignees: [] });
+      setLabelsEdited(false);
+      setAssigneesEdited(false);
+    }
     setTemplateDraft(
       template && scope
         ? {
             scopeKey: createScopeKey(scope),
-            key: next,
+            key,
             title: !titleEdited,
             body: !bodyEdited,
-            labels: true,
-            assignees: true,
+            labels: !automatic || !labelsEdited,
+            assignees: !automatic || !assigneesEdited,
           }
         : null,
     );
   };
+
+  if (
+    open &&
+    scope?.templates &&
+    !templateChosen &&
+    !templatesQuery.isPending &&
+    templatesQuery.error === null &&
+    templates[0]
+  ) {
+    chooseTemplate(templates[0].key, true);
+  }
 
   const missing = missingRequiredTemplateFields(fields, values);
   const blocked =
@@ -270,7 +293,12 @@ export function IssueCreateDialog({
       input: {
         ...scope.scope,
         title: trimmedTitle,
-        body: fields.length > 0 ? composeTemplateBody(fields, values) : body,
+        body:
+          fields.length > 0
+            ? [bodyEdited ? body : "", composeTemplateBody(fields, values)]
+                .filter(Boolean)
+                .join("\n\n")
+            : body,
         ...(selectedTemplate ? { templateKey: selectedTemplate.key } : {}),
         ...(parent ? { parentKey: parent.key } : {}),
         labels: extras.labels.map((label) => label.id ?? label.name),
@@ -327,8 +355,11 @@ export function IssueCreateDialog({
                       reset();
                     setSelectedScope(next);
                     setTemplateKey(BLANK);
+                    setTemplateChosen(false);
                     setTemplateDraft(null);
                     setExtras({ labels: [], assignees: [] });
+                    setLabelsEdited(false);
+                    setAssigneesEdited(false);
                     setIssueType(null);
                     setNativeValues({});
                   }}
@@ -353,19 +384,29 @@ export function IssueCreateDialog({
                 </Select>
               </div>
             ) : null}
-            {scope?.templates && (templates.length > 0 || templatesQuery.isPending) ? (
+            {scope?.templates &&
+            (templates.length > 0 ||
+              templatesQuery.isPending ||
+              (blankAllowed && templateKey !== BLANK && !catalogTemplate)) ? (
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <Label htmlFor="issue-create-template">Template</Label>
                 <Select
                   value={templateKey}
-                  onValueChange={chooseTemplate}
+                  onValueChange={(key, details) => {
+                    if (details.reason === "none" && templateKey !== BLANK && !catalogTemplate) {
+                      details.cancel();
+                      return;
+                    }
+                    chooseTemplate(key);
+                  }}
                   disabled={templatesQuery.isPending}
                 >
                   <SelectTrigger id="issue-create-template" size="sm" aria-label="Template">
                     <SelectValue>
                       {templatesQuery.isPending
                         ? "Loading templates…"
-                        : (templates.find((t) => t.key === templateKey)?.name ?? "Blank issue")}
+                        : (templates.find((t) => t.key === templateKey)?.name ??
+                          (templateKey === BLANK ? "Blank issue" : "Choose a template"))}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
@@ -473,7 +514,8 @@ export function IssueCreateDialog({
           </div>
           {fields.length > 0 ? (
             <IssueTemplateForm fields={fields} values={values} onChange={setValues} />
-          ) : (
+          ) : null}
+          {fields.length === 0 || bodyEdited ? (
             <div className="flex flex-col gap-1">
               <Label htmlFor="issue-create-body">Description</Label>
               <Textarea
@@ -495,7 +537,7 @@ export function IssueCreateDialog({
                 }}
               />
             </div>
-          )}
+          ) : null}
           {nativeForm ? (
             <IssueNativeFields
               fields={nativeFields}
@@ -519,6 +561,7 @@ export function IssueCreateDialog({
                   allowed={canWrite}
                   disabled={pending}
                   onChange={(next) => {
+                    setLabelsEdited(true);
                     setTemplateDraft((held) => (held ? { ...held, labels: false } : null));
                     setExtras((held) => ({ ...held, labels: next }));
                   }}
@@ -538,6 +581,7 @@ export function IssueCreateDialog({
                   allowed={canWrite}
                   disabled={pending}
                   onChange={(next) => {
+                    setAssigneesEdited(true);
                     setTemplateDraft((held) => (held ? { ...held, assignees: false } : null));
                     setExtras((held) => ({ ...held, assignees: next.map(issueAssigneeId) }));
                   }}

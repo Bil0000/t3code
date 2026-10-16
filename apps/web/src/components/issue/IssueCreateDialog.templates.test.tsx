@@ -128,6 +128,7 @@ vi.mock("~/state/issues", async () => {
 });
 
 import { IssueCreateDialog, type IssueCreateScope } from "./IssueCreateDialog";
+import { issueEnvironment } from "~/state/issues";
 
 const session = Atom.make(
   AsyncResult.success({
@@ -263,19 +264,24 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("reads one small catalog only on open and one chosen body while keeping all 100 choices", async () => {
+it("reads one small catalog on open and only selected bodies while keeping all 100 choices", async () => {
   await render([source], false);
   expect(state.read).not.toHaveBeenCalled();
   await render();
-  expect(state.read).toHaveBeenCalledExactlyOnceWith({
+  expect(state.read).toHaveBeenNthCalledWith(1, {
     environmentId: source.environmentId,
     input: { ...source.scope, metadataOnly: true },
+  });
+  expect(state.read).toHaveBeenCalledTimes(2);
+  expect(state.read).toHaveBeenLastCalledWith({
+    environmentId: source.environmentId,
+    input: { ...source.scope, templateKey: "0" },
   });
   const options = await openSelect("Template");
   expect(options).toHaveLength(100);
   expect(options[99]!.textContent).toBe("Template 99");
   await act(async () => options[99]!.click());
-  expect(state.read).toHaveBeenCalledTimes(2);
+  expect(state.read).toHaveBeenCalledTimes(3);
   expect(state.read).toHaveBeenLastCalledWith({
     environmentId: source.environmentId,
     input: { ...source.scope, templateKey: "99" },
@@ -320,7 +326,7 @@ it("keeps a late body from a previous template out of the selected draft", async
   });
 });
 
-it.each(["environment", "host"])(
+it.each(["environment", "host", "account"])(
   "isolates a delayed body across a %s switch with the same template key",
   async (change) => {
     const first = deferred();
@@ -330,19 +336,31 @@ it.each(["environment", "host"])(
       projectTitle: "Project B",
       ...(change === "environment"
         ? { environmentId: EnvironmentId.make("environment-b") }
-        : { scope: { ...source.scope, host: "second.gitlab.example" } }),
+        : {
+            scope: {
+              ...source.scope,
+              ...(change === "host"
+                ? { host: "second.gitlab.example" }
+                : { connectionId: "account-b" }),
+            },
+          }),
     };
     state.read.mockImplementation(
       ({ environmentId, input }: { environmentId: EnvironmentId; input: IssueTemplatesInput }) =>
         input.metadataOnly
           ? Promise.resolve(catalog)
-          : environmentId === alternative.environmentId && input.host === alternative.scope.host
+          : environmentId === alternative.environmentId &&
+              input.host === alternative.scope.host &&
+              input.connectionId === alternative.scope.connectionId
             ? second.promise
             : first.promise,
     );
     await render([source, alternative]);
     await choose("Template", "Template 0");
-    await choose("Project", `${alternative.projectTitle} · ${alternative.scope.scope}`);
+    await choose(
+      "Project",
+      `${alternative.projectTitle} · ${alternative.scope.scope}${alternative.scope.connectionId ? ` · ${alternative.scope.connectionId}` : ""}`,
+    );
     await choose("Template", "Template 0");
     await act(async () => first.resolve(loaded("0", { body: "Late secret for A" })));
     expect(field("body").value).toBe("");
@@ -519,7 +537,11 @@ it("keeps required form fields and their edits from the loaded template", async 
 });
 
 it("shows a catalog read failure and retries its existing query", async () => {
-  state.read.mockRejectedValueOnce(new Error("Catalog unavailable")).mockResolvedValue(catalog);
+  state.read
+    .mockRejectedValueOnce(new Error("Catalog unavailable"))
+    .mockImplementation(async ({ input }: { input: IssueTemplatesInput }) =>
+      input.metadataOnly ? catalog : loaded("0"),
+    );
   await render();
   await type("title", "My draft");
   await attemptCreate();
@@ -530,13 +552,19 @@ it("shows a catalog read failure and retries its existing query", async () => {
   )!;
   expect(retry).toBeDefined();
   await act(async () => retry.click());
-  expect(state.read).toHaveBeenCalledTimes(2);
-  expect(state.read).toHaveBeenLastCalledWith({
+  expect(state.read).toHaveBeenCalledTimes(3);
+  expect(state.read).toHaveBeenNthCalledWith(2, {
     environmentId: source.environmentId,
     input: { ...source.scope, metadataOnly: true },
   });
+  expect(state.read).toHaveBeenLastCalledWith({
+    environmentId: source.environmentId,
+    input: { ...source.scope, templateKey: "0" },
+  });
   expect(document.body.textContent).not.toContain("Catalog unavailable");
-  expect(createButton().disabled).toBe(true);
+  expect(createButton().disabled).toBe(false);
+  expect(field("title").value).toBe("My draft");
+  expect(field("body").value).toBe("Body 0");
   expect(await openSelect("Template")).toHaveLength(100);
 });
 
@@ -639,5 +667,387 @@ it.each([
       },
     });
     expect(state.read).toHaveBeenCalledTimes(3);
+  },
+);
+
+it.each([1, 3])(
+  "automatically selects the first of %s usable templates in native order",
+  async (count) => {
+    const templates = [
+      template("z-last-alphabetically"),
+      template("a-first-alphabetically"),
+      template("middle"),
+    ].slice(0, count);
+    state.read.mockResolvedValue({ blankIssuesEnabled: true, templates });
+    await render();
+    expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe(templates[0]!.name);
+    expect(field("title").value).toBe(templates[0]!.title);
+    expect(field("body").value).toBe(templates[0]!.body);
+    expect(state.read).toHaveBeenCalledExactlyOnceWith({
+      environmentId: source.environmentId,
+      input: { ...source.scope, metadataOnly: true },
+    });
+    expect(state.create).not.toHaveBeenCalled();
+    await act(async () => createButton().click());
+    expect(state.create).toHaveBeenCalledExactlyOnceWith({
+      environmentId: source.environmentId,
+      input: {
+        ...source.scope,
+        title: templates[0]!.title,
+        body: templates[0]!.body,
+        templateKey: templates[0]!.key,
+        labels: [],
+        assignees: [],
+      },
+    });
+  },
+);
+
+it("keeps text and extra choices made before the catalog arrives", async () => {
+  const pending = deferred();
+  state.read.mockReturnValue(pending.promise);
+  await render([{ ...source, labels: true, assignees: true }]);
+  await type("title", "My title before templates");
+  await type("body", "My body before templates");
+  for (const [label, text] of [
+    ["Change labels", "Manual label"],
+    ["Change assignees", "manual-user"],
+  ]) {
+    const option = (await openSelect(label!)).find((entry) => entry.textContent?.includes(text!));
+    expect(option).toBeDefined();
+    await act(async () => option!.click());
+  }
+  expect(createButton().disabled).toBe(true);
+  await act(async () =>
+    pending.resolve(loaded("inline", { labels: ["template-label"], assignees: ["template-user"] })),
+  );
+  expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe("Template inline");
+  expect(field("title").value).toBe("My title before templates");
+  expect(field("body").value).toBe("My body before templates");
+  await act(async () => createButton().click());
+  expect(state.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: source.environmentId,
+    input: {
+      ...source.scope,
+      title: "My title before templates",
+      body: "My body before templates",
+      templateKey: "inline",
+      labels: ["manual-label-id"],
+      assignees: ["manual-user-id"],
+    },
+  });
+});
+
+it("loads the automatic deferred template once and preserves text changed during that read", async () => {
+  const pending = deferred();
+  state.read.mockImplementation(({ input }: { input: IssueTemplatesInput }) =>
+    input.metadataOnly ? Promise.resolve(catalog) : pending.promise,
+  );
+  await render();
+  expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe("Template 0");
+  expect(state.read).toHaveBeenLastCalledWith({
+    environmentId: source.environmentId,
+    input: { ...source.scope, templateKey: "0" },
+  });
+  await type("title", "My title during template load");
+  await type("body", "Typed and cleared");
+  await type("body", "");
+  await attemptCreate();
+  expect(state.create).not.toHaveBeenCalled();
+  await act(async () => pending.resolve(loaded("0")));
+  await render();
+  expect(field("title").value).toBe("My title during template load");
+  expect(field("body").value).toBe("");
+  expect(state.read).toHaveBeenCalledTimes(2);
+  await act(async () => createButton().click());
+  expect(state.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: source.environmentId,
+    input: {
+      ...source.scope,
+      title: "My title during template load",
+      body: "",
+      templateKey: "0",
+      labels: [],
+      assignees: [],
+    },
+  });
+});
+
+it("keeps an explicit Blank choice through rerenders and a late template body", async () => {
+  const pending = deferred();
+  state.read.mockImplementation(({ input }: { input: IssueTemplatesInput }) =>
+    input.metadataOnly
+      ? Promise.resolve({ ...catalog, blankIssuesEnabled: true })
+      : pending.promise,
+  );
+  await render();
+  expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe("Template 0");
+  await choose("Template", "Blank issue");
+  await type("title", "My blank issue");
+  await type("body", "No template please");
+  await act(async () => pending.resolve(loaded("0")));
+  await render();
+  expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe("Blank issue");
+  expect(field("title").value).toBe("My blank issue");
+  expect(field("body").value).toBe("No template please");
+  await act(async () => createButton().click());
+  expect(state.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: source.environmentId,
+    input: {
+      ...source.scope,
+      title: "My blank issue",
+      body: "No template please",
+      labels: [],
+      assignees: [],
+    },
+  });
+});
+
+it.each([true, false])(
+  "keeps an empty external-only catalog explicit with blank allowed=%s",
+  async (blankIssuesEnabled) => {
+    state.read.mockResolvedValue({
+      blankIssuesEnabled,
+      templates: [],
+      externalTemplates: [
+        { name: "Native form", about: "", url: "https://gitlab.example/native-form" },
+      ],
+    });
+    await render();
+    expect(document.querySelector('[aria-label="Template"]')).toBeNull();
+    expect(
+      document.querySelector<HTMLAnchorElement>('a[href="https://gitlab.example/native-form"]')
+        ?.textContent,
+    ).toBe("Native form");
+    expect(field("title").value).toBe("");
+    expect(state.create).not.toHaveBeenCalled();
+    await type("title", "My issue");
+    expect(createButton().disabled).toBe(!blankIssuesEnabled);
+    if (blankIssuesEnabled) {
+      await act(async () => createButton().click());
+      expect(state.create).toHaveBeenCalledExactlyOnceWith({
+        environmentId: source.environmentId,
+        input: { ...source.scope, title: "My issue", body: "", labels: [], assignees: [] },
+      });
+    } else {
+      await attemptCreate();
+      expect(state.create).not.toHaveBeenCalled();
+      expect(document.body.textContent).toContain(
+        "This tracker requires a template, and none can be filled in here.",
+      );
+    }
+  },
+);
+
+it("selects the new scope's default and keeps a typed draft on a same-account scope switch", async () => {
+  const next = {
+    ...source,
+    projectTitle: "Project B",
+    scope: { ...source.scope, scope: "org/second" },
+  };
+  state.read.mockImplementation(async ({ input }: { input: IssueTemplatesInput }) =>
+    loaded("inline", { body: input.scope }),
+  );
+  await render([source, next]);
+  expect(field("body").value).toBe(source.scope.scope);
+  await type("title", "My title");
+  await type("body", "My draft");
+  await choose("Project", `${next.projectTitle} · ${next.scope.scope}`);
+  expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe("Template inline");
+  expect(field("title").value).toBe("My title");
+  expect(field("body").value).toBe("My draft");
+  await act(async () => createButton().click());
+  expect(state.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: next.environmentId,
+    input: {
+      ...next.scope,
+      title: "My title",
+      body: "My draft",
+      templateKey: "inline",
+      labels: [],
+      assignees: [],
+    },
+  });
+});
+
+it("blocks a selected template that disappears from a refreshed catalog", async () => {
+  state.read.mockResolvedValue({
+    blankIssuesEnabled: true,
+    templates: [template("0"), template("1")],
+  });
+  await render();
+  await choose("Template", "Template 1");
+  state.read.mockResolvedValue(loaded("0"));
+  await act(async () =>
+    registry.refresh(
+      issueEnvironment.templates({
+        environmentId: source.environmentId,
+        input: { ...source.scope, metadataOnly: true },
+      }),
+    ),
+  );
+  await render();
+  expect(field("title").value).toBe("Title 1");
+  expect(field("body").value).toBe("Body 1");
+  expect(document.body.textContent).toContain(
+    "The selected template is no longer available. Choose a template.",
+  );
+  expect(createButton().disabled).toBe(true);
+  await attemptCreate();
+  expect(state.create).not.toHaveBeenCalled();
+  await choose("Template", "Template 0");
+  expect(field("title").value).toBe("Title 0");
+  expect(field("body").value).toBe("Body 0");
+  expect(createButton().disabled).toBe(false);
+  await act(async () => createButton().click());
+  expect(state.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: source.environmentId,
+    input: {
+      ...source.scope,
+      title: "Title 0",
+      body: "Body 0",
+      templateKey: "0",
+      labels: [],
+      assignees: [],
+    },
+  });
+});
+
+it("keeps a typed description when the automatic template has form fields", async () => {
+  const pending = deferred();
+  state.read.mockReturnValue(pending.promise);
+  await render();
+  await type("title", "My title");
+  await type("body", "Keep this draft");
+  await act(async () =>
+    pending.resolve(
+      loaded("form", {
+        fields: [
+          {
+            kind: "input",
+            id: "details",
+            label: "Details",
+            description: null,
+            required: true,
+            placeholder: null,
+            value: "Native default",
+          },
+        ],
+      }),
+    ),
+  );
+  expect(field("body")?.value).toBe("Keep this draft");
+  await act(async () => createButton().click());
+  expect(state.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: source.environmentId,
+    input: {
+      ...source.scope,
+      title: "My title",
+      body: "Keep this draft\n\n### Details\n\nNative default",
+      templateKey: "form",
+      labels: [],
+      assignees: [],
+    },
+  });
+});
+
+it("keeps native keyboard typeahead for explicit template choices", async () => {
+  state.read.mockResolvedValue({
+    blankIssuesEnabled: true,
+    templates: [template("0", { name: "Bug" }), template("1", { name: "Task" })],
+  });
+  await render();
+  expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe("Bug");
+  await act(async () =>
+    document
+      .querySelector('[aria-label="Template"]')!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true })),
+  );
+  expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe("Task");
+  expect(field("title").value).toBe("Title 1");
+  expect(field("body").value).toBe("Body 1");
+  await act(async () => createButton().click());
+  expect(state.create).toHaveBeenCalledExactlyOnceWith({
+    environmentId: source.environmentId,
+    input: {
+      ...source.scope,
+      title: "Title 1",
+      body: "Body 1",
+      templateKey: "1",
+      labels: [],
+      assignees: [],
+    },
+  });
+});
+
+it.each([false, true])(
+  "keeps explicit Blank recovery and the full draft after the sole template disappears (retry and reopen=%s)",
+  async (retryAndReopen) => {
+    const writable = { ...source, labels: true, assignees: true };
+    state.read.mockResolvedValue({ blankIssuesEnabled: true, templates: [template("0")] });
+    await render([writable]);
+    expect(document.querySelector('[aria-label="Template"]')?.textContent).toBe("Template 0");
+    await type("title", "Keep title after removal");
+    await type("body", "Keep body after removal");
+    for (const [label, text] of [
+      ["Change labels", "Manual label"],
+      ["Change assignees", "manual-user"],
+    ] as const) {
+      const option = (await openSelect(label)).find((entry) => entry.textContent?.includes(text));
+      expect(option).toBeDefined();
+      await act(async () => option!.click());
+    }
+    state.read.mockResolvedValue({ blankIssuesEnabled: true, templates: [] });
+    await act(async () =>
+      registry.refresh(
+        issueEnvironment.templates({
+          environmentId: source.environmentId,
+          input: { ...source.scope, metadataOnly: true },
+        }),
+      ),
+    );
+    await render([writable]);
+    if (retryAndReopen) {
+      const retry = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent === "Retry",
+      );
+      expect(retry).toBeDefined();
+      await act(async () => retry!.click());
+      expect(state.read).toHaveBeenCalledTimes(3);
+      await render([writable], false);
+      await render([writable], true);
+    }
+    expect(field("title").value).toBe("Keep title after removal");
+    expect(field("body").value).toBe("Keep body after removal");
+    expect(document.body.textContent).toContain("Labels: Manual label");
+    expect(document.body.textContent).toContain("Assignees: manual-user-id");
+    expect(document.body.textContent).toContain(
+      "The selected template is no longer available. Choose a template.",
+    );
+    expect(createButton().disabled).toBe(true);
+    await attemptCreate();
+    expect(state.create).not.toHaveBeenCalled();
+    expect(document.querySelector('[aria-label="Template"]')).not.toBeNull();
+    await choose("Template", "Blank issue");
+    expect(document.body.textContent).not.toContain(
+      "The selected template is no longer available.",
+    );
+    expect(field("title").value).toBe("Keep title after removal");
+    expect(field("body").value).toBe("Keep body after removal");
+    expect(document.body.textContent).toContain("Labels: Manual label");
+    expect(document.body.textContent).toContain("Assignees: manual-user-id");
+    expect(createButton().disabled).toBe(false);
+    expect(state.create).not.toHaveBeenCalled();
+    await act(async () => createButton().click());
+    expect(state.create).toHaveBeenCalledExactlyOnceWith({
+      environmentId: source.environmentId,
+      input: {
+        ...source.scope,
+        title: "Keep title after removal",
+        body: "Keep body after removal",
+        labels: ["manual-label-id"],
+        assignees: ["manual-user-id"],
+      },
+    });
   },
 );
