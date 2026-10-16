@@ -344,6 +344,11 @@ export class AzureDevOpsCli extends Context.Service<
   }
 >()("@t3tools/source-control-azure-devops/server/AzureDevOpsCli") {}
 
+export const executeJson = (
+  execute: AzureDevOpsCli["Service"]["execute"],
+  input: Parameters<AzureDevOpsCli["Service"]["execute"]>[0],
+) => execute({ ...input, args: [...input.args, "--only-show-errors", "--output", "json"] });
+
 function normalizeChangeRequestId(reference: string): string {
   const trimmed = reference.trim().replace(/^#/, "");
   const urlMatch = /(?:pullrequest|pull-request|pull|_pulls?)\/(\d+)(?:\D.*)?$/i.exec(trimmed);
@@ -457,12 +462,6 @@ export const make = Effect.gen(function* () {
         ),
       );
 
-  const executeJson = (input: Parameters<AzureDevOpsCli["Service"]["execute"]>[0]) =>
-    execute({
-      ...input,
-      args: [...input.args, "--only-show-errors", "--output", "json"],
-    });
-
   return AzureDevOpsCli.of({
     execute,
     getCurrentIdentity: (input) =>
@@ -549,7 +548,7 @@ export const make = Effect.gen(function* () {
         return account;
       }),
     listPullRequests: (input) =>
-      executeJson({
+      executeJson(execute, {
         cwd: input.cwd,
         args: [
           "repos",
@@ -589,7 +588,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
     getPullRequest: (input) =>
-      executeJson({
+      executeJson(execute, {
         cwd: input.cwd,
         args: [
           "repos",
@@ -623,7 +622,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
     getRepositoryCloneUrls: (input) =>
-      executeJson({
+      executeJson(execute, {
         cwd: input.cwd,
         args: ["repos", "show", "--detect", "true", "--repository", input.repository],
       }).pipe(
@@ -644,7 +643,7 @@ export const make = Effect.gen(function* () {
       // `az repos create` does not expose a per-repository visibility flag, so
       // the generic source-control visibility input is intentionally not
       // translated into CLI args for this provider.
-      return executeJson({
+      return executeJson(execute, {
         cwd: input.cwd,
         args: [
           "repos",
@@ -684,7 +683,7 @@ export const make = Effect.gen(function* () {
         ],
       }).pipe(Effect.asVoid),
     getDefaultBranch: (input) =>
-      executeJson({
+      executeJson(execute, {
         cwd: input.cwd,
         args: ["repos", "show", "--detect", "true"],
       }).pipe(

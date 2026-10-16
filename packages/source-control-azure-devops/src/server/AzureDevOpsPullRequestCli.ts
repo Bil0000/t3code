@@ -353,12 +353,7 @@ export const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly args: ReadonlyArray<string>;
     readonly maxOutputBytes?: number;
-  }) =>
-    azure.execute({
-      cwd: input.cwd,
-      args: [...input.args, "--only-show-errors", "--output", "json"],
-      ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
-    });
+  }) => AzureDevOpsCli.executeJson(azure.execute, input);
 
   /**
    * A REST route reached through `az devops invoke`, which addresses it by area, resource and

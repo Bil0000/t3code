@@ -315,12 +315,10 @@ export const make: Effect.Effect<
     readonly operation: string;
     readonly args: ReadonlyArray<string>;
   }) =>
-    azure
-      .execute({ cwd: input.cwd, args: [...input.args, "--only-show-errors", "--output", "json"] })
-      .pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.mapError(fail(input.operation)),
-      );
+    AzureDevOpsCli.executeJson(azure.execute, { cwd: input.cwd, args: input.args }).pipe(
+      Effect.map((result) => result.stdout.trim()),
+      Effect.mapError(fail(input.operation)),
+    );
 
   const read = <A>(input: {
     readonly cwd: string;

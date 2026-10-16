@@ -99,6 +99,41 @@ afterEach(() => {
 });
 
 describe("AzureDevOpsCli.layer", () => {
+  it.effect("keeps JSON command output and caller limits through the native executor", () =>
+    Effect.gen(function* () {
+      const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const output = { ...processOutput(" raw response "), stdoutTruncated: true };
+      mockRun.mockReturnValueOnce(Effect.succeed(output));
+      assert.strictEqual(
+        yield* AzureDevOpsCli.executeJson(azure.execute, {
+          cwd: "/repo",
+          args: ["devops", "invoke", "--detect", "false", "--area", "wit"],
+          timeoutMs: 60_000,
+          maxOutputBytes: 8 * 1024 * 1024,
+        }),
+        output,
+      );
+      assert.deepStrictEqual(mockRun.mock.calls[0]?.[0], {
+        operation: "AzureDevOpsCli.execute",
+        command: "az",
+        cwd: "/repo",
+        args: [
+          "devops",
+          "invoke",
+          "--detect",
+          "false",
+          "--area",
+          "wit",
+          "--only-show-errors",
+          "--output",
+          "json",
+        ],
+        timeoutMs: 60_000,
+        maxOutputBytes: 8 * 1024 * 1024,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("reads the native organization account through the exact Azure Python runtime", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
