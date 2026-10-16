@@ -11,12 +11,14 @@ import { useState } from "react";
 import { issueEnvironment } from "~/state/issues";
 import { ISSUES_PANEL_REF } from "~/rightPanelStore";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
-import { PullRequestActorLabel, PullRequestMetaLine } from "../pullRequest/pullRequestPresentation";
+import {
+  PullRequestActorLabel,
+  PullRequestCommentTime,
+  PullRequestMetaLine,
+} from "../pullRequest/pullRequestPresentation";
 import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
 import { PullRequestCommentBody } from "../pullRequest/PullRequestCommentBody";
 import { PullRequestMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
-import { InlineButton } from "../ui/button";
 import { IssueRichBodyEditor, IssueRichBodyView } from "./IssueRichBodyEditor";
 import { isEditableIssueRichBody } from "./issueAdf";
 import { reportIssueResult } from "./issueMutation";
@@ -88,16 +90,7 @@ export function IssueCommentContent({
     <>
       <PullRequestMetaLine className="text-xs text-muted-foreground">
         <PullRequestActorLabel actor={comment.author} />
-        {comment.url ? (
-          <InlineButton
-            className="text-muted-foreground"
-            render={<a href={comment.url} target="_blank" rel="noopener noreferrer" />}
-          >
-            {formatRelativeTimeLabel(comment.createdAt)}
-          </InlineButton>
-        ) : (
-          <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
-        )}
+        <PullRequestCommentTime at={comment.createdAt} url={comment.url} />
         {comment.editedAt ? <span>edited</span> : null}
         {canEdit &&
         comment.canEdit !== false &&

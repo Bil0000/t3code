@@ -1,12 +1,12 @@
 import type { EnvironmentId, IssueLabel, IssueScopeRef } from "@t3tools/contracts";
-import { CheckIcon, TagIcon } from "lucide-react";
+import { TagIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useIssueLabelCandidates } from "~/state/issues";
 
 import { PullRequestCandidatePicker } from "../pullRequest/PullRequestCandidatePicker";
 import { issueLabelId, issueLabelOptions } from "./issueDetail.logic";
-import { pullRequestLabelColor } from "../pullRequest/pullRequestList.logic";
+import { PullRequestLabelOption } from "../pullRequest/pullRequestPresentation";
 
 const LOAD_MORE = { loadMore: true } as const;
 
@@ -86,24 +86,12 @@ export function IssueLabelPicker({
             </span>
           );
         }
-        const dot = pullRequestLabelColor(row.color);
         return (
-          <>
-            <span
-              aria-hidden
-              className="size-2 shrink-0 rounded-full bg-muted-foreground"
-              {...(dot ? { style: { backgroundColor: dot } } : {})}
-            />
-            <span className="min-w-0 flex-1 truncate">
-              {row.name}
-              {row.description ? (
-                <span className="text-muted-foreground"> · {row.description}</span>
-              ) : null}
-            </span>
-            {selected.some((label) => issueLabelId(label) === issueLabelId(row)) ? (
-              <CheckIcon aria-label="Selected" className="size-3.5 shrink-0" />
-            ) : null}
-          </>
+          <PullRequestLabelOption
+            label={row}
+            checked={selected.some((label) => issueLabelId(label) === issueLabelId(row))}
+            checkLabel="Selected"
+          />
         );
       }}
     </PullRequestCandidatePicker>
