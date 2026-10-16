@@ -6,7 +6,10 @@ import {
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 
@@ -226,5 +229,83 @@ it.effect("allows explicit comment and parent writes during a shared host pause"
     yield* api.editComment!({ ...target, commentId: "2", body: "Edited" });
     yield* api.setParent!({ ...target, parentKey: null });
     assert.deepStrictEqual(calls, ["editComment:git.example", "setParent:git.example"]);
+  }).pipe(Effect.provide(SourceControlRateLimit.layer)),
+);
+
+it.effect("resets issue backoff after success without crossing accounts or hosts", () =>
+  Effect.gen(function* () {
+    let limited = true;
+    const calls: string[] = [];
+    const kind = IssueTrackerKind.make("gitlab");
+    const failure = new IssueTrackerError({
+      tracker: kind,
+      operation: "getViewer",
+      reason: "rate-limited",
+      detail: "Try again later.",
+    });
+    const registry = yield* IssueTrackerRegistry.makeWithTrackers([
+      tracker(kind, calls, {
+        getViewer: ({ host }) =>
+          Effect.suspend(() => {
+            calls.push(host);
+            return limited ? Effect.fail(failure) : Effect.succeed("alex");
+          }),
+      }),
+    ]);
+    const api = registry.get(kind)!;
+    const request = api
+      .getViewer(target)
+      .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, "first"));
+    assert.strictEqual(yield* Effect.flip(request), failure);
+    assert.strictEqual((yield* Effect.flip(request)).retryAt, 30_000);
+    limited = false;
+    yield* api
+      .getViewer(target)
+      .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, "second"));
+    yield* api
+      .getViewer({ ...target, host: "other.example" })
+      .pipe(Effect.provideService(SourceControlRateLimit.CredentialScope, "first"));
+    assert.strictEqual((yield* Effect.flip(request)).retryAt, 30_000);
+    assert.deepStrictEqual(calls, [target.host, target.host, "other.example"]);
+    yield* TestClock.adjust("30 seconds");
+    yield* request;
+    limited = true;
+    assert.strictEqual(yield* Effect.flip(request), failure);
+    assert.strictEqual((yield* Effect.flip(request)).retryAt, 60_000);
+    assert.strictEqual(calls.length, 5);
+  }).pipe(Effect.provide(SourceControlRateLimit.layer)),
+);
+
+it.effect("keeps a newer issue pause when an older successful read finishes", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const kind = IssueTrackerKind.make("gitlab");
+    const failure = new IssueTrackerError({
+      tracker: kind,
+      operation: "getViewer",
+      reason: "rate-limited",
+      detail: "Try again later.",
+    });
+    const registry = yield* IssueTrackerRegistry.makeWithTrackers([
+      tracker(kind, [], {
+        getViewer: ({ cwd }) =>
+          cwd === "/slow"
+            ? Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as("alex"),
+              )
+            : Effect.fail(failure),
+      }),
+    ]);
+    const api = registry.get(kind)!;
+    const older = yield* api.getViewer({ ...target, cwd: "/slow" }).pipe(Effect.forkChild());
+    yield* Deferred.await(started);
+    assert.strictEqual(yield* Effect.flip(api.getViewer(target)), failure);
+    yield* TestClock.adjust("31 seconds");
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(older);
+    assert.strictEqual(yield* Effect.flip(api.getViewer(target)), failure);
+    assert.strictEqual((yield* Effect.flip(api.getViewer(target))).retryAt, 91_000);
   }).pipe(Effect.provide(SourceControlRateLimit.layer)),
 );

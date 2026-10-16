@@ -30,9 +30,13 @@ function withRateLimitBackoff(
     ) =>
     (input: I) => {
       const key = { provider: api.kind, host: input.host };
-      return limits.check(key, allowPaused ? { allowPaused: true } : undefined).pipe(
-        Effect.mapError(
-          (cause) =>
+      return SourceControlRateLimit.withBackoff(
+        limits,
+        key,
+        Effect.suspend(() => call(input)),
+        {
+          allowPaused,
+          onPaused: (cause) =>
             new IssueTrackerError({
               tracker: api.kind,
               operation,
@@ -41,22 +45,9 @@ function withRateLimitBackoff(
               retryAt: cause.retryAt,
               cause,
             }),
-        ),
-        Effect.flatMap((lease) =>
-          Effect.suspend(() => call(input)).pipe(
-            Effect.provideService(SourceControlRateLimit.Interactive, allowPaused),
-            Effect.tap(() => limits.recordSuccess({ ...key, lease })),
-            Effect.tapError((error) =>
-              error.reason === "rate-limited"
-                ? limits.recordRateLimit({
-                    ...key,
-                    lease,
-                    ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
-                  })
-                : Effect.void,
-            ),
-          ),
-        ),
+          getRateLimit: (error) =>
+            error.reason === "rate-limited" ? { retryAt: error.retryAt } : undefined,
+        },
       );
     };
   return {
