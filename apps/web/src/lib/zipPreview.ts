@@ -50,27 +50,36 @@ function withAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
 
 function checkArchiveDirectory(bytes: ArrayBuffer) {
   const view = new DataView(bytes);
-  let end = bytes.byteLength - 22;
-  const start = Math.max(0, end - 65535);
+  let end = bytes.byteLength - 4;
+  const start = Math.max(0, bytes.byteLength - 22 - 65535);
   for (; end >= start; end--) {
-    if (
-      view.getUint32(end, true) === 0x06054b50 &&
-      end + 22 + view.getUint16(end + 20, true) === bytes.byteLength
-    ) {
-      break;
-    }
+    if (view.getUint32(end, true) === 0x06054b50) break;
   }
-  if (end < start) throw new Error(INVALID_ARCHIVE_ERROR);
+  if (
+    end < start ||
+    end + 22 > bytes.byteLength ||
+    end + 22 + view.getUint16(end + 20, true) !== bytes.byteLength
+  ) {
+    throw new Error(INVALID_ARCHIVE_ERROR);
+  }
   const count = view.getUint16(end + 10, true);
   const directorySize = view.getUint32(end + 12, true);
+  const directoryOffset = view.getUint32(end + 16, true);
   if (
+    view.getUint16(end + 4, true) === 0xffff ||
+    view.getUint16(end + 6, true) === 0xffff ||
+    view.getUint16(end + 8, true) === 0xffff ||
     count === 0xffff ||
     directorySize === 0xffffffff ||
-    view.getUint32(end + 16, true) === 0xffffffff
+    directoryOffset === 0xffffffff
   ) {
     throw new Error("ZIP64 archives are not supported in ZIP preview.");
   }
-  if (view.getUint16(end + 4, true) !== 0 || view.getUint16(end + 6, true) !== 0) {
+  if (
+    view.getUint16(end + 4, true) !== 0 ||
+    view.getUint16(end + 6, true) !== 0 ||
+    view.getUint16(end + 8, true) !== count
+  ) {
     throw new Error("Multi-part ZIP archives are not supported in ZIP preview.");
   }
   if (count > MAX_FILES + MAX_FOLDERS) throw new Error(ENTRY_LIMIT_ERROR);
@@ -79,7 +88,7 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
   let fileCount = 0;
   let folderCount = 0;
   const checksums: number[] = [];
-  if (offset < 0) throw new Error(INVALID_ARCHIVE_ERROR);
+  if (offset < 0 || directoryOffset + directorySize > end) throw new Error(INVALID_ARCHIVE_ERROR);
   while (offset < end) {
     if (offset + 46 > end || view.getUint32(offset, true) !== 0x02014b50) {
       throw new Error(INVALID_ARCHIVE_ERROR);
@@ -107,8 +116,16 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
     if (compression !== 0 && compression !== 8) {
       throw new Error("This ZIP compression method is not supported in ZIP preview.");
     }
-    if (view.getUint32(offset + 24, true) === 0xffffffff) {
+    if (
+      view.getUint32(offset + 20, true) === 0xffffffff ||
+      view.getUint32(offset + 24, true) === 0xffffffff ||
+      view.getUint32(offset + 42, true) === 0xffffffff ||
+      view.getUint16(offset + 34, true) === 0xffff
+    ) {
       throw new Error("ZIP64 archives are not supported in ZIP preview.");
+    }
+    if (view.getUint16(offset + 34, true) !== 0) {
+      throw new Error("Multi-part ZIP archives are not supported in ZIP preview.");
     }
     checksums.push(view.getInt32(offset + 16, true));
     offset = nextOffset;

@@ -451,6 +451,91 @@ describe("loadZipPreview", () => {
     );
   });
 
+  it("rejects a hidden directory selected by an EOCD inside the ZIP comment before parsing", async () => {
+    const zip = new JSZip();
+    for (let index = 0; index < 2001; index++) zip.file(`${index}.txt`, "");
+    const bytes = await (await archive(zip)).arrayBuffer();
+    const view = new DataView(bytes);
+    const end = bytes.byteLength - 22;
+    const directoryOffset = view.getUint32(end + 16, true);
+    const comment = new Uint8Array(23);
+    const fake = new DataView(comment.buffer);
+    fake.setUint32(0, 0x06054b50, true);
+    fake.setUint16(8, 1, true);
+    fake.setUint16(10, 1, true);
+    fake.setUint32(12, bytes.byteLength - directoryOffset, true);
+    fake.setUint32(16, directoryOffset, true);
+    view.setUint16(end + 8, 0, true);
+    view.setUint16(end + 10, 0, true);
+    view.setUint32(end + 12, 0, true);
+    view.setUint32(end + 16, end, true);
+    view.setUint16(end + 20, comment.length, true);
+    const crafted = new Blob([bytes, comment]);
+
+    expect(Object.keys((await JSZip.loadAsync(await crafted.arrayBuffer())).files)).toHaveLength(
+      2001,
+    );
+    const parse = vi.spyOn(JSZip.prototype, "loadAsync");
+    try {
+      await expect(loadZipPreview(crafted, signal())).rejects.toThrow(/corrupt|valid ZIP/i);
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it("rejects a truncated final EOCD signature before parsing", async () => {
+    const zip = new JSZip().file("a.txt", "hello");
+    const blob = new Blob([
+      await zip.generateAsync({ type: "arraybuffer", comment: "PK\u0005\u0006" }),
+    ]);
+    const parse = vi.spyOn(JSZip.prototype, "loadAsync");
+    try {
+      await expect(loadZipPreview(blob, signal())).rejects.toThrow(/corrupt|valid ZIP/i);
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it("accepts an ordinary ZIP comment and prepended data", async () => {
+    const zip = new JSZip().file("a.txt", "hello");
+    const bytes = await zip.generateAsync({ type: "arraybuffer", comment: "Archive notes" });
+    const preview = await loadZipPreview(new Blob(["prefix", bytes]), signal());
+
+    expect(await (await preview.readFile(preview.entries[0]!, signal())).text()).toBe("hello");
+  });
+
+  it.each([4, 6, 8])("rejects the EOCD ZIP64 sentinel at offset %s", async (offset) => {
+    const bytes = await (await archive(new JSZip().file("a.txt", "hello"))).arrayBuffer();
+    new DataView(bytes).setUint16(bytes.byteLength - 22 + offset, 0xffff, true);
+
+    await expect(loadZipPreview(new Blob([bytes]), signal())).rejects.toThrow(/ZIP64/i);
+  });
+
+  it.each([20, 24, 34, 42])("rejects the central ZIP64 sentinel at offset %s", async (field) => {
+    const blob = await patchCentral(
+      await archive(new JSZip().file("a.txt", "hello")),
+      (view, offset) => {
+        if (field === 34) view.setUint16(offset + field, 0xffff, true);
+        else view.setUint32(offset + field, 0xffffffff, true);
+      },
+    );
+
+    await expect(loadZipPreview(blob, signal())).rejects.toThrow(/ZIP64/i);
+  });
+
+  it("rejects entries assigned to another disk", async () => {
+    const blob = await patchCentral(
+      await archive(new JSZip().file("a.txt", "hello")),
+      (view, offset) => {
+        view.setUint16(offset + 34, 1, true);
+      },
+    );
+
+    await expect(loadZipPreview(blob, signal())).rejects.toThrow(/multi-part/i);
+  });
+
   it("rejects encrypted archives", async () => {
     const blob = await patchCentral(
       await archive(new JSZip().file("photo.png", "x")),
