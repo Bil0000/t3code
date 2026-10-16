@@ -10,6 +10,7 @@ import {
   offeredIssueInvolvements,
   refreshIssueListPage,
 } from "@t3tools/client-runtime/state/issues";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import type {
   EnvironmentId,
@@ -50,6 +51,8 @@ import {
 } from "react";
 
 import { IssueCreateDialog, type IssueCreateScope } from "~/components/issue/IssueCreateDialog";
+import { IssueScrollSentinel } from "~/components/issue/IssueLoadMore";
+import { readableFailure } from "~/components/pullRequest/pullRequestDetail.logic";
 import { IssueDetailPanel } from "~/components/issue/IssueDetailPanel";
 import {
   IssueRow,
@@ -62,7 +65,7 @@ import {
   type IssueListPreferences,
 } from "~/components/issue/issueListPreferences";
 import {
-  IssueSortMenu,
+  IssueFiltersMenu,
   compareIssueListRows,
   issueSortOptions,
   supportedIssueSort,
@@ -80,7 +83,6 @@ import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDeta
 import { findScopedProject } from "~/components/pullRequest/pullRequestList.logic";
 import { PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
 import {
-  CompactFilterMenu,
   PullRequestRefreshControl,
   PullRequestSearchInput,
   pullRequestProjectKey,
@@ -102,7 +104,6 @@ import {
   EmptyTitle,
 } from "~/components/ui/empty";
 import { SidebarInset } from "~/components/ui/sidebar";
-import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { isElectron } from "~/env";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
 import { useEscapeToGoBack } from "~/hooks/useNavigateBack";
@@ -410,28 +411,30 @@ function IssuesRoute() {
     }
     return next;
   }, [list.values, current, refreshedPages]);
-  const [knownSources] = useState(() => new Map<EnvironmentId, IssueListSources>());
-  const filterProjects = useMemo(() => {
-    if (projectScope === null && !search.host) {
-      for (const [environmentId, page] of held) {
-        if (page.sources !== undefined) knownSources.set(environmentId, page.sources);
-      }
-    }
-    return pullRequestFilterProjects(
-      issueFilterProjects(capableProjects, knownSources, scopedProject),
-      environmentLabels,
-      scopedProject ?? undefined,
-      true,
+  const [knownSources, setKnownSources] = useState(
+    () => new Map<EnvironmentId, IssueListSources>(),
+  );
+  if (projectScope === null && !search.host && search.connectionId === undefined) {
+    const changed = [...held].filter(
+      ([environmentId, page]) =>
+        page.sources !== undefined && knownSources.get(environmentId) !== page.sources,
     );
-  }, [
-    held,
-    projectScope,
-    search.host,
-    scopedProject,
-    capableProjects,
-    knownSources,
-    environmentLabels,
-  ]);
+    if (changed.length > 0) {
+      const next = new Map(knownSources);
+      for (const [environmentId, page] of changed) next.set(environmentId, page.sources!);
+      setKnownSources(next);
+    }
+  }
+  const filterProjects = useMemo(
+    () =>
+      pullRequestFilterProjects(
+        issueFilterProjects(capableProjects, knownSources, scopedProject),
+        environmentLabels,
+        scopedProject ?? undefined,
+        true,
+      ),
+    [scopedProject, capableProjects, knownSources, environmentLabels],
+  );
   const heldRef = useRef(held);
   useEffect(() => {
     heldRef.current = held;
@@ -457,7 +460,16 @@ function IssuesRoute() {
     });
 
   const loadPage = useAtomCommand(issueEnvironment.listPage, { reportFailure: false });
-  const [loadingMore, setLoadingMore] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  const [pageErrors, setPageErrors] = useState(() => ({
+    key: filterKey,
+    errors: new Map<string, { answer: IssueListResult; error: string }>(),
+  }));
+  const pageRequestKey = (
+    environmentId: EnvironmentId,
+    tracker: Parameters<typeof trackerKey>[0],
+  ) => JSON.stringify([filterKey, environmentId, trackerKey(tracker)]);
   const loadMore = async (
     environmentId: EnvironmentId,
     host: string,
@@ -466,9 +478,11 @@ function IssuesRoute() {
   ) => {
     const page = held.get(environmentId);
     const cursors = page ? issueListCursorsOn(page.nextCursors, host, tracker, connectionId) : {};
-    if (!page || Object.keys(cursors).length === 0 || loadingMore !== null) return;
+    if (!page || Object.keys(cursors).length === 0 || loadingMoreRef.current) return;
     const key = filterKey;
-    setLoadingMore(JSON.stringify([environmentId, tracker, host, connectionId]));
+    const requestKey = pageRequestKey(environmentId, { tracker, host, connectionId });
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
     const result = await loadPage({
       environmentId,
       input: {
@@ -478,7 +492,19 @@ function IssuesRoute() {
         cursors,
       },
     });
-    setLoadingMore(null);
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+    if (key !== filterKeyRef.current) return;
+    const error =
+      result._tag === "Success"
+        ? result.value.errors.map((error) => error.message).join(" ")
+        : readableFailure(squashAtomCommandFailure(result), "More issues could not be read.");
+    setPageErrors((previous) => {
+      const next = new Map(previous.key === key ? previous.errors : []);
+      if (error) next.set(requestKey, { answer: page.answer, error });
+      else next.delete(requestKey);
+      return { key, errors: next };
+    });
     if (!reportIssueResult(result, "More issues could not be read", "The server refused it."))
       return;
     storePage(key, environmentId, (latest) =>
@@ -1117,33 +1143,31 @@ function IssuesRoute() {
                 />
               );
             })}
-            {group.more.map((environmentId) => (
-              <Button
-                key={environmentId}
-                size="sm"
-                variant="ghost-muted"
-                className="self-start"
-                disabled={loadingMore !== null}
-                onClick={() =>
-                  void loadMore(
-                    environmentId,
-                    group.tracker.host,
-                    group.tracker.tracker,
-                    group.tracker.connectionId,
-                  )
-                }
-              >
-                {loadingMore ===
-                JSON.stringify([
-                  environmentId,
-                  group.tracker.tracker,
-                  group.tracker.host,
-                  group.tracker.connectionId,
-                ])
-                  ? "Loading…"
-                  : "Load more"}
-              </Button>
-            ))}
+            {group.more.map((environmentId) => {
+              const requestKey = pageRequestKey(environmentId, group.tracker);
+              const failure =
+                pageErrors.key === filterKey ? pageErrors.errors.get(requestKey) : undefined;
+              return (
+                <IssueScrollSentinel
+                  key={requestKey}
+                  hasMore
+                  isPending={loadingMore}
+                  error={
+                    failure?.answer === held.get(environmentId)?.answer
+                      ? (failure?.error ?? null)
+                      : null
+                  }
+                  loadMore={() =>
+                    void loadMore(
+                      environmentId,
+                      group.tracker.host,
+                      group.tracker.tracker,
+                      group.tracker.connectionId,
+                    )
+                  }
+                />
+              );
+            })}
           </section>
         );
       })}
@@ -1204,71 +1228,41 @@ function IssuesRoute() {
                     aria-label="Search issues"
                   />
                 </div>
-                <ToggleGroup
-                  size="segmented"
-                  variant="segmented"
-                  aria-label="Filter by state"
-                  value={[search.status]}
-                  onValueChange={(next) => {
-                    const status = STATE_TABS.find((tab) => tab.value === next[0])?.value;
-                    if (status) updateListScope({ status });
+                <IssueFiltersMenu
+                  state={search.status}
+                  stateOptions={STATE_TABS}
+                  onState={(status) => updateListScope({ status })}
+                  involvement={search.who}
+                  involvementOptions={offeredInvolvements}
+                  onInvolvement={(who) => updateListScope({ who })}
+                  project={scopedProject ? pullRequestProjectKey(scopedProject) : ""}
+                  projectOptions={projectOptions}
+                  onProject={(key) => {
+                    const project = filterProjects.find(
+                      (candidate) => pullRequestProjectKey(candidate) === key,
+                    );
+                    updateListScope({
+                      projectId: project?.id,
+                      environmentId: project?.environmentId,
+                    });
                   }}
-                >
-                  {STATE_TABS.map((tab) => (
-                    <Toggle key={tab.value} value={tab.value}>
-                      {tab.label}
-                    </Toggle>
-                  ))}
-                </ToggleGroup>
-                <CompactFilterMenu
-                  outlined
-                  label="Filter by involvement"
-                  value={search.who}
-                  options={offeredInvolvements}
-                  onChange={(who) => updateListScope({ who })}
-                />
-                {projectOptions.length > 2 || search.projectId ? (
-                  <CompactFilterMenu
-                    outlined
-                    label="Filter by project"
-                    value={scopedProject ? pullRequestProjectKey(scopedProject) : ""}
-                    options={projectOptions}
-                    onChange={(key) => {
-                      const project = filterProjects.find(
-                        (candidate) => pullRequestProjectKey(candidate) === key,
-                      );
-                      updateListScope({
-                        projectId: project?.id,
-                        environmentId: project?.environmentId,
-                      });
-                    }}
-                  />
-                ) : null}
-                {hostOptions.length > 2 || search.host || search.connectionId !== undefined ? (
-                  <CompactFilterMenu
-                    outlined
-                    label="Filter by tracker"
-                    value={
-                      search.connectionId === undefined
-                        ? (search.host ?? "")
-                        : JSON.stringify([search.host, search.connectionId])
-                    }
-                    options={hostOptions}
-                    onChange={(value) => {
-                      const tracker = groups.find(
-                        (group) =>
-                          group.tracker.connectionId !== undefined &&
-                          JSON.stringify([group.tracker.host, group.tracker.connectionId]) ===
-                            value,
-                      )?.tracker;
-                      updateListScope({
-                        host: tracker?.host ?? (value || undefined),
-                        connectionId: tracker?.connectionId,
-                      });
-                    }}
-                  />
-                ) : null}
-                <IssueSortMenu
+                  tracker={
+                    search.connectionId === undefined
+                      ? (search.host ?? "")
+                      : JSON.stringify([search.host, search.connectionId])
+                  }
+                  trackerOptions={hostOptions}
+                  onTracker={(value) => {
+                    const tracker = groups.find(
+                      (group) =>
+                        group.tracker.connectionId !== undefined &&
+                        JSON.stringify([group.tracker.host, group.tracker.connectionId]) === value,
+                    )?.tracker;
+                    updateListScope({
+                      host: tracker?.host ?? (value || undefined),
+                      connectionId: tracker?.connectionId,
+                    });
+                  }}
                   sorts={sortOptions.sorts}
                   sort={effectiveSort.sort}
                   orders={sortOptions.orders}

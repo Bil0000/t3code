@@ -3,9 +3,14 @@ import type {
   IssueListSort,
   IssueCapabilities,
   IssueListEntry,
+  IssueListState,
+  IssueInvolvement,
 } from "@t3tools/contracts";
-import { ArrowDownUpIcon } from "lucide-react";
-import { PullRequestFilterRadioGroup } from "../pullRequest/PullRequestListFilters";
+import { ArrowDownUpIcon, ListFilterIcon } from "lucide-react";
+import {
+  PullRequestFilterRadioGroup,
+  type PullRequestFilterOption,
+} from "../pullRequest/PullRequestListFilters";
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 const SORT_LABELS: Record<IssueListSort, string> = {
@@ -14,7 +19,19 @@ const SORT_LABELS: Record<IssueListSort, string> = {
   comments: "Most commented",
 };
 
-export function IssueSortMenu({
+export function IssueFiltersMenu({
+  state,
+  stateOptions,
+  onState,
+  involvement,
+  involvementOptions,
+  onInvolvement,
+  project,
+  projectOptions,
+  onProject,
+  tracker,
+  trackerOptions,
+  onTracker,
   sorts,
   sort,
   order,
@@ -22,6 +39,18 @@ export function IssueSortMenu({
   onSort,
   onOrder,
 }: {
+  state: IssueListState;
+  stateOptions: ReadonlyArray<PullRequestFilterOption<IssueListState>>;
+  onState: (state: IssueListState) => void;
+  involvement: IssueInvolvement;
+  involvementOptions: ReadonlyArray<PullRequestFilterOption<IssueInvolvement>>;
+  onInvolvement: (involvement: IssueInvolvement) => void;
+  project: string;
+  projectOptions: ReadonlyArray<PullRequestFilterOption<string>>;
+  onProject: (project: string) => void;
+  tracker: string;
+  trackerOptions: ReadonlyArray<PullRequestFilterOption<string>>;
+  onTracker: (tracker: string) => void;
   sorts: ReadonlyArray<IssueListSort>;
   sort: IssueListSort;
   order: IssueListOrder;
@@ -29,25 +58,76 @@ export function IssueSortMenu({
   onSort: (sort: IssueListSort) => void;
   onOrder: (order: IssueListOrder) => void;
 }) {
-  if (sorts.length <= 1 && orders.length <= 1) return null;
+  const count = [
+    state !== "open",
+    involvement !== "all",
+    project,
+    tracker,
+    sort !== "updated",
+    order !== "desc",
+  ].filter(Boolean).length;
   return (
     <Menu>
-      <MenuTrigger
-        render={<Button variant="outline" size="icon" aria-label={`Sort: ${SORT_LABELS[sort]}`} />}
-      >
-        <ArrowDownUpIcon aria-hidden className="size-4" />
+      <MenuTrigger render={<Button variant="outline" aria-label="Filters" />}>
+        <ListFilterIcon aria-hidden className="size-4" />
+        Filters
+        {count > 0 ? (
+          <span className="rounded-full bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">
+            {count}
+          </span>
+        ) : null}
       </MenuTrigger>
       <MenuPopup align="end" side="bottom" className="min-w-48">
         <PullRequestFilterRadioGroup
-          label="Sort"
-          value={sort}
-          options={sorts.map((value) => ({
-            value,
-            label: SORT_LABELS[value],
-            Icon: ArrowDownUpIcon,
-          }))}
-          onChange={onSort}
+          label="State"
+          value={state}
+          options={stateOptions}
+          onChange={onState}
         />
+        <MenuSeparator />
+        <PullRequestFilterRadioGroup
+          label="Involvement"
+          value={involvement}
+          options={involvementOptions}
+          onChange={onInvolvement}
+        />
+        {projectOptions.length > 2 || project ? (
+          <>
+            <MenuSeparator />
+            <PullRequestFilterRadioGroup
+              label="Project"
+              value={project}
+              options={projectOptions}
+              onChange={onProject}
+            />
+          </>
+        ) : null}
+        {trackerOptions.length > 2 || tracker ? (
+          <>
+            <MenuSeparator />
+            <PullRequestFilterRadioGroup
+              label="Tracker"
+              value={tracker}
+              options={trackerOptions}
+              onChange={onTracker}
+            />
+          </>
+        ) : null}
+        {sorts.length > 1 ? (
+          <>
+            <MenuSeparator />
+            <PullRequestFilterRadioGroup
+              label="Sort"
+              value={sort}
+              options={sorts.map((value) => ({
+                value,
+                label: SORT_LABELS[value],
+                Icon: ArrowDownUpIcon,
+              }))}
+              onChange={onSort}
+            />
+          </>
+        ) : null}
         {orders.length > 1 ? (
           <>
             <MenuSeparator />

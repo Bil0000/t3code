@@ -257,6 +257,13 @@ it.each([undefined, "Account/B"])(
   },
 );
 
+let intersections: Array<{ element: Element; intersect: () => void }>;
+async function intersect(section = 0) {
+  const group = container.querySelectorAll("section")[section]!;
+  const observer = intersections.findLast(({ element }) => group.contains(element));
+  expect(observer).toBeDefined();
+  await act(async () => observer!.intersect());
+}
 let root: Root;
 let container: HTMLDivElement;
 const text = () => container.textContent;
@@ -303,11 +310,7 @@ it("keeps equal issue IDs on different accounts in separate rows, tabs and conti
       .click(),
   );
   expect(state.search.selectedConnectionId).toBe("B");
-  await act(async () =>
-    buttons()
-      .filter((button) => button.textContent === "Load more")[1]!
-      .click(),
-  );
+  await intersect(1);
   expect(state.listPage).toHaveBeenCalledExactlyOnceWith({
     environmentId: environmentA,
     input: expect.objectContaining({ connectionId: "B", cursors: { [bCursor]: "3" } }),
@@ -334,6 +337,30 @@ async function mount() {
 }
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  intersections = [];
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(private callback: IntersectionObserverCallback) {}
+      observe(element: Element) {
+        intersections.push({
+          element,
+          intersect: () =>
+            this.callback(
+              [{ isIntersecting: true, target: element } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            ),
+        });
+      }
+      disconnect() {}
+      unobserve() {}
+    },
+  );
   localStorage.clear();
   useRightPanelStore.setState(useRightPanelStore.getInitialState(), true);
   state.responses.clear();
@@ -823,12 +850,22 @@ const sourceAnswer = (sources: NonNullable<IssueListResult["sources"]>): IssueLi
     capabilities: source.capabilities,
   })),
 });
-async function openFilter(label: string) {
-  const trigger = container.querySelector<HTMLButtonElement>(`button[aria-label^="${label}:"]`);
-  expect(trigger).not.toBeNull();
-  await act(async () =>
-    trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+const filterGroup = (label: string) =>
+  [...document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-group"]')].find(
+    (group) => group.querySelector('[data-slot="menu-label"]')?.textContent === label,
   );
+async function openFilters() {
+  const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Filters"]');
+  expect(trigger).not.toBeNull();
+  if (trigger!.getAttribute("aria-expanded") !== "true")
+    await act(async () =>
+      trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+    );
+}
+async function openFilter(label: string) {
+  await openFilters();
+  const group = label.replace("Filter by ", "");
+  expect(filterGroup(group[0]!.toUpperCase() + group.slice(1))).toBeDefined();
 }
 
 it("forwards and explicitly clears the account filter without retaining a stale selector", async () => {
@@ -883,9 +920,8 @@ it("keeps another host's project selectable after a host-filtered answer", async
   expect(projectBOption()).toBeDefined();
   await act(async () => projectBOption()!.click());
   await mount();
-  expect(
-    container.querySelector('button[aria-label="Filter by project: Project B"]'),
-  ).not.toBeNull();
+  await openFilter("Filter by project");
+  expect(projectBOption()?.getAttribute("aria-checked")).toBe("true");
   expect(state.search).toMatchObject({
     host: "github.com",
     environmentId: environmentA,
@@ -917,10 +953,13 @@ it("removes projects after an authoritative empty unfiltered answer", async () =
   );
   state.responses.set(environmentB, AsyncResult.success(sourceAnswer([])));
   await mount();
-  expect(container.querySelector('button[aria-label^="Filter by project:"]')).not.toBeNull();
+  await openFilter("Filter by project");
+  expect(filterGroup("Project")?.textContent).toContain("Project A");
+  expect(filterGroup("Project")?.textContent).toContain("Project B");
   state.responses.set(environmentA, AsyncResult.success(sourceAnswer([])));
   await refresh();
-  expect(container.querySelector('button[aria-label^="Filter by project:"]')).toBeNull();
+  expect(filterGroup("Project")).toBeUndefined();
+  expect(projectBOption()).toBeUndefined();
 });
 
 it.each(["Linux", "MacIntel"])(
@@ -1210,7 +1249,10 @@ it("retains native sort refusals while another environment's fallback page is pe
   try {
     await mount();
     expect(text()).toContain("Issue A");
-    expect(container.querySelector('[aria-label="Sort: Recently updated"]')).not.toBeNull();
+    await openFilters();
+    expect(filterGroup("Sort")?.querySelector('[aria-checked="true"]')?.textContent).toBe(
+      "Recently updated",
+    );
     await mount();
     expect(reads.map(({ environmentId, input }) => [environmentId, input.sort])).toEqual([
       [environmentA, "comments"],
@@ -1305,11 +1347,7 @@ it.each([
   try {
     await mount();
     expect(text()).toContain("Issue A1");
-    await act(async () =>
-      [...container.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "Load more")!
-        .click(),
-    );
+    await intersect();
     expect(reads.map(({ tag }) => tag)).toEqual(
       Array(viewer === "B" ? 3 : 2).fill(WS_METHODS.issuesList),
     );
@@ -1323,11 +1361,19 @@ it.each([
     expect(text()).toContain("Issue G1");
     expect(text()).toContain("Issue F1");
     expect(text()).toContain("Failed native sibling");
+    expect(container.querySelectorAll("section")).toHaveLength(2);
     expect(
-      [...container.querySelectorAll("button")].filter(
+      new Set(
+        intersections
+          .filter(({ element }) => element.isConnected && element.closest("section") !== null)
+          .map(({ element }) => element),
+      ).size,
+    ).toBe(2);
+    expect(
+      [...container.querySelectorAll("button")].some(
         (button) => button.textContent === "Load more",
       ),
-    ).toHaveLength(2);
+    ).toBe(false);
     await mount();
     expect(reads).toHaveLength(viewer === "B" ? 3 : 2);
     expect(replies).toEqual([]);
@@ -1381,11 +1427,7 @@ it("refreshes each first page over the last refreshed list, not the continuation
   state.responses.set(environmentB, AsyncResult.success(answer([])));
   state.listPage.mockResolvedValue({ _tag: "Success", value: answer([issue("3")]) });
   await mount();
-  await act(async () =>
-    [...container.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Load more")!
-      .click(),
-  );
+  await intersect();
   expect(text()).toContain("Issue 3");
   state.responses.set(environmentA, first(["3", "1"]));
   await refresh();
@@ -1433,9 +1475,10 @@ it("keeps saved list settings when a link only selects an issue, and saves list 
   await mount();
   expect(state.search.selectedEnvironmentId).toBe(environmentA);
   expect(localStorage.getItem("t3.issues.preferences")).toBe(saved);
+  await openFilters();
   await act(async () =>
-    [...container.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Closed")!
+    [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')]
+      .find((option) => option.textContent === "Closed")!
       .click(),
   );
   expect(JSON.parse(localStorage.getItem("t3.issues.preferences")!)).toEqual({
@@ -1453,7 +1496,7 @@ it("explains an unavailable account option in the tracker filter", async () => {
     await mount();
     await openFilter("Filter by tracker");
     const option = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
-      (item) => item.textContent === "github.com · Gone",
+      (item) => item.textContent?.startsWith("github.com · Gone"),
     )!;
     expect(option.getAttribute("aria-disabled")).toBe("true");
     await act(async () => {
@@ -1564,4 +1607,181 @@ it.each<[string, string | null | undefined]>([
   expect(state.detailRead.mock.calls.at(-1)?.[1].host).toBe(host);
   const surface = surfaces.find((candidate) => candidate.kind === "issue");
   expect(surface?.kind === "issue" ? surface.key : null).toBe("44");
+});
+
+it("puts state, involvement, projects, trackers, sort and order behind one Filters button", async () => {
+  state.projects = [project("A"), project("B")];
+  const sources = [source("A", "github.com"), source("B", "github.example")].map((value) => ({
+    ...value,
+    capabilities: nativeSortCapabilities,
+  }));
+  state.responses.set(environmentA, AsyncResult.success(sourceAnswer(sources)));
+  state.responses.set(environmentB, AsyncResult.success(sourceAnswer(sources)));
+  await mount();
+  expect(container.querySelectorAll('[data-slot="menu-trigger"]')).toHaveLength(1);
+  expect(container.querySelector('[role="menuitemradio"]')).toBeNull();
+  await openFilters();
+  for (const label of ["State", "Involvement", "Project", "Tracker", "Sort", "Order"])
+    expect(filterGroup(label)).toBeDefined();
+  expect(filterGroup("State")?.textContent).toContain("OpenClosedAll");
+  expect(filterGroup("Involvement")?.textContent).toContain("Everyone");
+  const newest = [
+    ...filterGroup("Sort")!.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+  ].find((item) => item.textContent === "Newest")!;
+  await act(async () => newest.click());
+  await mount();
+  expect(state.search.issueSort).toBe("created");
+  expect(JSON.parse(localStorage.getItem("t3.issues.preferences")!)).toMatchObject({
+    issueSort: "created",
+  });
+});
+
+it("loads the next issue window on scroll and keeps existing rows", async () => {
+  const cursor = "github github.com org/repo";
+  state.responses.set(
+    environmentA,
+    AsyncResult.success({ ...answer([issue("1")]), nextCursors: { [cursor]: "2" } }),
+  );
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  state.listPage.mockResolvedValue({ _tag: "Success", value: answer([issue("2")]) });
+  await mount();
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent === "Load more"),
+  ).toBe(false);
+  const row = [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Issue 1"),
+  );
+  await intersect();
+  expect(state.listPage).toHaveBeenCalledExactlyOnceWith({
+    environmentId: environmentA,
+    input: expect.objectContaining({ cursors: { [cursor]: "2" } }),
+  });
+  expect(text()).toContain("Issue 2");
+  expect(row?.isConnected).toBe(true);
+});
+
+it("clears only the refreshed environment's inventory", async () => {
+  state.projects = [
+    project("A"),
+    project("B"),
+    { ...project("C"), environmentId: environmentB },
+    { ...project("D"), environmentId: environmentB },
+  ];
+  state.responses.set(
+    environmentA,
+    AsyncResult.success(sourceAnswer([source("A", "github.com"), source("B", "github.example")])),
+  );
+  state.responses.set(
+    environmentB,
+    AsyncResult.success(sourceAnswer([source("C", "github.com"), source("D", "github.example")])),
+  );
+  await mount();
+  await openFilter("Filter by project");
+  for (const id of ["A", "B", "C", "D"])
+    expect(filterGroup("Project")?.textContent).toContain(`Project ${id}`);
+  state.responses.set(environmentA, AsyncResult.success(sourceAnswer([])));
+  await refresh();
+  expect(filterGroup("Project")?.textContent).toContain("Project C");
+  expect(filterGroup("Project")?.textContent).toContain("Project D");
+  expect(filterGroup("Project")?.textContent).not.toContain("Project A");
+  expect(filterGroup("Project")?.textContent).not.toContain("Project B");
+});
+
+it("keeps the full inventory after an account-filtered empty answer", async () => {
+  state.projects = [project("A"), project("B")];
+  state.responses.set(
+    environmentA,
+    AsyncResult.success(sourceAnswer([source("A", "github.com"), source("B", "github.example")])),
+  );
+  state.responses.set(environmentB, AsyncResult.success(sourceAnswer([])));
+  await mount();
+  state.search = { ...state.search, connectionId: "B" };
+  state.responses.set(environmentA, AsyncResult.success(sourceAnswer([])));
+  await mount();
+  await openFilter("Filter by project");
+  expect(filterGroup("Project")?.textContent).toContain("Project A");
+  expect(filterGroup("Project")?.textContent).toContain("Project B");
+});
+
+it("pauses scroll requests while pending and after failure, then retries without losing rows", async () => {
+  const cursor = "github github.com org/repo";
+  state.responses.set(
+    environmentA,
+    AsyncResult.success({ ...answer([issue("1")]), nextCursors: { [cursor]: "2" } }),
+  );
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  let finish!: (value: unknown) => void;
+  state.listPage.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await mount();
+  const observer = intersections.at(-1)!;
+  await act(async () => {
+    observer.intersect();
+    observer.intersect();
+  });
+  expect(state.listPage).toHaveBeenCalledTimes(1);
+  expect(text()).toContain("Issue 1");
+  await act(async () =>
+    finish({ _tag: "Failure", cause: Cause.fail(new Error("Tracker offline")) }),
+  );
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Tracker offline");
+  await act(async () => observer.intersect());
+  expect(state.listPage).toHaveBeenCalledTimes(1);
+  state.listPage.mockResolvedValueOnce({ _tag: "Success", value: answer([issue("2")]) });
+  await act(async () => retry()!.click());
+  expect(state.listPage).toHaveBeenCalledTimes(2);
+  expect(text()).toContain("Issue 1");
+  expect(text()).toContain("Issue 2");
+  expect(retry()).toBeUndefined();
+});
+
+it("continues an answered environment while another environment is still pending", async () => {
+  const cursor = "github github.com org/repo";
+  state.responses.set(
+    environmentA,
+    AsyncResult.success({ ...answer([issue("1")]), nextCursors: { [cursor]: "2" } }),
+  );
+  state.listPage.mockResolvedValue({ _tag: "Success", value: answer([issue("2")]) });
+  await mount();
+  await intersect();
+  expect(state.listPage).toHaveBeenCalledOnce();
+  expect(text()).toContain("Issue 1");
+  expect(text()).toContain("Issue 2");
+});
+
+it("discards a pending continuation and its observer after an account switch", async () => {
+  const first = {
+    ...answer([{ ...issue("A"), connectionId: "A" }]),
+    trackers: [{ ...answer([]).trackers[0]!, connectionId: "A" }],
+    nextCursors: { "@A github github.com org/repo": "2" },
+  };
+  const second = {
+    ...answer([{ ...issue("B"), connectionId: "B" }]),
+    trackers: [{ ...answer([]).trackers[0]!, connectionId: "B" }],
+    nextCursors: { "@B github github.com org/repo": "2" },
+  };
+  state.responses.set(environmentA, AsyncResult.success(first));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  let finish!: (value: unknown) => void;
+  state.listPage.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await mount();
+  const observer = intersections.at(-1)!;
+  await intersect();
+  state.search = { ...state.search, host: "github.com", connectionId: "B" };
+  state.responses.set(environmentA, AsyncResult.success(second));
+  await mount();
+  await act(async () => finish({ _tag: "Success", value: answer([issue("A tail")]) }));
+  await act(async () => observer.intersect());
+  expect(state.listPage).toHaveBeenCalledOnce();
+  expect(text()).toContain("Issue B");
+  expect(text()).not.toContain("Issue A");
 });
