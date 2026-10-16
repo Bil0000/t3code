@@ -10,21 +10,14 @@
  *
  * @module issue/builtInIssueTrackers
  */
-import * as AzureDevOpsIssueTrackerDriver from "@t3tools/source-control-azure-devops/server/issueTrackerDriver";
-import * as ForgejoIssueTrackerDriver from "@t3tools/source-control-forgejo/server/issueTrackerDriver";
-import * as GitCafeIssueTrackerDriver from "@t3tools/source-control-gitcafe/server/issueTrackerDriver";
-import * as GitHubIssueTrackerDriver from "@t3tools/source-control-github/server/issueTrackerDriver";
-import * as GitLabIssueTrackerDriver from "@t3tools/source-control-gitlab/server/issueTrackerDriver";
 import type { IssueTrackerDriver } from "@t3tools/issue-tracker-core/server/driver";
 import * as JiraIssueTrackerDriver from "@t3tools/issue-tracker-jira/server/issueTrackerDriver";
 import * as LinearIssueTrackerDriver from "@t3tools/issue-tracker-linear/server/issueTrackerDriver";
 
+import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
+
 const drivers = [
-  GitHubIssueTrackerDriver.driver,
-  GitLabIssueTrackerDriver.driver,
-  AzureDevOpsIssueTrackerDriver.driver,
-  ForgejoIssueTrackerDriver.driver,
-  GitCafeIssueTrackerDriver.driver,
+  ...BuiltInDrivers.BUILT_IN_GIT_HOST_ISSUE_DRIVERS,
   LinearIssueTrackerDriver.driver,
   JiraIssueTrackerDriver.driver,
 ];

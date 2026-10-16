@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { IssueTrackerKind } from "@t3tools/contracts";
+import type { IssueTrackerKind } from "@t3tools/contracts";
 import {
   isStandaloneIssueTracker,
   IssueTrackerError,
@@ -13,10 +13,6 @@ import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import * as BuiltInIssueTrackers from "./builtInIssueTrackers.ts";
 import * as IssueTrackerHostLive from "./IssueTrackerHostLive.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
-
-const sharedHostLimits = new Set(
-  ["gitlab", "azure-devops", "forgejo", "gitcafe"].map((kind) => IssueTrackerKind.make(kind)),
-);
 
 function withRateLimitBackoff(
   api: IssueTrackerApi,
@@ -123,7 +119,7 @@ export const makeWithTrackers = Effect.fn(function* (trackers: ReadonlyArray<Iss
   const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
   return fromTrackers(
     trackers.map((api) =>
-      sharedHostLimits.has(api.kind) && !isStandaloneIssueTracker(api)
+      BuiltInDrivers.SHARED_ISSUE_RATE_LIMIT_KINDS.has(api.kind) && !isStandaloneIssueTracker(api)
         ? withRateLimitBackoff(api, limits)
         : api,
     ),
