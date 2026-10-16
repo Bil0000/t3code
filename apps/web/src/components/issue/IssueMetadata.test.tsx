@@ -34,7 +34,14 @@ vi.mock("~/state/query", () => ({
 vi.mock("~/state/issues", async () => {
   const { Atom } = await import("effect/reactivity");
   const command = { permissionAtom: () => Atom.make(true) };
-  const page = { hasMore: false, isPending: false, error: null, loadMore: vi.fn() };
+  const page = {
+    hasMore: false,
+    isPending: false,
+    error: null,
+    truncated: false,
+    loadMore: vi.fn(),
+    refresh: vi.fn(),
+  };
   return {
     issueEnvironment: {
       detail: () => ({}),
@@ -43,6 +50,7 @@ vi.mock("~/state/issues", async () => {
       update: command,
       setState: command,
     },
+    useIssueComments: () => ({ ...page, items: [] }),
     useIssueLinkedPullRequests: () => ({ ...page, items: [] }),
     useIssueLabelCandidates: () => ({
       ...page,
