@@ -257,34 +257,23 @@ export const make: Effect.Effect<IssueTrackerApi, never, GitLabCli.GitLabCli> = 
       readonly method?: string;
       readonly body?: unknown;
     }) =>
-      gitlab
-        .execute({
-          cwd: input.cwd,
-          args: [
-            "api",
-            input.path,
-            "--hostname",
-            input.host,
-            ...(input.method === undefined ? [] : ["--method", input.method]),
-            // A JSON body from stdin: argv is visible in process listings, and `glab api --input`
-            // sends no Content-Type of its own, which GitLab answers with HTTP 415.
-            ...(input.body === undefined
-              ? []
-              : ["--input", "-", "--header", "Content-Type: application/json"]),
-          ],
-          ...(input.body === undefined ? {} : { stdin: encodeBody(input.body) }),
-        })
-        .pipe(
-          Effect.mapError(fail(input.operation)),
-          Effect.flatMap((result) =>
-            (input.operation === "listTemplates" ||
-              input.operation === "update" ||
-              input.path === "graphql") &&
-            result.stdoutTruncated
-              ? Effect.fail(unreadable(input.operation, "truncated-response"))
-              : Effect.succeed(result.stdout.trim()),
-          ),
-        );
+      GitLabCli.api(gitlab.execute, {
+        cwd: input.cwd,
+        path: input.path,
+        hostname: input.host,
+        ...(input.method === undefined ? {} : { method: input.method }),
+        ...(input.body === undefined ? {} : { stdin: encodeBody(input.body) }),
+      }).pipe(
+        Effect.mapError(fail(input.operation)),
+        Effect.flatMap((result) =>
+          (input.operation === "listTemplates" ||
+            input.operation === "update" ||
+            input.path === "graphql") &&
+          result.stdoutTruncated
+            ? Effect.fail(unreadable(input.operation, "truncated-response"))
+            : Effect.succeed(result.stdout.trim()),
+        ),
+      );
 
     const read = <A>(input: {
       readonly cwd: string;
