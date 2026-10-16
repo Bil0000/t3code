@@ -12,8 +12,10 @@ import {
   mergePullRequestListEntries,
   mergeEnvironmentPullRequestPages,
   nextPullRequestListInput,
+  PR_LIST_PAGE_SIZE,
   pullRequestListFacets,
   pullRequestListHead,
+  pullRequestListInput,
   pullRequestListReviewStatus,
   pullRequestLabelColor,
   scopedPullRequestListKey,
@@ -102,37 +104,6 @@ describe("recycled PR list rows", () => {
         environmentId: EnvironmentId.make("env-two"),
       }),
     ).toBe(false);
-  });
-});
-
-describe("mobile PR draft queries", () => {
-  const rows = [entry(1), entry(2, { isDraft: true })];
-
-  it.each([
-    ["draft:false", [1]],
-    ["draft:true", [2]],
-    ["DRAFT:FALSE", [1]],
-    ["", [2, 1]],
-  ])("filters %s on local and host search", (query, expected) => {
-    for (const localSearchHosts of [new Set<string>(), new Set(["github.com"])]) {
-      expect(
-        filterPullRequestList(rows, DEFAULT_PR_LIST_CONTROLS, {}, query, localSearchHosts).map(
-          (row) => row.number,
-        ),
-      ).toEqual(expected);
-    }
-  });
-
-  it("lets the typed draft qualifier override the menu and keeps free text", () => {
-    expect(
-      filterPullRequestList(
-        rows,
-        { ...DEFAULT_PR_LIST_CONTROLS, filters: { draft: "only" } },
-        {},
-        "draft:false Change 1",
-        new Set(["github.com"]),
-      ).map((row) => row.number),
-    ).toEqual([1]);
   });
 });
 
@@ -343,6 +314,29 @@ describe("mobile PR scan and filters", () => {
       filterPullRequestList(rows, { ...DEFAULT_PR_LIST_CONTROLS, filters }, {}, "", new Set()).map(
         (row) => row.number,
       ),
+    ).toEqual([1]);
+  });
+  it("reads a typed draft qualifier as a filter and searches only the text left over", () => {
+    expect(pullRequestListInput(DEFAULT_PR_LIST_CONTROLS, "draft:false fix")).toEqual({
+      state: "open",
+      involvement: "all",
+      filters: { draft: "hide" },
+      limit: PR_LIST_PAGE_SIZE,
+      query: "fix",
+    });
+    const rows = [
+      entry(1, { title: "Fix parser" }),
+      entry(2, { title: "Fix drafts", isDraft: true }),
+      entry(3),
+    ];
+    expect(
+      filterPullRequestList(
+        rows,
+        DEFAULT_PR_LIST_CONTROLS,
+        {},
+        "draft:false fix",
+        new Set(["github.com"]),
+      ).map((row) => row.number),
     ).toEqual([1]);
   });
   it("does not label unsupported review summaries as reviewed or match text locally on host-search results", () => {
