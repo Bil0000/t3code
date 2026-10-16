@@ -4,6 +4,7 @@ import {
   readImageDimensions,
 } from "@t3tools/shared/imageDimensions";
 import JSZip from "jszip";
+import crc32 from "jszip/lib/crc32.js";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_FILES = 2000;
@@ -77,6 +78,7 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
   let actualCount = 0;
   let fileCount = 0;
   let folderCount = 0;
+  const checksums: number[] = [];
   if (offset < 0) throw new Error(INVALID_ARCHIVE_ERROR);
   while (offset < end) {
     if (offset + 46 > end || view.getUint32(offset, true) !== 0x02014b50) {
@@ -108,9 +110,11 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
     if (view.getUint32(offset + 24, true) === 0xffffffff) {
       throw new Error("ZIP64 archives are not supported in ZIP preview.");
     }
+    checksums.push(view.getInt32(offset + 16, true));
     offset = nextOffset;
   }
   if (offset !== end || actualCount !== count) throw new Error(INVALID_ARCHIVE_ERROR);
+  return checksums;
 }
 
 function zipImageDimensions(bytes: Uint8Array) {
@@ -139,12 +143,18 @@ function zipImageDimensions(bytes: Uint8Array) {
   };
 }
 
-function readFile(file: ZipFile, mimeType: string, signal: AbortSignal): Promise<Blob> {
+function readFile(
+  file: ZipFile,
+  expectedCrc: number,
+  mimeType: string,
+  signal: AbortSignal,
+): Promise<Blob> {
   signal.throwIfAborted();
   const stream = file.internalStream("uint8array");
   return new Promise((resolve, reject) => {
     const chunks: Uint8Array<ArrayBuffer>[] = [];
     let size = 0;
+    let checksum = 0;
     let settled = false;
     const fail = (error: unknown) => {
       if (settled) return;
@@ -163,6 +173,7 @@ function readFile(file: ZipFile, mimeType: string, signal: AbortSignal): Promise
         fail(new Error("File preview supports files up to 10 MiB."));
         return;
       }
+      checksum = crc32(chunk, checksum);
       chunks.push(chunk);
     });
     stream.on("error", () =>
@@ -170,6 +181,10 @@ function readFile(file: ZipFile, mimeType: string, signal: AbortSignal): Promise
     );
     stream.on("end", () => {
       if (settled) return;
+      if (checksum !== expectedCrc) {
+        fail(new Error("Could not read this file from the ZIP. The file data is corrupt."));
+        return;
+      }
       if (mimeType.startsWith("image/")) {
         const header = new Uint8Array(Math.min(size, IMAGE_DIMENSIONS_HEADER_BYTES));
         let offset = 0;
@@ -250,12 +265,12 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
     throw new Error(ARCHIVE_LIMIT_ERROR);
   }
   const bytes = await withAbort(blob.arrayBuffer(), signal);
-  checkArchiveDirectory(bytes);
+  const checksums = checkArchiveDirectory(bytes);
   const zip = new JSZip();
-  const objects: JSZip.JSZipObject[] = [];
+  const objects: { file: ZipFile; checksum: number }[] = [];
   zip.files = new Proxy(zip.files, {
     set(target, path, file: JSZip.JSZipObject) {
-      objects.push(file);
+      objects.push({ file: file as ZipFile, checksum: checksums[objects.length]! });
       return Reflect.set(target, path, file);
     },
   });
@@ -267,10 +282,10 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
   }
   signal.throwIfAborted();
   const entries = new Map<string, ZipPreviewEntry>();
-  const files = new Map<ZipPreviewEntry, ZipFile>();
+  const files = new Map<ZipPreviewEntry, { file: ZipFile; checksum: number }>();
   const occupied = new Set(
     objects.map(
-      (file) =>
+      ({ file }) =>
         `${file.name.replaceAll("\\", "/").split("/").filter(Boolean).join("/")}${file.dir ? "/" : ""}`,
     ),
   );
@@ -295,7 +310,7 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
     return entry;
   };
   for (const object of objects) {
-    const file = object as ZipFile;
+    const { file } = object;
     const parts = file.name.replaceAll("\\", "/").split("/").filter(Boolean);
     if (parts.length > MAX_FOLDERS + 1) throw new Error(ENTRY_LIMIT_ERROR);
     if (
@@ -322,7 +337,7 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
     }
     const entry = addEntry(path, file.dir, file.dir ? 0 : file._data.uncompressedSize >>> 0);
     if (!file.dir) {
-      files.set(entry, file);
+      files.set(entry, object);
       if (files.size > MAX_FILES) throw new Error(ENTRY_LIMIT_ERROR);
     }
   }
@@ -333,12 +348,17 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
     entries: sortedEntries,
     async readFile(entry: ZipPreviewEntry, fileSignal: AbortSignal) {
       fileSignal.throwIfAborted();
-      const file = files.get(entry);
-      if (!file) throw new Error("File preview is not available for this entry.");
+      const selected = files.get(entry);
+      if (!selected) throw new Error("File preview is not available for this entry.");
       if (entry.sizeBytes > MAX_FILE_BYTES) {
         throw new Error("File preview supports files up to 10 MiB.");
       }
-      return readFile(file, entry.mimeType ?? "application/octet-stream", fileSignal);
+      return readFile(
+        selected.file,
+        selected.checksum,
+        entry.mimeType ?? "application/octet-stream",
+        fileSignal,
+      );
     },
   };
 }

@@ -379,6 +379,46 @@ describe("loadZipPreview", () => {
     );
   });
 
+  it.each(["STORE", "DEFLATE"] as const)(
+    "checks only the selected entry's CRC before creating a Blob, compression=%s",
+    async (compression) => {
+      const contents = new Uint8Array(48 * 1024).fill(42);
+      const zip = new JSZip()
+        .file("good.txt", contents)
+        .file("broken.txt", contents)
+        .file("empty.txt", "")
+        .file("broken-empty.txt", "");
+      let index = 0;
+      const blob = await patchCentral(
+        new Blob([await zip.generateAsync({ type: "arraybuffer", compression })]),
+        (view, offset) => {
+          if (index++ % 2 === 1)
+            view.setUint32(offset + 16, view.getUint32(offset + 16, true) ^ 1, true);
+        },
+      );
+      const preview = await loadZipPreview(blob, signal());
+      const good = preview.entries.find((entry) => entry.name === "good.txt")!;
+      const empty = preview.entries.find((entry) => entry.name === "empty.txt")!;
+      const broken = preview.entries.find((entry) => entry.name === "broken.txt")!;
+      const brokenEmpty = preview.entries.find((entry) => entry.name === "broken-empty.txt")!;
+
+      expect(new Uint8Array(await (await preview.readFile(good, signal())).arrayBuffer())).toEqual(
+        contents,
+      );
+      expect((await preview.readFile(empty, signal())).size).toBe(0);
+      const createBlob = vi.spyOn(globalThis, "Blob");
+      try {
+        await expect(preview.readFile(broken, signal())).rejects.toThrow(/file data is corrupt/i);
+        await expect(preview.readFile(brokenEmpty, signal())).rejects.toThrow(
+          /file data is corrupt/i,
+        );
+        expect(createBlob).not.toHaveBeenCalled();
+      } finally {
+        createBlob.mockRestore();
+      }
+    },
+  );
+
   it.each([
     ["src/app.ts", "export const value = 1;", "application/octet-stream"],
     ["app.log", "ready", "application/octet-stream"],
