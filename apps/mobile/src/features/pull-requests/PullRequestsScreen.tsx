@@ -6,7 +6,6 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { useNavigation } from "@react-navigation/native";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ProjectId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   Keyboard,
@@ -34,10 +33,10 @@ import { usePullRequestListActions } from "./usePullRequestListActions";
 import {
   filterPullRequestList,
   pullRequestListFacets,
+  pullRequestListInput,
   pullRequestListRowsAreEqual,
   scopedPullRequestListKey as pullRequestKey,
   type EnvironmentPullRequestListEntry,
-  PR_LIST_PAGE_SIZE,
   withoutScratchProjectScope,
 } from "./pullRequestList";
 import { useDebouncedValue } from "../../state/queries";
@@ -83,9 +82,8 @@ export function PullRequestsScreen(
   );
   const debouncedQuery = useDebouncedValue(tab.query.trim(), 180);
   const query = tab.searchMode === "resting" ? "" : debouncedQuery;
-  const parsedQuery = useMemo(() => parsePullRequestQuery(query), [query]);
   const typedQuery = tab.searchMode === "resting" ? "" : tab.query;
-  const typedDraft = useMemo(() => parsePullRequestQuery(typedQuery).filters.draft, [typedQuery]);
+  const typedDraft = parsePullRequestQuery(typedQuery).filters.draft;
   const listControls = usePullRequestListControls();
   const selectedEnvironmentId = listControls.environmentId;
   const environmentId = environments.some((item) => item.environmentId === selectedEnvironmentId)
@@ -128,16 +126,9 @@ export function PullRequestsScreen(
         .sort((left, right) => left.environmentId.localeCompare(right.environmentId))
         .map((environment) => ({
           environmentId: environment.environmentId,
-          input: {
-            state: controls.state,
-            involvement: controls.involvement,
-            filters: { ...controls.filters, ...parsedQuery.filters },
-            limit: PR_LIST_PAGE_SIZE,
-            ...(controls.projectId ? { projectId: ProjectId.make(controls.projectId) } : {}),
-            ...(parsedQuery.text ? { query: parsedQuery.text } : {}),
-          },
+          input: pullRequestListInput(controls, query),
         })),
-    [environments, environmentId, configs, controls, parsedQuery],
+    [environments, environmentId, configs, controls, query],
   );
   const result = usePullRequestList(targets);
   const connectedTargets = targets.filter((target) =>
@@ -288,10 +279,11 @@ export function PullRequestsScreen(
               }))}
               environmentId={environmentId}
               onEnvironmentChange={listControls.setEnvironmentId}
-              value={{
-                ...controls,
-                filters: { ...controls.filters, draft: typedDraft ?? controls.filters.draft },
-              }}
+              value={
+                typedDraft
+                  ? { ...controls, filters: { ...controls.filters, draft: typedDraft } }
+                  : controls
+              }
               onChange={(next) => {
                 const update = applyPullRequestDraftFilterChange(
                   typedQuery,

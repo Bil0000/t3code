@@ -136,7 +136,6 @@ function isAuthoredByViewer(entry: ScopedEntry, viewers: PullRequestViewers): bo
   return viewer !== null && normalize(entry.author?.login) === viewer;
 }
 
-/** Free-text filter over the fields a row actually shows, plus `#123` / `123`. */
 export function matchesPullRequestQuery(entry: PullRequestListEntry, query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0) return true;

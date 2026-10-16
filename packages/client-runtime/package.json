@@ -3,10 +3,6 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./pull-request-query": {
-      "types": "./src/pullRequestQuery.ts",
-      "default": "./src/pullRequestQuery.ts"
-    },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
@@ -426,6 +422,10 @@
     "./pull-request-markdown": {
       "types": "./src/pullRequestMarkdown.ts",
       "default": "./src/pullRequestMarkdown.ts"
+    },
+    "./pull-request-query": {
+      "types": "./src/pullRequestQuery.ts",
+      "default": "./src/pullRequestQuery.ts"
     }
   },
   "scripts": {

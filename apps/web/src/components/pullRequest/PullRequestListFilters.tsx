@@ -110,7 +110,7 @@ export function PullRequestSearchInput({
           setDraft(event.currentTarget.value);
           onChange(event.currentTarget.value);
         }}
-        placeholder="Search pull requests, or draft:false"
+        placeholder="Search pull requests, or label:bug"
         aria-label="Search pull requests"
       />
     </InputGroup>

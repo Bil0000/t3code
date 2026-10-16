@@ -1791,7 +1791,11 @@ function PullRequestsRouteView() {
       involvement={search.involvement}
       involvementOptions={INVOLVEMENT_TABS}
       onInvolvement={(involvement) => updateListScope({ involvement })}
-      filters={{ ...menuFilters, draft: localFilters.draft }}
+      filters={
+        typedParsed.filters.draft
+          ? { ...menuFilters, draft: typedParsed.filters.draft }
+          : menuFilters
+      }
       onFilters={(value) => {
         const { query, filters: next } = applyPullRequestDraftFilterChange(
           typedQuery,
@@ -1799,7 +1803,7 @@ function PullRequestsRouteView() {
           value,
         );
         updateListScope({
-          q: query || undefined,
+          ...(query === typedQuery ? {} : { q: query || undefined }),
           draft: next.draft,
           review: next.review,
           checks: next.checks,

@@ -1,9 +1,10 @@
 import { parsePullRequestQuery } from "@t3tools/client-runtime/pull-request-query";
-import type {
-  EnvironmentId,
-  PullRequestListEntry,
-  PullRequestListInput,
-  PullRequestListResult,
+import {
+  ProjectId,
+  type EnvironmentId,
+  type PullRequestListEntry,
+  type PullRequestListInput,
+  type PullRequestListResult,
 } from "@t3tools/contracts";
 import type { PullRequestListControls } from "../../persistence/mobile-preferences";
 
@@ -137,6 +138,21 @@ export function pullRequestListHead(
         limit: PR_LIST_PAGE_SIZE,
         continued: false,
       };
+}
+
+export function pullRequestListInput(
+  controls: PullRequestListControls,
+  query: string,
+): PullRequestListInput {
+  const parsed = parsePullRequestQuery(query);
+  return {
+    state: controls.state,
+    involvement: controls.involvement,
+    filters: { ...controls.filters, ...parsed.filters },
+    limit: PR_LIST_PAGE_SIZE,
+    ...(controls.projectId ? { projectId: ProjectId.make(controls.projectId) } : {}),
+    ...(parsed.text ? { query: parsed.text } : {}),
+  };
 }
 
 export function nextPullRequestListInput(
