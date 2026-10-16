@@ -1,4 +1,4 @@
-import { issueHostKey, pullRequestHostOf, SourceControlProviderKind } from "@t3tools/contracts";
+import { pullRequestHostOf, SourceControlProviderKind } from "@t3tools/contracts";
 import type { EnvironmentId, IssueRef, ScopedThreadRef } from "@t3tools/contracts";
 import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { useNavigate } from "@tanstack/react-router";
@@ -16,6 +16,7 @@ import { ISSUES_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
 import { readThreadShell, useProjects, useServerConfigs } from "../state/entities";
 import { issueEnvironment } from "../state/issues";
 import { useAtomCommand } from "../state/use-atom-command";
+import { issueUrlConnectionId } from "./issueUrlConnection";
 
 async function openUnresolvedLink(url: string): Promise<void> {
   if (window.desktopBridge) return readLocalApi()?.shell.openExternal(url);
@@ -83,13 +84,8 @@ export function useOpenIssueLink(
       if (!candidate) return false;
       event.preventDefault();
       event.stopPropagation();
-      const target = source === undefined ? null : parseIssueUrl(targetUrl, source);
       const connectionId =
-        source !== undefined &&
-        target?.tracker === source.tracker &&
-        issueHostKey(target.host) === issueHostKey(source.host)
-          ? source.connectionId
-          : undefined;
+        source === undefined ? undefined : issueUrlConnectionId(targetUrl, source);
       const projectId =
         source?.projectId ??
         (threadRef?.environmentId === environmentId

@@ -3,23 +3,22 @@ import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useEnvironmentScope } from "~/state/session";
 import {
   threadIssueKeysEqual,
-  issueHostKey,
   type IssueRef,
   type IssueListResult,
   type ScopedThreadRef,
   type ThreadIssueSnapshot,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { parseIssueUrl } from "@t3tools/shared/issueUrl";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { issueUrlConnectionId } from "~/lib/issueUrlConnection";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useThreadShell } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import {
   continueIssueListPage,
-  issueEntryKey,
+  holdIssueListAnswer,
   issueListCursorsOn,
   refreshIssueListPage,
 } from "@t3tools/client-runtime/state/issues";
@@ -196,11 +195,7 @@ function LinkThreadIssueDialog({
       setError(formatEnvironmentQueryError(result.cause));
       return;
     }
-    const page = latest.current.held ?? {
-      ...seed,
-      firstCursors: seed.nextCursors,
-      firstKeys: new Set(seed.entries.map(issueEntryKey)),
-    };
+    const page = latest.current.held ?? holdIssueListAnswer(seed);
     const continued = continueIssueListPage(page, nextCursors, result.value, sentFirstCursors);
     if (continued === page) return;
     setPages({ key: filterKey, requestKey, seed, page: continued });
@@ -256,13 +251,8 @@ function LinkThreadIssueDialog({
       return;
     setPendingKey("url");
     setError(null);
-    const target = source === null ? null : parseIssueUrl(nativeUrl.trim(), source);
     const connectionId =
-      source !== null &&
-      target?.tracker === source.tracker &&
-      issueHostKey(target.host) === issueHostKey(source.host)
-        ? source.connectionId
-        : undefined;
+      source === null ? undefined : issueUrlConnectionId(nativeUrl.trim(), source);
     const resolved = await resolveUrl({
       environmentId,
       input: {

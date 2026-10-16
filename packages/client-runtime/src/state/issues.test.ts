@@ -28,6 +28,7 @@ import {
   continueIssueListPage,
   createIssueEnvironmentAtoms,
   createIssueSourceRefreshQueue,
+  holdIssueListAnswer,
   readIssueListSourcePage,
   issueEntryKey,
   issueListCursorsOn,
@@ -392,6 +393,27 @@ describe("mergeIssueListPage", () => {
 });
 
 describe("issue list continuations", () => {
+  it("continues a held answer only through its own first cursor object", () => {
+    const cursor = "github.com acme/app";
+    const answer: IssueListResult = {
+      entries: [entry({ key: "1" })],
+      viewers: {},
+      trackers: [],
+      nextCursors: { [cursor]: "2" },
+      errors: [],
+    };
+    const held = holdIssueListAnswer(answer);
+    expect(held.firstCursors).toBe(answer.nextCursors);
+    const page = { entries: [entry({ key: "2" })], nextCursors: {}, errors: [] };
+    expect(continueIssueListPage(held, held.nextCursors, page, { ...answer.nextCursors })).toBe(
+      held,
+    );
+    const continued = continueIssueListPage(held, held.nextCursors, page, answer.nextCursors);
+    expect(continued.entries.map((row) => row.key)).toEqual(["1", "2"]);
+    expect(continued.nextCursors).toEqual({});
+    expect(continued.answer).toBe(answer);
+  });
+
   it("keeps a failed scope's cursor when an older server omits error host and tracker", () => {
     const held = {
       entries: [entry({ key: "1" })],

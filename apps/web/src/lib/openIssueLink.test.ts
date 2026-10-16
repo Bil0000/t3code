@@ -401,6 +401,7 @@ describe("native chat issue links", () => {
 
   it.each([
     ["linear", "linear.app", "https://github.com/acme/web/issues/42"],
+    ["github", "git.example", "https://git.example/team/repo/-/issues/42"],
     ["forgejo", "forgejo.one.test", "https://forgejo.two.test/team/repo/issues/42"],
     ["forgejo", "forgejo.one.test:8443", "https://forgejo.one.test:9443/team/repo/issues/42"],
   ])(

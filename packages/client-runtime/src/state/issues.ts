@@ -153,6 +153,18 @@ type HeldIssueList = IssueListPage & {
   readonly firstKeys: ReadonlySet<string>;
 };
 
+export function holdIssueListAnswer(answer: IssueListResult) {
+  return {
+    answer,
+    entries: answer.entries,
+    nextCursors: answer.nextCursors,
+    firstCursors: answer.nextCursors,
+    firstKeys: new Set(answer.entries.map(issueEntryKey)),
+    errors: answer.errors,
+    sources: answer.sources,
+  };
+}
+
 type IssueListSource = {
   readonly connectionId?: string | undefined;
   readonly projectId: string;

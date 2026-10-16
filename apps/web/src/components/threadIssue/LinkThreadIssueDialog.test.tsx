@@ -1033,6 +1033,13 @@ it.each([
     "https://forgejo.test:9443/team/repo/issues/42",
     undefined,
   ],
+  [
+    "same-host-tracker",
+    "github",
+    "git.example",
+    "https://git.example/team/repo/-/issues/42",
+    undefined,
+  ],
   ["same-source", "jira", "ACME.ATLASSIAN.NET", "https://acme.atlassian.net/browse/ENG-42", "B"],
   [
     "same-port",
