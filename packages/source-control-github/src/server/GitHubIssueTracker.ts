@@ -1281,7 +1281,7 @@ export const make = Effect.gen(function* () {
             variables: {
               owner,
               name: repository,
-              ...(input.metadataOnly ? { includeBody: false } : {}),
+              includeBody: !input.metadataOnly,
             },
             decode: (data) => {
               const templates = toIssueTemplates(data);

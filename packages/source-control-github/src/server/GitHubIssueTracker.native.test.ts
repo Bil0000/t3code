@@ -67,6 +67,83 @@ const json = (body: unknown, init?: ResponseInit) =>
   });
 
 describe("GitHub issues over native HTTP", () => {
+  it.effect.each([false, true])(
+    "loads template metadata and bodies with inherited defaults=%s",
+    (inherited) => {
+      const bodySelections: boolean[] = [];
+      const { layer, requests } = harness((request) => {
+        const sent = JSON.parse(
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+        );
+        expect(sent.operationName).toBe("IssueTemplates");
+        const { name, includeBody } = sent.variables;
+        if (typeof includeBody !== "boolean") {
+          return json({
+            errors: [
+              { message: "Variable $includeBody of type Boolean! was provided invalid value" },
+            ],
+          });
+        }
+        bodySelections.push(includeBody);
+        const hasTemplate = !inherited || name === ".github";
+        return json({
+          data: {
+            repository: {
+              nameWithOwner: `acme/${name}`,
+              isPrivate: false,
+              forms: hasTemplate
+                ? {
+                    __typename: "Tree",
+                    oid: "a".repeat(40),
+                    entries: [
+                      {
+                        name: "bug.md",
+                        object: {
+                          __typename: "Blob",
+                          text: "---\nname: Bug report\nabout: Report a bug\n---\nBody",
+                        },
+                      },
+                    ],
+                  }
+                : null,
+              rootForms: null,
+              docsForms: null,
+              issueTemplates: hasTemplate
+                ? [
+                    {
+                      filename: "bug.md",
+                      name: "Bug report",
+                      about: null,
+                      title: "Bug: ",
+                      ...(includeBody ? { body: "Describe the bug" } : {}),
+                      assignees: { nodes: [] },
+                      labels: { nodes: [] },
+                    },
+                  ]
+                : [],
+            },
+          },
+        });
+      });
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        const input = { cwd: "/w", host: "github.com", scope: "acme/web" };
+        const metadata = yield* driver.listTemplates!({ ...input, metadataOnly: true });
+        expect(metadata.templates).toHaveLength(1);
+        expect(metadata.templates[0]).toMatchObject({ body: "", contentDeferred: true });
+        const templateKey = metadata.templates[0]!.key;
+        for (const selection of [{}, { templateKey }]) {
+          const result = yield* driver.listTemplates!({ ...input, ...selection });
+          expect(result.templates).toMatchObject([{ key: templateKey, body: "Describe the bug" }]);
+        }
+        expect(bodySelections).toEqual(
+          inherited ? [false, false, true, true, true, true] : [false, true, true],
+        );
+        expect(requests).toHaveLength(inherited ? 6 : 3);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect.each([
     { operation: "comments", order: "desc" },
     { operation: "comments", order: "asc" },

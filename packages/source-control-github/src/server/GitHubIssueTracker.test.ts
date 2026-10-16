@@ -269,8 +269,8 @@ describe("GitHubIssueTracker", () => {
         { name: "Help", about: "Ask us", url: "https://example.com/help" },
       ]);
       expect(reads).toEqual([
-        { owner: "acme", name: "web" },
-        { owner: "acme", name: ".github" },
+        { owner: "acme", name: "web", includeBody: true },
+        { owner: "acme", name: ".github", includeBody: true },
       ]);
     }),
   );
