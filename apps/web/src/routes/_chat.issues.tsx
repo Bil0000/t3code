@@ -175,6 +175,11 @@ const issueKey = (value: unknown): string | undefined =>
     ? String(value)
     : bounded(value);
 const decodeAccountSelector = Schema.decodeUnknownSync(IssueRef.fields.connectionId);
+function selectedIssueHost(value: unknown): string | undefined {
+  if (value !== undefined && typeof value !== "string")
+    throw new Error("The selected issue host is invalid.");
+  return bounded(value);
+}
 function accountSelector(value: unknown): string | undefined {
   const connectionId = decodeAccountSelector(value);
   if (connectionId !== value) throw new Error("The issue account selector is invalid.");
@@ -210,7 +215,7 @@ export const Route = createFileRoute("/_chat/issues")({
       bounded(raw.selectedEnvironmentId),
     ),
     ...present<"selectedProjectId", ProjectId>("selectedProjectId", bounded(raw.selectedProjectId)),
-    ...present("selectedHost", bounded(raw.selectedHost)),
+    ...present("selectedHost", selectedIssueHost(raw.selectedHost)),
     ...present("selectedConnectionId", accountSelector(raw.selectedConnectionId)),
     tracker: bounded(raw.tracker),
     scope: bounded(raw.scope),

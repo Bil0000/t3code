@@ -1505,7 +1505,13 @@ it.each([
   expect(search.selectedEnvironmentId).toBe("env");
 });
 
-it("opens a pasted numeric GitHub issue link with a string key", async () => {
+it.each<[string, string | null | undefined]>([
+  ["selectedHost=github.com&", "github.com"],
+  ["", undefined],
+  ...["44", "0", "-1", "4.5", "12345678901234567890", "true", "null", "%5B%5D", "%7B%7D"].map(
+    (host): [string, null] => [`selectedHost=${host}&`, null],
+  ),
+])("opens a pasted numeric GitHub issue link with a string key (%s)", async (hostQuery, host) => {
   const { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } =
     await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
   state.projects = [project("project")];
@@ -1520,12 +1526,13 @@ it("opens a pasted numeric GitHub issue link with a string key", async () => {
       state.search = search;
     },
     component: Page,
+    errorComponent: ({ error }) => <p role="alert">{error.message}</p>,
   });
   const router = createRouter({
     routeTree: rootRoute.addChildren([route]),
     history: createMemoryHistory({
       initialEntries: [
-        `/issues?who=assigned&status=open&selectedEnvironmentId=${environmentA}&selectedProjectId=project&selectedHost=github.com&tracker=github&scope=demo%2Fatlas&key=44`,
+        `/issues?who=assigned&status=open&selectedEnvironmentId=${environmentA}&selectedProjectId=project&${hostQuery}tracker=github&scope=demo%2Fatlas&key=44`,
       ],
     }),
   });
@@ -1537,13 +1544,24 @@ it("opens a pasted numeric GitHub issue link with a string key", async () => {
       </RegistryContext.Provider>,
     );
   });
+  const surfaces = selectThreadRightPanelState(
+    useRightPanelStore.getState().byThreadKey,
+    ISSUES_PANEL_REF,
+  ).surfaces;
+  if (host === null) {
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
+      "The selected issue host is invalid.",
+    );
+    expect(state.detailRead).not.toHaveBeenCalled();
+    expect(surfaces).toEqual([]);
+    return;
+  }
+  expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(state.detailRead).toHaveBeenCalledWith(
     environmentA,
     expect.objectContaining({ tracker: "github", scope: "demo/atlas", key: "44" }),
   );
-  const surface = selectThreadRightPanelState(
-    useRightPanelStore.getState().byThreadKey,
-    ISSUES_PANEL_REF,
-  ).surfaces.find((candidate) => candidate.kind === "issue");
+  expect(state.detailRead.mock.calls.at(-1)?.[1].host).toBe(host);
+  const surface = surfaces.find((candidate) => candidate.kind === "issue");
   expect(surface?.kind === "issue" ? surface.key : null).toBe("44");
 });
