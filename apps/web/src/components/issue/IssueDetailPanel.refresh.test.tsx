@@ -47,7 +47,7 @@ vi.mock("../../../../../packages/client-runtime/src/rpc/client.ts", async (impor
       input: IssueRef & { cursor?: string; direction?: IssueDependencyDirection },
     ) =>
       Effect.gen(function* () {
-        const value = yield* Effect.sync(() => state.read(tag, input));
+        const value = yield* Effect.promise(async () => state.read(tag, input));
         if (tag === WS_METHODS.issuesDetail && state.failedDetail)
           return yield* new IssueOperationError({
             operation: "getIssue",
@@ -310,6 +310,18 @@ it.each(["supported", "unmounted", "unsupported", "failed-detail", "failed-relat
       expect(container.textContent).toContain("Could not load this issue");
       expect(container.querySelector('[aria-label="Refresh issue"]')).toBeNull();
       expect(state.read.mock.calls.map(([tag]) => tag)).toEqual([WS_METHODS.issuesDetail]);
+      let release = () => {};
+      state.read.mockImplementationOnce(
+        () => new Promise((resolve) => (release = () => resolve(null))),
+      );
+      await act(async () => button("Retry").click());
+      expect(container.textContent).not.toContain("Could not load this issue");
+      expect(container.querySelector('[role="status"]')).not.toBeNull();
+      expect(state.read.mock.calls.map(([tag]) => tag)).toEqual([
+        WS_METHODS.issuesDetail,
+        WS_METHODS.issuesDetail,
+      ]);
+      release();
       return;
     }
     if (supported) {

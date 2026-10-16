@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { issueScopeKey } from "@t3tools/client-runtime/state/issues";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   IssueCreateResult,
@@ -30,7 +29,6 @@ import { Label } from "../ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
-import { readableFailure } from "../pullRequest/pullRequestDetail.logic";
 import {
   composeTemplateBody,
   initialTemplateValues,
@@ -43,6 +41,7 @@ import { issueAssigneeId } from "./issueDetail.logic";
 import { IssueNativeFields, nativeFieldError, nativeFieldValues } from "./IssueNativeFields";
 import { IssueTemplateForm } from "./IssueTemplateForm";
 import { issueCreateBlocked, resolveIssueType } from "./IssueCreateDialog.logic";
+import { reportIssueResult } from "./issueMutation";
 
 export interface IssueCreateScope {
   readonly environmentId: EnvironmentId;
@@ -281,14 +280,8 @@ export function IssueCreateDialog({
       },
     });
     setPending(false);
-    if (result._tag === "Failure") {
-      toastManager.add({
-        type: "error",
-        title: "The issue could not be created",
-        description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
-      });
+    if (!reportIssueResult(result, "The issue could not be created", "The tracker refused it."))
       return;
-    }
     const warnings = result.value.warnings ?? [];
     toastManager.add(
       warnings.length === 0

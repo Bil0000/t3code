@@ -1789,6 +1789,10 @@ describe("native issue body editability", () => {
       expect(document.activeElement).not.toBe(box);
       expect(back).not.toHaveBeenCalled();
       expect(state.write).not.toHaveBeenCalled();
+      await press({ key: "Enter", ctrlKey: true, isComposing: true });
+      await press({ key: "Enter", ctrlKey: true, keyCode: 229 });
+      expect(box.value).toBe("Half a reply");
+      expect(state.write).not.toHaveBeenCalled();
       await press({ key: "Enter", ctrlKey: true });
       expect(state.write).toHaveBeenCalledExactlyOnceWith({
         environmentId,
@@ -1850,12 +1854,18 @@ describe("native issue body editability", () => {
   });
   it("keeps a refused body draft for retry", async () => {
     state.write
-      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("denied")) })
+      .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("")) })
       .mockResolvedValueOnce({ _tag: "Success" });
+    state.toast.mockReset();
     await act(async () => render());
     await act(async () => button("Edit description")!.click());
     await act(async () => type(description()!, "Retry body"));
     await act(async () => button("Save")!.click());
+    expect(state.toast).toHaveBeenCalledExactlyOnceWith({
+      type: "error",
+      title: "The issue could not be updated",
+      description: "The tracker refused it.",
+    });
     expect(description()?.value).toBe("Retry body");
     await act(async () => button("Save")!.click());
     expect(state.write.mock.calls.map(([target]) => target.input.body)).toEqual([

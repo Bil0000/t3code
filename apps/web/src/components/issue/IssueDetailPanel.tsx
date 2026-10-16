@@ -4,7 +4,6 @@ import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
 import { PullRequestCommentBody } from "../pullRequest/PullRequestCommentBody";
 import { issueEntryKey } from "@t3tools/client-runtime/state/issues";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { AuthOrchestrationOperateScope, threadIssueKeysEqual } from "@t3tools/contracts";
 import type {
   EnvironmentId,
@@ -36,7 +35,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useIssueViewRefresh } from "~/hooks/useIssueViewRefresh";
-import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIssueThreadHandoff } from "./useIssueThreadHandoff";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -73,7 +72,6 @@ import {
 import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
-import { readableFailure } from "../pullRequest/pullRequestDetail.logic";
 import {
   PullRequestActorLabel,
   PullRequestLabelChip,
@@ -90,6 +88,7 @@ import {
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
 import {
   issueCloseReasonLabel,
+  IssueGlyph,
   IssueStateGlyph,
   issueTrackerPresentation,
 } from "./issuePresentation";
@@ -146,13 +145,11 @@ function IssueThreadLinkButton({
           input: { threadId: threadRef.threadId, ...key, url, source: "manual" },
         }));
     setPending(false);
-    if (result._tag === "Failure") {
-      toastManager.add({
-        type: "error",
-        title: linked ? "Could not unlink the issue" : "Could not link the issue",
-        description: readableFailure(squashAtomCommandFailure(result), "The server refused it."),
-      });
-    }
+    reportIssueResult(
+      result,
+      linked ? "Could not unlink the issue" : "Could not link the issue",
+      "The server refused it.",
+    );
   };
   return (
     <Tooltip>
@@ -455,6 +452,12 @@ function IssueDetailContent({
     (p) => p.environmentId === environmentId && p.id === reference.projectId,
   );
   const cwd = project?.workspaceRoot ?? "";
+  const { copyToClipboard: copyLink } = useCopyToClipboard<string>({
+    target: "issue link",
+    onCopy: (url) =>
+      toastManager.add({ type: "success", title: "Issue link copied", description: url }),
+    onError: () => toastManager.add({ type: "error", title: "The issue link could not be copied" }),
+  });
 
   const [tab, setTab] = useState<"summary" | "history">("summary");
   const [createSubIssue, setCreateSubIssue] = useState(false);
@@ -525,6 +528,7 @@ function IssueDetailContent({
           title="Could not load this issue"
           error={detailQuery.error}
           onRetry={detailQuery.refresh}
+          icon={<IssueGlyph.issue />}
         />
       );
     }
@@ -628,13 +632,10 @@ function IssueDetailContent({
     setSubmitting(closeTo === undefined ? "comment" : "close");
     if (!commentPosted) {
       const result = await comment({ environmentId, input: { ...reference, body: draft } });
-      if (result._tag === "Failure") {
+      if (
+        !reportIssueResult(result, "The comment could not be posted", "The tracker refused it.")
+      ) {
         setSubmitting(null);
-        toastManager.add({
-          type: "error",
-          title: "The comment could not be posted",
-          description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
-        });
         return;
       }
       setDraft("");
@@ -668,14 +669,8 @@ function IssueDetailContent({
     setSaving(true);
     const result = await update({ environmentId, input: { ...reference, ...patch } });
     setSaving(false);
-    if (result._tag === "Failure") {
-      toastManager.add({
-        type: "error",
-        title: "The issue could not be updated",
-        description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
-      });
+    if (!reportIssueResult(result, "The issue could not be updated", "The tracker refused it."))
       return;
-    }
     setEditing(null);
     onUpdated?.();
   };
@@ -708,14 +703,8 @@ function IssueDetailContent({
       },
     });
     setChangingState(false);
-    if (result._tag === "Failure") {
-      toastManager.add({
-        type: "error",
-        title: "The state could not be changed",
-        description: readableFailure(squashAtomCommandFailure(result), "The tracker refused it."),
-      });
+    if (!reportIssueResult(result, "The state could not be changed", "The tracker refused it."))
       return;
-    }
     setStateAction(null);
     onUpdated?.();
   };
@@ -955,23 +944,7 @@ function IssueDetailContent({
               size="icon-xs"
               variant="ghost"
               aria-label="Copy issue link"
-              onClick={() =>
-                void writeTextToClipboard(detail.url, "issue link").then(
-                  (copied) => {
-                    if (copied)
-                      toastManager.add({
-                        type: "success",
-                        title: "Issue link copied",
-                        description: detail.url,
-                      });
-                  },
-                  () =>
-                    toastManager.add({
-                      type: "error",
-                      title: "The issue link could not be copied",
-                    }),
-                )
-              }
+              onClick={() => copyLink(detail.url, detail.url)}
             >
               <CopyIcon aria-hidden className="size-3.5" />
             </Button>
@@ -1191,6 +1164,7 @@ function IssueDetailContent({
               ]}
               value={activeTab}
               onValueChange={setTab}
+              aria-label="Issue tabs"
             />
           ) : null}
           {activeTab === "history" ? (
@@ -1314,7 +1288,7 @@ function IssueDetailContent({
                   item.kind === "comment" ? (
                     <article
                       key={`c:${issueEntryKey(detail)}:${item.comment.id}`}
-                      className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
+                      className="flex flex-col gap-2 rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:160px] [content-visibility:auto]"
                     >
                       <IssueCommentContent
                         environmentId={environmentId}
@@ -1441,6 +1415,7 @@ function IssueDetailContent({
             disabled={!canComment || submitting !== null}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
               if (event.key === "Escape" && draft.length > 0) {
                 event.preventDefault();
                 event.currentTarget.blur();
