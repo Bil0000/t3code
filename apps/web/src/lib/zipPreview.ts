@@ -251,9 +251,16 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
   }
   const bytes = await withAbort(blob.arrayBuffer(), signal);
   checkArchiveDirectory(bytes);
-  let zip: JSZip;
+  const zip = new JSZip();
+  const objects: JSZip.JSZipObject[] = [];
+  zip.files = new Proxy(zip.files, {
+    set(target, path, file: JSZip.JSZipObject) {
+      objects.push(file);
+      return Reflect.set(target, path, file);
+    },
+  });
   try {
-    zip = await withAbort(JSZip.loadAsync(bytes), signal);
+    await withAbort(zip.loadAsync(bytes), signal);
   } catch (error) {
     signal.throwIfAborted();
     throw new Error(INVALID_ARCHIVE_ERROR, { cause: error });
@@ -261,6 +268,12 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
   signal.throwIfAborted();
   const entries = new Map<string, ZipPreviewEntry>();
   const files = new Map<ZipPreviewEntry, ZipFile>();
+  const occupied = new Set(
+    objects.map(
+      (file) =>
+        `${file.name.replaceAll("\\", "/").split("/").filter(Boolean).join("/")}${file.dir ? "/" : ""}`,
+    ),
+  );
   let folderCount = 0;
   const addEntry = (path: string, isDirectory: boolean, sizeBytes = 0) => {
     const parts = path.split("/").filter(Boolean);
@@ -281,7 +294,7 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
     entries.set(path, entry);
     return entry;
   };
-  for (const object of Object.values(zip.files)) {
+  for (const object of objects) {
     const file = object as ZipFile;
     const parts = file.name.replaceAll("\\", "/").split("/").filter(Boolean);
     if (parts.length > MAX_FOLDERS + 1) throw new Error(ENTRY_LIMIT_ERROR);
@@ -290,7 +303,19 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
       parts.some((part) => part === "__MACOSX" || part === ".DS_Store" || part.startsWith("._"))
     )
       continue;
-    const path = `${parts.join("/")}${file.dir ? "/" : ""}`;
+    let path = `${parts.join("/")}${file.dir ? "/" : ""}`;
+    if (!file.dir && entries.has(path)) {
+      const name = parts.at(-1)!;
+      const dot = name.lastIndexOf(".");
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const extension = dot > 0 ? name.slice(dot) : "";
+      let suffix = 2;
+      do {
+        parts[parts.length - 1] = `${stem} (${suffix++})${extension}`;
+        path = parts.join("/");
+      } while (occupied.has(path) || occupied.has(`${path}/`));
+      occupied.add(path);
+    }
     for (let index = 1; index < parts.length; index++) {
       const directory = `${parts.slice(0, index).join("/")}/`;
       if (!entries.has(directory)) addEntry(directory, true);

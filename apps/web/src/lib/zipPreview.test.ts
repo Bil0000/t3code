@@ -333,6 +333,37 @@ describe("loadZipPreview", () => {
     },
   );
 
+  it.each([false, true])(
+    "keeps normalized path collisions accessible, reversed=%s",
+    async (reverse) => {
+      const names = ["photos\\image.png", "photos/image.png", "photos//image.png"];
+      if (reverse) names.reverse();
+      const zip = new JSZip();
+      for (const [index, name] of names.entries()) {
+        zip.file(name, png(100 + index, 1), { createFolders: false });
+      }
+      zip.file("photos/image (2).png", png(200, 1), { createFolders: false });
+      zip.folder("photos/image (3).png");
+      zip.folder("photos/image.png");
+      const preview = await loadZipPreview(await archive(zip), signal());
+      const files = preview.entries.filter((entry) => !entry.isDirectory);
+
+      expect(files.map((entry) => entry.path)).toEqual([
+        "photos/image (2).png",
+        "photos/image (4).png",
+        "photos/image (5).png",
+        "photos/image.png",
+      ]);
+      expect(preview.entries.some((entry) => entry.path === "photos/image.png/")).toBe(true);
+      const widths = [200, 101, 102, 100];
+      for (const [index, entry] of files.entries()) {
+        const image = await preview.readFile(entry, signal());
+        expect(image.type).toBe("image/png");
+        expect(new Uint8Array(await image.arrayBuffer())).toEqual(png(widths[index]!, 1));
+      }
+    },
+  );
+
   it("does not decompress files while listing the archive", async () => {
     const blob = await patchCentral(
       await archive(new JSZip().file("broken.png", "x")),
