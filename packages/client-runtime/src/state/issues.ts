@@ -7,7 +7,6 @@ import {
   threadIssueKeyOf,
   type EnvironmentId,
   type IssueCapabilities,
-  type IssueComment,
   type IssueInvolvement,
   type IssueListCursors,
   type IssueListEntry,
@@ -572,16 +571,6 @@ export function offeredIssueInvolvements(
     for (const involvement of capabilities.involvements) offered.add(involvement);
   }
   return declared ? offered : null;
-}
-
-/** Older comments go in front: the detail carries the newest page and pages walk backwards. */
-export function prependIssueComments(
-  current: ReadonlyArray<IssueComment>,
-  older: ReadonlyArray<IssueComment>,
-): ReadonlyArray<IssueComment> {
-  if (older.length === 0) return current;
-  const seen = new Set(current.map((comment) => comment.id));
-  return [...older.filter((comment) => !seen.has(comment.id)), ...current];
 }
 
 /**

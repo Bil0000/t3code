@@ -15,6 +15,7 @@ import type {
   IssueState,
   IssueRichBody,
   IssueComment,
+  IssueCommentsPage,
   IssueReaction,
   IssueLinkedPullRequestsPage,
 } from "@t3tools/contracts";
@@ -87,6 +88,9 @@ const state = vi.hoisted(() => ({
     },
   },
   write: vi.fn(),
+  commentsRead: vi
+    .fn<({ input }: { input: IssueCommentsPageInput }) => Promise<IssueCommentsPage>>()
+    .mockResolvedValue({ comments: [], nextCursor: null }),
   navigate: vi.fn(),
   detailRefresh: vi.fn(),
   projects: [] as EnvironmentProject[],
@@ -105,6 +109,10 @@ const state = vi.hoisted(() => ({
 vi.mock("~/state/entities", () => ({ useProjects: () => state.projects }));
 vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
+  const Effect = await import("effect/Effect");
+  const commentPages = Atom.family((key: string) =>
+    Atom.make(Effect.promise(() => state.commentsRead(JSON.parse(key)))).pipe(Atom.keepAlive),
+  );
   const pages = Atom.family((_key: string) => {
     const value = Atom.make<AsyncResult.AsyncResult<IssueLinkedPullRequestsPage, unknown>>(
       AsyncResult.success({ items: [], nextCursor: null }),
@@ -120,6 +128,7 @@ vi.mock("@t3tools/client-runtime/state/issues", async (importOriginal) => {
     ...(await importOriginal<typeof import("@t3tools/client-runtime/state/issues")>()),
     createIssueEnvironmentAtoms: () => ({
       linkedPullRequests: (target: unknown) => pages(JSON.stringify(target)),
+      commentPages: (target: unknown) => commentPages(JSON.stringify(target)),
     }),
   };
 });
@@ -138,7 +147,10 @@ vi.mock("~/hooks/useIssueViewRefresh", () => ({ useIssueViewRefresh: () => {} })
 vi.mock("./useIssueThreadHandoff", () => ({
   useIssueThreadHandoff: () => ({ pending: false, start: state.solve }),
 }));
-vi.mock("./IssueHistory", () => ({ IssueHistory: () => null }));
+vi.mock("./IssueHistory", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./IssueHistory")>()),
+  IssueHistory: () => null,
+}));
 vi.mock("../pullRequest/PullRequestCommentBody", () => ({
   PullRequestCommentBody: ({ text }: { text: string }) => <div>{text}</div>,
 }));
@@ -186,6 +198,7 @@ vi.mock("~/state/issues", async (importOriginal) => {
       loadMore: vi.fn(),
     }),
     useIssueLinkedPullRequests: original.useIssueLinkedPullRequests,
+    useIssueComments: original.useIssueComments,
   };
 });
 import { appAtomRegistry } from "~/rpc/atomRegistry";
@@ -1339,27 +1352,24 @@ it.each([
   { tracker: "linear", viewer: null },
 ])("roundtrips cached viewer context for older comments (%j)", async ({ tracker, viewer }) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  state.write.mockReset().mockImplementation(async ({ input }) => {
+  state.commentsRead.mockReset().mockImplementation(async ({ input }) => {
     const wire = encodeCommentPageInput(input);
     const decoded = decodeCommentPageInput(wire);
     const owned = decoded.viewer === "viewer-123";
     expect(decoded.viewer).toBe(state.detail.viewer ?? undefined);
     return {
-      _tag: "Success",
-      value: {
-        comments: [
-          {
-            id: "older-own-comment",
-            author: { id: "viewer-123", login: "me", name: null, avatarUrl: null },
-            body: "Older own comment",
-            createdAt: "2026-10-01T00:00:00Z",
-            url: null,
-            canEdit: owned,
-            reactions: [{ content: "thumbs-up", count: 1, actors: [], viewerHasReacted: owned }],
-          },
-        ],
-        nextCursor: null,
-      },
+      comments: [
+        {
+          id: "older-own-comment",
+          author: { id: "viewer-123", login: "me", name: null, avatarUrl: null },
+          body: "Older own comment",
+          createdAt: "2026-10-01T00:00:00Z",
+          url: null,
+          canEdit: owned,
+          reactions: [{ content: "thumbs-up", count: 1, actors: [], viewerHasReacted: owned }],
+        },
+      ],
+      nextCursor: null,
     };
   });
   state.detail = {
@@ -1392,14 +1402,15 @@ it.each([
     await act(async () =>
       root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
     );
-    const load = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === "Load older comments",
-    )!;
-    await act(async () => load.click());
-    expect(state.write).toHaveBeenCalledOnce();
-    expect(state.write).toHaveBeenCalledWith({
+    expect(state.commentsRead).toHaveBeenCalledOnce();
+    expect(state.commentsRead).toHaveBeenCalledWith({
       environmentId,
-      input: { ...reference, cursor: "older", viewer: viewer ?? undefined },
+      input: {
+        ...reference,
+        cursor: "older",
+        order: "desc",
+        ...(viewer === null ? {} : { viewer }),
+      },
     });
     expect(container.textContent).toContain("Older own comment");
     const edit = container.querySelector<HTMLButtonElement>('button[aria-label="Edit comment"]');
@@ -1418,21 +1429,27 @@ it.each([
     await act(async () =>
       root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
     );
-    expect(state.write).toHaveBeenCalledOnce();
+    expect(state.commentsRead).toHaveBeenCalledOnce();
     if (viewer !== null) {
+      const read = state.commentsRead.getMockImplementation()!;
+      let finish!: (page: IssueCommentsPage) => void;
+      state.commentsRead.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
       state.detail = { ...state.detail, viewer: "viewer-456" };
       await act(async () =>
         root.render(<IssueDetailPanel environmentId={environmentId} reference={reference} />),
       );
       expect(container.querySelector('textarea[aria-label="Edit comment"]')).toBeNull();
       expect(container.querySelector('button[aria-label^="thumbs up,"]')).toBeNull();
-      expect(state.write).toHaveBeenCalledOnce();
-      const reload = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent === "Load older comments",
-      )!;
-      await act(async () => reload.click());
-      expect(state.write).toHaveBeenCalledTimes(2);
-      expect(state.write.mock.calls[1]![0].input.viewer).toBe("viewer-456");
+      expect(state.commentsRead).toHaveBeenCalledTimes(2);
+      expect((state.commentsRead.mock.calls[1]![0].input as { viewer: string }).viewer).toBe(
+        "viewer-456",
+      );
+      await act(async () => finish(await read(state.commentsRead.mock.calls[1]![0])));
       expect(container.querySelector('button[aria-label="Edit comment"]')).toBeNull();
       if (tracker === "linear")
         expect(
@@ -1442,6 +1459,8 @@ it.each([
   } finally {
     await act(async () => root.unmount());
     container.remove();
+    appAtomRegistry.reset();
+    state.commentsRead.mockReset().mockResolvedValue({ comments: [], nextCursor: null });
     vi.unstubAllGlobals();
   }
 });
@@ -1601,11 +1620,6 @@ it.each([
           </RegistryContext.Provider>,
         ),
       );
-      const loadMore = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent === "Load more pull requests",
-      );
-      expect(loadMore).toBeDefined();
-      await act(async () => loadMore!.click());
       expect(container.textContent).toContain("Related change");
       expect(container.querySelector(`a[href="${url}"]`)).not.toBeNull();
       expect(container.textContent).not.toContain("Load more pull requests");

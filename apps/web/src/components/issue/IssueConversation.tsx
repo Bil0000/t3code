@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
   IssueComment,
+  IssueEvent,
   IssueRichBody,
   IssueRef,
   ScopedThreadRef,
@@ -11,16 +12,19 @@ import { useState } from "react";
 import { issueEnvironment } from "~/state/issues";
 import { ISSUES_PANEL_REF } from "~/rightPanelStore";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { formatRelativeTimeLabel } from "~/timestampFormat";
 import {
   PullRequestActorLabel,
   PullRequestCommentTime,
   PullRequestMetaLine,
 } from "../pullRequest/pullRequestPresentation";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestEditButton } from "../pullRequest/PullRequestEditButton";
 import { PullRequestCommentBody } from "../pullRequest/PullRequestCommentBody";
 import { PullRequestMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import { IssueRichBodyEditor, IssueRichBodyView } from "./IssueRichBodyEditor";
-import { isEditableIssueRichBody } from "./issueAdf";
+import { isEditableIssueRichBody, safeIssueExternalUrl } from "./issueAdf";
+import { issueCloseReasonLabel } from "./issuePresentation";
 import { reportIssueResult } from "./issueMutation";
 
 export function IssueCommentContent({
@@ -135,5 +139,88 @@ export function IssueCommentContent({
         />
       )}
     </>
+  );
+}
+
+function eventSentence(event: IssueEvent): string {
+  switch (event.kind) {
+    case "closed":
+      return event.detail
+        ? `closed this as ${issueCloseReasonLabel(event.detail).toLowerCase()}`
+        : "closed this";
+    case "reopened":
+      return "reopened this";
+    case "labeled":
+      return event.detail ? `added the ${event.detail} label` : "added a label";
+    case "unlabeled":
+      return event.detail ? `removed the ${event.detail} label` : "removed a label";
+    case "assigned":
+      return event.detail ? `assigned ${event.detail}` : "assigned someone";
+    case "unassigned":
+      return event.detail ? `unassigned ${event.detail}` : "unassigned someone";
+    case "renamed":
+      return event.detail ? `renamed this to "${event.detail}"` : "renamed this";
+    case "referenced":
+      return event.reference
+        ? "referenced this from"
+        : event.detail
+          ? `referenced this from ${event.detail}`
+          : "referenced this";
+    case "state-changed":
+      return event.detail ? `moved this to ${event.detail}` : "changed the state";
+    case "changed":
+    case "updated":
+      return event.detail ? `${event.kind} ${event.detail}` : `${event.kind} this`;
+  }
+}
+
+export function IssueEventRow({ event }: { event: IssueEvent }) {
+  const source = event.reference;
+  const sourceUrl = source && safeIssueExternalUrl(source.url) !== null ? source.url : null;
+  const sourceLabel = source
+    ? [source.identifier, source.title].filter(Boolean).join(" ") || source.url
+    : null;
+  const eventUrl = event.url && safeIssueExternalUrl(event.url) !== null ? event.url : null;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs [contain-intrinsic-block-size:36px] [content-visibility:auto]">
+      <PullRequestActorLabel actor={event.actor} className="max-w-40" />
+      <span className="text-muted-foreground">{eventSentence(event)}</span>
+      {sourceUrl ? (
+        <a
+          href={sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="min-w-0 break-words font-medium hover:underline"
+        >
+          {sourceLabel}
+        </a>
+      ) : sourceLabel ? (
+        <span className="min-w-0 break-words">{sourceLabel}</span>
+      ) : null}
+      <span className="ml-auto shrink-0 text-muted-foreground">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              eventUrl ? (
+                <a
+                  href={eventUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground hover:underline"
+                />
+              ) : (
+                <span />
+              )
+            }
+          >
+            <time dateTime={event.createdAt}>{formatRelativeTimeLabel(event.createdAt)}</time>
+          </TooltipTrigger>
+          <TooltipPopup>
+            {new Date(event.createdAt).toLocaleString()}
+            {eventUrl ? " · Open event on host" : ""}
+          </TooltipPopup>
+        </Tooltip>
+      </span>
+    </div>
   );
 }

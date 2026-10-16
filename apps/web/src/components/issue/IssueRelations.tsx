@@ -18,7 +18,7 @@ const ROW_CLASS =
 
 function SectionTitle({ title, actions }: { title: string; actions?: ReactNode }) {
   return (
-    <div className="flex min-h-7 items-center gap-2 text-xs font-medium text-muted-foreground">
+    <div className="flex min-h-7 items-center gap-2 px-2 text-xs font-medium text-muted-foreground">
       <h3 className="flex-1">{title}</h3>
       {actions}
     </div>
@@ -175,7 +175,7 @@ export function IssueHierarchySection({
           </Button>
         </form>
       ) : (
-        <Muted>{loading ? "Loading" : "None"}</Muted>
+        <Muted>{loading ? "Loading" : "No parent issue."}</Muted>
       )}
       <SectionTitle
         title={noun}
@@ -193,7 +193,7 @@ export function IssueHierarchySection({
       {hierarchy.error !== null && hierarchy.items.length === 0 ? (
         <Muted>The hierarchy could not be read. {hierarchy.error}</Muted>
       ) : hierarchy.items.length === 0 ? (
-        <Muted>{loading ? "Loading" : "None"}</Muted>
+        <Muted>{loading ? "Loading" : `No ${noun.toLowerCase()}.`}</Muted>
       ) : (
         hierarchy.items.map((child) => (
           <RelationRow
@@ -204,7 +204,11 @@ export function IssueHierarchySection({
           />
         ))
       )}
-      <IssueLoadMore page={hierarchy} label={`Load more ${noun.toLowerCase()}`} />
+      <IssueLoadMore
+        key={JSON.stringify([environmentId, reference])}
+        page={hierarchy}
+        label={`Load more ${noun.toLowerCase()}`}
+      />
     </section>
   );
 }

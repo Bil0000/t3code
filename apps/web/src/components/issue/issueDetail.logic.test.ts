@@ -1,5 +1,4 @@
 import type {
-  IssueComment,
   IssueDetail,
   IssueLinkedPullRequest,
   IssueRef,
@@ -13,9 +12,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   issueAssigneeOptions,
-  appendOlderIssueComments,
-  editRetainedIssueComment,
-  issueCommentsView,
   issueSupportsReactions,
   offeredIssueReactionContents,
   retainUnacknowledgedIssueReactions,
@@ -319,15 +315,6 @@ describe("issueAssigneeOptions", () => {
   });
 });
 
-const comment = (id: string, reactions?: IssueComment["reactions"]): IssueComment => ({
-  id,
-  author: null,
-  body: id,
-  createdAt: "2026-10-01T00:00:00Z",
-  url: null,
-  ...(reactions === undefined ? {} : { reactions }),
-});
-
 function detail(patch: Partial<IssueDetail> = {}): IssueDetail {
   return {
     tracker: IssueTrackerKind.make("github"),
@@ -350,7 +337,7 @@ function detail(patch: Partial<IssueDetail> = {}): IssueDetail {
     writable: true,
     viewer: "viewer",
     body: "",
-    comments: [comment("c3")],
+    comments: [],
     commentsCursor: "page-2",
     events: [],
     linkedPullRequests: [],
@@ -373,124 +360,6 @@ function detail(patch: Partial<IssueDetail> = {}): IssueDetail {
   };
 }
 
-const heart = [{ content: "heart" as const, count: 1, actors: [], viewerHasReacted: false }];
-describe("older issue comments across detail re-reads", () => {
-  const first = detail();
-  const loaded = appendOlderIssueComments(first, null, {
-    comments: [comment("c2", heart)],
-    nextCursor: "page-3",
-  });
-
-  it("resets a viewer change while retaining same-viewer edits, null viewers and legacy windows", () => {
-    const changed = detail({ viewer: "another-viewer" });
-    expect(issueCommentsView(changed, loaded).held).toBeNull();
-    const edited = editRetainedIssueComment(loaded, loaded.issue, "c2", "edited");
-    expect(issueCommentsView(detail(), edited).comments[0]?.body).toBe("edited");
-    const unknownBase = detail({ viewer: null });
-    const unknown = appendOlderIssueComments(unknownBase, null, {
-      comments: [comment("c2")],
-      nextCursor: null,
-    });
-    expect(issueCommentsView({ ...unknownBase }, unknown).held).toBe(unknown);
-    expect(issueCommentsView(changed, { ...loaded, viewer: undefined }).held).not.toBeNull();
-  });
-
-  it.each(["viewer", null])(
-    "fences a fresh unknown-owner first page and restores its cursor: %s",
-    (viewer) => {
-      const before = detail({ viewer });
-      const retained = appendOlderIssueComments(before, null, {
-        comments: [comment("c2", [{ ...heart[0]!, viewerHasReacted: true }])],
-        nextCursor: null,
-      });
-      expect(issueCommentsView({ ...before }, retained).held).toBe(retained);
-      const after = { ...before, comments: [...before.comments] };
-      const fresh = issueCommentsView(after, retained);
-      expect(fresh.comments.map((entry) => entry.id)).toEqual(
-        viewer === null ? ["c3"] : ["c2", "c3"],
-      );
-      expect(fresh.cursor).toBe(viewer === null ? "page-2" : null);
-      if (viewer !== null) return;
-      const reloaded = appendOlderIssueComments(after, fresh.held, {
-        comments: [comment("c2", heart)],
-        nextCursor: null,
-      });
-      expect(issueCommentsView(after, reloaded).comments[0]?.reactions).toEqual(heart);
-      expect(issueCommentsView({ ...after }, reloaded).cursor).toBeNull();
-    },
-  );
-
-  it("drops a retained comment window when only the account changes", () => {
-    const original = detail({ connectionId: "A" });
-    const retained = appendOlderIssueComments(original, null, {
-      comments: [comment("c2", heart)],
-      nextCursor: "page-3",
-    });
-    expect(issueCommentsView(detail({ connectionId: "A" }), retained).held).toBe(retained);
-    expect(issueCommentsView(detail({ connectionId: "B" }), retained).held).toBeNull();
-    expect(issueCommentsView(detail(), retained).held).toBeNull();
-  });
-
-  it("keeps loaded pages when a new detail has the same first-page IDs and cursor", () => {
-    const refreshed = detail({
-      title: "Renamed",
-      comments: [{ ...comment("c3", heart), body: "Updated" }],
-    });
-    const view = issueCommentsView(refreshed, loaded);
-    expect(view.held).toBe(loaded);
-    expect(view.comments.map((each) => each.id)).toEqual(["c2", "c3"]);
-    expect(view.comments[1]).toEqual(refreshed.comments[0]);
-    expect(view.cursor).toBe("page-3");
-  });
-
-  it("restarts a shifted Jira head with the same offset and eventually includes every boundary comment", () => {
-    const comments = (from: number, to: number) =>
-      Array.from({ length: to - from + 1 }, (_, index) => comment(String(from + index)));
-    const before = detail({
-      tracker: IssueTrackerKind.make("jira"),
-      host: "workspace.atlassian.net",
-      scope: "PROJ",
-      comments: comments(101, 150),
-      commentsCursor: "50",
-      commentCount: 150,
-    });
-    const loaded = appendOlderIssueComments(before, null, {
-      comments: comments(51, 100),
-      nextCursor: "100",
-    });
-    const after = { ...before, comments: comments(102, 151), commentCount: 151 };
-    const shifted = issueCommentsView(after, loaded);
-    expect(shifted.held).toBeNull();
-    expect(shifted.cursor).toBe("50");
-    expect(shifted.comments).toHaveLength(50);
-    const page2 = appendOlderIssueComments(after, shifted.held, {
-      comments: comments(52, 101),
-      nextCursor: "100",
-    });
-    const page3 = appendOlderIssueComments(after, page2, {
-      comments: comments(2, 51),
-      nextCursor: "150",
-    });
-    const page4 = appendOlderIssueComments(after, page3, {
-      comments: comments(1, 1),
-      nextCursor: null,
-    });
-    const complete = issueCommentsView(after, page4);
-    expect(complete.comments.map((each) => each.id)).toEqual(
-      comments(1, 151).map((each) => each.id),
-    );
-    expect(complete.cursor).toBeNull();
-  });
-
-  it("drops them when the first page now ends elsewhere or the issue is another one", () => {
-    const moved = issueCommentsView(detail({ commentsCursor: "page-2b" }), loaded);
-    expect(moved.comments.map((each) => each.id)).toEqual(["c3"]);
-    expect(moved.cursor).toBe("page-2b");
-    const other = issueCommentsView(detail({ key: "2" }), loaded);
-    expect(other.comments.map((each) => each.id)).toEqual(["c3"]);
-  });
-});
-
 it("keeps labels with the same name distinct by native ID", () => {
   const team = { id: "team-label", name: "Bug", color: null };
   const workspace = { id: "workspace-label", name: "Bug", color: null, description: null };
@@ -499,23 +368,6 @@ it("keeps labels with the same name distinct by native ID", () => {
     "team-label",
   ]);
   expect(issueLabelId({ name: "Bug" })).toBe("Bug");
-});
-
-it("keeps a successful older-comment edit in its retained page after the editor closes", () => {
-  const older = {
-    issue: "issue",
-    seed: "older",
-    firstIds: ["new"],
-    cursor: null,
-    comments: [
-      { id: "old", body: "before", author: null, createdAt: "2026-10-14T00:00:00Z", url: null },
-    ],
-  };
-  const edited = editRetainedIssueComment(older, "issue", "old", "after");
-  expect(edited?.comments[0]?.body).toBe("after");
-  expect(edited?.firstIds).toEqual(["new"]);
-  expect(editRetainedIssueComment(older, "other-issue", "old", "after")).toBe(older);
-  expect(editRetainedIssueComment(null, "issue", "old", "after")).toBeNull();
 });
 
 it("keeps template selections available before their candidate pages are loaded", () => {

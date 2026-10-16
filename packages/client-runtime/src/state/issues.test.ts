@@ -2,7 +2,6 @@ import type {
   EnvironmentId,
   AuthSessionState,
   IssueCapabilities,
-  IssueComment,
   IssueCommentsPageInput,
   IssueListEntry,
   IssueListResult,
@@ -36,7 +35,6 @@ import {
   issueSourceMatchesList,
   mergeIssueListPage,
   offeredIssueInvolvements,
-  prependIssueComments,
   refreshIssueListPage,
 } from "./issues.ts";
 
@@ -1257,22 +1255,6 @@ describe("offeredIssueInvolvements", () => {
         "mentioned",
       ),
     ).toEqual(new Set(["mentioned", "all", "assigned", "authored"]));
-  });
-});
-
-describe("prependIssueComments", () => {
-  const comment = (id: string): IssueComment => ({
-    id,
-    author: null,
-    body: id,
-    createdAt: "2026-10-01T00:00:00.000Z",
-    url: null,
-  });
-
-  it("puts older comments first and drops ones already shown", () => {
-    const current = [comment("c3"), comment("c4")];
-    const older = [comment("c1"), comment("c2"), comment("c3")];
-    expect(prependIssueComments(current, older).map((c) => c.id)).toEqual(["c1", "c2", "c3", "c4"]);
   });
 });
 

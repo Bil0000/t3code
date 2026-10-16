@@ -12,6 +12,8 @@ import type {
   IssueDetail,
   IssueEvent,
   IssueLinkedPullRequest,
+  IssueCommentsPageInput,
+  IssueListOrder,
   IssueLabel,
   IssueReaction,
   IssueReactionContent,
@@ -29,6 +31,8 @@ import {
   ExternalLinkIcon,
   Link2Icon,
   Link2OffIcon,
+  MinusIcon,
+  PlusIcon,
   SendIcon,
   SmilePlusIcon,
 } from "lucide-react";
@@ -39,12 +43,12 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIssueThreadHandoff } from "./useIssueThreadHandoff";
 
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { issueEnvironment, useIssueLinkedPullRequests } from "~/state/issues";
-import { IssueLoadMore } from "./IssueLoadMore";
-import { IssueHistory } from "./IssueHistory";
+import { issueEnvironment, useIssueComments, useIssueLinkedPullRequests } from "~/state/issues";
+import { IssueScrollSentinel } from "./IssueLoadMore";
+import { IssueHistory, IssueOrderControl } from "./IssueHistory";
 import { IssueDependencies } from "./IssueDependencies";
 import { IssueHierarchySection } from "./IssueRelations";
-import { IssueCommentContent } from "./IssueConversation";
+import { IssueCommentContent, IssueEventRow } from "./IssueConversation";
 import { IssueRichBodyEditor, IssueRichBodyView } from "./IssueRichBodyEditor";
 import { isEditableIssueRichBody, safeIssueExternalUrl } from "./issueAdf";
 import { IssueStateFieldsDialog } from "./IssueStateFieldsDialog";
@@ -94,10 +98,6 @@ import {
 } from "./issuePresentation";
 import {
   issueAssigneeId,
-  appendOlderIssueComments,
-  editRetainedIssueComment,
-  issueCommentsView,
-  type IssueOlderComments,
   issueDisplayLabel,
   issueLabelId,
   heldIssuePicker,
@@ -330,34 +330,6 @@ export function IssueReactionBar({
   );
 }
 
-function eventSentence(event: IssueEvent): string {
-  switch (event.kind) {
-    case "closed":
-      return event.detail
-        ? `closed this as ${issueCloseReasonLabel(event.detail).toLowerCase()}`
-        : "closed this";
-    case "reopened":
-      return "reopened this";
-    case "labeled":
-      return event.detail ? `added the ${event.detail} label` : "added a label";
-    case "unlabeled":
-      return event.detail ? `removed the ${event.detail} label` : "removed a label";
-    case "assigned":
-      return event.detail ? `assigned ${event.detail}` : "assigned someone";
-    case "unassigned":
-      return event.detail ? `unassigned ${event.detail}` : "unassigned someone";
-    case "renamed":
-      return event.detail ? `renamed this to “${event.detail}”` : "renamed this";
-    case "referenced":
-      return event.detail ? `referenced this from ${event.detail}` : "referenced this";
-    case "state-changed":
-      return event.detail ? `moved this to ${event.detail}` : "changed the state";
-    case "changed":
-    case "updated":
-      return event.detail ? `${event.kind} ${event.detail}` : `${event.kind} this`;
-  }
-}
-
 type TimelineItem =
   | { kind: "comment"; at: string; comment: IssueComment }
   | { kind: "event"; at: string; event: IssueEvent };
@@ -389,7 +361,7 @@ function LinkedPullRequestRow({
     </>
   );
   const className =
-    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60";
+    "flex w-full min-w-0 items-center gap-2 rounded-md py-1.5 text-left hover:bg-accent/60";
   return onSelect ? (
     <button type="button" className={className} onClick={onSelect}>
       {body}
@@ -475,9 +447,16 @@ function IssueDetailContent({
     environmentId,
     detail?.capabilities.linkedPullRequests ? reference : null,
   );
-  const [older, setOlder] = useState<IssueOlderComments | null>(null);
-  const loadComments = useAtomCommand(issueEnvironment.comments, { reportFailure: false });
-  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [linkedExpansion, setLinkedExpansion] = useState({
+    viewer: detail?.viewer,
+    expanded: false,
+  });
+  const linkedExpanded = linkedExpansion.viewer === detail?.viewer && linkedExpansion.expanded;
+  useEffect(() => {
+    if (linkedPages.hasMore && !linkedPages.isPending && linkedPages.error === null)
+      linkedPages.loadMore();
+  }, [linkedPages]);
+  const [requestedOrder, setRequestedOrder] = useState<IssueListOrder>("desc");
   const comment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const setState = useAtomCommand(issueEnvironment.setState, { reportFailure: false });
@@ -558,11 +537,25 @@ function IssueDetailContent({
   const assignees = issuePickerIds(detail, "assignees", heldAssignees, environmentId).map((id) =>
     actorObjects.get(id)!,
   );
-  const { comments, cursor: nextCursor, held: heldComments } = issueCommentsView(detail, older);
-  const timeline: ReadonlyArray<TimelineItem> = [
-    ...comments.map((c): TimelineItem => ({ kind: "comment", at: c.createdAt, comment: c })),
-    ...detail.events.map((e): TimelineItem => ({ kind: "event", at: e.createdAt, event: e })),
-  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const commentOrders = detail.capabilities.commentOrders ?? ["desc", "asc"];
+  const historyOrders = detail.capabilities.historyOrders ?? ["desc", "asc"];
+  const partialHistory = detail.capabilities.events && historyOrders.length === 0;
+  const activityOrders = detail.capabilities.events
+    ? commentOrders.filter((order) => historyOrders.includes(order))
+    : commentOrders;
+  const orders = activityOrders.length > 0 ? activityOrders : commentOrders;
+  const order = orders.includes(requestedOrder) ? requestedOrder : (orders[0] ?? "desc");
+  const commentsInput: IssueCommentsPageInput | null =
+    commentOrders.length === 0 || (order === "desc" && detail.commentsCursor === null)
+      ? null
+      : {
+          ...reference,
+          order,
+          ...(detail.viewer === null ? {} : { viewer: detail.viewer }),
+          ...(order === "desc" && detail.commentsCursor !== null
+            ? { cursor: detail.commentsCursor }
+            : {}),
+        };
 
   const blocked = writeBlockReason(detail, canWrite);
   const may = (capability: boolean, permission: boolean) =>
@@ -582,7 +575,6 @@ function IssueDetailContent({
   const canAssign =
     may(detail.capabilities.assignees, detail.viewerPermissions.assignees) && updateAllowed;
   const canReact = blocked === null && detail.capabilities.reactions;
-  const canReactToComment = blocked === null && issueSupportsReactions(detail.capabilities, true);
   const canSetState =
     may(detail.capabilities.states.length > 0, detail.viewerPermissions.setState) && stateAllowed;
   const tracker = issueTrackerPresentation(detail.tracker);
@@ -596,21 +588,6 @@ function IssueDetailContent({
   );
   const closingStates = otherStates.filter((state) => state.category === "closed");
   const openingStates = otherStates.filter((state) => state.category === "open");
-
-  const loadOlder = async () => {
-    if (nextCursor === null || loadingOlder) return;
-    setLoadingOlder(true);
-    const result = await loadComments({
-      environmentId,
-      input: { ...reference, cursor: nextCursor, viewer: detail.viewer ?? undefined },
-    });
-    setLoadingOlder(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Older comments could not be read" });
-      return;
-    }
-    setOlder(appendOlderIssueComments(detail, heldComments, result.value));
-  };
 
   const submitComment = async (
     closeTo?: IssueState,
@@ -929,7 +906,12 @@ function IssueDetailContent({
               aria-label="Refresh issue"
               disabled={detailQuery.isPending}
               onClick={() => {
+                if (activeTab === "summary" && commentsInput?.cursor !== undefined)
+                  appAtomRegistry.refresh(
+                    issueEnvironment.commentPages({ environmentId, input: commentsInput }),
+                  );
                 detailQuery.refresh();
+                setLinkedExpansion({ viewer: detail.viewer, expanded: false });
                 setDependenciesRevision((revision) => revision + 1);
                 linkedPages.refresh();
                 if (activeTab === "summary" && detail.capabilities.subIssues)
@@ -1136,39 +1118,57 @@ function IssueDetailContent({
             ) : (
               <p className="text-sm text-muted-foreground italic">No description.</p>
             )}
-            {detail.reactions !== undefined ? (
-              <IssueReactionBar
-                key={JSON.stringify([issueEntryKey(detail), detail.viewer ?? null])}
-                viewer={detail.viewer}
-                reactions={detail.reactions}
-                canReact={canReact}
-                contents={detail.capabilities.reactionContents}
-                environmentId={environmentId}
-                reference={reference}
-              />
-            ) : null}
-            {detail.reactionsTruncated === true ? (
-              <IssueTruncatedNote
-                text="Reaction details are limited."
-                url={detail.url}
-                providerName={tracker.providerName}
-              />
-            ) : null}
           </section>
-
-          {detail.capabilities.events ? (
-            <PullRequestDetailTabBar
-              tabs={[
-                { value: "summary" as const, label: "Summary" },
-                { value: "history" as const, label: "History" },
-              ]}
-              value={activeTab}
-              onValueChange={setTab}
-              aria-label="Issue tabs"
+          {detail.reactions !== undefined ? (
+            <IssueReactionBar
+              key={JSON.stringify([issueEntryKey(detail), detail.viewer ?? null])}
+              viewer={detail.viewer}
+              reactions={detail.reactions}
+              canReact={canReact}
+              contents={detail.capabilities.reactionContents}
+              environmentId={environmentId}
+              reference={reference}
             />
           ) : null}
+          {detail.reactionsTruncated === true ? (
+            <IssueTruncatedNote
+              text="Reaction details are limited."
+              url={detail.url}
+              providerName={tracker.providerName}
+            />
+          ) : null}
+
+          {detail.capabilities.events ? (
+            <div className="-mx-4">
+              <PullRequestDetailTabBar
+                tabs={[
+                  { value: "summary" as const, label: "Summary" },
+                  { value: "history" as const, label: "History" },
+                ]}
+                value={activeTab}
+                onValueChange={setTab}
+                aria-label="Issue tabs"
+              >
+                {activeTab === "history" ? (
+                  <div className="ml-auto">
+                    <IssueOrderControl
+                      order={requestedOrder}
+                      orders={historyOrders}
+                      onChange={setRequestedOrder}
+                    />
+                  </div>
+                ) : null}
+              </PullRequestDetailTabBar>
+            </div>
+          ) : null}
           {activeTab === "history" ? (
-            <IssueHistory environmentId={environmentId} reference={reference} />
+            <IssueHistory
+              environmentId={environmentId}
+              reference={reference}
+              order={requestedOrder}
+              orders={historyOrders}
+              url={detail.url}
+            />
           ) : (
             <>
               {detail.capabilities.subIssues ? (
@@ -1230,123 +1230,91 @@ function IssueDetailContent({
                 linkedPages.hasMore ||
                 linkedPages.isPending ||
                 linkedPages.error) ? (
-                <section className="flex flex-col gap-1">
+                <section className="flex flex-col gap-1" aria-label="Linked pull requests">
                   <h3 className="text-xs text-muted-foreground">Linked pull requests</h3>
-                  {linkedPages.items.map((link) => {
-                    const target = linkedPullRequestTarget(
-                      link,
-                      reference,
-                      environmentId,
-                      projects,
-                    );
-                    return (
-                      <LinkedPullRequestRow
-                        key={link.url}
-                        link={link}
-                        onSelect={
-                          onSelectPullRequest && target ? () => onSelectPullRequest(target) : null
+                  {(linkedExpanded ? linkedPages.items : linkedPages.items.slice(0, 3)).map(
+                    (link) => {
+                      const target = linkedPullRequestTarget(
+                        link,
+                        reference,
+                        environmentId,
+                        projects,
+                      );
+                      return (
+                        <LinkedPullRequestRow
+                          key={link.url}
+                          link={link}
+                          onSelect={
+                            onSelectPullRequest && target ? () => onSelectPullRequest(target) : null
+                          }
+                        />
+                      );
+                    },
+                  )}
+                  {linkedPages.items.length > 3 ? (
+                    <div className="flex">
+                      <Button
+                        size="sm"
+                        variant="ghost-muted"
+                        aria-expanded={linkedExpanded}
+                        onClick={() =>
+                          setLinkedExpansion({ viewer: detail.viewer, expanded: !linkedExpanded })
                         }
-                      />
-                    );
-                  })}
-                  {linkedPages.error && linkedPages.items.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">{linkedPages.error}</p>
+                      >
+                        {linkedExpanded ? (
+                          <MinusIcon aria-hidden className="size-4" />
+                        ) : (
+                          <PlusIcon aria-hidden className="size-4" />
+                        )}
+                        {linkedExpanded ? "Show less" : `Show ${linkedPages.items.length - 3} more`}
+                      </Button>
+                    </div>
                   ) : null}
-                  <IssueLoadMore page={linkedPages} label="Load more pull requests" />
+                  {linkedPages.isPending ? (
+                    <p role="status" className="text-xs text-muted-foreground">
+                      Loading linked pull requests…
+                    </p>
+                  ) : null}
+                  {linkedPages.error !== null ? (
+                    <div className="flex flex-col items-start gap-2">
+                      <p role="alert" className="text-xs text-muted-foreground">
+                        Linked pull requests could not be read. {linkedPages.error}
+                      </p>
+                      <Button
+                        size="xs"
+                        variant="ghost-muted"
+                        disabled={linkedPages.isPending}
+                        onClick={!linkedPages.hasMore ? linkedPages.refresh : linkedPages.loadMore}
+                      >
+                        Retry linked pull requests
+                      </Button>
+                    </div>
+                  ) : null}
                 </section>
               ) : null}
 
-              <section className="flex flex-col gap-3">
-                <h3 className="text-xs text-muted-foreground">
-                  Activity
-                  {detail.commentCount !== null && detail.commentCount > 0
-                    ? ` · ${detail.commentCount} ${detail.commentCount === 1 ? "comment" : "comments"}`
-                    : ""}
-                </h3>
-                {detail.historyTruncated === true ? (
-                  <IssueTruncatedNote
-                    text="Some older activity is not shown here."
-                    url={detail.url}
-                    providerName={tracker.providerName}
-                  />
-                ) : null}
-                {nextCursor !== null ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="self-start"
-                    disabled={loadingOlder}
-                    onClick={() => void loadOlder()}
-                  >
-                    {loadingOlder ? "Loading…" : "Load older comments"}
-                  </Button>
-                ) : null}
-                {timeline.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Nothing has happened here yet.</p>
-                ) : null}
-                {timeline.map((item) =>
-                  item.kind === "comment" ? (
-                    <article
-                      key={`c:${issueEntryKey(detail)}:${item.comment.id}`}
-                      className="flex flex-col gap-2 rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:160px] [content-visibility:auto]"
-                    >
-                      <IssueCommentContent
-                        environmentId={environmentId}
-                        reference={{ ...reference, host: reference.host ?? detail.host }}
-                        comment={item.comment}
-                        cwd={cwd}
-                        threadRef={threadRef}
-                        richText={detail.capabilities.richText === true}
-                        canEdit={blocked === null && detail.capabilities.editComment === true}
-                        onChanged={(body) => {
-                          setOlder((held) =>
-                            editRetainedIssueComment(
-                              held,
-                              issueEntryKey(detail),
-                              item.comment.id,
-                              body,
-                            ),
-                          );
-                          onUpdated?.();
-                        }}
-                      />
-                      {item.comment.reactions !== undefined ||
-                      issueSupportsReactions(detail.capabilities, true) ? (
-                        <IssueReactionBar
-                          key={JSON.stringify([
-                            issueEntryKey(detail),
-                            item.comment.id,
-                            detail.viewer ?? null,
-                          ])}
-                          viewer={detail.viewer}
-                          reactions={item.comment.reactions}
-                          canReact={canReactToComment}
-                          contents={detail.capabilities.reactionContents}
-                          subjectId={item.comment.id}
-                          environmentId={environmentId}
-                          reference={reference}
-                        />
-                      ) : null}
-                      {item.comment.reactionsTruncated === true ? (
-                        <IssueTruncatedNote
-                          text="Reaction details are limited."
-                          url={item.comment.url ?? detail.url}
-                          providerName={tracker.providerName}
-                        />
-                      ) : null}
-                    </article>
-                  ) : (
-                    <PullRequestMetaLine
-                      key={`e:${item.event.id}`}
-                      className="px-1 text-xs text-muted-foreground"
-                    >
-                      <PullRequestActorLabel actor={item.event.actor} />
-                      <span>{eventSentence(item.event)}</span>
-                      <span>{formatRelativeTimeLabel(item.event.createdAt)}</span>
-                    </PullRequestMetaLine>
-                  ),
-                )}
-              </section>
+              <IssueActivity
+                key={JSON.stringify([
+                  issueEntryKey(detail),
+                  detail.viewer,
+                  order,
+                  detail.commentsCursor,
+                  dependenciesRevision,
+                ])}
+                environmentId={environmentId}
+                reference={reference}
+                detail={detail}
+                input={commentsInput}
+                order={order}
+                orders={orders}
+                includeEvents={activityOrders.length > 0 || partialHistory}
+                partialHistory={partialHistory}
+                cwd={cwd}
+                threadRef={threadRef}
+                canWrite={canWrite}
+                onOrderChange={setRequestedOrder}
+                onUpdated={onUpdated}
+              />
             </>
           )}
         </div>
@@ -1440,5 +1408,172 @@ function IssueDetailContent({
         </form>
       ) : null}
     </div>
+  );
+}
+
+function IssueActivity({
+  environmentId,
+  reference,
+  detail,
+  input,
+  order,
+  orders,
+  includeEvents,
+  partialHistory,
+  cwd,
+  threadRef,
+  canWrite,
+  onOrderChange,
+  onUpdated,
+}: {
+  environmentId: EnvironmentId;
+  reference: IssueRef;
+  detail: IssueDetail;
+  input: IssueCommentsPageInput | null;
+  order: IssueListOrder;
+  orders: ReadonlyArray<IssueListOrder>;
+  includeEvents: boolean;
+  partialHistory: boolean;
+  cwd: string;
+  threadRef: ScopedThreadRef | null;
+  canWrite: boolean;
+  onOrderChange: (order: IssueListOrder) => void;
+  onUpdated?: (() => void) | undefined;
+}) {
+  const pages = useIssueComments(environmentId, input);
+  const source =
+    detail.viewer === null
+      ? detail.comments
+      : JSON.stringify(detail.comments.map((comment) => comment.id));
+  const previousSource = useRef(source);
+  const [heldSource, setHeldSource] = useState({ source, staleItems: new Set<IssueComment>() });
+  const sourceChanged = heldSource.source !== source;
+  if (sourceChanged) setHeldSource({ source, staleItems: new Set(pages.items) });
+  const staleSource =
+    sourceChanged || pages.items.some((comment) => heldSource.staleItems.has(comment));
+  if (!staleSource && heldSource.staleItems.size > 0)
+    setHeldSource({ source, staleItems: new Set() });
+  const refreshComments = pages.refresh;
+  useEffect(() => {
+    if (previousSource.current === source) return;
+    previousSource.current = source;
+    refreshComments();
+  }, [source, refreshComments]);
+  const comments = new Map<string, IssueComment>();
+  if (!staleSource) for (const comment of pages.items) comments.set(comment.id, comment);
+  if (order === "desc") for (const comment of detail.comments) comments.set(comment.id, comment);
+  const timeline: ReadonlyArray<TimelineItem> = [
+    ...[...comments.values()].map((comment): TimelineItem => ({
+      kind: "comment",
+      at: comment.createdAt,
+      comment,
+    })),
+    ...(includeEvents ? detail.events : []).map((event): TimelineItem => ({
+      kind: "event",
+      at: event.createdAt,
+      event,
+    })),
+  ].sort((a, b) => (Date.parse(a.at) - Date.parse(b.at)) * (order === "desc" ? -1 : 1));
+  const blocked = writeBlockReason(detail, canWrite);
+  const canReactToComment = blocked === null && issueSupportsReactions(detail.capabilities, true);
+  const tracker = issueTrackerPresentation(detail.tracker);
+  return (
+    <section className="flex flex-col gap-3" aria-label="Activity">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <h3 className="text-xs text-muted-foreground">
+          Activity
+          {detail.commentCount !== null && detail.commentCount > 0
+            ? ` · ${detail.commentCount} ${detail.commentCount === 1 ? "comment" : "comments"}`
+            : ""}
+        </h3>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {partialHistory ? (
+            <span className="text-xs text-muted-foreground">Comment order</span>
+          ) : null}
+          <IssueOrderControl order={order} orders={orders} onChange={onOrderChange} />
+        </div>
+      </div>
+      {partialHistory ? (
+        <IssueTruncatedNote
+          text="History is incomplete and its global order is unavailable. Comments use the selected order."
+          url={detail.url}
+          providerName={tracker.providerName}
+        />
+      ) : null}
+      {!partialHistory && !includeEvents && detail.capabilities.events ? (
+        <IssueTruncatedNote
+          text="Activity history is not available in this order. Comments use the selected order."
+          url={detail.url}
+          providerName={tracker.providerName}
+        />
+      ) : null}
+      {!partialHistory && detail.historyTruncated === true && includeEvents ? (
+        <IssueTruncatedNote
+          text="Some activity is not shown here."
+          url={detail.url}
+          providerName={tracker.providerName}
+        />
+      ) : null}
+      {timeline.length === 0 &&
+      !pages.isPending &&
+      pages.error === null &&
+      detail.historyTruncated !== true &&
+      !partialHistory &&
+      includeEvents ? (
+        <p className="text-sm text-muted-foreground">Nothing has happened here yet.</p>
+      ) : null}
+      {timeline.map((item) =>
+        item.kind === "comment" ? (
+          <article
+            key={`c:${issueEntryKey(detail)}:${detail.viewer}:${item.comment.id}`}
+            className="flex flex-col gap-2 rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:160px] [content-visibility:auto]"
+          >
+            <IssueCommentContent
+              environmentId={environmentId}
+              reference={{ ...reference, host: reference.host ?? detail.host }}
+              comment={item.comment}
+              cwd={cwd}
+              threadRef={threadRef}
+              richText={detail.capabilities.richText === true}
+              canEdit={blocked === null && detail.capabilities.editComment === true}
+              onChanged={() => onUpdated?.()}
+            />
+            {item.comment.reactions !== undefined ||
+            issueSupportsReactions(detail.capabilities, true) ? (
+              <IssueReactionBar
+                key={JSON.stringify([
+                  issueEntryKey(detail),
+                  item.comment.id,
+                  detail.viewer ?? null,
+                ])}
+                viewer={detail.viewer}
+                reactions={item.comment.reactions}
+                canReact={canReactToComment}
+                contents={detail.capabilities.reactionContents}
+                subjectId={item.comment.id}
+                environmentId={environmentId}
+                reference={reference}
+              />
+            ) : null}
+            {item.comment.reactionsTruncated === true ? (
+              <IssueTruncatedNote
+                text="Reaction details are limited."
+                url={item.comment.url ?? detail.url}
+                providerName={tracker.providerName}
+              />
+            ) : null}
+          </article>
+        ) : (
+          <IssueEventRow key={`e:${item.event.id}`} event={item.event} />
+        ),
+      )}
+      <IssueScrollSentinel
+        key={JSON.stringify([environmentId, reference, input, order])}
+        hasMore={pages.hasMore || pages.error !== null}
+        isPending={pages.isPending}
+        error={pages.error}
+        loadMore={!pages.hasMore ? pages.refresh : pages.loadMore}
+      />
+    </section>
   );
 }

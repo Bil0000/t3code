@@ -1,7 +1,6 @@
 import type {
   EnvironmentId,
   IssueActor,
-  IssueComment,
   IssueDetail,
   IssueCapabilities,
   IssueAssigneeCandidate,
@@ -14,7 +13,7 @@ import type {
   IssueReaction,
   PullRequestRef,
 } from "@t3tools/contracts";
-import { issueEntryKey, prependIssueComments } from "@t3tools/client-runtime/state/issues";
+import { issueEntryKey } from "@t3tools/client-runtime/state/issues";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
@@ -64,68 +63,6 @@ export function offeredIssueReactionContents(
   return PULL_REQUEST_REACTION_ORDER.filter(
     (content) => contents === undefined || contents.includes(content),
   );
-}
-
-export type IssueOlderComments = {
-  readonly issue: string;
-  readonly viewer?: string | null | undefined;
-  readonly seed: string | null;
-  readonly firstPage?: ReadonlyArray<IssueComment> | undefined;
-  readonly firstIds: ReadonlyArray<string>;
-  readonly comments: ReadonlyArray<IssueComment>;
-  readonly cursor: string | null;
-};
-
-export function issueCommentsView(detail: IssueDetail, older: IssueOlderComments | null) {
-  const held =
-    older?.issue === issueEntryKey(detail) &&
-    (older.viewer === undefined || older.viewer === detail.viewer) &&
-    (detail.viewer !== null || older.firstPage === detail.comments) &&
-    older.seed === detail.commentsCursor &&
-    older.firstIds.length === detail.comments.length &&
-    older.firstIds.every((id, index) => id === detail.comments[index]?.id)
-      ? older
-      : null;
-  return {
-    comments: prependIssueComments(detail.comments, held?.comments ?? []),
-    cursor: held ? held.cursor : detail.commentsCursor,
-    held,
-  };
-}
-
-export function editRetainedIssueComment(
-  older: IssueOlderComments | null,
-  issue: string,
-  id: string,
-  body: string,
-): IssueOlderComments | null {
-  return older === null || older.issue !== issue
-    ? older
-    : {
-        ...older,
-        comments: older.comments.map((comment) =>
-          comment.id === id ? { ...comment, body } : comment,
-        ),
-      };
-}
-
-export function appendOlderIssueComments(
-  detail: IssueDetail,
-  older: IssueOlderComments | null,
-  page: { readonly comments: ReadonlyArray<IssueComment>; readonly nextCursor: string | null },
-): IssueOlderComments {
-  return {
-    issue: issueEntryKey(detail),
-    viewer: detail.viewer,
-    seed: detail.commentsCursor,
-    firstPage: detail.comments,
-    firstIds: detail.comments.map((comment) => comment.id),
-    comments: prependIssueComments(
-      issueCommentsView(detail, older).held?.comments ?? [],
-      page.comments,
-    ),
-    cursor: page.nextCursor,
-  };
 }
 
 export type IssueLinkedPullRequestTarget = Pick<
