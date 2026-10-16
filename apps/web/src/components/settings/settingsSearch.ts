@@ -775,7 +775,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "issue-trackers",
     title: "Issue trackers",
-    to: "/settings/source-control",
+    to: "/settings/integrations",
     scope: "environment-defaults",
     searchTerms: ["linear jira issues tracker team api key connect bind project"],
     environmentOnly: true,

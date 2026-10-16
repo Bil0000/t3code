@@ -172,6 +172,13 @@ describe("searchSettings", () => {
     });
   });
 
+  it.each(["Linear", "Jira"])("opens %s setup in Integrations", (query) => {
+    expect(searchSettings(query).find((item) => item.id === "issue-trackers")).toMatchObject({
+      to: "/settings/integrations",
+      environmentOnly: true,
+    });
+  });
+
   it("hides settings whose controls are unavailable", () => {
     const available = filterAvailableSettingsSearchItems({
       hasCloudPublicConfig: false,
