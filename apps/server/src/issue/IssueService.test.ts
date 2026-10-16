@@ -18,7 +18,11 @@ import * as RateLimit from "@t3tools/source-control-core/server/SourceControlRat
 import * as IssueTrackerHost from "@t3tools/issue-tracker-core/server/IssueTrackerHost";
 import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
 import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
-import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
+import * as GitHubRest from "@t3tools/source-control-github/server/GitHubRest";
+import * as GitHubRequestPolicy from "@t3tools/source-control-github/server/GitHubRequestPolicy";
+import * as GitHubCredentials from "@t3tools/source-control-github/server/GitHubCredentials";
+import * as GitHubQuota from "@t3tools/source-control-github/server/GitHubQuota";
+import * as Redacted from "effect/Redacted";
 import * as GitHubIssueTracker from "@t3tools/source-control-github/server/GitHubIssueTracker";
 import {
   IssueTrackerKind,
@@ -44,6 +48,57 @@ import * as IssueService from "./IssueService.ts";
 import * as IssueTrackerRegistry from "./IssueTrackerRegistry.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { IssuesToolkit } from "../mcp/toolkits/issues/tools.ts";
+
+function nativeGitHubTracker(input: {
+  readonly graphql: (request: {
+    readonly operationName: string;
+    readonly variables?: Readonly<Record<string, unknown>>;
+  }) => Effect.Effect<string>;
+  readonly rest?: GitHubRest.GitHubRest["Service"]["rest"];
+}) {
+  const services = Layer.mergeAll(
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        const body = JSON.parse(
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+        );
+        return input
+          .graphql(body)
+          .pipe(
+            Effect.map((text) =>
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(text, { headers: { "content-type": "application/json" } }),
+              ),
+            ),
+          );
+      }),
+    ),
+    Layer.succeed(GitHubCredentials.GitHubCredentials, {
+      get: (host) =>
+        Effect.succeed({
+          host,
+          token: Redacted.make("fixture"),
+          source: "env" as const,
+          fingerprint: "fixture",
+        }),
+      invalidate: () => Effect.void,
+    }),
+    GitHubQuota.layer,
+    RateLimit.layer,
+  );
+  return GitHubIssueTracker.make.pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(GitHubRest.GitHubRest)({
+          rest: input.rest ?? (() => Effect.die("Unexpected native REST call")),
+        }),
+        GitHubRequestPolicy.layer,
+      ).pipe(Layer.provideMerge(services)),
+    ),
+  );
+}
 
 const GITHUB = IssueTrackerKind.make("github");
 const LINEAR = IssueTrackerKind.make("linear");
@@ -1021,50 +1076,56 @@ describe("IssueService write permissions", () => {
   ])("keeps native GitHub metadata authorization for $role/$status", (testCase) =>
     Effect.gen(function* () {
       let reads = 0;
-      const writes: GitHubApi.GitHubRestInput[] = [];
-      const driver = yield* GitHubIssueTracker.make.pipe(
-        Effect.provide(
-          Layer.mock(GitHubApi.GitHubApi)({
-            graphql: () =>
-              Effect.sync(() => {
-                reads += 1;
-                return JSON.stringify({
-                  data: {
-                    repository: {
-                      viewerPermission: testCase.role,
-                      issue: { viewerCanUpdate: false },
-                    },
+      const writes: GitHubRest.GitHubRestInput[] = [];
+      const driver = yield* nativeGitHubTracker({
+        graphql: () =>
+          Effect.sync(() => {
+            reads += 1;
+            return JSON.stringify({
+              data: {
+                repository: {
+                  isArchived: false,
+                  viewerPermission: testCase.role ?? null,
+                  issue: {
+                    locked: false,
+                    viewerCanUpdate: false,
                   },
-                });
-              }),
-            rest: (request) =>
-              Effect.sync(() => {
-                writes.push(request);
-              }).pipe(
-                Effect.andThen(
-                  testCase.status === 403
-                    ? Effect.fail(
-                        new GitHubApi.GitHubApiResponseError({
-                          host: "github.com",
-                          operation: "update",
-                          status: 403,
-                        }),
-                      )
-                    : Effect.succeed({
-                        status: 200,
-                        headers: {},
-                        truncated: false,
-                        invalidUtf8: false,
-                        body: JSON.stringify({
-                          labels: [{ name: "bug", color: "000000" }],
-                          assignees: [{ login: "octocat" }],
-                        }),
-                      }),
-                ),
-              ),
+                },
+              },
+            });
           }),
-        ),
-      );
+        rest: (request) =>
+          Effect.sync(() => {
+            writes.push(request);
+          }).pipe(
+            Effect.andThen(
+              testCase.status === 403
+                ? Effect.fail(
+                    new GitHubRequestPolicy.GitHubApiResponseError({
+                      host: "github.com",
+                      operation: "update",
+                      status: 403,
+                    }),
+                  )
+                : Effect.succeed({
+                    status: 200,
+                    headers: {},
+                    truncated: false,
+                    invalidUtf8: false,
+                    body: JSON.stringify({
+                      labels: [{ name: "bug", color: "000000" }],
+                      assignees: [
+                        {
+                          name: null,
+                          avatarUrl: "https://avatars.example/user",
+                          login: "octocat",
+                        },
+                      ],
+                    }),
+                  }),
+            ),
+          ),
+      });
       const service = yield* makeService({
         projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [driver],
@@ -3090,50 +3151,56 @@ it.effect(
     Effect.gen(function* () {
       const calls: Array<{ operation: string; scope: string; cursor: unknown }> = [];
       let bindingReads = 0;
-      const driver = yield* GitHubIssueTracker.make.pipe(
-        Effect.provide(
-          Layer.mock(GitHubApi.GitHubApi)({
-            graphql: (request) =>
-              Effect.sync(() => {
-                const scope = `${request.variables?.owner}/${request.variables?.name}`;
-                calls.push({
-                  operation: request.operation,
-                  scope,
-                  cursor: request.variables?.cursor,
-                });
-                if (request.operation === "getViewer")
-                  return JSON.stringify({ data: { viewer: { login: "viewer" } } });
-                const next = request.variables?.cursor === undefined;
-                return JSON.stringify({
-                  data: {
-                    repository: {
-                      issues: {
-                        pageInfo: { hasNextPage: next, endCursor: next ? "native-next" : null },
-                        nodes: [
-                          {
-                            number: next ? 42 : 41,
-                            title: scope,
-                            url: `https://github.com/${scope}/issues/42`,
-                            state: "OPEN",
-                            stateReason: null,
-                            createdAt: "2026-10-14T00:00:00Z",
-                            updatedAt: "2026-10-14T00:00:00Z",
-                            closedAt: null,
-                            author: null,
-                            assignees: { nodes: [] },
-                            labels: { nodes: [], pageInfo: { hasNextPage: false } },
-                            milestone: null,
-                            comments: { totalCount: 0 },
+      const driver = yield* nativeGitHubTracker({
+        graphql: (request) =>
+          Effect.sync(() => {
+            const scope = `${request.variables?.owner}/${request.variables?.name}`;
+            calls.push({
+              operation: request.operationName,
+              scope,
+              cursor: request.variables?.cursor,
+            });
+            if (request.operationName === "IssueViewer")
+              return JSON.stringify({ data: { viewer: { login: "viewer" } } });
+            const next = request.variables?.cursor === undefined;
+            return JSON.stringify({
+              data: {
+                repository: {
+                  issues: {
+                    pageInfo: { hasNextPage: next, endCursor: next ? "native-next" : null },
+                    nodes: [
+                      {
+                        number: next ? 42 : 41,
+                        title: scope,
+                        url: `https://github.com/${scope}/issues/42`,
+                        state: "OPEN",
+                        stateReason: null,
+                        createdAt: "2026-10-14T00:00:00Z",
+                        updatedAt: "2026-10-14T00:00:00Z",
+                        closedAt: null,
+                        author: null,
+                        assignees: { nodes: [] },
+                        labels: {
+                          nodes: [],
+                          pageInfo: {
+                            endCursor: null,
+                            hasNextPage: false,
                           },
-                        ],
+                        },
+                        milestone: null,
+                        comments: {
+                          nodes: [],
+                          pageInfo: { hasPreviousPage: false, startCursor: null },
+                          totalCount: 0,
+                        },
                       },
-                    },
+                    ],
                   },
-                });
-              }),
+                },
+              },
+            });
           }),
-        ),
-      );
+      });
       const service = yield* makeService({
         projects: [project({ id: "web", repository: "acme/web" })],
         trackers: [driver],
@@ -3161,7 +3228,7 @@ it.effect(
       expect(calls).toHaveLength(4);
       expect(bindingReads).toBe(2);
       expect(
-        calls.filter((call) => call.operation === "listIssues").map((call) => call.scope),
+        calls.filter((call) => call.operation === "RepositoryIssues").map((call) => call.scope),
       ).toEqual(["acme/other", "acme/other"]);
       const before = calls.length;
       yield* service
@@ -3469,45 +3536,44 @@ it.effect.each([
   { role: "TRIAGE", archived: true, allowed: false },
 ])("keeps native GitHub dependency rights through the codec and service: $role/$archived", (test) =>
   Effect.gen(function* () {
-    const writes: GitHubApi.GitHubRestInput[] = [];
+    const writes: GitHubRest.GitHubRestInput[] = [];
     const host = "github.example";
-    const driver = yield* GitHubIssueTracker.make.pipe(
-      Effect.provide(
-        Layer.mock(GitHubApi.GitHubApi)({
-          graphql: () =>
-            Effect.succeed(
-              JSON.stringify({
-                data: {
-                  repository: {
-                    viewerPermission: test.role,
-                    isArchived: test.archived,
-                    issue: { viewerCanUpdate: false },
-                  },
+    const driver = yield* nativeGitHubTracker({
+      graphql: () =>
+        Effect.succeed(
+          JSON.stringify({
+            data: {
+              repository: {
+                viewerPermission: test.role ?? null,
+                isArchived: test.archived,
+                issue: {
+                  locked: false,
+                  viewerCanUpdate: false,
                 },
-              }),
-            ),
-          rest: (request) =>
-            Effect.sync(() => {
-              expect(request.host).toBe(host);
-              if (request.method === "POST") writes.push(request);
-              const target = request.path.includes("/api/");
-              return {
-                status: request.method === "POST" ? 201 : 200,
-                headers: {},
-                truncated: false,
-                invalidUtf8: false,
-                body: JSON.stringify({
-                  id: target ? 808 : 4242,
-                  number: target ? 8 : 42,
-                  title: "Native dependency",
-                  html_url: `https://${host}/acme/${target ? "api/issues/8" : "web/issues/42"}`,
-                  state: "open",
-                }),
-              };
+              },
+            },
+          }),
+        ),
+      rest: (request) =>
+        Effect.sync(() => {
+          expect(request.host).toBe(host);
+          if (request.method === "POST") writes.push(request);
+          const target = request.path.includes("/api/");
+          return {
+            status: request.method === "POST" ? 201 : 200,
+            headers: {},
+            truncated: false,
+            invalidUtf8: false,
+            body: JSON.stringify({
+              id: target ? 808 : 4242,
+              number: target ? 8 : 42,
+              title: "Native dependency",
+              html_url: `https://${host}/acme/${target ? "api/issues/8" : "web/issues/42"}`,
+              state: "open",
             }),
+          };
         }),
-      ),
-    );
+    });
     const native = yield* driver.getViewerPermissions({
       cwd: "/w/web",
       host,

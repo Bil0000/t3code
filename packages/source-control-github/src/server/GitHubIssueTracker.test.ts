@@ -5,7 +5,13 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { IssueDetail } from "@t3tools/contracts";
 
-import * as GitHubApi from "./GitHubApi.ts";
+import * as GitHubRest from "./GitHubRest.ts";
+import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
+import * as GitHubCredentials from "./GitHubCredentials.ts";
+import * as GitHubQuota from "./GitHubQuota.ts";
+import * as Redacted from "effect/Redacted";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubIssueTracker from "./GitHubIssueTracker.ts";
 
 const decodeDetailWire = Schema.decodeEffect(IssueDetail);
@@ -15,12 +21,20 @@ const DETAIL_FIXTURE = {
   data: {
     viewer: { login: "julius" },
     repository: {
+      isArchived: false,
       viewerPermission: "TRIAGE",
       issue: {
+        milestone: null,
+        locked: false,
         number: 42,
         title: "Composer loses focus",
         url: "https://github.com/acme/web/issues/42",
-        author: { login: "octocat", avatarUrl: "https://avatars/octocat", name: "Octo Cat" },
+        author: {
+          __typename: "User",
+          login: "octocat",
+          avatarUrl: "https://avatars/octocat",
+          name: "Octo Cat",
+        },
         state: "CLOSED",
         stateReason: "NOT_PLANNED",
         createdAt: "2026-07-01T00:00:00Z",
@@ -31,8 +45,16 @@ const DETAIL_FIXTURE = {
           pageInfo: { hasPreviousPage: true, startCursor: "Y3Vyc29y" },
           nodes: [
             {
+              __typename: "IssueComment",
+              lastEditedAt: null,
+              viewerCanUpdate: false,
               id: "IC_1",
-              author: { login: "julius", avatarUrl: null },
+              author: {
+                __typename: "User",
+                name: null,
+                login: "julius",
+                avatarUrl: "https://avatars.example/user",
+              },
               body: "Repro attached.",
               createdAt: "2026-07-02T00:00:00Z",
               url: "https://github.com/acme/web/issues/42#issuecomment-1",
@@ -40,7 +62,19 @@ const DETAIL_FIXTURE = {
                 {
                   content: "THUMBS_UP",
                   viewerHasReacted: true,
-                  reactors: { totalCount: 2, nodes: [{ login: "julius" }, { login: "theo" }] },
+                  reactors: {
+                    totalCount: 2,
+                    nodes: [
+                      {
+                        __typename: "User",
+                        login: "julius",
+                      },
+                      {
+                        __typename: "User",
+                        login: "theo",
+                      },
+                    ],
+                  },
                 },
                 {
                   content: "EYES",
@@ -51,8 +85,13 @@ const DETAIL_FIXTURE = {
             },
           ],
         },
-        assignees: { nodes: [{ login: "theo", name: null, avatarUrl: null }] },
-        labels: { nodes: [{ name: "bug", color: "d73a4a" }, null] },
+        assignees: {
+          nodes: [{ login: "theo", name: null, avatarUrl: "https://avatars.example/user" }],
+        },
+        labels: {
+          pageInfo: { hasNextPage: false },
+          nodes: [{ name: "bug", color: "d73a4a" }, null],
+        },
         body: "Typing in the composer drops focus after a paste.",
         viewerCanUpdate: false,
         reactionGroups: [],
@@ -69,19 +108,31 @@ const DETAIL_FIXTURE = {
           ],
         },
         timelineItems: {
+          pageInfo: {
+            startCursor: null,
+            hasPreviousPage: false,
+          },
           nodes: [
             {
               __typename: "LabeledEvent",
               id: "LE_1",
               createdAt: "2026-07-01T01:00:00Z",
-              actor: { login: "theo" },
+              actor: {
+                __typename: "User",
+                avatarUrl: "https://avatars.example/user",
+                login: "theo",
+              },
               label: { name: "bug" },
             },
             {
               __typename: "CrossReferencedEvent",
               id: "CRE_1",
               createdAt: "2026-07-02T01:00:00Z",
-              actor: { login: "julius" },
+              actor: {
+                __typename: "User",
+                avatarUrl: "https://avatars.example/user",
+                login: "julius",
+              },
               source: {
                 __typename: "PullRequest",
                 number: 50,
@@ -92,7 +143,12 @@ const DETAIL_FIXTURE = {
                 repository: { nameWithOwner: "acme/web" },
               },
             },
-            { __typename: "MentionedEvent", id: "ME_1", createdAt: "2026-07-02T02:00:00Z" },
+            {
+              actor: null,
+              __typename: "MentionedEvent",
+              id: "ME_1",
+              createdAt: "2026-07-02T02:00:00Z",
+            },
             {
               __typename: "ClosedEvent",
               id: "CE_1",
@@ -108,8 +164,8 @@ const DETAIL_FIXTURE = {
 const DETAIL_RESPONSE = JSON.stringify(DETAIL_FIXTURE);
 
 function tracker(
-  graphql: (query: string, variables: unknown) => string,
-  rest: (input: GitHubApi.GitHubRestInput) => GitHubApi.GitHubRestResponse = () => ({
+  graphql: (query: string, variables: Readonly<Record<string, unknown>>) => string | Response,
+  rest: (input: GitHubRest.GitHubRestInput) => GitHubRest.GitHubRestResponse = () => ({
     status: 200,
     headers: {},
     body: JSON.stringify({ labels: [{ name: "bug", color: "d73a4a" }] }),
@@ -117,12 +173,43 @@ function tracker(
     invalidUtf8: false,
   }),
 ) {
+  const services = Layer.mergeAll(
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => {
+        const body = JSON.parse(
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+        );
+        const response = graphql(body.query, body.variables);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            typeof response === "string"
+              ? new Response(response, { headers: { "content-type": "application/json" } })
+              : response,
+          ),
+        );
+      }),
+    ),
+    Layer.succeed(GitHubCredentials.GitHubCredentials, {
+      get: (host) =>
+        Effect.succeed({
+          host,
+          token: Redacted.make("fixture"),
+          source: "env" as const,
+          fingerprint: "fixture",
+        }),
+      invalidate: () => Effect.void,
+    }),
+    GitHubQuota.layer,
+    SourceControlRateLimit.layer,
+  );
   return GitHubIssueTracker.make.pipe(
     Effect.provide(
-      Layer.mock(GitHubApi.GitHubApi)({
-        graphql: ({ query, variables }) => Effect.succeed(graphql(query, variables)),
-        rest: (input) => Effect.succeed(rest(input)),
-      }),
+      Layer.mergeAll(
+        Layer.mock(GitHubRest.GitHubRest)({ rest: (input) => Effect.succeed(rest(input)) }),
+        GitHubRequestPolicy.layer,
+      ).pipe(Layer.provideMerge(services)),
     ),
   );
 }
@@ -137,21 +224,26 @@ describe("GitHubIssueTracker", () => {
         return JSON.stringify({
           data: {
             repository: {
+              rootForms: null,
+              docsForms: null,
               nameWithOwner: inherited ? "acme/.github" : "acme/web",
               isPrivate: false,
               forms: inherited
                 ? {
+                    __typename: "Tree",
                     oid: "a".repeat(40),
                     entries: [
                       {
                         name: "bug.yml",
                         object: {
+                          __typename: "Blob",
                           text: "name: Bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
                         },
                       },
                       {
                         name: "config.yml",
                         object: {
+                          __typename: "Blob",
                           text: "blank_issues_enabled: false\ncontact_links: [{name: Help, about: Ask us, url: 'https://example.com/help'}]\n",
                         },
                       },
@@ -187,10 +279,21 @@ describe("GitHubIssueTracker", () => {
     (kind) =>
       Effect.gen(function* () {
         const reads: unknown[] = [];
-        const markdown = { filename: "bug.md", name: "Native Markdown", body: "Native body" };
+        const markdown = {
+          filename: "bug.md",
+          name: "Native Markdown",
+          about: "Report a bug",
+          title: null,
+          body: "Native body",
+          assignees: { nodes: [] },
+          labels: null,
+        };
         const valid = {
           name: "bug.md",
-          object: { text: "---\nname: Native Markdown\nabout: Report a bug\n---\nNative body" },
+          object: {
+            __typename: "Blob",
+            text: "---\nname: Native Markdown\nabout: Report a bug\n---\nNative body",
+          },
         };
         const api = yield* tracker((_query, variables) => {
           reads.push(variables);
@@ -201,26 +304,56 @@ describe("GitHubIssueTracker", () => {
                 nameWithOwner: defaults ? "acme/.github" : "acme/web",
                 isPrivate: false,
                 issueTemplates: [markdown],
-                rootForms: !defaults && kind === "root" ? { entries: [valid] } : null,
-                docsForms: !defaults && kind === "docs" ? { entries: [valid] } : null,
+                rootForms:
+                  !defaults && kind === "root"
+                    ? {
+                        __typename: "Tree",
+                        oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        entries: [valid],
+                      }
+                    : null,
+                docsForms:
+                  !defaults && kind === "docs"
+                    ? {
+                        __typename: "Tree",
+                        oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        entries: [valid],
+                      }
+                    : null,
                 forms: defaults
                   ? {
+                      __typename: "Tree",
                       oid: "a".repeat(40),
                       entries: [
                         valid,
                         {
                           name: "form.yml",
                           object: {
+                            __typename: "Blob",
                             text: "name: Default form\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n",
                           },
                         },
-                        { name: "config.yml", object: { text: "blank_issues_enabled: false" } },
+                        {
+                          name: "config.yml",
+                          object: {
+                            __typename: "Blob",
+                            text: "blank_issues_enabled: false",
+                          },
+                        },
                       ],
                     }
                   : kind === "invalid-local"
                     ? {
+                        __typename: "Tree",
+                        oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                         entries: [
-                          { name: "bug.md", object: { text: "Missing native front matter" } },
+                          {
+                            name: "bug.md",
+                            object: {
+                              __typename: "Blob",
+                              text: "Missing native front matter",
+                            },
+                          },
                         ],
                       }
                     : null,
@@ -253,16 +386,33 @@ describe("GitHubIssueTracker", () => {
           return JSON.stringify({
             data: {
               repository: {
+                nameWithOwner: "acme/web",
+                isPrivate: false,
+                rootForms: null,
+                docsForms: null,
                 issueTemplates:
                   kind === "markdown"
-                    ? [{ filename: "bug.md", name: "Local bug", body: "Local body" }]
+                    ? [
+                        {
+                          about: null,
+                          title: null,
+                          assignees: { nodes: [] },
+                          labels: null,
+                          filename: "bug.md",
+                          name: "Local bug",
+                          body: "Local body",
+                        },
+                      ]
                     : [],
                 forms: {
+                  __typename: "Tree",
+                  oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   entries: [
                     {
                       name:
                         kind === "form" ? "bug.yml" : kind === "markdown" ? "bug.md" : "config.yml",
                       object: {
+                        __typename: "Blob",
                         text:
                           kind === "form"
                             ? "name: Local bug\ndescription: Report an issue\nbody:\n- type: textarea\n  attributes:\n    label: Details\n"
@@ -299,69 +449,60 @@ describe("GitHubIssueTracker", () => {
   ] as const)("handles %s defaults without changing native ownership", (kind) =>
     Effect.gen(function* () {
       let reads = 0;
-      const api = yield* GitHubIssueTracker.make.pipe(
-        Effect.provide(
-          Layer.mock(GitHubApi.GitHubApi)({
-            graphql: ({ variables }) => {
-              reads++;
-              if (variables?.name === "web")
-                return Effect.succeed(
-                  JSON.stringify({ data: { repository: { issueTemplates: [], forms: null } } }),
-                );
-              if (kind === "missing")
-                return Effect.fail(
-                  new GitHubApi.GitHubApiNotFoundError({
-                    host: "github.com",
-                    operation: "listTemplates",
-                  }),
-                );
-              if (kind === "forbidden")
-                return Effect.fail(
-                  new GitHubApi.GitHubApiResponseError({
-                    host: "github.com",
-                    operation: "listTemplates",
-                    status: 403,
-                  }),
-                );
-              if (kind === "rate-limited")
-                return Effect.fail(
-                  new GitHubApi.GitHubApiRateLimitError({
-                    host: "github.com",
-                    operation: "listTemplates",
-                    retryAt: 1234,
-                  }),
-                );
-              return Effect.succeed(
-                kind === "malformed"
-                  ? "{"
-                  : JSON.stringify({
-                      data: {
-                        repository: {
-                          nameWithOwner: kind === "wrong-owner" ? "other/.github" : "acme/.github",
-                          isPrivate: kind === "private",
-                          forms: {
-                            oid: "a".repeat(40),
-                            entries: [
-                              {
-                                name: "config.yml",
-                                object: { text: "blank_issues_enabled: false" },
-                              },
-                            ],
-                          },
-                          issueTemplates: [],
+      const api = yield* tracker((_query, variables) => {
+        reads++;
+        if (variables?.name === "web")
+          return JSON.stringify({
+            data: {
+              repository: {
+                nameWithOwner: "acme/web",
+                isPrivate: false,
+                rootForms: null,
+                docsForms: null,
+                issueTemplates: [],
+                forms: null,
+              },
+            },
+          });
+        if (kind === "missing") return new Response("{}", { status: 404 });
+        if (kind === "forbidden") return new Response("{}", { status: 403 });
+        if (kind === "rate-limited")
+          return new Response("{}", {
+            status: 429,
+            headers: { "x-ratelimit-reset": "2000000000" },
+          });
+        return kind === "malformed"
+          ? "{"
+          : JSON.stringify({
+              data: {
+                repository: {
+                  rootForms: null,
+                  docsForms: null,
+                  nameWithOwner: kind === "wrong-owner" ? "other/.github" : "acme/.github",
+                  isPrivate: kind === "private",
+                  forms: {
+                    __typename: "Tree",
+                    oid: "a".repeat(40),
+                    entries: [
+                      {
+                        name: "config.yml",
+                        object: {
+                          __typename: "Blob",
+                          text: "blank_issues_enabled: false",
                         },
                       },
-                    }),
-              );
-            },
-          }),
-        ),
-      );
+                    ],
+                  },
+                  issueTemplates: [],
+                },
+              },
+            });
+      });
       const input = { cwd: "/w", host: "github.com", scope: "acme/web" };
       if (kind === "rate-limited")
         expect(yield* api.listTemplates!(input).pipe(Effect.flip)).toMatchObject({
           reason: "rate-limited",
-          retryAt: 1234,
+          retryAt: 2_000_000_000_000,
         });
       else
         expect(yield* api.listTemplates!(input)).toEqual({
@@ -382,19 +523,51 @@ describe("GitHubIssueTracker", () => {
         return JSON.stringify({
           data: {
             repository: {
+              rootForms: null,
+              docsForms: null,
               nameWithOwner: defaults ? "acme/.github" : "acme/web",
               isPrivate: false,
               forms: defaults
-                ? { oid, entries: [{ name: "bug.md", object: { text: "Markdown" } }] }
+                ? {
+                    __typename: "Tree",
+                    oid,
+                    entries: [
+                      {
+                        name: "bug.md",
+                        object: {
+                          __typename: "Blob",
+                          text: "Markdown",
+                        },
+                      },
+                    ],
+                  }
                 : null,
               issueTemplates: defaults
                 ? [
                     {
+                      about: null,
+                      title: null,
                       filename: "bug.md",
                       name: "Bug",
                       body: "Native Markdown",
-                      labels: { nodes: [{ name: "bug" }] },
-                      assignees: { nodes: [{ login: "alice" }] },
+                      labels: {
+                        pageInfo: { hasNextPage: false },
+                        nodes: [
+                          {
+                            color: "000000",
+                            name: "bug",
+                          },
+                        ],
+                      },
+                      assignees: {
+                        nodes: [
+                          {
+                            name: null,
+                            avatarUrl: "https://avatars.example/user",
+                            login: "alice",
+                          },
+                        ],
+                      },
                     },
                   ]
                 : [],
@@ -437,7 +610,7 @@ describe("GitHubIssueTracker", () => {
 
   it.effect("reads and changes GitHub dependencies by native stable issue IDs", () =>
     Effect.gen(function* () {
-      const requests: GitHubApi.GitHubRestInput[] = [];
+      const requests: GitHubRest.GitHubRestInput[] = [];
       const source = {
         id: 1042,
         number: 42,
@@ -552,7 +725,7 @@ describe("GitHubIssueTracker", () => {
     "uses native dependency triage/archive permissions for $role/$archived/$inverse/$targetRole/$targetArchived",
     (scenario) =>
       Effect.gen(function* () {
-        const writes: GitHubApi.GitHubRestInput[] = [];
+        const writes: GitHubRest.GitHubRestInput[] = [];
         const api = yield* tracker(
           (_query, variables) => {
             const source = (variables as { number: number }).number === 42;
@@ -807,7 +980,7 @@ describe("GitHubIssueTracker", () => {
               ...DETAIL_FIXTURE.data,
               repository: {
                 ...DETAIL_FIXTURE.data.repository,
-                viewerPermission: input.role,
+                viewerPermission: input.role ?? null,
                 ...(query.includes("isArchived") ? { isArchived: input.archived } : {}),
                 issue: {
                   ...DETAIL_FIXTURE.data.repository.issue,
@@ -851,7 +1024,7 @@ describe("GitHubIssueTracker", () => {
     "enforces 10 assignees before %s native work",
     (operation) =>
       Effect.gen(function* () {
-        const requests: GitHubApi.GitHubRestInput[] = [];
+        const requests: GitHubRest.GitHubRestInput[] = [];
         let graphqlReads = 0;
         const api = yield* tracker(
           () => {
@@ -925,7 +1098,17 @@ describe("GitHubIssueTracker", () => {
         expect(query).not.toContain("search(");
         expect(variables).toMatchObject({ states: input.states });
         return JSON.stringify({
-          data: { repository: { issues: { nodes: [], pageInfo: { hasNextPage: false } } } },
+          data: {
+            repository: {
+              issues: {
+                nodes: [],
+                pageInfo: {
+                  endCursor: null,
+                  hasNextPage: false,
+                },
+              },
+            },
+          },
         });
       });
       expect(
@@ -1071,13 +1254,14 @@ describe("GitHubIssueTracker", () => {
       const api = yield* tracker((query, variables) => {
         reads++;
         expect(query).not.toContain("search(");
-        expect(query).toContain("issues(first: 100");
+        expect(query).toContain("issues(first:$first");
         expect(variables).toEqual({
           owner: "acme",
           name: "web",
           states: ["OPEN", "CLOSED"],
           orderBy: { field: order.field, direction: order.direction },
           cursor: "raw-native",
+          first: 100,
         });
         return JSON.stringify({
           data: {
@@ -1152,7 +1336,13 @@ describe("GitHubIssueTracker", () => {
         }));
         const native = {
           ...DETAIL_FIXTURE.data.repository.issue,
-          labels: { nodes: labels.slice(0, 20), pageInfo: { hasNextPage: true } },
+          labels: {
+            nodes: labels.slice(0, 20),
+            pageInfo: {
+              endCursor: null,
+              hasNextPage: true,
+            },
+          },
         };
         const queries: string[] = [];
         let restReads = 0;
@@ -1161,7 +1351,17 @@ describe("GitHubIssueTracker", () => {
             queries.push(query);
             return JSON.stringify(
               query.includes("search(")
-                ? { data: { search: { nodes: [native], pageInfo: { hasNextPage: false } } } }
+                ? {
+                    data: {
+                      search: {
+                        nodes: [native],
+                        pageInfo: {
+                          endCursor: null,
+                          hasNextPage: false,
+                        },
+                      },
+                    },
+                  }
                 : {
                     data: {
                       ...DETAIL_FIXTURE.data,
@@ -1201,7 +1401,7 @@ describe("GitHubIssueTracker", () => {
         expect(
           queries.every(
             (query) =>
-              query.includes("pageInfo { hasNextPage }") && query.includes("labels(first: 20)"),
+              query.includes("pageInfo{hasNextPage}") && query.includes("labels(first:20)"),
           ),
         ).toBe(true);
         expect(restReads).toBe(1);
@@ -1224,7 +1424,10 @@ describe("GitHubIssueTracker", () => {
               ...DETAIL_FIXTURE.data,
               repository: {
                 ...DETAIL_FIXTURE.data.repository,
-                issue: { ...DETAIL_FIXTURE.data.repository.issue, milestone },
+                issue: {
+                  ...DETAIL_FIXTURE.data.repository.issue,
+                  milestone: milestone ?? null,
+                },
               },
             },
           });
@@ -1255,7 +1458,7 @@ describe("GitHubIssueTracker", () => {
         }),
       ).toHaveProperty("milestone", milestone?.title ?? null);
       expect(queries).toHaveLength(1);
-      expect(queries[0]).toContain("milestone { title }");
+      expect(queries[0]).toContain("milestone{title}");
       expect(restReads).toBe(1);
     }),
   );
@@ -1278,7 +1481,10 @@ describe("GitHubIssueTracker", () => {
         return JSON.stringify({
           data: {
             ...DETAIL_FIXTURE.data,
-            repository: { ...DETAIL_FIXTURE.data.repository, viewerPermission: role },
+            repository: {
+              ...DETAIL_FIXTURE.data.repository,
+              viewerPermission: role ?? null,
+            },
           },
         });
       });
@@ -1308,9 +1514,11 @@ describe("GitHubIssueTracker", () => {
             expect(query).toContain("viewerCanUpdate");
             return JSON.stringify({
               data: {
+                viewer: { login: "julius" },
                 repository: {
                   issue: {
                     comments: {
+                      totalCount: 0,
                       pageInfo: { hasPreviousPage: false, startCursor: null },
                       nodes: [
                         {
@@ -1438,10 +1646,18 @@ describe("GitHubIssueTracker", () => {
         const queries: string[] = [];
         const api = yield* tracker((query) => {
           queries.push(query);
+          if (query.includes("updateIssueComment"))
+            return JSON.stringify({
+              data: { updateIssueComment: { issueComment: { id: "IC_1" } } },
+            });
           return JSON.stringify({
             data: {
               repository: { issue: { id: "I_42" } },
-              node: { viewerCanUpdate: canEdit, issue: { id: "I_42" } },
+              node: {
+                __typename: "IssueComment",
+                viewerCanUpdate: canEdit,
+                issue: { id: "I_42" },
+              },
             },
           });
         });
@@ -1462,7 +1678,7 @@ describe("GitHubIssueTracker", () => {
 
   it.effect("reads cross-repository hierarchy pages and attaches and removes a parent", () =>
     Effect.gen(function* () {
-      const writes: GitHubApi.GitHubRestInput[] = [];
+      const writes: GitHubRest.GitHubRestInput[] = [];
       const raw = (number: number, scope = "acme/web") => ({
         id: number + 1000,
         number,
@@ -1559,6 +1775,8 @@ describe("GitHubIssueTracker", () => {
         });
         const closing = query.includes("closedByPullRequestsReferences");
         const pr = {
+          isDraft: false,
+
           __typename: "PullRequest",
           number: 50,
           title: "Fix",
@@ -1571,7 +1789,7 @@ describe("GitHubIssueTracker", () => {
             repository: {
               issue: {
                 [closing ? "closedByPullRequestsReferences" : "timelineItems"]: {
-                  nodes: closing ? [pr] : [{ source: pr }],
+                  nodes: closing ? [pr] : [{ __typename: "CrossReferencedEvent", source: pr }],
                   pageInfo: { hasNextPage: false, endCursor: null },
                 },
               },
@@ -1595,7 +1813,7 @@ describe("GitHubIssueTracker", () => {
     "refuses success when GitHub omits the requested %s update",
     (field) =>
       Effect.gen(function* () {
-        const requests: GitHubApi.GitHubRestInput[] = [];
+        const requests: GitHubRest.GitHubRestInput[] = [];
         const api = yield* tracker(
           () => DETAIL_RESPONSE,
           (input) => {
@@ -1676,8 +1894,24 @@ describe("GitHubIssueTracker", () => {
         JSON.stringify({
           data: {
             repository: {
+              nameWithOwner: "acme/web",
+              isPrivate: false,
+              rootForms: null,
+              docsForms: null,
               issueTemplates: [],
-              forms: { entries: [{ name: "config.yml", object: { text: config } }] },
+              forms: {
+                __typename: "Tree",
+                oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                entries: [
+                  {
+                    name: "config.yml",
+                    object: {
+                      __typename: "Blob",
+                      text: config,
+                    },
+                  },
+                ],
+              },
             },
           },
         }),
@@ -1690,20 +1924,19 @@ describe("GitHubIssueTracker", () => {
 
   it.effect("enables blank issues when the template config is missing", () =>
     Effect.gen(function* () {
-      const api = yield* GitHubIssueTracker.make.pipe(
-        Effect.provide(
-          Layer.mock(GitHubApi.GitHubApi)({
-            graphql: () =>
-              Effect.succeed(JSON.stringify({ data: { repository: { issueTemplates: [] } } })),
-            rest: () =>
-              Effect.fail(
-                new GitHubApi.GitHubApiNotFoundError({
-                  host: "github.com",
-                  operation: "listTemplateConfig",
-                }),
-              ),
-          }),
-        ),
+      const api = yield* tracker(() =>
+        JSON.stringify({
+          data: {
+            repository: {
+              nameWithOwner: "acme/web",
+              isPrivate: false,
+              forms: null,
+              rootForms: null,
+              docsForms: null,
+              issueTemplates: [],
+            },
+          },
+        }),
       );
       expect(
         yield* api.listTemplates!({ cwd: "/w", host: "github.com", scope: "acme/web" }),
@@ -1726,7 +1959,11 @@ describe("GitHubIssueTracker", () => {
           return JSON.stringify({
             data: {
               repository: { issue: { id: "I_selected" } },
-              node: { issue: { id: "I_foreign" } },
+              node: {
+                __typename: "IssueComment",
+                viewerCanUpdate: false,
+                issue: { id: "I_foreign" },
+              },
             },
           });
         });
@@ -1754,7 +1991,7 @@ describe("GitHubIssueTracker", () => {
         name: `label-${index}`,
         color: "abc123",
       }));
-      const requests: GitHubApi.GitHubRestInput[] = [];
+      const requests: GitHubRest.GitHubRestInput[] = [];
       const api = yield* tracker(
         () => DETAIL_RESPONSE,
         (input) => {
@@ -1878,7 +2115,10 @@ describe("GitHubIssueTracker", () => {
                 issue: {
                   ...DETAIL_FIXTURE.data.repository.issue,
                   timelineItems: {
-                    pageInfo: { hasPreviousPage },
+                    pageInfo: {
+                      startCursor: null,
+                      hasPreviousPage,
+                    },
                     nodes: Array.from({ length: 100 }, (_, index) => ({
                       __typename: "ClosedEvent",
                       id: `CE_${index}`,
@@ -1900,9 +2140,7 @@ describe("GitHubIssueTracker", () => {
         expect(issue.historyTruncated).toBe(hasPreviousPage);
         expect(issue.events).toHaveLength(100);
         expect(queries).toHaveLength(1);
-        expect(queries[0]).toMatch(
-          /timelineItems\(last: 100,[^)]*\)\s*\{\s*pageInfo\s*\{\s*hasPreviousPage\s*\}/,
-        );
+        expect(queries[0]).toMatch(/timelineItems\(last:100[^)]*\)\{pageInfo\{hasPreviousPage\}/);
       }
     }),
   );

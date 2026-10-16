@@ -30,8 +30,10 @@ import * as JiraIssueTracker from "@t3tools/issue-tracker-jira/server/JiraIssueT
 import * as LinearApi from "@t3tools/issue-tracker-linear/server/LinearApi";
 import * as LinearIssueTracker from "@t3tools/issue-tracker-linear/server/LinearIssueTracker";
 import {
-  decodeIssueDetailJson,
-  decodeIssueSearchJson,
+  IssueDetail as NativeIssueDetail,
+  IssueSearch as NativeIssueSearch,
+  toIssueDetail,
+  toIssueSearch,
 } from "@t3tools/source-control-github/server/gitHubIssueJson";
 import * as IssueService from "../../../issue/IssueService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
@@ -44,6 +46,9 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 import * as IssuesHandlers from "./handlers.ts";
 import { IssuesToolkit } from "./tools.ts";
+
+const decodeNativeIssueDetail = Schema.decodeUnknownResult(NativeIssueDetail.result);
+const decodeNativeIssueSearch = Schema.decodeUnknownResult(NativeIssueSearch.result);
 
 const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_ID = ThreadId.make("thread-1");
@@ -778,42 +783,75 @@ describe("issue toolkit handlers", () => {
   const decodeListIssues = Schema.decodeUnknownSync(IssuesToolkit.tools.list_issues.successSchema);
 
   it.effect.each(["https://github.com/T3Tools/T3Code/issues/7#issuecomment-123456", null])(
-    "preserves the newest native comment URL %s through the MCP output codec",
+    "preserves the nullable comment URL %s through the MCP output codec after native mapping",
     (url) =>
       Effect.gen(function* () {
         const comment = {
+          __typename: "IssueComment",
+          lastEditedAt: null,
+          viewerCanUpdate: false,
+          reactionGroups: null,
           id: "IC_nativeOpaqueId",
           author: null,
           body: "Native comment",
           createdAt: detail.createdAt,
-          url,
+          url: url ?? "https://github.com/T3Tools/T3Code/issues/7#issuecomment-123456",
         };
-        const decoded = decodeIssueDetailJson(
-          JSON.stringify({
-            data: {
-              repository: {
-                issue: {
-                  number: 7,
-                  title: detail.title,
-                  url: detail.url,
-                  state: "OPEN",
-                  createdAt: detail.createdAt,
-                  updatedAt: detail.updatedAt,
-                  comments: {
-                    totalCount: 1,
-                    nodes: [comment],
-                    pageInfo: { hasPreviousPage: false },
+        const decoded = Result.map(
+          decodeNativeIssueDetail({
+            viewer: { login: "julius" },
+            repository: {
+              isArchived: false,
+              viewerPermission: null,
+              issue: {
+                stateReason: null,
+                closedAt: null,
+                author: null,
+                assignees: { nodes: [] },
+                labels: null,
+                milestone: null,
+                body: "",
+                locked: false,
+                viewerCanUpdate: true,
+                reactionGroups: null,
+                closedByPullRequestsReferences: null,
+                timelineItems: {
+                  nodes: [],
+                  pageInfo: {
+                    startCursor: null,
+                    hasPreviousPage: false,
+                  },
+                },
+                number: 7,
+                title: detail.title,
+                url: detail.url,
+                state: "OPEN",
+                createdAt: detail.createdAt,
+                updatedAt: detail.updatedAt,
+                comments: {
+                  totalCount: 1,
+                  nodes: [comment],
+                  pageInfo: {
+                    startCursor: null,
+                    hasPreviousPage: false,
                   },
                 },
               },
             },
           }),
+          toIssueDetail,
         );
         expect(Result.isSuccess(decoded)).toBe(true);
         if (Result.isFailure(decoded) || decoded.success === null)
           throw new Error("Fixture decode failed");
-        expect(decoded.success.comments[0]?.url).toBe(url);
-        const harness = yield* makeHarness([], { detail: { ...detail, ...decoded.success } });
+        expect(decoded.success.comments[0]?.url).toBe(comment.url);
+        const harness = yield* makeHarness([], {
+          detail: {
+            ...detail,
+            ...decoded.success,
+            comments: decoded.success.comments.map((comment) => ({ ...comment, url })),
+          },
+        });
         const read = decodeReadIssue(yield* harness.call("read_issue", { key: "7" }));
         expect(read.commentsCursor).toBeNull();
         expect(read.comments[0]).toHaveProperty("url", url);
@@ -1421,24 +1459,43 @@ describe("issue toolkit handlers", () => {
         color: "abcdef",
       }));
       const native = Result.getOrThrow(
-        decodeIssueSearchJson(
-          JSON.stringify({
-            data: {
-              search: {
-                nodes: [
-                  {
-                    number: 7,
-                    title: detail.title,
-                    url: detail.url,
-                    createdAt: detail.createdAt,
-                    updatedAt: detail.updatedAt,
-                    labels: { nodes: nativeLabels.slice(0, 20), pageInfo: { hasNextPage: true } },
+        Result.map(
+          decodeNativeIssueSearch({
+            search: {
+              nodes: [
+                {
+                  state: "OPEN",
+                  stateReason: null,
+                  closedAt: null,
+                  author: null,
+                  assignees: { nodes: [] },
+                  milestone: null,
+                  comments: {
+                    nodes: [],
+                    pageInfo: { hasPreviousPage: false, startCursor: null },
+                    totalCount: 0,
                   },
-                ],
-                pageInfo: { hasNextPage: false },
+                  number: 7,
+                  title: detail.title,
+                  url: detail.url,
+                  createdAt: detail.createdAt,
+                  updatedAt: detail.updatedAt,
+                  labels: {
+                    nodes: nativeLabels.slice(0, 20),
+                    pageInfo: {
+                      endCursor: null,
+                      hasNextPage: true,
+                    },
+                  },
+                },
+              ],
+              pageInfo: {
+                endCursor: null,
+                hasNextPage: false,
               },
             },
           }),
+          toIssueSearch,
         ),
       );
       const harness = yield* makeHarness([], { detail: { ...detail, ...native.items[0]! } });

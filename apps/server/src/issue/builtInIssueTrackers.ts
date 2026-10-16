@@ -5,7 +5,7 @@
  * issue tracker is retired on bitbucket.org.
  *
  * The services the git-host drivers need are the same ones `sourceControl/builtInDrivers.ts`
- * provides, so the server reuses that layer rather than building a second `GitHubApi`. A
+ * provides, so the server reuses that layer rather than building a second request policy. A
  * standalone tracker needs only the HttpClient and `IssueTrackerHost` for its stored credential.
  *
  * @module issue/builtInIssueTrackers
