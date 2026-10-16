@@ -203,6 +203,20 @@ describe("loadZipPreview", () => {
     },
   );
 
+  it("handles 2,000 files sharing 2,000 implied folders", async () => {
+    const parent = "d/".repeat(2000);
+    const zip = new JSZip();
+    for (let index = 0; index < 2000; index++) {
+      zip.file(`${parent}${index}.txt`, "hello", { createFolders: false });
+    }
+    const preview = await loadZipPreview(await archive(zip), signal());
+
+    expect(preview.entries.filter((entry) => entry.isDirectory)).toHaveLength(2000);
+    expect(preview.entries.filter((entry) => !entry.isDirectory)).toHaveLength(2000);
+    const entry = preview.entries.find((entry) => entry.path === `${parent}1999.txt`)!;
+    expect(await (await preview.readFile(entry, signal())).text()).toBe("hello");
+  });
+
   it("hides macOS metadata without hiding normal dotfiles", async () => {
     const zip = new JSZip()
       .file("__MACOSX/src/._app.ts", "metadata")

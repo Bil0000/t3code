@@ -361,9 +361,10 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
       } while (occupied.has(path) || occupied.has(`${path}/`));
       occupied.add(path);
     }
-    for (let index = 1; index < parts.length; index++) {
+    for (let index = parts.length - 1; index > 0; index--) {
       const directory = `${parts.slice(0, index).join("/")}/`;
-      if (!entries.has(directory)) addEntry(directory, true);
+      if (entries.has(directory)) break;
+      addEntry(directory, true);
     }
     const entry = addEntry(path, file.dir, file.dir ? 0 : file._data.uncompressedSize >>> 0);
     if (!file.dir) {
