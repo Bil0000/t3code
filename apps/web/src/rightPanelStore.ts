@@ -17,6 +17,9 @@ import {
   ThreadId,
   issueHostKey,
   issueScopeKeyOf,
+  type IssueRef,
+  type IssueTrackerKind,
+  type ProjectId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { create } from "zustand";
@@ -349,6 +352,17 @@ function issueSurface(target: IssueSurfaceTarget): IssueSurface {
     scope: target.scope,
     key: target.key,
     ...(typeof target.url === "string" ? { url: target.url } : {}),
+  };
+}
+
+export function issueRefOfSurface(surface: IssueSurface): IssueRef {
+  return {
+    projectId: surface.projectId as ProjectId,
+    tracker: surface.tracker as IssueTrackerKind,
+    ...(surface.host ? { host: surface.host } : {}),
+    ...(surface.connectionId === undefined ? {} : { connectionId: surface.connectionId }),
+    scope: surface.scope,
+    key: surface.key,
   };
 }
 

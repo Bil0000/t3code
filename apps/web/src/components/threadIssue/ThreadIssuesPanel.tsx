@@ -145,15 +145,7 @@ export function ThreadIssuesPanel({ threadRef }: { threadRef: ScopedThreadRef })
 
   const items = thread?.issues ?? [];
   const openIssue = (link: ThreadIssueLink) =>
-    useRightPanelStore.getState().openIssue(threadRef, {
-      projectId: link.projectId,
-      tracker: link.tracker,
-      host: link.host,
-      ...(link.connectionId === undefined ? {} : { connectionId: link.connectionId }),
-      scope: link.scope,
-      key: link.key,
-      url: link.url,
-    });
+    useRightPanelStore.getState().openIssue(threadRef, link);
   const handleUnlink = (link: ThreadIssueLink) =>
     void unlink({ environmentId, input: { threadId: threadRef.threadId, ...link } });
   const synced = items

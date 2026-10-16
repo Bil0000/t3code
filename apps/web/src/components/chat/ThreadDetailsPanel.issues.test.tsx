@@ -184,6 +184,7 @@ it.each(["linear", "jira"])(
     const saved = state.thread.issues[0]!;
     const link = {
       ...saved,
+      connectionId: "Account/B",
       tracker: IssueTrackerKind.make(tracker),
       host: tracker === "jira" ? "acme.atlassian.net" : saved.host,
       url: tracker === "jira" ? "https://acme.atlassian.net/browse/ENG-7" : saved.url,
@@ -210,16 +211,18 @@ it.each(["linear", "jira"])(
       await act(async () => rows[0]!.click());
       expect(
         useRightPanelStore.getState().byThreadKey[scopedThreadKey(threadRef)]?.surfaces,
-      ).toEqual([
-        expect.objectContaining({
+      ).toStrictEqual([
+        {
+          id: expect.stringMatching(/^issue:@Account%2FB:project:/),
           kind: "issue",
           projectId: link.projectId,
           tracker: link.tracker,
           host: link.host,
+          connectionId: "Account/B",
           scope: link.scope,
           key: link.key,
           url: link.url,
-        }),
+        },
       ]);
       expect(state.command).not.toHaveBeenCalled();
     }

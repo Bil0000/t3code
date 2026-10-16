@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { useClosedViewStore } from "./closedViewStore";
 import {
+  issueRefOfSurface,
   migratePersistedRightPanelState,
   pullRequestSurface,
   pullRequestSurfaceId,
@@ -997,6 +998,41 @@ describe("rightPanelStore", () => {
       kind: "preview",
       resourceId: "tab-b",
     });
+  });
+
+  it("reads an issue tab back as the exact reference it opened", () => {
+    const store = useRightPanelStore.getState();
+    store.openIssue(refA, {
+      environmentId: "env-2",
+      projectId: "project-a",
+      tracker: "jira",
+      host: "JIRA.EXAMPLE:8443/Jira",
+      connectionId: "Account/B",
+      scope: "ENG",
+      key: "ENG-42",
+      url: "https://jira.example:8443/Jira/browse/ENG-42",
+    });
+    store.openIssue(refA, {
+      projectId: "project-a",
+      tracker: "linear",
+      scope: "ENG",
+      key: "ENG-1",
+    });
+    const surfaces = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      refA,
+    ).surfaces.flatMap((surface) => (surface.kind === "issue" ? [issueRefOfSurface(surface)] : []));
+    expect(surfaces).toStrictEqual([
+      {
+        projectId: "project-a",
+        tracker: "jira",
+        host: "jira.example:8443/Jira",
+        connectionId: "Account/B",
+        scope: "ENG",
+        key: "ENG-42",
+      },
+      { projectId: "project-a", tracker: "linear", scope: "ENG", key: "ENG-1" },
+    ]);
   });
 
   it("keeps Forgejo mount tabs separate and owner case aliases in one tab", () => {

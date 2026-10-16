@@ -1,11 +1,6 @@
-import type {
-  EnvironmentId,
-  IssueTrackerKind,
-  ProjectId,
-  ScopedThreadRef,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 
-import { useRightPanelStore, type RightPanelSurface } from "../rightPanelStore";
+import { issueRefOfSurface, useRightPanelStore, type RightPanelSurface } from "../rightPanelStore";
 import type { EnvironmentPresentation } from "../state/environments";
 import { IssueDetailPanel } from "./issue/IssueDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
@@ -47,14 +42,7 @@ export function ChatViewIssuePanel({
   return (
     <IssueDetailPanel
       environmentId={environmentId}
-      reference={{
-        projectId: surface.projectId as ProjectId,
-        tracker: surface.tracker as IssueTrackerKind,
-        ...(surface.host ? { host: surface.host } : {}),
-        ...(surface.connectionId === undefined ? {} : { connectionId: surface.connectionId }),
-        scope: surface.scope,
-        key: surface.key,
-      }}
+      reference={issueRefOfSurface(surface)}
       threadRef={threadRef}
       onSelectPullRequest={(target) => {
         useRightPanelStore.getState().openPullRequest(threadRef, {
