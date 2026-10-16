@@ -133,9 +133,9 @@ export interface IssuesSearch extends IssueListPreferences {
   readonly selectedProjectId?: ProjectId;
   readonly selectedHost?: string;
   readonly selectedConnectionId?: string;
-  readonly tracker?: string;
-  readonly scope?: string;
-  readonly key?: string;
+  readonly tracker?: string | undefined;
+  readonly scope?: string | undefined;
+  readonly key?: string | undefined;
 }
 
 const STATE_TABS = [
@@ -170,6 +170,10 @@ function getShortcutContext() {
 
 const bounded = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim().slice(0, 200) : undefined;
+const issueKey = (value: unknown): string | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? String(value)
+    : bounded(value);
 const decodeAccountSelector = Schema.decodeUnknownSync(IssueRef.fields.connectionId);
 function accountSelector(value: unknown): string | undefined {
   const connectionId = decodeAccountSelector(value);
@@ -208,9 +212,9 @@ export const Route = createFileRoute("/_chat/issues")({
     ...present<"selectedProjectId", ProjectId>("selectedProjectId", bounded(raw.selectedProjectId)),
     ...present("selectedHost", bounded(raw.selectedHost)),
     ...present("selectedConnectionId", accountSelector(raw.selectedConnectionId)),
-    ...present("tracker", bounded(raw.tracker)),
-    ...present("scope", bounded(raw.scope)),
-    ...present("key", bounded(raw.key)),
+    tracker: bounded(raw.tracker),
+    scope: bounded(raw.scope),
+    key: issueKey(raw.key),
   }),
   component: IssuesRoute,
 });

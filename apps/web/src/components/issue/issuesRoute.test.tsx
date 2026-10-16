@@ -1467,3 +1467,83 @@ it("explains an unavailable account option in the tracker filter", async () => {
     vi.useRealTimers();
   }
 });
+
+it.each([
+  ["a pasted GitHub number", "key=44", "44"],
+  ["a quoted GitHub number", "key=%2244%22", "44"],
+  ["a number with leading zeros", "key=0044", "0044"],
+  ["a Linear key", "key=ENG-12", "ENG-12"],
+  ["a Jira key", "key=%22ABC-7%22", "ABC-7"],
+  ["a negative number", "key=-1", undefined],
+  ["an unsafe number", "key=12345678901234567890", undefined],
+  ["a boolean", "key=true", undefined],
+])("matches %s as a string issue key or none", async (_name, keyQuery, expected) => {
+  const { createMemoryHistory, createRootRoute, createRoute, createRouter } =
+    await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
+  const root = createRootRoute();
+  const chat = createRoute({ getParentRoute: () => root, id: "_chat" });
+  const issues = createRoute({
+    getParentRoute: () => chat,
+    path: "issues",
+    validateSearch: Route.options.validateSearch,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([chat.addChildren([issues])]),
+    history: createMemoryHistory({
+      initialEntries: [
+        `/issues?selectedEnvironmentId=env&selectedProjectId=project&selectedHost=github.com&tracker=github&scope=demo%2Fatlas&${keyQuery}`,
+      ],
+    }),
+  });
+  const search = router.matchRoutes(router.latestLocation).at(-1)?.search as IssuesSearch;
+  expect(search.key).toBe(expected);
+  expect(search).toMatchObject({
+    tracker: "github",
+    scope: "demo/atlas",
+    selectedHost: "github.com",
+  });
+  expect(search.selectedEnvironmentId).toBe("env");
+});
+
+it("opens a pasted numeric GitHub issue link with a string key", async () => {
+  const { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } =
+    await vi.importActual<typeof import("@tanstack/react-router")>("@tanstack/react-router");
+  state.projects = [project("project")];
+  state.responses.set(environmentA, AsyncResult.success(answer([issue("44")])));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  const rootRoute = createRootRoute();
+  const route = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/issues",
+    validateSearch: Route.options.validateSearch,
+    beforeLoad: ({ search }) => {
+      state.search = search;
+    },
+    component: Page,
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([route]),
+    history: createMemoryHistory({
+      initialEntries: [
+        `/issues?who=assigned&status=open&selectedEnvironmentId=${environmentA}&selectedProjectId=project&selectedHost=github.com&tracker=github&scope=demo%2Fatlas&key=44`,
+      ],
+    }),
+  });
+  await act(async () => {
+    await router.load();
+    root.render(
+      <RegistryContext.Provider value={appAtomRegistry}>
+        <RouterProvider router={router} />
+      </RegistryContext.Provider>,
+    );
+  });
+  expect(state.detailRead).toHaveBeenCalledWith(
+    environmentA,
+    expect.objectContaining({ tracker: "github", scope: "demo/atlas", key: "44" }),
+  );
+  const surface = selectThreadRightPanelState(
+    useRightPanelStore.getState().byThreadKey,
+    ISSUES_PANEL_REF,
+  ).surfaces.find((candidate) => candidate.kind === "issue");
+  expect(surface?.kind === "issue" ? surface.key : null).toBe("44");
+});
