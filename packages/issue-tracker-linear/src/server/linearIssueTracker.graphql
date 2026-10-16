@@ -265,7 +265,14 @@ query T3Scope($key: String!) {
   }
 }
 
-query T3Comments($id: String!, $first: Int!, $after: String) {
+query T3Comments(
+  $id: String!
+  $first: Int
+  $last: Int
+  $after: String
+  $before: String
+  $backward: Boolean!
+) {
   issue(id: $id) {
     id
     identifier
@@ -273,7 +280,7 @@ query T3Comments($id: String!, $first: Int!, $after: String) {
     team {
       key
     }
-    comments(first: $first, after: $after, orderBy: createdAt) {
+    comments(first: $first, last: $last, after: $after, before: $before, orderBy: createdAt) {
       nodes {
         id
         body
@@ -302,6 +309,8 @@ query T3Comments($id: String!, $first: Int!, $after: String) {
       pageInfo {
         hasNextPage
         endCursor
+        hasPreviousPage @include(if: $backward)
+        startCursor @include(if: $backward)
       }
     }
   }
@@ -555,7 +564,14 @@ query T3Hierarchy($id: String!, $first: Int!, $after: String) {
   }
 }
 
-query T3History($id: String!, $first: Int!, $after: String) {
+query T3History(
+  $id: String!
+  $first: Int
+  $last: Int
+  $after: String
+  $before: String
+  $backward: Boolean!
+) {
   issue(id: $id) {
     id
     identifier
@@ -563,7 +579,7 @@ query T3History($id: String!, $first: Int!, $after: String) {
     team {
       key
     }
-    history(first: $first, after: $after, orderBy: createdAt) {
+    history(first: $first, last: $last, after: $after, before: $before, orderBy: createdAt) {
       nodes {
         id
         createdAt
@@ -616,6 +632,8 @@ query T3History($id: String!, $first: Int!, $after: String) {
       pageInfo {
         hasNextPage
         endCursor
+        hasPreviousPage @include(if: $backward)
+        startCursor @include(if: $backward)
       }
     }
   }

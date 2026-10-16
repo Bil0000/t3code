@@ -18,6 +18,13 @@ export const Cursor = TrimmedNonEmptyString.check(
   Schema.isMaxLength(8192),
   Schema.isPattern(/^[A-Za-z0-9_-]+$/u),
 );
+export const CommentCursor = Schema.Struct({
+  version: Schema.Literal(1),
+  identity: Schema.String,
+  native: Cursor,
+  lastId: TrimmedNonEmptyString,
+  lastAt: IsoDateTime,
+});
 const State = Schema.Literals([
   "triage",
   "backlog",

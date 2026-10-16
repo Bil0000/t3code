@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
@@ -66,6 +67,400 @@ const json = (body: unknown, init?: ResponseInit) =>
   });
 
 describe("GitHub issues over native HTTP", () => {
+  it.effect.each([
+    { operation: "comments", order: "desc" },
+    { operation: "comments", order: "asc" },
+    { operation: "history", order: "desc" },
+    { operation: "history", order: "asc" },
+  ] as const)(
+    "pages true $order $operation across the native connection",
+    ({ operation, order }) => {
+      const total = 205;
+      const { layer, requests } = harness((request) => {
+        expect(request.url).toBe("https://api.github.com/graphql");
+        const sent = JSON.parse(
+          request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+        );
+        expect(sent.operationName).toBe(
+          operation === "comments" ? "IssueComments" : "IssueHistory",
+        );
+        const variables = sent.variables;
+        expect(variables).toMatchObject({ owner: "acme", name: "web", number: 42 });
+        const asc = order === "asc";
+        expect(variables[asc ? "last" : "first"] ?? null).toBeNull();
+        expect(variables[asc ? "before" : "after"] ?? null).toBeNull();
+        const size = variables[asc ? "first" : "last"];
+        expect(size).toBe(operation === "comments" ? 100 : 50);
+        const boundary = variables[asc ? "after" : "before"];
+        const offset = boundary == null ? (asc ? 0 : total) : Number(boundary.slice(7));
+        const start = asc ? offset : Math.max(0, offset - size);
+        const end = asc ? Math.min(total, offset + size) : offset;
+        const nodes = Array.from({ length: end - start }, (_, index) => {
+          const number = start + index + 1;
+          const common = {
+            id: String(number),
+            createdAt: DateTime.formatIso(DateTime.makeUnsafe(NOW + number * 1000)),
+          };
+          return operation === "comments"
+            ? {
+                ...common,
+                author: null,
+                body: String(number),
+                lastEditedAt: null,
+                viewerCanUpdate: false,
+                url: `https://github.com/acme/web/issues/42#issuecomment-${number}`,
+                reactionGroups: [],
+              }
+            : { ...common, __typename: "ClosedEvent", actor: null };
+        });
+        return json({
+          data: {
+            ...(operation === "comments" ? { viewer: { login: "julius" } } : {}),
+            repository: {
+              issue: {
+                [operation === "comments" ? "comments" : "timelineItems"]: {
+                  nodes,
+                  pageInfo: {
+                    hasPreviousPage: start > 0,
+                    hasNextPage: end < total,
+                    startCursor: `native-${start}`,
+                    endCursor: `native-${end}`,
+                  },
+                },
+              },
+            },
+          },
+        });
+      });
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42", order };
+        const ids: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const target = { ...input, ...(cursor === undefined ? {} : { cursor }) };
+          const page = yield* operation === "comments"
+            ? driver.getComments(target)
+            : driver.getHistory!({ ...target, limit: 50 });
+          ids.push(...("comments" in page ? page.comments : page.items).map((row) => row.id));
+          cursor = page.nextCursor ?? undefined;
+          expect(requests.length).toBeLessThanOrEqual(5);
+        } while (cursor !== undefined);
+        const expected = Array.from({ length: total }, (_, index) => String(index + 1));
+        expect(ids).toEqual(order === "asc" ? expected : expected.toReversed());
+        expect(requests).toHaveLength(operation === "comments" ? 3 : 5);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect.each(["comments", "history"] as const)(
+    "rejects foreign and malformed %s cursors before native HTTP",
+    (operation) => {
+      const { layer, requests } = harness(() =>
+        json({
+          data: {
+            viewer: { login: "julius" },
+            repository: {
+              issue: {
+                comments: {
+                  nodes: [
+                    {
+                      id: "101",
+                      author: null,
+                      body: "Reply",
+                      createdAt: "2026-07-01T00:00:00Z",
+                      lastEditedAt: null,
+                      viewerCanUpdate: false,
+                      url: "https://github.com/acme/web/issues/42#issuecomment-101",
+                      reactionGroups: [],
+                    },
+                  ],
+                  pageInfo: {
+                    hasPreviousPage: true,
+                    hasNextPage: false,
+                    startCursor: "native-100",
+                    endCursor: "native-101",
+                  },
+                },
+                timelineItems: {
+                  nodes: [
+                    {
+                      __typename: "ClosedEvent",
+                      id: "101",
+                      actor: null,
+                      createdAt: "2026-07-01T00:00:00Z",
+                    },
+                  ],
+                  pageInfo: {
+                    hasPreviousPage: true,
+                    hasNextPage: false,
+                    startCursor: "native-100",
+                    endCursor: "native-101",
+                  },
+                },
+              },
+            },
+          },
+        }),
+      );
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const read = (
+          target: typeof input & { cursor?: string; order?: "asc" | "desc"; connectionId?: string },
+        ) =>
+          operation === "comments"
+            ? driver
+                .getComments(target)
+                .pipe(Effect.map((page) => ({ nextCursor: page.nextCursor })))
+            : driver.getHistory!(target).pipe(
+                Effect.map((page) => ({ nextCursor: page.nextCursor })),
+              );
+        const page = yield* read(input);
+        expect(page.nextCursor).toBeTypeOf("string");
+        const cursor = page.nextCursor!;
+        expect(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"))).not.toHaveProperty(
+          "viewer",
+        );
+        for (const changed of [
+          { order: "asc" as const },
+          { connectionId: "another" },
+          { cwd: "/other" },
+          { host: "enterprise.example" },
+          { scope: "acme/other" },
+          { key: "43" },
+        ]) {
+          expect(yield* read({ ...input, ...changed, cursor }).pipe(Effect.flip)).toMatchObject({
+            reason: "failed",
+          });
+        }
+        const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+        const tampered = Buffer.from(JSON.stringify({ ...payload, window: "after" })).toString(
+          "base64url",
+        );
+        for (const invalid of [
+          "",
+          "2",
+          "native-100",
+          "{}",
+          "gh-issue:!",
+          "x".repeat(8193),
+          tampered,
+          ...[
+            { version: 2 },
+            { provider: "gitlab" },
+            { before: "extra" },
+            { previous: payload.cursor },
+            { cursor: " " },
+            { cursor: "x".repeat(2049) },
+          ].map((changed) =>
+            Buffer.from(JSON.stringify({ ...payload, ...changed })).toString("base64url"),
+          ),
+        ]) {
+          expect(yield* read({ ...input, cursor: invalid }).pipe(Effect.flip)).toMatchObject({
+            reason: "failed",
+          });
+        }
+        const other =
+          operation === "comments"
+            ? driver.getHistory!({ ...input, cursor }).pipe(Effect.asVoid)
+            : driver.getComments({ ...input, cursor }).pipe(Effect.asVoid);
+        expect(yield* other.pipe(Effect.flip)).toMatchObject({ reason: "failed" });
+        expect(requests).toHaveLength(1);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect.each([
+    { operation: "comments", invalid: "repeated" },
+    { operation: "history", invalid: "repeated" },
+    { operation: "comments", invalid: "missing" },
+    { operation: "history", invalid: "missing" },
+    { operation: "comments", invalid: "empty" },
+    { operation: "history", invalid: "empty" },
+  ] as const)("refuses $invalid native $operation continuation", ({ operation, invalid }) => {
+    let reads = 0;
+    const { layer, requests } = harness(() => {
+      reads++;
+      return json({
+        data: {
+          viewer: { login: "julius" },
+          repository: {
+            issue: {
+              [operation === "comments" ? "comments" : "timelineItems"]: {
+                nodes:
+                  invalid === "empty" && reads > 1
+                    ? []
+                    : operation === "comments"
+                      ? [
+                          {
+                            id: String(reads),
+                            author: null,
+                            body: "Reply",
+                            createdAt: "2026-07-01T00:00:00Z",
+                            lastEditedAt: null,
+                            viewerCanUpdate: false,
+                            url: "https://github.com/acme/web/issues/42#issuecomment-101",
+                            reactionGroups: [],
+                          },
+                        ]
+                      : [
+                          {
+                            __typename: "ClosedEvent",
+                            id: String(reads),
+                            createdAt: "2026-07-01T00:00:00Z",
+                            actor: null,
+                          },
+                        ],
+                pageInfo: {
+                  hasPreviousPage: true,
+                  hasNextPage: false,
+                  startCursor: invalid === "missing" && reads > 1 ? null : "same",
+                  endCursor: "end",
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+    return Effect.gen(function* () {
+      const driver = yield* GitHubIssueTracker.make;
+      const input = {
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        key: "42",
+        connectionId: "selected",
+      };
+      const read = (cursor?: string) =>
+        operation === "comments"
+          ? driver
+              .getComments({ ...input, ...(cursor === undefined ? {} : { cursor }) })
+              .pipe(Effect.map((page) => page.nextCursor))
+          : driver.getHistory!({ ...input, ...(cursor === undefined ? {} : { cursor }) }).pipe(
+              Effect.map((page) => page.nextCursor),
+            );
+      const cursor = yield* read();
+      const reset = {
+        cwd: input.cwd,
+        host: input.host,
+        scope: input.scope,
+        key: input.key,
+        cursor: cursor!,
+      };
+      const foreign =
+        operation === "comments"
+          ? driver.getComments(reset).pipe(Effect.asVoid)
+          : driver.getHistory!(reset).pipe(Effect.asVoid);
+      expect(yield* foreign.pipe(Effect.flip)).toMatchObject({ reason: "failed" });
+      expect(requests).toHaveLength(1);
+      expect(yield* read(cursor!).pipe(Effect.flip)).toMatchObject({ reason: "failed" });
+      expect(requests).toHaveLength(2);
+      expect(requests.every((request) => request.url.endsWith("/graphql"))).toBe(true);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect.each(["comments", "history"] as const)(
+    "keeps native %s rate-limit delay and pause",
+    (operation) => {
+      const { layer, requests } = harness(() =>
+        json(
+          { message: "slow down" },
+          {
+            status: 429,
+            headers: { "retry-after": "60" },
+          },
+        ),
+      );
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(NOW);
+        const driver = yield* GitHubIssueTracker.make;
+        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const read =
+          operation === "comments"
+            ? driver.getComments(input).pipe(Effect.asVoid)
+            : driver.getHistory!(input).pipe(Effect.asVoid);
+        expect(yield* read.pipe(Effect.flip)).toMatchObject({
+          reason: "rate-limited",
+          retryAt: NOW + 60_000,
+        });
+        expect(yield* read.pipe(Effect.flip)).toMatchObject({
+          reason: "rate-limited",
+          retryAt: NOW + 60_000,
+        });
+        expect(requests).toHaveLength(1);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect.each([0, -1, 101, 1.5, Number.NaN])(
+    "rejects out-of-range history limit %s before HTTP",
+    (limit) => {
+      const { layer, requests } = harness(() => {
+        throw new Error("Unexpected HTTP");
+      });
+      return Effect.gen(function* () {
+        const driver = yield* GitHubIssueTracker.make;
+        expect(
+          yield* driver.getHistory!({
+            cwd: "/w",
+            host: "github.com",
+            scope: "acme/web",
+            key: "42",
+            limit,
+          }).pipe(Effect.flip),
+        ).toMatchObject({ reason: "failed" });
+        expect(requests).toHaveLength(0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect("allows retrying a history page but refuses a native cursor cycle", () => {
+    const { layer, requests } = harness((request) => {
+      const sent = JSON.parse(
+        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}",
+      );
+      const before = sent.variables.before;
+      return json({
+        data: {
+          repository: {
+            issue: {
+              timelineItems: {
+                nodes: [
+                  {
+                    __typename: "ClosedEvent",
+                    id: before ?? "3",
+                    createdAt: "2026-07-01T00:00:00Z",
+                    actor: null,
+                  },
+                ],
+                pageInfo: {
+                  hasPreviousPage: true,
+                  hasNextPage: before !== undefined,
+                  startCursor: before === "one" ? "two" : "one",
+                  endCursor: "end",
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+    return Effect.gen(function* () {
+      const driver = yield* GitHubIssueTracker.make;
+      const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+      const first = yield* driver.getHistory!(input);
+      const second = yield* driver.getHistory!({ ...input, cursor: first.nextCursor! });
+      const retry = yield* driver.getHistory!({ ...input, cursor: first.nextCursor! });
+      expect(retry).toEqual(second);
+      expect(
+        yield* driver.getHistory!({ ...input, cursor: second.nextCursor! }).pipe(Effect.flip),
+      ).toMatchObject({ reason: "failed" });
+      expect(requests).toHaveLength(4);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("refreshes a refused GraphQL credential once per native request", () => {
     const { layer, requests, credentialReads, invalidations } = harness((request) =>
       request.headers.authorization === "Bearer first"

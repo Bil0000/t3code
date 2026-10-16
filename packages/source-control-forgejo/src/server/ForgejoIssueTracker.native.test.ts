@@ -2,7 +2,8 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
-import { IssueCommentsPage, IssueLabel } from "@t3tools/contracts";
+import * as Layer from "effect/Layer";
+import { IssueCommentsPage, IssueHistoryPage, IssueLabel } from "@t3tools/contracts";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
@@ -12,6 +13,139 @@ import * as ForgejoIssueTracker from "./ForgejoIssueTracker.ts";
 
 const decodeCommentsPage = Schema.decodeEffect(IssueCommentsPage);
 const decodeLabels = Schema.decodeEffect(Schema.Array(IssueLabel));
+const encodeHistoryPage = Schema.encodeEffect(IssueHistoryPage);
+
+it.effect.each([
+  { field: "event", length: 8192 },
+  { field: "event", length: 8193 },
+  { field: "reference", length: 8192 },
+  { field: "reference", length: 8193 },
+])(
+  "bounds optional native $field URLs at $length without losing the event",
+  ({ field, length }) => {
+    const prefix = "https://forgejo.test/acme/web/issues/42?native=";
+    const nativeUrl = prefix + "x".repeat(length - prefix.length);
+    let reads = 0;
+    return Effect.gen(function* () {
+      const tracker = yield* ForgejoIssueTracker.make;
+      const page = yield* tracker.getHistory!({
+        cwd: "/fixture",
+        host: "forgejo.test",
+        scope: "acme/web",
+        key: "42",
+        order: "asc",
+      });
+      const encoded = yield* encodeHistoryPage(page);
+      expect(encoded.items).toHaveLength(1);
+      expect(encoded.items[0]).toMatchObject({ id: "7", kind: "referenced" });
+      expect(encoded.items[0]?.reference?.identifier).toBe(
+        field === "event" || length === 8192 ? "#50" : undefined,
+      );
+      if (field === "event") {
+        expect(encoded.items[0]?.url).toBe(length === 8192 ? nativeUrl : undefined);
+        expect(encoded.items[0]?.reference?.url).toBe("https://forgejo.test/acme/web/pulls/50");
+      } else {
+        expect(encoded.items[0]?.reference?.url).toBe(length === 8192 ? nativeUrl : undefined);
+        expect(encoded.items[0]?.url).toBe(
+          "https://forgejo.test/acme/web/issues/42#issuecomment-7",
+        );
+      }
+      expect(reads).toBe(1);
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ForgejoCli.ForgejoCli)({
+          api: (input) => {
+            reads++;
+            expect(input.path).toBe("repos/acme/web/issues/42/timeline?limit=50&page=1");
+            return Effect.succeed(
+              TestSourceControlHost.processOutput(
+                JSON.stringify([
+                  {
+                    id: 7,
+                    type: "pull_ref",
+                    created_at: "2026-10-16T00:00:00Z",
+                    html_url:
+                      field === "event"
+                        ? nativeUrl
+                        : "https://forgejo.test/acme/web/issues/42#issuecomment-7",
+                    ref_issue: {
+                      number: 50,
+                      title: "Source",
+                      html_url:
+                        field === "reference"
+                          ? nativeUrl
+                          : "https://forgejo.test/acme/web/pulls/50",
+                    },
+                  },
+                ]),
+                { stderr: "X-Total-Count: 1" },
+              ),
+            );
+          },
+        }),
+      ),
+    );
+  },
+);
+
+it.effect.each([
+  { title: "x".repeat(4096), retained: true, type: "pull_ref" },
+  { title: "x".repeat(4097), retained: false, type: "pull_ref" },
+  { title: " ", retained: false, type: "pull_ref" },
+  { title: "x".repeat(4097), retained: false, type: "native_future_event" },
+])(
+  "bounds optional native reference titles for $type, retained=$retained",
+  ({ title, retained, type }) => {
+    let reads = 0;
+    return Effect.gen(function* () {
+      const tracker = yield* ForgejoIssueTracker.make;
+      const page = yield* tracker.getHistory!({
+        cwd: "/fixture",
+        host: "forgejo.test",
+        scope: "acme/web",
+        key: "42",
+        order: "asc",
+      });
+      const encoded = yield* encodeHistoryPage(page);
+      expect(encoded.items).toHaveLength(1);
+      expect(encoded.items[0]).toMatchObject({
+        id: "7",
+        kind: type === "pull_ref" ? "referenced" : "updated",
+        reference: {
+          url: "https://forgejo.test/acme/web/pulls/50",
+          identifier: "#9007199254740991",
+        },
+      });
+      expect(encoded.items[0]?.reference?.title).toBe(retained ? title : undefined);
+      expect(reads).toBe(1);
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ForgejoCli.ForgejoCli)({
+          api: () => {
+            reads++;
+            return Effect.succeed(
+              TestSourceControlHost.processOutput(
+                JSON.stringify([
+                  {
+                    id: 7,
+                    type,
+                    created_at: "2026-10-16T00:00:00Z",
+                    ref_issue: {
+                      number: Number.MAX_SAFE_INTEGER,
+                      title,
+                      html_url: "https://forgejo.test/acme/web/pulls/50",
+                    },
+                  },
+                ]),
+                { stderr: "X-Total-Count: 1" },
+              ),
+            );
+          },
+        }),
+      ),
+    );
+  },
+);
 
 it.effect.each([
   {
@@ -172,7 +306,7 @@ it.effect.each([
       })
       .pipe(Effect.flatMap(decodeCommentsPage));
     expect(next.comments.map((comment) => comment.id)).toEqual(
-      Array.from({ length: 10 }, (_, index) => String(index + 51)),
+      Array.from({ length: 10 }, (_, index) => String(10 - index)),
     );
     for (const comment of next.comments) {
       if (author) expect(comment.canEdit).toBe(true);

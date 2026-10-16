@@ -11,6 +11,7 @@
  * @module issue-tracker-linear/server/LinearIssueTracker
  */
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   SourceControlProviderKind,
   type IssueCapabilities,
@@ -25,6 +26,7 @@ import {
   type IssueWorkflowCategory,
   type IssueRelation,
   type IssuePageInput,
+  type IssueListOrder,
   type IssueTemplate,
   type IssueViewerPermissions,
   type StandaloneIssueTrackerDescriptor,
@@ -33,6 +35,7 @@ import {
   IssueTrackerError,
   type StandaloneIssueTrackerApi,
   type TrackerIssueSummary,
+  type IssueTarget,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
 import * as LinearApi from "./LinearApi.ts";
@@ -89,6 +92,9 @@ const VIEWER_PERMISSIONS: IssueViewerPermissions = {
   assignees: true,
 };
 
+const decodeActivityCursor = Schema.decodeEffect(
+  Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String])),
+);
 const COMMENTS_PAGE = 50;
 const CLOSED_STATE_TYPES = ["completed", "canceled", "duplicate"];
 
@@ -593,6 +599,59 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         (!connection.pageInfo.endCursor || connection.pageInfo.endCursor === input.cursor))
         ? Effect.fail(failed(operation, "Linear returned an inconsistent page."))
         : Effect.succeed(connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null);
+    const activityIdentity = (
+      operation: "getComments" | "getHistory",
+      input: IssueTarget & {
+        readonly order?: IssueListOrder | undefined;
+        readonly limit?: number | undefined;
+      },
+    ) =>
+      JSON.stringify([
+        "linear-activity-v1",
+        operation,
+        input.cwd,
+        input.host.toLowerCase(),
+        input.scope.toLowerCase(),
+        input.key.toUpperCase(),
+        input.connectionId ?? null,
+        input.order ?? "desc",
+        operation === "getComments" ? COMMENTS_PAGE : (input.limit ?? 100),
+      ]);
+    const activityCursor = (
+      operation: "getComments" | "getHistory",
+      input: IssueTarget & {
+        readonly cursor?: string | undefined;
+        readonly order?: IssueListOrder | undefined;
+        readonly limit?: number | undefined;
+      },
+    ) =>
+      input.cursor === undefined
+        ? Effect.succeed<string | undefined>(undefined)
+        : decodeActivityCursor(input.cursor).pipe(
+            Effect.filterOrFail(
+              ([identity, cursor]) =>
+                identity === activityIdentity(operation, input) &&
+                cursor.trim().length > 0 &&
+                cursor.length <= 4096,
+              () =>
+                failed(
+                  operation,
+                  "The activity cursor does not match this issue, account or order.",
+                ),
+            ),
+            Effect.map(([, cursor]) => cursor),
+            Effect.mapError(() =>
+              failed(operation, "The activity cursor does not match this issue, account or order."),
+            ),
+          );
+    const activityNext = (
+      operation: "getComments" | "getHistory",
+      input: IssueTarget & {
+        readonly order?: IssueListOrder | undefined;
+        readonly limit?: number | undefined;
+      },
+      cursor: string | null,
+    ) => (cursor === null ? null : JSON.stringify([activityIdentity(operation, input), cursor]));
     const relation = (native: LinearApi.LinearRelation, scope: string): IssueRelation => {
       const selected = parseScope(scope);
       const workspace = issueWorkspace(native.url);
@@ -749,9 +808,11 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
             viewer,
             viewerPermissions: VIEWER_PERMISSIONS,
             comments: issue.comments.nodes.map((comment) => toComment(comment, viewer)),
-            commentsCursor: issue.comments.pageInfo.hasNextPage
-              ? issue.comments.pageInfo.endCursor
-              : null,
+            commentsCursor: activityNext(
+              "getComments",
+              input,
+              issue.comments.pageInfo.hasNextPage ? issue.comments.pageInfo.endCursor : null,
+            ),
             events: toEvents(issue.history.nodes),
             historyTruncated: issue.history.pageInfo.hasNextPage,
             linkedPullRequests: toLinkedPullRequests(issue.attachments.nodes),
@@ -761,18 +822,20 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
       getComments: (input) =>
         Effect.gen(function* () {
           const identifier = yield* requireIdentifier("getComments", input.key);
+          const cursor = yield* activityCursor("getComments", input);
           const page = yield* linear.getComments({
             identifier,
             first: COMMENTS_PAGE,
-            after: input.cursor,
+            after: cursor,
+            order: input.order ?? "desc",
           });
           const viewer = input.viewer ?? null;
           yield* requireIssueReference("getComments", input.scope, page.issue);
-          if (page.nextCursor !== null && page.nextCursor === input.cursor)
+          if (page.nextCursor !== null && page.nextCursor === cursor)
             return yield* failed("getComments", "Linear returned an inconsistent page.");
           return {
             comments: page.nodes.map((comment) => toComment(comment, viewer)),
-            nextCursor: page.nextCursor,
+            nextCursor: activityNext("getComments", input, page.nextCursor),
           };
         }),
 
@@ -858,13 +921,29 @@ export const make: Effect.Effect<StandaloneIssueTrackerApi, never, LinearApi.Lin
         }),
       getHistory: (input) =>
         Effect.gen(function* () {
-          const first = yield* pageInput("getHistory", input);
           const identifier = yield* requireIdentifier("getHistory", input.key);
-          const result = yield* linear.getHistory({ identifier, first, after: input.cursor });
+          const cursor = yield* activityCursor("getHistory", input);
+          const first = yield* pageInput("getHistory", { ...input, cursor });
+          const result = yield* linear.getHistory({
+            identifier,
+            first,
+            after: cursor,
+            order: input.order ?? "desc",
+          });
           const selected = yield* requireIssueReference("getHistory", input.scope, result.issue);
+          const history = selected.history;
+          const backward = input.order === "asc";
+          const more = backward ? history.pageInfo.hasPreviousPage : history.pageInfo.hasNextPage;
+          const next = backward ? history.pageInfo.startCursor : history.pageInfo.endCursor;
+          if (
+            more === undefined ||
+            history.nodes.length > first ||
+            (more && (!next?.trim() || next === cursor || history.nodes.length === 0))
+          )
+            return yield* failed("getHistory", "Linear returned an inconsistent page.");
           return {
-            items: toEvents(selected.history.nodes),
-            nextCursor: yield* pageCursor("getHistory", input, selected.history),
+            items: toEvents(backward ? history.nodes.toReversed() : history.nodes),
+            nextCursor: activityNext("getHistory", input, more ? next! : null),
           };
         }),
       getLinkedPullRequests: (input) =>

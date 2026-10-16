@@ -46,6 +46,20 @@ function answer(path: string): string {
     return encode([{ id: 1, name: "eyes", user: { username: "theo" } }]);
   }
   if (path === "projects/acme%2Fweb/issues/42") return encode(ISSUE);
+  if (path.startsWith("projects/acme%2Fweb/issues/42/notes?"))
+    return encode([
+      {
+        id: 8,
+        system: true,
+        body: "closed",
+        author: { username: "theo" },
+        created_at: "2026-07-03T00:00:00Z",
+      },
+    ]);
+  if (path.startsWith("projects/acme%2Fweb/issues/42/resource_state_events"))
+    return encode([
+      { id: 8, state: "closed", user: { username: "theo" }, created_at: "2026-07-03T00:00:00Z" },
+    ]);
   if (path.startsWith("projects/acme%2Fweb/issues/42/resource_label_events")) {
     return encode([
       {
@@ -145,7 +159,17 @@ function tracker(onExecute: (args: ReadonlyArray<string>, stdin?: string) => str
     Effect.provide(
       Layer.mock(GitLabCli.GitLabCli)({
         execute: ({ args, stdin }) =>
-          Effect.succeed(TestSourceControlHost.processOutput(onExecute(args, stdin))),
+          Effect.sync(() => {
+            const body = onExecute(args, stdin);
+            if (!args.includes("--include") || body.startsWith("HTTP/"))
+              return TestSourceControlHost.processOutput(body);
+            const rows = JSON.parse(body);
+            const page = Number(new URL(args[1]!, "https://gitlab.com").searchParams.get("page"));
+            const more = Array.isArray(rows) && rows.length === 100;
+            return TestSourceControlHost.processOutput(
+              `HTTP/2.0 200 OK\r\nX-Next-Page: ${more ? page + 1 : ""}\r\nX-Total-Pages: ${more ? page + 1 : page}\r\n\r\n${body}`,
+            );
+          }),
       }),
     ),
   );
@@ -175,10 +199,16 @@ describe("GitLabIssueTracker", () => {
                       expect(sent.variables).toEqual({
                         fullPath: "acme/web",
                         iid: "42",
-                        ...(paths.length === 1 ? { cursor: "before-note-8" } : {}),
+                        ...(sent.variables.cursor === undefined ? {} : { cursor: "before-note-8" }),
                       });
                       const response = JSON.parse(answer("graphql"));
                       const note = response.data.project.mergeRequest.notes.nodes[0];
+                      response.data.project.mergeRequest.notes.nodes = [note];
+                      response.data.project.mergeRequest.notes.pageInfo = {
+                        hasPreviousPage: sent.variables.cursor === undefined,
+                        startCursor: "before-note-8",
+                      };
+                      if (sent.variables.cursor !== undefined) note.id = "gid://gitlab/Note/6";
                       note.updatedAt = "2026-07-04T00:00:00Z";
                       note.userPermissions = { adminNote: true };
                       note.awardEmoji.pageInfo = { hasNextPage: true };
@@ -192,8 +222,9 @@ describe("GitLabIssueTracker", () => {
           ),
         );
         const target = { cwd: "/w", host: "gitlab.acme.test:8443", scope: "acme/web", key: "42" };
+        const first = yield* api.getComments(target);
         const page = yield* decodeCommentsWire(
-          yield* api.getComments({ ...target, cursor: "before-note-8" }),
+          yield* api.getComments({ ...target, cursor: first.nextCursor! }),
         );
         expect(page.comments[0]).toMatchObject({
           url: url ?? null,
@@ -208,7 +239,7 @@ describe("GitLabIssueTracker", () => {
           actors: ["theo"],
           viewerHasReacted: true,
         });
-        expect(paths).toEqual(["graphql"]);
+        expect(paths).toEqual(["graphql", "graphql"]);
         const detail = yield* api.getIssue(target);
         const wire = yield* decodeDetailWire({
           ...detail,
@@ -219,9 +250,9 @@ describe("GitLabIssueTracker", () => {
           writable: true,
           capabilities: api.capabilities,
         });
-        expect(wire.comments[0]).toEqual(page.comments[0]);
-        expect(paths).toHaveLength(7);
-        expect(paths.filter((path) => path === "graphql")).toHaveLength(2);
+        expect(wire.comments[0]).toEqual({ ...page.comments[0], id: "7" });
+        expect(paths).toHaveLength(10);
+        expect(paths.filter((path) => path === "graphql")).toHaveLength(3);
         expect(paths).not.toContain("user");
       }),
   );
@@ -495,7 +526,7 @@ describe("GitLabIssueTracker", () => {
       expect(wire.labels.at(-1)).toEqual({ name: "121", color: detailed ? "#d73a4a" : null });
       expect(wire.labelsTruncated).not.toBe(true);
       expect(wire.viewerPermissions).toMatchObject({ edit: true, labels: true, assignees: true });
-      expect(paths).toHaveLength(6);
+      expect(paths).toHaveLength(8);
       expect(paths.filter((path) => path === "projects/acme%2Fweb/issues/42")).toHaveLength(1);
     }),
   );
@@ -619,7 +650,7 @@ describe("GitLabIssueTracker", () => {
       expect(yield* api.getViewerPermissions(target)).toEqual(input.expected);
       expect(paths).toEqual(["graphql"]);
       expect((yield* api.getIssue(target)).viewerPermissions).toEqual(input.expected);
-      expect(paths).toHaveLength(7);
+      expect(paths).toHaveLength(9);
       expect(paths).not.toContain("user");
     }),
   );
@@ -723,20 +754,20 @@ describe("GitLabIssueTracker", () => {
       const initial = yield* api.getIssue(target);
       expect(initial.comments).toHaveLength(100);
       expect(initial.commentsCursor).toBeNull();
-      expect(paths).toHaveLength(6);
+      expect(paths).toHaveLength(8);
       yield* api.comment!({ ...target, body: "Reply 101" });
       const refreshed = yield* api.getIssue(target);
       expect(refreshed.commentCount).toBe(101);
       expect(refreshed.comments.map((comment) => comment.id)).toEqual(
-        Array.from({ length: 100 }, (_, index) => String(index + 2)),
+        Array.from({ length: 100 }, (_, index) => String(101 - index)),
       );
-      expect(refreshed.commentsCursor).toBe("native-note-2");
-      expect(refreshed.historyTruncated).toBe(true);
-      expect(paths).toHaveLength(13);
+      expect(refreshed.commentsCursor).toEqual(expect.any(String));
+      expect(refreshed.historyTruncated).toBe(false);
+      expect(paths).toHaveLength(17);
       const older = yield* api.getComments({ ...target, cursor: refreshed.commentsCursor! });
       expect(older.comments.map((comment) => comment.id)).toEqual(["1"]);
       expect(older.nextCursor).toBeNull();
-      expect(paths).toHaveLength(14);
+      expect(paths).toHaveLength(18);
       expect(paths.filter((path) => path === "graphql")).toHaveLength(3);
       expect(paths).not.toContain("user");
     }),
@@ -778,10 +809,10 @@ describe("GitLabIssueTracker", () => {
             { content: "thumbs-up", count: 2, actors: ["theo"], viewerHasReacted: true },
           ]);
           expect(detail.reactionsTruncated).toBe(false);
-          expect(paths).toHaveLength(6);
+          expect(paths).toHaveLength(8);
           expect(paths).not.toContain("user");
         } else {
-          const page = yield* api.getComments({ ...target, cursor: "native-note-7" });
+          const page = yield* api.getComments(target);
           expect(page.comments[0]?.reactions).toEqual([
             { content: "thumbs-up", count: 2, actors: ["theo"], viewerHasReacted: true },
           ]);
@@ -797,6 +828,14 @@ describe("GitLabIssueTracker", () => {
         let reads = 0;
         const api = yield* tracker(() => {
           reads++;
+          if (reads === 1) {
+            const initial = JSON.parse(answer("graphql"));
+            initial.data.project.mergeRequest.notes.pageInfo = {
+              hasPreviousPage: true,
+              startCursor: "native-note-7",
+            };
+            return encode(initial);
+          }
           if (failure === "invalid JSON") return "{";
           const response = JSON.parse(answer("graphql"));
           if (failure === "missing page info")
@@ -804,17 +843,19 @@ describe("GitLabIssueTracker", () => {
           else response.data.currentUser = null;
           return encode(response);
         });
+        const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+        const first = yield* api.getComments(target);
         const error = yield* Effect.flip(
           api.getComments({
             cwd: "/w",
             host: "gitlab.com",
             scope: "acme/web",
             key: "42",
-            cursor: "native-note-7",
+            cursor: first.nextCursor!,
           }),
         );
         expect(error).toMatchObject({ operation: "getComments", reason: "failed" });
-        expect(reads).toBe(1);
+        expect(reads).toBe(2);
       }),
   );
 
@@ -1096,7 +1137,7 @@ describe("GitLabIssueTracker", () => {
           capabilities: api.capabilities,
         }),
       ).toHaveProperty("milestone", milestone?.title ?? null);
-      expect(paths).toHaveLength(6);
+      expect(paths).toHaveLength(8);
       expect(paths.filter((path) => path === "projects/acme%2Fweb/issues/42")).toHaveLength(1);
       expect(paths.some((path) => path.includes("milestones"))).toBe(false);
     }),
@@ -1124,10 +1165,10 @@ describe("GitLabIssueTracker", () => {
                     adminIssue: true,
                   },
                   notes: {
-                    pageInfo: { hasPreviousPage: false, startCursor: null },
+                    pageInfo: { hasPreviousPage: paths.length === 1, startCursor: "older" },
                     nodes: [
                       {
-                        id: "gid://gitlab/Note/7",
+                        id: `gid://gitlab/Note/${paths.length === 1 ? 8 : 7}`,
                         body: "Older",
                         author: { username: "other" },
                         createdAt: "2026-07-02T00:00:00Z",
@@ -1141,16 +1182,18 @@ describe("GitLabIssueTracker", () => {
             },
           });
         });
+        const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+        const first = yield* api.getComments(target);
         const page = yield* api.getComments({
           cwd: "/w",
           host: "gitlab.com",
           scope: "acme/web",
           key: "42",
-          cursor: "older",
+          cursor: first.nextCursor!,
         });
         expect(page.comments[0]?.canEdit).toBe(canEdit);
         expect(page.comments[0]?.editedAt).toBe("2026-07-03T00:00:00Z");
-        expect(paths).toEqual(["graphql"]);
+        expect(paths).toEqual(["graphql", "graphql"]);
       }),
   );
 
@@ -1263,7 +1306,7 @@ describe("GitLabIssueTracker", () => {
                       "gitlab.acme.test:8443",
                     );
                     const url = new URL(path, "https://gitlab.acme.test:8443");
-                    expect(url.searchParams.get("per_page")).toBe("15");
+                    expect(url.searchParams.get("per_page")).toBe("100");
                     let rows;
                     if (url.pathname.endsWith("/notes")) {
                       expect(url.searchParams.get("sort")).toBe("asc");
@@ -1282,6 +1325,13 @@ describe("GitLabIssueTracker", () => {
                                 id,
                                 body: "Comment",
                                 system: false,
+                                created_at: createdAt,
+                                author,
+                              })),
+                              ...remaining.map(([body], index) => ({
+                                id: index + 101,
+                                body,
+                                system: true,
                                 created_at: createdAt,
                                 author,
                               })),
@@ -1312,7 +1362,11 @@ describe("GitLabIssueTracker", () => {
                         user: author,
                       }));
                     }
-                    return Effect.succeed(TestSourceControlHost.processOutput(encode(rows)));
+                    return Effect.succeed(
+                      TestSourceControlHost.processOutput(
+                        `HTTP/2.0 200 OK\r\nX-Next-Page: \r\nX-Total-Pages: 1\r\n\r\n${encode(rows)}`,
+                      ),
+                    );
                   },
                 },
               }),
@@ -1326,34 +1380,27 @@ describe("GitLabIssueTracker", () => {
         scope: "acme/web",
         key: "42",
         limit: 15,
+        order: "asc" as const,
       };
       const first = yield* decodeHistoryWire(yield* api.getHistory!(target));
-      expect(first).toEqual({ items: [], nextCursor: "notes:2" });
-      expect(paths).toHaveLength(1);
-      const notes = yield* decodeHistoryWire(
-        yield* api.getHistory!({ ...target, cursor: first.nextCursor! }),
-      );
-      expect(notes.nextCursor).toBe("labels:1");
-      expect(notes.items.map(({ kind, detail }) => [kind, detail])).toEqual(
-        remaining.map(([, kind, detail]) => [kind, detail]),
-      );
-      const labels = yield* decodeHistoryWire(
-        yield* api.getHistory!({ ...target, cursor: notes.nextCursor! }),
-      );
-      expect(labels.nextCursor).toBe("states:1");
-      const states = yield* decodeHistoryWire(
-        yield* api.getHistory!({ ...target, cursor: labels.nextCursor! }),
-      );
-      expect(states.nextCursor).toBeNull();
+      expect(first.nextCursor).toBeNull();
+      expect(paths).toHaveLength(3);
       expect(
-        [...labels.items, ...states.items].map(({ id, kind, detail }) => [id, kind, detail]),
+        first.items
+          .filter(({ id }) => id.startsWith("notes:"))
+          .map(({ kind, detail }) => [kind, detail]),
+      ).toEqual(remaining.map(([, kind, detail]) => [kind, detail]));
+      expect(
+        first.items
+          .filter(({ id }) => !id.startsWith("notes:"))
+          .map(({ id, kind, detail }) => [id, kind, detail]),
       ).toEqual([
         ["labels:201", "labeled", "bug"],
         ["labels:202", "unlabeled", "bug"],
         ["states:301", "closed", null],
         ["states:302", "reopened", null],
       ]);
-      for (const item of [...notes.items, ...labels.items, ...states.items]) {
+      for (const item of first.items) {
         expect(item.actor).toEqual({
           id: "7",
           login: "julius",
@@ -1363,15 +1410,14 @@ describe("GitLabIssueTracker", () => {
         expect(item.createdAt).toBe(createdAt);
       }
       expect(paths).toEqual([
-        "projects/acme%2Fweb/issues/42/notes?per_page=15&page=1&sort=asc&order_by=created_at",
-        "projects/acme%2Fweb/issues/42/notes?per_page=15&page=2&sort=asc&order_by=created_at",
-        "projects/acme%2Fweb/issues/42/resource_label_events?per_page=15&page=1",
-        "projects/acme%2Fweb/issues/42/resource_state_events?per_page=15&page=1",
+        "projects/acme%2Fweb/issues/42/notes?per_page=100&page=1&sort=asc&order_by=created_at",
+        "projects/acme%2Fweb/issues/42/resource_label_events?per_page=100&page=1",
+        "projects/acme%2Fweb/issues/42/resource_state_events?per_page=100&page=1",
       ]);
     }),
   );
 
-  it.effect("keeps native history phases when a notes page contains no history", () =>
+  it.effect("merges native resource history when a notes page contains no history", () =>
     Effect.gen(function* () {
       const api = yield* tracker((args) => {
         const path = args[1]!;
@@ -1387,14 +1433,8 @@ describe("GitLabIssueTracker", () => {
       });
       const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 2 };
       const notes = yield* api.getHistory!(target);
-      expect(notes).toEqual({ items: [], nextCursor: "labels:1" });
-      const labels = yield* api.getHistory!({ ...target, cursor: notes.nextCursor! });
-      expect(labels).toMatchObject({
-        items: [{ kind: "labeled", detail: "bug" }],
-        nextCursor: "states:1",
-      });
-      expect(yield* api.getHistory!({ ...target, cursor: labels.nextCursor! })).toMatchObject({
-        items: [{ kind: "closed" }],
+      expect(notes).toMatchObject({
+        items: [{ kind: "closed" }, { kind: "labeled", detail: "bug" }],
         nextCursor: null,
       });
     }),
@@ -1630,10 +1670,13 @@ describe("GitLabIssueTracker", () => {
                   adminIssue: true,
                 },
                 notes: {
-                  pageInfo: { hasPreviousPage: true, startCursor: "native-next" },
+                  pageInfo: {
+                    hasPreviousPage: paths.length === 1,
+                    startCursor: paths.length === 1 ? "native-cursor" : "native-next",
+                  },
                   nodes: [
                     {
-                      id: "gid://gitlab/Note/107",
+                      id: `gid://gitlab/Note/${paths.length === 1 ? 108 : 107}`,
                       body: "Older page",
                       author: { id: "gid://gitlab/User/2", username: "theo" },
                       createdAt: "2026-07-02T00:00:00Z",
@@ -1652,25 +1695,27 @@ describe("GitLabIssueTracker", () => {
           },
         });
       });
+      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" };
+      const first = yield* api.getComments(target);
       const page = yield* api.getComments({
         cwd: "/w",
         host: "gitlab.com",
         scope: "acme/web",
         key: "42",
-        cursor: "native-cursor",
+        cursor: first.nextCursor!,
       });
       expect(page.comments[0]?.author?.id).toBe("2");
       expect(page.comments[0]?.reactions).toEqual([
         { content: "thumbs-up", count: 2, actors: ["theo"], viewerHasReacted: true },
       ]);
       expect(page.comments[0]?.reactionsTruncated).toBe(true);
-      expect(page.nextCursor).toBe("native-next");
-      expect(paths).toEqual(["graphql"]);
+      expect(page.nextCursor).toBeNull();
+      expect(paths).toEqual(["graphql", "graphql"]);
       expect(sentBody).toContain('"cursor":"native-cursor"');
     }),
   );
 
-  it.effect("marks partial detail reactions and history without reading more pages", () =>
+  it.effect("keeps partial detail reactions separate from complete native history", () =>
     Effect.gen(function* () {
       const paths: string[] = [];
       const api = yield* tracker((args) => {
@@ -1722,19 +1767,19 @@ describe("GitLabIssueTracker", () => {
         key: "42",
       });
       expect(issue.reactionsTruncated).toBe(true);
-      expect(issue.historyTruncated).toBe(true);
-      expect(issue.commentsCursor).toBe("native-next");
+      expect(issue.historyTruncated).toBe(false);
+      expect(issue.commentsCursor).toEqual(expect.any(String));
       expect(issue.comments).toEqual([]);
       expect(issue.events).toContainEqual({
-        id: "note-108",
+        id: "states:8",
         kind: "closed",
-        actor: { id: "2", login: "theo", name: null, avatarUrl: null },
-        createdAt: "2026-07-02T00:00:00Z",
+        actor: { id: undefined, login: "theo", name: null, avatarUrl: null },
+        createdAt: "2026-07-03T00:00:00Z",
         detail: null,
       });
-      expect(paths).toHaveLength(6);
+      expect(paths).toHaveLength(8);
       expect(paths.filter((path) => path === "graphql")).toHaveLength(1);
-      expect(paths.some((path) => path.includes("/notes"))).toBe(false);
+      expect(paths.filter((path) => path.includes("/notes?"))).toHaveLength(1);
     }),
   );
 
@@ -1774,8 +1819,8 @@ describe("GitLabIssueTracker", () => {
       ]);
       // System notes become events; label notes are dropped in favour of the label events.
       expect(issue.events.map((event) => [event.kind, event.detail])).toEqual([
-        ["labeled", "bug"],
         ["closed", null],
+        ["labeled", "bug"],
       ]);
       // A closing merge request is not repeated as a related one.
       expect(
@@ -1808,7 +1853,8 @@ describe("GitLabIssueTracker", () => {
       });
       expect(issue.commentsCursor).toBeNull();
       expect(issue.historyTruncated).toBe(true);
-      expect(issue.events).toHaveLength(1);
+      expect(issue.events.map(({ id, kind }) => [id, kind])).toEqual([["states:8", "closed"]]);
+      expect(issue.capabilities?.historyOrders).toEqual([]);
     }),
   );
 
@@ -1850,5 +1896,571 @@ describe("GitLabIssueTracker", () => {
       expect(error.reason).toBe("not-found");
       expect(requests).toBe(0);
     }),
+  );
+});
+
+describe("GitLab native timeline order", () => {
+  it.effect.each(["desc", "asc"] as const)(
+    "pages comments globally in %s order with bound cursors",
+    (order) =>
+      Effect.gen(function* () {
+        const target = {
+          cwd: "/w",
+          host: "gitlab.com",
+          scope: "acme/web",
+          key: "42",
+          connectionId: "account-a",
+        };
+        let calls = 0;
+        const rows = Array.from({ length: 205 }, (_, index) => ({
+          id: `gid://gitlab/Note/${index + 1}`,
+          body: `Reply ${index + 1}`,
+          createdAt: DateTime.formatIso(
+            DateTime.add(DateTime.makeUnsafe("2026-07-01T00:00:00Z"), { minutes: index }),
+          ),
+          author: { username: "julius" },
+        }));
+        const api = yield* tracker((args, stdin) => {
+          calls++;
+          expect(args[1]).toBe("graphql");
+          const request = JSON.parse(stdin!);
+          const before = request.variables.cursor;
+          const backward = request.query.includes("notes(last:");
+          expect(backward).toBe(order === "desc");
+          const edge = before == null ? (backward ? rows.length : 0) : Number(before);
+          const start = backward ? Math.max(0, edge - 100) : edge;
+          const end = backward ? edge : Math.min(rows.length, edge + 100);
+          const response = JSON.parse(answer("graphql"));
+          response.data.project.mergeRequest.notes = {
+            nodes: rows.slice(start, end),
+            pageInfo: {
+              hasPreviousPage: backward ? start > 0 : end < rows.length,
+              startCursor: String(backward ? start : end),
+            },
+          };
+          return encode(response);
+        });
+        const first = yield* api.getComments({ ...target, ...(order === "desc" ? {} : { order }) });
+        const wrongDirection = yield* Effect.flip(
+          api.getComments({
+            ...target,
+            order: order === "desc" ? "asc" : "desc",
+            cursor: first.nextCursor!,
+          }),
+        );
+        expect(wrongDirection.reason).toBe("failed");
+        for (const changed of [
+          { connectionId: "account-b" },
+          { cwd: "/other" },
+          { host: "other.test" },
+          { scope: "other/web" },
+          { key: "43" },
+        ]) {
+          expect(
+            (yield* Effect.flip(
+              api.getComments({ ...target, ...changed, order, cursor: first.nextCursor! }),
+            )).reason,
+          ).toBe("failed");
+        }
+        expect(calls).toBe(1);
+        const second = yield* api.getComments({ ...target, order, cursor: first.nextCursor! });
+        const third = yield* api.getComments({ ...target, order, cursor: second.nextCursor! });
+        expect(third.nextCursor).toBeNull();
+        const ids = [...first.comments, ...second.comments, ...third.comments].map(({ id }) => id);
+        const expected = rows.map(({ id }) => id.split("/").at(-1));
+        expect(ids).toEqual(order === "desc" ? expected.toReversed() : expected);
+        expect(calls).toBe(3);
+        expect((yield* api.getComments({ ...target, order })).comments[0]?.id).toBe(
+          order === "desc" ? "205" : "1",
+        );
+      }),
+  );
+
+  it.effect.each(["desc", "asc"] as const)(
+    "merges native history globally in %s order across pages",
+    (order) =>
+      Effect.gen(function* () {
+        const target = {
+          cwd: "/w",
+          host: "gitlab.com",
+          scope: "acme/web",
+          key: "42",
+          connectionId: "account-a",
+          limit: 17,
+          order,
+        };
+        const notes = Array.from({ length: 123 }, (_, index) => ({
+          id: index + 1,
+          body: "changed the description",
+          system: true,
+          created_at: DateTime.formatIso(
+            DateTime.add(DateTime.makeUnsafe("2026-07-01T00:00:00Z"), { minutes: index * 2 }),
+          ),
+        }));
+        const labels = [
+          { id: 1, action: "add", label: { name: "bug" }, created_at: notes[1]!.created_at },
+          { id: 2, action: "remove", label: { name: "bug" }, created_at: notes[120]!.created_at },
+        ];
+        const states = [{ id: 1, state: "closed", created_at: notes[70]!.created_at }];
+        let calls = 0;
+        const api = yield* tracker((args) => {
+          calls++;
+          const url = new URL(args[1]!, "https://gitlab.com");
+          expect(url.searchParams.get("per_page")).toBe("100");
+          if (url.pathname.endsWith("resource_label_events")) return encode(labels.toReversed());
+          if (url.pathname.endsWith("resource_state_events")) return encode(states);
+          expect(url.pathname).toBe("/projects/acme%2Fweb/issues/42/notes");
+          expect(url.searchParams.get("sort")).toBe(order);
+          const page = Number(url.searchParams.get("page"));
+          const ordered = order === "desc" ? notes.toReversed() : notes;
+          return encode(ordered.slice((page - 1) * 100, page * 100));
+        });
+        const events = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < 12; page++) {
+          const result = yield* api.getHistory!({
+            ...target,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+          events.push(...result.items);
+          if (page === 0) {
+            const before = calls;
+            expect(
+              (yield* Effect.flip(
+                api.getHistory!({ ...target, connectionId: "other", cursor: result.nextCursor! }),
+              )).reason,
+            ).toBe("failed");
+            expect(calls).toBe(before);
+          }
+          if (result.nextCursor === null) break;
+          cursor = result.nextCursor;
+        }
+        expect(events).toHaveLength(126);
+        expect(new Set(events.map(({ id }) => id)).size).toBe(126);
+        const times = events.map(({ createdAt }) => Date.parse(createdAt));
+        expect(times).toEqual([...times].sort((a, b) => (order === "desc" ? b - a : a - b)));
+        expect(times[0]).toBe(Date.parse(notes[order === "desc" ? 122 : 0]!.created_at));
+        expect(events.filter(({ kind }) => kind === "updated")).toHaveLength(123);
+      }),
+  );
+
+  it.effect("reports truncated history for an unbounded native resource stream", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        paths.push(args[1]!);
+        return args[1]!.includes("resource_label_events")
+          ? encode(
+              Array.from({ length: 100 }, (_, index) => ({
+                id: index + 1,
+                action: "add",
+                label: { name: "bug" },
+                created_at: "2026-07-01T00:00:00Z",
+              })),
+            )
+          : "[]";
+      });
+      const target = {
+        cwd: "/w",
+        host: "gitlab.com",
+        scope: "acme/web",
+        key: "42",
+      };
+      const page = yield* api.getHistory!(target);
+      expect(page.items).toHaveLength(50);
+      expect(page.truncated).toBe(true);
+      expect(page.nextCursor).toEqual(expect.any(String));
+      expect(paths).toHaveLength(3);
+      const next = yield* api.getHistory!({ ...target, cursor: page.nextCursor! });
+      expect(next.items).toHaveLength(50);
+      expect(next).toMatchObject({ nextCursor: null, truncated: true });
+      expect(new Set([...page.items, ...next.items].map(({ id }) => id)).size).toBe(100);
+      expect(paths).toHaveLength(6);
+      expect(paths.every((path) => path.includes("page=1"))).toBe(true);
+    }),
+  );
+
+  it.effect.each([
+    { name: "no pagination metadata", headers: "Content-Type: application/json", failed: false },
+    {
+      name: "a short visible page with a native next page",
+      headers: "X-Next-Page: 2\r\nX-Total-Pages: 2",
+      failed: false,
+    },
+    {
+      name: "contradictory Link metadata",
+      headers: 'X-Next-Page: \r\nLink: <https://gitlab.com/api/v4/next>; rel="next"',
+      failed: true,
+    },
+    { name: "a repeated page", headers: "X-Next-Page: 1", failed: true },
+    {
+      name: "duplicate pagination metadata",
+      headers: "X-Next-Page: \r\nX-Next-Page: 2",
+      failed: true,
+    },
+    { name: "a contradictory total", headers: "X-Next-Page: \r\nX-Total-Pages: 0", failed: true },
+    {
+      name: "contradictory complete totals",
+      headers: "X-Next-Page: \r\nX-Total-Pages: 1\r\nX-Total: 200",
+      failed: true,
+    },
+  ])("handles resource history with $name without following another page", ({ headers, failed }) =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((args) => {
+        const path = args[1]!;
+        paths.push(path);
+        if (!path.includes("resource_label_events")) return "[]";
+        const row = {
+          id: 1,
+          action: "add",
+          label: { name: "bug" },
+          created_at: "2026-07-01T00:00:00Z",
+        };
+        return `HTTP/2.0 200 OK\r\n${headers}\r\n\r\n${encode([row])}`;
+      });
+      const result = yield* Effect.result(
+        api.getHistory!({ cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" }),
+      );
+      expect(Result.isFailure(result)).toBe(failed);
+      if (Result.isSuccess(result))
+        expect(result.success).toMatchObject({
+          items: [{ id: "labels:1", kind: "labeled", detail: "bug" }],
+          nextCursor: null,
+          truncated: true,
+        });
+      expect(paths.length).toBeLessThanOrEqual(3);
+      expect(paths.some((path) => path.includes("resource_label_events"))).toBe(true);
+      expect(paths.every((path) => path.includes("page=1"))).toBe(true);
+    }),
+  );
+
+  it.effect("orders a complete full resource page using authoritative native totals", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker((args) => {
+        if (!args[1]!.includes("resource_label_events")) return "[]";
+        return `HTTP/2.0 200 OK\r\nX-Next-Page: \r\nX-Total-Pages: 1\r\nX-Total: 100\r\n\r\n${encode(Array.from({ length: 100 }, (_, index) => ({ id: index + 1, action: "add", label: { name: "bug" }, created_at: DateTime.formatIso(DateTime.add(DateTime.makeUnsafe("2026-07-01T00:00:00Z"), { minutes: index })) })))}`;
+      });
+      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 100 };
+      const page = yield* api.getHistory!(target);
+      expect(page.items.map(({ id }) => id)).toEqual(
+        Array.from({ length: 100 }, (_, index) => `labels:${100 - index}`),
+      );
+      expect(page.nextCursor).toBeNull();
+      expect(page.truncated).not.toBe(true);
+    }),
+  );
+
+  it.effect("rejects malformed and contradictory history cursors before a provider read", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const api = yield* tracker((args) => {
+        calls++;
+        return args[1]!.includes("resource_label_events")
+          ? encode(
+              [1, 2].map((id) => ({
+                id,
+                action: "add",
+                label: { name: "bug" },
+                created_at: "2026-07-01T00:00:00Z",
+              })),
+            )
+          : "[]";
+      });
+      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 1 };
+      const first = yield* api.getHistory!(target);
+      expect(first.nextCursor).toEqual(expect.any(String));
+      const original = JSON.parse(Buffer.from(first.nextCursor!, "base64url").toString("utf8"));
+      const originalPosition = JSON.parse(original.position);
+      for (const change of [
+        { page: -1 },
+        { page: 1000001 },
+        { offset: 101 },
+        { resourceOffset: -1 },
+        { resources: "invalid-window-checksum" },
+        { page: 2, previousIds: [], previousTime: null },
+        { ids: [1, 1] },
+      ]) {
+        const cursor = Buffer.from(
+          encode({ ...original, position: encode({ ...originalPosition, ...change }) }),
+        ).toString("base64url");
+        yield* Effect.flip(api.getHistory!({ ...target, cursor }));
+      }
+      yield* Effect.flip(api.getHistory!({ ...target, cursor: first.nextCursor! + ".bad" }));
+      expect(calls).toBe(3);
+    }),
+  );
+
+  it.effect.each([
+    {
+      url: "https://gitlab.com/acme/web/-/issues/42#note_9",
+      expected: "https://gitlab.com/acme/web/-/issues/42#note_9",
+    },
+    { url: "javascript:alert(1)", expected: undefined },
+    { url: undefined, expected: undefined },
+  ])("keeps only a supplied safe native event permalink: $url", ({ url, expected }) =>
+    Effect.gen(function* () {
+      const api = yield* tracker((args) =>
+        args[1]!.includes("/notes?")
+          ? encode([
+              {
+                id: 9,
+                system: true,
+                body: "mentioned in !50",
+                created_at: "2026-07-01T00:00:00Z",
+                ...(url === undefined ? {} : { url }),
+              },
+            ])
+          : "[]",
+      );
+      const page = yield* decodeHistoryWire(
+        yield* api.getHistory!({ cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42" }),
+      );
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]).toMatchObject({ kind: "referenced", detail: "!50" });
+      expect(page.items[0]?.url).toBe(expected);
+      expect(page.items[0]?.reference).toBeUndefined();
+    }),
+  );
+});
+
+describe("GitLab native history regression repairs", () => {
+  it.effect("refuses a changed resource window after compacting its cursor comparison", () =>
+    Effect.gen(function* () {
+      let changed = false;
+      let calls = 0;
+      const api = yield* tracker((args) => {
+        calls++;
+        return args[1]!.includes("resource_label_events")
+          ? encode(
+              [changed ? 3 : 1, 2].map((id) => ({
+                id,
+                action: "add",
+                label: { name: "bug" },
+                created_at: "2026-07-01T00:00:00Z",
+              })),
+            )
+          : "[]";
+      });
+      const target = { cwd: "/w", host: "gitlab.com", scope: "acme/web", key: "42", limit: 1 };
+      const first = yield* api.getHistory!(target);
+      expect(first.nextCursor).toEqual(expect.any(String));
+      changed = true;
+      const error = yield* Effect.flip(api.getHistory!({ ...target, cursor: first.nextCursor! }));
+      expect(error.detail).toContain("history changed");
+      expect(calls).toBe(6);
+    }),
+  );
+
+  it.effect.each(["label continuation", "state continuation", "missing metadata"] as const)(
+    "keeps known native history and detail events with %s",
+    (partial) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args) => {
+          const path = args[1]!;
+          paths.push(path);
+          let rows;
+          if (path.includes("/notes?"))
+            rows = [
+              {
+                id: 9,
+                system: true,
+                body: "changed title from old to {+new+}",
+                created_at: "2026-07-03T00:00:00Z",
+              },
+            ];
+          else if (path.includes("resource_label_events"))
+            rows = [
+              { id: 1, action: "add", label: { name: "bug" }, created_at: "2026-07-02T00:00:00Z" },
+            ];
+          else if (path.includes("resource_state_events"))
+            rows = [{ id: 2, state: "closed", created_at: "2026-07-01T00:00:00Z" }];
+          else return answer(path);
+          const incomplete =
+            (partial === "label continuation" && path.includes("resource_label_events")) ||
+            (partial === "state continuation" && path.includes("resource_state_events"));
+          const headers =
+            partial === "missing metadata" && path.includes("resource_label_events")
+              ? "Content-Type: application/json"
+              : `X-Next-Page: ${incomplete ? "2" : ""}\r\nX-Total-Pages: ${incomplete ? "2" : "1"}`;
+          return `HTTP/2.0 200 OK\r\n${headers}\r\n\r\n${encode(rows)}`;
+        });
+        const target = {
+          cwd: "/w",
+          host: "gitlab.com",
+          scope: "acme/web",
+          key: "42",
+          connectionId: "account-a",
+        };
+        const page = yield* api.getHistory!(target);
+        expect(page.items.map(({ id }) => id)).toEqual(["notes:9", "labels:1", "states:2"]);
+        expect(page).toMatchObject({ nextCursor: null, truncated: true });
+        expect(paths).toHaveLength(3);
+        paths.length = 0;
+        const detail = yield* api.getIssue(target);
+        expect(detail.events.map(({ id }) => id)).toEqual(["notes:9", "labels:1", "states:2"]);
+        expect(detail.historyTruncated).toBe(true);
+        expect(detail.capabilities?.historyOrders).toEqual([]);
+        expect(paths).toHaveLength(8);
+        expect(paths.filter((path) => path === "graphql")).toHaveLength(1);
+        expect(
+          paths.filter((path) => path.includes("/notes?") || path.includes("resource_")),
+        ).toHaveLength(3);
+      }),
+  );
+
+  it.effect.each([
+    { order: "asc", partial: false },
+    { order: "desc", partial: false },
+    { order: "asc", partial: true },
+    { order: "desc", partial: true },
+  ] as const)(
+    "continues known 100-row resource windows and 205 notes in $order within the cursor limit, partial: $partial",
+    ({ order, partial }) =>
+      Effect.gen(function* () {
+        const notes = Array.from({ length: 205 }, (_, index) => ({
+          id: 1000000000 + index,
+          system: true,
+          body: "changed the description",
+          created_at: DateTime.formatIso(
+            DateTime.add(DateTime.makeUnsafe("2026-07-10T00:00:00Z"), { minutes: index }),
+          ),
+        }));
+        const labels = Array.from({ length: 100 }, (_, index) => ({
+          id: 1000000000 + index,
+          action: "add",
+          label: { name: "bug" },
+          created_at: "2026-07-02T00:00:00Z",
+        }));
+        const states = Array.from({ length: 100 }, (_, index) => ({
+          id: 1000000000 + index,
+          state: "closed",
+          created_at: "2026-07-01T00:00:00Z",
+        }));
+        const paths: string[] = [];
+        const api = yield* tracker((args) => {
+          const path = args[1]!;
+          paths.push(path);
+          if (path.includes("resource_label_events"))
+            return `HTTP/2.0 200 OK\r\nX-Next-Page: ${partial ? "2" : ""}\r\nX-Total-Pages: ${partial ? "2" : "1"}\r\nX-Total: ${partial ? "200" : "100"}\r\n\r\n${encode(labels)}`;
+          if (path.includes("resource_state_events"))
+            return `HTTP/2.0 200 OK\r\nX-Next-Page: \r\nX-Total-Pages: 1\r\nX-Total: 100\r\n\r\n${encode(states)}`;
+          const url = new URL(path, "https://gitlab.com");
+          expect(url.searchParams.get("sort")).toBe(order);
+          const page = Number(url.searchParams.get("page"));
+          const ordered = order === "asc" ? notes : notes.toReversed();
+          return `HTTP/2.0 200 OK\r\nX-Next-Page: ${page < 3 ? page + 1 : ""}\r\nX-Total-Pages: 3\r\nX-Total: 205\r\n\r\n${encode(ordered.slice((page - 1) * 100, page * 100))}`;
+        });
+        const target = {
+          cwd: "/w",
+          host: "gitlab.com",
+          scope: "acme/web",
+          key: "42",
+          connectionId: "account-a",
+          order,
+          limit: 50,
+        };
+        const ids: string[] = [];
+        let cursor: string | undefined;
+        let reads = 0;
+        for (let page = 0; page < 12; page++) {
+          const result = yield* api.getHistory!({
+            ...target,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+          reads++;
+          expect(paths).toHaveLength(reads * 3);
+          ids.push(...result.items.map(({ id }) => id));
+          expect(result.truncated).toBe(partial ? true : undefined);
+          if (result.nextCursor === null) break;
+          expect(result.nextCursor.length).toBeLessThanOrEqual(8192);
+          cursor = result.nextCursor;
+        }
+        const expected = [
+          ...states.map(({ id }) => `states:${id}`),
+          ...labels.map(({ id }) => `labels:${id}`),
+          ...notes.map(({ id }) => `notes:${id}`),
+        ];
+        expect(ids).toEqual(order === "asc" ? expected : expected.toReversed());
+        expect(new Set(ids).size).toBe(405);
+        expect(reads).toBe(9);
+        expect(paths).toHaveLength(27);
+      }),
+  );
+
+  it.effect.each([
+    {
+      body: "changed title from old to {+new+}",
+      graphId: 9,
+      url: "https://gitlab.com/acme/web/-/issues/42#note_9",
+      expected: "https://gitlab.com/acme/web/-/issues/42#note_9",
+    },
+    {
+      body: "changed the description",
+      graphId: 9,
+      url: "https://gitlab.com/acme/web/-/issues/42#note_9",
+      expected: "https://gitlab.com/acme/web/-/issues/42#note_9",
+    },
+    {
+      body: "made the issue confidential",
+      graphId: 9,
+      url: "https://gitlab.com/acme/web/-/issues/42#note_9",
+      expected: "https://gitlab.com/acme/web/-/issues/42#note_9",
+    },
+    {
+      body: "changed title from old to {+new+}",
+      graphId: 10,
+      url: "https://gitlab.com/acme/web/-/issues/42#note_10",
+      expected: undefined,
+    },
+    {
+      body: "changed title from old to {+new+}",
+      graphId: 9,
+      url: "javascript:alert(1)",
+      expected: undefined,
+    },
+  ])(
+    "keeps only a safe matching GraphQL system-note URL in detail: $body / $graphId / $url",
+    ({ body, graphId, url, expected }) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((args) => {
+          const path = args[1]!;
+          paths.push(path);
+          if (path.includes("/notes?"))
+            return encode([{ id: 9, system: true, body, created_at: "2026-07-03T00:00:00Z" }]);
+          if (path === "graphql") {
+            const response = JSON.parse(answer(path));
+            response.data.project.mergeRequest.notes = {
+              pageInfo: { hasPreviousPage: false, startCursor: null },
+              nodes: [
+                {
+                  id: `gid://gitlab/Note/${graphId}`,
+                  system: true,
+                  body,
+                  createdAt: "2026-07-03T00:00:00Z",
+                  url,
+                },
+              ],
+            };
+            return encode(response);
+          }
+          return answer(path);
+        });
+        const detail = yield* api.getIssue({
+          cwd: "/w",
+          host: "gitlab.com",
+          scope: "acme/web",
+          key: "42",
+          connectionId: "account-a",
+        });
+        const event = detail.events.find(({ id }) => id === "notes:9");
+        expect(event).toBeDefined();
+        expect(event?.url).toBe(expected);
+        expect(event?.reference).toBeUndefined();
+        expect(paths).toHaveLength(8);
+        expect(paths.filter((path) => path === "graphql")).toHaveLength(1);
+      }),
   );
 });

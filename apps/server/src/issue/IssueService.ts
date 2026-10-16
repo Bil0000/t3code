@@ -36,6 +36,7 @@ import {
   type IssueEditCommentInput,
   type IssueHierarchyPage,
   type IssueHistoryPage,
+  type IssueHistoryInput,
   type IssueLabelCandidatesPage,
   type IssueLinkedPullRequestsPage,
   type IssuePageRef,
@@ -217,7 +218,7 @@ export class IssueService extends Context.Service<
     readonly comments: (
       input: IssueCommentsPageInput,
     ) => Effect.Effect<IssueCommentsPage, IssueError>;
-    readonly history: (input: IssuePageRef) => Effect.Effect<IssueHistoryPage, IssueError>;
+    readonly history: (input: IssueHistoryInput) => Effect.Effect<IssueHistoryPage, IssueError>;
     readonly linkedPullRequests: (
       input: IssuePageRef,
     ) => Effect.Effect<IssueLinkedPullRequestsPage, IssueError>;
@@ -806,6 +807,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((project) =>
         project.api
           .getIssue({
+            ...accountFields(project),
             cwd: project.project.workspaceRoot,
             host: project.host,
             scope: project.scope,
@@ -838,7 +840,9 @@ export const make = Effect.gen(function* () {
             host: project.host,
             scope: project.scope,
             key: input.key,
-            cursor: input.cursor,
+            ...accountFields(project),
+            ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+            order: input.order ?? "desc",
             ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
           })
           .pipe(withConnection(project), Effect.mapError(toIssueError("comments"))),
@@ -852,6 +856,8 @@ export const make = Effect.gen(function* () {
           ? Effect.fail(unsupported("history", "issue history"))
           : project.api
               .getHistory({
+                ...accountFields(project),
+                order: input.order ?? "desc",
                 cwd: project.project.workspaceRoot,
                 host: project.host,
                 scope: project.scope,

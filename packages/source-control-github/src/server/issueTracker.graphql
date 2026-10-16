@@ -154,19 +154,55 @@ query IssueDetail($owner: String!, $name: String!, $number: Int!) {
   }
 }
 
-query IssueComments($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
+query IssueComments(
+  $owner: String!
+  $name: String!
+  $number: Int!
+  $first: Int
+  $last: Int
+  $after: String
+  $before: String
+) {
   viewer {
     login
   }
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
-      comments(last: 100, before: $cursor) {
+      comments(first: $first, last: $last, after: $after, before: $before) {
         pageInfo {
           hasPreviousPage
+          hasNextPage
           startCursor
+          endCursor
         }
         nodes {
           ...IssueCommentFields
+        }
+      }
+    }
+  }
+}
+
+query IssueHistory(
+  $owner: String!
+  $name: String!
+  $number: Int!
+  $first: Int
+  $last: Int
+  $after: String
+  $before: String
+) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      timelineItems(first: $first, last: $last, after: $after, before: $before) {
+        pageInfo {
+          hasPreviousPage
+          hasNextPage
+          startCursor
+          endCursor
+        }
+        nodes {
+          ...IssueHistoryItem
         }
       }
     }
@@ -444,6 +480,7 @@ fragment IssueTimelineItem on IssueTimelineItems {
   ... on CrossReferencedEvent {
     id
     createdAt
+    url
     actor {
       login
       avatarUrl
@@ -462,10 +499,352 @@ fragment IssueTimelineItem on IssueTimelineItems {
       }
       ... on Issue {
         number
+        title
+        url
         repository {
           nameWithOwner
         }
       }
+    }
+  }
+}
+
+fragment IssueHistoryItem on IssueTimelineItems {
+  ...IssueTimelineItem
+  ... on AddedToProjectEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on AddedToProjectV2Event {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on BlockedByAddedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on BlockedByRemovedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on BlockingAddedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on BlockingRemovedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on CommentDeletedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on ConnectedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on ConvertedFromDraftEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on ConvertedNoteToIssueEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on ConvertedToDiscussionEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on DemilestonedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on DisconnectedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on IssueCommentPinnedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on IssueCommentUnpinnedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on IssueFieldAddedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on IssueFieldChangedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on IssueFieldRemovedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on IssueTypeAddedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on IssueTypeChangedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on IssueTypeRemovedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on LockedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on MarkedAsDuplicateEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on MentionedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on MilestonedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on MovedColumnsInProjectEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on ParentIssueAddedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on ParentIssueRemovedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on PinnedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on ProjectV2ItemStatusChangedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on ReferencedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on RemovedFromProjectEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on RemovedFromProjectV2Event {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on SubIssueAddedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on SubIssueRemovedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on SubscribedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on TransferredEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on UnlockedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on UnmarkedAsDuplicateEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on UnpinnedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on UnsubscribedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
+    }
+  }
+  ... on UserBlockedEvent {
+    id
+    createdAt
+    actor {
+      login
+      avatarUrl
     }
   }
 }

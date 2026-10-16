@@ -13,7 +13,7 @@ import type {
   IssueActor,
   IssueComment,
   IssueEvent,
-  IssueEventKind,
+  IssueListOrder,
   IssueLabel,
   IssueLinkedPullRequest,
   IssueState,
@@ -72,6 +72,21 @@ export const IssueDetail = GraphQL.query(Queries.IssueDetail.name, {
     ),
   }),
 });
+const HistoryTimeline = Schema.Struct({
+  ...Queries.IssueHistoryRepositoryIssueTimelineItemsIssueTimelineItemsConnection.fields,
+  nodes: Schema.NullOr(Schema.Array(Schema.Unknown)),
+});
+const IssueHistory = GraphQL.query(Queries.IssueHistory.name, {
+  document: Queries.IssueHistory.document,
+  variables: Queries.IssueHistory.variables,
+  result: Schema.Struct({
+    repository: Schema.NullOr(
+      Schema.Struct({
+        issue: Schema.NullOr(Schema.Struct({ timelineItems: HistoryTimeline })),
+      }),
+    ),
+  }),
+});
 const IssueTemplates = GraphQL.query(Queries.IssueTemplates.name, {
   document: Queries.IssueTemplates.document,
   variables: Queries.IssueTemplates.variables,
@@ -90,6 +105,7 @@ export const IssueQueries = GraphQLGroup.make(
   IssueDetail,
   IssueTemplates,
   Queries.IssueComments,
+  IssueHistory,
   Queries.IssueViewerPermissions,
   Queries.IssueNodeId,
   Queries.IssueCommentScope,
@@ -113,6 +129,7 @@ const RawCreatedIssueSchema = Schema.Struct({
 
 const decodeIssueRow = Schema.decodeUnknownExit(Queries.IssueRow);
 const decodeTemplate = Schema.decodeUnknownExit(Queries.IssueTemplate);
+const decodeHistoryItem = Schema.decodeUnknownExit(Queries.IssueHistoryItem);
 const decodeTimelineItem = Schema.decodeUnknownExit(Queries.IssueTimelineItem);
 const decodeCreatedIssue = decodeJsonResult(RawCreatedIssueSchema);
 const decodeRestIssueLabels = decodeJsonResult(
@@ -255,10 +272,21 @@ function toLinkedPullRequest(
   };
 }
 
+function nativeUrl(value: string | null | undefined): string | undefined {
+  const url = trimmed(value);
+  if (url === null || url.length > 8192 || !URL.canParse(url)) return undefined;
+  const parsed = new URL(url);
+  return ["https:", "http:"].includes(parsed.protocol) &&
+    parsed.username === "" &&
+    parsed.password === ""
+    ? url
+    : undefined;
+}
+
 /** The change GitHub recorded, or null for a kind this page has no vocabulary for. */
 function toEventFields(
   raw: Queries.IssueTimelineItem,
-): { readonly kind: IssueEventKind; readonly detail: string | null } | null {
+): Pick<IssueEvent, "kind" | "detail" | "url" | "reference"> | null {
   switch (raw.__typename) {
     case "ClosedEvent":
       return { kind: "closed", detail: null };
@@ -286,9 +314,23 @@ function toEventFields(
       const repository =
         "repository" in raw.source ? trimmed(raw.source.repository.nameWithOwner) : null;
       const number = "number" in raw.source ? raw.source.number : 0;
+      const url = nativeUrl(raw.url);
+      const sourceUrl = "url" in raw.source ? nativeUrl(raw.source.url) : undefined;
+      const title = "title" in raw.source ? trimmed(raw.source.title) : null;
+      const identifier = repository === null || number <= 0 ? null : `${repository}#${number}`;
       return {
         kind: "referenced",
-        detail: repository === null || number <= 0 ? null : `${repository}#${number}`,
+        detail: identifier,
+        ...(url === undefined ? {} : { url }),
+        ...(sourceUrl === undefined
+          ? {}
+          : {
+              reference: {
+                url: sourceUrl,
+                ...(title === null ? {} : { title }),
+                ...(identifier === null ? {} : { identifier }),
+              },
+            }),
       };
     }
     default:
@@ -322,8 +364,10 @@ function toComments(
 }
 
 /** Where a newest-last connection carries on into older rows; null once it is whole. */
-function previousCursorOf(pageInfo: Queries.CommentsPageInfoPageInfo | undefined): string | null {
-  return pageInfo?.hasPreviousPage === true ? trimmed(pageInfo.startCursor) : null;
+function previousCursorOf(
+  pageInfo: Queries.IssueDetailRepositoryIssueCommentsPageInfoPageInfo | undefined,
+): string | null {
+  return pageInfo?.hasPreviousPage === true ? (trimmed(pageInfo.startCursor) ?? "") : null;
 }
 
 function toViewerPermissions(raw: Queries.IssueViewerPermissionsRepositoryRepository) {
@@ -394,9 +438,9 @@ export function toIssueDetail(data: typeof IssueDetail.result.Type): GitHubIssue
       issue,
     }),
     reactions: toReactions(issue.reactionGroups, viewer),
-    comments: toComments(issue.comments, viewer),
+    comments: toComments(issue.comments, viewer).toReversed(),
     commentsCursor: previousCursorOf(issue.comments?.pageInfo),
-    events,
+    events: events.toReversed(),
     historyTruncated: issue.timelineItems?.pageInfo?.hasPreviousPage === true,
     linkedPullRequests: [...links.values()],
   };
@@ -408,12 +452,62 @@ export function decodeRestIssueLabelsJson(
   return Result.map(decodeRestIssueLabels(raw), (issue) => toLabels(issue.labels));
 }
 
-export function toIssueComments(data: Queries.IssueComments.Result) {
-  const comments = data.repository?.issue?.comments;
-  const viewer = trimmed(data.viewer?.login);
+function timelinePage(
+  pageInfo: Queries.IssueCommentsRepositoryIssueCommentsPageInfoPageInfo,
+  order: IssueListOrder,
+  rowCount: number,
+) {
+  const more = order === "asc" ? pageInfo.hasNextPage : pageInfo.hasPreviousPage;
+  const cursor = order === "asc" ? pageInfo.endCursor : pageInfo.startCursor;
   return {
-    comments: toComments(comments, viewer),
-    nextCursor: previousCursorOf(comments?.pageInfo),
+    nextCursor: more ? trimmed(cursor) : null,
+    valid: !more || (rowCount > 0 && trimmed(cursor) !== null),
+    oppositePage: order === "asc" ? pageInfo.hasPreviousPage : pageInfo.hasNextPage,
+  };
+}
+
+export function toIssueComments(
+  data: Queries.IssueComments.Result,
+  order: IssueListOrder = "desc",
+) {
+  if (data.repository?.issue == null) return null;
+  const comments = data.repository.issue.comments;
+  const viewer = trimmed(data.viewer?.login);
+  const items = toComments(comments, viewer);
+  return {
+    comments: order === "asc" ? items : items.toReversed(),
+    rowCount: comments.nodes?.length ?? 0,
+    ...timelinePage(comments.pageInfo, order, comments.nodes?.length ?? 0),
+  };
+}
+
+export function toIssueHistory(
+  data: typeof IssueHistory.result.Type,
+  order: IssueListOrder = "desc",
+) {
+  if (data.repository?.issue == null) return null;
+  const timeline = data.repository.issue.timelineItems;
+  const items = (timeline.nodes ?? []).flatMap((entry): IssueEvent[] => {
+    const decoded = decodeHistoryItem(entry);
+    if (Exit.isFailure(decoded)) return [];
+    const raw = decoded.value;
+    if (!("id" in raw) || !("createdAt" in raw)) return [];
+    const id = trimmed(raw.id);
+    const createdAt = trimmed(raw.createdAt);
+    if (id === null || createdAt === null) return [];
+    const fields = toEventFields(raw) ?? {
+      kind: "updated" as const,
+      detail: raw.__typename
+        .replace(/Event$/, "")
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .toLowerCase(),
+    };
+    return [{ id, ...fields, actor: toActor("actor" in raw ? raw.actor : null), createdAt }];
+  });
+  return {
+    items: order === "asc" ? items : items.toReversed(),
+    rowCount: timeline.nodes?.length ?? 0,
+    ...timelinePage(timeline.pageInfo, order, timeline.nodes?.length ?? 0),
   };
 }
 

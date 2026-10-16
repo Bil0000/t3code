@@ -722,7 +722,7 @@ describe("LinearIssueTracker", () => {
         ],
         [api.create({ ...scoped, title: "New", body: "", labels: [], assignees: [] }), ["T3Team"]],
         [api.getIssue({ ...scoped, key: "ENG-7" }), ["T3Issue", "T3Viewer"]],
-        [api.getComments({ ...scoped, key: "ENG-7", cursor: "next" }), ["T3Comments"]],
+        [api.getComments({ ...scoped, key: "ENG-7" }), ["T3Comments"]],
         [api.comment({ ...scoped, key: "ENG-7", body: "Hello" }), ["T3IssueReference"]],
         [api.update({ ...scoped, key: "ENG-7", title: "Changed" }), ["T3IssueReference"]],
         [api.setState({ ...scoped, key: "ENG-7", state: "closed" }), ["T3IssueReference"]],
@@ -2122,7 +2122,7 @@ describe("LinearIssueTracker", () => {
       expect(detail.assignees[0]).toMatchObject({ id: THEO.id, login: "theo" });
       expect(detail.comments[0]?.author).toMatchObject({ id: THEO.id, login: "theo" });
       expect(detail.viewer).toBe("usr_julius");
-      expect(detail.commentsCursor).toBe("cmt_cur");
+      expect(JSON.parse(detail.commentsCursor!)[1]).toBe("cmt_cur");
       expect(detail.comments[0]?.reactions).toEqual([
         { content: "thumbs-up", count: 1, actors: [], viewerHasReacted: true },
       ]);
@@ -2924,10 +2924,9 @@ it.effect("pages hierarchy, history and attachments while checking the source sc
       items: [{ key: "ENG-8", scope: "ENG" }],
       nextCursor: "next",
     });
-    expect(yield* api.getHistory(input)).toMatchObject({
-      items: [{ kind: "closed" }],
-      nextCursor: "next",
-    });
+    const historyPage = yield* api.getHistory(input);
+    expect(historyPage.items).toMatchObject([{ kind: "closed" }]);
+    expect(JSON.parse(historyPage.nextCursor!)[1]).toBe("next");
     expect(yield* api.getLinkedPullRequests(input)).toMatchObject({
       items: [{ number: 7, state: "merged" }],
       nextCursor: "next",
@@ -3159,14 +3158,32 @@ it.effect("rejects unchanged Linear comment cursors without extra requests", () 
         }),
       });
       const api = yield* test.tracker;
-      const result = api.getComments({ ...target, key: "ENG-7", cursor: "same" });
+      const cursor = JSON.stringify([
+        JSON.stringify([
+          "linear-activity-v1",
+          "getComments",
+          target.cwd,
+          target.host,
+          "eng",
+          "ENG-7",
+          null,
+          "desc",
+          50,
+        ]),
+        "same",
+      ]);
+      const result = api.getComments({ ...target, key: "ENG-7", cursor });
       if (nextCursor === "same")
         expect(yield* result.pipe(Effect.flip)).toMatchObject({
           reason: "failed",
           operation: "getComments",
           detail: "Linear returned an inconsistent page.",
         });
-      else expect(yield* result).toMatchObject({ comments: [{ id: "comment-1" }], nextCursor });
+      else {
+        const page = yield* result;
+        expect(page.comments).toMatchObject([{ id: "comment-1" }]);
+        expect(page.nextCursor === null ? null : JSON.parse(page.nextCursor)[1]).toBe(nextCursor);
+      }
       expect(test.requests.map(({ operation }) => operation)).toEqual(["T3Comments"]);
       expect(test.requests[0]?.variables.after).toBe("same");
     }
@@ -3200,7 +3217,20 @@ it.effect("maps editable old comments with the supplied viewer and native edit t
     const result = yield* api.getComments({
       ...target,
       key: "ENG-7",
-      cursor: "older",
+      cursor: JSON.stringify([
+        JSON.stringify([
+          "linear-activity-v1",
+          "getComments",
+          target.cwd,
+          target.host,
+          "eng",
+          "ENG-7",
+          null,
+          "desc",
+          50,
+        ]),
+        "older",
+      ]),
       viewer: JULIUS.id,
     });
     expect(result.comments[0]).toMatchObject({
@@ -4858,5 +4888,184 @@ it.effect.each(["boundary", "child-guest", "parent-guest"] as const)(
           expect(test.requests.some(({ query }) => query.startsWith("mutation"))).toBe(false);
         }
       }
+    }),
+);
+
+it.effect.each(["asc", "desc"] as const)(
+  "pages native Linear comments and history globally in %s order with one request per page",
+  (order) =>
+    Effect.gen(function* () {
+      const all = Array.from({ length: 105 }, (_, index) => {
+        const number = 105 - index;
+        return {
+          id: `row-${number}`,
+          createdAt: `2026-01-01T00:${String(Math.floor(number / 60)).padStart(2, "0")}:${String(number % 60).padStart(2, "0")}.000Z`,
+        };
+      });
+      const connection = (variables: Record<string, unknown>, history: boolean) => {
+        const start = variables.after == null ? 0 : Number(variables.after);
+        const end = variables.before == null ? all.length : Number(variables.before);
+        const from = variables.last == null ? start : Math.max(0, end - Number(variables.last));
+        const to =
+          variables.last == null ? Math.min(all.length, from + Number(variables.first)) : end;
+        return {
+          nodes: all.slice(from, to).map((row) =>
+            history
+              ? {
+                  ...row,
+                  actor: JULIUS,
+                  fromState: null,
+                  toState: null,
+                  fromAssignee: null,
+                  toAssignee: null,
+                  addedLabels: null,
+                  removedLabels: null,
+                  fromTitle: null,
+                  toTitle: row.id,
+                }
+              : {
+                  ...row,
+                  body: row.id,
+                  editedAt: null,
+                  url: `https://linear.app/acme/issue/ENG-7#${row.id}`,
+                  user: JULIUS,
+                  reactions: [],
+                },
+          ),
+          pageInfo: {
+            hasNextPage: to < all.length,
+            endCursor: String(to),
+            hasPreviousPage: from > 0,
+            startCursor: String(from),
+          },
+        };
+      };
+      const test = fakeLinear({
+        T3History: (variables) => ({
+          issue: { ...issue("ENG-7"), history: connection(variables, true) },
+        }),
+        T3Comments: (variables) => ({
+          issue: { ...issue("ENG-7"), comments: connection(variables, false) },
+        }),
+      });
+      const api = yield* test.tracker;
+      const input = { ...target, key: "ENG-7", connectionId: "selected-account", order, limit: 50 };
+      for (const operation of ["history", "comments"] as const) {
+        const first =
+          operation === "history" ? yield* api.getHistory(input) : yield* api.getComments(input);
+        const rows = "items" in first ? first.items : first.comments;
+        expect(rows[0]?.id).toBe(
+          `row-${order === "asc" ? 1 : 105}${operation === "history" ? ":title" : ""}`,
+        );
+        expect(rows).toHaveLength(50);
+        expect(first.nextCursor).not.toBeNull();
+        const secondInput = { ...input, cursor: first.nextCursor! };
+        const second =
+          operation === "history"
+            ? yield* api.getHistory(secondInput)
+            : yield* api.getComments(secondInput);
+        const more = "items" in second ? second.items : second.comments;
+        expect(more[0]?.id).toBe(
+          `row-${order === "asc" ? 51 : 55}${operation === "history" ? ":title" : ""}`,
+        );
+        expect(more).toHaveLength(50);
+        const last = test.requests.at(-1)!;
+        expect(last.variables).toMatchObject(
+          order === "asc"
+            ? { first: null, last: 50, after: null, before: "55" }
+            : { first: 50, last: null, after: "50", before: null },
+        );
+        expect(compactQuery(last.query)).toContain(
+          compactQuery(
+            `${operation === "history" ? "history" : "comments"}(first:$first,last:$last,after:$after,before:$before,orderBy:createdAt)`,
+          ),
+        );
+        const count = test.requests.length;
+        for (const changed of [
+          { order: order === "asc" ? "desc" : "asc" },
+          { key: "ENG-8" },
+          { connectionId: "other-account" },
+          { cwd: "/other" },
+          { host: "other.example" },
+          { scope: "OPS" },
+          ...(operation === "history" ? [{ limit: 25 }] : []),
+        ]) {
+          const invalid = { ...secondInput, ...changed } as typeof secondInput;
+          const failure =
+            operation === "history"
+              ? yield* api.getHistory(invalid).pipe(Effect.flip)
+              : yield* api.getComments(invalid).pipe(Effect.flip);
+          expect(failure.reason).toBe("failed");
+        }
+        expect(test.requests).toHaveLength(count);
+      }
+      expect(test.requests.map(({ operation }) => operation)).toEqual([
+        "T3History",
+        "T3History",
+        "T3Comments",
+        "T3Comments",
+      ]);
+    }),
+);
+
+it.effect.each(["getHistory", "getComments"] as const)(
+  "preserves Retry-After on backward %s reads without extra HTTP calls",
+  (operation) =>
+    Effect.gen(function* () {
+      const now = 1_750_000_000_000;
+      yield* TestClock.setTime(now);
+      const test = fakeLinear({
+        [operation === "getHistory" ? "T3History" : "T3Comments"]: () =>
+          new Response("limited", { status: 429, headers: { "retry-after": "20" } }),
+      });
+      const api = yield* test.tracker;
+      const input = { ...target, key: "ENG-7", order: "asc" as const };
+      const error =
+        operation === "getHistory"
+          ? yield* api.getHistory(input).pipe(Effect.flip)
+          : yield* api.getComments(input).pipe(Effect.flip);
+      expect(error).toMatchObject({ reason: "rate-limited", retryAt: now + 20_000 });
+      if (operation === "getHistory") yield* api.getHistory(input).pipe(Effect.flip);
+      else yield* api.getComments(input).pipe(Effect.flip);
+      expect(test.requests).toHaveLength(1);
+      expect(test.requests[0]?.variables).toMatchObject({
+        first: null,
+        last: operation === "getHistory" ? 100 : 50,
+        backward: true,
+      });
+    }),
+);
+
+it.effect.each(["getHistory", "getComments"] as const)(
+  "rejects inconsistent native backward %s continuations with one HTTP call",
+  (operation) =>
+    Effect.gen(function* () {
+      const test = fakeLinear({
+        [operation === "getHistory" ? "T3History" : "T3Comments"]: () => ({
+          issue: {
+            ...issue("ENG-7"),
+            [operation === "getHistory" ? "history" : "comments"]: {
+              nodes: [],
+              pageInfo: {
+                hasNextPage: false,
+                endCursor: null,
+                hasPreviousPage: true,
+                startCursor: null,
+              },
+            },
+          },
+        }),
+      });
+      const api = yield* test.tracker;
+      const input = { ...target, key: "ENG-7", order: "asc" as const };
+      const error =
+        operation === "getHistory"
+          ? yield* api.getHistory(input).pipe(Effect.flip)
+          : yield* api.getComments(input).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        reason: "failed",
+        detail: "Linear returned an inconsistent page.",
+      });
+      expect(test.requests).toHaveLength(1);
     }),
 );

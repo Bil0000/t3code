@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import type {
   IssueCapabilities,
   IssuePageInput,
+  IssueListOrder,
   IssueRelation,
   IssueViewerPermissions,
   StandaloneIssueTrackerDescriptor,
@@ -31,6 +32,7 @@ import {
   jiraEvents,
   quoteJiraJql,
 } from "./jiraJson.ts";
+import { normalizeJiraInstanceHost } from "./jiraDataCenter.ts";
 import { jiraRichBody, parseJiraRichBody } from "./jiraAdf.ts";
 import {
   JiraField,
@@ -143,6 +145,7 @@ const History = Schema.Struct({
 });
 const ScopeIssue = Schema.Struct({
   key: Text,
+  changelog: JiraIssue.fields.changelog,
   fields: Schema.Struct({
     project: Schema.Struct({ id: Text, key: Text }),
     status: JiraStatus,
@@ -180,6 +183,54 @@ const commentOffset = (cursor: string) => {
   if (!/^(0|[1-9][0-9]{0,8})$/.test(cursor)) throw new Error("Invalid Jira comment cursor.");
   return Number(cursor);
 };
+const TimelineCursor = Schema.Struct({
+  identity: Text,
+  kind: Schema.Literals(["comments", "history"]),
+  position: Count,
+  total: Count,
+  boundary: Text,
+});
+const decodeTimelineCursor = Schema.decodeSync(Schema.fromJsonString(TimelineCursor));
+const encodeTimeline = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const timelineIdentity = (input: IssueTarget, order: IssueListOrder) =>
+  encodeTimeline([
+    "jira",
+    input.cwd,
+    normalizeJiraInstanceHost(input.host),
+    input.scope,
+    input.key,
+    input.connectionId ?? null,
+    order,
+  ]);
+const timelineCursor = (
+  input: IssueTarget,
+  kind: "comments" | "history",
+  order: IssueListOrder,
+  cursor?: string,
+) => {
+  if (order !== "asc" && order !== "desc") throw new Error("Invalid Jira timeline order.");
+  if (cursor === undefined) return undefined;
+  if (cursor.length > 8192) throw new Error("Invalid Jira timeline cursor.");
+  const page = decodeTimelineCursor(cursor);
+  if (
+    page.identity !== timelineIdentity(input, order) ||
+    page.kind !== kind ||
+    !Number.isSafeInteger(page.total) ||
+    !Number.isSafeInteger(page.position) ||
+    page.position <= 0 ||
+    page.position >= page.total
+  )
+    throw new Error("Invalid Jira timeline cursor.");
+  return page;
+};
+const encodeTimelineCursor = (
+  input: IssueTarget,
+  kind: "comments" | "history",
+  order: IssueListOrder,
+  position: number,
+  total: number,
+  boundary: string,
+) => encodeTimeline({ identity: timelineIdentity(input, order), kind, position, total, boundary });
 const matchesState = (
   transition: (typeof Transitions.Type)["transitions"][number],
   state: string,
@@ -273,7 +324,12 @@ export const make = Effect.gen(function* () {
         );
       return issue;
     });
-  const requireScopeIssue = (input: IssueTarget, operation: string, description = false) =>
+  const requireScopeIssue = (
+    input: IssueTarget,
+    operation: string,
+    description = false,
+    expandHistory = false,
+  ) =>
     Effect.gen(function* () {
       const issue = yield* jira.request({
         host: input.host,
@@ -283,7 +339,8 @@ export const make = Effect.gen(function* () {
           "/issue/" +
           encodeURIComponent(input.key) +
           "?fields=project,status" +
-          (description ? ",description" : ""),
+          (description ? ",description" : "") +
+          (expandHistory ? "&expand=changelog" : ""),
         schema: ScopeIssue,
       });
       if (issue.fields.project.key !== input.scope && issue.fields.project.id !== input.scope)
@@ -386,6 +443,7 @@ export const make = Effect.gen(function* () {
     },
     granted?: typeof Permissions.Type,
     deployment: "cloud" | "data-center" = "cloud",
+    order: IssueListOrder = "desc",
   ) =>
     JiraApi.attempt("getComments", () => {
       if (page.comments.length === 0 && page.startAt < page.total)
@@ -416,7 +474,14 @@ export const make = Effect.gen(function* () {
         }),
         nextCursor:
           page.startAt + page.comments.length < page.total
-            ? String(page.startAt + page.comments.length)
+            ? encodeTimelineCursor(
+                input,
+                "comments",
+                order,
+                page.startAt + page.comments.length,
+                page.total,
+                page.comments.at(-1)!.id,
+              )
             : null,
       };
     });
@@ -425,6 +490,8 @@ export const make = Effect.gen(function* () {
     startAt: number,
     granted?: typeof Permissions.Type,
     deployment: "cloud" | "data-center" = "cloud",
+    order: IssueListOrder = "desc",
+    previous?: typeof TimelineCursor.Type,
   ) =>
     Effect.gen(function* () {
       const page = yield* jira.request({
@@ -434,19 +501,124 @@ export const make = Effect.gen(function* () {
         path:
           "/issue/" +
           encodeURIComponent(input.key) +
-          "/comment?orderBy=-created&startAt=" +
+          "/comment?orderBy=" +
+          (order === "desc" ? "-created" : "created") +
+          "&startAt=" +
           startAt +
           "&maxResults=50",
         schema: CommentPage,
       });
-      if (page.startAt !== startAt || (page.comments.length === 0 && startAt < page.total))
+      if (
+        page.startAt !== startAt ||
+        startAt > page.total ||
+        startAt + page.comments.length > page.total ||
+        (page.comments.length === 0 && startAt < page.total) ||
+        (previous !== undefined && page.total !== previous.total) ||
+        new Set(page.comments.map((row) => row.id)).size !== page.comments.length ||
+        page.comments.some(
+          (row, index) =>
+            row.id === previous?.boundary ||
+            (index > 0 &&
+              (order === "desc"
+                ? Date.parse(row.created) > Date.parse(page.comments[index - 1]!.created)
+                : Date.parse(row.created) < Date.parse(page.comments[index - 1]!.created))),
+        )
+      )
         return yield* JiraApi.failed("getComments", "Jira returned an inconsistent comment page.");
-      return yield* commentResult(
-        input,
-        { ...page, comments: page.comments.toReversed() },
-        granted,
-        deployment,
-      );
+      return yield* commentResult(input, page, granted, deployment, order);
+    });
+  const history = (
+    input: IssueTarget,
+    order: IssueListOrder,
+    limit: number,
+    previous?: typeof TimelineCursor.Type,
+    embedded?: typeof History.Type,
+    operation = "getHistory",
+  ) =>
+    Effect.gen(function* () {
+      const read = (startAt: number, maximum: number) =>
+        jira.request({
+          host: input.host,
+          operation,
+          method: "GET",
+          path:
+            "/issue/" +
+            encodeURIComponent(input.key) +
+            "/changelog?startAt=" +
+            startAt +
+            "&maxResults=" +
+            maximum,
+          schema: History,
+        });
+      let metadata = embedded;
+      if (previous === undefined && order === "desc" && metadata?.total === undefined) {
+        metadata = yield* read(0, 1);
+        if (
+          metadata.startAt !== 0 ||
+          metadata.total === undefined ||
+          metadata.values.length > 1 ||
+          metadata.values.length !== Math.min(metadata.total, 1) ||
+          (metadata.isLast !== undefined &&
+            metadata.isLast !== (metadata.values.length === metadata.total))
+        )
+          return yield* JiraApi.failed(operation, "Jira returned inconsistent history metadata.");
+      }
+      if (
+        metadata?.total !== undefined &&
+        (!Number.isSafeInteger(metadata.total) ||
+          (metadata.startAt ?? 0) > metadata.total ||
+          metadata.values.length > metadata.total - (metadata.startAt ?? 0))
+      )
+        return yield* JiraApi.failed(operation, "Jira returned inconsistent history metadata.");
+      const total = previous?.total ?? metadata?.total;
+      const end = previous?.position ?? total;
+      const startAt = order === "desc" ? Math.max(0, end! - limit) : (previous?.position ?? 0);
+      const maximum =
+        order === "desc"
+          ? end! - startAt
+          : Math.min(limit, total === undefined ? limit : total - startAt);
+      const embeddedStart = metadata?.startAt ?? 0;
+      const page =
+        metadata !== undefined &&
+        metadata.total !== undefined &&
+        embeddedStart <= startAt &&
+        embeddedStart + metadata.values.length === metadata.total &&
+        startAt + maximum <= metadata.total
+          ? {
+              startAt,
+              total: metadata.total,
+              isLast: startAt + maximum === metadata.total,
+              values: metadata.values
+                .toSorted((a, b) => Date.parse(a.created) - Date.parse(b.created))
+                .slice(startAt - embeddedStart, startAt - embeddedStart + maximum),
+            }
+          : yield* read(startAt, Math.max(1, maximum));
+      const actualTotal = page.total;
+      if (
+        actualTotal === undefined ||
+        !Number.isSafeInteger(actualTotal) ||
+        page.startAt !== startAt ||
+        startAt > actualTotal ||
+        page.values.length > maximum ||
+        startAt + page.values.length > actualTotal ||
+        (total !== undefined && actualTotal < total) ||
+        (order === "desc" && page.values.length !== maximum) ||
+        (page.values.length === 0 && startAt < actualTotal) ||
+        (page.isLast !== undefined &&
+          page.isLast !== (startAt + page.values.length === actualTotal)) ||
+        new Set(page.values.map((row) => row.id)).size !== page.values.length ||
+        page.values.some((row) => row.id === previous?.boundary)
+      )
+        return yield* JiraApi.failed(operation, "Jira returned an inconsistent history page.");
+      const bound = total ?? actualTotal;
+      const position = order === "desc" ? startAt : startAt + page.values.length;
+      const values = order === "desc" ? page.values.toReversed() : page.values;
+      return {
+        items: yield* JiraApi.attempt(operation, () => jiraEvents(values)),
+        nextCursor: (order === "desc" ? position > 0 : position < bound)
+          ? encodeTimelineCursor(input, "history", order, position, bound, values.at(-1)!.id)
+          : null,
+      };
     });
   const issueTypes = (input: IssueScopeTarget) =>
     Effect.gen(function* () {
@@ -624,29 +796,34 @@ export const make = Effect.gen(function* () {
           { concurrency: 4 },
         );
         const embedded = issue.fields.comment;
-        const page =
-          embedded?.comments === undefined && embedded?.total !== 0
-            ? yield* comments({ ...input, viewer: who }, 0, rawPermissions, deployment)
-            : yield* commentResult(
-                { ...input, viewer: who },
-                {
-                  startAt: 0,
-                  total: embedded?.total ?? 0,
-                  comments: embedded?.comments ?? [],
-                },
-                rawPermissions,
-                deployment,
-              );
-        const history = issue.changelog
-          ? { ...issue.changelog, values: issue.changelog.histories, isLast: undefined }
-          : yield* jira.request({
-              host: input.host,
-              operation: "getIssue",
-              method: "GET",
-              path:
-                "/issue/" + encodeURIComponent(input.key) + "/changelog?startAt=0&maxResults=50",
-              schema: History,
-            });
+        const completeComments =
+          embedded !== undefined &&
+          (embedded.startAt ?? 0) === 0 &&
+          (embedded.comments?.length ?? 0) === embedded.total;
+        const page = completeComments
+          ? yield* commentResult(
+              { ...input, viewer: who },
+              {
+                startAt: 0,
+                total: embedded.total,
+                comments: (embedded.comments ?? []).toSorted(
+                  (a, b) => Date.parse(b.created) - Date.parse(a.created),
+                ),
+              },
+              rawPermissions,
+              deployment,
+            )
+          : yield* comments({ ...input, viewer: who }, 0, rawPermissions, deployment);
+        const events = yield* history(
+          input,
+          "desc",
+          50,
+          undefined,
+          issue.changelog === undefined
+            ? undefined
+            : { ...issue.changelog, values: issue.changelog.histories },
+          "getIssue",
+        );
         const richBody = jiraRichBody(issue.fields.description, deployment);
         const parentContext =
           deployment === "cloud" ? null : yield* dataCenterParentContext(input, issue);
@@ -671,23 +848,25 @@ export const make = Effect.gen(function* () {
           },
           comments: page.comments,
           commentsCursor: page.nextCursor,
-          events: yield* JiraApi.attempt("getIssue", () => jiraEvents(history.values)),
-          historyTruncated:
-            (history.startAt ?? 0) > 0 ||
-            history.values.length < (history.total ?? history.values.length) ||
-            history.isLast === false,
+          events: events.items,
+          historyTruncated: events.nextCursor !== null,
           linkedPullRequests: [],
         };
       }),
     getComments: (input) =>
       Effect.gen(function* () {
+        const order = input.order ?? "desc";
+        const previous = yield* JiraApi.attempt("getComments", () =>
+          timelineCursor(input, "comments", order, input.cursor),
+        );
         yield* requireScopeIssue(input, "getComments");
-        const startAt = yield* JiraApi.attempt("getComments", () => commentOffset(input.cursor));
         return yield* comments(
           input,
-          startAt,
+          previous?.position ?? 0,
           input.viewer === undefined ? undefined : yield* permissions(input, "getComments"),
           yield* jira.deploymentFor(input.host),
+          order,
+          previous,
         );
       }),
     getViewerPermissions: (input) =>
@@ -1033,36 +1212,24 @@ export const make = Effect.gen(function* () {
     getHistory: (input) =>
       Effect.gen(function* () {
         const limit = yield* pageLimit("getHistory", input);
-        const startAt = yield* JiraApi.attempt("getHistory", () =>
-          commentOffset(input.cursor ?? "0"),
+        const order = input.order ?? "desc";
+        const previous = yield* JiraApi.attempt("getHistory", () =>
+          timelineCursor(input, "history", order, input.cursor),
         );
-        yield* requireScopeIssue(input, "getHistory");
-        const page = yield* jira.request({
-          host: input.host,
-          operation: "getHistory",
-          method: "GET",
-          path:
-            "/issue/" +
-            encodeURIComponent(input.key) +
-            "/changelog?startAt=" +
-            startAt +
-            "&maxResults=" +
-            limit,
-          schema: History,
-        });
-        if (
-          page.startAt !== startAt ||
-          page.values.length > limit ||
-          (page.values.length === 0 && (page.isLast === false || startAt < (page.total ?? 0)))
-        )
-          return yield* JiraApi.failed("getHistory", "Jira returned an inconsistent history page.");
-        const more =
-          page.isLast === false ||
-          (page.isLast !== true && startAt + page.values.length < (page.total ?? 0));
-        return {
-          items: yield* JiraApi.attempt("getHistory", () => jiraEvents(page.values)),
-          nextCursor: more ? String(startAt + page.values.length) : null,
-        };
+        const expanded =
+          previous === undefined &&
+          order === "desc" &&
+          (yield* jira.deploymentFor(input.host)) === "data-center";
+        const issue = yield* requireScopeIssue(input, "getHistory", false, expanded);
+        return yield* history(
+          input,
+          order,
+          Math.min(limit, 100),
+          previous,
+          expanded && issue.changelog !== undefined
+            ? { ...issue.changelog, values: issue.changelog.histories }
+            : undefined,
+        );
       }),
     listLabelCandidates: (input) =>
       Effect.gen(function* () {

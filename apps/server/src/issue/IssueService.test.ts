@@ -2915,7 +2915,20 @@ it.effect(
           host: "linear.app",
           scope: "acme/ENG",
           key: "ENG-7",
-          cursor: "older",
+          cursor: JSON.stringify([
+            JSON.stringify([
+              "linear-activity-v1",
+              "getComments",
+              "/w/web",
+              "linear.app",
+              "acme/eng",
+              "ENG-7",
+              null,
+              "desc",
+              50,
+            ]),
+            "older",
+          ]),
           ...(viewer === undefined ? {} : { viewer }),
         });
         expect(result.comments[0]?.canEdit).toBe(viewer !== undefined);
@@ -3747,5 +3760,74 @@ it.effect(
           key: "1",
         })).capabilities,
       ).toEqual(native);
+    }),
+);
+
+it.effect(
+  "keeps selected-account activity orders and native capabilities without viewer reads",
+  () =>
+    Effect.gen(function* () {
+      const calls: Array<{
+        account: string | undefined;
+        connectionId?: string | undefined;
+        order?: string | undefined;
+        cursor?: string | undefined;
+      }> = [];
+      const base = fakeStandaloneTracker();
+      const native = {
+        ...base.capabilities,
+        commentOrders: ["asc"] as const,
+        historyOrders: ["asc"] as const,
+      };
+      const record = (input: {
+        connectionId?: string | undefined;
+        order?: string | undefined;
+        cursor?: string | undefined;
+      }) =>
+        Effect.gen(function* () {
+          const account = yield* IssueTrackerHost.ConnectionId;
+          calls.push({ ...input, account });
+        });
+      const api = fakeStandaloneTracker({
+        getViewer: () => Effect.die("No extra viewer read"),
+        getIssue: (input) =>
+          record(input).pipe(Effect.as({ ...issue(input.key), capabilities: native })),
+        getComments: (input) => record(input).pipe(Effect.as({ comments: [], nextCursor: null })),
+        getHistory: (input) => record(input).pipe(Effect.as({ items: [], nextCursor: null })),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "web" })],
+        trackers: [api],
+        bindings: { web: { tracker: LINEAR, scope: "ENG", connectionId: "ExactB" } },
+      });
+      const ref = {
+        projectId: ProjectId.make("web"),
+        tracker: LINEAR,
+        scope: "ENG",
+        key: "ENG-1",
+        connectionId: "ExactB",
+      };
+      expect((yield* service.detail(ref)).capabilities).toEqual(native);
+      yield* service.comments({ ...ref, order: "asc" });
+      yield* service.history({ ...ref, order: "asc" });
+      yield* service.comments(ref);
+      yield* service.history(ref);
+      expect(
+        calls.map(({ account, connectionId, order, cursor }) => ({
+          account,
+          connectionId,
+          order,
+          cursor,
+        })),
+      ).toEqual(
+        [undefined, "asc", "asc", "desc", "desc"].map((order) => ({
+          account: "ExactB",
+          connectionId: "ExactB",
+          order,
+          cursor: undefined,
+        })),
+      );
+      yield* service.history({ ...ref, connectionId: "exactb" }).pipe(Effect.flip);
+      expect(calls).toHaveLength(5);
     }),
 );

@@ -99,8 +99,13 @@ function tracker(answer: (args: ReadonlyArray<string>, body: Record<string, unkn
                 expect(request.cwd).toBe("/checkout");
                 expect(request.args[request.args.indexOf("--hostname") + 1]).toBe(target.host);
                 const body = request.stdin === undefined ? {} : JSON.parse(request.stdin);
+                const response = JSON.stringify(answer(request.args, body));
                 return Effect.succeed(
-                  TestSourceControlHost.processOutput(JSON.stringify(answer(request.args, body))),
+                  TestSourceControlHost.processOutput(
+                    request.args.includes("--include")
+                      ? `HTTP/2.0 200 OK\r\nX-Next-Page: \r\nX-Total-Pages: 1\r\n\r\n${response}`
+                      : response,
+                  ),
                 );
               },
             },
@@ -494,7 +499,7 @@ it.effect.each(["authentication", "rate-limited"] as const)(
         expect(detailError.reason).toBe(
           failureKind === "authentication" ? "unauthenticated" : "rate-limited",
         );
-        expect(calls.length).toBeLessThanOrEqual(optional ? 7 : 6);
+        expect(calls.length).toBeLessThanOrEqual(optional ? 9 : 8);
         expect(calls.filter((path) => path === "graphql")).toHaveLength(optional ? 2 : 1);
         calls.length = 0;
         const permissionsError = yield* Effect.flip(api.getViewerPermissions(target));
@@ -662,12 +667,12 @@ it.effect.each([
         subIssueNoun: "Tasks",
       },
     });
-    expect(calls).toBe(type === "task" ? 7 : 6);
+    expect(calls).toBe(type === "task" ? 9 : 8);
     if (type === "task" && reply === undefined) {
       const page = yield* decodeHierarchy(yield* api.getHierarchy!(target));
       expect(page.parent).toMatchObject({ key: "9", itemType: "Issue" });
       expect(page.children).toEqual({ items: [], nextCursor: null });
-      expect(calls).toBe(8);
+      expect(calls).toBe(10);
     }
   }),
 );

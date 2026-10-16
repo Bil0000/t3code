@@ -14,7 +14,9 @@ import * as RegExpUtils from "effect/RegExp";
 import * as Schema from "effect/Schema";
 import {
   IssueTrackerKind,
+  issueHostKey,
   type IssueCapabilities,
+  type IssueListOrder,
   type IssueEvent,
   type IssuePageInput,
   type IssueLinkedPullRequest,
@@ -41,9 +43,11 @@ import {
   ForgejoIssueRepository,
   ForgejoIssueTemplate,
   ForgejoTimelineEntry,
+  ForgejoConversationCursor,
   forgejoIssue,
   forgejoIssueComment,
   forgejoIssueEvent,
+  forgejoIssueEventLinks,
   forgejoIssueTemplate,
 } from "./forgejoIssueJson.ts";
 import {
@@ -79,6 +83,7 @@ const CAPABILITIES: IssueCapabilities = {
   templates: true,
   linkedPullRequests: true,
   events: true,
+  historyOrders: ["asc"],
   search: true,
   involvements: ["all", "assigned", "authored", "mentioned"],
   states: [
@@ -147,6 +152,43 @@ function permissions(repository: typeof ForgejoIssueRepository.Type): IssueViewe
 export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> = Effect.gen(
   function* () {
     const cli = yield* ForgejoCli.ForgejoCli;
+    const cursorIdentity = (
+      input: IssueTarget,
+      operation: string,
+      order: IssueListOrder,
+      limit?: number,
+    ) =>
+      JSON.stringify([
+        KIND,
+        input.cwd,
+        issueHostKey(input.host),
+        input.scope,
+        input.key,
+        input.connectionId ?? null,
+        operation,
+        order,
+        limit ?? null,
+      ]);
+    const saveCursor = (
+      identity: string,
+      native: string | null,
+      lastId?: number,
+      total?: number,
+      lastAt?: string,
+    ) => {
+      if (native === null) return Effect.succeed(null);
+      const cursor = JSON.stringify({
+        version: 1,
+        identity,
+        native,
+        ...(lastId === undefined ? {} : { lastId }),
+        ...(total === undefined ? {} : { total }),
+        ...(lastAt === undefined ? {} : { lastAt }),
+      });
+      return cursor.length <= 8192
+        ? Effect.succeed(cursor)
+        : Effect.fail(refused("comments", "The Forgejo cursor exceeds the supported size."));
+    };
 
     const refused = (operation: string, detail: string, cause?: unknown) =>
       new IssueTrackerError({
@@ -164,6 +206,38 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         reason: "not-found",
         detail: "Forgejo could not find the requested issue.",
       });
+
+    const readCursor = (
+      input: IssueTarget,
+      operation: string,
+      cursor: string | undefined,
+      order: IssueListOrder,
+      limit?: number,
+    ): Effect.Effect<typeof ForgejoConversationCursor.Type | undefined, IssueTrackerError> => {
+      if (cursor === undefined) return Effect.succeed(undefined);
+      const decoded =
+        cursor.length <= 8192 ? decodeJsonResult(ForgejoConversationCursor)(cursor) : undefined;
+      if (
+        decoded === undefined ||
+        Result.isFailure(decoded) ||
+        decoded.success.identity !== cursorIdentity(input, operation, order, limit)
+      )
+        return Effect.fail(
+          refused(
+            operation,
+            "The Forgejo cursor does not match this account, issue or order. Refresh the conversation.",
+          ),
+        );
+      const state = decoded.success;
+      const offset = /^offset:1:([1-9]\d*)$/.exec(state.native)?.[1];
+      if (
+        operation === "comments" &&
+        ((state.total !== undefined && (offset === undefined || Number(offset) >= state.total)) ||
+          (order === "desc" && state.total === undefined))
+      )
+        return Effect.fail(refused(operation, "The Forgejo comment window is invalid."));
+      return Effect.succeed(state);
+    };
 
     type Target = { readonly cwd: string; readonly host: string; readonly scope: string };
 
@@ -419,21 +493,25 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
       );
 
     const commentsPage = Effect.fn("ForgejoIssueTracker.commentsPage")(function* (
-      target: Target,
+      target: IssueTarget,
       operation: string,
       path: string,
       cursor: string | undefined,
       viewer: string,
       canWrite?: boolean,
       active = true,
+      order: IssueListOrder = "desc",
+      expectedTotal?: number,
     ) {
-      const offsetMatch = /^offset:(?:([1-9]\d{0,6}):)?([1-9]\d{0,8})$/.exec(cursor ?? "");
-      const pageMatch = COMMENT_PAGE_CURSOR.exec(cursor ?? "");
+      const state = yield* readCursor(target, "comments", cursor, order);
+      const nativeCursor = state?.native;
+      const offsetMatch = /^offset:(?:([1-9]\d{0,6}):)?([1-9]\d{0,8})$/.exec(nativeCursor ?? "");
+      const pageMatch = COMMENT_PAGE_CURSOR.exec(nativeCursor ?? "");
       const page = offsetMatch
         ? Number(offsetMatch[1] ?? 1)
         : pageMatch
           ? Number(pageMatch[1])
-          : parsePage(cursor);
+          : parsePage(nativeCursor);
       if (page === null)
         return yield* refused(operation, "The cursor was not one Forgejo handed out.");
       const result = yield* request(target, operation, {
@@ -448,14 +526,53 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
         return yield* refused(operation, "Forgejo returned an invalid response.", decoded.failure);
       const rows = decoded.success ?? [];
       const links = /^link:\s*(.*)$/im.exec(result.stderr)?.[1];
+      const totals = [...result.stderr.matchAll(/^x-total-count:\s*([^\r\n]*)/gim)].map((match) =>
+        match[1]!.trim(),
+      );
+      if (totals.length > 1 || (totals[0] !== undefined && !/^(0|[1-9]\d{0,8})$/.test(totals[0])))
+        return yield* refused(operation, "Forgejo returned an invalid comment total.");
+      const total = totals[0] === undefined ? (state?.total ?? expectedTotal) : Number(totals[0]);
+      if (
+        totals[0] !== undefined &&
+        (total! < rows.length || (total === rows.length && /rel="?next"?/i.test(links ?? "")))
+      )
+        return yield* refused(operation, "Forgejo returned a contradictory comment total.");
+      const complete = page === 1 && total === rows.length && !/rel="?next"?/i.test(links ?? "");
+      if (state?.total !== undefined && (!complete || state.total !== total))
+        return yield* refused(operation, "The Forgejo conversation changed. Refresh the comments.");
+      if (order === "desc" && !complete && operation !== "getIssue")
+        return yield* refused(
+          operation,
+          "This Forgejo response supports oldest-first comments only.",
+        );
+      const selectedOrder = complete ? order : "asc";
+      const ordered = selectedOrder === "desc" ? rows.toReversed() : rows;
       const seenAt = pageMatch ? rows.findIndex((row) => row.id === Number(pageMatch[2])) : -1;
       const offset = offsetMatch ? Number(offsetMatch[2]) : seenAt + 1;
-      const selected = rows.slice(offset, offset + COMMENT_REACTION_LIMIT);
+      if (offset > ordered.length || (offsetMatch && state?.lastId !== ordered[offset - 1]?.id))
+        return yield* refused(
+          operation,
+          "The Forgejo comment offset is no longer valid. Refresh the conversation.",
+        );
+      const selected = ordered.slice(offset, offset + COMMENT_REACTION_LIMIT);
+      if (
+        new Set(rows.map((row) => row.id)).size !== rows.length ||
+        (!offsetMatch &&
+          state?.lastId !== undefined &&
+          selected.some(
+            (row) =>
+              Date.parse(row.created_at) < Date.parse(state.lastAt ?? "") ||
+              (Date.parse(row.created_at) === Date.parse(state.lastAt ?? "") &&
+                row.id <= state.lastId!),
+          ))
+      )
+        return yield* refused(operation, "Forgejo returned a repeated comment page.");
       const last = selected.at(-1);
       let nextCursor: string | null = null;
       if (last) {
-        if (offset + selected.length < rows.length)
+        if (offset + selected.length < ordered.length)
           nextCursor = `offset:${page}:${offset + selected.length}`;
+        else if (complete) nextCursor = null;
         else if (links !== undefined) {
           if (/rel="?next"?/i.test(links)) nextCursor = String(page + 1);
         } else nextCursor = `page:${page + 1}:${last.id}`;
@@ -483,7 +600,17 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
           ),
         { concurrency: 4 },
       );
-      return { comments, nextCursor };
+      return {
+        comments,
+        nextCursor: yield* saveCursor(
+          cursorIdentity(target, "comments", selectedOrder),
+          nextCursor,
+          last?.id,
+          complete ? total : undefined,
+          last?.created_at,
+        ),
+        commentOrders: complete ? undefined : (["asc"] as const),
+      };
     });
 
     /** Pull requests the timeline shows citing this issue. */
@@ -890,11 +1017,19 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                 viewer,
                 repository.permissions?.push ?? false,
                 !repository.archived && repository.has_issues !== false,
+                "desc",
+                issue.comments,
               ),
               linkedPullRequests(input, timeline.rows, issue.html_url),
             ]).pipe(
               Effect.map(([conversation, links]) => ({
                 ...forgejoIssue(issue),
+                capabilities: {
+                  ...CAPABILITIES,
+                  ...(conversation.commentOrders === undefined
+                    ? {}
+                    : { commentOrders: conversation.commentOrders }),
+                },
                 body: issue.body ?? "",
                 viewer,
                 viewerPermissions: permissions(repository),
@@ -904,25 +1039,27 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                 commentsCursor: conversation.nextCursor,
                 events: timeline.rows.flatMap((entry) => forgejoIssueEvent(entry) ?? []),
                 linkedPullRequests: links,
-                historyTruncated: !timeline.paginationKnown || timeline.nextCursor !== null,
+                historyTruncated: true,
               })),
             ),
           ),
         ),
 
-      getComments: (input) => {
-        const validCursor =
-          parsePage(input.cursor) !== null ||
-          /^offset:(?:[1-9]\d{0,6}:)?[1-9]\d{0,8}$/.test(input.cursor) ||
-          COMMENT_PAGE_CURSOR.test(input.cursor);
-        return !validCursor
-          ? Effect.fail(refused("getComments", "The cursor was not one Forgejo handed out."))
-          : issueTarget("getComments", input).pipe(
-              Effect.flatMap(({ path }) =>
-                commentsPage(input, "getComments", path, input.cursor, input.viewer ?? ""),
-              ),
-            );
-      },
+      getComments: (input) =>
+        issueTarget("getComments", input).pipe(
+          Effect.flatMap(({ path }) =>
+            commentsPage(
+              input,
+              "getComments",
+              path,
+              input.cursor,
+              input.viewer ?? "",
+              undefined,
+              true,
+              input.order,
+            ),
+          ),
+        ),
 
       getViewerPermissions: (input) =>
         issueTarget("getViewerPermissions", input).pipe(
@@ -1056,8 +1193,24 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
 
       getHistory: (input) =>
         Effect.gen(function* () {
+          const order = input.order ?? "desc";
+          if (order !== "asc")
+            return yield* refused(
+              "getHistory",
+              "Forgejo supports oldest-first issue history only.",
+            );
           const { path } = yield* issueTarget("getHistory", input);
-          const { page, limit } = yield* pageInput(input, "getHistory");
+          const state = yield* readCursor(
+            input,
+            "history",
+            input.cursor,
+            order,
+            input.limit ?? PAGE_SIZE,
+          );
+          const { page, limit } = yield* pageInput(
+            { ...input, cursor: state?.native },
+            "getHistory",
+          );
           const rows = yield* readPage(
             input,
             "getHistory",
@@ -1066,6 +1219,21 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
             ForgejoTimelineEntry,
             limit,
           );
+          if (
+            new Set(rows.rows.map((row) => row.id)).size !== rows.rows.length ||
+            rows.rows.length > limit ||
+            (state?.lastId !== undefined &&
+              rows.rows.some(
+                (row) =>
+                  Date.parse(row.created_at) < Date.parse(state.lastAt ?? "") ||
+                  (Date.parse(row.created_at) === Date.parse(state.lastAt ?? "") &&
+                    row.id <= state.lastId!),
+              ))
+          )
+            return yield* refused(
+              "getHistory",
+              "Forgejo returned a repeated or invalid history page.",
+            );
           return {
             items: rows.rows.flatMap((row): IssueEvent[] =>
               row.type === "comment"
@@ -1077,11 +1245,18 @@ export const make: Effect.Effect<IssueTrackerApi, never, ForgejoCli.ForgejoCli> 
                       actor: forgejoActor(row.user),
                       createdAt: row.created_at,
                       detail: row.body?.trim() || row.type.replaceAll("_", " "),
+                      ...forgejoIssueEventLinks(row),
                     },
                   ],
             ),
-            nextCursor: rows.nextCursor,
-            truncated: !rows.paginationKnown,
+            nextCursor: yield* saveCursor(
+              cursorIdentity(input, "history", order, input.limit ?? PAGE_SIZE),
+              rows.nextCursor,
+              rows.rows.at(-1)?.id,
+              undefined,
+              rows.rows.at(-1)?.created_at,
+            ),
+            truncated: true,
           };
         }),
 

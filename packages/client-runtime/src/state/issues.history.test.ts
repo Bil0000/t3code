@@ -431,3 +431,107 @@ it.effect.each(
       });
     }),
 );
+
+it.effect("isolates late activity pages by account and order", () =>
+  Effect.gen(function* () {
+    const supervisor = {
+      state: yield* SubscriptionRef.make({ phase: "connected" }),
+      session: yield* SubscriptionRef.make(Option.some({})),
+    } as unknown as EnvironmentSupervisor.EnvironmentSupervisor["Service"];
+    yield* Effect.promise(async () => {
+      const runtime = Atom.runtime(
+        Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
+          run: (_id, effect) =>
+            Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          followStream: (_id, stream) =>
+            Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+      );
+      const started = Promise.withResolvers<void>();
+      const pending: Array<{ input: { connectionId: string; order: string }; finish: () => void }> =
+        [];
+      const read = vi.spyOn(RpcClient, "request");
+      read.mockImplementation(((tag: string, input: { connectionId: string; order: string }) =>
+        Effect.promise(
+          () =>
+            new Promise((resolve) => {
+              const id = `${input.connectionId}:${input.order}`;
+              pending.push({
+                input,
+                finish: () =>
+                  resolve(
+                    tag === WS_METHODS.issuesHistory
+                      ? {
+                          items: [
+                            {
+                              id,
+                              kind: "updated",
+                              actor: null,
+                              createdAt: "2026-10-16T00:00:00Z",
+                              detail: id,
+                            },
+                          ],
+                          nextCursor: null,
+                        }
+                      : {
+                          comments: [
+                            {
+                              id,
+                              author: null,
+                              body: id,
+                              createdAt: "2026-10-16T00:00:00Z",
+                              editedAt: null,
+                              url: null,
+                            },
+                          ],
+                          nextCursor: null,
+                        },
+                  ),
+              });
+              if (pending.length === 8) started.resolve();
+            }),
+        )) as unknown as typeof RpcClient.request);
+      const atoms = createIssueEnvironmentAtoms(runtime);
+      const registry = AtomRegistry.make();
+      const targets = ["ExactB", "exactb"].flatMap((connectionId) =>
+        (["asc", "desc"] as const).map((order) => ({
+          environmentId: EnvironmentId.make("env"),
+          input: {
+            projectId: ProjectId.make("project"),
+            tracker: IssueTrackerKind.make("linear"),
+            host: "linear.app",
+            scope: "acme/ENG",
+            key: "ENG-7",
+            connectionId,
+            order,
+          },
+        })),
+      );
+      const history = targets.map((target) => atoms.history(target));
+      const comments = targets.map((target) => atoms.commentPages(target));
+      const releases = [
+        ...history.map((query) => registry.mount(query)),
+        ...comments.map((query) => registry.mount(query)),
+      ];
+      try {
+        const results = [
+          ...history.map((query) => executeAtomQuery(registry, query)),
+          ...comments.map((query) => executeAtomQuery(registry, query)),
+        ];
+        await started.promise;
+        for (const page of pending.toReversed()) page.finish();
+        await Promise.all(results);
+        targets.forEach((target, index) => {
+          const id = `${target.input.connectionId}:${target.input.order}`;
+          expect(registry.get(history[index]!)).toMatchObject({ value: { items: [{ id }] } });
+          expect(registry.get(comments[index]!)).toMatchObject({ value: { comments: [{ id }] } });
+        });
+        expect(read).toHaveBeenCalledTimes(8);
+      } finally {
+        releases.forEach((release) => release());
+        registry.dispose();
+        read.mockRestore();
+      }
+    });
+  }),
+);

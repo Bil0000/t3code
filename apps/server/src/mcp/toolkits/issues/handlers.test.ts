@@ -214,6 +214,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
     readonly update?: IssueService.IssueService["Service"]["update"];
     readonly templates?: IssueService.IssueService["Service"]["templates"];
     readonly comments?: IssueService.IssueService["Service"]["comments"];
+    readonly history?: IssueService.IssueService["Service"]["history"];
   } = {},
 ) {
   const links = yield* Ref.make<ReadonlyArray<ThreadIssueService.LinkThreadIssueInput>>([]);
@@ -288,7 +289,13 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
           ),
         ),
       history: (input) =>
-        record("history", input, { items: [], nextCursor: "native-history-next" }),
+        record("history", input, undefined).pipe(
+          Effect.flatMap(() =>
+            options.history === undefined
+              ? Effect.succeed({ items: [], nextCursor: "native-history-next" })
+              : options.history(input),
+          ),
+        ),
       dependencies: (input) =>
         record("dependencies", input, { items: [], nextCursor: "dependency-next" }),
       setDependency: (input) => record("setDependency", input, undefined),
@@ -2409,4 +2416,190 @@ it.effect("preserves native rich bodies, item types and external links through i
       comments: [{ richBody }],
     });
   }),
+);
+
+it.effect("reads ascending history through the registered schema on the selected account", () =>
+  Effect.gen(function* () {
+    const source = { ...standaloneSource, connectionId: "Account" };
+    const event = {
+      id: "oldest",
+      kind: "updated" as const,
+      actor: null,
+      createdAt: detail.createdAt,
+      detail: null,
+    };
+    const harness = yield* makeHarness([], {
+      sources: [source],
+      history: (input) =>
+        input.order === "asc"
+          ? Effect.succeed({ items: [event], nextCursor: null })
+          : Effect.fail(
+              new IssueOperationError({
+                operation: "history",
+                detail: "Native history supports asc only",
+              }),
+            ),
+    });
+    const input = {
+      projectId: PROJECT_ID,
+      ...source,
+      key: "ENG-7",
+      order: "asc" as const,
+      cursor: "opaque",
+      limit: 1,
+    };
+    expect(yield* harness.call("read_issue_history", input)).toEqual({
+      items: [event],
+      nextCursor: null,
+    });
+    expect(yield* Ref.get(harness.calls)).toEqual([{ operation: "history", input }]);
+    expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+    expect((yield* harness.call("read_issue_history", input, []).pipe(Effect.flip))._tag).toBe(
+      "McpCapabilityUnavailableError",
+    );
+    expect(yield* Ref.get(harness.calls)).toHaveLength(1);
+  }),
+);
+
+it.effect.each(["explicit", "shorthand"] as const)(
+  "continues ascending comments through %s targets without extra detail reads",
+  (shape) =>
+    Effect.gen(function* () {
+      const source = { ...standaloneSource, connectionId: "Account" };
+      const comment = {
+        id: "older",
+        author: null,
+        body: "Older",
+        createdAt: detail.createdAt,
+        url: null,
+        canEdit: true,
+      };
+      const harness = yield* makeHarness([], {
+        sources: [source],
+        comments: (input) =>
+          input.order === "asc"
+            ? Effect.succeed({ comments: [comment], nextCursor: "opaque-next" })
+            : Effect.fail(
+                new IssueOperationError({ operation: "comments", detail: "Cursor order mismatch" }),
+              ),
+      });
+      const target =
+        shape === "explicit"
+          ? { projectId: PROJECT_ID, ...source, key: "ENG-7" }
+          : { key: "ENG-7", connectionId: "Account" };
+      const input = { ...target, order: "asc" as const, cursor: "opaque", viewer: "viewer" };
+      expect(yield* harness.call("read_issue_comments", input)).toEqual({
+        comments: [comment],
+        nextCursor: "opaque-next",
+      });
+      expect(yield* Ref.get(harness.calls)).toEqual([
+        {
+          operation: "comments",
+          input: {
+            projectId: PROJECT_ID,
+            ...source,
+            key: "ENG-7",
+            order: "asc",
+            cursor: "opaque",
+            viewer: "viewer",
+          },
+        },
+      ]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual(shape === "explicit" ? [] : ["sources"]);
+    }),
+);
+
+it.effect.each(["asc", "desc", undefined] as const)(
+  "starts true comment pages in order %s without a cursor or detail read",
+  (order) =>
+    Effect.gen(function* () {
+      const oldest = {
+        id: "oldest",
+        author: null,
+        body: "Oldest",
+        createdAt: detail.createdAt,
+        url: null,
+      };
+      const newest = { ...oldest, id: "newest", body: "Newest" };
+      const harness = yield* makeHarness([], {
+        comments: (input) =>
+          Effect.succeed({ comments: [input.order === "asc" ? oldest : newest], nextCursor: null }),
+      });
+      const input = {
+        projectId: PROJECT_ID,
+        ...gitHostSource,
+        key: "7",
+        ...(order === undefined ? {} : { order }),
+      };
+      expect(yield* harness.call("read_issue_comments", input)).toEqual({
+        comments: [order === "asc" ? oldest : newest],
+        nextCursor: null,
+      });
+      expect(yield* Ref.get(harness.calls)).toEqual([{ operation: "comments", input }]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual([]);
+    }),
+);
+
+it.effect(
+  "keeps oldest-only detail readable and continues its native order without preflight reads",
+  () =>
+    Effect.gen(function* () {
+      const source = {
+        ...gitHostSource,
+        tracker: IssueTrackerKind.make("gitcafe"),
+        host: "git.cafe",
+      };
+      const first = {
+        id: "oldest",
+        author: null,
+        body: "First",
+        createdAt: detail.createdAt,
+        url: null,
+      };
+      const next = { ...first, id: "next", body: "Next" };
+      const refusal = new IssueOperationError({
+        operation: "comments",
+        detail: "Native comments support asc only",
+      });
+      const harness = yield* makeHarness([], {
+        sources: [source],
+        detail: {
+          ...detail,
+          ...source,
+          url: "https://git.cafe/T3Tools/T3Code/issues/7",
+          comments: [first],
+          commentsCursor: "native-asc-cursor",
+          capabilities: { ...detail.capabilities, commentOrders: ["asc"] },
+        },
+        comments: (input) =>
+          input.order === "asc"
+            ? Effect.succeed({ comments: [next], nextCursor: null })
+            : Effect.fail(refusal),
+      });
+      const read = yield* harness.call("read_issue", { key: "7" });
+      expect(read.comments).toMatchObject([{ id: "oldest" }]);
+      expect(read.capabilities.commentOrders).toEqual(["asc"]);
+      const input = {
+        projectId: read.projectId,
+        tracker: read.tracker,
+        host: read.host,
+        scope: read.scope,
+        key: read.key,
+        cursor: read.commentsCursor!,
+        order: read.capabilities.commentOrders![0],
+      };
+      expect(yield* harness.call("read_issue_comments", input)).toEqual({
+        comments: [next],
+        nextCursor: null,
+      });
+      expect(
+        yield* harness.call("read_issue_comments", { ...input, order: "desc" }).pipe(Effect.flip),
+      ).toEqual(refusal);
+      expect((yield* Ref.get(harness.calls)).map(({ operation }) => operation)).toEqual([
+        "detail",
+        "comments",
+        "comments",
+      ]);
+      expect(yield* Ref.get(harness.resolutions)).toEqual(["sources"]);
+    }),
 );

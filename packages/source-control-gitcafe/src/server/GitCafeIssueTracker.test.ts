@@ -59,6 +59,151 @@ const target = { cwd: "/repo", host: "git.cafe", scope: "owner/repo", key: "7" }
 const base = "/repos/owner/repo/issues/7";
 const page = { items: [], next: null };
 
+describe("GitCafe comment ordering", () => {
+  it.effect("keeps partial detail readable and refuses a false newest page", () => {
+    const fake = harness({ [`GET ${base}/comments/`]: { items: [comment], next: "page_two" } });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const detail = yield* api.getIssue(target);
+      assert.deepStrictEqual(detail.capabilities?.commentOrders, ["asc"]);
+      assert.strictEqual(detail.comments[0]?.id, "comment_one");
+      fake.sent.length = 0;
+      const error = yield* api.getComments({ ...target, order: "desc" }).pipe(Effect.flip);
+      assert.strictEqual(error.reason, "failed");
+      assert.strictEqual(fake.sent.length, 1);
+      assert.strictEqual(fake.sent[0]?.query.has("direction"), false);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("sorts a complete native page in both directions", () => {
+    const fake = harness({
+      [`GET ${base}/comments/`]: {
+        items: [
+          { ...comment, id: "old", createdAt: "2026-10-01T00:00:00Z" },
+          { ...comment, id: "new", createdAt: "2026-10-03T00:00:00Z" },
+          { ...comment, id: "middle", createdAt: "2026-10-02T00:00:00Z" },
+        ],
+        next: null,
+      },
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      assert.deepStrictEqual(
+        (yield* api.getIssue(target)).comments.map((row) => row.id),
+        ["new", "middle", "old"],
+      );
+      assert.deepStrictEqual(
+        (yield* api.getComments({ ...target, order: "asc" })).comments.map((row) => row.id),
+        ["old", "middle", "new"],
+      );
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("rejects changed context before HTTP and repeated native pages after one read", () => {
+    const fake = harness({ [`GET ${base}/comments/`]: { items: [comment], next: "page_two" } });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const first = yield* api.getComments({ ...target, order: "asc", connectionId: "account-a" });
+      assert.ok(first.nextCursor);
+      fake.sent.length = 0;
+      for (const change of [
+        { connectionId: "account-b" },
+        { order: "desc" as const },
+        { cwd: "/other" },
+        { scope: "other/repo" },
+        { key: "8" },
+        { host: "other.test" },
+        { cursor: "page_two" },
+        { cursor: first.nextCursor + "x" },
+      ]) {
+        yield* api
+          .getComments({
+            ...target,
+            order: "asc",
+            connectionId: "account-a",
+            cursor: first.nextCursor!,
+            ...change,
+          })
+          .pipe(Effect.flip);
+      }
+      assert.strictEqual(fake.sent.length, 0);
+      yield* api
+        .getComments({ ...target, order: "asc", cursor: first.nextCursor! })
+        .pipe(Effect.flip);
+      assert.strictEqual(fake.sent.length, 0);
+      yield* api
+        .getComments({
+          ...target,
+          order: "asc",
+          connectionId: "account-a",
+          cursor: first.nextCursor!,
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(fake.sent.length, 1);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("continues native oldest-first pages without losing or repeating rows", () => {
+    const fake = harness({
+      [`GET ${base}/comments/`]: ({ query }: Sent) => ({
+        items: [
+          {
+            ...comment,
+            id: query.has("after") ? "second" : "first",
+            createdAt: query.has("after") ? "2026-10-02T00:00:00Z" : "2026-10-01T00:00:00Z",
+          },
+        ],
+        next: query.has("after") ? null : "page_two",
+      }),
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const first = yield* api.getComments({ ...target, order: "asc" });
+      const second = yield* api.getComments({ ...target, order: "asc", cursor: first.nextCursor! });
+      assert.deepStrictEqual(
+        [...first.comments, ...second.comments].map((row) => row.id),
+        ["first", "second"],
+      );
+      assert.strictEqual(second.nextCursor, null);
+      assert.strictEqual(fake.sent.filter((row) => row.path.endsWith("/comments/")).length, 2);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("restores both orders when the native window becomes complete", () => {
+    let complete = false;
+    const fake = harness({
+      [`GET ${base}/comments/`]: () => ({ items: [comment], next: complete ? null : "page_two" }),
+    });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const partial = yield* api.getIssue(target);
+      assert.deepStrictEqual(partial.capabilities?.commentOrders, ["asc"]);
+      complete = true;
+      const whole = yield* api.getIssue(target);
+      assert.strictEqual(whole.capabilities?.commentOrders, undefined);
+      assert.strictEqual(whole.commentsCursor, null);
+      fake.sent.length = 0;
+      yield* api
+        .getComments({ ...target, cursor: partial.commentsCursor!, order: "desc" })
+        .pipe(Effect.flip);
+      assert.strictEqual(fake.sent.length, 0);
+    }).pipe(Effect.provide(fake.layer));
+  });
+
+  it.effect("refuses oversized native cursor envelopes without truncation or further reads", () => {
+    const native = "a".repeat(8192);
+    const fake = harness({ [`GET ${base}/comments/`]: { items: [comment], next: native } });
+    return Effect.gen(function* () {
+      const api = yield* GitCafeIssueTracker.make;
+      const error = yield* api.getComments({ ...target, order: "asc" }).pipe(Effect.flip);
+      assert.strictEqual(error.reason, "failed");
+      assert.match(error.detail, /size/);
+      assert.strictEqual(fake.sent.length, 1);
+      assert.strictEqual(fake.sent[0]?.query.get("after"), null);
+    }).pipe(Effect.provide(fake.layer));
+  });
+});
+
 interface Sent {
   method: string;
   path: string;
@@ -846,9 +991,9 @@ describe("GitCafeIssueTracker", () => {
     });
     return Effect.gen(function* () {
       const api = yield* GitCafeIssueTracker.make;
-      const comments = yield* api.getComments({ ...target, cursor: "first" });
-      assert.strictEqual(comments.nextCursor, "older");
-      assert.strictEqual(fake.sent[0]?.query.get("after"), "first");
+      const comments = yield* api.getComments({ ...target, order: "asc" });
+      assert.ok(comments.nextCursor);
+      assert.strictEqual(fake.sent[0]?.query.get("after"), null);
       const links = yield* api.getLinkedPullRequests!({ ...target, limit: 5 });
       assert.strictEqual(links.nextCursor, "links_next");
       assert.strictEqual(links.items[0]?.url, "https://git.cafe/owner/repo/pulls/9");

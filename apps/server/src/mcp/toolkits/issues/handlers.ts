@@ -229,6 +229,7 @@ const make = Effect.gen(function* () {
         const target = yield* resolveTarget(input);
         return yield* issues.history({
           ...refOf(target),
+          ...(input.order === undefined ? {} : { order: input.order }),
           ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
           ...(input.limit === undefined ? {} : { limit: input.limit }),
         });
@@ -527,14 +528,16 @@ const make = Effect.gen(function* () {
             ...(input.host === undefined ? {} : { host: input.host }),
             scope: input.scope,
             key: input.key,
-            cursor: input.cursor,
+            ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+            ...(input.order === undefined ? {} : { order: input.order }),
             ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
           });
         }
         const target = yield* resolveTarget(input);
         return yield* issues.comments({
           ...refOf(target),
-          cursor: input.cursor,
+          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+          ...(input.order === undefined ? {} : { order: input.order }),
           ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
         });
       }),

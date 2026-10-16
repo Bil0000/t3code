@@ -15,8 +15,6 @@ import { GraphQLClient, GraphQLClientError, GraphQLGroup } from "effect/graphql"
 import {
   IssueTrackerKind,
   SourceControlProviderKind,
-  IssueEventKind,
-  type IssueEvent,
   type IssueRelation,
   type IssuePageInput,
   type IssueLinkedPullRequest,
@@ -45,6 +43,7 @@ import {
   toIssueCommentScope,
   toIssueComments,
   toIssueDetail,
+  toIssueHistory,
   decodeRestIssueLabelsJson,
   decodeRestIssueMetadataJson,
   toIssueNodeId,
@@ -78,17 +77,24 @@ const CandidateLabel = Schema.Struct({
   color: Schema.NullOr(Schema.String),
   description: Schema.NullOr(Schema.String),
 });
-const HistoryEvent = Schema.Struct({
-  id: Schema.optional(Schema.Int),
-  node_id: Schema.optional(Schema.String),
-  event: Schema.optional(Schema.String),
-  created_at: Schema.optional(Schema.NullOr(Schema.String)),
-  actor: Schema.optional(Schema.NullOr(CandidateActor)),
-  label: Schema.optional(Schema.Struct({ name: Schema.String })),
-  assignee: Schema.optional(CandidateActor),
-  rename: Schema.optional(Schema.Struct({ from: Schema.String, to: Schema.String })),
+const TimelineCursor = Schema.Struct({
+  provider: Schema.Literal("github"),
+  version: Schema.Literal(1),
+  operation: Schema.Literals(["getComments", "getHistory"]),
+  cwd: Schema.String,
+  host: Schema.String,
+  scope: Schema.String,
+  key: Schema.String,
+  connectionId: Schema.NullOr(Schema.String),
+  order: Schema.Literals(["asc", "desc"]),
+  cursor: Schema.String,
+  window: Schema.Literals(["before", "after"]),
+  previous: Schema.NullOr(Schema.String),
 });
-const isIssueEventKind = Schema.is(IssueEventKind);
+const decodeTimelineCursor = Schema.decodeResult(Schema.fromJsonString(TimelineCursor), {
+  onExcessProperty: "error",
+});
+const encodeTimelineCursor = Schema.encodeSync(Schema.fromJsonString(TimelineCursor));
 const KIND = IssueTrackerKind.make("github");
 const MAX_ASSIGNEES = 10;
 
@@ -344,6 +350,77 @@ export const make = Effect.gen(function* () {
       ? Effect.fail(notFound(operation))
       : Effect.succeed({ owner, name, number, path: `repos/${owner}/${name}/issues/${number}` });
   };
+
+  const timelineIdentity = (
+    input: IssueTarget & { readonly order?: "asc" | "desc" },
+    operation: "getComments" | "getHistory",
+  ) => ({
+    provider: "github" as const,
+    version: 1 as const,
+    operation,
+    cwd: input.cwd,
+    host: GitHubRequestPolicy.normalizeHost(input.host),
+    scope: input.scope.trim().toLowerCase(),
+    key: input.key,
+    connectionId: input.connectionId ?? null,
+    order: input.order ?? "desc",
+  });
+
+  const readTimelineCursor = (
+    input: IssueTarget & { readonly order?: "asc" | "desc"; readonly cursor?: string | undefined },
+    operation: "getComments" | "getHistory",
+  ) =>
+    Effect.gen(function* () {
+      if (input.order !== undefined && input.order !== "asc" && input.order !== "desc")
+        return yield* unreadable(operation, "invalid-order");
+      if (input.cursor === undefined) return undefined;
+      if (input.cursor.length > 8192 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))
+        return yield* unreadable(operation, "invalid-cursor");
+      const decoded = decodeTimelineCursor(Buffer.from(input.cursor, "base64url").toString("utf8"));
+      if (Result.isFailure(decoded)) return yield* unreadable(operation, "invalid-cursor");
+      const cursor = decoded.success;
+      const identity = timelineIdentity(input, operation);
+      if (
+        Object.entries(identity).some(
+          ([key, value]) => cursor[key as keyof typeof identity] !== value,
+        ) ||
+        cursor.cursor.trim().length === 0 ||
+        cursor.cursor.length > 2048 ||
+        cursor.window !== (identity.order === "asc" ? "after" : "before") ||
+        cursor.cursor === cursor.previous ||
+        (cursor.previous !== null &&
+          (cursor.previous.trim().length === 0 || cursor.previous.length > 2048))
+      )
+        return yield* unreadable(operation, "invalid-cursor");
+      return cursor;
+    });
+
+  const writeTimelineCursor = (
+    input: IssueTarget & { readonly order?: "asc" | "desc" },
+    operation: "getComments" | "getHistory",
+    cursor: string | null,
+    previous?: { readonly cursor: string; readonly previous: string | null },
+  ): Effect.Effect<string | null, IssueTrackerError> =>
+    Effect.gen(function* () {
+      if (cursor === null) return null;
+      if (
+        cursor.trim().length === 0 ||
+        cursor.length > 2048 ||
+        cursor === previous?.cursor ||
+        cursor === previous?.previous
+      )
+        return yield* unreadable(operation, "invalid-continuation");
+      const encoded = Buffer.from(
+        encodeTimelineCursor({
+          ...timelineIdentity(input, operation),
+          cursor,
+          window: input.order === "asc" ? "after" : "before",
+          previous: previous?.cursor ?? null,
+        }),
+      ).toString("base64url");
+      if (encoded.length > 8192) return yield* unreadable(operation, "invalid-continuation");
+      return encoded;
+    });
 
   /** Every write to an issue's own fields is one `PATCH`; only its body differs. */
   const patchIssue = (
@@ -690,17 +767,24 @@ export const make = Effect.gen(function* () {
               (detail) => detail !== null,
               () => notFound("getIssue"),
             ),
+            Effect.filterOrFail(
+              (detail) => detail.commentsCursor !== "",
+              () => unreadable("getIssue", "missing-comments-cursor"),
+            ),
             Effect.flatMap((detail) =>
               api.rest({ host: input.host, operation: "getIssue", path }).pipe(
                 Effect.mapError(fail("getIssue")),
                 Effect.flatMap((response) => {
                   const labels = decodeRestIssueLabelsJson(response.body);
                   return !response.truncated && !response.invalidUtf8 && Result.isSuccess(labels)
-                    ? Effect.succeed({
-                        ...detail,
-                        labels: labels.success,
-                        labelsTruncated: false,
-                      })
+                    ? writeTimelineCursor(input, "getComments", detail.commentsCursor).pipe(
+                        Effect.map((commentsCursor) => ({
+                          ...detail,
+                          commentsCursor,
+                          labels: labels.success,
+                          labelsTruncated: false,
+                        })),
+                      )
                     : Effect.fail(unreadable("getIssue", response));
                 }),
               ),
@@ -710,17 +794,37 @@ export const make = Effect.gen(function* () {
       ),
 
     getComments: (input) =>
-      restIssue(input, "getComments").pipe(
-        Effect.flatMap(({ owner, name, number }) =>
-          graphqlRead({
-            host: input.host,
-            operation: "getComments",
-            query: client.IssueComments,
-            variables: { owner, name, number, cursor: input.cursor },
-            decode: toIssueComments,
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const cursor = yield* readTimelineCursor(input, "getComments");
+        const { owner, name, number } = yield* restIssue(input, "getComments");
+        const asc = input.order === "asc";
+        const page = yield* graphqlRead({
+          host: input.host,
+          operation: "getComments",
+          query: client.IssueComments,
+          variables: {
+            owner,
+            name,
+            number,
+            ...(asc
+              ? { first: 100, after: cursor?.cursor }
+              : { last: 100, before: cursor?.cursor }),
+          },
+          decode: (data) => toIssueComments(data, input.order ?? "desc"),
+        });
+        if (page === null) return yield* notFound("getComments");
+        if (
+          !page.valid ||
+          page.rowCount > 100 ||
+          new Set(page.comments.map((row) => row.id)).size !== page.comments.length ||
+          (cursor === undefined ? page.oppositePage : page.rowCount === 0)
+        )
+          return yield* unreadable("getComments", "invalid-page");
+        return {
+          comments: page.comments,
+          nextCursor: yield* writeTimelineCursor(input, "getComments", page.nextCursor, cursor),
+        };
+      }),
 
     getViewerPermissions: (input) =>
       readViewerPermissions(input, "getViewerPermissions").pipe(
@@ -921,43 +1025,40 @@ export const make = Effect.gen(function* () {
       }).pipe(Effect.provideService(SourceControlRateLimit.Interactive, true)),
 
     getHistory: (input) =>
-      restIssue(input, "getHistory").pipe(
-        Effect.flatMap(({ path }) =>
-          restPage(input, "getHistory", `${path}/timeline`, HistoryEvent),
-        ),
-        Effect.map((page) => ({
-          ...page,
-          items: page.items.flatMap((event): IssueEvent[] => {
-            if (
-              event.created_at == null ||
-              event.event === undefined ||
-              event.event === "commented" ||
-              (event.id === undefined && event.node_id === undefined)
-            )
-              return [];
-            return [
-              {
-                id: event.node_id ?? String(event.id),
-                kind: isIssueEventKind(event.event) ? event.event : "updated",
-                createdAt: event.created_at,
-                actor:
-                  event.actor == null
-                    ? null
-                    : {
-                        login: event.actor.login,
-                        name: null,
-                        avatarUrl: event.actor.avatar_url ?? null,
-                      },
-                detail:
-                  event.rename?.to ??
-                  event.label?.name ??
-                  event.assignee?.login ??
-                  event.event.replaceAll("_", " "),
-              },
-            ];
-          }),
-        })),
-      ),
+      Effect.gen(function* () {
+        const cursor = yield* readTimelineCursor(input, "getHistory");
+        const limit = input.limit ?? 50;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+          return yield* unreadable("getHistory", "invalid-limit");
+        const { owner, name, number } = yield* restIssue(input, "getHistory");
+        const asc = input.order === "asc";
+        const page = yield* graphqlRead({
+          host: input.host,
+          operation: "getHistory",
+          query: client.IssueHistory,
+          variables: {
+            owner,
+            name,
+            number,
+            ...(asc
+              ? { first: limit, after: cursor?.cursor }
+              : { last: limit, before: cursor?.cursor }),
+          },
+          decode: (data) => toIssueHistory(data, input.order ?? "desc"),
+        });
+        if (page === null) return yield* notFound("getHistory");
+        if (
+          !page.valid ||
+          page.rowCount > limit ||
+          new Set(page.items.map((row) => row.id)).size !== page.items.length ||
+          (cursor === undefined ? page.oppositePage : page.rowCount === 0)
+        )
+          return yield* unreadable("getHistory", "invalid-page");
+        return {
+          items: page.items,
+          nextCursor: yield* writeTimelineCursor(input, "getHistory", page.nextCursor, cursor),
+        };
+      }),
 
     listLabelCandidates: (input) => {
       const { owner, name } = parseRepository(input.scope);

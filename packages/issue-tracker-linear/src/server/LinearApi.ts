@@ -12,8 +12,6 @@ import * as LinearGraphQlClient from "./linearGraphQlClient.ts";
 
 export const KIND = IssueTrackerKind.make("linear");
 
-// --- Linear's shapes -----------------------------------------------------------------------
-
 export const LinearUser = Schema.Struct({
   ...Generated.ViewerUser.fields,
   name: Schema.NullOr(Schema.String),
@@ -70,7 +68,7 @@ type LinearLabel = Generated.AncestorsLabelsNodesIssueLabel;
 export type LinearReaction = Generated.Reaction;
 export type LinearComment = Generated.NodesComment;
 const BidirectionalPageInfo = Schema.Struct({
-  ...Generated.PageInfo.fields,
+  ...Generated.TeamsPageInfoPageInfo.fields,
   hasPreviousPage: Schema.optional(Schema.Boolean),
   startCursor: Schema.optional(Schema.NullOr(Schema.String)),
 });
@@ -187,7 +185,7 @@ const AssigneeCandidatesResponse = Schema.Struct({
           ),
         }),
       ),
-      pageInfo: Generated.PageInfo,
+      pageInfo: Generated.TeamsPageInfoPageInfo,
     }),
   ),
 });
@@ -197,8 +195,6 @@ interface NativePageInput {
   readonly first: number;
   readonly after?: string | undefined;
 }
-
-// --- Service -------------------------------------------------------------------------------
 
 /** The team with the workspace-wide labels that any of its issues may also carry. */
 export interface LinearTeamScope {
@@ -284,7 +280,8 @@ export class LinearApi extends Context.Service<
     readonly getComments: (input: {
       readonly identifier: string;
       readonly first: number;
-      readonly after: string;
+      readonly after?: string | undefined;
+      readonly order?: "asc" | "desc";
     }) => Effect.Effect<
       {
         readonly issue: LinearIssueReference;
@@ -298,7 +295,7 @@ export class LinearApi extends Context.Service<
       input: NativePageInput,
     ) => Effect.Effect<Generated.T3Hierarchy.Result, IssueTrackerError>;
     readonly getHistory: (
-      input: NativePageInput,
+      input: NativePageInput & { readonly order?: "asc" | "desc" },
     ) => Effect.Effect<Generated.T3History.Result, IssueTrackerError>;
     readonly getAttachments: (
       input: NativePageInput,
@@ -609,16 +606,27 @@ export const make = Effect.gen(function* () {
   const getComments: LinearApi["Service"]["getComments"] = (input) =>
     execute("getComments", client.T3Comments, {
       id: input.identifier,
-      first: Math.min(100, Math.max(1, input.first)),
-      after: input.after,
+      first: input.order === "asc" ? null : Math.min(100, Math.max(1, input.first)),
+      last: input.order === "asc" ? Math.min(100, Math.max(1, input.first)) : null,
+      after: input.order === "asc" ? null : (input.after ?? null),
+      before: input.order === "asc" ? (input.after ?? null) : null,
+      backward: input.order === "asc",
     }).pipe(
-      Effect.map((data) => ({
-        issue: data.issue,
-        nodes: data.issue.comments.nodes,
-        nextCursor: data.issue.comments.pageInfo.hasNextPage
-          ? data.issue.comments.pageInfo.endCursor
-          : null,
-      })),
+      Effect.flatMap((data) => {
+        const page = data.issue.comments;
+        const more =
+          input.order === "asc" ? page.pageInfo.hasPreviousPage : page.pageInfo.hasNextPage;
+        const cursor = input.order === "asc" ? page.pageInfo.startCursor : page.pageInfo.endCursor;
+        return more === undefined ||
+          page.nodes.length > input.first ||
+          (more && (!cursor?.trim() || cursor === input.after || page.nodes.length === 0))
+          ? Effect.fail(fail("getComments", "failed", "Linear returned an inconsistent page."))
+          : Effect.succeed({
+              issue: data.issue,
+              nodes: input.order === "asc" ? page.nodes.toReversed() : page.nodes,
+              nextCursor: more ? cursor! : null,
+            });
+      }),
     );
 
   const getTeam: LinearApi["Service"]["getTeam"] = (key, includeAncestorLabels = false) =>
@@ -719,8 +727,11 @@ export const make = Effect.gen(function* () {
   const getHistory: LinearApi["Service"]["getHistory"] = (input) =>
     execute("getHistory", client.T3History, {
       id: input.identifier,
-      first: input.first,
-      after: input.after ?? null,
+      first: input.order === "asc" ? null : input.first,
+      last: input.order === "asc" ? input.first : null,
+      after: input.order === "asc" ? null : (input.after ?? null),
+      before: input.order === "asc" ? (input.after ?? null) : null,
+      backward: input.order === "asc",
     });
   const getAttachments: LinearApi["Service"]["getAttachments"] = (input) =>
     execute("getLinkedPullRequests", client.T3Attachments, {

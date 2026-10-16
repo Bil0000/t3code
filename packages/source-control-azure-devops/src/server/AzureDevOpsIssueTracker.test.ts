@@ -20,6 +20,7 @@ const encode = (value: unknown) => JSON.stringify(value);
 
 const WORK_ITEM = {
   id: 7,
+  rev: 2,
   url: "https://dev.azure.com/acme/_apis/wit/workItems/7",
   fields: {
     "System.Title": "Composer loses focus",
@@ -387,7 +388,7 @@ describe("AzureDevOpsIssueTracker", () => {
           if (args[0] === "boards" || readBatch(args) !== null)
             return encode({
               ...WORK_ITEM,
-              rev: 6,
+              rev: 2,
               relations: [],
               fields: { ...WORK_ITEM.fields, "System.Description": body },
               ...(format === undefined
@@ -776,7 +777,10 @@ describe("AzureDevOpsIssueTracker", () => {
                 ? { id: 1, text: "Before", format: "markdown", createdDate: "2026-07-02T00:00:00Z" }
                 : { comments: [] },
             );
-          if (resource === "updates") return encode({ value: [] });
+          if (resource === "updates")
+            return encode({
+              value: [1, 2].map((id) => ({ id, revisedDate: "2026-07-03T00:00:00Z" })),
+            });
           throw new Error(`Unexpected native resource ${resource}`);
         });
         const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
@@ -862,6 +866,7 @@ describe("AzureDevOpsIssueTracker", () => {
         if (resource === "updates")
           return encode({
             value: [
+              { id: 1, revisedDate: "2026-07-01T00:00:00Z" },
               {
                 id: 2,
                 revisedDate: "2026-07-03T00:00:00Z",
@@ -1656,9 +1661,7 @@ describe("AzureDevOpsIssueTracker", () => {
         key: "7",
         ...(viewer === undefined ? {} : { viewer }),
       };
-      const result = yield* operation === "getIssue"
-        ? api.getIssue(input)
-        : api.getComments({ ...input, cursor: "next-token" });
+      const result = yield* operation === "getIssue" ? api.getIssue(input) : api.getComments(input);
       expect(result.comments[0]?.canEdit).toBe(canEdit);
       expect(seen).toHaveLength(operation === "getIssue" ? 4 : 2);
     }),
@@ -1907,7 +1910,7 @@ describe("AzureDevOpsIssueTracker", () => {
         ],
         commentCount: 2,
         body: "<p>Typing drops focus.</p>",
-        commentsCursor: "next-token",
+        commentsCursor: expect.any(String),
         historyTruncated: false,
         viewerPermissions: { setState: true, edit: true, labels: true, assignees: true },
       });
@@ -1973,8 +1976,14 @@ describe("AzureDevOpsIssueTracker", () => {
             const resource = args[args.indexOf("--resource") + 1];
             if (resource === "updates") {
               const top = Number(args.find((arg) => arg.startsWith("$top="))?.slice(5));
-              return encode({ count: Math.min(top, total), value: updates.slice(0, top) });
+              const skip = Number(args.find((arg) => arg.startsWith("$skip="))?.slice(6) ?? 0);
+              return encode({
+                count: Math.min(top, total - skip),
+                value: updates.slice(skip, skip + top),
+              });
             }
+            if (args[0] === "boards" || readBatch(args) !== null)
+              return encode({ ...WORK_ITEM, rev: total });
             return answer(args);
           });
           const issue = yield* api.getIssue({
@@ -1983,20 +1992,24 @@ describe("AzureDevOpsIssueTracker", () => {
             scope: "acme/Web App",
             key: "7",
           });
-          expect(issue.historyTruncated).toBe(total >= 100);
+          expect(issue.historyTruncated).toBe(total > 100);
           expect(issue.state).toEqual({ category: "closed", name: "Resolved" });
-          expect(issue.events.map((event) => event.kind)).toEqual(
-            total <= 100 ? ["renamed", "labeled", "state-changed"] : ["renamed", "labeled"],
-          );
+          expect(issue.events.map((event) => event.kind)).toEqual([
+            "state-changed",
+            "renamed",
+            "labeled",
+          ]);
           expect(issue.events[0]).toMatchObject({
-            id: "update-2-0",
+            id: `update-${total}-0`,
             actor: { login: "theo@acme.test" },
             createdAt: "2026-07-03T00:00:00Z",
-            detail: "New title",
+            detail: "Resolved",
           });
           expect(seen).toHaveLength(4);
           expect(seen.filter((args) => args.includes("updates"))).toHaveLength(1);
-          expect(seen.find((args) => args.includes("updates"))).toContain("$top=100");
+          expect(seen.find((args) => args.includes("updates"))).toContain(
+            `$top=${Math.min(100, total)}`,
+          );
         }
       }),
   );
@@ -2113,7 +2126,7 @@ describe("AzureDevOpsIssueTracker", () => {
               : operation === "setState"
                 ? api.setState!({ ...target, state: "New" })
                 : operation === "getComments"
-                  ? api.getComments({ ...target, cursor: "next-token" })
+                  ? api.getComments(target)
                   : api.getIssue(target);
         const error = yield* Effect.flip(task);
         expect(error.reason).toBe("not-found");
@@ -2167,3 +2180,237 @@ describe("AzureDevOpsIssueTracker", () => {
     }),
   );
 });
+
+it.effect.each(["asc", "desc"] as const)(
+  "reads true Azure comment and revision windows in %s order",
+  (order) =>
+    Effect.gen(function* () {
+      const rows = Array.from({ length: 223 }, (_, index) => ({
+        id: index + 1,
+        text: String(index + 1),
+        format: "markdown",
+        createdDate: `2026-10-${String(14 + Math.floor(index / 60)).padStart(2, "0")}T00:${String(index % 60).padStart(2, "0")}:00.000Z`,
+        revisedDate: `2026-10-${String(14 + Math.floor(index / 60)).padStart(2, "0")}T00:${String(index % 60).padStart(2, "0")}:00.000Z`,
+        fields: { "System.Title": { oldValue: "old", newValue: String(index + 1) } },
+      }));
+      const calls: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        calls.push(args);
+        if (args.includes("updates")) {
+          const skip = Number(args.find((arg) => arg.startsWith("$skip="))?.slice(6) ?? 0);
+          const top = Number(args.find((arg) => arg.startsWith("$top="))?.slice(5));
+          return encode({ value: rows.slice(skip, skip + top) });
+        }
+        if (args.includes("comments")) {
+          expect(args).toContain(`order=${order}`);
+          const offset = Number(
+            args.find((arg) => arg.startsWith("continuationToken="))?.slice(18) ?? 0,
+          );
+          const sorted = order === "desc" ? rows.toReversed() : rows;
+          return encode({
+            comments: sorted.slice(offset, offset + 100),
+            count: Math.min(100, rows.length - offset),
+            totalCount: rows.length,
+            ...(offset + 100 < rows.length ? { continuationToken: String(offset + 100) } : {}),
+          });
+        }
+        return encode({ ...WORK_ITEM, rev: rows.length, relations: [] });
+      });
+      const selected = {
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+        connectionId: "account-a",
+        order,
+      };
+      for (const kind of ["comments", "history"] as const) {
+        const ids: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const before = calls.length;
+          const page =
+            kind === "comments"
+              ? yield* api.getComments({ ...selected, ...(cursor === undefined ? {} : { cursor }) })
+              : yield* api.getHistory!({
+                  ...selected,
+                  limit: 100,
+                  ...(cursor === undefined ? {} : { cursor }),
+                });
+          expect(calls.length - before).toBe(2);
+          ids.push(
+            ...("comments" in page
+              ? page.comments.map((row) => row.id)
+              : page.items.map((row) => row.id.split("-")[1]!)),
+          );
+          cursor = page.nextCursor ?? undefined;
+          if (cursor !== undefined) {
+            for (const changed of [
+              { connectionId: "account-b" },
+              { order: order === "desc" ? ("asc" as const) : ("desc" as const) },
+              { cwd: "/other" },
+              { scope: "acme/Other" },
+              { key: "8" },
+              { host: "other.visualstudio.com" },
+            ]) {
+              const count = calls.length;
+              const bad = { ...selected, ...changed, cursor };
+              if (kind === "comments") yield* api.getComments(bad).pipe(Effect.flip);
+              else yield* api.getHistory!(bad).pipe(Effect.flip);
+              expect(calls).toHaveLength(count);
+            }
+            const parsed: Record<string, unknown> = JSON.parse(cursor);
+            for (const position of [-1, 0, Number(parsed.total)]) {
+              const before = calls.length;
+              const bad = { ...selected, cursor: JSON.stringify({ ...parsed, position }) };
+              if (kind === "comments") yield* api.getComments(bad).pipe(Effect.flip);
+              else yield* api.getHistory!(bad).pipe(Effect.flip);
+              expect(calls).toHaveLength(before);
+            }
+          }
+        } while (cursor !== undefined);
+        expect(ids).toEqual(
+          (order === "desc" ? rows.toReversed() : rows)
+            .filter((row) => kind === "comments" || row.id !== 1)
+            .map((row) => String(row.id)),
+        );
+        expect(new Set(ids).size).toBe(kind === "comments" ? 223 : 222);
+      }
+      for (const cursor of ["0", "50", "{}", "null", "[]"]) {
+        const before = calls.length;
+        yield* api.getComments({ ...selected, cursor }).pipe(Effect.flip);
+        yield* api.getHistory!({ ...selected, cursor }).pipe(Effect.flip);
+        expect(calls).toHaveLength(before);
+      }
+    }),
+);
+
+it.effect.each([
+  { comments: [], continuationToken: "next" },
+  { comments: [], totalCount: 2 },
+  { comments: [{ id: 2, createdDate: "2026-10-14T01:00:00Z" }], count: 1, totalCount: 2 },
+  { comments: [{ id: 2, createdDate: "2026-10-14T01:00:00Z" }], count: 2 },
+  { comments: [1, 2].map((id) => ({ id, createdDate: `2026-10-14T0${id}:00:00Z` })) },
+])("refuses inconsistent Azure native comment pages: %j", (page) =>
+  Effect.gen(function* () {
+    const calls: ReadonlyArray<string>[] = [];
+    const api = yield* tracker((args) => {
+      calls.push(args);
+      return args.includes("comments") ? encode(page) : encode(WORK_ITEM);
+    });
+    const error = yield* api
+      .getComments({ cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" })
+      .pipe(Effect.flip);
+    expect(error.reason).toBe("failed");
+    expect(calls).toHaveLength(2);
+  }),
+);
+
+it.effect.each([null, 0, 1.5, 9007199254740992])(
+  "refuses an absent or invalid Azure revision %s before an update read",
+  (rev) =>
+    Effect.gen(function* () {
+      const calls: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        calls.push(args);
+        return encode({ ...WORK_ITEM, ...(rev === null ? { rev: undefined } : { rev }) });
+      });
+      yield* api.getHistory!({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+      }).pipe(Effect.flip);
+      expect(calls).toHaveLength(1);
+    }),
+);
+
+it.effect.each([[], [1, 1], [2, 3], [1]])(
+  "refuses missing, repeated or foreign Azure update windows: %j",
+  (ids) =>
+    Effect.gen(function* () {
+      const calls: ReadonlyArray<string>[] = [];
+      const api = yield* tracker((args) => {
+        calls.push(args);
+        return args.includes("updates")
+          ? encode({ value: ids.map((id) => ({ id, revisedDate: "2026-10-14T01:00:00Z" })) })
+          : encode(WORK_ITEM);
+      });
+      yield* api.getHistory!({
+        cwd: "/w",
+        host: "dev.azure.com",
+        scope: "acme/Web App",
+        key: "7",
+      }).pipe(Effect.flip);
+      expect(calls).toHaveLength(2);
+    }),
+);
+
+it.effect("rejects a repeated Azure comment token without another continuation read", () =>
+  Effect.gen(function* () {
+    const calls: ReadonlyArray<string>[] = [];
+    let id = 3;
+    const api = yield* tracker((args) => {
+      calls.push(args);
+      return args.includes("comments")
+        ? encode({
+            comments: [{ id: id--, createdDate: "2026-10-14T01:00:00Z" }],
+            continuationToken: "repeated",
+          })
+        : encode(WORK_ITEM);
+    });
+    const target = { cwd: "/w", host: "dev.azure.com", scope: "acme/Web App", key: "7" };
+    const first = yield* api.getComments(target);
+    yield* api.getComments({ ...target, cursor: first.nextCursor! }).pipe(Effect.flip);
+    expect(calls).toHaveLength(4);
+  }),
+);
+
+it.effect("starts Azure detail at the true newest comment and revision pages", () =>
+  Effect.gen(function* () {
+    const rows = Array.from({ length: 223 }, (_, index) => ({
+      id: index + 1,
+      text: String(index + 1),
+      createdDate: "2026-10-14T01:00:00Z",
+      revisedDate: "2026-10-14T01:00:00Z",
+      fields: { "System.Title": { oldValue: "old", newValue: String(index + 1) } },
+    }));
+    const calls: ReadonlyArray<string>[] = [];
+    const api = yield* tracker((args) => {
+      calls.push(args);
+      if (args.includes("comments")) {
+        expect(args).toContain("order=desc");
+        return encode({ comments: rows.slice(-100).toReversed(), continuationToken: "older" });
+      }
+      if (args.includes("updates")) {
+        expect(args).toContain("$skip=123");
+        expect(args).toContain("$top=100");
+        return encode({ value: rows.slice(-100) });
+      }
+      return encode({ ...WORK_ITEM, rev: 223, relations: [] });
+    });
+    const result = yield* api.getIssue({
+      cwd: "/w",
+      host: "dev.azure.com",
+      scope: "acme/Web App",
+      key: "7",
+      connectionId: "selected-account",
+    });
+    expect(result.comments.map((row) => row.id)).toEqual(
+      rows
+        .slice(-100)
+        .toReversed()
+        .map((row) => String(row.id)),
+    );
+    expect(result.events.map((row) => row.detail)).toEqual(
+      rows
+        .slice(-100)
+        .toReversed()
+        .map((row) => String(row.id)),
+    );
+    expect(result.historyTruncated).toBe(true);
+    expect(result.commentsCursor).toContain("selected-account");
+    expect(calls).toHaveLength(3);
+    expect(calls.flat()).not.toContain("profiles");
+  }),
+);

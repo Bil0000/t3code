@@ -452,6 +452,9 @@ it.effect(
         if (url.pathname.endsWith("/changelog"))
           return {
             body: {
+              startAt: 0,
+              total: 1,
+              isLast: true,
               values: [
                 {
                   id: "history",
@@ -477,7 +480,9 @@ it.effect(
         setState: true,
       });
       expect(result.comments[0]?.author?.id).toBe("native-account");
-      expect(result.commentsCursor).toBe("1");
+      expect(
+        result.commentsCursor === null ? null : JSON.parse(result.commentsCursor).position,
+      ).toBe(1);
       expect(result.events[0]).toMatchObject({ kind: "state-changed", detail: null });
       expect(result.linkedPullRequests).toEqual([]);
     }),
@@ -836,6 +841,8 @@ it.effect("loads embedded conversation, history and remote links with four detai
         body: {
           ...issue,
           changelog: {
+            startAt: 0,
+            total: 1,
             histories: [
               {
                 id: "event",
@@ -847,7 +854,7 @@ it.effect("loads embedded conversation, history and remote links with four detai
           fields: {
             ...issue.fields,
             comment: {
-              total: 4,
+              total: 1,
               startAt: 0,
               comments: [
                 {
@@ -867,13 +874,13 @@ it.effect("loads embedded conversation, history and remote links with four detai
     const result = yield* api.getIssue(target);
     expect(f.calls).toHaveLength(4);
     expect(f.calls[0]?.url).toContain("expand=changelog");
-    expect(result.commentsCursor).toBe("1");
+    expect(result.commentsCursor).toBeNull();
     expect(result.events[0]).toMatchObject({ kind: "renamed", detail: "Task" });
     expect(result.comments[0]?.body).toBe("body");
   }),
 );
 
-it.effect("loads older comments after Jira's latest embedded page without gaps or duplicates", () =>
+it.effect("loads true newest comments when Jira embeds an unqualified partial page", () =>
   Effect.gen(function* () {
     const nativeComments = Array.from({ length: 150 }, (_, index) => ({
       id: String(index + 1),
@@ -908,13 +915,13 @@ it.effect("loads older comments after Jira's latest embedded page without gaps o
         return {
           body: {
             ...issue,
-            changelog: { histories: [] },
+            changelog: { startAt: 0, total: 0, histories: [] },
             fields: {
               ...issue.fields,
               comment: {
                 startAt: embeddedStartAt,
                 total: 150,
-                comments: nativeComments.slice(-embeddedCount),
+                comments: nativeComments.slice(0, embeddedCount),
               },
             },
           },
@@ -922,20 +929,20 @@ it.effect("loads older comments after Jira's latest embedded page without gaps o
       });
       const api = yield* f.api;
       const result = yield* api.getIssue(target);
-      expect(f.calls).toHaveLength(4);
-      expect(result.commentsCursor).toBe(String(embeddedCount));
+      expect(f.calls).toHaveLength(5);
+      expect(JSON.parse(result.commentsCursor!).position).toBe(50);
       const loaded = [...result.comments];
       let cursor = result.commentsCursor;
       while (cursor !== null) {
         const page = yield* api.getComments({ ...target, cursor });
         const ids = page.comments.map((comment) => Number(comment.id));
-        expect(ids).toEqual(ids.toSorted((a, b) => a - b));
-        loaded.unshift(...page.comments);
+        expect(ids).toEqual(ids.toSorted((a, b) => b - a));
+        loaded.push(...page.comments);
         cursor = page.nextCursor;
       }
-      expect(offsets).toEqual(embeddedCount === 100 ? [100] : [20, 70, 120]);
+      expect(offsets).toEqual([0, 50, 100]);
       expect(loaded.map((comment) => comment.id)).toEqual(
-        nativeComments.map((comment) => comment.id),
+        nativeComments.toReversed().map((comment) => comment.id),
       );
     }
   }),
@@ -965,7 +972,7 @@ it.effect("keeps complete and empty embedded comment sets without another reques
         return {
           body: {
             ...issue,
-            changelog: { histories: [] },
+            changelog: { startAt: 0, total: 0, histories: [] },
             fields: { ...issue.fields, comment },
           },
         };
@@ -979,7 +986,7 @@ it.effect("keeps complete and empty embedded comment sets without another reques
   }),
 );
 
-it.effect("starts comment paging with the latest comments in ascending display order", () =>
+it.effect("starts comment paging with the true latest comments in descending order", () =>
   Effect.gen(function* () {
     const f = fakeJira((request) => {
       if (!request.url.includes("/comment?")) return { body: issue };
@@ -1000,9 +1007,9 @@ it.effect("starts comment paging with the latest comments in ascending display o
       };
     });
     const api = yield* f.api;
-    const page = yield* api.getComments({ ...target, cursor: "0" });
-    expect(page.comments.map((comment) => comment.id)).toEqual(["2", "3", "4"]);
-    expect(page.nextCursor).toBe("3");
+    const page = yield* api.getComments(target);
+    expect(page.comments.map((comment) => comment.id)).toEqual(["4", "3", "2"]);
+    expect(JSON.parse(page.nextCursor!).position).toBe(3);
   }),
 );
 
@@ -1156,40 +1163,58 @@ it.effect("returns no fabricated scope when Jira denies or cannot find a project
   }),
 );
 
-it.effect("marks bounded native history pages as partial without fetching more", () =>
+it.effect("loads only the true tail of bounded native history", () =>
   Effect.gen(function* () {
-    const histories = ["one", "two"].map((id) => ({
-      id,
-      created: "2026-10-14T10:00:00Z",
-      items: [{ field: "summary", toString: id }],
-    }));
-    for (const test of [
-      { embedded: true, total: 200, isLast: true, truncated: true },
-      { embedded: false, total: 200, isLast: true, truncated: true },
-      { embedded: false, total: 2, isLast: false, truncated: true },
-      { embedded: false, total: 2, isLast: true, truncated: false },
-    ]) {
+    for (const embedded of [true, false]) {
+      const histories = Array.from({ length: 123 }, (_, index) => ({
+        id: String(index + 1),
+        created: issue.fields.created,
+        items: [{ field: "summary", toString: String(index + 1) }],
+      }));
       const f = fakeJira((request) => {
-        const path = new URL(request.url).pathname;
-        if (path.endsWith("/myself")) return { body: user };
-        if (path.endsWith("/mypermissions")) return { body: { permissions: {} } };
-        if (path.endsWith("/changelog"))
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/myself")) return { body: user };
+        if (url.pathname.endsWith("/mypermissions")) return { body: { permissions: {} } };
+        if (url.pathname.endsWith("/changelog")) {
+          const startAt = Number(url.searchParams.get("startAt"));
+          const limit = Number(url.searchParams.get("maxResults"));
           return {
-            body: { startAt: 0, total: test.total, isLast: test.isLast, values: histories },
+            body: {
+              startAt,
+              total: histories.length,
+              isLast: startAt + limit >= histories.length,
+              values: histories.slice(startAt, startAt + limit),
+            },
           };
+        }
         return {
           body: {
             ...issue,
             fields: { ...issue.fields, comment: { total: 0, comments: [] } },
-            ...(test.embedded ? { changelog: { startAt: 0, total: test.total, histories } } : {}),
+            ...(embedded
+              ? {
+                  changelog: {
+                    startAt: 0,
+                    total: histories.length,
+                    histories: histories.slice(0, 100),
+                  },
+                }
+              : {}),
           },
         };
       });
-      const api = yield* f.api;
-      const result = yield* api.getIssue(target);
-      expect(result.events).toHaveLength(2);
-      expect(result.historyTruncated ?? false).toBe(test.truncated);
-      expect(f.calls).toHaveLength(test.embedded ? 4 : 5);
+      const result = yield* (yield* f.api).getIssue(target);
+      expect(result.events.map((event) => event.detail)).toEqual(
+        histories
+          .slice(-50)
+          .toReversed()
+          .map((row) => row.id),
+      );
+      expect(result.historyTruncated).toBe(true);
+      const reads = f.calls.filter(({ url }) => url.includes("/changelog?"));
+      expect(reads).toHaveLength(embedded ? 1 : 2);
+      expect(reads.at(-1)?.url).toContain("startAt=73&maxResults=50");
+      expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
     }
   }),
 );
@@ -1372,7 +1397,7 @@ it.effect("refuses a foreign project before reading or editing its comment", () 
 );
 
 it.effect(
-  "exposes native rich editing for old comments without extra viewer or comment reads",
+  "exposes native rich editing for comment pages without extra viewer or comment reads",
   () =>
     Effect.gen(function* () {
       const f = fakeJira((request) => {
@@ -1381,8 +1406,8 @@ it.effect(
         if (new URL(request.url).pathname.endsWith("/comment"))
           return {
             body: {
-              startAt: 50,
-              total: 52,
+              startAt: 0,
+              total: 2,
               comments: [issue.fields.description, richCommentBody].map((body, index) => ({
                 id: String(9000 + index),
                 body,
@@ -1395,15 +1420,15 @@ it.effect(
         return { body: issue };
       });
       const api = yield* f.api;
-      const page = yield* api.getComments({ ...target, cursor: "50", viewer: user.accountId });
+      const page = yield* api.getComments({ ...target, viewer: user.accountId });
       expect(page.comments).toEqual([
+        expect.objectContaining({ id: "9000", body: "body", canEdit: true }),
         expect.objectContaining({
           id: "9001",
           body: "rich",
           canEdit: true,
           richBody: expect.objectContaining({ format: "adf" }),
         }),
-        expect.objectContaining({ id: "9000", body: "body", canEdit: true }),
       ]);
       expect(f.calls).toHaveLength(3);
       expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
@@ -1413,7 +1438,7 @@ it.effect(
     }),
 );
 
-it.effect("adds edit flags to old comments without a viewer request", () =>
+it.effect("adds edit flags to comment pages without a viewer request", () =>
   Effect.gen(function* () {
     const f = fakeJira((request) => {
       const url = new URL(request.url);
@@ -1422,8 +1447,8 @@ it.effect("adds edit flags to old comments without a viewer request", () =>
       if (url.pathname.endsWith("/comment"))
         return {
           body: {
-            startAt: 50,
-            total: 51,
+            startAt: 0,
+            total: 1,
             comments: [
               {
                 id: "c1",
@@ -1438,7 +1463,7 @@ it.effect("adds edit flags to old comments without a viewer request", () =>
       return { body: issue };
     });
     const api = yield* f.api;
-    const page = yield* api.getComments({ ...target, viewer: user.accountId, cursor: "50" });
+    const page = yield* api.getComments({ ...target, viewer: user.accountId });
     expect(page.comments[0]).toMatchObject({ canEdit: true, editedAt: "2026-10-14T11:00:00.000Z" });
     expect(f.calls.some((request) => request.url.includes("/myself"))).toBe(false);
   }),
@@ -1446,31 +1471,40 @@ it.effect("adds edit flags to old comments without a viewer request", () =>
 
 it.effect("pages history and rejects inconsistent offsets", () =>
   Effect.gen(function* () {
-    let startAt = 50;
-    const f = fakeJira((request) => ({
-      body: request.url.includes("/changelog?")
-        ? {
-            startAt,
-            total: 52,
-            values: [
-              {
-                id: "h1",
-                author: user,
-                created: issue.fields.created,
-                items: [{ field: "summary", fromString: "Old", toString: "New" }],
-              },
-            ],
-          }
-        : issue,
-    }));
-    const api = yield* f.api;
-    expect(yield* api.getHistory!({ ...target, cursor: "50", limit: 1 })).toMatchObject({
-      items: [{ kind: "renamed", detail: "New" }],
-      nextCursor: "51",
+    let inconsistent = false;
+    const f = fakeJira((request) => {
+      const url = new URL(request.url);
+      const startAt = Number(url.searchParams.get("startAt"));
+      return {
+        body: url.pathname.endsWith("/changelog")
+          ? {
+              startAt: inconsistent ? 0 : startAt,
+              total: 2,
+              isLast: startAt === 1,
+              values: [
+                {
+                  id: String(startAt + 1),
+                  author: user,
+                  created: issue.fields.created,
+                  items: [{ field: "summary", fromString: "Old", toString: "New" }],
+                },
+              ],
+            }
+          : issue,
+      };
     });
-    startAt = 0;
+    const api = yield* f.api;
+    const first = yield* api.getHistory!({ ...target, order: "asc", limit: 1 });
+    expect(first.items).toMatchObject([{ kind: "renamed", detail: "New" }]);
+    expect(first.nextCursor).not.toBeNull();
+    inconsistent = true;
     expect(
-      (yield* api.getHistory!({ ...target, cursor: "50", limit: 1 }).pipe(Effect.flip)).reason,
+      (yield* api.getHistory!({
+        ...target,
+        order: "asc",
+        cursor: first.nextCursor!,
+        limit: 1,
+      }).pipe(Effect.flip)).reason,
     ).toBe("failed");
   }),
 );
@@ -1976,4 +2010,266 @@ it.effect.each([
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0]?.method).toBe("GET");
   }),
+);
+
+it.effect.each(["asc", "desc"] as const)(
+  "reads true Jira comment and history windows in %s order",
+  (order) =>
+    Effect.gen(function* () {
+      const rows = Array.from({ length: 123 }, (_, index) => ({
+        id: String(index + 1),
+        created: `2026-10-${String(14 + Math.floor(index / 60)).padStart(2, "0")}T00:${String(index % 60).padStart(2, "0")}:00.000Z`,
+        updated: issue.fields.updated,
+        body: issue.fields.description,
+        items: [{ field: "summary", toString: String(index + 1) }],
+      }));
+      const f = fakeJira((request) => {
+        const url = new URL(request.url);
+        const startAt = Number(url.searchParams.get("startAt"));
+        const limit = Number(url.searchParams.get("maxResults"));
+        if (url.pathname.endsWith("/comment")) {
+          expect(url.searchParams.get("orderBy")).toBe(order === "desc" ? "-created" : "created");
+          const sorted = order === "desc" ? rows.toReversed() : rows;
+          return {
+            body: { startAt, total: rows.length, comments: sorted.slice(startAt, startAt + limit) },
+          };
+        }
+        if (url.pathname.endsWith("/changelog"))
+          return {
+            body: {
+              startAt,
+              total: rows.length,
+              isLast: startAt + limit >= rows.length,
+              values: rows.slice(startAt, startAt + limit),
+            },
+          };
+        return { body: issue };
+      });
+      const api = yield* f.api;
+      const selected = { ...target, connectionId: "account-a", order };
+      for (const kind of ["comments", "history"] as const) {
+        const ids: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const before = f.calls.length;
+          const page =
+            kind === "comments"
+              ? yield* api.getComments({ ...selected, ...(cursor === undefined ? {} : { cursor }) })
+              : yield* api.getHistory!({
+                  ...selected,
+                  limit: 50,
+                  ...(cursor === undefined ? {} : { cursor }),
+                });
+          expect(f.calls.length - before).toBeLessThanOrEqual(
+            cursor === undefined && kind === "history" && order === "desc" ? 3 : 2,
+          );
+          ids.push(
+            ...("comments" in page
+              ? page.comments.map((row) => row.id)
+              : page.items.map((row) => row.id.split(":")[0]!)),
+          );
+          cursor = page.nextCursor ?? undefined;
+          if (cursor !== undefined) {
+            for (const changed of [
+              { connectionId: "account-b" },
+              { order: order === "desc" ? ("asc" as const) : ("desc" as const) },
+              { cwd: "/other" },
+              { scope: "OTHER" },
+              { key: "ENG-2" },
+              { host: "other.atlassian.net" },
+            ]) {
+              const calls = f.calls.length;
+              const bad = { ...selected, ...changed, cursor };
+              if (kind === "comments") yield* api.getComments(bad).pipe(Effect.flip);
+              else yield* api.getHistory!(bad).pipe(Effect.flip);
+              expect(f.calls).toHaveLength(calls);
+            }
+            const parsed: Record<string, unknown> = JSON.parse(cursor);
+            for (const position of [-1, 0, Number(parsed.total)]) {
+              const before = f.calls.length;
+              const bad = { ...selected, cursor: JSON.stringify({ ...parsed, position }) };
+              if (kind === "comments") yield* api.getComments(bad).pipe(Effect.flip);
+              else yield* api.getHistory!(bad).pipe(Effect.flip);
+              expect(f.calls).toHaveLength(before);
+            }
+          }
+        } while (cursor !== undefined);
+        expect(ids).toEqual((order === "desc" ? rows.toReversed() : rows).map((row) => row.id));
+        expect(new Set(ids).size).toBe(123);
+      }
+      for (const cursor of ["0", "50", "{}", "null", "[]"]) {
+        const before = f.calls.length;
+        yield* api.getComments({ ...selected, cursor }).pipe(Effect.flip);
+        yield* api.getHistory!({ ...selected, cursor }).pipe(Effect.flip);
+        expect(f.calls).toHaveLength(before);
+      }
+    }),
+);
+
+it.effect.each([
+  { startAt: 1, total: 2, ids: [2] },
+  { startAt: 0, total: 0, ids: [2] },
+  { startAt: 0, total: 2, ids: [] },
+  { startAt: 0, total: 2, ids: [2, 2] },
+  { startAt: 0, total: 2, ids: [1, 2] },
+])("refuses inconsistent Jira native comment pages: %j", ({ startAt, total, ids }) =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => ({
+      body: request.url.includes("/comment?")
+        ? {
+            startAt,
+            total,
+            comments: ids.map((id) => ({
+              id: String(id),
+              body: issue.fields.description,
+              created: `2026-10-14T0${id}:00:00Z`,
+              updated: issue.fields.updated,
+            })),
+          }
+        : issue,
+    }));
+    const error = yield* (yield* f.api).getComments(target).pipe(Effect.flip);
+    expect(error.reason).toBe("failed");
+    expect(f.calls).toHaveLength(2);
+  }),
+);
+
+it.effect("rejects contradictory Jira tail metadata before a tail read", () =>
+  Effect.gen(function* () {
+    const f = fakeJira((request) => ({
+      body: request.url.includes("/changelog?")
+        ? {
+            startAt: 0,
+            total: 123,
+            isLast: true,
+            values: [{ id: "1", created: issue.fields.created, items: [] }],
+          }
+        : issue,
+    }));
+    yield* (yield* f.api).getHistory!(target).pipe(Effect.flip);
+    expect(f.calls).toHaveLength(2);
+  }),
+);
+
+it.effect(
+  "orders a complete Cloud expanded changelog by time before choosing its newest window",
+  () =>
+    Effect.gen(function* () {
+      const histories = Array.from({ length: 80 }, (_, index) => ({
+        id: String(index + 1),
+        created:
+          "2026-10-" +
+          String(14 + Math.floor(index / 60)).padStart(2, "0") +
+          "T00:" +
+          String(index % 60).padStart(2, "0") +
+          ":00Z",
+        items: [{ field: "summary", toString: String(index + 1) }],
+      }));
+      const f = fakeJira((request) => {
+        if (request.url.endsWith("/myself")) return { body: user };
+        if (request.url.includes("/mypermissions?")) return { body: { permissions: {} } };
+        return {
+          body: {
+            ...issue,
+            changelog: { startAt: 0, total: histories.length, histories: histories.toReversed() },
+            fields: { ...issue.fields, comment: { total: 0, comments: [] } },
+          },
+        };
+      });
+      const result = yield* (yield* f.api).getIssue(target);
+      expect(result.events.map((row) => row.detail)).toEqual(
+        histories
+          .slice(-50)
+          .toReversed()
+          .map((row) => row.id),
+      );
+      expect(result.historyTruncated).toBe(true);
+      expect(f.calls).toHaveLength(4);
+    }),
+);
+
+it.effect.each(["asc", "desc"] as const)(
+  "keeps Jira Data Center history and wiki comment order in %s",
+  (order) =>
+    Effect.gen(function* () {
+      const histories = Array.from({ length: 123 }, (_, index) => ({
+        id: String(index + 1),
+        created: issue.fields.created,
+        items: [{ field: "summary", toString: String(index + 1) }],
+      }));
+      const nativeUser = { key: "native-account", name: "ada" };
+      const dcIssue = {
+        ...issue,
+        changelog: { startAt: 0, total: histories.length, histories },
+        fields: {
+          ...issue.fields,
+          creator: nativeUser,
+          assignee: nativeUser,
+          description: "wiki",
+          comment: { startAt: 0, total: 0, comments: [] },
+        },
+      };
+      const f = fakeJira(
+        (request) => {
+          const url = new URL(request.url);
+          if (url.pathname.endsWith("/myself")) return { body: nativeUser };
+          if (url.pathname.endsWith("/mypermissions"))
+            return { body: { permissions: { EDIT_OWN_COMMENTS: { havePermission: true } } } };
+          if (url.pathname.endsWith("/comment")) {
+            const startAt = Number(url.searchParams.get("startAt"));
+            const sorted = order === "desc" ? histories.toReversed() : histories;
+            expect(url.searchParams.get("orderBy")).toBe(order === "desc" ? "-created" : "created");
+            return {
+              body: {
+                startAt,
+                total: histories.length,
+                comments: sorted.slice(startAt, startAt + 50).map((row) => ({
+                  ...row,
+                  updated: row.created,
+                  body: "h1. wiki",
+                  author: nativeUser,
+                })),
+              },
+            };
+          }
+          return { body: dcIssue };
+        },
+        JSON.stringify({ site: target.host, deployment: "data-center", token: "fake-pat" }),
+      );
+      const api = yield* f.api;
+      const detail = yield* api.getIssue(target);
+      expect(detail.events.map((row) => row.detail)).toEqual(
+        histories
+          .slice(-50)
+          .toReversed()
+          .map((row) => row.id),
+      );
+      expect(detail.historyTruncated).toBe(true);
+      const selected = { ...target, order };
+      const loaded: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const before = f.calls.length;
+        const page = yield* api.getHistory!({
+          ...selected,
+          limit: 50,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        expect(f.calls.length - before).toBe(cursor === undefined && order === "desc" ? 1 : 2);
+        loaded.push(...page.items.map((row) => row.detail!));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor !== undefined);
+      expect(loaded).toEqual(
+        (order === "desc" ? histories.toReversed() : histories).map((row) => row.id),
+      );
+      const page = yield* api.getComments({ ...selected, viewer: "native-account" });
+      expect(page.comments[0]).toMatchObject({
+        id: order === "desc" ? "123" : "1",
+        body: "h1. wiki",
+        richBody: { format: "jira-wiki", document: "h1. wiki" },
+        canEdit: true,
+      });
+      expect(f.calls.every(({ method }) => method === "GET")).toBe(true);
+      expect(f.calls.every(({ url }) => !url.includes("/rest/api/3/"))).toBe(true);
+    }),
 );

@@ -405,6 +405,10 @@ export const SourceIssue = Schema.Struct({
   __typename: Schema.Literal("Issue"),
   /** Identifies the issue number. */
   number: Shared.Int,
+  /** Identifies the issue title. */
+  title: Schema.String,
+  /** The HTTP URL for this issue */
+  url: Shared.URI,
   /** The repository associated with this node. */
   repository: NodesRepositoryRepository
 })
@@ -423,6 +427,8 @@ export const IssueTimelineItemCrossReferencedEvent = Schema.Struct({
   id: Shared.ID,
   /** Identifies the date and time when the object was created. */
   createdAt: Shared.DateTime,
+  /** The HTTP URL for this pull request. */
+  url: Shared.URI,
   /** Identifies the actor who performed the event. */
   actor: Schema.NullOr(Actor),
   /** Issue or pull request that made the reference. */
@@ -457,6 +463,576 @@ export const IssueTimelineItem = Schema.Union([
   IssueTimelineItemIssueTimelineItemsOther
 ])
 export type IssueTimelineItem = typeof IssueTimelineItem.Type
+
+/** Represents a 'added_to_project' event on a given issue or pull request. */
+export const AddedToProjectEvent = Schema.Struct({
+  __typename: Schema.Literal("AddedToProjectEvent"),
+  /** The Node ID of the AddedToProjectEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface AddedToProjectEvent extends Schema.Struct.Type<typeof AddedToProjectEvent.fields> {}
+
+/** Represents a 'added_to_project_v2' event on a given issue or pull request. */
+export const AddedToProjectV2Event = Schema.Struct({
+  __typename: Schema.Literal("AddedToProjectV2Event"),
+  /** The Node ID of the AddedToProjectV2Event object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface AddedToProjectV2Event extends Schema.Struct.Type<typeof AddedToProjectV2Event.fields> {}
+
+/** Represents a 'blocked_by_added' event on a given issue. */
+export const BlockedByAddedEvent = Schema.Struct({
+  __typename: Schema.Literal("BlockedByAddedEvent"),
+  /** The Node ID of the BlockedByAddedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface BlockedByAddedEvent extends Schema.Struct.Type<typeof BlockedByAddedEvent.fields> {}
+
+/** Represents a 'blocked_by_removed' event on a given issue. */
+export const BlockedByRemovedEvent = Schema.Struct({
+  __typename: Schema.Literal("BlockedByRemovedEvent"),
+  /** The Node ID of the BlockedByRemovedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface BlockedByRemovedEvent extends Schema.Struct.Type<typeof BlockedByRemovedEvent.fields> {}
+
+/** Represents a 'blocking_added' event on a given issue. */
+export const BlockingAddedEvent = Schema.Struct({
+  __typename: Schema.Literal("BlockingAddedEvent"),
+  /** The Node ID of the BlockingAddedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface BlockingAddedEvent extends Schema.Struct.Type<typeof BlockingAddedEvent.fields> {}
+
+/** Represents a 'blocking_removed' event on a given issue. */
+export const BlockingRemovedEvent = Schema.Struct({
+  __typename: Schema.Literal("BlockingRemovedEvent"),
+  /** The Node ID of the BlockingRemovedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface BlockingRemovedEvent extends Schema.Struct.Type<typeof BlockingRemovedEvent.fields> {}
+
+/** Represents a 'comment_deleted' event on a given issue or pull request. */
+export const CommentDeletedEvent = Schema.Struct({
+  __typename: Schema.Literal("CommentDeletedEvent"),
+  /** The Node ID of the CommentDeletedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface CommentDeletedEvent extends Schema.Struct.Type<typeof CommentDeletedEvent.fields> {}
+
+/** Represents a 'connected' event on a given issue or pull request. */
+export const ConnectedEvent = Schema.Struct({
+  __typename: Schema.Literal("ConnectedEvent"),
+  /** The Node ID of the ConnectedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface ConnectedEvent extends Schema.Struct.Type<typeof ConnectedEvent.fields> {}
+
+/** Represents a 'converted_from_draft' event on a given issue or pull request. */
+export const ConvertedFromDraftEvent = Schema.Struct({
+  __typename: Schema.Literal("ConvertedFromDraftEvent"),
+  /** The Node ID of the ConvertedFromDraftEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface ConvertedFromDraftEvent extends Schema.Struct.Type<typeof ConvertedFromDraftEvent.fields> {}
+
+/** Represents a 'converted_note_to_issue' event on a given issue or pull request. */
+export const ConvertedNoteToIssueEvent = Schema.Struct({
+  __typename: Schema.Literal("ConvertedNoteToIssueEvent"),
+  /** The Node ID of the ConvertedNoteToIssueEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface ConvertedNoteToIssueEvent extends Schema.Struct.Type<typeof ConvertedNoteToIssueEvent.fields> {}
+
+/** Represents a 'converted_to_discussion' event on a given issue. */
+export const ConvertedToDiscussionEvent = Schema.Struct({
+  __typename: Schema.Literal("ConvertedToDiscussionEvent"),
+  /** The Node ID of the ConvertedToDiscussionEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface ConvertedToDiscussionEvent extends Schema.Struct.Type<typeof ConvertedToDiscussionEvent.fields> {}
+
+/** Represents a 'demilestoned' event on a given issue or pull request. */
+export const DemilestonedEvent = Schema.Struct({
+  __typename: Schema.Literal("DemilestonedEvent"),
+  /** The Node ID of the DemilestonedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface DemilestonedEvent extends Schema.Struct.Type<typeof DemilestonedEvent.fields> {}
+
+/** Represents a 'disconnected' event on a given issue or pull request. */
+export const DisconnectedEvent = Schema.Struct({
+  __typename: Schema.Literal("DisconnectedEvent"),
+  /** The Node ID of the DisconnectedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface DisconnectedEvent extends Schema.Struct.Type<typeof DisconnectedEvent.fields> {}
+
+/** Represents a 'issue_comment_pinned' event on a given issue. */
+export const IssueCommentPinnedEvent = Schema.Struct({
+  __typename: Schema.Literal("IssueCommentPinnedEvent"),
+  /** The Node ID of the IssueCommentPinnedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface IssueCommentPinnedEvent extends Schema.Struct.Type<typeof IssueCommentPinnedEvent.fields> {}
+
+/** Represents a 'issue_comment_unpinned' event on a given issue. */
+export const IssueCommentUnpinnedEvent = Schema.Struct({
+  __typename: Schema.Literal("IssueCommentUnpinnedEvent"),
+  /** The Node ID of the IssueCommentUnpinnedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface IssueCommentUnpinnedEvent extends Schema.Struct.Type<typeof IssueCommentUnpinnedEvent.fields> {}
+
+/** Represents a 'issue_field_added' event on a given issue. */
+export const IssueFieldAddedEvent = Schema.Struct({
+  __typename: Schema.Literal("IssueFieldAddedEvent"),
+  /** The Node ID of the IssueFieldAddedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface IssueFieldAddedEvent extends Schema.Struct.Type<typeof IssueFieldAddedEvent.fields> {}
+
+/** Represents a 'issue_field_changed' event on a given issue. */
+export const IssueFieldChangedEvent = Schema.Struct({
+  __typename: Schema.Literal("IssueFieldChangedEvent"),
+  /** The Node ID of the IssueFieldChangedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface IssueFieldChangedEvent extends Schema.Struct.Type<typeof IssueFieldChangedEvent.fields> {}
+
+/** Represents a 'issue_field_removed' event on a given issue. */
+export const IssueFieldRemovedEvent = Schema.Struct({
+  __typename: Schema.Literal("IssueFieldRemovedEvent"),
+  /** The Node ID of the IssueFieldRemovedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface IssueFieldRemovedEvent extends Schema.Struct.Type<typeof IssueFieldRemovedEvent.fields> {}
+
+/** Represents a 'issue_type_added' event on a given issue. */
+export const IssueTypeAddedEvent = Schema.Struct({
+  __typename: Schema.Literal("IssueTypeAddedEvent"),
+  /** The Node ID of the IssueTypeAddedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface IssueTypeAddedEvent extends Schema.Struct.Type<typeof IssueTypeAddedEvent.fields> {}
+
+/** Represents a 'issue_type_changed' event on a given issue. */
+export const IssueTypeChangedEvent = Schema.Struct({
+  __typename: Schema.Literal("IssueTypeChangedEvent"),
+  /** The Node ID of the IssueTypeChangedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface IssueTypeChangedEvent extends Schema.Struct.Type<typeof IssueTypeChangedEvent.fields> {}
+
+/** Represents a 'issue_type_removed' event on a given issue. */
+export const IssueTypeRemovedEvent = Schema.Struct({
+  __typename: Schema.Literal("IssueTypeRemovedEvent"),
+  /** The Node ID of the IssueTypeRemovedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface IssueTypeRemovedEvent extends Schema.Struct.Type<typeof IssueTypeRemovedEvent.fields> {}
+
+/** Represents a 'locked' event on a given issue or pull request. */
+export const LockedEvent = Schema.Struct({
+  __typename: Schema.Literal("LockedEvent"),
+  /** The Node ID of the LockedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface LockedEvent extends Schema.Struct.Type<typeof LockedEvent.fields> {}
+
+/** Represents a 'marked_as_duplicate' event on a given issue or pull request. */
+export const MarkedAsDuplicateEvent = Schema.Struct({
+  __typename: Schema.Literal("MarkedAsDuplicateEvent"),
+  /** The Node ID of the MarkedAsDuplicateEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface MarkedAsDuplicateEvent extends Schema.Struct.Type<typeof MarkedAsDuplicateEvent.fields> {}
+
+/** Represents a 'mentioned' event on a given issue or pull request. */
+export const MentionedEvent = Schema.Struct({
+  __typename: Schema.Literal("MentionedEvent"),
+  /** The Node ID of the MentionedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface MentionedEvent extends Schema.Struct.Type<typeof MentionedEvent.fields> {}
+
+/** Represents a 'milestoned' event on a given issue or pull request. */
+export const MilestonedEvent = Schema.Struct({
+  __typename: Schema.Literal("MilestonedEvent"),
+  /** The Node ID of the MilestonedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface MilestonedEvent extends Schema.Struct.Type<typeof MilestonedEvent.fields> {}
+
+/** Represents a 'moved_columns_in_project' event on a given issue or pull request. */
+export const MovedColumnsInProjectEvent = Schema.Struct({
+  __typename: Schema.Literal("MovedColumnsInProjectEvent"),
+  /** The Node ID of the MovedColumnsInProjectEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface MovedColumnsInProjectEvent extends Schema.Struct.Type<typeof MovedColumnsInProjectEvent.fields> {}
+
+/** Represents a 'parent_issue_added' event on a given issue. */
+export const ParentIssueAddedEvent = Schema.Struct({
+  __typename: Schema.Literal("ParentIssueAddedEvent"),
+  /** The Node ID of the ParentIssueAddedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface ParentIssueAddedEvent extends Schema.Struct.Type<typeof ParentIssueAddedEvent.fields> {}
+
+/** Represents a 'parent_issue_removed' event on a given issue. */
+export const ParentIssueRemovedEvent = Schema.Struct({
+  __typename: Schema.Literal("ParentIssueRemovedEvent"),
+  /** The Node ID of the ParentIssueRemovedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface ParentIssueRemovedEvent extends Schema.Struct.Type<typeof ParentIssueRemovedEvent.fields> {}
+
+/** Represents a 'pinned' event on a given issue or pull request. */
+export const PinnedEvent = Schema.Struct({
+  __typename: Schema.Literal("PinnedEvent"),
+  /** The Node ID of the PinnedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface PinnedEvent extends Schema.Struct.Type<typeof PinnedEvent.fields> {}
+
+/** Represents a 'project_v2_item_status_changed' event on a given issue or pull request. */
+export const ProjectV2ItemStatusChangedEvent = Schema.Struct({
+  __typename: Schema.Literal("ProjectV2ItemStatusChangedEvent"),
+  /** The Node ID of the ProjectV2ItemStatusChangedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface ProjectV2ItemStatusChangedEvent extends Schema.Struct.Type<typeof ProjectV2ItemStatusChangedEvent.fields> {}
+
+/** Represents a 'referenced' event on a given `ReferencedSubject`. */
+export const ReferencedEvent = Schema.Struct({
+  __typename: Schema.Literal("ReferencedEvent"),
+  /** The Node ID of the ReferencedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface ReferencedEvent extends Schema.Struct.Type<typeof ReferencedEvent.fields> {}
+
+/** Represents a 'removed_from_project' event on a given issue or pull request. */
+export const RemovedFromProjectEvent = Schema.Struct({
+  __typename: Schema.Literal("RemovedFromProjectEvent"),
+  /** The Node ID of the RemovedFromProjectEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface RemovedFromProjectEvent extends Schema.Struct.Type<typeof RemovedFromProjectEvent.fields> {}
+
+/** Represents a 'removed_from_project_v2' event on a given issue or pull request. */
+export const RemovedFromProjectV2Event = Schema.Struct({
+  __typename: Schema.Literal("RemovedFromProjectV2Event"),
+  /** The Node ID of the RemovedFromProjectV2Event object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface RemovedFromProjectV2Event extends Schema.Struct.Type<typeof RemovedFromProjectV2Event.fields> {}
+
+/** Represents a 'sub_issue_added' event on a given issue. */
+export const SubIssueAddedEvent = Schema.Struct({
+  __typename: Schema.Literal("SubIssueAddedEvent"),
+  /** The Node ID of the SubIssueAddedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface SubIssueAddedEvent extends Schema.Struct.Type<typeof SubIssueAddedEvent.fields> {}
+
+/** Represents a 'sub_issue_removed' event on a given issue. */
+export const SubIssueRemovedEvent = Schema.Struct({
+  __typename: Schema.Literal("SubIssueRemovedEvent"),
+  /** The Node ID of the SubIssueRemovedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface SubIssueRemovedEvent extends Schema.Struct.Type<typeof SubIssueRemovedEvent.fields> {}
+
+/** Represents a 'subscribed' event on a given `Subscribable`. */
+export const SubscribedEvent = Schema.Struct({
+  __typename: Schema.Literal("SubscribedEvent"),
+  /** The Node ID of the SubscribedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface SubscribedEvent extends Schema.Struct.Type<typeof SubscribedEvent.fields> {}
+
+/** Represents a 'transferred' event on a given issue or pull request. */
+export const TransferredEvent = Schema.Struct({
+  __typename: Schema.Literal("TransferredEvent"),
+  /** The Node ID of the TransferredEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface TransferredEvent extends Schema.Struct.Type<typeof TransferredEvent.fields> {}
+
+/** Represents an 'unlocked' event on a given issue or pull request. */
+export const UnlockedEvent = Schema.Struct({
+  __typename: Schema.Literal("UnlockedEvent"),
+  /** The Node ID of the UnlockedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface UnlockedEvent extends Schema.Struct.Type<typeof UnlockedEvent.fields> {}
+
+/** Represents an 'unmarked_as_duplicate' event on a given issue or pull request. */
+export const UnmarkedAsDuplicateEvent = Schema.Struct({
+  __typename: Schema.Literal("UnmarkedAsDuplicateEvent"),
+  /** The Node ID of the UnmarkedAsDuplicateEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface UnmarkedAsDuplicateEvent extends Schema.Struct.Type<typeof UnmarkedAsDuplicateEvent.fields> {}
+
+/** Represents an 'unpinned' event on a given issue or pull request. */
+export const UnpinnedEvent = Schema.Struct({
+  __typename: Schema.Literal("UnpinnedEvent"),
+  /** The Node ID of the UnpinnedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface UnpinnedEvent extends Schema.Struct.Type<typeof UnpinnedEvent.fields> {}
+
+/** Represents an 'unsubscribed' event on a given `Subscribable`. */
+export const UnsubscribedEvent = Schema.Struct({
+  __typename: Schema.Literal("UnsubscribedEvent"),
+  /** The Node ID of the UnsubscribedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface UnsubscribedEvent extends Schema.Struct.Type<typeof UnsubscribedEvent.fields> {}
+
+/** Represents a 'user_blocked' event on a given user. */
+export const UserBlockedEvent = Schema.Struct({
+  __typename: Schema.Literal("UserBlockedEvent"),
+  /** The Node ID of the UserBlockedEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** Identifies the actor who performed the event. */
+  actor: Schema.NullOr(Actor)
+})
+export interface UserBlockedEvent extends Schema.Struct.Type<typeof UserBlockedEvent.fields> {}
+
+/** An item in an issue timeline */
+export const IssueHistoryItemIssueTimelineItemsOther = Schema.Struct({
+  __typename: GraphQL.otherTypename<Shared.Typename.IssueTimelineItems>()(["ClosedEvent", "ReopenedEvent", "LabeledEvent", "UnlabeledEvent", "AssignedEvent", "UnassignedEvent", "RenamedTitleEvent", "CrossReferencedEvent", "AddedToProjectEvent", "AddedToProjectV2Event", "BlockedByAddedEvent", "BlockedByRemovedEvent", "BlockingAddedEvent", "BlockingRemovedEvent", "CommentDeletedEvent", "ConnectedEvent", "ConvertedFromDraftEvent", "ConvertedNoteToIssueEvent", "ConvertedToDiscussionEvent", "DemilestonedEvent", "DisconnectedEvent", "IssueCommentPinnedEvent", "IssueCommentUnpinnedEvent", "IssueFieldAddedEvent", "IssueFieldChangedEvent", "IssueFieldRemovedEvent", "IssueTypeAddedEvent", "IssueTypeChangedEvent", "IssueTypeRemovedEvent", "LockedEvent", "MarkedAsDuplicateEvent", "MentionedEvent", "MilestonedEvent", "MovedColumnsInProjectEvent", "ParentIssueAddedEvent", "ParentIssueRemovedEvent", "PinnedEvent", "ProjectV2ItemStatusChangedEvent", "ReferencedEvent", "RemovedFromProjectEvent", "RemovedFromProjectV2Event", "SubIssueAddedEvent", "SubIssueRemovedEvent", "SubscribedEvent", "TransferredEvent", "UnlockedEvent", "UnmarkedAsDuplicateEvent", "UnpinnedEvent", "UnsubscribedEvent", "UserBlockedEvent"])
+})
+export interface IssueHistoryItemIssueTimelineItemsOther extends Schema.Struct.Type<typeof IssueHistoryItemIssueTimelineItemsOther.fields> {}
+
+/**
+ * `fragment IssueHistoryItem on IssueTimelineItems`
+ *
+ * An item in an issue timeline
+ */
+export const IssueHistoryItem = Schema.Union([
+  ClosedEvent,
+  ReopenedEvent,
+  LabeledEvent,
+  UnlabeledEvent,
+  AssignedEvent,
+  UnassignedEvent,
+  RenamedTitleEvent,
+  IssueTimelineItemCrossReferencedEvent,
+  AddedToProjectEvent,
+  AddedToProjectV2Event,
+  BlockedByAddedEvent,
+  BlockedByRemovedEvent,
+  BlockingAddedEvent,
+  BlockingRemovedEvent,
+  CommentDeletedEvent,
+  ConnectedEvent,
+  ConvertedFromDraftEvent,
+  ConvertedNoteToIssueEvent,
+  ConvertedToDiscussionEvent,
+  DemilestonedEvent,
+  DisconnectedEvent,
+  IssueCommentPinnedEvent,
+  IssueCommentUnpinnedEvent,
+  IssueFieldAddedEvent,
+  IssueFieldChangedEvent,
+  IssueFieldRemovedEvent,
+  IssueTypeAddedEvent,
+  IssueTypeChangedEvent,
+  IssueTypeRemovedEvent,
+  LockedEvent,
+  MarkedAsDuplicateEvent,
+  MentionedEvent,
+  MilestonedEvent,
+  MovedColumnsInProjectEvent,
+  ParentIssueAddedEvent,
+  ParentIssueRemovedEvent,
+  PinnedEvent,
+  ProjectV2ItemStatusChangedEvent,
+  ReferencedEvent,
+  RemovedFromProjectEvent,
+  RemovedFromProjectV2Event,
+  SubIssueAddedEvent,
+  SubIssueRemovedEvent,
+  SubscribedEvent,
+  TransferredEvent,
+  UnlockedEvent,
+  UnmarkedAsDuplicateEvent,
+  UnpinnedEvent,
+  UnsubscribedEvent,
+  UserBlockedEvent,
+  IssueHistoryItemIssueTimelineItemsOther
+])
+export type IssueHistoryItem = typeof IssueHistoryItem.Type
 
 /** Information about pagination in a connection. */
 export const SearchPageInfoPageInfo = Schema.Struct({
@@ -607,20 +1183,20 @@ export declare namespace IssueViewer {
 }
 
 /** Information about pagination in a connection. */
-export const CommentsPageInfoPageInfo = Schema.Struct({
+export const IssueDetailRepositoryIssueCommentsPageInfoPageInfo = Schema.Struct({
   /** When paginating backwards, are there more items? */
   hasPreviousPage: Schema.Boolean,
   /** When paginating backwards, the cursor to continue. */
   startCursor: Schema.NullOr(Schema.String)
 })
-export interface CommentsPageInfoPageInfo extends Schema.Struct.Type<typeof CommentsPageInfoPageInfo.fields> {}
+export interface IssueDetailRepositoryIssueCommentsPageInfoPageInfo extends Schema.Struct.Type<typeof IssueDetailRepositoryIssueCommentsPageInfoPageInfo.fields> {}
 
 /** The connection type for IssueComment. */
 export const IssueDetailRepositoryIssueCommentsIssueCommentConnection = Schema.Struct({
   /** Identifies the total count of items in the connection. */
   totalCount: Shared.Int,
   /** Information to aid in pagination. */
-  pageInfo: CommentsPageInfoPageInfo,
+  pageInfo: IssueDetailRepositoryIssueCommentsPageInfoPageInfo,
   /** A list of nodes. */
   nodes: Schema.NullOr(Schema.Array(Schema.NullOr(IssueCommentFields)))
 })
@@ -713,7 +1289,7 @@ export const IssueDetail = GraphQL.query("IssueDetail", {
       { name: "IssueFields", body: ["on Issue{number title url state stateReason createdAt updatedAt closedAt author{__typename login avatarUrl...on User{name}}assignees(first:20){nodes{login name avatarUrl}}labels(first:20){nodes{name color}pageInfo{hasNextPage}}milestone{title}}"] },
       { name: "Reactions", body: ["on Reactable{__typename reactionGroups{content viewerHasReacted reactors(first:10){totalCount nodes{__typename...on User{login}...on Bot{login}...on Organization{login}...on Mannequin{login}}}}}"] },
       { name: "IssueCommentFields", body: ["on IssueComment{id author{__typename login avatarUrl}body createdAt lastEditedAt viewerCanUpdate url...Reactions}"] },
-      { name: "IssueTimelineItem", body: ["on IssueTimelineItems{__typename...on ClosedEvent{id createdAt actor{__typename login avatarUrl}}...on ReopenedEvent{id createdAt actor{__typename login avatarUrl}}...on LabeledEvent{id createdAt actor{__typename login avatarUrl}label{name}}...on UnlabeledEvent{id createdAt actor{__typename login avatarUrl}label{name}}...on AssignedEvent{id createdAt actor{__typename login avatarUrl}assignee{__typename...on User{login name}...on Bot{login}}}...on UnassignedEvent{id createdAt actor{__typename login avatarUrl}assignee{__typename...on User{login name}...on Bot{login}}}...on RenamedTitleEvent{id createdAt actor{__typename login avatarUrl}currentTitle}...on CrossReferencedEvent{id createdAt actor{__typename login avatarUrl}source{__typename...on PullRequest{number title url state isDraft repository{nameWithOwner}}...on Issue{number repository{nameWithOwner}}}}}"] }
+      { name: "IssueTimelineItem", body: ["on IssueTimelineItems{__typename...on ClosedEvent{id createdAt actor{__typename login avatarUrl}}...on ReopenedEvent{id createdAt actor{__typename login avatarUrl}}...on LabeledEvent{id createdAt actor{__typename login avatarUrl}label{name}}...on UnlabeledEvent{id createdAt actor{__typename login avatarUrl}label{name}}...on AssignedEvent{id createdAt actor{__typename login avatarUrl}assignee{__typename...on User{login name}...on Bot{login}}}...on UnassignedEvent{id createdAt actor{__typename login avatarUrl}assignee{__typename...on User{login name}...on Bot{login}}}...on RenamedTitleEvent{id createdAt actor{__typename login avatarUrl}currentTitle}...on CrossReferencedEvent{id createdAt url actor{__typename login avatarUrl}source{__typename...on PullRequest{number title url state isDraft repository{nameWithOwner}}...on Issue{number title url repository{nameWithOwner}}}}}"] }
     ]
   },
   variables: {
@@ -733,10 +1309,23 @@ export declare namespace IssueDetail {
   export type Result = typeof IssueDetail.result.Type
 }
 
+/** Information about pagination in a connection. */
+export const IssueCommentsRepositoryIssueCommentsPageInfoPageInfo = Schema.Struct({
+  /** When paginating backwards, are there more items? */
+  hasPreviousPage: Schema.Boolean,
+  /** When paginating forwards, are there more items? */
+  hasNextPage: Schema.Boolean,
+  /** When paginating backwards, the cursor to continue. */
+  startCursor: Schema.NullOr(Schema.String),
+  /** When paginating forwards, the cursor to continue. */
+  endCursor: Schema.NullOr(Schema.String)
+})
+export interface IssueCommentsRepositoryIssueCommentsPageInfoPageInfo extends Schema.Struct.Type<typeof IssueCommentsRepositoryIssueCommentsPageInfoPageInfo.fields> {}
+
 /** The connection type for IssueComment. */
 export const IssueCommentsRepositoryIssueCommentsIssueCommentConnection = Schema.Struct({
   /** Information to aid in pagination. */
-  pageInfo: CommentsPageInfoPageInfo,
+  pageInfo: IssueCommentsRepositoryIssueCommentsPageInfoPageInfo,
   /** A list of nodes. */
   nodes: Schema.NullOr(Schema.Array(Schema.NullOr(IssueCommentFields)))
 })
@@ -763,11 +1352,14 @@ export const IssueComments = GraphQL.query("IssueComments", {
       { name: "owner", body: "String!" },
       { name: "name", body: "String!" },
       { name: "number", body: "Int!" },
-      { name: "cursor", body: "String!" }
+      { name: "first", body: "Int" },
+      { name: "last", body: "Int" },
+      { name: "after", body: "String" },
+      { name: "before", body: "String" }
     ],
     selections: [
       { name: "viewer", body: ["{login}"] },
-      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){issue(number:$", "number", "){comments(last:100 before:$", "cursor", "){pageInfo{hasPreviousPage startCursor}nodes{...IssueCommentFields}}}}"] }
+      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){issue(number:$", "number", "){comments(first:$", "first", " last:$", "last", " after:$", "after", " before:$", "before", "){pageInfo{hasPreviousPage hasNextPage startCursor endCursor}nodes{...IssueCommentFields}}}}"] }
     ],
     fragments: [
       { name: "IssueCommentFields", body: ["on IssueComment{id author{__typename login avatarUrl}body createdAt lastEditedAt viewerCanUpdate url...Reactions}"] },
@@ -778,7 +1370,10 @@ export const IssueComments = GraphQL.query("IssueComments", {
     owner: Schema.String,
     name: Schema.String,
     number: Shared.Int,
-    cursor: Schema.String
+    first: Schema.optional(Schema.NullOr(Shared.Int)),
+    last: Schema.optional(Schema.NullOr(Shared.Int)),
+    after: Schema.optional(Schema.NullOr(Schema.String)),
+    before: Schema.optional(Schema.NullOr(Schema.String))
   },
   result: Schema.Struct({
     /** The currently authenticated user. */
@@ -790,6 +1385,68 @@ export const IssueComments = GraphQL.query("IssueComments", {
 export declare namespace IssueComments {
   export type Variables = typeof IssueComments.variables.Type
   export type Result = typeof IssueComments.result.Type
+}
+
+/** The connection type for IssueTimelineItems. */
+export const IssueHistoryRepositoryIssueTimelineItemsIssueTimelineItemsConnection = Schema.Struct({
+  /** Information to aid in pagination. */
+  pageInfo: IssueCommentsRepositoryIssueCommentsPageInfoPageInfo,
+  /** A list of nodes. */
+  nodes: Schema.NullOr(Schema.Array(Schema.NullOr(IssueHistoryItem)))
+})
+export interface IssueHistoryRepositoryIssueTimelineItemsIssueTimelineItemsConnection extends Schema.Struct.Type<typeof IssueHistoryRepositoryIssueTimelineItemsIssueTimelineItemsConnection.fields> {}
+
+/** An Issue is a place to discuss ideas, enhancements, tasks, and bugs for a project. */
+export const IssueHistoryRepositoryIssueIssue = Schema.Struct({
+  /** A list of events, comments, commits, etc. associated with the issue. */
+  timelineItems: IssueHistoryRepositoryIssueTimelineItemsIssueTimelineItemsConnection
+})
+export interface IssueHistoryRepositoryIssueIssue extends Schema.Struct.Type<typeof IssueHistoryRepositoryIssueIssue.fields> {}
+
+/** A repository contains the content for a project. */
+export const IssueHistoryRepositoryRepository = Schema.Struct({
+  /** Returns a single issue from the current repository by number. */
+  issue: Schema.NullOr(IssueHistoryRepositoryIssueIssue)
+})
+export interface IssueHistoryRepositoryRepository extends Schema.Struct.Type<typeof IssueHistoryRepositoryRepository.fields> {}
+
+/** `query IssueHistory` */
+export const IssueHistory = GraphQL.query("IssueHistory", {
+  document: {
+    variables: [
+      { name: "owner", body: "String!" },
+      { name: "name", body: "String!" },
+      { name: "number", body: "Int!" },
+      { name: "first", body: "Int" },
+      { name: "last", body: "Int" },
+      { name: "after", body: "String" },
+      { name: "before", body: "String" }
+    ],
+    selections: [
+      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){issue(number:$", "number", "){timelineItems(first:$", "first", " last:$", "last", " after:$", "after", " before:$", "before", "){pageInfo{hasPreviousPage hasNextPage startCursor endCursor}nodes{__typename...IssueHistoryItem}}}}"] }
+    ],
+    fragments: [
+      { name: "IssueHistoryItem", body: ["on IssueTimelineItems{__typename...IssueTimelineItem...on AddedToProjectEvent{id createdAt actor{__typename login avatarUrl}}...on AddedToProjectV2Event{id createdAt actor{__typename login avatarUrl}}...on BlockedByAddedEvent{id createdAt actor{__typename login avatarUrl}}...on BlockedByRemovedEvent{id createdAt actor{__typename login avatarUrl}}...on BlockingAddedEvent{id createdAt actor{__typename login avatarUrl}}...on BlockingRemovedEvent{id createdAt actor{__typename login avatarUrl}}...on CommentDeletedEvent{id createdAt actor{__typename login avatarUrl}}...on ConnectedEvent{id createdAt actor{__typename login avatarUrl}}...on ConvertedFromDraftEvent{id createdAt actor{__typename login avatarUrl}}...on ConvertedNoteToIssueEvent{id createdAt actor{__typename login avatarUrl}}...on ConvertedToDiscussionEvent{id createdAt actor{__typename login avatarUrl}}...on DemilestonedEvent{id createdAt actor{__typename login avatarUrl}}...on DisconnectedEvent{id createdAt actor{__typename login avatarUrl}}...on IssueCommentPinnedEvent{id createdAt actor{__typename login avatarUrl}}...on IssueCommentUnpinnedEvent{id createdAt actor{__typename login avatarUrl}}...on IssueFieldAddedEvent{id createdAt actor{__typename login avatarUrl}}...on IssueFieldChangedEvent{id createdAt actor{__typename login avatarUrl}}...on IssueFieldRemovedEvent{id createdAt actor{__typename login avatarUrl}}...on IssueTypeAddedEvent{id createdAt actor{__typename login avatarUrl}}...on IssueTypeChangedEvent{id createdAt actor{__typename login avatarUrl}}...on IssueTypeRemovedEvent{id createdAt actor{__typename login avatarUrl}}...on LockedEvent{id createdAt actor{__typename login avatarUrl}}...on MarkedAsDuplicateEvent{id createdAt actor{__typename login avatarUrl}}...on MentionedEvent{id createdAt actor{__typename login avatarUrl}}...on MilestonedEvent{id createdAt actor{__typename login avatarUrl}}...on MovedColumnsInProjectEvent{id createdAt actor{__typename login avatarUrl}}...on ParentIssueAddedEvent{id createdAt actor{__typename login avatarUrl}}...on ParentIssueRemovedEvent{id createdAt actor{__typename login avatarUrl}}...on PinnedEvent{id createdAt actor{__typename login avatarUrl}}...on ProjectV2ItemStatusChangedEvent{id createdAt actor{__typename login avatarUrl}}...on ReferencedEvent{id createdAt actor{__typename login avatarUrl}}...on RemovedFromProjectEvent{id createdAt actor{__typename login avatarUrl}}...on RemovedFromProjectV2Event{id createdAt actor{__typename login avatarUrl}}...on SubIssueAddedEvent{id createdAt actor{__typename login avatarUrl}}...on SubIssueRemovedEvent{id createdAt actor{__typename login avatarUrl}}...on SubscribedEvent{id createdAt actor{__typename login avatarUrl}}...on TransferredEvent{id createdAt actor{__typename login avatarUrl}}...on UnlockedEvent{id createdAt actor{__typename login avatarUrl}}...on UnmarkedAsDuplicateEvent{id createdAt actor{__typename login avatarUrl}}...on UnpinnedEvent{id createdAt actor{__typename login avatarUrl}}...on UnsubscribedEvent{id createdAt actor{__typename login avatarUrl}}...on UserBlockedEvent{id createdAt actor{__typename login avatarUrl}}}"] },
+      { name: "IssueTimelineItem", body: ["on IssueTimelineItems{__typename...on ClosedEvent{id createdAt actor{__typename login avatarUrl}}...on ReopenedEvent{id createdAt actor{__typename login avatarUrl}}...on LabeledEvent{id createdAt actor{__typename login avatarUrl}label{name}}...on UnlabeledEvent{id createdAt actor{__typename login avatarUrl}label{name}}...on AssignedEvent{id createdAt actor{__typename login avatarUrl}assignee{__typename...on User{login name}...on Bot{login}}}...on UnassignedEvent{id createdAt actor{__typename login avatarUrl}assignee{__typename...on User{login name}...on Bot{login}}}...on RenamedTitleEvent{id createdAt actor{__typename login avatarUrl}currentTitle}...on CrossReferencedEvent{id createdAt url actor{__typename login avatarUrl}source{__typename...on PullRequest{number title url state isDraft repository{nameWithOwner}}...on Issue{number title url repository{nameWithOwner}}}}}"] }
+    ]
+  },
+  variables: {
+    owner: Schema.String,
+    name: Schema.String,
+    number: Shared.Int,
+    first: Schema.optional(Schema.NullOr(Shared.Int)),
+    last: Schema.optional(Schema.NullOr(Shared.Int)),
+    after: Schema.optional(Schema.NullOr(Schema.String)),
+    before: Schema.optional(Schema.NullOr(Schema.String))
+  },
+  result: Schema.Struct({
+    /** Lookup a given repository by the owner and repository name. */
+    repository: Schema.NullOr(IssueHistoryRepositoryRepository)
+  })
+})
+export declare namespace IssueHistory {
+  export type Variables = typeof IssueHistory.variables.Type
+  export type Result = typeof IssueHistory.result.Type
 }
 
 /** An Issue is a place to discuss ideas, enhancements, tasks, and bugs for a project. */
@@ -1284,4 +1941,4 @@ export declare namespace IssueRelatedPullRequests {
 }
 
 /** Every operation in issueTracker.graphql. */
-export const IssueTrackerGraphQLGroup = GraphQLGroup.make(IssueSearch, RepositoryIssues, IssueViewer, IssueDetail, IssueComments, IssueViewerPermissions, IssueNodeId, IssueCommentScope, IssueCandidates, IssueTemplates, IssueClosingPullRequests, IssueRelatedPullRequests)
+export const IssueTrackerGraphQLGroup = GraphQLGroup.make(IssueSearch, RepositoryIssues, IssueViewer, IssueDetail, IssueComments, IssueHistory, IssueViewerPermissions, IssueNodeId, IssueCommentScope, IssueCandidates, IssueTemplates, IssueClosingPullRequests, IssueRelatedPullRequests)

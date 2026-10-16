@@ -8,6 +8,8 @@ import { WS_METHODS, WsIssuesRpcGroup } from "./rpc.ts";
 import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   IssueActor,
+  IssueEvent,
+  IssueHistoryInput,
   IssueInputField,
   IssueCandidates,
   IssueFieldValues,
@@ -50,6 +52,14 @@ import {
   StandaloneIssueTrackerDescriptor,
 } from "./issue.ts";
 
+const decodeHistoryRpc = Schema.decodeUnknownSync(
+  WsIssuesRpcGroup.requests.get(WS_METHODS.issuesHistory)!.payloadSchema,
+);
+const decodeCommentsRpc = Schema.decodeUnknownSync(
+  WsIssuesRpcGroup.requests.get(WS_METHODS.issuesComments)!.payloadSchema,
+);
+const decodeHistoryInput = Schema.decodeUnknownSync(IssueHistoryInput);
+const decodeEvent = Schema.decodeUnknownSync(IssueEvent);
 const decodeDescriptor = Schema.decodeEffect(StandaloneIssueTrackerDescriptor);
 const decodeComments = Schema.decodeUnknownSync(IssueCommentsPageInput);
 const decodeThreadLink = Schema.decodeUnknownSync(ThreadIssueLink);
@@ -838,4 +848,61 @@ it("keeps Jira instance paths distinct in issue, host and cursor keys", () => {
   expect(issueListCursorKey(ref)).not.toBe(issueListCursorKey(other));
   expect(threadIssueKeyOf(ref)).not.toBe(threadIssueKeyOf(other));
   expect(threadIssueKeyOf(ref)).toBe(threadIssueKeyOf({ ...ref, host: "jira.example:8443/Jira" }));
+});
+
+it("accepts ordered first and continued activity pages with native reference links", () => {
+  const ref = { projectId: "web", tracker: "github", scope: "org/repo", key: "7" };
+  expect(decodeComments({ ...ref, order: "asc" })).toMatchObject({ order: "asc" });
+  expect(decodeHistoryInput({ ...ref, order: "desc" })).toMatchObject({
+    order: "desc",
+  });
+  const selected = {
+    ...ref,
+    tracker: "linear",
+    scope: "acme/ENG",
+    key: "ENG-7",
+    projectId: { value: "web", connectionId: "ExactB" },
+    order: "asc",
+  };
+  expect(decodeHistoryRpc(selected)).toMatchObject({ order: "asc", connectionId: "ExactB" });
+  expect(decodeCommentsRpc(selected)).toMatchObject({ order: "asc", connectionId: "ExactB" });
+  expect(() => decodeComments({ ...ref, order: "sideways" })).toThrow();
+  const event = {
+    id: "native",
+    kind: "referenced",
+    actor: null,
+    createdAt: "2026-10-16T00:00:00.000Z",
+    detail: "Source",
+    url: "https://github.com/org/repo/pull/8#issuecomment-42",
+    reference: {
+      url: "https://github.com/org/repo/pull/8",
+      title: "Source",
+      identifier: "org/repo#8",
+    },
+  };
+  expect(decodeEvent(event)).toEqual(event);
+});
+
+it("preserves native activity order limits without changing legacy capabilities", () => {
+  const decode = Schema.decodeUnknownSync(IssueCapabilities);
+  const capabilities = {
+    create: false,
+    edit: false,
+    comment: true,
+    labels: false,
+    assignees: false,
+    reactions: false,
+    templates: false,
+    linkedPullRequests: false,
+    events: true,
+    search: false,
+    involvements: ["all"],
+    states: [],
+    closeReasons: [],
+  };
+  expect(decode(capabilities).commentOrders).toBeUndefined();
+  expect(decode({ ...capabilities, commentOrders: ["asc"], historyOrders: ["asc"] })).toMatchObject(
+    { commentOrders: ["asc"], historyOrders: ["asc"] },
+  );
+  expect(() => decode({ ...capabilities, commentOrders: ["sideways"] })).toThrow();
 });

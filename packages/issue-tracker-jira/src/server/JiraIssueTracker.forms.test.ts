@@ -1194,13 +1194,13 @@ it.effect(
       const f = fixture(
         (path) =>
           path.startsWith("/issue/ENG-1/comment?")
-            ? { startAt: 50, total: 51, comments: [{ ...comment, body: wiki }] }
+            ? { startAt: 0, total: 1, comments: [{ ...comment, body: wiki }] }
             : path.includes("/mypermissions?")
               ? { permissions: { EDIT_OWN_COMMENTS: { havePermission: true } } }
               : undefined,
         "data-center",
       );
-      const page = yield* (yield* f.api).getComments({ ...target, viewer: "me", cursor: "50" });
+      const page = yield* (yield* f.api).getComments({ ...target, viewer: "me" });
       expect(page.comments[0]).toMatchObject({
         body: wiki,
         richBody: { format: "jira-wiki", document: wiki },

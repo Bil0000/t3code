@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { IssueDetail, VcsProcessExitError } from "@t3tools/contracts";
@@ -162,7 +163,7 @@ it.effect("reads a group epic and real notes without a project REST fallback", (
       assignees: [{ login: "theo" }],
       labels: [{ name: "roadmap", color: "#abcdef" }],
       comments: [{ body: "Native epic comment", canEdit: false, editedAt: "2026-10-02T00:30:00Z" }],
-      commentsCursor: "older-notes",
+      commentsCursor: expect.any(String),
       events: [
         { id: "gid://gitlab/LabelNote/label-sha", kind: "labeled", detail: "added ~101 label" },
         { id: "gid://gitlab/StateNote/state-sha", kind: "closed" },
@@ -197,24 +198,36 @@ it.effect("pages real group epic comments and system history with one native req
           ? {
               fullPath: "acme",
               iid: "7",
-              before: "older-notes",
+              before: calls === 1 ? null : "older-notes",
               includeHistory: false,
               first: 100,
               after: null,
             }
-          : { fullPath: "acme", iid: "7", first: 3, after: "older-activity" },
+          : { fullPath: "acme", iid: "7", first: 3, after: calls === 3 ? null : "older-activity" },
       );
       const epic = detail();
-      epic.widgets[0]!.notes!.pageInfo = { hasPreviousPage: false, startCursor: "first-note" };
-      epic.widgets[0]!.discussions!.pageInfo = { hasNextPage: false, endCursor: null };
+      if (calls === 2) {
+        epic.widgets[0]!.notes!.nodes[0]!.id = "gid://gitlab/Note/10";
+        epic.widgets[0]!.notes!.nodes[1]!.id = "gid://gitlab/Note/9";
+        epic.widgets[0]!.notes!.pageInfo = { hasPreviousPage: false, startCursor: "first-note" };
+      }
+      if (calls === 3)
+        for (const discussion of epic.widgets[0]!.discussions!.nodes)
+          discussion.notes.nodes[0]!.id += "-first";
+      if (calls === 4)
+        epic.widgets[0]!.discussions!.pageInfo = { hasNextPage: false, endCursor: null };
       return { data: { currentUser: { username: "theo" }, namespace: { workItem: epic } } };
     });
-    const comments = yield* api.getComments({ ...target, cursor: "older-notes" });
+    const firstComments = yield* api.getComments(target);
+    expect(calls).toBe(1);
+    const comments = yield* api.getComments({ ...target, cursor: firstComments.nextCursor! });
     expect(comments.comments).toMatchObject([{ body: "Native epic comment" }]);
     expect(comments.nextCursor).toBeNull();
+    const firstHistory = yield* api.getHistory!({ ...target, limit: 3 });
+    expect(calls).toBe(3);
     const history = yield* api.getHistory!({
       ...target,
-      cursor: "activity:older-activity",
+      cursor: firstHistory.nextCursor!,
       limit: 3,
     });
     expect(history.items).toMatchObject([
@@ -223,7 +236,7 @@ it.effect("pages real group epic comments and system history with one native req
       { id: "gid://gitlab/MilestoneNote/milestone-sha", kind: "updated" },
     ]);
     expect(history.nextCursor).toBeNull();
-    expect(calls).toBe(2);
+    expect(calls).toBe(4);
   }),
 );
 
@@ -352,9 +365,7 @@ it.effect.each(["authentication", "rate-limited", "command-failed"] as const)(
             : "failed";
       expect((yield* Effect.flip(api.getIssue(target))).reason).toBe(reason);
       expect((yield* Effect.flip(api.getHierarchy!(target))).reason).toBe(reason);
-      expect((yield* Effect.flip(api.getComments({ ...target, cursor: "older" }))).reason).toBe(
-        reason,
-      );
+      expect((yield* Effect.flip(api.getComments(target))).reason).toBe(reason);
       expect((yield* Effect.flip(api.getHistory!(target))).reason).toBe(reason);
       expect(calls).toBe(4);
     }),
@@ -378,12 +389,16 @@ it.effect.each([
         fullPath: "acme",
         iid: "7",
         first: 3,
-        after: "older-activity",
+        after: calls === 1 ? null : "older-activity",
       });
       expect(body.query).not.toContain("notes(last:");
       expect(body.query).toContain("notes(first: 1)");
       const selected = detail();
       const activity = selected.widgets[0]!.discussions!;
+      if (calls === 1) {
+        for (const discussion of activity.nodes) discussion.notes.nodes[0]!.id += "-initial";
+        return { data: { namespace: { workItem: selected } } };
+      }
       activity.pageInfo.endCursor = "next-older-activity";
       if (failure === "missing continuation") activity.pageInfo.endCursor = null;
       if (failure === "repeated continuation") activity.pageInfo.endCursor = "older-activity";
@@ -396,12 +411,12 @@ it.effect.each([
       if (failure === "duplicate activity") activity.nodes[1] = activity.nodes[0]!;
       return { data: { namespace: { workItem: selected } } };
     });
+    const initial = yield* api.getHistory!({ ...target, limit: 3 });
     expect(
-      (yield* Effect.flip(
-        api.getHistory!({ ...target, cursor: "activity:older-activity", limit: 3 }),
-      )).reason,
+      (yield* Effect.flip(api.getHistory!({ ...target, cursor: initial.nextCursor!, limit: 3 })))
+        .reason,
     ).toBe("failed");
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
   }),
 );
 
@@ -418,10 +433,10 @@ it.effect.each([false, true])(
         return { data: { currentUser: { username: "theo" }, namespace: { workItem: selected } } };
       });
       const issue = yield* api.getIssue(target);
-      expect(issue.commentsCursor).toBe(moreHistory ? null : "older-notes");
+      expect(issue.commentsCursor).toEqual(moreHistory ? null : expect.any(String));
       expect(issue.historyTruncated).toBe(moreHistory);
       const history = yield* api.getHistory!(target);
-      expect(history.nextCursor).toBe(moreHistory ? "activity:older-activity" : null);
+      expect(history.nextCursor).toEqual(moreHistory ? expect.any(String) : null);
       expect(calls).toBe(2);
     }),
 );
@@ -433,7 +448,7 @@ it.effect("keeps comment rows beyond a 200-reply discussion limit", () =>
       expect(body.query).toContain("notes(last: 100, before: $before)");
       expect(body.variables).toMatchObject({
         includeHistory: false,
-        before: calls === 0 ? "page-1" : `page-${calls + 1}`,
+        before: calls === 0 ? null : `page-${calls + 1}`,
       });
       const selected = detail();
       const page = selected.widgets[0]!.notes!;
@@ -446,10 +461,15 @@ it.effect("keeps comment rows beyond a 200-reply discussion limit", () =>
       return { data: { currentUser: { username: "theo" }, namespace: { workItem: selected } } };
     });
     const ids: string[] = [];
+    let cursor: string | undefined;
     for (let pageNumber = 1; pageNumber <= 3; pageNumber++) {
-      const page = yield* api.getComments({ ...target, cursor: `page-${pageNumber}` });
+      const page = yield* api.getComments({
+        ...target,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
       ids.push(...page.comments.map((comment) => comment.id));
-      expect(page.nextCursor).toBe(pageNumber < 3 ? `page-${pageNumber + 1}` : null);
+      expect(page.nextCursor).toEqual(pageNumber < 3 ? expect.any(String) : null);
+      cursor = page.nextCursor ?? undefined;
     }
     expect(new Set(ids).size).toBe(201);
     expect(calls).toBe(3);
@@ -547,6 +567,8 @@ it.effect.each([
       calls++;
       const selected = detail();
       const page = selected.widgets[0]!.notes!;
+      if (calls === 1)
+        return { data: { currentUser: { username: "theo" }, namespace: { workItem: selected } } };
       page.pageInfo.startCursor = "next-older-notes";
       if (failure === "missing continuation") page.pageInfo.startCursor = null;
       if (failure === "repeated continuation") page.pageInfo.startCursor = "older-notes";
@@ -555,7 +577,115 @@ it.effect.each([
       if (failure === "missing notes widget") selected.widgets = [];
       return { data: { currentUser: { username: "theo" }, namespace: { workItem: selected } } };
     });
-    yield* Effect.flip(api.getComments({ ...target, cursor: "older-notes" }));
-    expect(calls).toBe(1);
+    const initial = yield* api.getComments(target);
+    yield* Effect.flip(api.getComments({ ...target, cursor: initial.nextCursor! }));
+    expect(calls).toBe(2);
+  }),
+);
+
+it.effect.each([
+  { stream: "comments", order: "asc" },
+  { stream: "comments", order: "desc" },
+  { stream: "history", order: "asc" },
+  { stream: "history", order: "desc" },
+] as const)("pages epic $stream globally in $order order", ({ stream, order }) =>
+  Effect.gen(function* () {
+    const input = { ...target, connectionId: "account-a", order };
+    const count = stream === "comments" ? 205 : 83;
+    const rows = Array.from({ length: count }, (_, index) => ({
+      id: `gid://gitlab/Note/${index + 1}`,
+      body: stream === "comments" ? `Reply ${index + 1}` : "changed the description",
+      system: stream === "history",
+      createdAt: DateTime.formatIso(
+        DateTime.add(DateTime.makeUnsafe("2026-10-01T00:00:00Z"), { minutes: index }),
+      ),
+      lastEditedAt: null,
+      url: `https://${target.host}/groups/acme/-/epics/7#note_${index + 1}`,
+      author: null,
+    }));
+    let calls = 0;
+    const api = yield* tracker((body) => {
+      calls++;
+      const variables = body.variables as {
+        before?: string | null;
+        after?: string | null;
+        first: number;
+      };
+      const selected = detail();
+      if (stream === "comments") {
+        const backwards = String(body.query).includes("notes(last:");
+        expect(backwards).toBe(order === "desc");
+        const edge = variables.before == null ? (backwards ? count : 0) : Number(variables.before);
+        const start = backwards ? Math.max(0, edge - 100) : edge;
+        const end = backwards ? edge : Math.min(count, start + 100);
+        Object.assign(selected.widgets[0]!.notes!, { nodes: rows.slice(start, end) });
+        selected.widgets[0]!.notes!.pageInfo = {
+          hasPreviousPage: backwards ? start > 0 : end < count,
+          startCursor: String(backwards ? start : end),
+        };
+      } else {
+        expect(body.query).toContain(order === "asc" ? "sort: CREATED_ASC" : "sort: CREATED_DESC");
+        const start = variables.after == null ? 0 : Number(variables.after);
+        const end = Math.min(count, start + variables.first);
+        Object.assign(selected.widgets[0]!.discussions!, {
+          nodes: (order === "asc" ? rows : rows.toReversed())
+            .slice(start, end)
+            .map((note) => ({ notes: { nodes: [note], pageInfo: { hasNextPage: false } } })),
+        });
+        selected.widgets[0]!.discussions!.pageInfo = {
+          hasNextPage: end < count,
+          endCursor: String(end),
+        };
+      }
+      return { data: { currentUser: { username: "theo" }, namespace: { workItem: selected } } };
+    });
+    let cursor: string | undefined;
+    const ids: string[] = [];
+    for (let page = 0; page < 3; page++) {
+      const result =
+        stream === "comments"
+          ? yield* api.getComments({ ...input, ...(cursor === undefined ? {} : { cursor }) })
+          : yield* api.getHistory!({
+              ...input,
+              limit: 31,
+              ...(cursor === undefined ? {} : { cursor }),
+            });
+      const items = "comments" in result ? result.comments : result.items;
+      ids.push(...items.map(({ id }) => id));
+      expect(
+        items.every((item) =>
+          item.url?.startsWith(`https://${target.host}/groups/acme/-/epics/7#note_`),
+        ),
+      ).toBe(true);
+      if (page === 0) {
+        if (stream === "comments")
+          yield* Effect.flip(api.getHistory!({ ...input, cursor: result.nextCursor! }));
+        else yield* Effect.flip(api.getComments({ ...input, cursor: result.nextCursor! }));
+        for (const changed of [
+          { connectionId: "other" },
+          { cwd: "/other" },
+          { host: "other.test" },
+          { scope: "group:other" },
+          { key: "8" },
+          { order: order === "asc" ? ("desc" as const) : ("asc" as const) },
+        ]) {
+          if (stream === "comments")
+            yield* Effect.flip(
+              api.getComments({ ...input, ...changed, cursor: result.nextCursor! }),
+            );
+          else
+            yield* Effect.flip(
+              api.getHistory!({ ...input, ...changed, cursor: result.nextCursor! }),
+            );
+        }
+        expect(calls).toBe(1);
+      }
+      expect(result.nextCursor).toEqual(page < 2 ? expect.any(String) : null);
+      cursor = result.nextCursor ?? undefined;
+    }
+    const expected = rows.map(({ id }) => id);
+    expect(ids).toEqual(order === "asc" ? expected : expected.toReversed());
+    expect(new Set(ids).size).toBe(count);
+    expect(calls).toBe(3);
   }),
 );

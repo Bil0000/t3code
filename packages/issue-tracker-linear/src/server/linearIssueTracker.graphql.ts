@@ -158,17 +158,17 @@ export const T3ProbeCredentialTeamsNodesTeam = Schema.Struct({
 })
 export interface T3ProbeCredentialTeamsNodesTeam extends Schema.Struct.Type<typeof T3ProbeCredentialTeamsNodesTeam.fields> {}
 
-export const PageInfo = Schema.Struct({
+export const TeamsPageInfoPageInfo = Schema.Struct({
   /** Indicates if there are more results when paginating forward. */
   hasNextPage: Schema.Boolean,
   /** Cursor representing the last result in the paginated results. */
   endCursor: Schema.NullOr(Schema.String)
 })
-export interface PageInfo extends Schema.Struct.Type<typeof PageInfo.fields> {}
+export interface TeamsPageInfoPageInfo extends Schema.Struct.Type<typeof TeamsPageInfoPageInfo.fields> {}
 
 export const T3ProbeCredentialTeamsTeamConnection = Schema.Struct({
   nodes: Schema.Array(T3ProbeCredentialTeamsNodesTeam),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
 export interface T3ProbeCredentialTeamsTeamConnection extends Schema.Struct.Type<typeof T3ProbeCredentialTeamsTeamConnection.fields> {}
 
@@ -228,7 +228,7 @@ export declare namespace T3Scopes {
 
 export const WorkflowStateConnection = Schema.Struct({
   nodes: Schema.Array(WorkflowState),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
 export interface WorkflowStateConnection extends Schema.Struct.Type<typeof WorkflowStateConnection.fields> {}
 
@@ -254,7 +254,7 @@ export interface IssueLabelsNodesIssueLabel extends Schema.Struct.Type<typeof Is
 
 export const IssueLabelsIssueLabelConnection = Schema.Struct({
   nodes: Schema.Array(IssueLabelsNodesIssueLabel),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
 export interface IssueLabelsIssueLabelConnection extends Schema.Struct.Type<typeof IssueLabelsIssueLabelConnection.fields> {}
 
@@ -288,11 +288,11 @@ export const NodesComment = Schema.Struct({
 })
 export interface NodesComment extends Schema.Struct.Type<typeof NodesComment.fields> {}
 
-export const CommentConnection = Schema.Struct({
+export const T3IssueIssueCommentsCommentConnection = Schema.Struct({
   nodes: Schema.Array(NodesComment),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
-export interface CommentConnection extends Schema.Struct.Type<typeof CommentConnection.fields> {}
+export interface T3IssueIssueCommentsCommentConnection extends Schema.Struct.Type<typeof T3IssueIssueCommentsCommentConnection.fields> {}
 
 /** An attachment linking external content to an issue. Attachments represent connections to external resources such as GitHub pull requests, Slack messages, Zendesk tickets, Figma files, Sentry issues, Intercom conversations, and plain URLs. Each attachment has a title and subtitle displayed in the Linear UI, a URL serving as both the link destination and unique identifier per issue, and optional metadata specific to the source integration. */
 export const Attachment = Schema.Struct({
@@ -309,7 +309,7 @@ export interface Attachment extends Schema.Struct.Type<typeof Attachment.fields>
 
 export const AttachmentConnection = Schema.Struct({
   nodes: Schema.Array(Attachment),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
 export interface AttachmentConnection extends Schema.Struct.Type<typeof AttachmentConnection.fields> {}
 
@@ -340,11 +340,11 @@ export const IssueHistory = Schema.Struct({
 })
 export interface IssueHistory extends Schema.Struct.Type<typeof IssueHistory.fields> {}
 
-export const IssueHistoryConnection = Schema.Struct({
+export const T3IssueIssueHistoryIssueHistoryConnection = Schema.Struct({
   nodes: Schema.Array(IssueHistory),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
-export interface IssueHistoryConnection extends Schema.Struct.Type<typeof IssueHistoryConnection.fields> {}
+export interface T3IssueIssueHistoryIssueHistoryConnection extends Schema.Struct.Type<typeof T3IssueIssueHistoryIssueHistoryConnection.fields> {}
 
 /** An issue is the core work item in Linear. Issues belong to a team, have a workflow status, can be assigned to users, carry a priority level, and can be organized into projects and cycles. Issues support sub-issues (parent-child hierarchy up to 10 levels deep), labels, due dates, estimates, and SLA tracking. They can also be linked to other issues via relations, attached to releases, and tracked through their full history of changes. */
 export const T3IssueIssueIssue = Schema.Struct({
@@ -384,13 +384,13 @@ export const T3IssueIssueIssue = Schema.Struct({
   /** Labels associated with this issue. */
   labels: IssueLabelsIssueLabelConnection,
   /** Comments associated with the issue, including inline comments on the issue's description. */
-  comments: CommentConnection,
+  comments: T3IssueIssueCommentsCommentConnection,
   /** Reactions associated with the issue. */
   reactions: Schema.Array(Reaction),
   /** Attachments associated with the issue. */
   attachments: AttachmentConnection,
   /** History entries associated with the issue. */
-  history: IssueHistoryConnection
+  history: T3IssueIssueHistoryIssueHistoryConnection
 })
 export interface T3IssueIssueIssue extends Schema.Struct.Type<typeof T3IssueIssueIssue.fields> {}
 
@@ -574,6 +574,24 @@ export declare namespace T3Scope {
   export type Result = typeof T3Scope.result.Type
 }
 
+export const CommentsPageInfoPageInfo = Schema.Struct({
+  /** Indicates if there are more results when paginating forward. */
+  hasNextPage: Schema.Boolean,
+  /** Cursor representing the last result in the paginated results. */
+  endCursor: Schema.NullOr(Schema.String),
+  /** Indicates if there are more results when paginating backward. */
+  hasPreviousPage: Schema.optionalKey(Schema.Boolean),
+  /** Cursor representing the first result in the paginated results. */
+  startCursor: Schema.optionalKey(Schema.NullOr(Schema.String))
+})
+export interface CommentsPageInfoPageInfo extends Schema.Struct.Type<typeof CommentsPageInfoPageInfo.fields> {}
+
+export const T3CommentsIssueCommentsCommentConnection = Schema.Struct({
+  nodes: Schema.Array(NodesComment),
+  pageInfo: CommentsPageInfoPageInfo
+})
+export interface T3CommentsIssueCommentsCommentConnection extends Schema.Struct.Type<typeof T3CommentsIssueCommentsCommentConnection.fields> {}
+
 /** An issue is the core work item in Linear. Issues belong to a team, have a workflow status, can be assigned to users, carry a priority level, and can be organized into projects and cycles. Issues support sub-issues (parent-child hierarchy up to 10 levels deep), labels, due dates, estimates, and SLA tracking. They can also be linked to other issues via relations, attached to releases, and tracked through their full history of changes. */
 export const T3CommentsIssueIssue = Schema.Struct({
   /** The unique identifier of the entity. */
@@ -585,7 +603,7 @@ export const T3CommentsIssueIssue = Schema.Struct({
   /** The team that the issue belongs to. Every issue must belong to exactly one team, which determines the available workflow states, labels, and other team-specific configuration. */
   team: T3IssueReferenceIssueTeamTeam,
   /** Comments associated with the issue, including inline comments on the issue's description. */
-  comments: CommentConnection
+  comments: T3CommentsIssueCommentsCommentConnection
 })
 export interface T3CommentsIssueIssue extends Schema.Struct.Type<typeof T3CommentsIssueIssue.fields> {}
 
@@ -594,18 +612,24 @@ export const T3Comments = GraphQL.query("T3Comments", {
   document: {
     variables: [
       { name: "id", body: "String!" },
-      { name: "first", body: "Int!" },
-      { name: "after", body: "String" }
+      { name: "first", body: "Int" },
+      { name: "last", body: "Int" },
+      { name: "after", body: "String" },
+      { name: "before", body: "String" },
+      { name: "backward", body: "Boolean!" }
     ],
     selections: [
-      { name: "issue", body: ["(id:$", "id", "){id identifier url team{key}comments(first:$", "first", " after:$", "after", " orderBy:createdAt){nodes{id body createdAt editedAt url user{id name displayName email avatarUrl}reactions{id emoji user{id name displayName email avatarUrl}}}pageInfo{hasNextPage endCursor}}}"] }
+      { name: "issue", body: ["(id:$", "id", "){id identifier url team{key}comments(first:$", "first", " last:$", "last", " after:$", "after", " before:$", "before", " orderBy:createdAt){nodes{id body createdAt editedAt url user{id name displayName email avatarUrl}reactions{id emoji user{id name displayName email avatarUrl}}}pageInfo{hasNextPage endCursor hasPreviousPage@include(if:$", "backward", ")startCursor@include(if:$", "backward", ")}}}"] }
     ],
     fragments: []
   },
   variables: {
     id: Schema.String,
-    first: Shared.Int,
-    after: Schema.optional(Schema.NullOr(Schema.String))
+    first: Schema.optional(Schema.NullOr(Shared.Int)),
+    last: Schema.optional(Schema.NullOr(Shared.Int)),
+    after: Schema.optional(Schema.NullOr(Schema.String)),
+    before: Schema.optional(Schema.NullOr(Schema.String)),
+    backward: Schema.Boolean
   },
   result: Schema.Struct({
     /** One specific issue, looked up by its unique identifier. */
@@ -638,7 +662,7 @@ export interface Template extends Schema.Struct.Type<typeof Template.fields> {}
 
 export const TemplateConnection = Schema.Struct({
   nodes: Schema.Array(Template),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
 export interface TemplateConnection extends Schema.Struct.Type<typeof TemplateConnection.fields> {}
 
@@ -672,7 +696,7 @@ export interface AncestorsLabelsNodesIssueLabel extends Schema.Struct.Type<typeo
 
 export const AncestorsLabelsIssueLabelConnection = Schema.Struct({
   nodes: Schema.Array(AncestorsLabelsNodesIssueLabel),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
 export interface AncestorsLabelsIssueLabelConnection extends Schema.Struct.Type<typeof AncestorsLabelsIssueLabelConnection.fields> {}
 
@@ -720,7 +744,7 @@ export interface NodesUser extends Schema.Struct.Type<typeof NodesUser.fields> {
 
 export const UserConnection = Schema.Struct({
   nodes: Schema.Array(NodesUser),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
 export interface UserConnection extends Schema.Struct.Type<typeof UserConnection.fields> {}
 
@@ -1028,7 +1052,7 @@ export interface ParentIssue extends Schema.Struct.Type<typeof ParentIssue.field
 
 export const IssueConnection = Schema.Struct({
   nodes: Schema.Array(ParentIssue),
-  pageInfo: PageInfo
+  pageInfo: TeamsPageInfoPageInfo
 })
 export interface IssueConnection extends Schema.Struct.Type<typeof IssueConnection.fields> {}
 
@@ -1077,6 +1101,12 @@ export declare namespace T3Hierarchy {
   export type Result = typeof T3Hierarchy.result.Type
 }
 
+export const T3HistoryIssueHistoryIssueHistoryConnection = Schema.Struct({
+  nodes: Schema.Array(IssueHistory),
+  pageInfo: CommentsPageInfoPageInfo
+})
+export interface T3HistoryIssueHistoryIssueHistoryConnection extends Schema.Struct.Type<typeof T3HistoryIssueHistoryIssueHistoryConnection.fields> {}
+
 /** An issue is the core work item in Linear. Issues belong to a team, have a workflow status, can be assigned to users, carry a priority level, and can be organized into projects and cycles. Issues support sub-issues (parent-child hierarchy up to 10 levels deep), labels, due dates, estimates, and SLA tracking. They can also be linked to other issues via relations, attached to releases, and tracked through their full history of changes. */
 export const T3HistoryIssueIssue = Schema.Struct({
   /** The unique identifier of the entity. */
@@ -1088,7 +1118,7 @@ export const T3HistoryIssueIssue = Schema.Struct({
   /** The team that the issue belongs to. Every issue must belong to exactly one team, which determines the available workflow states, labels, and other team-specific configuration. */
   team: T3IssueReferenceIssueTeamTeam,
   /** History entries associated with the issue. */
-  history: IssueHistoryConnection
+  history: T3HistoryIssueHistoryIssueHistoryConnection
 })
 export interface T3HistoryIssueIssue extends Schema.Struct.Type<typeof T3HistoryIssueIssue.fields> {}
 
@@ -1097,18 +1127,24 @@ export const T3History = GraphQL.query("T3History", {
   document: {
     variables: [
       { name: "id", body: "String!" },
-      { name: "first", body: "Int!" },
-      { name: "after", body: "String" }
+      { name: "first", body: "Int" },
+      { name: "last", body: "Int" },
+      { name: "after", body: "String" },
+      { name: "before", body: "String" },
+      { name: "backward", body: "Boolean!" }
     ],
     selections: [
-      { name: "issue", body: ["(id:$", "id", "){id identifier url team{key}history(first:$", "first", " after:$", "after", " orderBy:createdAt){nodes{id createdAt actor{id name displayName email avatarUrl}fromState{id name type position}toState{id name type position}fromAssignee{id name displayName email avatarUrl}toAssignee{id name displayName email avatarUrl}addedLabels{id name color}removedLabels{id name color}fromTitle toTitle}pageInfo{hasNextPage endCursor}}}"] }
+      { name: "issue", body: ["(id:$", "id", "){id identifier url team{key}history(first:$", "first", " last:$", "last", " after:$", "after", " before:$", "before", " orderBy:createdAt){nodes{id createdAt actor{id name displayName email avatarUrl}fromState{id name type position}toState{id name type position}fromAssignee{id name displayName email avatarUrl}toAssignee{id name displayName email avatarUrl}addedLabels{id name color}removedLabels{id name color}fromTitle toTitle}pageInfo{hasNextPage endCursor hasPreviousPage@include(if:$", "backward", ")startCursor@include(if:$", "backward", ")}}}"] }
     ],
     fragments: []
   },
   variables: {
     id: Schema.String,
-    first: Shared.Int,
-    after: Schema.optional(Schema.NullOr(Schema.String))
+    first: Schema.optional(Schema.NullOr(Shared.Int)),
+    last: Schema.optional(Schema.NullOr(Shared.Int)),
+    after: Schema.optional(Schema.NullOr(Schema.String)),
+    before: Schema.optional(Schema.NullOr(Schema.String)),
+    backward: Schema.Boolean
   },
   result: Schema.Struct({
     /** One specific issue, looked up by its unique identifier. */

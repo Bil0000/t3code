@@ -30,6 +30,7 @@ import {
   IssueLinkedPullRequest,
   IssueDetail,
   IssueListState,
+  IssueListOrder,
   IssueOperationError,
   IssueState,
   IssueSummary,
@@ -290,7 +291,6 @@ export const ReadIssueResult = Schema.Struct({
       reactionsTruncated: IssueComment.fields.reactionsTruncated,
     }),
   ),
-  /** Older comments exist beyond the page returned. */
   commentsTruncated: Schema.Boolean,
   commentsCursor: IssueDetail.fields.commentsCursor,
   linkedPullRequests: Schema.Array(
@@ -385,7 +385,7 @@ const ListIssuesTool = Tool.make("list_issues", {
 
 const ReadIssueTool = Tool.make("read_issue", {
   description:
-    "Read an issue: its body, state, labels, assignees, the newest page of comments, and the pull requests the tracker links to it. If bodyEditable is false, edit its rich description in the native tracker. Use states when present, otherwise capabilities.states, for state changes. Actor authorDetails/assigneeDetails and comment authorDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs, including archived labels; labelsTruncated means the current label set is incomplete. Pass commentsCursor to read_issue_comments for older comments. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
+    "Read an issue: its body, state, labels, assignees, a bounded page of comments, and the pull requests the tracker links to it. Comments start newest first unless capabilities.commentOrders permits only asc. If bodyEditable is false, edit its rich description in the native tracker. Use states when present, otherwise capabilities.states, for state changes. Actor authorDetails/assigneeDetails and comment authorDetails preserve native IDs when supplied by the tracker. Current labelDetails preserves native IDs, including archived labels; labelsTruncated means the current label set is incomplete. Pass commentsCursor to read_issue_comments with the same order. Pass the URL, or key with projectId and tracker. Omit tracker only when the project has one issue source. A URL from a repository no project here is a checkout of is read through any project on that host, read-only.",
   parameters: IssueTargetInput.pipe(issueAccountRequest),
   success: ReadIssueResult,
   failure: IssueToolError,
@@ -399,19 +399,20 @@ const ReadIssueTool = Tool.make("read_issue", {
 
 const ReadIssueCommentsTool = Tool.make("read_issue_comments", {
   description:
-    "Read one bounded page of older issue comments. Pass commentsCursor from read_issue or nextCursor from this tool as cursor. Reuse the returned projectId, tracker, host, scope and key to avoid resolving the issue again, or pass its URL. Pass viewer from read_issue for comment and reaction display flags; it does not grant write access. A null nextCursor means there are no older comments.",
+    "Read one bounded page of issue comments. Order defaults to desc, newest first. Use asc for oldest first. Omit cursor to start at the requested end; pass commentsCursor from read_issue or nextCursor from this tool to continue with the same explicit order. Honor capabilities.commentOrders from read_issue; an asc-only native page must continue with order asc. Reuse the returned projectId, tracker, host, scope and key to avoid resolving the issue again, or pass its URL. Pass viewer from read_issue for comment and reaction display flags; it does not grant write access. A null nextCursor means there are no more comments in that direction.",
   parameters: Schema.Struct({
     ...IssueTargetInput.fields,
     host: IssueCommentsPageInput.fields.host,
     scope: Schema.optional(IssueCommentsPageInput.fields.scope),
     cursor: IssueCommentsPageInput.fields.cursor,
+    order: Schema.optional(IssueListOrder),
     viewer: IssueCommentsPageInput.fields.viewer,
   }).pipe(issueAccountRequest),
   success: IssueCommentsPage,
   failure: IssueToolError,
   dependencies,
 })
-  .annotate(Tool.Title, "Read older issue comments")
+  .annotate(Tool.Title, "Read issue comments")
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
@@ -580,10 +581,13 @@ const ListIssueSources = Tool.make("list_issue_sources", {
   .annotate(Tool.OpenWorld, true);
 
 const ReadIssueHistory = Tool.make("read_issue_history", {
-  description: "Read a bounded page of native issue history.",
-  parameters: Schema.Struct({ ...IssueTargetInput.fields, ...IssuePageInput.fields }).pipe(
-    issueAccountRequest,
-  ),
+  description:
+    "Read a bounded page of native issue history. Order defaults to desc, newest first. Use asc for oldest first and for trackers whose capabilities.historyOrders permits only asc. Continue cursors with the same explicit order.",
+  parameters: Schema.Struct({
+    ...IssueTargetInput.fields,
+    ...IssuePageInput.fields,
+    order: Schema.optional(IssueListOrder),
+  }).pipe(issueAccountRequest),
   success: IssueHistoryPage,
   failure: IssueToolError,
   dependencies,

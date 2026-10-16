@@ -262,6 +262,8 @@ const Comment = Schema.Struct({
 });
 
 const CommentsPage = Schema.Struct({
+  count: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  totalCount: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   comments: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
   continuationToken: Schema.optional(Schema.NullOr(Schema.String)),
 });
@@ -307,10 +309,24 @@ export function decodeCommentsJson(
   raw: string,
   viewer?: string,
 ): Result.Result<
-  { readonly comments: ReadonlyArray<IssueComment>; readonly nextCursor: string | null },
+  {
+    readonly comments: ReadonlyArray<IssueComment>;
+    readonly nextCursor: string | null;
+    readonly rawCount: number;
+    readonly rawIds: ReadonlyArray<number | null>;
+    readonly count: number | undefined;
+    readonly totalCount: number | undefined;
+  },
   DecodeFailure
 > {
   return Result.map(decodeCommentsPage(raw), (page) => ({
+    count: page.count,
+    totalCount: page.totalCount,
+    rawCount: page.comments?.length ?? 0,
+    rawIds: (page.comments ?? []).map((entry) => {
+      const comment = decodeCommentEntry(entry);
+      return Exit.isSuccess(comment) ? comment.value.id : null;
+    }),
     comments: (page.comments ?? []).flatMap((entry) => {
       const comment = decodeCommentEntry(entry);
       if (Exit.isFailure(comment) || comment.value.isDeleted === true) return [];
@@ -372,86 +388,102 @@ function identityLogin(value: unknown): string | null {
 export function decodeUpdatesJson(
   raw: string,
   states?: ReadonlyArray<IssueState>,
+  order: "asc" | "desc" = "asc",
 ): Result.Result<
-  { readonly events: ReadonlyArray<IssueEvent>; readonly rawCount: number },
+  {
+    readonly events: ReadonlyArray<IssueEvent>;
+    readonly rawCount: number;
+    readonly rawIds: ReadonlyArray<number | null>;
+  },
   DecodeFailure
 > {
   return Result.map(decodeUpdatesPage(raw), (page) => ({
     rawCount: page.value?.length ?? 0,
-    events: (page.value ?? []).flatMap((entry) => {
+    rawIds: (page.value ?? []).map((entry) => {
       const update = decodeUpdateEntry(entry);
-      if (Exit.isFailure(update) || (update.value.id === 1 && update.value.relations === undefined))
-        return [];
-      const { id, revisedBy, revisedDate } = update.value;
-      const fields = update.value.fields ?? {};
-      const changedAt = fields["System.ChangedDate"]?.newValue;
-      const createdAt = typeof changedAt === "string" ? changedAt : revisedDate;
-      const events: IssueEvent[] = [];
-      const add = (kind: IssueEvent["kind"], detail: string | null) =>
-        events.push({
-          id: `update-${id}-${events.length}`,
-          kind,
-          actor: toActor(revisedBy),
-          createdAt,
-          detail,
-        });
-      const state = fields["System.State"];
-      if (typeof state?.oldValue === "string" && typeof state.newValue === "string") {
-        const was = states?.find((candidate) => candidate.name === state.oldValue);
-        const now = states?.find((candidate) => candidate.name === state.newValue);
-        add(
-          was === undefined || now === undefined || was.category === now.category
-            ? "state-changed"
-            : now.category === "closed"
-              ? "closed"
-              : "reopened",
-          state.newValue,
-        );
-      }
-      const title = fields["System.Title"];
-      if (typeof title?.oldValue === "string" && typeof title.newValue === "string") {
-        add("renamed", trimmed(title.newValue));
-      }
-      const tags = fields["System.Tags"];
-      if (tags !== undefined) {
-        const before = toLabels(typeof tags.oldValue === "string" ? tags.oldValue : null);
-        const after = toLabels(typeof tags.newValue === "string" ? tags.newValue : null);
-        for (const tag of before)
-          if (!after.some((label) => label.name === tag.name)) add("unlabeled", tag.name);
-        for (const tag of after)
-          if (!before.some((label) => label.name === tag.name)) add("labeled", tag.name);
-      }
-      const assigned = fields["System.AssignedTo"];
-      if (assigned !== undefined) {
-        const before = identityLogin(assigned.oldValue);
-        const after = identityLogin(assigned.newValue);
-        if (before !== after) {
-          if (before !== null) add("unassigned", before);
-          if (after !== null) add("assigned", after);
-        }
-      }
-      if (
-        update.value.relations !== undefined ||
-        Object.keys(fields).some(
-          (name) =>
-            ![
-              "System.State",
-              "System.Title",
-              "System.Tags",
-              "System.AssignedTo",
-              "System.ChangedDate",
-            ].includes(name),
-        )
-      )
-        add(
-          "updated",
-          encodeUpdate({
-            fields,
-            ...(update.value.relations === undefined ? {} : { relations: update.value.relations }),
-          }),
-        );
-      return events;
+      return Exit.isSuccess(update) ? update.value.id : null;
     }),
+    events: (order === "desc" ? (page.value ?? []).toReversed() : (page.value ?? [])).flatMap(
+      (entry) => {
+        const update = decodeUpdateEntry(entry);
+        if (
+          Exit.isFailure(update) ||
+          (update.value.id === 1 && update.value.relations === undefined)
+        )
+          return [];
+        const { id, revisedBy, revisedDate } = update.value;
+        const fields = update.value.fields ?? {};
+        const changedAt = fields["System.ChangedDate"]?.newValue;
+        const createdAt = typeof changedAt === "string" ? changedAt : revisedDate;
+        const events: IssueEvent[] = [];
+        const add = (kind: IssueEvent["kind"], detail: string | null) =>
+          events.push({
+            id: `update-${id}-${events.length}`,
+            kind,
+            actor: toActor(revisedBy),
+            createdAt,
+            detail,
+          });
+        const state = fields["System.State"];
+        if (typeof state?.oldValue === "string" && typeof state.newValue === "string") {
+          const was = states?.find((candidate) => candidate.name === state.oldValue);
+          const now = states?.find((candidate) => candidate.name === state.newValue);
+          add(
+            was === undefined || now === undefined || was.category === now.category
+              ? "state-changed"
+              : now.category === "closed"
+                ? "closed"
+                : "reopened",
+            state.newValue,
+          );
+        }
+        const title = fields["System.Title"];
+        if (typeof title?.oldValue === "string" && typeof title.newValue === "string") {
+          add("renamed", trimmed(title.newValue));
+        }
+        const tags = fields["System.Tags"];
+        if (tags !== undefined) {
+          const before = toLabels(typeof tags.oldValue === "string" ? tags.oldValue : null);
+          const after = toLabels(typeof tags.newValue === "string" ? tags.newValue : null);
+          for (const tag of before)
+            if (!after.some((label) => label.name === tag.name)) add("unlabeled", tag.name);
+          for (const tag of after)
+            if (!before.some((label) => label.name === tag.name)) add("labeled", tag.name);
+        }
+        const assigned = fields["System.AssignedTo"];
+        if (assigned !== undefined) {
+          const before = identityLogin(assigned.oldValue);
+          const after = identityLogin(assigned.newValue);
+          if (before !== after) {
+            if (before !== null) add("unassigned", before);
+            if (after !== null) add("assigned", after);
+          }
+        }
+        if (
+          update.value.relations !== undefined ||
+          Object.keys(fields).some(
+            (name) =>
+              ![
+                "System.State",
+                "System.Title",
+                "System.Tags",
+                "System.AssignedTo",
+                "System.ChangedDate",
+              ].includes(name),
+          )
+        )
+          add(
+            "updated",
+            encodeUpdate({
+              fields,
+              ...(update.value.relations === undefined
+                ? {}
+                : { relations: update.value.relations }),
+            }),
+          );
+        return events;
+      },
+    ),
   }));
 }
 

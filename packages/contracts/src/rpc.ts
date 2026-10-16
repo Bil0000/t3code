@@ -174,6 +174,7 @@ import {
   IssueLabelCandidatesPage,
   IssueLinkedPullRequestsPage,
   IssuePageRef,
+  IssueHistoryInput,
   IssueScopePageRef,
   IssueSetParentInput,
   IssueCommentInput,
@@ -1286,7 +1287,7 @@ const WsIssuesReactRpc = Rpc.make(WS_METHODS.issuesReact, {
 });
 
 const WsIssuesHistoryRpc = Rpc.make(WS_METHODS.issuesHistory, {
-  payload: issueAccountRequest(IssuePageRef),
+  payload: issueAccountRequest(IssueHistoryInput),
   success: IssueHistoryPage,
   error: IssueRpcError,
 });

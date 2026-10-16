@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { adfToText, isEditableAdf } from "./jiraJson.ts";
+import { adfToText, isEditableAdf, jiraDate } from "./jiraJson.ts";
 
 const record = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown));
 const array = Schema.decodeUnknownSync(Schema.Array(Schema.Unknown));
@@ -58,6 +58,19 @@ function actorFields(value: unknown) {
   };
 }
 
+function chronological(values: ReadonlyArray<unknown>) {
+  return values
+    .map((value) => {
+      const entry = record(value);
+      return { entry, created: Date.parse(jiraDate(text(entry.created))), id: text(entry.id) };
+    })
+    .toSorted(
+      (left, right) =>
+        left.created - right.created || left.id.localeCompare(right.id, "en", { numeric: true }),
+    )
+    .map(({ entry }) => entry);
+}
+
 function issue(value: unknown) {
   const raw = record(value);
   const fields = actorFields(raw.fields);
@@ -73,7 +86,7 @@ function issue(value: unknown) {
         ? {
             startAt: 0,
             maxResults: Math.min(50, embedded.length),
-            comments: embedded.slice(-50).map(actorFields),
+            comments: chronological(embedded).slice(-50).map(actorFields),
           }
         : {}),
     };
@@ -89,7 +102,16 @@ function issue(value: unknown) {
           changelog: {
             ...history,
             total: count(history.total ?? histories.length),
-            histories: histories.slice(0, 100).map(actorFields),
+            startAt:
+              count(history.startAt ?? 0) === 0 &&
+              histories.length === count(history.total ?? histories.length)
+                ? Math.max(0, histories.length - 100)
+                : count(history.startAt ?? 0),
+            histories: (count(history.startAt ?? 0) === 0 &&
+            histories.length === count(history.total ?? histories.length)
+              ? chronological(histories).slice(-100)
+              : histories.slice(0, 100)
+            ).map(actorFields),
           },
         }),
   };
@@ -273,7 +295,9 @@ export function dataCenterResponse(path: string, body: unknown, response: unknow
     return {
       startAt,
       total,
-      values: histories.slice(startAt, startAt + limit).map(actorFields),
+      values: chronological(histories)
+        .slice(startAt, startAt + limit)
+        .map(actorFields),
       isLast: startAt + limit >= total,
     };
   }

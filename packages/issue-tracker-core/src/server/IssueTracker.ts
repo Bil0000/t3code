@@ -83,6 +83,7 @@ export interface IssueScopeTarget {
 }
 
 export interface IssueTarget extends IssueScopeTarget {
+  readonly connectionId?: string;
   readonly viewer?: string;
   /** The issue's native id within the scope: `"123"` on GitHub, `"ENG-123"` on Linear. */
   readonly key: string;
@@ -107,7 +108,6 @@ export interface TrackerIssueDetail extends TrackerIssueSummary {
   readonly viewer: string | null;
   readonly viewerPermissions: IssueViewerPermissions;
   readonly comments: ReadonlyArray<IssueComment>;
-  /** Where older comments carry on; null once the conversation is whole. */
   readonly commentsCursor: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
   readonly linkedPullRequests: ReadonlyArray<IssueLinkedPullRequest>;
@@ -127,7 +127,7 @@ export interface IssueTrackerApi {
     },
   ) => Effect.Effect<void, IssueTrackerError>;
   readonly getHistory?: (
-    input: IssueTarget & IssuePageInput,
+    input: IssueTarget & IssuePageInput & { readonly order?: IssueListOrder },
   ) => Effect.Effect<IssueHistoryPage, IssueTrackerError>;
   readonly getLinkedPullRequests?: (
     input: IssueTarget & IssuePageInput,
@@ -181,9 +181,8 @@ export interface IssueTrackerApi {
   /** The issue with its first page of conversation, in one read where the tracker allows. */
   readonly getIssue: (input: IssueTarget) => Effect.Effect<TrackerIssueDetail, IssueTrackerError>;
 
-  /** One page of older comments past a cursor `getIssue` or a previous page handed over. */
   readonly getComments: (
-    input: IssueTarget & { readonly cursor: string },
+    input: IssueTarget & { readonly cursor?: string; readonly order?: IssueListOrder },
   ) => Effect.Effect<IssueCommentsPage, IssueTrackerError>;
 
   /**

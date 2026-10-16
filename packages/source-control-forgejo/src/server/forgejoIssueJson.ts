@@ -24,6 +24,19 @@ import {
   forgejoActor,
 } from "./forgejoPullRequestJson.ts";
 
+export const ForgejoConversationCursor = Schema.Struct({
+  version: Schema.Literal(1),
+  identity: Schema.String,
+  native: Schema.String.check(
+    Schema.isPattern(
+      /^(?:[1-9]\d{0,6}|offset:[1-9]\d{0,6}:[1-9]\d{0,8}|page:[1-9]\d{0,6}:[1-9]\d*)$/,
+    ),
+  ),
+  lastId: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+  lastAt: Schema.optional(Schema.String),
+  total: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+});
+
 export const ForgejoIssue = Schema.Struct({
   number: Schema.Int,
   title: Schema.String,
@@ -74,6 +87,7 @@ export const ForgejoTimelineEntry = Schema.Struct({
       Schema.Struct({
         number: Schema.Int,
         html_url: Schema.String,
+        title: Schema.optional(Schema.String),
         pull_request: Schema.optional(Schema.NullOr(Schema.Struct({ merged: Schema.Boolean }))),
       }),
     ),
@@ -147,6 +161,39 @@ export function forgejoIssueComment(comment: typeof ForgejoComment.Type): IssueC
   };
 }
 
+const isReferenceTitle = Schema.is(TrimmedNonEmptyString.check(Schema.isMaxLength(4096)));
+
+export function forgejoIssueEventLinks(entry: typeof ForgejoTimelineEntry.Type) {
+  const safeUrl = (value: string | null | undefined) => {
+    if (!value || value.length > 8192) return undefined;
+    try {
+      const url = new URL(value);
+      return (url.protocol === "https:" || url.protocol === "http:") &&
+        !url.username &&
+        !url.password
+        ? value
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const url = safeUrl(entry.html_url);
+  const referenceUrl = safeUrl(entry.ref_issue?.html_url);
+  const title = entry.ref_issue?.title;
+  return {
+    ...(url === undefined ? {} : { url }),
+    ...(referenceUrl === undefined
+      ? {}
+      : {
+          reference: {
+            url: referenceUrl,
+            identifier: `#${entry.ref_issue!.number}`,
+            ...(isReferenceTitle(title) ? { title } : {}),
+          },
+        }),
+  };
+}
+
 /** Null for a timeline entry with no kind in the shared vocabulary, which is dropped. */
 export function forgejoIssueEvent(entry: typeof ForgejoTimelineEntry.Type): IssueEvent | null {
   const event = (kind: IssueEvent["kind"], detail: string | null = null): IssueEvent => ({
@@ -155,6 +202,7 @@ export function forgejoIssueEvent(entry: typeof ForgejoTimelineEntry.Type): Issu
     actor: forgejoActor(entry.user),
     createdAt: toIsoUtc(entry.created_at),
     detail,
+    ...forgejoIssueEventLinks(entry),
   });
   switch (entry.type) {
     case "close":

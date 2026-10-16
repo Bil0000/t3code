@@ -127,6 +127,7 @@ const DETAIL_FIXTURE = {
             {
               __typename: "CrossReferencedEvent",
               id: "CRE_1",
+              url: "https://github.com/acme/web/pull/50#ref-event-1",
               createdAt: "2026-07-02T01:00:00Z",
               actor: {
                 __typename: "User",
@@ -1504,7 +1505,7 @@ describe("GitHubIssueTracker", () => {
   );
 
   it.effect.each([true, false])(
-    "keeps native older-comment edit permission %s without a viewer",
+    "keeps native comment edit permission %s without a viewer",
     (canEdit) =>
       Effect.gen(function* () {
         let reads = 0;
@@ -1519,7 +1520,12 @@ describe("GitHubIssueTracker", () => {
                   issue: {
                     comments: {
                       totalCount: 0,
-                      pageInfo: { hasPreviousPage: false, startCursor: null },
+                      pageInfo: {
+                        hasPreviousPage: false,
+                        hasNextPage: false,
+                        startCursor: null,
+                        endCursor: null,
+                      },
                       nodes: [
                         {
                           ...DETAIL_FIXTURE.data.repository.issue.comments.nodes[0],
@@ -1541,7 +1547,6 @@ describe("GitHubIssueTracker", () => {
           host: "github.com",
           scope: "acme/web",
           key: "42",
-          cursor: "older",
         });
         expect(page.comments[0]?.canEdit).toBe(canEdit);
         expect(reads).toBe(1);
@@ -1728,38 +1733,64 @@ describe("GitHubIssueTracker", () => {
     }),
   );
 
-  it.effect("keeps native history continuation after comment rows and unknown events", () =>
+  it.effect("keeps native history continuation after comment rows and other event kinds", () =>
     Effect.gen(function* () {
+      let reads = 0;
       const api = yield* tracker(
-        () => "{}",
-        (input) => {
-          expect(input.path).toBe("repos/acme/web/issues/42/timeline?per_page=3&page=2");
-          return {
-            status: 200,
-            headers: { link: '<https://github.com/next>; rel="next"' },
-            body: JSON.stringify([
-              { id: 1, event: "commented", created_at: "2026-07-01T00:00:00Z" },
-              { id: 2, event: "milestoned", created_at: "2026-07-01T00:00:00Z" },
-              { event: "cross-referenced", created_at: "2026-07-01T00:00:00Z" },
-            ]),
-            truncated: false,
-            invalidUtf8: false,
-          };
+        (query, variables) => {
+          expect(query).toContain("query IssueHistory");
+          expect(variables).toMatchObject({ last: 3 });
+          reads++;
+          return JSON.stringify({
+            data: {
+              repository: {
+                issue: {
+                  timelineItems: {
+                    pageInfo: {
+                      hasPreviousPage: reads === 1,
+                      hasNextPage: false,
+                      startCursor: "older",
+                      endCursor: "last",
+                    },
+                    nodes:
+                      reads === 1
+                        ? [
+                            { __typename: "IssueComment" },
+                            {
+                              __typename: "MilestonedEvent",
+                              id: "2",
+                              createdAt: "2026-07-01T00:00:00Z",
+                              actor: null,
+                            },
+                            { __typename: "FutureEvent" },
+                          ]
+                        : [
+                            {
+                              __typename: "ClosedEvent",
+                              id: "1",
+                              createdAt: "2026-06-01T00:00:00Z",
+                              actor: null,
+                            },
+                          ],
+                  },
+                },
+              },
+            },
+          });
+        },
+        () => {
+          throw new Error("Unexpected REST history read");
         },
       );
-      expect(
-        yield* api.getHistory!({
-          cwd: "/w",
-          host: "github.com",
-          scope: "acme/web",
-          key: "42",
-          cursor: "2",
-          limit: 3,
-        }),
-      ).toMatchObject({
+      const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42", limit: 3 };
+      const first = yield* api.getHistory!(input);
+      expect(first).toMatchObject({
         items: [{ id: "2", kind: "updated", detail: "milestoned" }],
-        nextCursor: "3",
+        nextCursor: expect.any(String),
       });
+      const second = yield* api.getHistory!({ ...input, cursor: first.nextCursor! });
+      expect(second).toMatchObject({ items: [{ id: "1", kind: "closed" }], nextCursor: null });
+      expect(reads).toBe(2);
     }),
   );
 
@@ -2073,7 +2104,7 @@ describe("GitHubIssueTracker", () => {
           assignees: true,
           comment: true,
         },
-        commentsCursor: "Y3Vyc29y",
+        commentsCursor: expect.any(String),
         historyTruncated: false,
       });
       // The viewer is left out of `actors` and shown as "You"; an empty group is dropped.
@@ -2094,10 +2125,247 @@ describe("GitHubIssueTracker", () => {
       ]);
       // An event kind this page has no vocabulary for is dropped rather than guessed at.
       expect(issue.events.map((event) => [event.kind, event.detail])).toEqual([
-        ["labeled", "bug"],
-        ["referenced", "acme/web#50"],
         ["closed", null],
+        ["referenced", "acme/web#50"],
+        ["labeled", "bug"],
       ]);
+    }),
+  );
+
+  it.effect("refuses detail with a missing native comment boundary before the labels read", () =>
+    Effect.gen(function* () {
+      const api = yield* tracker(
+        () =>
+          JSON.stringify({
+            data: {
+              ...DETAIL_FIXTURE.data,
+              repository: {
+                ...DETAIL_FIXTURE.data.repository,
+                issue: {
+                  ...DETAIL_FIXTURE.data.repository.issue,
+                  comments: {
+                    ...DETAIL_FIXTURE.data.repository.issue.comments,
+                    pageInfo: { hasPreviousPage: true, startCursor: null },
+                  },
+                },
+              },
+            },
+          }),
+        () => {
+          throw new Error("Unexpected REST metadata read");
+        },
+      );
+      expect(
+        yield* api
+          .getIssue({ cwd: "/w", host: "github.com", scope: "acme/web", key: "42" })
+          .pipe(Effect.flip),
+      ).toMatchObject({ reason: "failed" });
+    }),
+  );
+
+  it.effect("starts detail at the true newest page and continues without gaps", () =>
+    Effect.gen(function* () {
+      const comment = (number: number) => ({
+        ...DETAIL_FIXTURE.data.repository.issue.comments.nodes[0],
+        id: String(number),
+      });
+      const events = Array.from({ length: 100 }, (_, index) => ({
+        __typename: "ClosedEvent",
+        id: String(106 + index),
+        createdAt: "2026-07-03T00:00:00Z",
+        actor: null,
+      }));
+      let reads = 0;
+      const api = yield* tracker((query, variables) => {
+        reads++;
+        if (query.includes("query IssueDetail"))
+          return JSON.stringify({
+            data: {
+              ...DETAIL_FIXTURE.data,
+              repository: {
+                ...DETAIL_FIXTURE.data.repository,
+                issue: {
+                  ...DETAIL_FIXTURE.data.repository.issue,
+                  comments: {
+                    totalCount: 205,
+                    nodes: Array.from({ length: 100 }, (_, i) => comment(106 + i)),
+                    pageInfo: { hasPreviousPage: true, startCursor: "native-105" },
+                  },
+                  timelineItems: { nodes: events, pageInfo: { hasPreviousPage: true } },
+                },
+              },
+            },
+          });
+        const asc = variables.first === 100;
+        const end = asc ? 100 : variables.before === "native-105" ? 105 : 5;
+        const start = Math.max(0, end - 100);
+        return JSON.stringify({
+          data: {
+            viewer: { login: "julius" },
+            repository: {
+              issue: {
+                comments: {
+                  nodes: Array.from({ length: end - start }, (_, i) => comment(start + i + 1)),
+                  pageInfo: {
+                    hasPreviousPage: start > 0,
+                    hasNextPage: end < 205,
+                    startCursor: `native-${start}`,
+                    endCursor: `native-${end}`,
+                  },
+                },
+              },
+            },
+          },
+        });
+      });
+      const input = {
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        key: "42",
+        connectionId: "selected",
+      };
+      const detail = yield* api.getIssue(input);
+      expect(detail.events.map((event) => event.id)).toEqual(
+        Array.from({ length: 100 }, (_, i) => String(205 - i)),
+      );
+      expect(detail.historyTruncated).toBe(true);
+      const ids = detail.comments.map((row) => row.id);
+      let cursor = detail.commentsCursor;
+      while (cursor !== null) {
+        const page = yield* api.getComments({ ...input, cursor });
+        ids.push(...page.comments.map((row) => row.id));
+        cursor = page.nextCursor;
+      }
+      expect(ids).toEqual(Array.from({ length: 205 }, (_, i) => String(205 - i)));
+      const oldest = yield* api.getComments({ ...input, order: "asc" });
+      expect(oldest.comments.map((row) => row.id)).toEqual(
+        Array.from({ length: 100 }, (_, i) => String(i + 1)),
+      );
+      expect(reads).toBe(4);
+    }),
+  );
+
+  it.effect.each(["Issue", "PullRequest"] as const)(
+    "keeps the native %s reference and event URLs separate",
+    (type) =>
+      Effect.gen(function* () {
+        const eventUrl = "https://github.com/acme/web/issues/42#ref-event-7";
+        const sourceUrl = `https://github.com/acme/other/${type === "Issue" ? "issues" : "pull"}/7`;
+        const event = {
+          __typename: "CrossReferencedEvent",
+          id: "ref-7",
+          createdAt: "2026-07-02T01:00:00Z",
+          actor: null,
+          url: eventUrl,
+          source: {
+            __typename: type,
+            number: 7,
+            title: "Source title",
+            url: sourceUrl,
+            state: "OPEN",
+            isDraft: false,
+            repository: { nameWithOwner: "acme/other" },
+          },
+        };
+        const api = yield* tracker(() =>
+          JSON.stringify({
+            data: {
+              ...DETAIL_FIXTURE.data,
+              repository: {
+                ...DETAIL_FIXTURE.data.repository,
+                issue: {
+                  ...DETAIL_FIXTURE.data.repository.issue,
+                  timelineItems: {
+                    nodes: [event],
+                    pageInfo: {
+                      hasPreviousPage: false,
+                      hasNextPage: false,
+                      startCursor: null,
+                      endCursor: null,
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        );
+        const input = { cwd: "/w", host: "github.com", scope: "acme/web", key: "42" };
+        const detail = yield* api.getIssue(input);
+        const history = yield* api.getHistory!(input);
+        const expected = {
+          url: eventUrl,
+          reference: {
+            url: sourceUrl,
+            title: "Source title",
+            identifier: "acme/other#7",
+          },
+        };
+        expect(detail.events[0]).toMatchObject(expected);
+        expect(history.items[0]).toMatchObject(expected);
+        const wire = yield* decodeDetailWire({
+          ...detail,
+          ...input,
+          tracker: "github",
+          projectId: "p1",
+          projectTitle: "Web",
+          writable: true,
+          capabilities: api.capabilities,
+        });
+        expect(wire.events[0]).toMatchObject(expected);
+      }),
+  );
+
+  it.effect.each([
+    "javascript:alert(1)",
+    "data:text/plain,unsafe",
+    "/relative",
+    "https://user:pass@github.com/path",
+  ])("omits unsafe native reference URLs %s", (url) =>
+    Effect.gen(function* () {
+      const api = yield* tracker(() =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                timelineItems: {
+                  nodes: [
+                    {
+                      __typename: "CrossReferencedEvent",
+                      id: "ref-7",
+                      createdAt: "2026-07-02T01:00:00Z",
+                      actor: null,
+                      url,
+                      source: {
+                        __typename: "Issue",
+                        number: 7,
+                        title: "Source",
+                        url,
+                        repository: { nameWithOwner: "acme/web" },
+                      },
+                    },
+                  ],
+                  pageInfo: {
+                    hasPreviousPage: false,
+                    hasNextPage: false,
+                    startCursor: null,
+                    endCursor: null,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      );
+      const page = yield* api.getHistory!({
+        cwd: "/w",
+        host: "github.com",
+        scope: "acme/web",
+        key: "42",
+      });
+      expect(page.items).toHaveLength(1);
+      expect(page.items[0]).not.toHaveProperty("url");
+      expect(page.items[0]).not.toHaveProperty("reference");
     }),
   );
 

@@ -12,7 +12,6 @@ import type {
   IssueActor,
   IssueAssigneeCandidate,
   IssueComment,
-  IssueEvent,
   IssueEventKind,
   IssueLabel,
   IssueLabelCandidate,
@@ -62,15 +61,6 @@ const RawIssueSchema = Schema.Struct({
   issue_type: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-const RawLabelEventSchema = Schema.Struct({
-  id: Schema.Int,
-  action: Schema.String,
-  created_at: Schema.String,
-  user: Schema.optional(Schema.NullOr(RawUserSchema)),
-  /** Null once the label itself has been deleted, which leaves the event with no subject. */
-  label: Schema.optional(Schema.NullOr(Schema.Struct({ name: Schema.optional(Schema.String) }))),
-});
-
 const RawLinkedMergeRequestSchema = Schema.Struct({
   iid: Schema.Int,
   title: Schema.String,
@@ -95,7 +85,6 @@ const RawTemplateSchema = Schema.Struct({ content: Schema.String });
 const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeIssue = decodeJsonResult(RawIssueSchema);
 const decodeIssueEntry = Schema.decodeUnknownExit(RawIssueSchema);
-const decodeLabelEventEntry = Schema.decodeUnknownExit(RawLabelEventSchema);
 const decodeLinkedMergeRequestEntry = Schema.decodeUnknownExit(RawLinkedMergeRequestSchema);
 const decodeProjectLabelEntry = Schema.decodeUnknownExit(RawProjectLabelSchema);
 const decodeUserEntry = Schema.decodeUnknownExit(RawUserSchema);
@@ -205,6 +194,18 @@ export function decodeCreatedIssueJson(raw: string): Result.Result<
   }));
 }
 
+export function nativeEventUrl(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The events GitLab records as notes of its own. A label note names its labels by id ("added ~7
  * label"), which is why labellings come from `/resource_label_events` instead and are dropped here.
@@ -244,16 +245,14 @@ export function toSystemEvent(
 
 interface GitLabIssueNotes {
   readonly comments: ReadonlyArray<IssueComment>;
-  readonly events: ReadonlyArray<IssueEvent>;
 }
 
 function toIssueNotes(
   rows: ReadonlyArray<typeof RawGraphNoteSchema.Type | null>,
 ): GitLabIssueNotes {
   const comments: IssueComment[] = [];
-  const events: IssueEvent[] = [];
   for (const note of rows) {
-    if (note === null) continue;
+    if (note === null || note.system === true) continue;
     const id = nativeId(note.id);
     if (id === undefined) continue;
     const body = note.body ?? "";
@@ -267,18 +266,6 @@ function toIssueNotes(
             avatar_url: note.author.avatarUrl,
           },
     );
-    if (note.system === true) {
-      const event = toSystemEvent(body);
-      if (event === null) continue;
-      events.push({
-        id: `note-${id}`,
-        kind: event.kind,
-        actor: author,
-        createdAt: note.createdAt,
-        detail: event.detail,
-      });
-      continue;
-    }
     comments.push({
       id: String(id),
       author,
@@ -286,36 +273,10 @@ function toIssueNotes(
       createdAt: note.createdAt,
       editedAt: note.updatedAt == null || note.updatedAt === note.createdAt ? null : note.updatedAt,
       canEdit: note.userPermissions?.adminNote ?? false,
-      url: trimmed(note.url),
+      url: nativeEventUrl(note.url) ?? null,
     });
   }
-  return { comments, events };
-}
-
-export function decodeLabelEventsJson(
-  raw: string,
-): Result.Result<
-  { readonly events: ReadonlyArray<IssueEvent>; readonly rawCount: number },
-  DecodeFailure
-> {
-  return Result.map(decodeUnknownList(raw), (rows) => ({
-    rawCount: rows.length,
-    events: rows.flatMap((entry) => {
-      const event = decodeLabelEventEntry(entry);
-      if (Exit.isFailure(event)) return [];
-      const action = event.value.action.trim().toLowerCase();
-      if (action !== "add" && action !== "remove") return [];
-      return [
-        {
-          id: `label-${event.value.id}`,
-          kind: action === "add" ? ("labeled" as const) : ("unlabeled" as const),
-          actor: toActor(event.value.user),
-          createdAt: event.value.created_at,
-          detail: trimmed(event.value.label?.name),
-        },
-      ];
-    }),
-  }));
+  return { comments };
 }
 
 function toPullRequestState(value: string | null | undefined): PullRequestState {
@@ -568,7 +529,7 @@ function nativeId(id: string | undefined): number | undefined {
   return value !== undefined && /^[1-9]\d*$/.test(value) ? Number(value) : undefined;
 }
 
-export function decodeIssueAwardPageJson(raw: string) {
+export function decodeIssueAwardPageJson(raw: string, order: "asc" | "desc" = "desc") {
   return Result.flatMap(decodeIssueAwardPage(raw), ({ data }) =>
     Result.map(decodeAwardEmojiJson(raw), (awards) => {
       const issue = data.project.mergeRequest;
@@ -580,18 +541,26 @@ export function decodeIssueAwardPageJson(raw: string) {
       );
       return {
         ...awards,
+        nativeIds: issue.notes.nodes.flatMap((note) => (note === null ? [] : [note.id])),
+        eventUrls: issue.notes.nodes.flatMap((note) => {
+          if (note?.system !== true) return [];
+          const id = nativeId(note.id);
+          const url = nativeEventUrl(note.url);
+          return id === undefined || url === undefined ? [] : [{ id: String(id), url }];
+        }),
         viewer: data.currentUser.username.trim(),
         viewerPermissions: toViewerPermissions(data.project),
         nextCursor:
           issue.notes.pageInfo.hasPreviousPage === true
             ? trimmed(issue.notes.pageInfo.startCursor)
             : null,
-        events: notes.events,
-        comments: notes.comments.map((comment) => ({
-          ...comment,
-          reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
-          ...(partialNotes.has(comment.id) ? { reactionsTruncated: true } : {}),
-        })),
+        comments: (order === "desc" ? notes.comments.toReversed() : notes.comments).map(
+          (comment) => ({
+            ...comment,
+            reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+            ...(partialNotes.has(comment.id) ? { reactionsTruncated: true } : {}),
+          }),
+        ),
       };
     }),
   );

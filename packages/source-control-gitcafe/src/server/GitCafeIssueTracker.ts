@@ -3,7 +3,9 @@ import * as Schema from "effect/Schema";
 import {
   IssueTrackerKind,
   SourceControlProviderKind,
+  issueHostKey,
   type IssueCapabilities,
+  type IssueListOrder,
 } from "@t3tools/contracts";
 import {
   IssueTrackerError,
@@ -21,6 +23,7 @@ import { makeListTemplates, parseTemplateKey } from "./gitCafeIssueTemplates.ts"
 const KIND = IssueTrackerKind.make("gitcafe");
 const isCursor = Schema.is(Json.Cursor);
 const isApiError = Schema.is(GitCafeApi.GitCafeApiError);
+const decodeCommentCursor = Schema.decodeEffect(Schema.fromJsonString(Json.CommentCursor));
 const STATES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"] as const;
 const CAPABILITIES: IssueCapabilities = {
   create: true,
@@ -57,6 +60,34 @@ const fail = (operation: string, detail: string, cause?: unknown) =>
 
 export const make = Effect.gen(function* () {
   const api = yield* GitCafeApi.GitCafeApi;
+  const commentIdentity = (input: IssueTarget, order: IssueListOrder) =>
+    JSON.stringify([
+      KIND,
+      input.cwd,
+      issueHostKey(input.host),
+      input.scope,
+      input.key,
+      input.connectionId ?? null,
+      order,
+    ]);
+  const commentCursor = (
+    operation: string,
+    input: IssueTarget,
+    native: string | null,
+    last: typeof Json.Comment.Type | undefined,
+  ) => {
+    if (native === null || last === undefined) return Effect.succeed(null);
+    const cursor = JSON.stringify({
+      version: 1,
+      identity: commentIdentity(input, "asc"),
+      native,
+      lastId: last.id,
+      lastAt: last.createdAt,
+    });
+    return cursor.length <= 8192
+      ? Effect.succeed(cursor)
+      : Effect.fail(fail(operation, "The GitCafe comment cursor exceeds the supported size."));
+  };
   const send = (
     operation: string,
     input: { readonly host: string },
@@ -140,6 +171,54 @@ export const make = Effect.gen(function* () {
     issuePath(operation, input).pipe(
       Effect.flatMap((path) => page(operation, input, `${path}/comments/`, Json.Comments, cursor)),
     );
+  const readConversation = (
+    operation: string,
+    input: IssueTarget,
+    cursor: string | undefined,
+    order: IssueListOrder = "desc",
+    fallback = false,
+  ) =>
+    Effect.gen(function* () {
+      if (cursor !== undefined && cursor.length > 8192)
+        return yield* fail(operation, "The GitCafe comment cursor exceeds the supported size.");
+      const continuation =
+        cursor === undefined
+          ? undefined
+          : yield* decodeCommentCursor(cursor).pipe(
+              Effect.mapError(() => fail(operation, "The GitCafe comment cursor is invalid.")),
+            );
+      if (cursor !== undefined && continuation?.identity !== commentIdentity(input, order))
+        return yield* fail(
+          operation,
+          "The GitCafe comment cursor does not match this account, issue or order. Refresh the conversation.",
+        );
+      const result = yield* readComments(operation, input, continuation?.native);
+      if (
+        new Set(result.items.map((row) => row.id)).size !== result.items.length ||
+        (result.next !== null && result.items.length === 0) ||
+        (continuation !== undefined &&
+          result.items.some(
+            (row) => row.id === continuation.lastId || row.createdAt < continuation.lastAt,
+          ))
+      )
+        return yield* fail(operation, "GitCafe returned a repeated or invalid comment page.");
+      const partial = result.next !== null || continuation !== undefined;
+      if (partial && order === "desc" && !fallback)
+        return yield* fail(
+          operation,
+          "GitCafe supports oldest-first comments only for a paged conversation.",
+        );
+      const selectedOrder = partial ? "asc" : order;
+      const items = [...result.items].sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt),
+      );
+      if (selectedOrder === "desc") items.reverse();
+      return {
+        items,
+        next: yield* commentCursor(operation, input, result.next, items.at(-1)),
+        partial,
+      };
+    });
   const readReactions = (operation: string, input: IssueTarget) =>
     Effect.gen(function* () {
       const path = yield* issuePath(operation, input);
@@ -299,7 +378,7 @@ export const make = Effect.gen(function* () {
         const [viewer, comments, links, reactions] = yield* Effect.all(
           [
             principal("getIssue", input),
-            readComments("getIssue", input),
+            readConversation("getIssue", input, undefined, "desc", true),
             linkedPullRequests({ ...input, limit: 30 }),
             optionalReactions("getIssue", input),
           ],
@@ -312,6 +391,9 @@ export const make = Effect.gen(function* () {
           return yield* fail("getIssue", "GitCafe returned a different issue conversation.");
         return {
           ...Json.summary(value, input.host, input.scope),
+          ...(comments.partial
+            ? { capabilities: { ...CAPABILITIES, commentOrders: ["asc"] as const } }
+            : {}),
           body: value.description ?? "",
           viewer: viewer.handle,
           viewerPermissions: Json.permissions(value),
@@ -334,7 +416,7 @@ export const make = Effect.gen(function* () {
       }),
     getComments: (input) =>
       Effect.gen(function* () {
-        const rows = yield* readComments("getComments", input, input.cursor);
+        const rows = yield* readConversation("getComments", input, input.cursor, input.order);
         const reactions = yield* optionalReactions("getComments", input);
         return {
           comments: rows.items.map((value) => ({

@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 import {
   IssueTrackerKind,
   type IssueCapabilities,
+  type IssueListOrder,
   type IssueWorkflowCategory,
   type IssueState,
   type IssueRelation,
@@ -27,6 +28,7 @@ import {
 import {
   IssueTrackerError,
   type IssueTrackerApi,
+  type IssueTarget,
   type IssueScopeTarget,
 } from "@t3tools/issue-tracker-core/server/IssueTracker";
 
@@ -124,6 +126,43 @@ const decodeListCursor = Schema.decodeUnknownResult(
     ]),
   }),
 );
+const TimelineCount = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+);
+const CommentCursor = Schema.Struct({
+  identity: Schema.String,
+  token: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+  seen: Schema.Array(Schema.String.check(Schema.isMinLength(1))).check(Schema.isMaxLength(2048)),
+  boundary: Schema.Int,
+  position: TimelineCount,
+  total: Schema.optional(TimelineCount),
+});
+const HistoryCursor = Schema.Struct({
+  identity: Schema.String,
+  position: TimelineCount,
+  total: TimelineCount,
+});
+const decodeCommentCursor = Schema.decodeSync(Schema.fromJsonString(CommentCursor));
+const decodeHistoryCursor = Schema.decodeSync(Schema.fromJsonString(HistoryCursor));
+const timelineIdentity = (
+  input: IssueTarget,
+  kind: "comments" | "history",
+  order: IssueListOrder,
+) => {
+  if (order !== "asc" && order !== "desc") throw new Error("Invalid Azure DevOps timeline order.");
+  const host = new URL("https://" + input.host);
+  return encodeJson([
+    "azure-devops",
+    kind,
+    input.cwd,
+    host.host + host.pathname.replace(/\/$/u, ""),
+    input.scope,
+    input.key,
+    input.connectionId ?? null,
+    order,
+  ]);
+};
 const REST_API_VERSION = "7.1";
 const PAGE_SIZE = 100;
 /** Linked pull requests are read one `az` process each, so a work item's links are bounded. */
@@ -591,32 +630,180 @@ export const make: Effect.Effect<
       }),
     );
 
-  const comments = (input: {
-    readonly cwd: string;
-    readonly operation: string;
-    readonly organization: string;
-    readonly project: string;
-    readonly number: number;
-    readonly cursor?: string | undefined;
-    readonly viewer?: string;
-  }) =>
-    read({
-      cwd: input.cwd,
-      operation: input.operation,
-      args: invokeArgs({
-        ...input,
-        resource: "comments",
-        route: [`workItemId=${input.number}`],
-        apiVersion: "7.1-preview",
-        query: [
-          `$top=${PAGE_SIZE}`,
-          "order=asc",
-          "$expand=reactions",
-          "api-version=7.1-preview.4",
-          ...(input.cursor === undefined ? [] : [`continuationToken=${input.cursor}`]),
-        ],
-      }),
-      decode: (raw) => decodeCommentsJson(raw, input.viewer),
+  const commentCursor = (
+    input: IssueTarget & { readonly cursor?: string; readonly order?: IssueListOrder },
+  ) =>
+    Effect.try({
+      try: () => {
+        const identity = timelineIdentity(input, "comments", input.order ?? "desc");
+        if (input.cursor === undefined) return undefined;
+        if (input.cursor.length > 8192) throw new Error("Invalid cursor.");
+        const page = decodeCommentCursor(input.cursor);
+        if (
+          page.identity !== identity ||
+          page.position <= 0 ||
+          (page.total !== undefined && page.position >= page.total) ||
+          page.seen.includes(page.token) ||
+          new Set(page.seen).size !== page.seen.length
+        )
+          throw new Error("Invalid cursor.");
+        return page;
+      },
+      catch: (cause) => refused("getComments", "Invalid Azure DevOps comment cursor.", cause),
+    });
+  const comments = (
+    input: IssueTarget & {
+      readonly operation: string;
+      readonly organization: string;
+      readonly project: string;
+      readonly number: number;
+      readonly order?: IssueListOrder;
+      readonly previous?: typeof CommentCursor.Type;
+    },
+  ) =>
+    Effect.gen(function* () {
+      const order = input.order ?? "desc";
+      const page = yield* read({
+        cwd: input.cwd,
+        operation: input.operation,
+        args: invokeArgs({
+          ...input,
+          resource: "comments",
+          route: [`workItemId=${input.number}`],
+          apiVersion: "7.1-preview",
+          query: [
+            `$top=${PAGE_SIZE}`,
+            `order=${order}`,
+            "$expand=reactions",
+            "api-version=7.1-preview.4",
+            ...(input.previous === undefined ? [] : [`continuationToken=${input.previous.token}`]),
+          ],
+        }),
+        decode: (raw) => decodeCommentsJson(raw, input.viewer),
+      });
+      const seen =
+        input.previous === undefined ? [] : [...input.previous.seen, input.previous.token];
+      const position = (input.previous?.position ?? 0) + page.rawCount;
+      const total = input.previous?.total ?? page.totalCount;
+      if (
+        (page.count !== undefined && page.count !== page.rawCount) ||
+        (input.previous?.total !== undefined &&
+          page.totalCount !== undefined &&
+          input.previous.total !== page.totalCount) ||
+        (total !== undefined &&
+          (position > total ||
+            (page.nextCursor === null ? position < total : position >= total))) ||
+        (page.totalCount !== undefined &&
+          (page.totalCount < page.rawCount || (page.rawCount === 0 && page.totalCount > 0))) ||
+        (input.previous !== undefined && page.rawCount === 0) ||
+        page.comments.some(
+          (row, index) =>
+            !Number.isFinite(Date.parse(row.createdAt)) ||
+            (index > 0 &&
+              (order === "desc"
+                ? Date.parse(row.createdAt) > Date.parse(page.comments[index - 1]!.createdAt)
+                : Date.parse(row.createdAt) < Date.parse(page.comments[index - 1]!.createdAt))),
+        ) ||
+        page.rawCount > PAGE_SIZE ||
+        page.rawIds.some((id) => id === null || id <= 0 || id === input.previous?.boundary) ||
+        new Set(page.rawIds).size !== page.rawCount ||
+        (page.nextCursor !== null && (page.rawCount === 0 || seen.includes(page.nextCursor)))
+      )
+        return yield* refused(
+          input.operation,
+          "Azure DevOps returned an inconsistent comment page.",
+        );
+      const nextCursor =
+        page.nextCursor === null
+          ? null
+          : encodeJson({
+              identity: timelineIdentity(input, "comments", order),
+              token: page.nextCursor,
+              seen,
+              boundary: page.rawIds.at(-1)!,
+              position,
+              ...(total === undefined ? {} : { total }),
+            });
+      if (nextCursor !== null && nextCursor.length > 8192)
+        return yield* refused(
+          input.operation,
+          "Azure DevOps comment continuation exceeds the cursor limit.",
+        );
+      return { comments: page.comments, nextCursor };
+    });
+  const historyCursor = (
+    input: IssueTarget & IssuePageInput & { readonly order?: IssueListOrder },
+  ) =>
+    Effect.try({
+      try: () => {
+        const identity = timelineIdentity(input, "history", input.order ?? "desc");
+        const limit = input.limit ?? PAGE_SIZE;
+        if (!Number.isInteger(limit) || limit < 1 || limit > PAGE_SIZE)
+          throw new Error("Invalid page size.");
+        if (input.cursor === undefined) return undefined;
+        if (input.cursor.length > 8192) throw new Error("Invalid cursor.");
+        const page = decodeHistoryCursor(input.cursor);
+        if (page.identity !== identity || page.position <= 0 || page.position >= page.total)
+          throw new Error("Invalid cursor.");
+        return page;
+      },
+      catch: (cause) =>
+        refused("getHistory", "Invalid Azure DevOps history cursor or page size.", cause),
+    });
+  const history = (
+    input: IssueTarget,
+    scope: {
+      readonly organization: string;
+      readonly project: string;
+      readonly number: number;
+      readonly item: AzureDevOpsWorkItem;
+    },
+    order: IssueListOrder,
+    limit: number,
+    previous?: typeof HistoryCursor.Type,
+    operation = "getHistory",
+  ) =>
+    Effect.gen(function* () {
+      const revision = scope.item.revision;
+      if (
+        revision === null ||
+        !Number.isSafeInteger(revision) ||
+        revision < 1 ||
+        (previous !== undefined && revision < previous.total)
+      )
+        return yield* refused(
+          operation,
+          "Azure DevOps did not return an authoritative work item revision.",
+        );
+      const total = previous?.total ?? revision;
+      const end =
+        order === "desc"
+          ? (previous?.position ?? total)
+          : Math.min(total, (previous?.position ?? 0) + limit);
+      const skip = order === "desc" ? Math.max(0, end - limit) : (previous?.position ?? 0);
+      const top = end - skip;
+      const page = yield* read({
+        cwd: input.cwd,
+        operation,
+        args: invokeArgs({
+          ...scope,
+          resource: "updates",
+          route: [`id=${scope.number}`],
+          query: [`$top=${top}`, `$skip=${skip}`],
+        }),
+        decode: (raw) =>
+          Result.map(decodeUpdatesJson(raw, undefined, order), (page) => ({ ...page, raw })),
+      });
+      if (page.rawCount !== top || page.rawIds.some((id, index) => id !== skip + index + 1))
+        return yield* refused(operation, "Azure DevOps returned an inconsistent history window.");
+      const position = order === "desc" ? skip : end;
+      return {
+        items: page.events,
+        raw: page.raw,
+        nextCursor: (order === "desc" ? position > 0 : position < total)
+          ? encodeJson({ identity: timelineIdentity(input, "history", order), position, total })
+          : null,
+      };
     });
 
   const linkedPullRequests = (input: {
@@ -1170,22 +1357,13 @@ export const make: Effect.Effect<
           Effect.all(
             [
               comments({
+                ...input,
                 ...scope,
                 cwd: input.cwd,
                 operation: "getIssue",
                 ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
               }),
-              read({
-                cwd: input.cwd,
-                operation: "getIssue",
-                args: invokeArgs({
-                  ...scope,
-                  resource: "updates",
-                  route: [`id=${scope.number}`],
-                  query: [`$top=${PAGE_SIZE}`],
-                }),
-                decode: (raw) => Result.succeed(raw),
-              }),
+              history(input, scope, "desc", PAGE_SIZE, undefined, "getIssue"),
               itemWorkflow({ ...scope, cwd: input.cwd }, scope.item),
               linkedPullRequests({
                 cwd: input.cwd,
@@ -1195,41 +1373,39 @@ export const make: Effect.Effect<
             ],
             { concurrency: 3 },
           ).pipe(
-            Effect.flatMap(([conversation, rawUpdates, workflow, links]) => {
-              const updates = decodeUpdatesJson(
-                rawUpdates,
-                scope.item.workItemType === null ? undefined : workflow.states,
-              );
-              if (Result.isFailure(updates)) return Effect.fail(unreadable("getIssue", rawUpdates));
-              return Effect.succeed({
-                ...workflow.item,
-                states: workflow.states,
-                // Nothing cheap names the viewer here; the service already read it per host.
-                viewer: input.viewer ?? null,
-                viewerPermissions: VIEWER_PERMISSIONS,
-                comments: conversation.comments,
-                commentsCursor: conversation.nextCursor,
-                events: updates.success.events,
-                historyTruncated: updates.success.rawCount >= PAGE_SIZE,
-                linkedPullRequests: links,
-              });
-            }),
+            Effect.map(([conversation, updates, workflow, links]) => ({
+              ...workflow.item,
+              states: workflow.states,
+              // Nothing cheap names the viewer here; the service already read it per host.
+              viewer: input.viewer ?? null,
+              viewerPermissions: VIEWER_PERMISSIONS,
+              comments: conversation.comments,
+              commentsCursor: conversation.nextCursor,
+              events: Result.getOrThrow(
+                decodeUpdatesJson(
+                  updates.raw,
+                  scope.item.workItemType === null ? undefined : workflow.states,
+                  "desc",
+                ),
+              ).events,
+              historyTruncated: updates.nextCursor !== null,
+              linkedPullRequests: links,
+            })),
           ),
         ),
       ),
 
     getComments: (input) =>
-      target("getComments", input).pipe(
-        Effect.flatMap((scope) =>
-          comments({
-            ...scope,
-            cwd: input.cwd,
-            operation: "getComments",
-            cursor: input.cursor,
-            ...(input.viewer === undefined ? {} : { viewer: input.viewer }),
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const previous = yield* commentCursor(input);
+        const scope = yield* target("getComments", input);
+        return yield* comments({
+          ...input,
+          ...scope,
+          operation: "getComments",
+          ...(previous === undefined ? {} : { previous }),
+        });
+      }),
 
     getViewerPermissions: () => Effect.succeed(VIEWER_PERMISSIONS),
 
@@ -1283,24 +1459,16 @@ export const make: Effect.Effect<
 
     getHistory: (input) =>
       Effect.gen(function* () {
+        const previous = yield* historyCursor(input);
         const scope = yield* target("getHistory", input);
-        const skip = yield* pageOffset(input, "getHistory");
-        const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
-        const page = yield* read({
-          cwd: input.cwd,
-          operation: "getHistory",
-          args: invokeArgs({
-            ...scope,
-            resource: "updates",
-            route: [`id=${scope.number}`],
-            query: [`$top=${limit}`, `$skip=${skip}`],
-          }),
-          decode: decodeUpdatesJson,
-        });
-        return {
-          items: page.events,
-          nextCursor: page.rawCount >= limit ? String(skip + page.rawCount) : null,
-        };
+        const page = yield* history(
+          input,
+          scope,
+          input.order ?? "desc",
+          input.limit ?? PAGE_SIZE,
+          previous,
+        );
+        return { items: page.items, nextCursor: page.nextCursor };
       }),
 
     getLinkedPullRequests: (input) =>

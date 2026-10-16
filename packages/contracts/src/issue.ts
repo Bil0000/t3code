@@ -436,6 +436,14 @@ export type IssueEventKind = typeof IssueEventKind.Type;
 export const IssueEvent = Schema.Struct({
   id: TrimmedNonEmptyString,
   kind: IssueEventKind,
+  url: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
+  reference: Schema.optional(
+    Schema.Struct({
+      url: TrimmedNonEmptyString.check(Schema.isMaxLength(8192)),
+      title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4096))),
+      identifier: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
+    }),
+  ),
   actor: Schema.NullOr(IssueActor),
   createdAt: IsoDateTime,
   /** What the event was about, where it has a subject: a label name, a login, a new title. */
@@ -474,6 +482,8 @@ export const IssueCapabilities = Schema.Struct({
   updateParent: Schema.optional(Schema.Boolean),
   listSorts: Schema.optional(Schema.Array(IssueListSort)),
   listOrders: Schema.optional(Schema.Array(IssueListOrder)),
+  commentOrders: Schema.optional(Schema.Array(IssueListOrder)),
+  historyOrders: Schema.optional(Schema.Array(IssueListOrder)),
   create: Schema.Boolean,
   createIssueTypes: Schema.optional(Schema.Boolean),
   /** Title and body can be rewritten after filing. */
@@ -551,7 +561,6 @@ export const IssueDetail = Schema.Struct({
   reactions: Schema.optional(Schema.Array(IssueReaction)),
   reactionsTruncated: Schema.optional(Schema.Boolean),
   comments: Schema.Array(IssueComment),
-  /** Where older comments carry on; null once the conversation is whole. */
   commentsCursor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
   events: Schema.Array(IssueEvent),
   linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
@@ -559,10 +568,10 @@ export const IssueDetail = Schema.Struct({
 });
 export type IssueDetail = typeof IssueDetail.Type;
 
-/** Older comments, one page past a cursor the detail or a previous page handed over. */
 export const IssueCommentsPageInput = Schema.Struct({
   ...IssueRef.fields,
-  cursor: TrimmedNonEmptyString.check(Schema.isMaxLength(8192)),
+  cursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(8192))),
+  order: Schema.optional(IssueListOrder),
   viewer: Schema.optional(TrimmedNonEmptyString),
 });
 export type IssueCommentsPageInput = typeof IssueCommentsPageInput.Type;
@@ -914,6 +923,11 @@ export type IssueCandidates = typeof IssueCandidates.Type;
 
 export const IssuePageRef = Schema.Struct({ ...IssueRef.fields, ...IssuePageInput.fields });
 export type IssuePageRef = typeof IssuePageRef.Type;
+export const IssueHistoryInput = Schema.Struct({
+  ...IssuePageRef.fields,
+  order: Schema.optional(IssueListOrder),
+});
+export type IssueHistoryInput = typeof IssueHistoryInput.Type;
 export const IssueScopePageRef = Schema.Struct({
   ...IssueScopeRef.fields,
   ...IssuePageInput.fields,

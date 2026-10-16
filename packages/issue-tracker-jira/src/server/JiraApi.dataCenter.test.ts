@@ -1327,7 +1327,12 @@ it.effect.each(["listIssues", "listLabelCandidates", "getHierarchy", "listCandid
 
 it.effect("normalizes complete DC embedded comments to a bounded newest page", () =>
   Effect.gen(function* () {
-    const comments = Array.from({ length: 60 }, (_, index) => ({ id: String(index + 1) }));
+    const comments = Array.from({ length: 60 }, (_, index) => ({
+      id: String(index + 1),
+      body: "Native wiki",
+      created: "2026-10-15T10:" + String(index).padStart(2, "0") + ":00Z",
+      updated: issue.fields.updated,
+    }));
     const f = fakeJira(() => ({
       body: {
         ...issue,
@@ -1351,7 +1356,7 @@ it.effect("normalizes complete DC embedded comments to a bounded newest page", (
 );
 
 it.effect.each([
-  { name: "complete 60", total: 60, startAt: 0, embedded: 60, offsets: [50], canEdit: true },
+  { name: "complete 60", total: 60, startAt: 0, embedded: 60, offsets: [0, 50], canEdit: true },
   { name: "incomplete 60", total: 60, startAt: 0, embedded: 10, offsets: [0, 50], canEdit: true },
   { name: "displaced 60", total: 60, startAt: 10, embedded: 10, offsets: [0, 50], canEdit: false },
   { name: "complete 50", total: 50, startAt: 0, embedded: 50, offsets: [], canEdit: true },
@@ -1425,10 +1430,14 @@ it.effect.each([
       native.map((comment) => comment.id),
     );
     expect(detail.comments.map((comment) => comment.id)).toEqual(
-      native.slice(-50).map((comment) => comment.id),
+      native
+        .slice(-50)
+        .toReversed()
+        .map((comment) => comment.id),
     );
     expect(detail.comments).toHaveLength(Math.min(50, scenario.total));
-    expect(detail.commentsCursor).toBe(scenario.total > 50 ? "50" : null);
+    if (scenario.total > 50) expect(detail.commentsCursor).toEqual(expect.any(String));
+    else expect(detail.commentsCursor).toBeNull();
     expect(cursor).toBeNull();
     expect(loaded.every((comment) => comment.canEdit === scenario.canEdit)).toBe(true);
     for (const comment of loaded)
@@ -1452,35 +1461,264 @@ it.effect.each([
 
 it.effect("stops DC comment loading when native comment permissions return 403", () =>
   Effect.gen(function* () {
+    let denied = false;
     const f = fakeJira((request) => {
       const path = new URL(request.url).pathname;
-      if (path.endsWith("/issue/ENG-1")) return { body: issue };
-      if (path.endsWith("/mypermissions")) return { status: 403 };
+      if (path.endsWith("/issue/ENG-1"))
+        return {
+          body: {
+            ...issue,
+            changelog: { startAt: 0, total: 0, histories: [] },
+            fields: { ...issue.fields, comment: { startAt: 0, total: 51 } },
+          },
+        };
+      if (path.endsWith("/mypermissions"))
+        return denied ? { status: 403 } : { body: { permissions: {} } };
+      if (path.endsWith("/myself")) return { body: user };
+      if (path.endsWith("/remotelink")) return { body: [] };
+      if (path.endsWith("/comment"))
+        return {
+          body: {
+            startAt: 0,
+            total: 51,
+            comments: Array.from({ length: 50 }, (_, index) => ({
+              id: String(51 - index),
+              author: user,
+              body: "Native comment",
+              created: issue.fields.created,
+              updated: issue.fields.updated,
+            })),
+          },
+        };
       throw new Error(`Unexpected fake Jira request: ${request.url}`);
     });
     const tracker = yield* JiraIssueTracker.make.pipe(
       Effect.provideServiceEffect(JiraApi.JiraApi, f.api),
     );
+    const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1", viewer: user.key };
+    const detail = yield* tracker.getIssue(target);
+    expect(detail.commentsCursor).not.toBeNull();
+    const before = f.calls.length;
+    denied = true;
     expect(
-      yield* tracker
-        .getComments({
-          cwd: "/tmp",
-          host,
-          scope: "ENG",
-          key: "ENG-1",
-          viewer: user.key,
-          cursor: "0",
-        })
-        .pipe(Effect.flip),
+      yield* tracker.getComments({ ...target, cursor: detail.commentsCursor! }).pipe(Effect.flip),
     ).toMatchObject({
       operation: "getComments",
       reason: "failed",
       detail: "Jira returned HTTP 403.",
     });
-    expect(f.calls.map((request) => new URL(request.url).pathname)).toEqual([
+    expect(f.calls.slice(before).map((request) => new URL(request.url).pathname)).toEqual([
       "/Team/Jira/rest/api/2/issue/ENG-1",
       "/Team/Jira/rest/api/2/mypermissions",
     ]);
     expect(f.calls.every((request) => request.method === "GET")).toBe(true);
   }),
+);
+
+it.effect.each(["asc", "desc"] as const)(
+  "orders complete 205-row DC history before clipping and offset paging from native %s",
+  (nativeOrder) =>
+    Effect.gen(function* () {
+      const orderedIds = [2, 205, ...Array.from({ length: 202 }, (_, index) => index + 3), 1];
+      const chronological = orderedIds.map((id, index) => ({
+        id: String(id),
+        author: user,
+        created:
+          "2026-10-16T" +
+          String(10 + Math.floor(index / 120)).padStart(2, "0") +
+          ":" +
+          String(Math.floor(index / 2) % 60).padStart(2, "0") +
+          ":00Z",
+        items: [{ field: "summary", fromString: "Before", toString: String(id) }],
+      }));
+      const histories = nativeOrder === "desc" ? chronological.toReversed() : chronological;
+      const f = fakeJira((request) => {
+        const path = new URL(request.url).pathname;
+        if (path.endsWith("/myself")) return { body: user };
+        if (path.endsWith("/mypermissions")) return { body: { permissions: {} } };
+        if (path.endsWith("/remotelink")) return { body: [] };
+        if (path.endsWith("/issue/ENG-1"))
+          return {
+            body: {
+              ...issue,
+              fields: { ...issue.fields, comment: { startAt: 0, total: 0, comments: [] } },
+              changelog: { startAt: 0, total: 205, histories },
+            },
+          };
+        throw new Error(`Unexpected fake Jira request: ${request.url}`);
+      });
+      const api = yield* f.api;
+      const tracker = yield* JiraIssueTracker.make.pipe(
+        Effect.provideService(JiraApi.JiraApi, api),
+      );
+      const target = { cwd: "/tmp", host, scope: "ENG", key: "ENG-1" };
+      const detail = yield* tracker.getIssue(target);
+      expect(detail.events.map((event) => event.detail)).toEqual(
+        [1, ...Array.from({ length: 49 }, (_, index) => 204 - index)].map(String),
+      );
+      expect(detail.historyTruncated).toBe(true);
+      expect(f.calls).toHaveLength(4);
+      const expanded = yield* api.request({
+        host,
+        operation: "getIssue",
+        method: "GET",
+        path: "/issue/ENG-1?fields=project&expand=changelog",
+        schema: JiraIssue,
+      });
+      expect(expanded.changelog).toMatchObject({ startAt: 105, total: 205 });
+      expect(expanded.changelog?.histories.map((entry) => entry.id)).toEqual(
+        [...Array.from({ length: 99 }, (_, index) => 106 + index), 1].map(String),
+      );
+      for (const order of ["asc", "desc"] as const) {
+        const loaded: string[] = [];
+        const requestCounts: number[] = [];
+        let cursor: string | undefined;
+        do {
+          const before = f.calls.length;
+          const page = yield* tracker.getHistory!({
+            ...target,
+            order,
+            limit: 50,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+          requestCounts.push(f.calls.length - before);
+          loaded.push(...page.items.map((event) => event.detail!));
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor !== undefined && loaded.length <= 205);
+        expect(cursor).toBeUndefined();
+        expect(loaded).toEqual(
+          (order === "desc" ? orderedIds.toReversed() : orderedIds).map(String),
+        );
+        expect(new Set(loaded).size).toBe(205);
+        expect(requestCounts).toEqual(order === "desc" ? [1, 2, 2, 2, 2] : [2, 2, 2, 2, 2]);
+      }
+      const pageSchema = Schema.Struct({
+        startAt: Schema.Int,
+        total: Schema.Int,
+        isLast: Schema.Boolean,
+        values: Schema.Array(Schema.Struct({ id: Schema.String })),
+      });
+      for (const [startAt, limit, ids] of [
+        [0, 2, ["2", "205"]],
+        [8, 2, ["9", "10"]],
+        [200, 5, ["201", "202", "203", "204", "1"]],
+        [205, 5, []],
+      ] as const) {
+        const before = f.calls.length;
+        const page = yield* api.request({
+          host,
+          operation: "getHistory",
+          method: "GET",
+          path: "/issue/ENG-1/changelog?startAt=" + startAt + "&maxResults=" + limit,
+          schema: pageSchema,
+        });
+        expect(page).toMatchObject({ startAt, total: 205, isLast: startAt + limit >= 205 });
+        expect(page.values.map((entry) => entry.id)).toEqual(ids);
+        expect(f.calls).toHaveLength(before + 1);
+      }
+      expect(f.calls).toHaveLength(28);
+      expect(
+        f.calls.every(
+          (request) =>
+            request.method === "GET" && request.headers.authorization === "Bearer fake-pat",
+        ),
+      ).toBe(true);
+    }),
+);
+
+it.effect.each(["asc", "desc"] as const)(
+  "selects the true newest complete embedded DC comments from native %s before clipping",
+  (nativeOrder) =>
+    Effect.gen(function* () {
+      const comments = Array.from({ length: 205 }, (_, index) => ({
+        id: String(index + 1),
+        body: "Native wiki",
+        author: user,
+        created:
+          "2026-10-16T" +
+          String(10 + Math.floor(index / 60)).padStart(2, "0") +
+          ":" +
+          String(index % 60).padStart(2, "0") +
+          ":00Z",
+        updated: issue.fields.updated,
+      }));
+      const f = fakeJira(() => ({
+        body: {
+          ...issue,
+          fields: {
+            ...issue.fields,
+            comment: {
+              startAt: 0,
+              total: 205,
+              comments: nativeOrder === "desc" ? comments.toReversed() : comments,
+            },
+          },
+        },
+      }));
+      const api = yield* f.api;
+      const result = yield* api.request({
+        host,
+        operation: "getIssue",
+        method: "GET",
+        path: "/issue/ENG-1",
+        schema: JiraIssue,
+      });
+      expect(result.fields.comment).toMatchObject({ startAt: 0, total: 205 });
+      expect(result.fields.comment?.comments?.map((entry) => entry.id)).toEqual(
+        Array.from({ length: 50 }, (_, index) => String(index + 156)),
+      );
+      expect(f.calls).toHaveLength(1);
+    }),
+);
+
+it.effect.each([{ created: "not-a-native-date" }, { created: "" }, { id: "" }])(
+  "refuses malformed complete DC history rows before a clipped window: %j",
+  (invalid) =>
+    Effect.gen(function* () {
+      const histories = Array.from({ length: 205 }, (_, index) => ({
+        id: String(index + 1),
+        author: user,
+        created: issue.fields.created,
+        items: [],
+      }));
+      const f = fakeJira((request) => {
+        const path = new URL(request.url).pathname;
+        if (path.endsWith("/myself")) return { body: user };
+        if (path.endsWith("/mypermissions")) return { body: { permissions: {} } };
+        if (path.endsWith("/remotelink")) return { body: [] };
+        return {
+          body: {
+            ...issue,
+            fields: { ...issue.fields, comment: { total: 0, comments: [] } },
+            changelog: {
+              startAt: 0,
+              total: 205,
+              histories: [{ ...histories[0], ...invalid }, ...histories.slice(1)],
+            },
+          },
+        };
+      });
+      const api = yield* f.api;
+      const tracker = yield* JiraIssueTracker.make.pipe(
+        Effect.provideService(JiraApi.JiraApi, api),
+      );
+      expect(
+        (yield* tracker
+          .getIssue({ cwd: "/tmp", host, scope: "ENG", key: "ENG-1" })
+          .pipe(Effect.flip)).reason,
+      ).toBe("failed");
+      expect(f.calls).toHaveLength(1);
+      expect(
+        (yield* api
+          .request({
+            host,
+            operation: "getHistory",
+            method: "GET",
+            path: "/issue/ENG-1/changelog?startAt=155&maxResults=50",
+            schema: Schema.Unknown,
+          })
+          .pipe(Effect.asVoid, Effect.flip)).reason,
+      ).toBe("failed");
+      expect(f.calls).toHaveLength(2);
+    }),
 );

@@ -730,6 +730,13 @@ export function createIssueEnvironmentAtoms<R, E>(
       refreshTrigger: (target) =>
         target.input.cursor === undefined ? historyRefresh(target) : undefined,
     }),
+    commentPages: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:comment-pages",
+      tag: WS_METHODS.issuesComments,
+      staleTimeMs: 30_000,
+      refreshTrigger: (target) =>
+        target.input.cursor === undefined ? historyRefresh(target) : undefined,
+    }),
     linkedPullRequests: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:issues:linked-pull-requests",
       tag: WS_METHODS.issuesLinkedPullRequests,
@@ -792,7 +799,6 @@ export function createIssueEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
-    /** Older comments past the cursor the detail handed over; the panel prepends what arrives. */
     comments: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:comments",
       tag: WS_METHODS.issuesComments,

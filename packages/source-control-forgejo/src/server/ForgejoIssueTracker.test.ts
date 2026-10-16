@@ -7,9 +7,18 @@ import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSour
 
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoIssueTracker from "./ForgejoIssueTracker.ts";
+import {
+  ForgejoTimelineEntry,
+  ForgejoConversationCursor,
+  forgejoIssueEvent,
+} from "./forgejoIssueJson.ts";
 
 const encode = (value: unknown) => JSON.stringify(value);
 const isForgejoCliError = Schema.is(ForgejoCli.ForgejoCliError);
+const decodeTimelineEntry = Schema.decodeSync(ForgejoTimelineEntry);
+const decodeConversationCursor = Schema.decodeSync(
+  Schema.fromJsonString(ForgejoConversationCursor),
+);
 
 const ISSUE = {
   number: 42,
@@ -32,6 +41,259 @@ const CONTACT_LINK = {
   about: "Get help",
   url: "https://support.example.test/help",
 };
+
+describe("Forgejo comment ordering", () => {
+  it("keeps native event and source URLs distinct and rejects unsafe links", () => {
+    const source = {
+      number: 50,
+      title: "Native source",
+      html_url: "https://other.test/team/repo/pulls/50",
+    };
+    const native = {
+      id: 7,
+      type: "pull_ref",
+      created_at: "2026-10-16T00:00:00Z",
+      html_url: "https://forgejo.test/acme/web/issues/42#issuecomment-7",
+      ref_issue: source,
+    };
+    const event = forgejoIssueEvent(decodeTimelineEntry(native));
+    expect(event).toMatchObject({
+      url: native.html_url,
+      reference: { url: source.html_url, title: "Native source", identifier: "#50" },
+    });
+    for (const url of [
+      "javascript:alert(1)",
+      "data:text/html,test",
+      "/relative",
+      "https://user:secret@example.test/path",
+    ]) {
+      const unsafe = forgejoIssueEvent({
+        ...native,
+        html_url: url,
+        ref_issue: { ...source, html_url: url },
+      });
+      expect(unsafe).not.toHaveProperty("url");
+      expect(unsafe).not.toHaveProperty("reference");
+    }
+    expect(
+      forgejoIssueEvent({ id: 9, type: "close", created_at: native.created_at }),
+    ).not.toHaveProperty("url");
+  });
+
+  it.effect(
+    "continues native history without duplicates and keeps filtered completion unknown",
+    () =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const api = yield* tracker((input) => {
+          paths.push(input.path);
+          const page = Number(new URL(input.path, "https://forgejo.test").searchParams.get("page"));
+          return {
+            stdout: encode(
+              page === 1
+                ? [{ id: 20, type: "close", created_at: "2026-10-01T00:00:00Z" }]
+                : [{ id: 10, type: "reopen", created_at: "2026-10-02T00:00:00Z" }],
+            ),
+            stderr: page === 1 ? 'Link: </next>; rel="next"' : "X-Total-Count: 1",
+          };
+        });
+        const input = {
+          cwd: "/w",
+          host: "forgejo.test:3000",
+          scope: "Mount/acme/web",
+          key: "42",
+          order: "asc" as const,
+          limit: 1,
+        };
+        const first = yield* api.getHistory!(input);
+        const second = yield* api.getHistory!({
+          ...input,
+          host: "FORGEJO.TEST:3000",
+          cursor: first.nextCursor!,
+        });
+        expect([...first.items, ...second.items].map((row) => row.id)).toEqual(["20", "10"]);
+        expect(second.truncated).toBe(true);
+        expect(paths).toHaveLength(2);
+        const third = yield* api.getHistory!({ ...input, cursor: second.nextCursor! }).pipe(
+          Effect.flip,
+        );
+        expect(third.reason).toBe("failed");
+        expect(paths).toHaveLength(3);
+      }),
+  );
+
+  it.effect.each([
+    "X-Total-Count: invalid",
+    "X-Total-Count: 1\nX-Total-Count: 1",
+    "X-Total-Count: 0",
+  ])("refuses contradictory comment totals %s without reaction reads", (stderr) =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((input) => {
+        paths.push(input.path);
+        return {
+          stdout: encode([
+            { id: 1, body: "Comment", user: null, created_at: "2026-10-01T00:00:00Z" },
+          ]),
+          stderr,
+        };
+      });
+      yield* api
+        .getComments({
+          cwd: "/w",
+          host: "forgejo.test",
+          scope: "acme/web",
+          key: "42",
+          order: "asc",
+        })
+        .pipe(Effect.flip);
+      expect(paths).toHaveLength(1);
+    }),
+  );
+
+  it.effect("refuses out-of-range native cursor windows before HTTP", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const rows = Array.from({ length: 60 }, (_, index) => ({
+        id: index + 1,
+        body: "Comment",
+        user: null,
+        created_at: "2026-10-01T00:00:00Z",
+      }));
+      const api = yield* tracker((input) => {
+        paths.push(input.path);
+        return {
+          stdout: encode(input.path.includes("/42/comments?") ? rows : []),
+          stderr: "X-Total-Count: 60",
+        };
+      });
+      const input = { cwd: "/w", host: "forgejo.test", scope: "acme/web", key: "42" };
+      const first = yield* api.getComments(input);
+      const state = decodeConversationCursor(first.nextCursor!);
+      paths.length = 0;
+      for (const native of [
+        "offset:1:60",
+        "offset:1:999",
+        "offset:0:50",
+        "page:99999999:50",
+        "2",
+      ]) {
+        yield* api
+          .getComments({ ...input, cursor: JSON.stringify({ ...state, native }) })
+          .pipe(Effect.flip);
+      }
+      expect(paths).toEqual([]);
+    }),
+  );
+  it.effect.each(["asc", "desc"] as const)(
+    "reads true %s across a complete native conversation",
+    (order) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const rows = Array.from({ length: 120 }, (_, index) => ({
+          id: index + 1,
+          body: "Comment",
+          user: { login: "julius" },
+          created_at: "2026-07-02T00:00:00Z",
+        }));
+        const api = yield* tracker((input) => {
+          paths.push(input.path);
+          if (input.path.startsWith("repos/acme/web/issues/42/comments?"))
+            return { stdout: encode(rows), stderr: "X-Total-Count: 120" };
+          if (/\/issues\/comments\/\d+\/reactions$/.test(input.path)) return { stdout: "[]" };
+          return answer(input.path);
+        });
+        const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
+        const ids: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = yield* api.getComments({
+            ...target,
+            order,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+          ids.push(...page.comments.map((row) => row.id));
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor !== undefined && ids.length <= 120);
+        expect(ids).toEqual(
+          Array.from({ length: 120 }, (_, index) =>
+            String(order === "desc" ? 120 - index : index + 1),
+          ),
+        );
+        expect(cursor).toBeUndefined();
+        expect(paths.filter((path) => /\/42\/comments\?/.test(path))).toHaveLength(3);
+        expect(
+          paths.filter((path) => /\/issues\/comments\/\d+\/reactions$/.test(path)),
+        ).toHaveLength(120);
+      }),
+  );
+
+  it.effect("rejects changed cursor context before native reads", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((input) => {
+        paths.push(input.path);
+        return input.path.includes("timeline")
+          ? {
+              stdout: encode([{ id: 1, type: "close", created_at: "2026-07-02T00:00:00Z" }]),
+              stderr: 'Link: </next>; rel="next"',
+            }
+          : answer(input.path);
+      });
+      const target = {
+        cwd: "/w",
+        host: "forgejo.test:3000",
+        scope: "acme/web",
+        key: "42",
+        connectionId: "account-a",
+        order: "asc" as const,
+      };
+      for (const method of ["getComments", "getHistory"] as const) {
+        const read = (input: Parameters<typeof api.getComments>[0]) =>
+          method === "getComments"
+            ? api.getComments(input).pipe(Effect.map((page) => page.nextCursor))
+            : api.getHistory!(input).pipe(Effect.map((page) => page.nextCursor));
+        const cursor = (yield* read(target))!;
+        expect(cursor).toBeTruthy();
+        paths.length = 0;
+        for (const change of [
+          { connectionId: "account-b" },
+          { cwd: "/else" },
+          { host: "other.test" },
+          { scope: "other/repo" },
+          { key: "43" },
+          { order: "desc" as const },
+          { cursor: "2" },
+          { cursor: cursor + "x" },
+        ]) {
+          yield* read({ ...target, cursor, ...change }).pipe(Effect.flip);
+        }
+        expect(paths).toEqual([]);
+        const { connectionId: _connectionId, ...defaultTarget } = target;
+        yield* read({ ...defaultTarget, cursor }).pipe(Effect.flip);
+        expect(paths).toEqual([]);
+      }
+    }),
+  );
+
+  it.effect("refuses newest history before reading a native oldest-first timeline", () =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const api = yield* tracker((input) => {
+        paths.push(input.path);
+        return { stdout: "[]" };
+      });
+      const error = yield* api.getHistory!({
+        cwd: "/w",
+        host: "forgejo.test:3000",
+        scope: "acme/web",
+        key: "42",
+      }).pipe(Effect.flip);
+      expect(error.reason).toBe("failed");
+      expect(paths).toEqual([]);
+    }),
+  );
+});
 
 /** Every endpoint the detail read touches, answered by path; stderr carries the `Link` header. */
 function answer(path: string): { readonly stdout: string; readonly stderr?: string } {
@@ -1206,10 +1468,9 @@ describe("ForgejoIssueTracker", () => {
         key: "42",
         limit: 1,
       };
-      expect(yield* api.getHistory!(target)).toMatchObject({
-        items: [{ kind: "updated", detail: "Release" }],
-        nextCursor: "2",
-      });
+      const history = yield* api.getHistory!({ ...target, order: "asc" });
+      expect(history.items).toMatchObject([{ kind: "updated", detail: "Release" }]);
+      expect(history.nextCursor).toBeTruthy();
       const repo = yield* api.listLabelCandidates!(target);
       expect(repo.nextCursor).toBe("org:1");
       expect(
@@ -1233,7 +1494,7 @@ describe("ForgejoIssueTracker", () => {
           host: "forgejo.test:3000",
           scope: "acme/web",
           key: "42",
-          cursor: "1",
+          order: "asc",
           ...(viewer === undefined ? {} : { viewer }),
         });
         if (viewer === "julius") expect(page.comments[0]?.canEdit).toBe(true);
@@ -1394,7 +1655,7 @@ describe("ForgejoIssueTracker", () => {
         },
         reactions: [{ content: "eyes", count: 1, actors: ["theo"], viewerHasReacted: false }],
         reactionsTruncated: true,
-        commentsCursor: "2",
+        commentsCursor: expect.any(String),
       });
       expect(issue.comments).toEqual([
         {
@@ -2236,7 +2497,7 @@ describe("ForgejoIssueTracker", () => {
           scope: "acme/web",
           key: "42",
         });
-        expect(issue.historyTruncated).toBe(stderr === undefined);
+        expect(issue.historyTruncated).toBe(true);
         expect(paths.filter((path) => path.includes("/timeline"))).toHaveLength(1);
       }),
   );
@@ -2318,21 +2579,17 @@ describe("ForgejoIssueTracker", () => {
         const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
         const first = yield* api.getIssue(target);
         expect(first.comments.map((comment) => comment.id)).toEqual(
-          Array.from({ length: 50 }, (_, index) => String(index + 1)),
+          Array.from({ length: 50 }, (_, index) => String(count - index)),
         );
-        expect(first.commentsCursor).toBe("offset:1:50");
+        expect(first.commentsCursor).toBeTruthy();
         const second = yield* api.getComments({ ...target, cursor: first.commentsCursor! });
         expect(second.comments.map((comment) => comment.id)).toEqual(
-          comments.slice(50).map((comment) => String(comment.id)),
+          Array.from({ length: count - 50 }, (_, index) => String(count - 50 - index)),
         );
-        expect(second.nextCursor).toBe(`page:2:${count}`);
-        const last = yield* api.getComments({ ...target, cursor: second.nextCursor! });
-        expect(last.comments).toEqual([]);
-        expect(last.nextCursor).toBeNull();
+        expect(second.nextCursor).toBeNull();
         expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toEqual([
           "repos/acme/web/issues/42/comments?limit=50&page=1",
           "repos/acme/web/issues/42/comments?limit=50&page=1",
-          "repos/acme/web/issues/42/comments?limit=50&page=2",
         ]);
         expect(paths.filter((path) => path.endsWith("/comments/51/reactions"))).toHaveLength(1);
         expect(
@@ -2378,7 +2635,7 @@ describe("ForgejoIssueTracker", () => {
         const pages = [...Array.from({ length: Math.ceil(firstCount / 50) - 1 }, () => 1), 2, 2, 3];
         for (const page of pages) {
           expect(cursor).not.toBeNull();
-          const result = yield* api.getComments({ ...target, cursor: cursor! });
+          const result = yield* api.getComments({ ...target, order: "asc", cursor: cursor! });
           expect(result.comments.length).toBeLessThanOrEqual(50);
           ids.push(...result.comments.map((comment) => comment.id));
           cursor = result.nextCursor;
@@ -2420,9 +2677,13 @@ describe("ForgejoIssueTracker", () => {
       });
       const target = { cwd: "/w", host: "forgejo.test", scope: "acme/web", key: "42" };
       const first = yield* api.getIssue(target);
-      const second = yield* api.getComments({ ...target, cursor: first.commentsCursor! });
-      expect(second.nextCursor).toBe("offset:2:50");
-      const third = yield* api.getComments({ ...target, cursor: second.nextCursor! });
+      const second = yield* api.getComments({
+        ...target,
+        order: "asc",
+        cursor: first.commentsCursor!,
+      });
+      expect(second.nextCursor).toBeTruthy();
+      const third = yield* api.getComments({ ...target, order: "asc", cursor: second.nextCursor! });
       expect(third.comments.map((comment) => comment.id)).toEqual(
         Array.from({ length: 10 }, (_, index) => String(index + 52)),
       );
@@ -2486,16 +2747,18 @@ describe("ForgejoIssueTracker", () => {
           return answer(input.path);
         });
         const target = { cwd: "/w", host: "forgejo.test:3000", scope: "acme/web", key: "42" };
-        let cursor = "1";
+        let cursor: string | undefined;
         const ids: string[] = [];
         for (let page = 1; page <= 4; page++) {
-          const result = yield* api.getComments({ ...target, cursor });
+          const result = yield* api.getComments({
+            ...target,
+            order: "asc",
+            ...(cursor === undefined ? {} : { cursor }),
+          });
           ids.push(...result.comments.map((comment) => comment.id));
-          expect(result.nextCursor).toBe(
-            page === 4 ? null : `page:${page + 1}:${Math.min(page * 20, 50)}`,
-          );
+          expect(result.nextCursor === null).toBe(page === 4);
           expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toHaveLength(page);
-          cursor = result.nextCursor ?? "";
+          cursor = result.nextCursor ?? undefined;
         }
         expect(ids).toEqual(comments.map((comment) => String(comment.id)));
         expect(
@@ -2514,28 +2777,32 @@ describe("ForgejoIssueTracker", () => {
           return {
             stdout: encode([
               {
-                id: 51,
+                id: input.path.endsWith("page=1") ? 1 : 51,
                 body: "Last comment",
                 user: { login: "julius" },
                 created_at: "2026-07-02T00:00:00Z",
               },
             ]),
-            stderr:
-              'Link: <https://forgejo.test:3000/api/v1/repos/acme/web/issues/42/comments?page=1>; rel="prev"',
+            stderr: input.path.endsWith("page=1")
+              ? 'Link: </next>; rel="next"'
+              : 'Link: </previous>; rel="prev"',
           };
         if (/\/issues\/comments\/\d+\/reactions$/.test(route)) return { stdout: "[]" };
         return answer(input.path);
       });
-      const page = yield* api.getComments({
+      const target = {
         cwd: "/w",
         host: "forgejo.test:3000",
         scope: "acme/web",
         key: "42",
-        cursor: "2",
-      });
+        order: "asc" as const,
+      };
+      const first = yield* api.getComments(target);
+      const page = yield* api.getComments({ ...target, cursor: first.nextCursor! });
       expect(page.comments.map((comment) => comment.id)).toEqual(["51"]);
       expect(page.nextCursor).toBeNull();
       expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toEqual([
+        "repos/acme/web/issues/42/comments?limit=50&page=1",
         "repos/acme/web/issues/42/comments?limit=50&page=2",
       ]);
     }),
@@ -2579,13 +2846,17 @@ describe("ForgejoIssueTracker", () => {
       expect(first.comments.map((comment) => comment.id)).toEqual(
         Array.from({ length: Math.min(count, 50) }, (_, index) => String(index + 1)),
       );
-      expect(first.commentsCursor).toBe(`page:2:${Math.min(count, 50)}`);
+      expect(first.commentsCursor).toBeTruthy();
       expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toHaveLength(1);
-      const second = yield* api.getComments({ ...target, cursor: first.commentsCursor! });
+      const second = yield* api.getComments({
+        ...target,
+        order: "asc",
+        cursor: first.commentsCursor!,
+      });
       expect(second.comments.map((comment) => comment.id)).toEqual(
         paginated ? Array.from({ length: 10 }, (_, index) => String(index + 51)) : [],
       );
-      expect(second.nextCursor).toBe(paginated ? "page:3:60" : null);
+      expect(second.nextCursor === null).toBe(!paginated);
       expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toEqual([
         "repos/acme/web/issues/42/comments?limit=50&page=1",
         "repos/acme/web/issues/42/comments?limit=50&page=2",
@@ -2594,7 +2865,11 @@ describe("ForgejoIssueTracker", () => {
         count,
       );
       if (paginated) {
-        const last = yield* api.getComments({ ...target, cursor: second.nextCursor! });
+        const last = yield* api.getComments({
+          ...target,
+          order: "asc",
+          cursor: second.nextCursor!,
+        });
         expect(last.comments).toEqual([]);
         expect(last.nextCursor).toBeNull();
         expect(paths.filter((path) => /\/42\/comments(?:\?|$)/.test(path))).toHaveLength(3);

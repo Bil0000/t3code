@@ -187,6 +187,11 @@ export const useIssueHistory = createIssuePagedQuery(
   issueEnvironment.history,
   pageOf,
 );
+export const useIssueComments = createIssuePagedQuery(
+  "web-issues:comments",
+  issueEnvironment.commentPages,
+  (value) => ({ items: value.comments, nextCursor: value.nextCursor }),
+);
 const useLinkedPullRequestPages = createIssuePagedQuery(
   "web-issues:linked-pull-requests",
   issueEnvironment.linkedPullRequests,
