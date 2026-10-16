@@ -1,10 +1,12 @@
+import { hostPreviewMimeTypeFromExtension } from "@t3tools/shared/filePreview";
 import JSZip from "jszip";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
-const MAX_ENTRIES = 2000;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_FILES = 2000;
+const MAX_FOLDERS = 2000;
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const ARCHIVE_LIMIT_ERROR = "ZIP preview supports archives up to 32 MiB.";
-const ENTRY_LIMIT_ERROR = "ZIP preview supports up to 2,000 entries.";
+const ENTRY_LIMIT_ERROR = "ZIP preview supports up to 2,000 files and 2,000 folders.";
 const INVALID_ARCHIVE_ERROR =
   "Could not read this ZIP. The archive is corrupt or is not a valid ZIP file.";
 
@@ -19,16 +21,6 @@ export interface ZipPreviewEntry {
 type ZipFile = JSZip.JSZipObject & {
   readonly _data: { readonly uncompressedSize: number };
   internalStream(type: "uint8array"): JSZip.JSZipStreamHelper<Uint8Array<ArrayBuffer>>;
-};
-
-const IMAGE_MIME_TYPES: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  avif: "image/avif",
 };
 
 function withAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -74,15 +66,32 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
   if (view.getUint16(end + 4, true) !== 0 || view.getUint16(end + 6, true) !== 0) {
     throw new Error("Multi-part ZIP archives are not supported in ZIP preview.");
   }
-  if (count > MAX_ENTRIES) throw new Error(ENTRY_LIMIT_ERROR);
+  if (count > MAX_FILES + MAX_FOLDERS) throw new Error(ENTRY_LIMIT_ERROR);
   let offset = end - directorySize;
   let actualCount = 0;
+  let fileCount = 0;
+  let folderCount = 0;
   if (offset < 0) throw new Error(INVALID_ARCHIVE_ERROR);
   while (offset < end) {
     if (offset + 46 > end || view.getUint32(offset, true) !== 0x02014b50) {
       throw new Error(INVALID_ARCHIVE_ERROR);
     }
-    if (++actualCount > MAX_ENTRIES) throw new Error(ENTRY_LIMIT_ERROR);
+    if (++actualCount > MAX_FILES + MAX_FOLDERS) throw new Error(ENTRY_LIMIT_ERROR);
+    const nameLength = view.getUint16(offset + 28, true);
+    const nextOffset =
+      offset +
+      46 +
+      nameLength +
+      view.getUint16(offset + 30, true) +
+      view.getUint16(offset + 32, true);
+    if (nextOffset > end) throw new Error(INVALID_ARCHIVE_ERROR);
+    const lastByte = nameLength > 0 ? view.getUint8(offset + 46 + nameLength - 1) : 0;
+    const attributes = view.getUint32(offset + 38, true);
+    const isDirectory =
+      lastByte === 47 || (attributes & 16) !== 0 || ((attributes >>> 16) & 0xf000) === 0x4000;
+    if (isDirectory) folderCount++;
+    else fileCount++;
+    if (fileCount > MAX_FILES || folderCount > MAX_FOLDERS) throw new Error(ENTRY_LIMIT_ERROR);
     if ((view.getUint16(offset + 8, true) & 1) !== 0) {
       throw new Error("Encrypted ZIP archives are not supported in ZIP preview.");
     }
@@ -93,16 +102,12 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
     if (view.getUint32(offset + 24, true) === 0xffffffff) {
       throw new Error("ZIP64 archives are not supported in ZIP preview.");
     }
-    offset +=
-      46 +
-      view.getUint16(offset + 28, true) +
-      view.getUint16(offset + 30, true) +
-      view.getUint16(offset + 32, true);
+    offset = nextOffset;
   }
   if (offset !== end || actualCount !== count) throw new Error(INVALID_ARCHIVE_ERROR);
 }
 
-function readImage(file: ZipFile, mimeType: string, signal: AbortSignal): Promise<Blob> {
+function readFile(file: ZipFile, mimeType: string, signal: AbortSignal): Promise<Blob> {
   signal.throwIfAborted();
   const stream = file.internalStream("uint8array");
   return new Promise((resolve, reject) => {
@@ -122,14 +127,14 @@ function readImage(file: ZipFile, mimeType: string, signal: AbortSignal): Promis
     stream.on("data", (chunk) => {
       if (settled) return;
       size += chunk.byteLength;
-      if (size > MAX_IMAGE_BYTES) {
-        fail(new Error("Image preview supports images up to 10 MiB."));
+      if (size > MAX_FILE_BYTES) {
+        fail(new Error("File preview supports files up to 10 MiB."));
         return;
       }
       chunks.push(chunk);
     });
     stream.on("error", () =>
-      fail(new Error("Could not read this image from the ZIP. The image data is corrupt.")),
+      fail(new Error("Could not read this file from the ZIP. The file data is corrupt.")),
     );
     stream.on("end", () => {
       if (settled) return;
@@ -197,50 +202,59 @@ export async function loadZipPreview(blob: Blob, signal: AbortSignal) {
   signal.throwIfAborted();
   const entries = new Map<string, ZipPreviewEntry>();
   const files = new Map<ZipPreviewEntry, ZipFile>();
+  let folderCount = 0;
   const addEntry = (path: string, isDirectory: boolean, sizeBytes = 0) => {
     const parts = path.split("/").filter(Boolean);
     const name = parts.at(-1) ?? path;
-    const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
+    const extension = name.slice(name.lastIndexOf(".")).toLowerCase();
     const entry: ZipPreviewEntry = {
       path,
       name,
       isDirectory,
       sizeBytes,
-      mimeType:
-        !isDirectory && Object.hasOwn(IMAGE_MIME_TYPES, extension)
-          ? IMAGE_MIME_TYPES[extension]!
-          : null,
+      mimeType: isDirectory
+        ? null
+        : (hostPreviewMimeTypeFromExtension(extension) ??
+          (extension === ".bmp" ? "image/bmp" : null)),
     };
+    if (isDirectory && !entries.has(path) && ++folderCount > MAX_FOLDERS)
+      throw new Error(ENTRY_LIMIT_ERROR);
     entries.set(path, entry);
-    if (entries.size > MAX_ENTRIES) throw new Error(ENTRY_LIMIT_ERROR);
     return entry;
   };
   for (const object of Object.values(zip.files)) {
     const file = object as ZipFile;
     const parts = file.name.replaceAll("\\", "/").split("/").filter(Boolean);
-    if (parts.length === 0) continue;
+    if (parts.length > MAX_FOLDERS + 1) throw new Error(ENTRY_LIMIT_ERROR);
+    if (
+      parts.length === 0 ||
+      parts.some((part) => part === "__MACOSX" || part === ".DS_Store" || part.startsWith("._"))
+    )
+      continue;
     const path = `${parts.join("/")}${file.dir ? "/" : ""}`;
     for (let index = 1; index < parts.length; index++) {
       const directory = `${parts.slice(0, index).join("/")}/`;
       if (!entries.has(directory)) addEntry(directory, true);
     }
     const entry = addEntry(path, file.dir, file.dir ? 0 : file._data.uncompressedSize >>> 0);
-    if (!file.dir) files.set(entry, file);
+    if (!file.dir) {
+      files.set(entry, file);
+      if (files.size > MAX_FILES) throw new Error(ENTRY_LIMIT_ERROR);
+    }
   }
   const sortedEntries: readonly ZipPreviewEntry[] = [...entries.values()].sort((left, right) =>
     left.path.localeCompare(right.path),
   );
   return {
     entries: sortedEntries,
-    async readImage(entry: ZipPreviewEntry, imageSignal: AbortSignal) {
-      imageSignal.throwIfAborted();
+    async readFile(entry: ZipPreviewEntry, fileSignal: AbortSignal) {
+      fileSignal.throwIfAborted();
       const file = files.get(entry);
-      if (!file || !entry.mimeType)
-        throw new Error("Image preview is not available for this file.");
-      if (entry.sizeBytes > MAX_IMAGE_BYTES) {
-        throw new Error("Image preview supports images up to 10 MiB.");
+      if (!file) throw new Error("File preview is not available for this entry.");
+      if (entry.sizeBytes > MAX_FILE_BYTES) {
+        throw new Error("File preview supports files up to 10 MiB.");
       }
-      return readImage(file, entry.mimeType, imageSignal);
+      return readFile(file, entry.mimeType ?? "application/octet-stream", fileSignal);
     },
   };
 }

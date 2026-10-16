@@ -153,10 +153,40 @@ describe("loadZipPreview", () => {
     ]);
   });
 
+  it.each([true, false])(
+    "allows 2,000 files without counting folders, createFolders=%s",
+    async (createFolders) => {
+      const zip = new JSZip();
+      for (let index = 0; index < 2000; index++) {
+        zip.file(`folder-${index}/file.txt`, "hello", { createFolders });
+      }
+      const preview = await loadZipPreview(await archive(zip), signal());
+
+      expect(preview.entries.filter((entry) => !entry.isDirectory)).toHaveLength(2000);
+      expect(preview.entries.filter((entry) => entry.isDirectory)).toHaveLength(2000);
+    },
+  );
+
+  it("hides macOS metadata without hiding normal dotfiles", async () => {
+    const zip = new JSZip()
+      .file("__MACOSX/src/._app.ts", "metadata")
+      .file("src/.DS_Store", "metadata")
+      .file("src/._app.ts", "metadata")
+      .file("src/app.ts", "export const app = true;")
+      .file(".gitignore", "node_modules");
+    const preview = await loadZipPreview(await archive(zip), signal());
+
+    expect(preview.entries.map((entry) => entry.path)).toEqual([
+      ".gitignore",
+      "src/",
+      "src/app.ts",
+    ]);
+  });
+
   it("reads the selected raster image into a typed blob", async () => {
     const zip = new JSZip().file("photo.jpg", new Uint8Array([0xff, 0xd8, 0xff]));
     const preview = await loadZipPreview(await archive(zip), signal());
-    const image = await preview.readImage(preview.entries[0]!, signal());
+    const image = await preview.readFile(preview.entries[0]!, signal());
 
     expect(image.type).toBe("image/jpeg");
     expect(new Uint8Array(await image.arrayBuffer())).toEqual(new Uint8Array([0xff, 0xd8, 0xff]));
@@ -179,7 +209,7 @@ describe("loadZipPreview", () => {
           mimeType: "image/png",
         },
       ]);
-      const image = await preview.readImage(preview.entries[1]!, signal());
+      const image = await preview.readFile(preview.entries[1]!, signal());
       expect(new Uint8Array(await image.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
     },
   );
@@ -194,23 +224,37 @@ describe("loadZipPreview", () => {
     const preview = await loadZipPreview(blob, signal());
 
     expect(preview.entries[0]?.sizeBytes).toBe(2);
-    await expect(preview.readImage(preview.entries[0]!, signal())).rejects.toThrow(
+    await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(
       /could not read/i,
     );
   });
 
-  it("does not preview SVG or other non-raster files", async () => {
-    const zip = new JSZip()
-      .file("image.svg", "<svg/>")
-      .file("readme.txt", "hello")
-      .file("image.constructor", "x");
-    const preview = await loadZipPreview(await archive(zip), signal());
+  it.each([
+    ["src/app.ts", "export const value = 1;", "application/octet-stream"],
+    ["app.log", "ready", "application/octet-stream"],
+    ["README.md", "# Project", "application/octet-stream"],
+    ["data.csv", "name,value\nexample,1", "application/octet-stream"],
+    ["document.pdf", "%PDF-1.4", "application/pdf"],
+    ["clip.mp4", "media", "video/mp4"],
+    ["sound.mp3", "media", "audio/mpeg"],
+    ["image.svg", "<svg/>", "image/svg+xml"],
+  ])(
+    "extracts only the selected file %s for the shared viewer",
+    async (name, contents, mimeType) => {
+      const preview = await loadZipPreview(
+        await archive(new JSZip().file(name, contents)),
+        signal(),
+      );
+      const entry = preview.entries.find((entry) => !entry.isDirectory)!;
+      const file = await preview.readFile(entry, signal());
 
-    expect(preview.entries.every((entry) => entry.mimeType === null)).toBe(true);
-    await expect(preview.readImage(preview.entries[0]!, signal())).rejects.toThrow(
-      /image preview/i,
-    );
-  });
+      expect(file.type).toBe(mimeType);
+      expect(await file.text()).toBe(contents);
+      const folder = preview.entries.find((entry) => entry.isDirectory);
+      if (folder)
+        await expect(preview.readFile(folder, signal())).rejects.toThrow(/not available/i);
+    },
+  );
 
   it("rejects corrupt archives with a clear error", async () => {
     await expect(loadZipPreview(new Blob(["not a zip"]), signal())).rejects.toThrow(
@@ -227,6 +271,17 @@ describe("loadZipPreview", () => {
     );
 
     await expect(loadZipPreview(blob, signal())).rejects.toThrow(/encrypted/i);
+  });
+
+  it.each(["zip64", "multipart"])("rejects unsupported %s archive headers", async (kind) => {
+    const bytes = await (await archive(new JSZip().file("a.txt", "x"))).arrayBuffer();
+    const view = new DataView(bytes);
+    const end = bytes.byteLength - 22;
+    if (kind === "zip64") view.setUint16(end + 10, 0xffff, true);
+    else view.setUint16(end + 4, 1, true);
+    await expect(loadZipPreview(new Blob([bytes]), signal())).rejects.toThrow(
+      kind === "zip64" ? /ZIP64/i : /multi-part/i,
+    );
   });
 
   it("rejects unsupported compression", async () => {
@@ -256,15 +311,25 @@ describe("loadZipPreview", () => {
     view.setUint16(bytes.byteLength - 22 + 8, 1, true);
     view.setUint16(bytes.byteLength - 22 + 10, 1, true);
 
-    await expect(loadZipPreview(new Blob([bytes]), signal())).rejects.toThrow(/2,000 entries/i);
+    await expect(loadZipPreview(new Blob([bytes]), signal())).rejects.toThrow(/2,000 files/i);
   });
 
-  it("includes implicit directories in the entry limit", async () => {
-    const zip = new JSZip().file(`${"folder/".repeat(2000)}image.png`, "x", {
+  it("bounds decoded file counts when directory attributes disagree", async () => {
+    const zip = new JSZip();
+    for (let index = 0; index < 2001; index++) zip.file(`${index}.txt`, "");
+    let count = 0;
+    const blob = await patchCentral(await archive(zip), (view, offset) => {
+      if (count++ < 1000) view.setUint32(offset + 38, 0x40000000, true);
+    });
+    await expect(loadZipPreview(blob, signal())).rejects.toThrow(/2,000 files/i);
+  });
+
+  it("bounds implicit directories separately from files", async () => {
+    const zip = new JSZip().file(`${"folder/".repeat(2001)}image.png`, "x", {
       createFolders: false,
     });
 
-    await expect(loadZipPreview(await archive(zip), signal())).rejects.toThrow(/2,000 entries/i);
+    await expect(loadZipPreview(await archive(zip), signal())).rejects.toThrow(/2,000 files/i);
   });
 
   it("lists oversized images but rejects image reads", async () => {
@@ -276,7 +341,7 @@ describe("loadZipPreview", () => {
     );
     const preview = await loadZipPreview(blob, signal());
 
-    await expect(preview.readImage(preview.entries[0]!, signal())).rejects.toThrow(/10 MiB/i);
+    await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(/10 MiB/i);
   });
 
   it("stops inflated image data at the limit even when the stored size is forged", async () => {
@@ -286,7 +351,7 @@ describe("loadZipPreview", () => {
     });
     const preview = await loadZipPreview(blob, signal());
 
-    await expect(preview.readImage(preview.entries[0]!, signal())).rejects.toThrow(/10 MiB/i);
+    await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(/10 MiB/i);
   });
 
   it("rejects a cancelled archive read", async () => {
@@ -322,7 +387,7 @@ describe("loadZipPreview", () => {
       signal(),
     );
     const controller = new AbortController();
-    const image = preview.readImage(preview.entries[0]!, controller.signal);
+    const image = preview.readFile(preview.entries[0]!, controller.signal);
     controller.abort();
 
     await expect(image).rejects.toMatchObject({ name: "AbortError" });
@@ -343,13 +408,13 @@ describe("loadZipPreview", () => {
       return original.call(this, type).on("data", () => controller.abort());
     });
     try {
-      await expect(preview.readImage(preview.entries[0]!, controller.signal)).rejects.toMatchObject(
-        { name: "AbortError" },
-      );
+      await expect(preview.readFile(preview.entries[0]!, controller.signal)).rejects.toMatchObject({
+        name: "AbortError",
+      });
     } finally {
       streaming.mockRestore();
     }
 
-    expect((await preview.readImage(preview.entries[0]!, signal())).size).toBe(64 * 1024);
+    expect((await preview.readFile(preview.entries[0]!, signal())).size).toBe(64 * 1024);
   });
 });
