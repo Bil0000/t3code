@@ -732,9 +732,7 @@ it.each(
         expect(selected?.kind).toBe("issue");
         if (selected?.kind === "issue")
           expect(selected.connectionId).toBe(key === "selectedConnectionId" ? value : undefined);
-        expect(JSON.parse(localStorage.getItem("t3.issues.preferences")!).connectionId).toBe(
-          key === "connectionId" ? value : undefined,
-        );
+        expect(localStorage.getItem("t3.issues.preferences")).toBe(preferences);
       }
     } finally {
       error.mockRestore();
@@ -1400,4 +1398,72 @@ it("refreshes each first page over the last refreshed list, not the continuation
   expect(text()).not.toContain("Issue 3");
   expect(state.read.mock.calls.map(([id]) => id).sort()).toEqual([environmentA, environmentB]);
   expect(state.listPage).toHaveBeenCalledOnce();
+});
+
+it("names issues, not pull requests, while loading and after every environment fails", async () => {
+  await mount();
+  expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe(
+    "Loading issues",
+  );
+  for (const environmentId of [environmentA, environmentB])
+    state.responses.set(environmentId, AsyncResult.failure(Cause.fail(new Error("Offline"))));
+  const reads = state.read.mock.calls.slice();
+  await act(async () => {
+    for (const [environmentId, input] of reads)
+      appAtomRegistry.refresh(issueEnvironment.list({ environmentId, input }));
+  });
+  expect(container.querySelector('[data-slot="empty-title"]')?.textContent).toBe(
+    "Could not load issues",
+  );
+  expect(container.querySelector('[data-slot="empty-media"] svg')?.classList).toContain(
+    "lucide-circle-dot",
+  );
+  expect(text()).not.toContain("pull request");
+});
+
+it("keeps saved list settings when a link only selects an issue, and saves list controls", async () => {
+  const saved = JSON.stringify({ who: "assigned", status: "closed", issueSort: "created" });
+  localStorage.setItem("t3.issues.preferences", saved);
+  state.projects = [project("project")];
+  const { selectedConnectionId: _account, ...selection } = linkedSelection;
+  state.search = { ...state.search, ...selection };
+  state.responses.set(environmentA, AsyncResult.success(answer([issue("42")])));
+  state.responses.set(environmentB, AsyncResult.success(answer([])));
+  await mount();
+  await mount();
+  expect(state.search.selectedEnvironmentId).toBe(environmentA);
+  expect(localStorage.getItem("t3.issues.preferences")).toBe(saved);
+  await act(async () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Closed")!
+      .click(),
+  );
+  expect(JSON.parse(localStorage.getItem("t3.issues.preferences")!)).toEqual({
+    who: "all",
+    status: "closed",
+  });
+});
+
+it("explains an unavailable account option in the tracker filter", async () => {
+  vi.useFakeTimers();
+  try {
+    state.search = { ...state.search, host: "github.com", connectionId: "Gone" };
+    state.responses.set(environmentA, AsyncResult.success(answer([])));
+    state.responses.set(environmentB, AsyncResult.success(answer([])));
+    await mount();
+    await openFilter("Filter by tracker");
+    const option = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+      (item) => item.textContent === "github.com · Gone",
+    )!;
+    expect(option.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      option.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      option.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      option.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(document.body.textContent).toContain("This account is not available");
+  } finally {
+    vi.useRealTimers();
+  }
 });

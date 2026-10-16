@@ -5,15 +5,14 @@ import { memo } from "react";
 import { cn } from "~/lib/utils";
 
 import {
+  PULL_REQUEST_PAGE_ROW_CLASS,
   PULL_REQUEST_ROW_CLASS,
   PULL_REQUEST_ROW_NUMBER_CLASS,
   PullRequestRowAuthor,
+  PullRequestRowLabels,
   PullRequestRowLines,
 } from "../pullRequest/PullRequestListRow";
-import {
-  PullRequestLabelChip,
-  PullRequestActorAvatar,
-} from "../pullRequest/pullRequestPresentation";
+import { PullRequestActorAvatar } from "../pullRequest/pullRequestPresentation";
 import { IssueStateGlyph, issueTrackerPresentation } from "./issuePresentation";
 
 export interface EnvironmentIssueEntry extends IssueListEntry {
@@ -45,7 +44,6 @@ function IssueRowImpl({
   onSelect: (entry: IssueRowTarget) => void;
 }) {
   const tracker = issueTrackerPresentation(entry.tracker);
-  const [firstLabel, secondLabel] = entry.labels;
   return (
     <div
       className={cn(
@@ -57,7 +55,7 @@ function IssueRowImpl({
         type="button"
         aria-current={selected ? "true" : undefined}
         onClick={() => onSelect(entry)}
-        className={cn(PULL_REQUEST_ROW_CLASS, "px-3 py-2.5")}
+        className={cn(PULL_REQUEST_ROW_CLASS, PULL_REQUEST_PAGE_ROW_CLASS)}
       >
         <IssueStateGlyph state={entry.state} />
         <PullRequestRowLines
@@ -97,27 +95,7 @@ function IssueRowImpl({
               ) : null}
               {showScope ? <span className="truncate">{entry.scope}</span> : null}
               {environmentLabel ? <span className="truncate">{environmentLabel}</span> : null}
-              {firstLabel ? (
-                <span className="flex min-w-0 items-center gap-1">
-                  <PullRequestLabelChip label={firstLabel}>
-                    {entry.labels.length > 1 ? (
-                      <span className="shrink-0 @xl/pr-row-meta:hidden">
-                        +{entry.labels.length - 1}
-                      </span>
-                    ) : null}
-                  </PullRequestLabelChip>
-                  {secondLabel ? (
-                    <PullRequestLabelChip
-                      label={secondLabel}
-                      className="hidden @xl/pr-row-meta:inline-flex"
-                    >
-                      {entry.labels.length > 2 ? (
-                        <span className="shrink-0">+{entry.labels.length - 2}</span>
-                      ) : null}
-                    </PullRequestLabelChip>
-                  ) : null}
-                </span>
-              ) : null}
+              <PullRequestRowLabels labels={entry.labels} />
             </>
           }
           updatedAt={entry.updatedAt}

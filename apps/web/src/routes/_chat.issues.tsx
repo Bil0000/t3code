@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   continueIssueListPage,
   createIssueSourceRefreshQueue,
+  holdIssueListAnswer,
   readIssueListSourcePage,
   issueEntryKey,
   issueListCursorsOn,
@@ -9,7 +10,6 @@ import {
   offeredIssueInvolvements,
   refreshIssueListPage,
 } from "@t3tools/client-runtime/state/issues";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import type {
   EnvironmentId,
@@ -49,7 +49,6 @@ import {
   type ReactNode,
 } from "react";
 
-import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { IssueCreateDialog, type IssueCreateScope } from "~/components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "~/components/issue/IssueDetailPanel";
 import {
@@ -69,6 +68,7 @@ import {
   supportedIssueSort,
 } from "~/components/issue/IssueListFilters";
 import { IssueGlyph, issueTrackerPresentation } from "~/components/issue/issuePresentation";
+import { reportIssueResult } from "~/components/issue/issueMutation";
 import {
   issueCreateSources,
   issueFilterProjects,
@@ -77,11 +77,11 @@ import {
   type IssueListSources,
 } from "~/components/issue/issueProjectFilter.logic";
 import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDetailPanel";
-import { readableFailure } from "~/components/pullRequest/pullRequestDetail.logic";
 import { findScopedProject } from "~/components/pullRequest/pullRequestList.logic";
 import { PullRequestListGhost } from "~/components/pullRequest/PullRequestGhosts";
 import {
-  PullRequestFilterOptionIcon,
+  CompactFilterMenu,
+  PullRequestRefreshControl,
   PullRequestSearchInput,
   pullRequestProjectKey,
   type PullRequestFilterOption,
@@ -101,9 +101,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "~/components/ui/empty";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "~/components/ui/menu";
 import { SidebarInset } from "~/components/ui/sidebar";
-import { toastManager } from "~/components/ui/toast";
 import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { isElectron } from "~/env";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
@@ -114,6 +112,7 @@ import { isTerminalFocused } from "~/lib/terminalFocus";
 import { usePanelAnimationSettings, usePanelPresence } from "~/panelAnimations";
 import {
   ISSUES_PANEL_REF,
+  issueRefOfSurface,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
@@ -249,10 +248,6 @@ function IssuesRoute() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   useEscapeToGoBack();
 
-  useEffect(() => {
-    writeIssueListPreferences(issueListPreferences(search));
-  }, [search]);
-
   const capableEnvironments = useMemo(
     () =>
       environments.filter(
@@ -360,10 +355,10 @@ function IssuesRoute() {
     [listedEnvironments, baseInput],
   );
   const list = useIssueList(targets);
-  if (list.answers.length > 0) {
+  if (list.values.length > 0) {
     const next = new Map(sortPolicy.sourceKey === sortSourceKey ? sortPolicy.environments : []);
     let changed = sortPolicy.sourceKey !== sortSourceKey;
-    for (const [environmentId, answer] of list.answers) {
+    for (const [environmentId, answer] of list.values) {
       const policy = issueSortOptions(
         (answer.sources ?? answer.trackers)
           .filter((source) => !("configured" in source) || source.configured)
@@ -390,20 +385,12 @@ function IssuesRoute() {
       return page;
     };
     const next = new Map<EnvironmentId, HeldPage>();
-    for (const [environmentId, answer] of list.answers) {
+    for (const [environmentId, answer] of list.values) {
       const previous = current?.pages.get(environmentId);
       next.set(
         environmentId,
         previous === undefined
-          ? {
-              answer,
-              entries: answer.entries,
-              nextCursors: answer.nextCursors,
-              firstCursors: answer.nextCursors,
-              firstKeys: new Set(answer.entries.map(issueEntryKey)),
-              errors: answer.errors,
-              sources: answer.sources,
-            }
+          ? holdIssueListAnswer(answer)
           : previous.answer === answer
             ? previous
             : refreshed(previous, answer),
@@ -413,7 +400,7 @@ function IssuesRoute() {
       if (!next.has(environmentId)) next.set(environmentId, page);
     }
     return next;
-  }, [list.answers, current, refreshedPages]);
+  }, [list.values, current, refreshedPages]);
   const [knownSources] = useState(() => new Map<EnvironmentId, IssueListSources>());
   const filterProjects = useMemo(() => {
     if (projectScope === null && !search.host) {
@@ -483,14 +470,8 @@ function IssuesRoute() {
       },
     });
     setLoadingMore(null);
-    if (result._tag === "Failure") {
-      toastManager.add({
-        type: "error",
-        title: "More issues could not be read",
-        description: readableFailure(squashAtomCommandFailure(result), "The server refused it."),
-      });
+    if (!reportIssueResult(result, "More issues could not be read", "The server refused it."))
       return;
-    }
     storePage(key, environmentId, (latest) =>
       continueIssueListPage(latest, cursors, result.value, page.firstCursors),
     );
@@ -773,6 +754,19 @@ function IssuesRoute() {
     scope: undefined,
     key: undefined,
   } as const;
+  const updateListScope = (patch: {
+    [Key in keyof IssueListPreferences]?: IssueListPreferences[Key] | undefined;
+  }) => {
+    writeIssueListPreferences(
+      issueListPreferences({
+        ...search,
+        ...patch,
+        who: patch.who ?? search.who,
+        status: patch.status ?? search.status,
+      }),
+    );
+    updateSearch(patch);
+  };
 
   // One shared panel for the page, with a fixed sentinel ref, as the pull-request page does.
   const rightPanelRef = capableEnvironments.length === 0 ? null : ISSUES_PANEL_REF;
@@ -1024,14 +1018,17 @@ function IssuesRoute() {
   const listBody: ReactNode = !issuesSupported ? (
     <PullRequestsUnavailableState
       title="Issues unavailable"
+      icon={<IssueGlyph.issue />}
       error="Update this environment's T3 Code server to browse issues."
     />
   ) : noneAnswered && (list.isPending || projectScope === "waiting") ? (
-    <PullRequestListGhost />
+    <PullRequestListGhost label="Loading issues" />
   ) : noneAnswered && list.error ? (
     <PullRequestsUnavailableState
+      title="Could not load issues"
+      icon={<IssueGlyph.issue />}
       error={list.error}
-      onRetry={list.refresh}
+      onRetry={() => list.refresh()}
       refreshing={list.isPending}
     />
   ) : groups.length === 0 ? (
@@ -1193,7 +1190,7 @@ function IssuesRoute() {
                       (search.q ?? "") !== debouncedQuery ||
                       (debouncedQuery.length > 0 && list.isPending)
                     }
-                    onChange={(q) => updateSearch({ q: q || undefined })}
+                    onChange={(q) => updateListScope({ q: q || undefined })}
                     placeholder="Search issues, or label:bug"
                     aria-label="Search issues"
                   />
@@ -1205,7 +1202,7 @@ function IssuesRoute() {
                   value={[search.status]}
                   onValueChange={(next) => {
                     const status = STATE_TABS.find((tab) => tab.value === next[0])?.value;
-                    if (status) updateSearch({ status });
+                    if (status) updateListScope({ status });
                   }}
                 >
                   {STATE_TABS.map((tab) => (
@@ -1214,14 +1211,16 @@ function IssuesRoute() {
                     </Toggle>
                   ))}
                 </ToggleGroup>
-                <FilterMenu
+                <CompactFilterMenu
+                  outlined
                   label="Filter by involvement"
                   value={search.who}
                   options={offeredInvolvements}
-                  onChange={(who) => updateSearch({ who })}
+                  onChange={(who) => updateListScope({ who })}
                 />
                 {projectOptions.length > 2 || search.projectId ? (
-                  <FilterMenu
+                  <CompactFilterMenu
+                    outlined
                     label="Filter by project"
                     value={scopedProject ? pullRequestProjectKey(scopedProject) : ""}
                     options={projectOptions}
@@ -1229,7 +1228,7 @@ function IssuesRoute() {
                       const project = filterProjects.find(
                         (candidate) => pullRequestProjectKey(candidate) === key,
                       );
-                      updateSearch({
+                      updateListScope({
                         projectId: project?.id,
                         environmentId: project?.environmentId,
                       });
@@ -1237,7 +1236,8 @@ function IssuesRoute() {
                   />
                 ) : null}
                 {hostOptions.length > 2 || search.host || search.connectionId !== undefined ? (
-                  <FilterMenu
+                  <CompactFilterMenu
+                    outlined
                     label="Filter by tracker"
                     value={
                       search.connectionId === undefined
@@ -1252,7 +1252,7 @@ function IssuesRoute() {
                           JSON.stringify([group.tracker.host, group.tracker.connectionId]) ===
                             value,
                       )?.tracker;
-                      updateSearch({
+                      updateListScope({
                         host: tracker?.host ?? (value || undefined),
                         connectionId: tracker?.connectionId,
                       });
@@ -1264,18 +1264,14 @@ function IssuesRoute() {
                   sort={effectiveSort.sort}
                   orders={sortOptions.orders}
                   order={effectiveSort.order}
-                  onSort={(issueSort) => updateSearch({ issueSort })}
-                  onOrder={(issueOrder) => updateSearch({ issueOrder })}
+                  onSort={(issueSort) => updateListScope({ issueSort })}
+                  onOrder={(issueOrder) => updateListScope({ issueOrder })}
                 />
-                <Button
-                  size="icon"
-                  variant="outline"
+                <PullRequestRefreshControl
                   aria-label="Refresh issues"
-                  onClick={list.refresh}
-                  disabled={list.isPending}
-                >
-                  <RefreshIcon size="md" refreshing={list.isPending} />
-                </Button>
+                  refreshing={list.isPending}
+                  onRefresh={() => list.refresh()}
+                />
                 {createScopes.length > 0 ? (
                   <Button size="default" onClick={() => setCreateOpen(true)}>
                     <PlusIcon aria-hidden className="size-4" />
@@ -1290,7 +1286,7 @@ function IssuesRoute() {
                     size="xs"
                     variant="outline"
                     disabled={list.isPending}
-                    onClick={list.refresh}
+                    onClick={() => list.refresh()}
                   >
                     Retry
                   </Button>
@@ -1365,16 +1361,7 @@ function IssuesRoute() {
               <IssueDetailPanel
                 key={renderedSurface.id}
                 environmentId={panelEnvironmentId}
-                reference={{
-                  projectId: renderedSurface.projectId as ProjectId,
-                  tracker: renderedSurface.tracker as IssueTrackerKind,
-                  ...(renderedSurface.host ? { host: renderedSurface.host } : {}),
-                  ...(renderedSurface.connectionId === undefined
-                    ? {}
-                    : { connectionId: renderedSurface.connectionId }),
-                  scope: renderedSurface.scope,
-                  key: renderedSurface.key,
-                }}
+                reference={issueRefOfSurface(renderedSurface)}
                 onSelectPullRequest={(target) => {
                   useRightPanelStore.getState().openPullRequest(rightPanelRef, {
                     ...target,
@@ -1437,44 +1424,5 @@ function IssuesRoute() {
         }}
       />
     </SidebarInset>
-  );
-}
-
-function FilterMenu<Value extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: Value;
-  options: ReadonlyArray<PullRequestFilterOption<Value>>;
-  onChange: (value: Value) => void;
-}) {
-  const current = options.find((option) => option.value === value) ?? options[0];
-  if (!current) return null;
-  return (
-    <Menu>
-      <MenuTrigger aria-label={`${label}: ${current.label}`} render={<Button variant="outline" />}>
-        <PullRequestFilterOptionIcon option={current} />
-        <span className="truncate">{current.label}</span>
-      </MenuTrigger>
-      <MenuPopup align="start">
-        <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
-          {options.map((option) => (
-            <MenuRadioItem
-              key={option.value}
-              value={option.value}
-              disabled={option.unavailable !== undefined}
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <PullRequestFilterOptionIcon option={option} />
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-      </MenuPopup>
-    </Menu>
   );
 }

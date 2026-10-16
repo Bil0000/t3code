@@ -5,56 +5,14 @@ import type {
   IssueListEntry,
 } from "@t3tools/contracts";
 import { ArrowDownUpIcon } from "lucide-react";
-import type { ElementType } from "react";
+import { PullRequestFilterRadioGroup } from "../pullRequest/PullRequestListFilters";
 import { Button } from "../ui/button";
-import {
-  Menu,
-  MenuGroup,
-  MenuGroupLabel,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "../ui/menu";
-interface IssueFilterOption<Value extends string> {
-  readonly value: Value;
-  readonly label: string;
-  readonly Icon: ElementType<{ className?: string }>;
-}
+import { Menu, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 const SORT_LABELS: Record<IssueListSort, string> = {
   updated: "Recently updated",
   created: "Newest",
   comments: "Most commented",
 };
-
-function RadioGroup<Value extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: Value;
-  options: ReadonlyArray<IssueFilterOption<Value>>;
-  onChange: (value: Value) => void;
-}) {
-  return (
-    <MenuGroup>
-      <MenuGroupLabel>{label}</MenuGroupLabel>
-      <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
-        {options.map((option) => (
-          <MenuRadioItem key={option.value} value={option.value}>
-            <span className="flex min-w-0 items-center gap-2">
-              <option.Icon aria-hidden className="size-3.5 shrink-0" />
-              <span className="truncate">{option.label}</span>
-            </span>
-          </MenuRadioItem>
-        ))}
-      </MenuRadioGroup>
-    </MenuGroup>
-  );
-}
 
 export function IssueSortMenu({
   sorts,
@@ -80,7 +38,7 @@ export function IssueSortMenu({
         <ArrowDownUpIcon aria-hidden className="size-4" />
       </MenuTrigger>
       <MenuPopup align="end" side="bottom" className="min-w-48">
-        <RadioGroup
+        <PullRequestFilterRadioGroup
           label="Sort"
           value={sort}
           options={sorts.map((value) => ({
@@ -93,7 +51,7 @@ export function IssueSortMenu({
         {orders.length > 1 ? (
           <>
             <MenuSeparator />
-            <RadioGroup
+            <PullRequestFilterRadioGroup
               label="Order"
               value={order}
               options={orders.map((value) => ({
