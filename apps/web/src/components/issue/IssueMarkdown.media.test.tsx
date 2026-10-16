@@ -111,7 +111,13 @@ vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../media/MediaActions", () => ({
   MediaActions: ({ children }: { children: unknown }) => children,
 }));
+vi.mock("../chat/ZoomableImage", () => ({
+  ZoomableImage: ({ src, name }: { src: string; name: string }) => <img src={src} alt={name} />,
+}));
 
+import ChatMarkdown from "../ChatMarkdown";
+import type { ExpandedImagePreview } from "../chat/ExpandedImagePreview";
+import { ExpandedImageDialog } from "../chat/ExpandedImageDialog";
 import { IssueCommentContent } from "./IssueConversation";
 import { PullRequestCommentBody } from "../pullRequest/PullRequestCommentBody";
 import { PullRequestMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
@@ -325,4 +331,233 @@ it("retries a failed Linear video through the signed resource only", async () =>
   expect(container.querySelector("video")?.src).toBe(
     "https://env-b.test/api/assets/env-b/signed-1",
   );
+});
+
+it.each([
+  ["with an extension", "recording.mp4"],
+  ["without an extension", "recording"],
+])("signs an explicit protected video tag %s", async (_name, file) => {
+  const video = upload.replace("screenshot.png", file);
+  await render(
+    <PullRequestCommentBody
+      text={`<video src="${video}"></video>`}
+      cwd="/repo"
+      environmentId={environmentB}
+      threadRef={threadRef}
+      issueLinkContext={{ ...issue, environmentId: environmentB }}
+    />,
+  );
+  expect(assets.calls).toEqual([
+    { environmentId: environmentB, resource: { ...linearResource, url: video } },
+  ]);
+  expect(container.querySelector("video")?.src).toBe(
+    "https://env-b.test/api/assets/env-b/signed-1",
+  );
+});
+
+const full = upload.replace("screenshot.png", "full.png");
+const second = upload.replace("screenshot.png", "second.png");
+const linkedText = `![First](${upload})\n\n[![Second](${second})](${full})`;
+
+async function renderGallery(reference: typeof issue | typeof defaultIssue = issue) {
+  const expand = vi.fn<(preview: ExpandedImagePreview) => void>();
+  await render(
+    <ChatMarkdown
+      text={linkedText}
+      cwd="/repo"
+      environmentId={environmentB}
+      threadRef={threadRef}
+      issueLinkContext={{ ...reference, environmentId: environmentB }}
+      onImageExpand={expand}
+    />,
+  );
+  await act(async () => {
+    for (const image of container.querySelectorAll("img"))
+      image.dispatchEvent(new Event("load", { bubbles: false }));
+  });
+  return expand;
+}
+const galleryAsset = (url: string, reference: typeof issue | typeof defaultIssue = issue) => ({
+  src: null,
+  originalUrl: url,
+  actionsSource: {
+    asset: { environmentId: environmentB, resource: { ...linearResource, issue: reference, url } },
+  },
+});
+
+it.each([
+  ["Account/B", issue],
+  ["the default account", defaultIssue],
+])("opens a linked protected full-size image through %s", async (_name, reference) => {
+  const expand = await renderGallery(reference);
+  await act(async () => container.querySelector<HTMLAnchorElement>(`a[href="${full}"]`)!.click());
+  expect(expand).toHaveBeenCalledOnce();
+  const preview = expand.mock.calls[0]![0];
+  expect(preview.index).toBe(1);
+  expect(preview.images[1]).toMatchObject(galleryAsset(full, reference));
+  expect(container.querySelector(`a[href="${full}"]`)).not.toBeNull();
+});
+
+it("keeps a linked protected neighbor signed when another image opens the gallery", async () => {
+  const expand = await renderGallery();
+  await act(async () => container.querySelector<HTMLImageElement>("img[role=button]")!.click());
+  const preview = expand.mock.calls[0]![0];
+  expect(preview.images).toHaveLength(2);
+  expect(preview.images[0]).toMatchObject({
+    src: "https://env-b.test/api/assets/env-b/signed-1",
+    actionsSource: { asset: { environmentId: environmentB, resource: linearResource } },
+  });
+  expect(preview.images[1]).toMatchObject(galleryAsset(full));
+  expect(JSON.stringify(preview)).not.toContain(`"src":"${full}"`);
+});
+
+it("signs the full-size image in the viewer and shows failure without the private URL", async () => {
+  await render(
+    <ExpandedImageDialog
+      preview={{ images: [galleryAsset(full) as never], index: 0 }}
+      onClose={vi.fn()}
+    />,
+  );
+  const signed = assets.calls.find((call) => call.resource._tag === "linear-media");
+  expect(signed).toEqual({
+    environmentId: environmentB,
+    resource: { ...linearResource, url: full },
+  });
+  expect(document.body.querySelector(`img[src^="https://env-b.test/"]`)).not.toBeNull();
+  expect(document.body.innerHTML).not.toContain(`src="${full}"`);
+  await act(async () => root.render(null));
+  assets.fail.add(environmentB);
+  registry = AtomRegistry.make();
+  await render(
+    <ExpandedImageDialog
+      preview={{ images: [galleryAsset(full) as never], index: 0 }}
+      onClose={vi.fn()}
+    />,
+  );
+  expect(document.body.textContent).toContain("This image could not be loaded.");
+  expect(document.body.innerHTML).not.toContain(`src="${full}"`);
+});
+
+it("keeps public linked images and their gallery entries direct", async () => {
+  const expand = vi.fn<(preview: ExpandedImagePreview) => void>();
+  const publicFull = "https://example.com/full.png";
+  await render(
+    <ChatMarkdown
+      text={`[![Public](https://example.com/thumb.png)](${publicFull})`}
+      cwd="/repo"
+      environmentId={environmentB}
+      threadRef={threadRef}
+      issueLinkContext={{ ...issue, environmentId: environmentB }}
+      onImageExpand={expand}
+    />,
+  );
+  expect(container.querySelector("a")?.hasAttribute("data-linear-media")).toBe(false);
+  expect(assets.calls).toEqual([]);
+});
+
+it("re-signs one URL after an account and environment switch", async () => {
+  const accountC = { ...issue, connectionId: "Account/C" };
+  for (const [reference, environmentId] of [
+    [issue, environmentB],
+    [accountC, environmentB],
+    [defaultIssue, environmentA],
+  ] as const) {
+    await render(
+      <PullRequestCommentBody
+        text={text}
+        cwd="/repo"
+        environmentId={environmentId}
+        threadRef={threadRef}
+        issueLinkContext={{ ...reference, environmentId }}
+      />,
+    );
+  }
+  expect(assets.calls).toEqual([
+    { environmentId: environmentB, resource: { ...linearResource, issue } },
+    { environmentId: environmentB, resource: { ...linearResource, issue: accountC } },
+    { environmentId: environmentA, resource: { ...linearResource, issue: defaultIssue } },
+  ]);
+  expect(sources()).toEqual(["https://env-a.test/api/assets/env-a/signed-3"]);
+});
+
+const recording = upload.replace("screenshot.png", "recording.mp4");
+const prose = (url: string) => `Watch [Recording](${url}) here.\n\n![First](${upload})`;
+
+async function openInlineVideo(surface: string, url: string) {
+  const props = {
+    cwd: "/repo",
+    environmentId: environmentB,
+    threadRef,
+    issueLinkContext: { ...issue, environmentId: environmentB },
+  };
+  await render(
+    surface === "comment" ? (
+      <IssueCommentContent
+        environmentId={environmentB}
+        reference={issue}
+        threadRef={threadRef}
+        cwd="/repo"
+        canEdit={false}
+        comment={{
+          id: "inline-video",
+          body: prose(url),
+          author: null,
+          createdAt: "2026-10-14T00:00:00Z",
+          url: null,
+          canEdit: false,
+        }}
+      />
+    ) : surface === "editor preview" ? (
+      <PullRequestMarkdownEditor
+        {...props}
+        value={prose(url)}
+        label="Description"
+        saving={false}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    ) : (
+      <PullRequestCommentBody {...props} text={prose(url)} />
+    ),
+  );
+  if (surface === "editor preview") {
+    await act(async () =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent === "Preview")!
+        .click(),
+    );
+    await flush();
+  }
+  assets.calls.length = 0;
+  await act(async () => container.querySelector<HTMLAnchorElement>(`a[href="${url}"]`)!.click());
+  await flush();
+  const dialog = document.body.querySelector("[role=dialog]");
+  return {
+    video: dialog?.querySelector("video")?.getAttribute("src"),
+    image: dialog?.querySelector("img")?.getAttribute("src"),
+    count: dialog?.textContent?.includes("(1/2)"),
+  };
+}
+
+it.each(["description", "comment", "editor preview"])(
+  "opens a protected inline video link in a %s with the signed video player",
+  async (surface) => {
+    const opened = await openInlineVideo(surface, recording);
+    expect(assets.calls).toEqual([
+      { environmentId: environmentB, resource: { ...linearResource, url: recording } },
+    ]);
+    expect(opened).toEqual({
+      video: "https://env-b.test/api/assets/env-b/signed-2",
+      image: undefined,
+      count: false,
+    });
+    expect(document.body.innerHTML).not.toContain(`src="${recording}"`);
+  },
+);
+
+it("opens a public inline video link directly with the video player", async () => {
+  const publicVideo = "https://example.com/recording.mp4";
+  const opened = await openInlineVideo("comment", publicVideo);
+  expect(assets.calls).toEqual([]);
+  expect(opened).toEqual({ video: publicVideo, image: undefined, count: false });
 });

@@ -118,7 +118,11 @@ import {
   type ExpandedImagePreview,
 } from "./chat/ExpandedImagePreview";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
-import { markdownImageGallery, markdownImageItems } from "./chat/markdownImageGallery";
+import {
+  linkedMediaItem,
+  markdownImageGallery,
+  markdownImageItems,
+} from "./chat/markdownImageGallery";
 import { MediaVideoPlayer } from "./media/MediaVideoPlayer";
 import { MediaActions, type MediaActionSource } from "./media/MediaActions";
 import { resolveProtocolRelativeMediaUrl } from "./media/mediaContent";
@@ -1574,7 +1578,7 @@ function ChatMarkdownVideo(props: {
   );
 }
 
-export function linearMediaUrl(source: string): string | null {
+function linearMediaUrl(source: string): string | null {
   const url = URL.parse(source);
   return url !== null &&
     url.protocol === "https:" &&
@@ -1584,6 +1588,32 @@ export function linearMediaUrl(source: string): string | null {
     url.password === ""
     ? source
     : null;
+}
+
+export function linearMediaAsset(
+  context: IssueLinkContext | undefined,
+  source: string,
+): {
+  environmentId: EnvironmentId;
+  resource: Extract<AssetResource, { _tag: "linear-media" }>;
+} | null {
+  const url = linearMediaUrl(source);
+  if (
+    url === null ||
+    context?.tracker !== "linear" ||
+    context.scope === undefined ||
+    context.key === undefined
+  )
+    return null;
+  const { environmentId, ...issue } = context;
+  return {
+    environmentId,
+    resource: {
+      _tag: "linear-media",
+      issue: { ...issue, scope: context.scope, key: context.key },
+      url,
+    },
+  };
 }
 
 /** Environment-hosted media loads through an exact-file signed asset URL. */
@@ -2958,8 +2988,10 @@ const CHAT_MARKDOWN_COMPONENTS = {
       canOperatePreview,
       cwd,
       environmentId,
+      expandMedia,
       explicitEnvironmentId,
       imageBaseDir,
+      issueLinkContext,
       markdownFileLinkMetaByHref,
       threadRef,
       openMarkdownMedia,
@@ -3034,9 +3066,11 @@ const CHAT_MARKDOWN_COMPONENTS = {
       const canOpenInPreview =
         canOperatePreview && Boolean(threadRef && isPreviewAvailableFor(threadRef.environmentId));
       const linkChildren = <MarkdownLinkContext value>{children}</MarkdownLinkContext>;
+      const linkedAsset = href ? linearMediaAsset(issueLinkContext, href) : null;
       const link = (
         <a
           {...props}
+          data-linear-media={linkedAsset ? JSON.stringify(linkedAsset) : undefined}
           className={cn(props.className, pullRequestAutolink === "commit" && "font-mono")}
           data-markdown-copy={pullRequestCopy}
           data-markdown-image-link={!hasText || undefined}
@@ -3061,6 +3095,20 @@ const CHAT_MARKDOWN_COMPONENTS = {
             ) {
               event.preventDefault();
               event.stopPropagation();
+              if (linkedAsset) {
+                const image =
+                  event.target instanceof HTMLImageElement
+                    ? event.target
+                    : event.currentTarget.querySelector("img");
+                const registered = image ? markdownImageItems.get(image) : undefined;
+                const selected = linkedMediaItem(linkedAsset, href, registered?.name ?? "image");
+                expandMedia(
+                  image && selected.type !== "video"
+                    ? markdownImageGallery(image, selected)
+                    : { images: [selected], index: 0 },
+                );
+                return;
+              }
               openMarkdownMedia(
                 href,
                 undefined,
@@ -3301,22 +3349,12 @@ const CHAT_MARKDOWN_COMPONENTS = {
     const imageSource = classifyMarkdownImageSource(classifiedSrc, imageBaseDir ?? cwd);
     const kind = mediaKindFromPath(classifiedSrc) ?? "image";
     const directUri = imageSource._tag === "Direct" ? imageSource.uri : null;
-    const linearUrl = directUri === null ? null : linearMediaUrl(directUri);
-    if (
-      linearUrl !== null &&
-      issueLinkContext?.tracker === "linear" &&
-      issueLinkContext.scope !== undefined &&
-      issueLinkContext.key !== undefined
-    ) {
-      const { environmentId: issueEnvironmentId, ...issue } = issueLinkContext;
+    const linearAsset = directUri === null ? null : linearMediaAsset(issueLinkContext, directUri);
+    if (linearAsset !== null) {
       return (
         <ChatMarkdownAssetImage
-          environmentId={issueEnvironmentId}
-          resource={{
-            _tag: "linear-media",
-            issue: { ...issue, scope: issueLinkContext.scope, key: issueLinkContext.key },
-            url: linearUrl,
-          }}
+          environmentId={linearAsset.environmentId}
+          resource={linearAsset.resource}
           alt={altText}
           kind={kind}
           copyMarkdown={copyMarkdown}
@@ -3325,7 +3363,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
           style={authoredSizeStyle}
           imageProps={imageProps}
           srcFragment={markdownImageSourceFragment(classifiedSrc)}
-          originalUrl={linearUrl}
+          originalUrl={linearAsset.resource.url}
           framed={false}
           onImageExpand={imageExpand}
         />
