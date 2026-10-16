@@ -1,10 +1,16 @@
 import { hostPreviewMimeTypeFromExtension } from "@t3tools/shared/filePreview";
+import {
+  IMAGE_DIMENSIONS_HEADER_BYTES,
+  readImageDimensions,
+} from "@t3tools/shared/imageDimensions";
 import JSZip from "jszip";
 
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const MAX_FILES = 2000;
 const MAX_FOLDERS = 2000;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_PIXELS = 16_000_000;
+const MAX_IMAGE_EDGE = 8192;
 const ARCHIVE_LIMIT_ERROR = "ZIP preview supports archives up to 32 MiB.";
 const ENTRY_LIMIT_ERROR = "ZIP preview supports up to 2,000 files and 2,000 folders.";
 const INVALID_ARCHIVE_ERROR =
@@ -107,6 +113,32 @@ function checkArchiveDirectory(bytes: ArrayBuffer) {
   if (offset !== end || actualCount !== count) throw new Error(INVALID_ARCHIVE_ERROR);
 }
 
+function zipImageDimensions(bytes: Uint8Array) {
+  const dimensions = readImageDimensions(bytes);
+  if (!dimensions || bytes[0] !== 0x47) return dimensions;
+  if (bytes.length < 13) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const packed = bytes[10]!;
+  let offset = 13 + (packed & 0x80 ? 3 * (2 << (packed & 7)) : 0);
+  while (bytes[offset] === 0x21) {
+    offset += 2;
+    while (offset < bytes.length && bytes[offset] !== 0) offset += 1 + bytes[offset]!;
+    if (offset >= bytes.length) return null;
+    offset++;
+  }
+  if (bytes[offset] !== 0x2c || offset + 10 > bytes.length) return null;
+  return {
+    width: Math.max(
+      dimensions.width,
+      view.getUint16(offset + 1, true) + view.getUint16(offset + 5, true),
+    ),
+    height: Math.max(
+      dimensions.height,
+      view.getUint16(offset + 3, true) + view.getUint16(offset + 7, true),
+    ),
+  };
+}
+
 function readFile(file: ZipFile, mimeType: string, signal: AbortSignal): Promise<Blob> {
   signal.throwIfAborted();
   const stream = file.internalStream("uint8array");
@@ -138,6 +170,33 @@ function readFile(file: ZipFile, mimeType: string, signal: AbortSignal): Promise
     );
     stream.on("end", () => {
       if (settled) return;
+      if (mimeType.startsWith("image/")) {
+        const header = new Uint8Array(Math.min(size, IMAGE_DIMENSIONS_HEADER_BYTES));
+        let offset = 0;
+        for (const chunk of chunks) {
+          const part = chunk.subarray(0, header.length - offset);
+          header.set(part, offset);
+          offset += part.length;
+          if (offset === header.length) break;
+        }
+        const dimensions = zipImageDimensions(header);
+        if (!dimensions) {
+          fail(new Error("Cannot safely preview this image. Download the ZIP to open it."));
+          return;
+        }
+        if (
+          dimensions.width > MAX_IMAGE_EDGE ||
+          dimensions.height > MAX_IMAGE_EDGE ||
+          dimensions.width * dimensions.height > MAX_IMAGE_PIXELS
+        ) {
+          fail(
+            new Error(
+              "Image preview supports up to 16 million pixels and 8,192 pixels per side. Download the ZIP to open it.",
+            ),
+          );
+          return;
+        }
+      }
       settled = true;
       signal.removeEventListener("abort", abort);
       resolve(new Blob(chunks, { type: mimeType }));

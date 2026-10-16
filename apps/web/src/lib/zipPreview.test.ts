@@ -5,6 +5,15 @@ import { loadZipPreview, readZipPreviewResponse } from "./zipPreview";
 
 const signal = () => new AbortController().signal;
 
+function png(width = 800, height = 600) {
+  const bytes = new Uint8Array(24);
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  return bytes;
+}
+
 async function archive(zip: JSZip) {
   return new Blob([await zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" })]);
 }
@@ -183,19 +192,129 @@ describe("loadZipPreview", () => {
     ]);
   });
 
-  it("reads the selected raster image into a typed blob", async () => {
-    const zip = new JSZip().file("photo.jpg", new Uint8Array([0xff, 0xd8, 0xff]));
+  it("checks the image bytes even when the extension declares a different image type", async () => {
+    const zip = new JSZip().file("photo.jpg", png());
     const preview = await loadZipPreview(await archive(zip), signal());
     const image = await preview.readFile(preview.entries[0]!, signal());
 
     expect(image.type).toBe("image/jpeg");
-    expect(new Uint8Array(await image.arrayBuffer())).toEqual(new Uint8Array([0xff, 0xd8, 0xff]));
+    expect(new Uint8Array(await image.arrayBuffer())).toEqual(png());
+  });
+
+  it.each([
+    ["photo.png", png(10000, 10000)],
+    ["photo.jpg", png(4001, 4000)],
+    ["photo.webp", png(8193, 1)],
+    ["photo.jpg", new Uint8Array([255, 216, 255, 192, 0, 17, 8, 39, 16, 39, 16])],
+    [
+      "photo.webp",
+      new Uint8Array([
+        82, 73, 70, 70, 22, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 88, 10, 0, 0, 0, 0, 0, 0, 0, 15,
+        39, 0, 15, 39, 0,
+      ]),
+    ],
+    [
+      "photo.gif",
+      new Uint8Array([
+        71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 0, 0, 0, 44, 0, 0, 0, 0, 16, 39, 16, 39, 0,
+      ]),
+    ],
+  ])("rejects oversized decoded images before creating a Blob: %s", async (name, bytes) => {
+    const preview = await loadZipPreview(await archive(new JSZip().file(name, bytes)), signal());
+    const blob = vi.spyOn(globalThis, "Blob");
+    try {
+      await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(
+        /16 million pixels.*8,192.*Download the ZIP/i,
+      );
+      expect(blob).not.toHaveBeenCalled();
+    } finally {
+      blob.mockRestore();
+    }
+  });
+
+  it.each([
+    ["photo.png", png(4000, 4000)],
+    ["photo.png", png(8192, 1)],
+    [
+      "photo.gif",
+      new Uint8Array([
+        71, 73, 70, 56, 57, 97, 32, 3, 88, 2, 0, 0, 0, 44, 0, 0, 0, 0, 32, 3, 88, 2, 0,
+      ]),
+    ],
+    [
+      "photo.gif",
+      Uint8Array.from(atob("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"), (c) =>
+        c.charCodeAt(0),
+      ),
+    ],
+    ["photo.jpg", new Uint8Array([255, 216, 255, 192, 0, 17, 8, 2, 88, 3, 32])],
+    [
+      "photo.webp",
+      new Uint8Array([
+        82, 73, 70, 70, 22, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 32, 10, 0, 0, 0, 0, 0, 0, 157, 1,
+        42, 32, 3, 88, 2,
+      ]),
+    ],
+    [
+      "photo.webp",
+      new Uint8Array([
+        82, 73, 70, 70, 17, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 76, 5, 0, 0, 0, 47, 31, 195, 149,
+        0,
+      ]),
+    ],
+    [
+      "photo.webp",
+      new Uint8Array([
+        82, 73, 70, 70, 22, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 88, 10, 0, 0, 0, 0, 0, 0, 0, 31, 3,
+        0, 87, 2, 0,
+      ]),
+    ],
+  ])("keeps bounded %s images available to the shared preview", async (name, bytes) => {
+    const preview = await loadZipPreview(await archive(new JSZip().file(name, bytes)), signal());
+    const image = await preview.readFile(preview.entries[0]!, signal());
+    expect(new Uint8Array(await image.arrayBuffer())).toEqual(bytes);
+    expect(image.type).toMatch(/^image\//);
+  });
+
+  it.each([
+    ["photo.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="10000" height="10000"/>'],
+    ["photo.avif", "unsupported header"],
+    ["photo.bmp", "BM"],
+    ["photo.ico", "unsupported header"],
+    ["photo.jpg", new Uint8Array([255, 216, 255])],
+    ["photo.png", png(0, 600)],
+    ["photo.gif", png().subarray(0, 20)],
+    ["photo.gif", new Uint8Array([71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 0, 0, 0, 33, 249, 255])],
+    ["photo.png", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
+  ])("blocks unreadable dimensions without decoding: %s", async (name, bytes) => {
+    const preview = await loadZipPreview(await archive(new JSZip().file(name, bytes)), signal());
+    await expect(preview.readFile(preview.entries[0]!, signal())).rejects.toThrow(
+      /Cannot safely preview this image.*Download the ZIP/i,
+    );
+  });
+
+  it("reads a JPEG frame across extracted chunks but rejects headers beyond the scan limit", async () => {
+    for (const segments of [1, 5]) {
+      const bytes = new Uint8Array(2 + segments * 65537 + 9);
+      bytes.set([255, 216]);
+      for (let index = 0; index < segments; index++) {
+        bytes.set([255, 224, 255, 255], 2 + index * 65537);
+      }
+      bytes.set([255, 192, 0, 17, 8, 2, 88, 3, 32], bytes.length - 9);
+      const preview = await loadZipPreview(
+        await archive(new JSZip().file("photo.jpg", bytes)),
+        signal(),
+      );
+      const reading = preview.readFile(preview.entries[0]!, signal());
+      if (segments === 1) expect((await reading).size).toBe(bytes.length);
+      else await expect(reading).rejects.toThrow(/Cannot safely preview/i);
+    }
   });
 
   it.each(["photos\\image.png", "photos\\\\image.png", "photos//image.png"])(
     "keeps folder and file paths consistent for %s",
     async (path) => {
-      const zip = new JSZip().file(path, new Uint8Array([1, 2, 3]), { createFolders: false });
+      const zip = new JSZip().file(path, png(), { createFolders: false });
       zip.file(path.slice(0, -"image.png".length), null, { dir: true, createFolders: false });
       const preview = await loadZipPreview(await archive(zip), signal());
 
@@ -205,12 +324,12 @@ describe("loadZipPreview", () => {
           path: "photos/image.png",
           name: "image.png",
           isDirectory: false,
-          sizeBytes: 3,
+          sizeBytes: 24,
           mimeType: "image/png",
         },
       ]);
       const image = await preview.readFile(preview.entries[1]!, signal());
-      expect(new Uint8Array(await image.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+      expect(new Uint8Array(await image.arrayBuffer())).toEqual(png());
     },
   );
 
@@ -237,7 +356,6 @@ describe("loadZipPreview", () => {
     ["document.pdf", "%PDF-1.4", "application/pdf"],
     ["clip.mp4", "media", "video/mp4"],
     ["sound.mp3", "media", "audio/mpeg"],
-    ["image.svg", "<svg/>", "image/svg+xml"],
   ])(
     "extracts only the selected file %s for the shared viewer",
     async (name, contents, mimeType) => {
@@ -394,7 +512,9 @@ describe("loadZipPreview", () => {
   });
 
   it("cancels image reads after the stream starts", async () => {
-    const zip = new JSZip().file("photo.png", new Uint8Array(64 * 1024));
+    const contents = new Uint8Array(64 * 1024);
+    contents.set(png());
+    const zip = new JSZip().file("photo.png", contents);
     const preview = await loadZipPreview(await archive(zip), signal());
     const controller = new AbortController();
     const prototype = Object.getPrototypeOf(zip.file("photo.png")) as {

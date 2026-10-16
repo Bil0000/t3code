@@ -219,13 +219,17 @@ describe("ZIP file browsing", () => {
     expect(renderer.root.findByType("pre").children).toEqual(["app.ts"]);
   });
 
-  it("shows extraction failures without losing the file tree", async () => {
-    readFile.mockRejectedValueOnce(new Error("File preview supports files up to 10 MiB."));
+  it.each([
+    "File preview supports files up to 10 MiB.",
+    "Image preview supports up to 16 million pixels and 8,192 pixels per side. Download the ZIP to open it.",
+    "Cannot safely preview this image. Download the ZIP to open it.",
+  ])("shows %s without decoding or losing the file tree", async (message) => {
+    readFile.mockRejectedValueOnce(new Error(message));
     await open();
     await select("photos/a.png");
-    expect(renderer.root.findByProps({ role: "alert" }).children).toEqual([
-      "File preview supports files up to 10 MiB.",
-    ]);
+    expect(renderer.root.findByProps({ role: "alert" }).children).toEqual([message]);
+    expect(renderer.root.findAllByType("img")).toHaveLength(0);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
     await back();
     await select("src/app.ts");
     expect(renderer.root.findByType("pre").children).toEqual(["app.ts"]);
